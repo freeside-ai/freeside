@@ -10,6 +10,10 @@ public enum AttentionFixtures {
     /// MockServer's default approved set contains exactly this digest.
     public static let approvedRecipeDigest = "sha256:recipe-approved"
 
+    /// A fixed creation instant shared by the seeded inbox so screenshots and
+    /// cache tests never depend on the host clock.
+    public static let createdInstant = Date(timeIntervalSince1970: 1_767_323_045)
+
     /// The Phase 1 attention types, in the schema's enum order.
     public static let phase1Types: [Components.Schemas.AttentionType] = [
         .spec_approval,
@@ -299,6 +303,7 @@ public enum AttentionFixtures {
                 first_opened_at: nil,
                 submit_to_first_open: nil
             ),
+            created_at: createdInstant,
             expires_when: nil,
             decided_at: nil,
             posture: type == .system_health ? .init(value1: .advisory) : nil,

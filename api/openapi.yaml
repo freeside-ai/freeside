@@ -1801,6 +1801,7 @@ components:
         - interruption_class
         - conversation_id
         - timing
+        - created_at
         - expires_when
         - decided_at
         - posture
@@ -1937,6 +1938,14 @@ components:
           nullable: true
         timing:
           $ref: "#/components/schemas/TimingSummary"
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            The daemon-stamped instant the attention item was created.
+            Immutable and never client-set; null only for items persisted
+            before this field existed.
         expires_when:
           type: string
           format: date-time
@@ -2035,6 +2044,7 @@ components:
           first_accepted_at: "2026-01-02T03:05:05Z"
           first_opened_at: "2026-01-02T03:09:05Z"
           submit_to_first_open: 300000000000
+        created_at: "2026-01-02T03:04:05Z"
         expires_when: "2026-01-03T03:04:05Z"
         decided_at: null
         posture: null

@@ -420,6 +420,7 @@ func (r *activeResourceReconciler) convergeCompletionForeclosure(
 	}
 
 	posture := domain.HealthPostureAdvisory
+	createdAt := r.now().UTC()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: itemID, ProjectID: ready.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
@@ -436,7 +437,8 @@ func (r *activeResourceReconciler) convergeCompletionForeclosure(
 		),
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
-		Posture: &posture, Status: domain.StatusOpen,
+		CreatedAt: &createdAt,
+		Posture:   &posture, Status: domain.StatusOpen,
 	}, nil)
 	if err != nil {
 		return err
@@ -510,6 +512,7 @@ func (r *activeResourceReconciler) convergeObservationHealth(
 		return err
 	}
 	posture := domain.HealthPostureAdvisory
+	createdAt := r.now().UTC()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: domain.ItemID(fmt.Sprintf(
 			"%s%d", activeResourceObservationHealthPrefix(ready.ID), state.Revision+1,
@@ -528,7 +531,8 @@ func (r *activeResourceReconciler) convergeObservationHealth(
 			domain.ActionStopUnattended,
 		},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
-		Posture: &posture, Status: domain.StatusOpen,
+		CreatedAt: &createdAt,
+		Posture:   &posture, Status: domain.StatusOpen,
 	}, nil)
 	if err != nil {
 		return err

@@ -164,6 +164,7 @@ func newProposalItem(
 		RequestedDecision: slices.Clone(requestedDecision),
 		EvidenceSnapshot:  []domain.Artifact{artifact}, ItemVersion: 1,
 		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+		CreatedAt: &instance.CreatedAt,
 	}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})
 }
 

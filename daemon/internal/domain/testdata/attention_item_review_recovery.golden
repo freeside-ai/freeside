@@ -40,6 +40,7 @@
     "first_opened_at": null,
     "submit_to_first_open": null
   },
+  "created_at": null,
   "expires_when": null,
   "decided_at": null,
   "posture": null,

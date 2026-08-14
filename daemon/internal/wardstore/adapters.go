@@ -110,6 +110,7 @@ type Leaser struct {
 // AuthState backs ward's durable, identity-scoped Codex re-enrollment marker.
 type AuthState struct {
 	store *store.Store
+	now   func() time.Time
 }
 
 // Enrollment backs ward's Codex enrollment journal and verified projection
@@ -125,7 +126,7 @@ func New(st *store.Store) (*Adapters, error) {
 	if st == nil {
 		return nil, errors.New("ward store adapters: nil store")
 	}
-	authState := &AuthState{store: st}
+	authState := &AuthState{store: st, now: time.Now}
 	return &Adapters{
 		Journal:    &Journal{store: st},
 		Leaser:     &Leaser{store: st},
@@ -589,6 +590,27 @@ func codexAuthReenrollmentItem(
 	return store.NewCodexReenrollmentMarker(id, occurrence, projectID, version, status, binding)
 }
 
+func codexAuthReenrollmentItemAt(
+	id domain.AuthIdentityID,
+	occurrence int,
+	projectID domain.ProjectID,
+	version int,
+	status domain.ItemStatus,
+	binding *domain.CodexReenrollmentRecoveryBinding,
+	createdAt time.Time,
+) (domain.AttentionItem, error) {
+	item, err := codexAuthReenrollmentItem(id, occurrence, projectID, version, status, binding)
+	if err != nil {
+		return domain.AttentionItem{}, err
+	}
+	createdAt = createdAt.UTC()
+	item.CreatedAt = &createdAt
+	if err := item.Validate(); err != nil {
+		return domain.AttentionItem{}, err
+	}
+	return item, nil
+}
+
 func validateCodexAuthReenrollmentItem(
 	item domain.AttentionItem, id domain.AuthIdentityID,
 ) (int, error) {
@@ -741,7 +763,9 @@ func (a *AuthState) MarkCodexAuthNeedsReenrollment(
 		if err != nil {
 			return err
 		}
-		item, err := codexAuthReenrollmentItem(id, nextOccurrence, run.ProjectID, 1, domain.StatusOpen, nil)
+		item, err := codexAuthReenrollmentItemAt(
+			id, nextOccurrence, run.ProjectID, 1, domain.StatusOpen, nil, a.now(),
+		)
 		if err != nil {
 			return err
 		}
@@ -869,8 +893,8 @@ func (a *Enrollment) Begin(
 			if err != nil {
 				return err
 			}
-			marker, err = codexAuthReenrollmentItem(
-				identity.ID, next, projectID, 1, domain.StatusOpen, nil,
+			marker, err = codexAuthReenrollmentItemAt(
+				identity.ID, next, projectID, 1, domain.StatusOpen, nil, now,
 			)
 			if err != nil {
 				return err

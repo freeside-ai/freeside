@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -36,6 +37,7 @@ type Doctor struct {
 	Backend             domain.RunnerBackendClass
 	ConfigurationDigest domain.Digest
 	Mode                domain.OperatingMode
+	Now                 func() time.Time
 }
 
 // Run checks conformance/workspace handoff and every backup-health dimension.
@@ -227,6 +229,10 @@ func (d Doctor) converge(ctx context.Context, findings []DoctorFinding) error {
 		}
 		switch {
 		case !exists:
+			createdAt := time.Now().UTC()
+			if d.Now != nil {
+				createdAt = d.Now().UTC()
+			}
 			posture := domain.HealthPostureBlocking
 			item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 				ID:        domain.ItemID(fmt.Sprintf("%s%s-%d", doctorItemPrefix, finding.Code, revision)),
@@ -240,8 +246,9 @@ func (d Doctor) converge(ctx context.Context, findings []DoctorFinding) error {
 					domain.ActionStopUnattended,
 				},
 				ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
-				Posture: &posture,
-				Status:  domain.StatusOpen,
+				CreatedAt: &createdAt,
+				Posture:   &posture,
+				Status:    domain.StatusOpen,
 			}, nil)
 			if err != nil {
 				return fmt.Errorf("doctor: construct %s finding: %w", finding.Code, err)

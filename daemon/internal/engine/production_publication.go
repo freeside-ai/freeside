@@ -185,6 +185,13 @@ type productionPublicationWorkflow struct {
 	reconcileMu          sync.Mutex
 }
 
+func (w *productionPublicationWorkflow) attentionCreatedAt() time.Time {
+	if w.now == nil {
+		return time.Now().UTC()
+	}
+	return w.now().UTC()
+}
+
 type productionPublicationResult struct {
 	completed     int
 	accepted      int
@@ -2594,6 +2601,7 @@ func (w *productionPublicationWorkflow) putReviewContradictionAttention(
 		BaseSHA: failure.BaseSHA, HeadSHA: failure.HeadSHA, FailureDigest: digest,
 	}
 	runID := task.RunID
+	createdAt := w.attentionCreatedAt()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: productionReviewItemID(task.RunID, failure.Round), ProjectID: task.ProjectID,
 		Subject: domain.Subject{
@@ -2604,7 +2612,8 @@ func (w *productionPublicationWorkflow) putReviewContradictionAttention(
 		RequestedDecision: []domain.Action{domain.ActionRecoverReview},
 		PRHeadSHA:         failure.HeadSHA, ReviewRecoveryBinding: &binding,
 		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
-		Status: domain.StatusOpen,
+		CreatedAt: &createdAt,
+		Status:    domain.StatusOpen,
 	}, w.approvedRecipes)
 	if err != nil {
 		return err
@@ -2624,6 +2633,7 @@ func (w *productionPublicationWorkflow) putReviewContradictionAttention(
 		return err
 	}
 	if existing != nil {
+		item.CreatedAt = existing.CreatedAt
 		// Delivery receipts legitimately advance the item's version and derived
 		// timing while it remains parked. Ignore only those two mutable telemetry
 		// fields; every identity, presentation, action, and recovery coordinate
@@ -2844,6 +2854,7 @@ func (w *productionPublicationWorkflow) putReviewConfigurationAttention(
 		SupersededProfileDigest: binding.profile.ProfileDigest,
 	}
 	runID := task.RunID
+	createdAt := w.attentionCreatedAt()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: productionReviewItemID(task.RunID, failure.Round), ProjectID: task.ProjectID,
 		Subject: domain.Subject{
@@ -2858,7 +2869,8 @@ func (w *productionPublicationWorkflow) putReviewConfigurationAttention(
 		},
 		PRHeadSHA: failure.HeadSHA, ReviewConfigurationRecovery: &recovery,
 		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
-		Status: domain.StatusOpen,
+		CreatedAt: &createdAt,
+		Status:    domain.StatusOpen,
 	}, w.approvedRecipes)
 	if err != nil {
 		return err
@@ -2878,6 +2890,7 @@ func (w *productionPublicationWorkflow) putReviewConfigurationAttention(
 		return err
 	}
 	if existing != nil {
+		item.CreatedAt = existing.CreatedAt
 		// Delivery receipts advance the item's version and derived timing, and
 		// a discuss decision attaches its conversation, all while the item
 		// remains parked. Ignore only those mutable fields; every identity,
@@ -2970,6 +2983,7 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithID(
 		// item actionable through the executable conversation and stop paths.
 		actions = []domain.Action{domain.ActionDiscuss, domain.ActionStop}
 	}
+	createdAt := w.attentionCreatedAt()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: itemID, ProjectID: task.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID},
@@ -2977,6 +2991,7 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithID(
 		RequestedDecision: actions,
 		PRHeadSHA:         task.HeadSHA, ItemVersion: 1,
 		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+		CreatedAt: &createdAt,
 	}, w.approvedRecipes)
 	if err != nil {
 		return err
@@ -3383,6 +3398,7 @@ func (w *productionPublicationWorkflow) holdBlockedTask(
 		item.ItemVersion = current.ItemVersion + 1
 		item.Timing = current.Timing
 		item.ConversationID = current.ConversationID
+		item.CreatedAt = current.CreatedAt
 		item.ExpiresWhen = current.ExpiresWhen
 		if err := w.attention.PutItem(ctx, item); err != nil {
 			return productionTaskOutcome{}, err
@@ -4265,6 +4281,7 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 	approvedRecipes map[domain.Digest]bool,
 ) (domain.AttentionItem, error) {
 	runID := task.RunID
+	createdAt := w.attentionCreatedAt()
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: productionReadyItemID(task.RunID), ProjectID: task.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID},
@@ -4281,7 +4298,8 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 		},
 		CommitPlanNotice: checkpoint.Imported.CommitPlanNotice,
 		ItemVersion:      1, InterruptionClass: domain.InterruptionPlannedGate,
-		Status: domain.StatusOpen,
+		CreatedAt: &createdAt,
+		Status:    domain.StatusOpen,
 	}, approvedRecipes)
 }
 
@@ -4329,6 +4347,7 @@ func (w *productionPublicationWorkflow) newBlockedItem(
 	approvedRecipes map[domain.Digest]bool,
 ) (domain.AttentionItem, error) {
 	runID := task.RunID
+	createdAt := w.attentionCreatedAt()
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: productionBlockedItemID(task.RunID), ProjectID: task.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID},
@@ -4339,7 +4358,8 @@ func (w *productionPublicationWorkflow) newBlockedItem(
 		PRHeadSHA:        imported.CommitSHA,
 		CommitPlanNotice: imported.CommitPlanNotice,
 		ItemVersion:      1, InterruptionClass: domain.InterruptionExceptional,
-		Status: domain.StatusOpen,
+		CreatedAt: &createdAt,
+		Status:    domain.StatusOpen,
 	}, approvedRecipes)
 }
 
@@ -4510,6 +4530,7 @@ func (w *productionPublicationWorkflow) putTerminalItem(
 		item.ItemVersion = current.ItemVersion + 1
 		item.Timing = current.Timing
 		item.ConversationID = current.ConversationID
+		item.CreatedAt = current.CreatedAt
 		item.ExpiresWhen = current.ExpiresWhen
 		return w.attention.PutItem(ctx, item)
 	}

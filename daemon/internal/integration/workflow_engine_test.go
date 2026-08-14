@@ -99,6 +99,13 @@ func (f *workflowFixture) seed(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("StartFakeRun: %v", err)
 	}
+	initial, err := f.signet.GetAttentionItem(ctx, domain.ItemID("approval-"+string(testRunID)))
+	if err != nil {
+		t.Fatalf("get initial attention item: %v", err)
+	}
+	if initial.Item.CreatedAt == nil {
+		t.Fatal("initial attention item created_at is nil")
+	}
 	pairedAt := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		for _, id := range []domain.DeviceID{deviceA, deviceB} {

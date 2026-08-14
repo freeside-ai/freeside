@@ -162,9 +162,12 @@ struct DecisionDetailView: View {
     }
 
     private func header(_ item: Components.Schemas.AttentionItem) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(AttentionDisplay.title(item._type))
-                .font(.title2.weight(.semibold))
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(AttentionDisplay.title(item._type))
+                    .font(.title2.weight(.semibold))
+                creationTimestamp(item.created_at)
+            }
             Spacer()
             PriorityBadge(priority: item.priority)
             if let posture = item.posture?.value1 {
@@ -172,6 +175,23 @@ struct DecisionDetailView: View {
             }
             StatusBadge(status: item.status)
         }
+    }
+
+    @ViewBuilder
+    private func creationTimestamp(_ createdAt: Date?) -> some View {
+        Label {
+            if let createdAt {
+                Text(
+                    "Created \(createdAt, format: .dateTime.month(.abbreviated).day().year().hour().minute())"
+                )
+            } else {
+                Text("Created: not recorded")
+            }
+        } icon: {
+            Image(systemName: "clock")
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
     }
 
     @ViewBuilder

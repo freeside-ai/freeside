@@ -193,6 +193,9 @@ func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error)
 	item.Status = domain.StatusOpen
 	item.DecidedAt = nil
 	item.Timing = domain.TimingSummary{}
+	// The terminal digest binds derived publication facts, not the instant at
+	// which a recovery pass first persisted the item.
+	item.CreatedAt = nil
 	payload, err := json.Marshal(struct {
 		Task Task                 `json:"task"`
 		Item domain.AttentionItem `json:"item"`

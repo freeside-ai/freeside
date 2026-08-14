@@ -1955,6 +1955,7 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 	if err != nil {
 		return false, err
 	}
+	createdAt := e.elaboration.now().UTC()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: itemID, ProjectID: run.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID},
@@ -1965,6 +1966,7 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 			Provenance: artifact.Provenance, Text: &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: specification.Body},
 		}},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+		CreatedAt: &createdAt,
 	}, nil)
 	if err != nil {
 		return false, err
@@ -2117,7 +2119,8 @@ func (e *Engine) recordElaborationFailure(ctx context.Context, run domain.Run, r
 		return err
 	}
 	item, err := elaborationFailureItem(run,
-		domain.ItemID("execution-failure-"+string(request.InvocationID)), status, summary)
+		domain.ItemID("execution-failure-"+string(request.InvocationID)), status, summary,
+		e.elaboration.now().UTC())
 	if err != nil {
 		return err
 	}
@@ -2153,7 +2156,7 @@ func (e *Engine) recordElaborationRevisionFailure(
 ) error {
 	item, err := elaborationFailureItem(run,
 		elaborationRevisionFailureItemID(request),
-		status, summary)
+		status, summary, e.elaboration.now().UTC())
 	if err != nil {
 		return err
 	}
@@ -2199,7 +2202,7 @@ func (e *Engine) elaborationRevisionFailed(
 }
 
 func elaborationFailureItem(
-	run domain.Run, id domain.ItemID, status exec.Status, summary string,
+	run domain.Run, id domain.ItemID, status exec.Status, summary string, createdAt time.Time,
 ) (domain.AttentionItem, error) {
 	runID := run.ID
 	reason := fmt.Sprintf("Elaboration ended %q without an accepted specification.", status)
@@ -2212,6 +2215,7 @@ func elaborationFailureItem(
 		Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityHigh, Reason: reason,
 		RequestedDecision: []domain.Action{domain.ActionStop}, ItemVersion: 1,
 		InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+		CreatedAt: &createdAt,
 	}, nil)
 }
 
@@ -2415,7 +2419,7 @@ func (e *Engine) reconcileElaborationGates(ctx context.Context) (int, int, error
 			if request.Iteration >= settings.MaxIterations {
 				failure, itemErr := elaborationFailureItem(run,
 					domain.ItemID("execution-failure-spec-revision-"+string(request.ImplementationRunID)),
-					exec.StatusFailed, ErrElaborationIterationsExhausted.Error())
+					exec.StatusFailed, ErrElaborationIterationsExhausted.Error(), e.elaboration.now().UTC())
 				if itemErr != nil {
 					return started, blocked, itemErr
 				}
@@ -2612,6 +2616,7 @@ func (e *Engine) enqueueSpecRevision(ctx context.Context, run domain.Run, reques
 func (e *Engine) ensureElaborationBlockedItem(
 	ctx context.Context, run domain.Run, approvalItemID domain.ItemID, waitingSince time.Time,
 ) (bool, error) {
+	createdAt := e.elaboration.now().UTC()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: domain.ItemID("blocked-" + string(approvalItemID)), ProjectID: run.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID},
@@ -2619,6 +2624,7 @@ func (e *Engine) ensureElaborationBlockedItem(
 		Reason:            fmt.Sprintf("Specification approval has been waiting since %s.", waitingSince.UTC().Format(time.RFC3339)),
 		RequestedDecision: []domain.Action{}, ItemVersion: 1,
 		InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+		CreatedAt: &createdAt,
 	}, nil)
 	if err != nil {
 		return false, err

@@ -72,6 +72,7 @@ func (s *Service) applyStopUnattended(
 		RequestedDecision: []domain.Action{domain.ActionResumeUnattended, domain.ActionAcknowledge},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt:         &now,
 		Posture:           &posture,
 		Status:            domain.StatusOpen,
 	}, nil)

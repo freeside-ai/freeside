@@ -115,7 +115,7 @@ func TestGolden(t *testing.T) {
 		CommitPlanNotice:  &noticeReason,
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,
-		ConversationID:    &convID, ExpiresWhen: &expires, Status: domain.StatusOpen,
+		ConversationID:    &convID, CreatedAt: &ts, ExpiresWhen: &expires, Status: domain.StatusOpen,
 	}, approved)
 	if err != nil {
 		t.Fatal(err)

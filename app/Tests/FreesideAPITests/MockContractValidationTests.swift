@@ -87,6 +87,10 @@ import Testing
         zeroVersion.item_version = 0
         #expect(MockContractValidation.itemValidityBreach(zeroVersion) == "non-positive item_version")
 
+        var zeroCreatedAt = AttentionFixtures.fixture(type: .spec_approval).item
+        zeroCreatedAt.created_at = daemonZeroInstant
+        #expect(MockContractValidation.itemValidityBreach(zeroCreatedAt) == "zero created_at")
+
         // A head-bound evidence artifact must name the same head as the
         // item; only the item's head moves here, so the binding diverges.
         var headMismatch = AttentionFixtures.fixture(type: .spec_approval).item

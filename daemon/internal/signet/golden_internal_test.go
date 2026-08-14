@@ -27,7 +27,7 @@ func TestSignetWireGoldens(t *testing.T) {
 		RequestedDecision: []domain.Action{domain.ActionApprove, domain.ActionDiscuss},
 		PRHeadSHA:         strings.Repeat("1", 40), ItemVersion: 3,
 		InterruptionClass: domain.InterruptionPlannedGate,
-		ConversationID:    &conversationID, ExpiresWhen: &expiresAt,
+		ConversationID:    &conversationID, CreatedAt: &createdAt, ExpiresWhen: &expiresAt,
 		Status: domain.StatusOpen,
 	}
 	delivery := domain.AttentionDelivery{

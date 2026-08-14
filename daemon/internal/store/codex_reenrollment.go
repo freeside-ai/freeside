@@ -209,6 +209,7 @@ func NewCodexReenrollmentMarker(
 		CodexReenrollmentRecoveryBinding: binding,
 		ItemVersion:                      version,
 		InterruptionClass:                domain.InterruptionExceptional,
+		CreatedAt:                        nil,
 		Posture:                          &posture,
 		Status:                           status,
 	}, nil)
@@ -237,6 +238,7 @@ func CodexReenrollmentMarkerOccurrence(
 		return 0, err
 	}
 	expected.Timing = item.Timing
+	expected.CreatedAt = item.CreatedAt
 	expected.DecidedAt = item.DecidedAt
 	if !reflect.DeepEqual(expected, item) {
 		return 0, fmt.Errorf("codex auth re-enrollment item diverges from its identity binding: %w",

@@ -602,6 +602,9 @@ func TestProductionOwnershipReGatesTheMarkerPayload(t *testing.T) {
 				item.Subject.ID != domain.SubjectID(tc.runID) || item.ProjectID != run.ProjectID {
 				t.Fatalf("quarantine item = %#v", item)
 			}
+			if item.CreatedAt == nil {
+				t.Fatal("quarantine item created_at is nil")
+			}
 
 			// A second pass (the restart case) converges on the one notice
 			// instead of failing or duplicating it.
@@ -993,6 +996,42 @@ func TestProductionQuarantineRejectsADivergentConcurrentItem(t *testing.T) {
 	)
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("divergent concurrent item accepted: %v", err)
+	}
+}
+
+// TestProductionQuarantineConvergesOnConcurrentCreationTime: each contender
+// samples its own creation stamp, but the first durable notice owns that
+// lifecycle fact and the losing pass must accept it without rewriting it.
+func TestProductionQuarantineConvergesOnConcurrentCreationTime(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, st := newQuarantineEngine(t, ctx)
+	runID := domain.RunID("run-concurrent-created-at")
+	itemID := productionQuarantineItemID(runID)
+	winner, err := productionQuarantineItem(
+		itemID, runID, "project-1", productionQuarantineUnreadable)
+	if err != nil {
+		t.Fatalf("construct winner: %v", err)
+	}
+	winnerCreatedAt := time.Date(2026, 8, 14, 20, 0, 0, 0, time.UTC)
+	winner.CreatedAt = &winnerCreatedAt
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, winner)
+	}); err != nil {
+		t.Fatalf("seed winner: %v", err)
+	}
+
+	loser := winner
+	loserCreatedAt := winnerCreatedAt.Add(time.Second)
+	loser.CreatedAt = &loserCreatedAt
+	if err := confirmProductionQuarantineItem(
+		ctx, st, itemID, loser, store.ErrStaleWrite,
+	); err != nil {
+		t.Fatalf("confirm concurrent winner: %v", err)
+	}
+	current := requireQuarantineItem(t, ctx, st, runID)
+	if current.CreatedAt == nil || !current.CreatedAt.Equal(winnerCreatedAt) {
+		t.Fatalf("winner created_at = %v, want %v", current.CreatedAt, winnerCreatedAt)
 	}
 }
 

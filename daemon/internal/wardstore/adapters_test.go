@@ -588,6 +588,9 @@ func TestCodexAuthStateIsIdentityScopedAndAdvisory(t *testing.T) {
 		if item.ProjectID != run.ProjectID || item.Subject.Type != domain.SubjectSystem {
 			t.Fatalf("attention binding = project %q, subject %#v", item.ProjectID, item.Subject)
 		}
+		if item.CreatedAt == nil {
+			t.Fatal("re-enrollment marker created_at is nil")
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)

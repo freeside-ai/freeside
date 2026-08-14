@@ -201,6 +201,10 @@ func (d *daemon) fileDurableStop(ctx context.Context, cause error) error {
 			return err
 		}
 		posture := domain.HealthPostureBlocking
+		createdAt := time.Now().UTC()
+		if d.now != nil {
+			createdAt = d.now().UTC()
+		}
 		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 			ID:        domain.ItemID(fmt.Sprintf("%s%d", durableStopItemPrefix, state.Revision+1)),
 			ProjectID: domain.ProjectID("project-system"),
@@ -214,6 +218,7 @@ func (d *daemon) fileDurableStop(ctx context.Context, cause error) error {
 			},
 			ItemVersion:       1,
 			InterruptionClass: domain.InterruptionExceptional,
+			CreatedAt:         &createdAt,
 			Posture:           &posture,
 			Status:            domain.StatusOpen,
 		}, nil)

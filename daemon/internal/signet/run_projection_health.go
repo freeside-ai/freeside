@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -78,7 +79,7 @@ func (s *Service) convergeRunProjectionHealth(ctx context.Context, excluded []ex
 		if openRuns[run.id] {
 			continue
 		}
-		item, err := newRunProjectionHealthItem(run)
+		item, err := newRunProjectionHealthItem(run, s.now().UTC())
 		if err != nil {
 			s.logger.Warn("run projection health converge: build item",
 				"run", run.id, "error", err)
@@ -130,7 +131,7 @@ func runProjectionHealthOpenItems(items []domain.AttentionItem) []domain.Attenti
 // is deliberately not embedded, only the trusted run coordinate the operator
 // inspects. Advisory posture surfaces the damaged run without gating unattended
 // admission for the whole system (a blocking posture would).
-func newRunProjectionHealthItem(run excludedRun) (domain.AttentionItem, error) {
+func newRunProjectionHealthItem(run excludedRun, createdAt time.Time) (domain.AttentionItem, error) {
 	runID := run.id
 	posture := domain.HealthPostureAdvisory
 	return domain.NewAttentionItem(domain.AttentionItemInput{
@@ -151,6 +152,7 @@ func newRunProjectionHealthItem(run excludedRun) (domain.AttentionItem, error) {
 		RequestedDecision: []domain.Action{domain.ActionRunDoctor, domain.ActionAcknowledge},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt:         &createdAt,
 		Posture:           &posture,
 		Status:            domain.StatusOpen,
 	}, nil)
