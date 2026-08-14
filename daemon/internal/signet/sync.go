@@ -224,7 +224,9 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 			snapshot, err := projectRunSnapshot(ctx, tx, state, run.Value, run.Snapshot, items)
 			if err != nil {
 				if errors.Is(err, ErrRunObservationIntegrity) {
-					excluded = append(excluded, excludedRun{id: run.Value.ID, err: err})
+					excluded = append(excluded, excludedRun{
+						id: run.Value.ID, projectID: run.Value.ProjectID, err: err,
+					})
 					continue
 				}
 				return err
@@ -251,6 +253,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 		return BootstrapSnapshot{}, fmt.Errorf("bootstrap sync: %w", err)
 	}
 	s.logExcludedRuns(excluded)
+	s.convergeRunProjectionHealth(ctx, excluded)
 	return out, nil
 }
 
@@ -516,7 +519,9 @@ func (s *Service) ListRuns(ctx context.Context) ([]RunSnapshot, error) {
 			snapshot, err := projectRunSnapshot(ctx, tx, state, value.Value, value.Snapshot, items)
 			if err != nil {
 				if errors.Is(err, ErrRunObservationIntegrity) {
-					excluded = append(excluded, excludedRun{id: value.Value.ID, err: err})
+					excluded = append(excluded, excludedRun{
+						id: value.Value.ID, projectID: value.Value.ProjectID, err: err,
+					})
 					continue
 				}
 				return err
@@ -529,6 +534,7 @@ func (s *Service) ListRuns(ctx context.Context) ([]RunSnapshot, error) {
 		return nil, fmt.Errorf("list runs: %w", err)
 	}
 	s.logExcludedRuns(excluded)
+	s.convergeRunProjectionHealth(ctx, excluded)
 	return out, nil
 }
 
@@ -754,10 +760,13 @@ func asRunObservationIntegrityError(err error) error {
 
 // excludedRun pairs a run the listing reads dropped with the integrity
 // contradiction that dropped it, so logExcludedRuns can name both after the
-// read transaction closes.
+// read transaction closes. projectID carries the run's project so the durable
+// AttentionSystemHealth item the converge mints binds to the same project the
+// run does (#770); a mis-bound item would itself trip authenticateRunObservation.
 type excludedRun struct {
-	id  domain.RunID
-	err error
+	id        domain.RunID
+	projectID domain.ProjectID
+	err       error
 }
 
 // logExcludedRuns records one durable Warn per run a listing read excluded for
