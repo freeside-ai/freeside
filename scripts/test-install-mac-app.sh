@@ -29,25 +29,135 @@ cat >"$STUB_BIN/uname" <<'STUB'
 printf 'Darwin\n'
 STUB
 
+# Faithful stand-in for the plutil operations install-mac-app.sh performs on
+# the daemon plist. The real fix (#762) rewrites ProgramArguments in one
+# `-replace … -json` call because `-replace ProgramArguments.<N>` inserts at
+# the index instead of overwriting it. Real plutil would be more faithful, but
+# the harness's synthetic Info.plist files are not valid plists, so its
+# CFBundleIdentifier reads must be stubbed; this stub therefore models the
+# whole-array replace directly and rejects the index form so a regression to
+# it fails loudly here (installer `die`) rather than passing green-but-blind.
 cat >"$STUB_BIN/plutil" <<'STUB'
 #!/usr/bin/env bash
 target=${!#}
 [[ -f "$target" ]] || exit 1
-if [[ "${1:-}" == -replace ]]; then
-    key=$2
-    value=$4
-    case "$key" in
-    ProgramArguments.2) token=__FREESIDE_DB_PATH__ ;;
-    ProgramArguments.4) token=__FREESIDE_STATE_DIR__ ;;
-    StandardErrorPath) token=__FREESIDE_STDERR_PATH__ ;;
+case "${1:-}" in
+-extract)
+    case "$2" in
+    CFBundleIdentifier) printf '%s\n' "${STUB_BUNDLE_ID:-ai.freeside.app.macos}" ;;
+    ProgramArguments)
+        awk '
+            /<key>ProgramArguments<\/key>/ { p=1; next }
+            p && /<array>/ { a=1; next }
+            a && /<\/array>/ { exit }
+            a { print }
+        ' "$target" ;;
+    ProgramArguments.*)
+        # Model `plutil -extract ProgramArguments.N raw`: print the Nth array
+        # string (0-based) decoded to raw and exit non-zero when N is out of
+        # range, so the installer's per-element guard and its trailing-index
+        # bound behave against the stub as they do against real plutil.
+        idx=${2#ProgramArguments.}
+        if val=$(awk -v idx="$idx" '
+            /<key>ProgramArguments<\/key>/ { p=1; next }
+            p && /<array>/ { a=1; next }
+            a && /<\/array>/ { a=0 }
+            a && /<string>/ {
+                if (n == idx+0) {
+                    line = $0
+                    sub(/^[[:space:]]*<string>/, "", line)
+                    sub(/<\/string>[[:space:]]*$/, "", line)
+                    print line
+                    found = 1
+                }
+                n++
+            }
+            END { exit(found ? 0 : 1) }
+        ' "$target"); then
+            printf '%s\n' "$val"
+            exit 0
+        fi
+        exit 1
+        ;;
+    StandardErrorPath)
+        awk '
+            /<key>StandardErrorPath<\/key>/ {
+                getline
+                sub(/^[[:space:]]*<string>/, "")
+                sub(/<\/string>[[:space:]]*$/, "")
+                print
+                exit
+            }
+        ' "$target" ;;
     *) exit 1 ;;
     esac
-    escaped=$(printf '%s' "$value" | sed 's/[\\&|]/\\&/g')
-    sed "s|$token|$escaped|" "$target" >"$target.tmp"
-    mv "$target.tmp" "$target"
     exit 0
-fi
-printf '%s\n' "${STUB_BUNDLE_ID:-ai.freeside.app.macos}"
+    ;;
+-replace)
+    case "$2" in
+    ProgramArguments)
+        [[ "$3" == -json ]] || exit 1
+        inner=${4#\[}
+        inner=${inner%\]}
+        inner=${inner#\"}
+        inner=${inner%\"}
+        sep=$'\x1f'
+        inner=${inner//'","'/$sep}
+        # Model plutil's JSON string decoding for the escapes json_string
+        # emits: \\ and \" (default: the char after the backslash), plus the
+        # control-character shortcuts \n \t \r \b \f. A single left-to-right
+        # pass, so an escaped backslash binds one backslash, not two. The rare
+        # \uXXXX form (only for control bytes a realistic path never carries)
+        # is not modelled. Without this the stub would not detect a regression
+        # that dropped json_string's encoding.
+        unescape_json() {
+            local s=$1 out='' i c e
+            for ((i = 0; i < ${#s}; i++)); do
+                c=${s:i:1}
+                if [[ "$c" == '\' && $((i + 1)) -lt ${#s} ]]; then
+                    ((i++))
+                    e=${s:i:1}
+                    case "$e" in
+                    n) out+=$'\n' ;;
+                    t) out+=$'\t' ;;
+                    r) out+=$'\r' ;;
+                    b) out+=$'\b' ;;
+                    f) out+=$'\f' ;;
+                    *) out+=$e ;;
+                    esac
+                else
+                    out+=$c
+                fi
+            done
+            printf '%s' "$out"
+        }
+        new=""
+        old_ifs=$IFS
+        IFS=$sep
+        for el in $inner; do
+            new+="		<string>$(unescape_json "$el")</string>"$'\n'
+        done
+        IFS=$old_ifs
+        STUB_NEW="$new" awk '
+            /<key>ProgramArguments<\/key>/ { print; p=1; next }
+            p && /<array>/ { print; printf "%s", ENVIRON["STUB_NEW"]; s=1; p=0; next }
+            s && /<\/array>/ { print; s=0; next }
+            s { next }
+            { print }
+        ' "$target" >"$target.tmp" && mv "$target.tmp" "$target"
+        exit 0
+        ;;
+    StandardErrorPath)
+        escaped=$(printf '%s' "$4" | sed 's/[\\&|]/\\&/g')
+        sed "s|__FREESIDE_STDERR_PATH__|$escaped|" "$target" >"$target.tmp"
+        mv "$target.tmp" "$target"
+        exit 0
+        ;;
+    *) exit 1 ;;
+    esac
+    ;;
+esac
+exit 1
 STUB
 
 cat >"$STUB_BIN/codesign" <<'STUB'
@@ -225,16 +335,29 @@ chmod +x "$STUB_BIN"/*
 
 STUB_AGENT_TEMPLATE=$TMP/ai.freeside.daemon.plist
 export STUB_AGENT_TEMPLATE
+# Mirror the shipped bundle plist (app/Apps/macOS/LaunchAgents/…): the same
+# reused `__FREESIDE_STATE_DIR__/freeside.db` db token and one string per line,
+# so the fixture exercises the real template shape rather than a divergent one.
 cat >"$STUB_AGENT_TEMPLATE" <<'PLIST'
-<plist><dict>
-<key>BundleProgram</key><string>Contents/Resources/freesided</string>
-<key>ProgramArguments</key><array>
-<string>freesided</string><string>-db</string><string>__FREESIDE_DB_PATH__</string>
-<string>-state-dir</string><string>__FREESIDE_STATE_DIR__</string>
-<string>-listen</string><string>127.0.0.1:7331</string>
-</array>
-<key>StandardErrorPath</key><string>__FREESIDE_STDERR_PATH__</string>
-</dict></plist>
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>BundleProgram</key>
+	<string>Contents/Resources/freesided</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>freesided</string>
+		<string>-db</string>
+		<string>__FREESIDE_STATE_DIR__/freeside.db</string>
+		<string>-state-dir</string>
+		<string>__FREESIDE_STATE_DIR__</string>
+		<string>-listen</string>
+		<string>127.0.0.1:7331</string>
+	</array>
+	<key>StandardErrorPath</key>
+	<string>__FREESIDE_STDERR_PATH__</string>
+</dict>
+</plist>
 PLIST
 
 pass=0
@@ -266,6 +389,7 @@ begin_case() {
     unset STUB_TERM_AFTER_MV_SOURCE
     unset STUB_FAIL_VERIFY_CALL
     unset STUB_SIGNING_IDENTITY
+    unset RUN_HOME
     echo "case: $CASE"
 }
 
@@ -286,7 +410,7 @@ run_installer_raw() {
         FREESIDE_MAC_INSTALL_DIR="$CASE_DIR/Applications" \
         FREESIDE_MAC_BUILD_DIR="$CASE_DIR/Build" \
         FREESIDE_MAC_SIGNING_IDENTITY="${STUB_SIGNING_IDENTITY-Test Identity}" \
-        HOME="$CASE_DIR/home" \
+        HOME="${RUN_HOME:-$CASE_DIR/home}" \
         bash "$INSTALLER" "$@" 2>&1)
     RC=$?
     set -e
@@ -340,6 +464,42 @@ assert_absent() {
         report_failure "expected path to be absent: $1"
     else
         pass=$((pass + 1))
+    fi
+}
+
+# Extract the ProgramArguments string vector, one element per line, from a
+# templated LaunchAgent plist. Works uniformly on the stubbed and (were the
+# harness ever run against it) real plutil output, since both emit standard
+# plist XML with one <string> per line inside the array.
+program_arguments_of() {
+    awk '
+        /<key>ProgramArguments<\/key>/ { p = 1; next }
+        p && /<array>/ { a = 1; next }
+        a && /<\/array>/ { exit }
+        a {
+            line = $0
+            sub(/^[[:space:]]*<string>/, "", line)
+            sub(/<\/string>[[:space:]]*$/, "", line)
+            print line
+        }
+    ' "$1"
+}
+
+# Pin the whole templated argument vector, not just placeholder absence: the
+# #762 defect shipped a doubled 9-element vector, which an omits-only check
+# would miss if a placeholder happened to resolve. $1 is the plist; the rest
+# are the expected arguments in order.
+assert_program_arguments() {
+    local path=$1
+    shift
+    local expected
+    expected=$(printf '%s\n' "$@")
+    local actual
+    actual=$(program_arguments_of "$path")
+    if [[ "$actual" == "$expected" ]]; then
+        pass=$((pass + 1))
+    else
+        report_failure "ProgramArguments mismatch in $path"$'\n'"expected:"$'\n'"$expected"$'\n'"actual:"$'\n'"$actual"
     fi
 }
 
@@ -955,14 +1115,18 @@ export STUB_BUILD_SUCCEEDS=true
 run_installer
 assert_rc 0
 agent=$destination/Contents/Library/LaunchAgents/ai.freeside.daemon.plist
+daemon_dir=$CASE_DIR/home/Library/Application\ Support/Freeside/daemon
 assert_file_contains "$agent" "Contents/Resources/freesided"
-assert_file_contains \
-    "$agent" "$CASE_DIR/home/Library/Application Support/Freeside/daemon/freeside.db"
-assert_file_contains \
-    "$agent" "$CASE_DIR/home/Library/Application Support/Freeside/daemon"
 assert_file_contains \
     "$agent" "$CASE_DIR/home/Library/Application Support/Freeside/daemon/freesided.log"
 assert_file_omits "$agent" "__FREESIDE_"
+# Exact vector: freesided binds -db, -state-dir, and the fixed listener with
+# no surviving placeholder and no doubled positional args (#762).
+assert_program_arguments "$agent" \
+    freesided \
+    -db "$daemon_dir/freeside.db" \
+    -state-dir "$daemon_dir" \
+    -listen 127.0.0.1:7331
 assert_file_contains "$destination/Contents/Resources/freesided" "#!/usr/bin/env bash"
 assert_exists "$CASE_DIR/codesign-sign-called"
 assert_file_contains \
@@ -974,6 +1138,76 @@ assert_file_contains \
 assert_file_contains \
     "$CASE_DIR/defaults-calls" \
     "after-build delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
+
+# A state path bearing a JSON metacharacter must bind byte-for-byte. Here HOME
+# carries a literal backslash before `t`; a raw interpolation into the `-json`
+# fragment would let plutil decode `\t` into a tab and bind a path that is not
+# the created directory. The exact-vector assertion pins the literal backslash,
+# so dropping json_string's encoding reddens this case.
+begin_case "state paths with a JSON metacharacter bind literally" json-metachar
+export STUB_BUILD_SUCCEEDS=true
+bs=$'\\'
+meta_home="$CASE_DIR/home${bs}tstate"
+RUN_HOME=$meta_home run_installer
+assert_rc 0
+agent=$CASE_DIR/Applications/Freeside.app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist
+meta_dir=$meta_home/Library/Application\ Support/Freeside/daemon
+assert_program_arguments "$agent" \
+    freesided \
+    -db "$meta_dir/freeside.db" \
+    -state-dir "$meta_dir" \
+    -listen 127.0.0.1:7331
+
+# A legal home path may itself contain "__FREESIDE_"; the guard must verify the
+# bound values exactly, not reject that substring, or it would abort every
+# install for such an operator. The old prefix guard reddens this case.
+begin_case "state paths containing __FREESIDE_ install cleanly" freeside-substr
+export STUB_BUILD_SUCCEEDS=true
+sub_home="$CASE_DIR/__FREESIDE_home"
+RUN_HOME=$sub_home run_installer
+assert_rc 0
+agent=$CASE_DIR/Applications/Freeside.app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist
+sub_dir=$sub_home/Library/Application\ Support/Freeside/daemon
+assert_program_arguments "$agent" \
+    freesided \
+    -db "$sub_dir/freeside.db" \
+    -state-dir "$sub_dir" \
+    -listen 127.0.0.1:7331
+
+# XML metacharacters in a legal home path must round-trip literally through the
+# raw per-element guard: an xml1 re-extraction would hand them back escaped
+# (&amp; etc.) and abort a valid install. Enumerate &, <, and > together.
+begin_case "state paths with XML metacharacters install cleanly" xml-metachar
+export STUB_BUILD_SUCCEEDS=true
+xml_home="$CASE_DIR/home&a<b>c"
+RUN_HOME=$xml_home run_installer
+assert_rc 0
+agent=$CASE_DIR/Applications/Freeside.app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist
+xml_dir=$xml_home/Library/Application\ Support/Freeside/daemon
+assert_program_arguments "$agent" \
+    freesided \
+    -db "$xml_dir/freeside.db" \
+    -state-dir "$xml_dir" \
+    -listen 127.0.0.1:7331
+
+# A control character (here a tab) is a legal pathname byte that `-json`
+# rejects raw; json_string must encode it (\t) so the whole-array rewrite
+# still installs, preserving the prior per-index `-string` behavior. The tab
+# is mid-path so the line-based assertions read it intact. (Real plutil's JSON
+# strictness is proven against json_string directly in the PR verification; the
+# stub is lenient, so this case exercises the encode/decode plumbing.)
+begin_case "state paths with a control character install cleanly" ctrl-char
+export STUB_BUILD_SUCCEEDS=true
+tab_home="$CASE_DIR/home"$'\t'"state"
+RUN_HOME=$tab_home run_installer
+assert_rc 0
+agent=$CASE_DIR/Applications/Freeside.app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist
+tab_dir=$tab_home/Library/Application\ Support/Freeside/daemon
+assert_program_arguments "$agent" \
+    freesided \
+    -db "$tab_dir/freeside.db" \
+    -state-dir "$tab_dir" \
+    -listen 127.0.0.1:7331
 
 begin_case "registration invalidation precedes a later build failure" 30
 run_installer
