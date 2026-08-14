@@ -343,9 +343,10 @@ Tailscale.
 process exits only involuntarily or to be restarted. Classification of
 today's fatal-channel writers and exit paths:
 
-- **Durable stop** (close unattended admission through the Section 4
-  transition, file `system_health`, keep serving reads; only explicit
-  resume reopens admission, and a restart never does):
+- **Durable stop** (close unattended admission durably through the Section 4
+  gate: operator stops append the stop transition, while system stops file a
+  blocking `system_health` item; keep serving reads; only explicit resume
+  reopens admission, and a restart never does):
   - store I/O and correctness failures in any long-running loop (the
     workflow reconcile loop, a scheduler pass, active-resource enumeration
     or commit): an invariant on durable state recurs on restart, and a
