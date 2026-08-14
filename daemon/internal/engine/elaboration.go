@@ -1593,12 +1593,33 @@ func (e *Engine) acceptElaborationAttempt(ctx context.Context, run domain.Run, a
 		return false, err
 	}
 	if err := e.cancelExpiredElaboration(ctx, attempt, settings.StageActiveTime); err != nil {
+		// The expiry cancellation inspects through the same policy-gated driver
+		// as collection, so a mutable-policy refusal (a backend recheck in
+		// progress) must hold here too, not exit the loop into a durable stop
+		// (issue #761): this runs before the collect hold below, so classifying
+		// only there would still durable-stop an expired attempt. The
+		// cancellation defers to a later pass once the refusal clears.
+		if MutableAdmissionPolicyRefusal(err) {
+			return false, nil
+		}
 		return false, err
 	}
 	result, ready, err := e.collectTerminal(ctx, run.ID, attempt)
 	if err != nil {
 		if errors.Is(err, ErrInvocationLost) {
 			return false, e.recordElaborationFailure(ctx, run, request, exec.StatusFailed, err.Error())
+		}
+		// A mutable-policy refusal at the collect re-gate (a backend recheck in
+		// progress, a floor that later lifts) is a fail-closed verdict that can
+		// clear without changing the recorded attempt. Hold the invocation for
+		// a later pass instead of exiting the engine loop into a durable stop
+		// (issue #761): the dispatch path, the production collector, and the
+		// elaboration admissibility re-check below already take this exact hold.
+		// A same-configuration recheck is tolerated upstream by
+		// AuthenticateBackendConformant, so what reaches here is a genuine
+		// refusal the next pass re-evaluates against fresh state.
+		if MutableAdmissionPolicyRefusal(err) {
+			return false, nil
 		}
 		return false, err
 	}
