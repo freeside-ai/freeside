@@ -41,6 +41,12 @@ type (
 	issueObserver func(ctx context.Context, repo string, number int) (publish.IssueObservation, error)
 )
 
+// labelIssueObserver reads the open issues carrying one initiator label,
+// conditionally through the publish reconciler (ReconcileLabelIssues). The
+// label-intake loop consumes it to allocate occurrences; the fake lane wires no
+// label observer.
+type labelIssueObserver func(ctx context.Context, repo, label string) (publish.LabelIssuesObservation, error)
+
 // nativeReviewObserver reads one PR's native (forge-hosted) review activity —
 // its submitted reviews, inline review comments, and description reactions —
 // as best-effort extra evidence (plan §5.16, §7). The production composition

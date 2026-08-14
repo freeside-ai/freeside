@@ -2284,7 +2284,11 @@ func TestSubmitElaborationRunSourceGuard(t *testing.T) {
 		}
 	})
 
-	t.Run("issue_subject is deferred to #659", func(t *testing.T) {
+	t.Run("issue_subject adopts a reserved run, failing closed without one", func(t *testing.T) {
+		// The issue-subject arm (#659) adopts the reserved elaboration run the
+		// label-intake admission persists; the fixture never reserves one, so the
+		// arm fails closed rather than fabricating a run. The full happy path is
+		// covered in elaboration_issue_subject_test.go.
 		f := newElaborationFixture(t, true, 4)
 		spec := f.specWithSource(domain.ElaborationSource{
 			Kind: domain.ElaborationSourceIssueSubject,
@@ -2293,8 +2297,8 @@ func TestSubmitElaborationRunSourceGuard(t *testing.T) {
 			},
 		})
 		_, err := SubmitElaborationRun(t.Context(), f.store, spec)
-		if err == nil || !strings.Contains(err.Error(), "reconciliation loop") {
-			t.Fatalf("issue_subject source: err = %v, want a deferred-path refusal", err)
+		if !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("issue_subject source without a reserved run: err = %v, want ErrNotFound", err)
 		}
 	})
 }

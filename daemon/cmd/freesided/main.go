@@ -344,6 +344,11 @@ type config struct {
 	SchedulerInterval                  time.Duration
 	ApprovedRecipes                    map[domain.Digest]bool
 	BackupEncryptionWaiverRepositoryID *int64
+	// IntakeInitiators are the configured label initiators the label-intake
+	// reconciler observes (#659). Empty leaves the loop supervised but idle; the
+	// rein resolver and workflow-definition parsing that populate it are a later
+	// unit, so a composition (or a test) supplies them directly for now.
+	IntakeInitiators []intakeInitiator
 	// Logger is the process logger the long-running loops report through.
 	// Nil discards their records, which keeps every test composition quiet
 	// without each one having to build a handler.
@@ -766,6 +771,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	var fakeSched *scheduler.Scheduler
 	var claudeSched *scheduler.Scheduler
 	var activeReconciler *activeResourceReconciler
+	var intakeReconcilerLoop *intakeReconciler
 	if claudeWiring == nil {
 		// Construct every loop before making restart-gated recovery available.
 		// None is running yet, so no operator can resume into a partial start.
@@ -795,6 +801,14 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			reviewInvalidate: claudeWiring.reviewInvalidate,
 			evictConcluded:   claudeWiring.evictConcluded,
 			now:              func() time.Time { return time.Now().UTC() },
+		}
+		intakeReconcilerLoop = &intakeReconciler{
+			store: st, blobs: blobs, engine: workflow, attention: attention,
+			observeLabel: claudeWiring.observeLabelIssues,
+			observeIssue: claudeWiring.observeIssue,
+			evictLabel:   claudeWiring.evictLabelIssues,
+			initiators:   cfg.IntakeInitiators,
+			now:          func() time.Time { return time.Now().UTC() },
 		}
 	}
 	if err := d.enableDurableStopRecovery(parent); err != nil {
@@ -842,7 +856,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}()
 	}
 	if claudeSched != nil {
-		d.wg.Add(3)
+		d.wg.Add(4)
 		// The production publication lane gets its own loop: one task holds a
 		// clone, a containerized verification, and GitHub calls for minutes,
 		// which inside the reconcile loop would stall every other run,
@@ -862,6 +876,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			err := activeReconciler.Run(ctx,
 				defaultActiveResourceInterval, operatorActiveResourceInterval, cfg.Logger)
 			d.componentExited(parent, ctx, componentActiveResource, err)
+		}()
+		go func() {
+			defer d.wg.Done()
+			err := intakeReconcilerLoop.Run(ctx, defaultIntakeInterval, cfg.Logger)
+			d.componentExited(parent, ctx, componentLabelIntake, err)
 		}()
 	}
 	pairingCode, _, err := attention.MintPairingCode(parent)

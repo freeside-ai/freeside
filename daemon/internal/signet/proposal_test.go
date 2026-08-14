@@ -166,6 +166,74 @@ func TestRunProposalStartAndDeclineConcludePerInstance(t *testing.T) {
 	}
 }
 
+// TestStartRunProposalUnattendedReportsStart proves the daemon-attributed start
+// records a decision and reports started only when the card is open, so the
+// label-intake caller launches only a start it actually made. A card an operator
+// declined between the caller's gate and this call reports started=false and
+// keeps its decline: an explicit non-start decision can never become a run. An
+// already-started card likewise reports no second start (convergence-launch is
+// the reconciler's already-decided path, not a second decision here).
+func TestStartRunProposalUnattendedReportsStart(t *testing.T) {
+	ctx := context.Background()
+	readStatus := func(t *testing.T, f proposalDecisionFixture) domain.ItemStatus {
+		t.Helper()
+		var item domain.AttentionItem
+		if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			item, err = tx.GetAttentionItem(ctx, f.item.ID)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return item.Status
+	}
+
+	t.Run("open card starts", func(t *testing.T) {
+		f := newProposalDecisionFixture(t)
+		started, err := f.service.StartRunProposalUnattended(ctx, f.item.ID, "cmd-start-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !started {
+			t.Fatal("an open run_proposal must report started")
+		}
+		if status := readStatus(t, f); status != domain.StatusResolved {
+			t.Fatalf("item status = %q, want resolved", status)
+		}
+	})
+
+	t.Run("declined card does not start", func(t *testing.T) {
+		f := newProposalDecisionFixture(t)
+		if _, err := f.service.Submit(ctx, f.proposalCommand("decline-1", domain.ActionDecline)); err != nil {
+			t.Fatal(err)
+		}
+		started, err := f.service.StartRunProposalUnattended(ctx, f.item.ID, "cmd-start-2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if started {
+			t.Fatal("a declined run_proposal must not report started")
+		}
+		if status := readStatus(t, f); status != domain.StatusDismissed {
+			t.Fatalf("item status = %q, want the decline preserved (dismissed)", status)
+		}
+	})
+
+	t.Run("already started card does not re-decide", func(t *testing.T) {
+		f := newProposalDecisionFixture(t)
+		if started, err := f.service.StartRunProposalUnattended(ctx, f.item.ID, "cmd-a"); err != nil || !started {
+			t.Fatalf("first start: started=%v err=%v", started, err)
+		}
+		started, err := f.service.StartRunProposalUnattended(ctx, f.item.ID, "cmd-b")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if started {
+			t.Fatal("a resolved card must not report a second start")
+		}
+	})
+}
+
 func TestRunProposalSnoozeAdvancesVersionAndRetryConverges(t *testing.T) {
 	f := newProposalDecisionFixture(t)
 	command := f.proposalCommand("command-snooze", domain.ActionSnooze)
