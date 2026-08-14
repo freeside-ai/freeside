@@ -484,8 +484,14 @@ func (e *stubExports) LookupExecutionOutcomeRecord(
 }
 
 func (e *stubExports) RecordExportRejection(
-	_ context.Context, rejection domain.ExportRejection,
+	ctx context.Context, rejection domain.ExportRejection,
 ) error {
+	// A real store begins its write transaction under the caller's context, so
+	// a canceled one fails the insert immediately. Model that so a test can
+	// prove the diagnostic write is detached from run cancellation.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.rejectErr != nil {

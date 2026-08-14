@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -26,6 +27,39 @@ import (
 // released directory; every operational or ambiguous failure preserves the
 // phaseExported replay state.
 var errDefinitiveExportRejection = errors.New("released export was definitively rejected")
+
+// definitiveRejection carries a rejected export's diagnostic finding sample
+// from the import boundary to the terminal-commit path. The ExportRejection is
+// recorded there, best-effort, only after the authoritative failed
+// ExecutionOutcome commits (recordRejectionDetail) — never before the released
+// directory is cleaned. Recovery therefore never observes a rejection without
+// its outcome and needs no rejection-specific special-casing: a crash between
+// the outcome and the detail write loses only the diagnostic, never
+// correctness (issue #768). It wraps errDefinitiveExportRejection so the
+// directory-cleanup classification is unchanged, and its message is the
+// count-only summary the failed outcome carries (per-finding paths stay
+// daemon-internal, off the client-visible AttentionItem.Reason).
+type definitiveRejection struct {
+	findings []domain.ExportRejectionFinding
+	// fatal is the count of findings that actually blocked under the profile;
+	// total is every reported finding. They differ only under the specification
+	// profile, where tolerated debris is reported but not blocking, so the
+	// summary must name the fatal count rather than labelling debris
+	// publish-blocking.
+	fatal int
+	total int
+}
+
+func (r *definitiveRejection) Error() string {
+	if r.fatal == r.total {
+		return fmt.Sprintf("%s: gauntlet containment reported %d publish-blocking findings",
+			errDefinitiveExportRejection.Error(), r.total)
+	}
+	return fmt.Sprintf("%s: gauntlet containment reported %d publish-blocking of %d findings",
+		errDefinitiveExportRejection.Error(), r.fatal, r.total)
+}
+
+func (r *definitiveRejection) Unwrap() error { return errDefinitiveExportRejection }
 
 // errExportAuthorityConflict marks a durable ExecutionExport that disagrees
 // with this invocation's released facts. It is neither retryable nor safe to
@@ -78,6 +112,16 @@ func (d *Driver) runPipeline(ctx context.Context, in intent) {
 	} else {
 		log.Error("stage failed", "error", err)
 	}
+	var rej *definitiveRejection
+	if errors.As(err, &rej) {
+		// The live session retains a failed terminal write for Inspect/Collect,
+		// so a returned error only needs logging here, matching d.commit.
+		if commitErr := d.commitRejection(ctx, log, in, status, rej); commitErr != nil {
+			log.Error("terminal result write failed; retained for retry",
+				"status", string(status), "error", commitErr)
+		}
+		return
+	}
 	d.commit(log, in.InvocationID, exec.StageResult{
 		InvocationID: in.InvocationID, Status: status,
 		Summary: truncateSummary(err.Error()),
@@ -94,6 +138,48 @@ func (d *Driver) commit(log *slog.Logger, id domain.InvocationID, result exec.St
 		return
 	}
 	log.Debug("terminal result committed", "status", string(result.Status))
+}
+
+// rejectionDetailWriteTimeout bounds the best-effort diagnostic write so a
+// hung store cannot delay daemon shutdown, while still giving the write a
+// chance to land after the run context is canceled.
+const rejectionDetailWriteTimeout = 15 * time.Second
+
+// commitRejection commits the authoritative failed (or canceled) outcome for a
+// definitive rejection, then records the diagnostic ExportRejection detail
+// best-effort. The order is load-bearing: the outcome is the terminal
+// authority, so it commits first; the detail write follows and never blocks or
+// fails the terminal, which is what keeps recovery free of rejection-specific
+// convergence special-casing (issue #768).
+//
+// It returns the terminal-write error so a caller without a retrying live
+// session — recovery, which has already deleted the released directory — can
+// propagate it and be retried, rather than dropping a failed write as success
+// and having the next reconciliation record the rejected attempt as lost. The
+// live-pipeline caller ignores the return: commitResult has already retained
+// the pending result on its session for Inspect/Collect to retry.
+//
+// The detail write runs on a context detached from the run's cancellation, the
+// same way commitResult writes the outcome under context.Background(). This is
+// what makes it best-effort during the shutdown race: a canceled run still
+// commits a canceled outcome, and passing that canceled context to the store
+// would fail the diagnostic insert every time. It stays bounded so a stalled
+// store cannot hold shutdown open on an expendable write.
+func (d *Driver) commitRejection(
+	ctx context.Context, log *slog.Logger, in intent, status exec.Status, rej *definitiveRejection,
+) error {
+	if err := d.commitResult(in.InvocationID, exec.StageResult{
+		InvocationID: in.InvocationID, Status: status,
+		Summary: truncateSummary(rej.Error()),
+	}); err != nil {
+		return err
+	}
+	log.Debug("terminal result committed", "status", string(status))
+	detailCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx), rejectionDetailWriteTimeout)
+	defer cancel()
+	d.recordRejectionDetail(detailCtx, in, rej)
+	return nil
 }
 
 // handoffAndImport seeds the exact base, runs the ward gate, imports the
@@ -213,9 +299,8 @@ func (d *Driver) finish(ctx context.Context, in intent, out exportOutcome) (exec
 		}
 		return exec.StageResult{}, err
 	}
-	if err := validateImportResult(imported); err != nil {
-		return exec.StageResult{}, fmt.Errorf("%w: %w",
-			errDefinitiveExportRejection, err)
+	if err := d.validateImportFindings(in, imported, opts.Policy.FindingProfile); err != nil {
+		return exec.StageResult{}, err
 	}
 
 	manifestDigest, err := fileDigest(filepath.Join(out.dir, export.ManifestFilename))
@@ -243,11 +328,14 @@ func (d *Driver) finish(ctx context.Context, in intent, out exportOutcome) (exec
 	if err != nil {
 		return exec.StageResult{}, err
 	}
-	// Every byte needed to reconstruct the exact candidate lands before the
+	// Every byte needed to reconstruct a publishable candidate lands before the
 	// immutable export row. A crash can leave unreferenced content-addressed
-	// bytes, but never an ExecutionExport whose source material disappeared
-	// with the released directory.
-	artifacts, replay, err := d.persistReleasedMaterial(ctx, in, out, record, imported.Claims)
+	// bytes, but never an ExecutionExport whose publication source material
+	// disappeared with the released directory. The elaboration profile is the
+	// one exception: its commit is never published, so its repo-channel blobs
+	// are deliberately not persisted (persistsRepositoryChannel).
+	artifacts, replay, err := d.persistReleasedMaterial(
+		ctx, in, out, record, imported.Claims, persistsRepositoryChannel(opts.Policy.FindingProfile))
 	if err != nil {
 		return exec.StageResult{}, err
 	}
@@ -326,16 +414,150 @@ func isDefinitiveImportRejection(err error) bool {
 		errors.Is(err, importer.ErrBlobTooLarge)
 }
 
-func validateImportResult(imported importer.Result) error {
-	if len(imported.Findings) != 0 {
-		return fmt.Errorf(
-			"gauntlet containment reported %d publish-blocking findings",
-			len(imported.Findings))
+// validateImportFindings decides the released import's fate under the stage's
+// finding profile. Under the default publish-strict profile every finding is
+// fatal, exactly as before; the elaboration profile tolerates the
+// workspace-debris classes because it publishes a typed specification, never
+// workspace content. A fatal finding returns a definitiveRejection carrying the
+// diagnostic sample; the ExportRejection itself is recorded later, after the
+// failed outcome commits (see definitiveRejection), so this function performs
+// no store write and cannot fail on one.
+func (d *Driver) validateImportFindings(
+	in intent, imported importer.Result, profile *importer.FindingProfile,
+) error {
+	fatal, tolerated := partitionFindings(imported.Findings, profile)
+	if len(fatal) > 0 {
+		return newDefinitiveRejection(fatal, tolerated)
+	}
+	if len(tolerated) > 0 {
+		d.logger.Info("import tolerated non-fatal findings",
+			"invocation", string(in.InvocationID), "profile", profileLabel(profile),
+			"tolerated", len(tolerated))
 	}
 	if imported.CommitSHA == "" {
-		return fmt.Errorf("gauntlet containment withheld a candidate commit")
+		return fmt.Errorf("%w: gauntlet containment withheld a candidate commit",
+			errDefinitiveExportRejection)
 	}
 	return nil
+}
+
+// profileLabel names a possibly-absent finding profile for a log line; a nil
+// profile is the default publish-strict behavior.
+func profileLabel(profile *importer.FindingProfile) string {
+	if profile == nil {
+		return string(importer.FindingProfilePublishStrict)
+	}
+	return string(*profile)
+}
+
+// partitionFindings splits a result's findings into the definitively fatal and
+// the tolerated under the given profile. Both slices preserve the importer's
+// order.
+func partitionFindings(
+	findings []importer.Finding, profile *importer.FindingProfile,
+) (fatal, tolerated []importer.Finding) {
+	for _, f := range findings {
+		if f.Fatal(profile) {
+			fatal = append(fatal, f)
+		} else {
+			tolerated = append(tolerated, f)
+		}
+	}
+	return fatal, tolerated
+}
+
+// maxPersistedRejectionFindings caps how many findings the durable rejection
+// record retains. The findings are candidate-controlled (kinds and long paths
+// an adversarial workspace can flood), and the record is permanent and copied
+// into every backup checkpoint, so an uncapped body would let one rejected
+// attempt bloat the control-plane database. The record keeps this many findings
+// as a diagnostic sample plus the true total; the failed-outcome summary and
+// the log line already carry the blocking and total counts.
+const maxPersistedRejectionFindings = 100
+
+// newDefinitiveRejection builds the rejection carrying a bounded, fatal-first
+// diagnostic sample. Fatal findings lead so the true cause is never crowded out
+// of the capped sample by tolerated debris — which a candidate-controlled
+// workspace can flood — while the total spans every reported finding.
+func newDefinitiveRejection(fatal, tolerated []importer.Finding) *definitiveRejection {
+	total := len(fatal) + len(tolerated)
+	sample := make([]importer.Finding, 0, min(total, maxPersistedRejectionFindings))
+	for _, group := range [][]importer.Finding{fatal, tolerated} {
+		for _, f := range group {
+			if len(sample) == maxPersistedRejectionFindings {
+				break
+			}
+			sample = append(sample, f)
+		}
+	}
+	return &definitiveRejection{
+		findings: domainRejectionFindings(sample), fatal: len(fatal), total: total,
+	}
+}
+
+// recordRejectionDetail writes the diagnostic ExportRejection after the failed
+// outcome is already durable. It is best-effort: the ExecutionOutcome is the
+// authoritative terminal, and losing this row to a crash or a write error costs
+// only the per-finding detail, never correctness. The record is keyed by the
+// Start-pinned instant so a retried write converges. Per-finding paths reach
+// the durable record and the error-level log line here, never the client-facing
+// outcome summary (issue #768).
+func (d *Driver) recordRejectionDetail(ctx context.Context, in intent, rej *definitiveRejection) {
+	rejection, err := domain.NewExportRejection(domain.ExportRejectionInput{
+		InvocationID:  in.InvocationID,
+		AdmissionID:   in.Spec.AdmissionID,
+		Findings:      rej.findings,
+		TotalFindings: rej.total,
+		RecordedAt:    in.RecordedAt,
+	})
+	if err != nil {
+		d.logger.Error("build export rejection detail",
+			"invocation", string(in.InvocationID), "error", err)
+		return
+	}
+	if err := d.outcomes.RecordExportRejection(ctx, rejection); err != nil {
+		d.logger.Error("record export rejection detail",
+			"invocation", string(in.InvocationID), "error", err)
+		return
+	}
+	d.logger.Error("released export definitively rejected by gauntlet containment",
+		"invocation", string(in.InvocationID), "findings", rej.total,
+		"detail", rejectionDetail(rejection.Findings))
+}
+
+// domainRejectionFindings lifts import findings into the durable record's flat
+// shape. Path and PathHex are mutually exclusive in a manifest entry, so the
+// lift preserves that exclusivity the domain Validate requires.
+func domainRejectionFindings(findings []importer.Finding) []domain.ExportRejectionFinding {
+	out := make([]domain.ExportRejectionFinding, 0, len(findings))
+	for _, f := range findings {
+		out = append(out, domain.ExportRejectionFinding{
+			Kind: string(f.Kind), Path: f.Path, PathHex: f.PathHex,
+			Rule: f.Rule, Line: f.Line, Detail: f.Detail,
+		})
+	}
+	return out
+}
+
+// maxSummaryFindings bounds how many kind:path pairs the rejection summary
+// folds in; the durable record holds all of them, and the summary column is
+// capped anyway (truncateSummary).
+const maxSummaryFindings = 5
+
+// persistsRepositoryChannel reports whether this import's repo-channel blobs
+// must enter durable storage. The specification (elaboration) profile publishes
+// a typed result and never publishes the repo commit, so those blobs are
+// vestigial: skipping them keeps unscanned tolerated content (a
+// secret_scan_skipped blob most sharply) out of the daemon CAS, which
+// publish-strict never admits because it rejects that finding outright. Every
+// other profile may publish, so its repo blobs must be resolvable for the
+// production replay that reconstructs the commit. This is safe only while no
+// path builds a publication replay from an elaboration export: the elaboration
+// arm of engine.RecordExecutionExport records the export export-only and mints
+// no publication task, and backup artifact closure pulls repo entry blobs only
+// through such a task (issue #768).
+func persistsRepositoryChannel(profile *importer.FindingProfile) bool {
+	return profile == nil || *profile != importer.FindingProfileSpecification
 }
 
 func (d *Driver) persistReleasedMaterial(
@@ -344,12 +566,15 @@ func (d *Driver) persistReleasedMaterial(
 	out exportOutcome,
 	record domain.ExecutionExport,
 	claims []domain.AgentClaim,
+	persistRepositoryChannel bool,
 ) ([]domain.Digest, executionReplay, error) {
 	if err := d.persistManifests(ctx, out, record); err != nil {
 		return nil, executionReplay{}, err
 	}
-	if err := d.persistRepositoryBlobs(ctx, out); err != nil {
-		return nil, executionReplay{}, err
+	if persistRepositoryChannel {
+		if err := d.persistRepositoryBlobs(ctx, out); err != nil {
+			return nil, executionReplay{}, err
+		}
 	}
 	// Evidence lands before the export record: the released blobs live only
 	// under this directory, and a durable row is an assertion that every
@@ -1263,6 +1488,20 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 			if ctx.Err() != nil {
 				status = exec.StatusCanceled
 			}
+			// A re-derived definitive rejection routes through commitRejection,
+			// the same terminal path as the live pipeline and recoverExported, so
+			// its diagnostic detail is written beside the outcome rather than
+			// dropped by a generic commitResult (the directory is already gone).
+			var rej *definitiveRejection
+			if errors.As(err, &rej) {
+				if commitErr := d.commitRejection(ctx,
+					d.logger.With("invocation", string(in.InvocationID), "run", in.RunID),
+					in, status, rej); commitErr != nil {
+					return fmt.Errorf("%w: commit recovery result: %w",
+						ErrRecoveryRetryable, commitErr)
+				}
+				return nil
+			}
 			if commitErr := d.commitResult(in.InvocationID, exec.StageResult{
 				InvocationID: in.InvocationID, Status: status,
 				Summary: truncateSummary(err.Error()),
@@ -1415,9 +1654,47 @@ func (d *Driver) recoverExported(ctx context.Context, in intent) error {
 		removeReleasedExport(out.dir)
 		return nil
 	}
+	// Adopt any already-written non-export terminal before deciding anything
+	// else. The live pipeline (or a prior recovery pass) can durably record a
+	// failed outcome — a definitive rejection commits one — or a canceled one
+	// under daemon shutdown, before its intent phase commits. Converging on that
+	// authoritative outcome here is what keeps the write-once record from making
+	// recovery retry forever; re-importing a surviving directory instead could
+	// derive a second, conflicting outcome.
+	if outcome, outcomeFound, outcomeErr := d.outcomes.LookupExecutionOutcome(
+		ctx, in.InvocationID,
+	); outcomeErr != nil {
+		return fmt.Errorf("%w: lookup execution outcome: %w", ErrRecoveryRetryable, outcomeErr)
+	} else if outcomeFound {
+		if err := d.adoptRecordedOutcome(ctx, in, outcome); err != nil {
+			return err
+		}
+		removeReleasedExport(out.dir)
+		return nil
+	}
+	// No terminal outcome is recorded. A surviving directory is replayed through
+	// finish(); a gone directory means nothing durable was decided.
 	if _, err := os.Stat(out.dir); err == nil {
 		result, err := d.completeReleasedExport(ctx, in, out)
 		if err != nil {
+			// A re-derived definitive rejection is a normal terminal, not a
+			// recovery failure. Commit it through the same terminal path as the
+			// live pipeline — the clean count-only summary and the best-effort
+			// diagnostic detail — rather than letting reconcileIntent's generic
+			// catch-all record it as a "recovery failed:" outcome without detail.
+			var rej *definitiveRejection
+			if errors.As(err, &rej) {
+				if commitErr := d.commitRejection(ctx,
+					d.logger.With("invocation", string(in.InvocationID), "run", in.RunID),
+					in, exec.StatusFailed, rej); commitErr != nil {
+					// No live session retains a failed recovery write, so propagate
+					// it as retryable instead of returning success and letting the
+					// next pass record the rejected attempt as lost.
+					return fmt.Errorf("%w: commit recovered rejection: %w",
+						ErrRecoveryRetryable, commitErr)
+				}
+				return nil
+			}
 			return err
 		}
 		if err := d.commitResult(in.InvocationID, result); err != nil {
@@ -1430,18 +1707,66 @@ func (d *Driver) recoverExported(ctx context.Context, in intent) error {
 			ErrRecoveryRetryable, err)
 	}
 	if lookupErr != nil {
-		// A read or reconstruction error says nothing about presence. Leave
-		// the exported intent retryable rather than turning a transient
-		// failure into permanent loss.
+		// A read or reconstruction error says nothing about presence. Leave the
+		// exported intent retryable rather than turning a transient failure into
+		// permanent loss.
 		return fmt.Errorf("%w: lookup execution export: %w",
 			ErrRecoveryRetryable, lookupErr)
 	}
-	if !found {
-		// Neither the released directory nor a durable record survived, so
-		// nothing was published and the attempt is rerun-safe.
+	// Neither a durable export record, a terminal outcome, a rejection, nor the
+	// released directory survived, so nothing was published and the attempt is
+	// rerun-safe.
+	return d.commitLost(ctx, in.InvocationID)
+}
+
+// adoptRecordedOutcome commits the intent phase to match a terminal outcome
+// that was already durably written, so a crash between the outcome write and
+// its phase commit converges on the authoritative record instead of
+// resynthesizing (and conflicting with) it. A lost outcome routes through
+// commitLost, which owns the phaseLost transition.
+func (d *Driver) adoptRecordedOutcome(
+	ctx context.Context, in intent, outcome domain.ExecutionOutcome,
+) error {
+	switch outcome.Status {
+	case domain.ExecutionOutcomeLost:
 		return d.commitLost(ctx, in.InvocationID)
+	case domain.ExecutionOutcomeFailed, domain.ExecutionOutcomeCanceled:
+		status := exec.StatusFailed
+		if outcome.Status == domain.ExecutionOutcomeCanceled {
+			status = exec.StatusCanceled
+		}
+		if err := d.commitResult(in.InvocationID, exec.StageResult{
+			InvocationID: in.InvocationID, Status: status, Summary: outcome.Summary,
+		}); err != nil {
+			return fmt.Errorf("%w: adopt recorded outcome: %w", ErrRecoveryRetryable, err)
+		}
+		return nil
 	}
-	return d.commitRecordedExport(in, out, record)
+	return fmt.Errorf("%w: recorded outcome %q for %s has no stage status",
+		errExportAuthorityConflict, outcome.Status, in.InvocationID)
+}
+
+// rejectionDetail renders the leading kind:path pairs of a rejection's
+// diagnostic sample for the error-level log line, naming the invalid-path hex
+// when a finding carries no canonical path. The paths stay in the log and the
+// daemon-internal record, never the client-facing outcome summary.
+func rejectionDetail(findings []domain.ExportRejectionFinding) string {
+	var b strings.Builder
+	for i, f := range findings {
+		if i == maxSummaryFindings {
+			fmt.Fprintf(&b, " (+%d more)", len(findings)-maxSummaryFindings)
+			break
+		}
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		loc := f.Path
+		if loc == "" {
+			loc = "hex:" + f.PathHex
+		}
+		fmt.Fprintf(&b, "%s:%s", f.Kind, loc)
+	}
+	return b.String()
 }
 
 // LoadExecutionReplay returns the authenticated durable source description

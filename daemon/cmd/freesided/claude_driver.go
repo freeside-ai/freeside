@@ -544,6 +544,12 @@ func (a storeAdmissionAuthority) ImportOptions(
 	if err != nil {
 		return importer.Options{}, err
 	}
+	// An elaboration run imports under the specification finding profile: it
+	// publishes a typed JSON result, never workspace content, so incidental
+	// investigation debris must not definitively fail the invocation (#768).
+	if err := a.applyElaborationFindingProfile(ctx, id, admission, &opts); err != nil {
+		return importer.Options{}, err
+	}
 	author, production, err := a.invocationImportAuthor(ctx, id, admission, spec.Base.Repo)
 	if err != nil {
 		return importer.Options{}, err
@@ -553,6 +559,24 @@ func (a storeAdmissionAuthority) ImportOptions(
 	}
 	a.authenticatedStartAuthors.forget(id)
 	return opts, nil
+}
+
+// applyElaborationFindingProfile sets the specification finding profile when
+// the invocation is an authenticated elaboration one, so both the live import
+// and its terminal replay reconstruct the same profile from the same durable
+// marker (the omitempty field keeps a non-elaboration policy byte-identical).
+func (a storeAdmissionAuthority) applyElaborationFindingProfile(
+	ctx context.Context, id domain.InvocationID, admission domain.ExecutionAdmission, opts *importer.Options,
+) error {
+	elaboration, err := a.authenticateElaborationInvocation(ctx, id, admission)
+	if err != nil {
+		return err
+	}
+	if elaboration {
+		profile := importer.FindingProfileSpecification
+		opts.Policy.FindingProfile = &profile
+	}
+	return nil
 }
 
 func (a storeAdmissionAuthority) ImportOptionsRecord(
@@ -578,6 +602,11 @@ func (a storeAdmissionAuthority) ImportOptionsRecord(
 	opts.Policy.Allowlist = allowedPaths
 	opts.CommitMessage, err = a.fallbackCommitMessage(ctx, admission, opts.Policy)
 	if err != nil {
+		return importer.Options{}, err
+	}
+	// Reconstruct the same specification profile the live import used, from the
+	// same durable elaboration marker, so the replayed ImportOptions match.
+	if err := a.applyElaborationFindingProfile(ctx, id, admission, &opts); err != nil {
 		return importer.Options{}, err
 	}
 	// This reconstructs an already-completed import from immutable records.
