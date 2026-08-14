@@ -63,6 +63,49 @@ die() {
     exit 1
 }
 
+# Encode a value as the contents of a JSON double-quoted string for `plutil
+# -json`, which parses its argument as JSON. A raw path is otherwise decoded,
+# not taken literally: a backslash before a JSON escape letter (a legal
+# `…\troot`) would bind a different byte, a double quote could terminate the
+# string early and inject arguments, and a control byte (a legal newline, tab,
+# or carriage return in a pathname) is illegal raw in JSON, so it would abort
+# the whole-array rewrite that the prior per-index `-string` op tolerated
+# (#762). A complete encoder keeps every bound path byte-identical to the
+# created directory. Iteration is byte-wise (LC_ALL=C) so multibyte UTF-8
+# passes through unchanged, which is valid inside a JSON string; a NUL cannot
+# occur (illegal in a pathname and unrepresentable in a shell variable), and a
+# byte read as signed by printf falls through to raw passthrough.
+json_string() {
+    local s=$1 out='' i c ord hex bs=$'\\'
+    local LC_ALL=C
+    for ((i = 0; i < ${#s}; i++)); do
+        c=${s:i:1}
+        case "$c" in
+        "$bs") out+="$bs$bs" ;;
+        '"') out+="$bs"'"' ;;
+        *)
+            printf -v ord '%d' "'$c"
+            if ((ord >= 0 && ord < 32)); then
+                case "$ord" in
+                8) out+='\b' ;;
+                9) out+='\t' ;;
+                10) out+='\n' ;;
+                12) out+='\f' ;;
+                13) out+='\r' ;;
+                *)
+                    printf -v hex '\\u%04x' "$ord"
+                    out+=$hex
+                    ;;
+                esac
+            else
+                out+=$c
+            fi
+            ;;
+        esac
+    done
+    printf '%s' "$out"
+}
+
 [[ "$(uname)" == "Darwin" ]] || die "requires macOS"
 
 while [[ $# -gt 0 ]]; do
@@ -432,12 +475,50 @@ ditto "$daemon_path" "$bundled_daemon" ||
 chmod 755 "$bundled_daemon"
 [[ -f "$bundled_daemon" && -x "$bundled_daemon" ]] ||
     die "the bundled freesided executable is missing or not executable"
-plutil -replace ProgramArguments.2 -string "$daemon_state_dir/freeside.db" \
-    "$launch_agent_plist" || die "could not bind the daemon database path"
-plutil -replace ProgramArguments.4 -string "$daemon_state_dir" \
-    "$launch_agent_plist" || die "could not bind the daemon state directory"
-plutil -replace StandardErrorPath -string "$daemon_state_dir/freesided.log" \
+# `plutil -replace ProgramArguments.<N>` inserts at the index instead of
+# overwriting it, shifting each placeholder down rather than replacing it, so
+# per-index replacement shipped a doubled arg vector with the template tokens
+# still present (#762). Rewrite the whole array in one position-independent
+# call; the arg structure now mirrors the bundled plist template, and the
+# guard below re-reads and verifies it. The dynamic state paths are
+# JSON-encoded (json_string) before they enter the fragment so a backslash or
+# double quote in the pathname binds literally instead of being decoded or
+# injecting arguments; see json_string for why a raw interpolation does not
+# fail closed on those bytes.
+db_path="$daemon_state_dir/freeside.db"
+listen_addr="127.0.0.1:7331"
+stderr_path="$daemon_state_dir/freesided.log"
+plutil -replace ProgramArguments -json \
+    "[\"freesided\",\"-db\",\"$(json_string "$db_path")\",\"-state-dir\",\"$(json_string "$daemon_state_dir")\",\"-listen\",\"$(json_string "$listen_addr")\"]" \
+    "$launch_agent_plist" || die "could not bind the daemon program arguments"
+plutil -replace StandardErrorPath -string "$stderr_path" \
     "$launch_agent_plist" || die "could not bind the daemon stderr log path"
+
+# Re-read the templated values and require them to equal exactly what was just
+# written, not merely that no "__FREESIDE_" prefix survived: an operator's
+# legal home path can itself contain that substring (e.g. /Users/__FREESIDE_x),
+# so a prefix check would abort a correct install. Extract each argument in raw
+# form and compare byte-for-byte: `raw` yields the unescaped scalar, so any
+# metacharacter in the path (a backslash, an XML `&`/`<`/`>`, a double quote)
+# compares literally, where an xml1/json re-extraction would re-encode it and
+# spuriously mismatch. The entry past the last expected index must be absent,
+# so a doubled vector (the #762 defect) is caught, not just per-element drift.
+# Fails closed on every real install (#762).
+expected_args=(freesided -db "$db_path" -state-dir "$daemon_state_dir" -listen "$listen_addr")
+for i in "${!expected_args[@]}"; do
+    got=$(plutil -extract "ProgramArguments.$i" raw -o - "$launch_agent_plist") ||
+        die "the templated daemon program arguments are shorter than expected (see #762)"
+    [[ "$got" == "${expected_args[$i]}" ]] ||
+        die "templated daemon argument $i does not match the expected value (see #762)"
+done
+if plutil -extract "ProgramArguments.${#expected_args[@]}" raw -o - "$launch_agent_plist" \
+    >/dev/null 2>&1; then
+    die "the templated daemon program arguments have more entries than expected (see #762)"
+fi
+templated_stderr=$(plutil -extract StandardErrorPath raw -o - "$launch_agent_plist") ||
+    die "could not read the templated daemon stderr log path"
+[[ "$templated_stderr" == "$stderr_path" ]] ||
+    die "the templated daemon stderr path does not match the expected value (see #762)"
 
 # Templating changes the outer bundle seal produced by Xcode. Re-sign only
 # after every host-local path is final. The helper gets the same identity first
