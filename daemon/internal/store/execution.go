@@ -83,6 +83,16 @@ ON CONFLICT (invocation_id) DO NOTHING`
 	getExecutionOutcomeSQL        = `
 SELECT invocation_id, admission_id, status, summary, recorded_at, body
 FROM execution_outcomes WHERE invocation_id = ?`
+
+	recordExportRejectionSQL = `
+INSERT INTO export_rejections
+    (invocation_id, admission_id, recorded_at, body)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (invocation_id) DO NOTHING`
+	selectExportRejectionBodySQL = `SELECT body FROM export_rejections WHERE invocation_id = ?`
+	getExportRejectionSQL        = `
+SELECT invocation_id, admission_id, recorded_at, body
+FROM export_rejections WHERE invocation_id = ?`
 )
 
 // RecordExecutionAdmission persists the spawn-time record for one attempt. It
@@ -854,4 +864,80 @@ func (tx *ReadTx) getExecutionOutcome(
 		return domain.ExecutionOutcome{}, fmt.Errorf("get execution outcome %q: %w", id, err)
 	}
 	return outcome, nil
+}
+
+// RecordExportRejection persists the diagnostic per-finding detail of a
+// definitively rejected export. It binds to the immutable admission record —
+// not current policy — because the record is diagnostic history: re-gating
+// current policy could make it unrecordable exactly when an operator needs to
+// diagnose the rejection. It is not held mutually exclusive with either
+// terminal-authority row: the same rejection also records an
+// ExecutionOutcome(failed), and this row is that outcome's finding detail, not
+// a competing authority.
+//
+// Write-once: a byte-identical replay of the same rejection converges, and a
+// different body for one invocation fails with ErrImmutableConflict.
+func (tx *WriteTx) RecordExportRejection(
+	ctx context.Context, rejection domain.ExportRejection,
+) error {
+	body, err := encode(rejection)
+	if err != nil {
+		return fmt.Errorf("record export rejection %q: %w", rejection.InvocationID, err)
+	}
+	admission, err := tx.GetExecutionAdmissionRecord(ctx, rejection.InvocationID)
+	if err != nil {
+		return fmt.Errorf("record export rejection %q: %w", rejection.InvocationID, err)
+	}
+	if err := domain.ValidateExportRejectionBinding(admission, rejection); err != nil {
+		return fmt.Errorf("record export rejection %q: %w", rejection.InvocationID, err)
+	}
+	if err := tx.putImmutable(ctx, recordExportRejectionSQL,
+		[]any{
+			rejection.InvocationID, rejection.AdmissionID,
+			formatTime(rejection.RecordedAt), body,
+		},
+		selectExportRejectionBodySQL, []any{rejection.InvocationID}, body); err != nil {
+		return fmt.Errorf("record export rejection %q: %w", rejection.InvocationID, err)
+	}
+	return nil
+}
+
+// GetExportRejection reconstructs a rejection's diagnostic detail, re-checking
+// every extracted column against the decoded body and binding it to the
+// immutable admission record. It deliberately does not re-apply current
+// admission policy: a rejection is terminal diagnostic history and must stay
+// readable after the run is no longer admissible.
+func (tx *ReadTx) GetExportRejection(
+	ctx context.Context, id domain.InvocationID,
+) (domain.ExportRejection, error) {
+	var (
+		invocationID string
+		admissionID  string
+		recordedAt   string
+		body         []byte
+	)
+	err := tx.tx.QueryRowContext(ctx, getExportRejectionSQL, id).
+		Scan(&invocationID, &admissionID, &recordedAt, &body)
+	if err != nil {
+		return domain.ExportRejection{}, fmt.Errorf(
+			"get export rejection %q: %w", id, notFoundOr(err))
+	}
+	rejection, err := decode[domain.ExportRejection](body)
+	if err != nil {
+		return domain.ExportRejection{}, fmt.Errorf("get export rejection %q: %w", id, err)
+	}
+	if rejection.InvocationID != id || invocationID != string(rejection.InvocationID) ||
+		admissionID != string(rejection.AdmissionID) ||
+		!timeColumnEqual(recordedAt, rejection.RecordedAt) {
+		return domain.ExportRejection{}, fmt.Errorf(
+			"get export rejection %q: %w", id, errRowInconsistent)
+	}
+	admission, err := tx.GetExecutionAdmissionRecord(ctx, id)
+	if err != nil {
+		return domain.ExportRejection{}, fmt.Errorf("get export rejection %q: %w", id, err)
+	}
+	if err := domain.ValidateExportRejectionBinding(admission, rejection); err != nil {
+		return domain.ExportRejection{}, fmt.Errorf("get export rejection %q: %w", id, err)
+	}
+	return rejection, nil
 }
