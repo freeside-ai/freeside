@@ -390,18 +390,21 @@ func (v *secondLookupRefusingVolumes) AuthStoreVolume(
 }
 
 type stubExports struct {
-	mu        sync.Mutex
-	records   map[domain.InvocationID]domain.ExecutionExport
-	replays   map[domain.InvocationID]ExecutionReplay
-	outcomes  map[domain.InvocationID]domain.ExecutionOutcome
-	lookupErr error
+	mu         sync.Mutex
+	records    map[domain.InvocationID]domain.ExecutionExport
+	replays    map[domain.InvocationID]ExecutionReplay
+	outcomes   map[domain.InvocationID]domain.ExecutionOutcome
+	rejections map[domain.InvocationID]domain.ExportRejection
+	rejectErr  error
+	lookupErr  error
 }
 
 func newStubExports() *stubExports {
 	return &stubExports{
-		records:  map[domain.InvocationID]domain.ExecutionExport{},
-		replays:  map[domain.InvocationID]ExecutionReplay{},
-		outcomes: map[domain.InvocationID]domain.ExecutionOutcome{},
+		records:    map[domain.InvocationID]domain.ExecutionExport{},
+		replays:    map[domain.InvocationID]ExecutionReplay{},
+		outcomes:   map[domain.InvocationID]domain.ExecutionOutcome{},
+		rejections: map[domain.InvocationID]domain.ExportRejection{},
 	}
 }
 
@@ -478,6 +481,51 @@ func (e *stubExports) LookupExecutionOutcomeRecord(
 	ctx context.Context, id domain.InvocationID,
 ) (domain.ExecutionOutcome, bool, error) {
 	return e.LookupExecutionOutcome(ctx, id)
+}
+
+func (e *stubExports) RecordExportRejection(
+	_ context.Context, rejection domain.ExportRejection,
+) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.rejectErr != nil {
+		return e.rejectErr
+	}
+	if existing, ok := e.rejections[rejection.InvocationID]; ok {
+		if !sameRejection(existing, rejection) {
+			return domain.ErrImmutableTransition
+		}
+		return nil
+	}
+	e.rejections[rejection.InvocationID] = rejection
+	return nil
+}
+
+func (e *stubExports) LookupExportRejection(
+	_ context.Context, id domain.InvocationID,
+) (domain.ExportRejection, bool, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.lookupErr != nil {
+		return domain.ExportRejection{}, false, e.lookupErr
+	}
+	record, ok := e.rejections[id]
+	return record, ok, nil
+}
+
+// sameRejection compares the fields the write-once stub converges on: the
+// identity and the recorded findings.
+func sameRejection(a, b domain.ExportRejection) bool {
+	if a.InvocationID != b.InvocationID || a.AdmissionID != b.AdmissionID ||
+		len(a.Findings) != len(b.Findings) {
+		return false
+	}
+	for i := range a.Findings {
+		if a.Findings[i] != b.Findings[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func testStartSpec() exec.StartSpec {

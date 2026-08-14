@@ -111,6 +111,17 @@ type OutcomeRecorder interface {
 	LookupExecutionOutcomeRecord(
 		context.Context, domain.InvocationID,
 	) (domain.ExecutionOutcome, bool, error)
+	// RecordExportRejection persists the diagnostic per-finding detail of a
+	// definitively rejected export, so it survives the released directory's
+	// cleanup. It is write-once and converges on a byte-identical replay; it is
+	// not an execution authority and coexists with the failed outcome the same
+	// rejection records.
+	RecordExportRejection(context.Context, domain.ExportRejection) error
+	// LookupExportRejection reads that diagnostic detail back, distinguishing a
+	// clean absence (no rejection recorded) from a read error.
+	LookupExportRejection(
+		context.Context, domain.InvocationID,
+	) (domain.ExportRejection, bool, error)
 }
 
 // AdmissionAuthority authenticates a reconstructed record against its durable

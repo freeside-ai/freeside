@@ -909,6 +909,29 @@ func (r exportRecorder) lookupExecutionOutcome(
 	return record, err == nil, err
 }
 
+func (r exportRecorder) RecordExportRejection(
+	ctx context.Context, rejection domain.ExportRejection,
+) error {
+	return r.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.RecordExportRejection(ctx, rejection)
+	})
+}
+
+func (r exportRecorder) LookupExportRejection(
+	ctx context.Context, id domain.InvocationID,
+) (domain.ExportRejection, bool, error) {
+	var record domain.ExportRejection
+	err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		record, err = tx.GetExportRejection(ctx, id)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return domain.ExportRejection{}, false, nil
+	}
+	return record, err == nil, err
+}
+
 // artifactStore persists released evidence bytes, the immutable artifact rows
 // the imported claims name, and the invocation-bound claim record that carries
 // the complete labeled AgentClaim set (label and inline text included) for the
