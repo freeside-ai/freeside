@@ -45,6 +45,25 @@ VALUES (?, ?, ?, ?, ?)`
 	latestBackendConformanceSQL = `
 SELECT id, outcome, configuration_digest, capabilities, proved_at
 FROM backend_conformance_records WHERE backend = ? ORDER BY id DESC LIMIT 1`
+	// The row immediately preceding a given generation for a backend, across
+	// every outcome and configuration digest, ordered by id for the same reason
+	// as latestBackendConformanceSQL. In the append-only log this row is, by
+	// construction, exactly the declaration a supersession marker at that
+	// generation superseded: whatever was latest the instant the marker was
+	// written. The authenticate re-gate tolerates only when that declaration
+	// both passed and matches the admission's digest, so this must not filter
+	// by outcome or digest. Skipping any intervening marker or other-digest row
+	// to reach an older same-digest pass would resurrect a declaration the
+	// backend already cleared: a proof for another configuration in between (a
+	// roll forward to B then back to A), or a stacked marker from a mid-recheck
+	// restart after a reconfiguration, means no completed pass currently
+	// authorizes the admission's configuration, and the immediately-preceding
+	// row (a marker, a failure, or a different digest) makes that refuse.
+	latestBackendConformanceBeforeSQL = `
+SELECT id, outcome, configuration_digest, capabilities, proved_at
+FROM backend_conformance_records
+WHERE backend = ? AND id < ?
+ORDER BY id DESC LIMIT 1`
 )
 
 // RecordBackendConformance appends one completed pass's record and returns
@@ -102,6 +121,36 @@ func (tx *InternalTx) RecordBackendConformance(
 func (tx *ReadTx) LatestBackendConformance(
 	ctx context.Context, backend domain.RunnerBackendClass,
 ) (domain.BackendConformance, bool, error) {
+	row := tx.tx.QueryRowContext(ctx, latestBackendConformanceSQL, string(backend))
+	return scanBackendConformance(backend, row)
+}
+
+// latestBackendConformanceBefore recovers the row immediately preceding
+// generation for a backend: in the append-only log, exactly the declaration a
+// supersession marker at that generation superseded. It deliberately returns a
+// marker, a failure, or an other-digest row too, since the authenticate re-gate
+// re-binds only when that declaration both passed and matches the admission's
+// digest and must refuse otherwise. It shares the reconstruction-time
+// validation of LatestBackendConformance: a row that no longer validates
+// against the class ceiling fails closed rather than restoring a wider
+// declaration.
+func (tx *ReadTx) latestBackendConformanceBefore(
+	ctx context.Context, backend domain.RunnerBackendClass, generation uint64,
+) (domain.BackendConformance, bool, error) {
+	row := tx.tx.QueryRowContext(ctx, latestBackendConformanceBeforeSQL,
+		string(backend), generation)
+	return scanBackendConformance(backend, row)
+}
+
+// scanBackendConformance reconstructs one conformance record from a scanned
+// row and re-runs domain validation, so a tampered row claiming beyond what
+// the class's suite could ever prove fails closed instead of reconstructing as
+// a wider declaration. Presence is reported separately because an empty result
+// is a legitimate "no such record" state, not an error. It is the single
+// reconstruction point shared by every conformance read.
+func scanBackendConformance(
+	backend domain.RunnerBackendClass, row *sql.Row,
+) (domain.BackendConformance, bool, error) {
 	var (
 		id                  int64
 		outcome             string
@@ -109,29 +158,28 @@ func (tx *ReadTx) LatestBackendConformance(
 		capabilities        string
 		provedAt            string
 	)
-	err := tx.tx.QueryRowContext(ctx, latestBackendConformanceSQL, string(backend)).
-		Scan(&id, &outcome, &configurationDigest, &capabilities, &provedAt)
+	err := row.Scan(&id, &outcome, &configurationDigest, &capabilities, &provedAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return domain.BackendConformance{}, false, nil
 	case err != nil:
 		return domain.BackendConformance{}, false,
-			fmt.Errorf("latest backend conformance for %q: %w", backend, err)
+			fmt.Errorf("backend conformance for %q: %w", backend, err)
 	}
 	if id <= 0 {
 		return domain.BackendConformance{}, false,
-			fmt.Errorf("latest backend conformance for %q: row id %d: %w",
+			fmt.Errorf("backend conformance for %q: row id %d: %w",
 				backend, id, domain.ErrNonPositive)
 	}
 	var caps domain.CapabilitySnapshot
 	if err := json.Unmarshal([]byte(capabilities), &caps); err != nil {
 		return domain.BackendConformance{}, false,
-			fmt.Errorf("latest backend conformance for %q capabilities: %w", backend, err)
+			fmt.Errorf("backend conformance for %q capabilities: %w", backend, err)
 	}
 	at, err := parseTime(provedAt)
 	if err != nil {
 		return domain.BackendConformance{}, false,
-			fmt.Errorf("latest backend conformance for %q proved_at %q: %w", backend, provedAt, err)
+			fmt.Errorf("backend conformance for %q proved_at %q: %w", backend, provedAt, err)
 	}
 	record := domain.BackendConformance{
 		Backend:             backend,
@@ -143,7 +191,7 @@ func (tx *ReadTx) LatestBackendConformance(
 	}
 	if err := record.Validate(); err != nil {
 		return domain.BackendConformance{}, false,
-			fmt.Errorf("latest backend conformance for %q: %w", backend, err)
+			fmt.Errorf("backend conformance for %q: %w", backend, err)
 	}
 	return record, true, nil
 }
@@ -161,6 +209,42 @@ func (tx *ReadTx) LatestBackendConformance(
 func (tx *ReadTx) RequireBackendConformant(
 	ctx context.Context, admission domain.ExecutionAdmission,
 ) error {
+	return tx.requireBackendConformant(ctx, admission, backendConformanceMint)
+}
+
+// AuthenticateBackendConformant re-gates an already-recorded admission against
+// current conformance state, tolerating one thing the mint gate does not: a
+// same-configuration supersession marker. The startup suite (and the scheduled
+// doctor re-proof) writes that marker the instant a recheck of the current
+// configuration begins, before the marker's own passed outcome lands. A
+// same-configuration re-proof is a proof refresh, not a policy change, so an
+// invocation already admitted against the proof the marker superseded stays
+// authenticated across the window; without this, a re-proof racing an in-flight
+// invocation's re-gate makes the invocation permanently unauthenticatable and
+// durable-stops the daemon (issue #761). A failed proof, or a marker for a
+// different configuration, is a real policy change and stays a refusal.
+func (tx *ReadTx) AuthenticateBackendConformant(
+	ctx context.Context, admission domain.ExecutionAdmission,
+) error {
+	return tx.requireBackendConformant(ctx, admission, backendConformanceAuthenticate)
+}
+
+// backendConformanceGate selects how requireBackendConformant treats a latest
+// row that is not itself a current passed proof. The mint gate refuses
+// anything but a current passed row (work not yet admitted loses nothing by
+// holding out a recheck window); the authenticate gate additionally recovers
+// the passed proof a same-configuration supersession marker superseded, so a
+// persisted admission survives the window.
+type backendConformanceGate int
+
+const (
+	backendConformanceMint backendConformanceGate = iota
+	backendConformanceAuthenticate
+)
+
+func (tx *ReadTx) requireBackendConformant(
+	ctx context.Context, admission domain.ExecutionAdmission, gate backendConformanceGate,
+) error {
 	if admission.OperatingMode != domain.ModeUnattended {
 		return nil
 	}
@@ -174,9 +258,22 @@ func (tx *ReadTx) RequireBackendConformant(
 			admission.InvocationID, admission.Backend, ErrBackendNotConformant)
 	}
 	if record.Outcome != domain.ConformancePassed {
-		return fmt.Errorf("admission %q backend %q conformance generation %d records %q: %w",
-			admission.InvocationID, admission.Backend, record.Generation,
-			record.Outcome, ErrBackendNotConformant)
+		// A same-configuration supersession marker, in the authenticate gate
+		// only, re-binds to the passed proof it superseded. Every other
+		// non-passed latest row (a failure, or a marker for a different
+		// configuration) refuses exactly as the mint gate does. The recovered
+		// proof carries the same-digest capability ceiling; the shared checks
+		// below then run against it unchanged.
+		passed, recovered, err := tx.supersededSameConfigurationProof(ctx, admission, record, gate)
+		if err != nil {
+			return fmt.Errorf("admission %q: %w", admission.InvocationID, err)
+		}
+		if !recovered {
+			return fmt.Errorf("admission %q backend %q conformance generation %d records %q: %w",
+				admission.InvocationID, admission.Backend, record.Generation,
+				record.Outcome, ErrBackendNotConformant)
+		}
+		record = passed
 	}
 	if !record.ConfigurationBound() {
 		return fmt.Errorf("admission %q backend %q conformance generation %d: %w",
@@ -196,4 +293,55 @@ func (tx *ReadTx) RequireBackendConformant(
 			domain.ErrAdmissionExceedsConformance)
 	}
 	return nil
+}
+
+// supersededSameConfigurationProof reports the passed proof to re-bind an
+// admission to when the backend's latest row is a supersession marker for the
+// admission's own configuration. recovered is false (refuse) unless every
+// condition holds: the gate authenticates, the latest row is a supersession
+// marker (not a failure), the marker's configuration is bound and equals the
+// admission's bound digest, and the exact declaration the marker superseded
+// (the newest completed proof for that digest) passed. A marker for a
+// different configuration means the operator reconfigured the backend, so the
+// admission's configuration is no longer current and stays refused; the digest
+// equality is checked here rather than left to the shared mismatch check so a
+// reconfiguration refuses as "no current passed record" rather than silently
+// recovering a stale proof. Re-binding to the *superseded* declaration, not
+// the immediately-preceding row, is what keeps every non-refresh history
+// fatal: that row is the exact declaration the marker superseded, so an
+// already-admitted invocation is authenticated only against the state the
+// backend actually held when this re-proof began, never an older pass the log
+// moved past (a fail-open the mint gate refuses). A failure, an
+// other-configuration proof, or another marker (a mid-recheck restart after a
+// reconfiguration) in that position all mean no completed pass currently
+// authorizes the admission's configuration, so tolerance closes. Two digest
+// checks are required and distinct: the marker must be re-proving the
+// admission's configuration (a refresh, not a reconfiguration), and the
+// declaration it superseded must itself be a pass for that configuration.
+func (tx *ReadTx) supersededSameConfigurationProof(
+	ctx context.Context,
+	admission domain.ExecutionAdmission,
+	latest domain.BackendConformance,
+	gate backendConformanceGate,
+) (domain.BackendConformance, bool, error) {
+	if gate != backendConformanceAuthenticate {
+		return domain.BackendConformance{}, false, nil
+	}
+	if latest.Outcome != domain.ConformanceSuperseded {
+		return domain.BackendConformance{}, false, nil
+	}
+	if !latest.ConfigurationBound() ||
+		latest.ConfigurationDigest != admission.BackendConfigurationDigest {
+		return domain.BackendConformance{}, false, nil
+	}
+	superseded, found, err := tx.latestBackendConformanceBefore(
+		ctx, domain.RunnerBackendClass(admission.Backend), latest.Generation)
+	if err != nil {
+		return domain.BackendConformance{}, false, err
+	}
+	if !found || superseded.Outcome != domain.ConformancePassed ||
+		superseded.ConfigurationDigest != admission.BackendConfigurationDigest {
+		return domain.BackendConformance{}, false, nil
+	}
+	return superseded, true, nil
 }
