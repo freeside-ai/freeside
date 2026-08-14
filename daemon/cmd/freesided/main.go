@@ -601,6 +601,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	attention := signet.NewService(st,
 		signet.WithPairingKey(pairingKey),
 		signet.WithClock(cfg.now),
+		signet.WithLogger(cfg.Logger),
 		signet.WithBlobStore(blobs),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: cfg.NtfyURL, TopicKey: topicKey,
