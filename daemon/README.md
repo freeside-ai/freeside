@@ -171,8 +171,16 @@ freesided enroll-codex \
   -input-root /path/to/codex-enrollment-input \
   -input-file /path/to/codex-enrollment-input/auth.json \
   -auth-store-root /path/to/freeside/review-inputs \
-  -auth-store /path/to/freeside/review-inputs/codex-primary.json
+  -auth-store /path/to/freeside/review-inputs/codex-primary.json \
+  -approved-recipe sha256:<approved-verify-recipe-digest>
 ```
+
+Pass `-approved-recipe` once per approved verification-recipe digest the
+daemon runs with, the same set given at daemon start. The command opens the
+store and re-gates its recipe-gated evidence against this set exactly as the
+daemon does, so any production store, which has recorded such evidence, needs
+it; omitting it fails before enrollment with a message naming the flag. A
+fresh store with no recipe-gated evidence needs no `-approved-recipe`.
 
 Success prints only the identity, store path, lease fence, verified digest,
 access-token expiry, and recovery item coordinates. The input refresh token
