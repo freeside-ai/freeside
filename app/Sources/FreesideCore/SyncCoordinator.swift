@@ -1,5 +1,6 @@
 import FreesideAPI
 import Observation
+import OpenAPIRuntime
 
 /// The client half of plan §5.14's consistency contract. Owns the
 /// cursor pair and the disposable disk cache over the InboxStore's
@@ -109,7 +110,7 @@ public final class SyncCoordinator {
             }
         } catch {
             guard generation == syncGeneration else { return }
-            store.freshness = .unreachable
+            store.freshness = freshnessForReadError(error)
         }
     }
 
@@ -162,7 +163,7 @@ public final class SyncCoordinator {
             }
         } catch {
             guard generation == syncGeneration else { return }
-            store.freshness = .unreachable
+            store.freshness = freshnessForReadError(error)
         }
     }
 
@@ -224,7 +225,7 @@ public final class SyncCoordinator {
                 requestCacheGeneration == cacheGeneration
             else { return }
             if error is CancellationError || Task.isCancelled { return }
-            store.freshness = .unreachable
+            store.freshness = freshnessForReadError(error)
         }
     }
 
@@ -246,8 +247,10 @@ public final class SyncCoordinator {
             case .ok(let ok):
                 let timeline = try ok.body.json
                 guard timeline.run_id == runID else {
+                    // The daemon answered, just with the wrong run's
+                    // timeline: a reachable-but-failing read, not silence.
                     timelineLoadStates[runID] = .unavailable
-                    store.freshness = .unreachable
+                    store.freshness = .syncFailing
                     return
                 }
                 timelinesByRunID[runID] = timeline
@@ -269,7 +272,7 @@ public final class SyncCoordinator {
                 return
             }
             timelineLoadStates[runID] = .unavailable
-            store.freshness = .unreachable
+            store.freshness = freshnessForReadError(error)
         }
     }
 
@@ -307,8 +310,25 @@ public final class SyncCoordinator {
         return true
     }
 
+    /// Maps an answered non-401 status to its freshness state. The daemon
+    /// responded, so this is never `.unreachable`: 401 is the credential
+    /// state, any other status is a reachable daemon whose reads are
+    /// failing.
     private func mark(failureStatus: Int) {
-        store.freshness = failureStatus == 401 ? .unauthenticated : .unreachable
+        store.freshness = failureStatus == 401 ? .unauthenticated : .syncFailing
+    }
+
+    /// Classifies a thrown sync-read error. OpenAPIRuntime raises a
+    /// `ClientError` for both a transport failure and a response that
+    /// arrived but could not be decoded (a 200 whose body is malformed or
+    /// schema-incompatible, since the generated client decodes eagerly on
+    /// the operation call). The decode failure carries the received
+    /// response; the transport failure carries none. The former is a
+    /// reachable daemon whose read failed (`.syncFailing`), the latter is
+    /// silence (`.unreachable`). A non-`ClientError` cannot have reached a
+    /// response, so it fails closed to `.unreachable`.
+    private func freshnessForReadError(_ error: any Error) -> InboxStore.Freshness {
+        (error as? ClientError)?.response != nil ? .syncFailing : .unreachable
     }
 
     private func discardCache() {

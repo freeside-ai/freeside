@@ -16,6 +16,20 @@ public actor MockServer {
     /// open, throw to fail the request.
     public typealias BeforeRespond = @Sendable (_ operationID: String) async throws -> Void
 
+    /// Thrown from a `beforeRespond` hook to make the mock answer with a
+    /// specific HTTP status and a generic error-shaped body, modelling a
+    /// reachable daemon whose read failed. Distinct from an arbitrary
+    /// thrown error, which the transport lets propagate as a
+    /// transport-level outage; this one comes back as an answered
+    /// response. A non-2xx code (e.g. 500) surfaces to the generated
+    /// client as `.undocumented`; a 2xx code (e.g. 200) pairs a success
+    /// status with that error-shaped body, so the client's schema decode
+    /// throws — a schema-skew stand-in for an incompatible 200 body.
+    public struct ForcedStatus: Error, Sendable {
+        public let code: Int
+        public init(_ code: Int) { self.code = code }
+    }
+
     /// How the mock authenticates requests: `permissive` trusts every
     /// caller (the pre-device inbox tests), `enforcing` requires an
     /// active paired device's bearer token on everything except pairing,
