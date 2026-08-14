@@ -123,6 +123,7 @@ var (
 	ErrExportBaseMismatch           = errors.New("observed export base does not match the admitted base")
 	ErrStageInputsNotCanonical      = errors.New("stage input snapshot must use canonical digest and array forms")
 	ErrOutcomeInconsistent          = errors.New("execution outcome fields are internally inconsistent")
+	ErrExportRejectionEmpty         = errors.New("export rejection records no findings")
 	ErrMilestoneDetailMismatch      = errors.New("milestone detail fields do not match the kind's contract")
 	ErrObservationInconsistent      = errors.New("invocation observation fields are internally inconsistent")
 	ErrRunOutcomeDetailMismatch     = errors.New("run outcome detail mismatch")
