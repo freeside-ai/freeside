@@ -47,6 +47,13 @@
 #                                    agent may rewrite (no match-everything
 #                                    default: it is a containment control)
 #
+# Optional environment:
+#   FREESIDE_REAL_RUN_LISTEN         fixed signet listener address (for
+#                                    example 127.0.0.1:8677) so a paired
+#                                    client with a stored server URL can
+#                                    reach the specification-approval gate;
+#                                    unset keeps the ephemeral default
+#
 # Requires: Go, Apple `container` running, macOS, an authenticated credential
 # volume for the named identity, and an operator watching a Freeside client to
 # approve or revise the generated specification. The harness runs and durably
@@ -283,7 +290,11 @@ env -u FREESIDE_REAL_RUN_INVOCATION FREESIDE_REAL_RUN_LIVE_TEST=1 \
 }
 
 echo "starting the daemon with the production Claude driver" >&2
+# FREESIDE_REAL_RUN_LISTEN pins the signet listener so an operator's paired
+# client (whose stored server URL names a fixed port) can reach the
+# specification-approval gate; unset, the daemon keeps its ephemeral default.
 "$workdir/freesided" \
+  ${FREESIDE_REAL_RUN_LISTEN:+-listen "$FREESIDE_REAL_RUN_LISTEN"} \
   -db "$db_path" \
   -driver claude \
   -agent-image "$FREESIDE_REAL_RUN_AGENT_IMAGE" \
