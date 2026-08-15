@@ -65,6 +65,25 @@ ward's per-run writer networks cannot reach it. The recorded project-image
 verification (devlog 2026-07-27-1030) ran with the build proxy absent during
 execution; that absence is part of what it proved.
 
+## Recovering Broken Build DNS
+
+The vmnet gateway DNS responder can fail independently of a VPN: guest queries
+to `192.168.64.1` were observed being refused with the VPN fully quit and its
+lockdown disabled, and the failure survived a full `container system` restart.
+Builds then fail with symptoms such as `EAI_AGAIN` or empty `apt` indexes even
+though host DNS still works.
+
+Reconfigure the BuildKit VM with an explicit resolver:
+
+```sh
+container builder start --dns 8.8.8.8
+```
+
+Use a resolver trusted for the build's dependency lookups. This changes build
+DNS only; it does not configure or relax ward's runtime egress. For individual
+project-image builds, `freesided onboard` also accepts repeatable `-dns`
+options and the build-only `-build-proxy` option described above.
+
 ## exporter/
 
 The digest-pinned image ward runs in the fresh, credential-free exporter VM
