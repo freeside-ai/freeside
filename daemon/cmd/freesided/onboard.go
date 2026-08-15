@@ -60,6 +60,20 @@ type onboardConfig struct {
 	GitPath           string
 	ContainerPath     string
 	TempDir           string
+	DNS               []string
+	BuildProxy        string
+}
+
+type stringList []string
+
+func (v *stringList) String() string { return fmt.Sprint([]string(*v)) }
+
+func (v *stringList) Set(value string) error {
+	if value == "" {
+		return errors.New("value must not be empty")
+	}
+	*v = append(*v, value)
+	return nil
 }
 
 func runOnboardCommand(
@@ -230,6 +244,7 @@ func runOnboardCommand(
 				BaseImageRef: domain.ImageRef(cfg.BaseImage), BaseBuildRef: cfg.BaseBuildRef,
 				Registry: cfg.Registry, LocalRegistryPort: cfg.LocalRegistryPort,
 				ImageName: cfg.ImageName, RefTag: cfg.RefTag,
+				DNS: cfg.DNS, BuildProxy: cfg.BuildProxy,
 			},
 		})
 		if runErr != nil {
@@ -264,6 +279,7 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	flags.SetOutput(output)
 	cfg := onboardConfig{Repository: args[0]}
 	var commitPlan string
+	var dns stringList
 	flags.StringVar(&cfg.DBPath, "db", "", "SQLite database path (required)")
 	flags.StringVar(&cfg.StateDir, "state-dir", "", "GitHub App authority state directory (required)")
 	flags.Int64Var(&cfg.RegistrationID, "registration-id", 0, "selected numeric GitHub App ID (required)")
@@ -294,12 +310,16 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	flags.StringVar(&cfg.GitPath, "git", "", "git executable (default from PATH)")
 	flags.StringVar(&cfg.ContainerPath, "container", "", "Apple container executable (default from PATH)")
 	flags.StringVar(&cfg.TempDir, "temp-dir", "", "bindable scratch parent")
+	flags.Var(&dns, "dns", "build DNS server; repeatable")
+	flags.StringVar(&cfg.BuildProxy, "build-proxy", "",
+		"optional build-only HTTP proxy URL without credentials")
 	if err := flags.Parse(args[1:]); err != nil {
 		return onboardConfig{}, err
 	}
 	if flags.NArg() != 0 {
 		return onboardConfig{}, fmt.Errorf("unexpected positional arguments: %v", flags.Args())
 	}
+	cfg.DNS = append([]string(nil), dns...)
 	for _, required := range []struct {
 		name  string
 		value string
