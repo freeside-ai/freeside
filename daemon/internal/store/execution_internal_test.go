@@ -66,6 +66,45 @@ func TestExecutionRecordsMigrationAppliesFromHead(t *testing.T) {
 	}
 }
 
+func TestCurrentImportStartsMigrationAndReconstruction(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openRaw(t)
+	migrateThrough(t, ctx, db, "0047_")
+	if got := rawVersion(t, db); got != 46 {
+		t.Fatalf("prior schema version = %d, want 46", got)
+	}
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate to head: %v", err)
+	}
+	if got := rawVersion(t, db); got != 47 {
+		t.Fatalf("schema version = %d, want 47", got)
+	}
+
+	s, admission := seedAdmission(t, nil)
+	start := domain.CurrentImportStart{
+		InvocationID: admission.InvocationID,
+		AdmissionID:  admission.ID,
+	}
+	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		return tx.RecordCurrentImportStart(ctx, start)
+	}); err != nil {
+		t.Fatalf("record current import start: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE current_import_starts SET body = ? WHERE invocation_id = ?`,
+		`{"invocation_id":"inv-tampered","admission_id":"sha256:tampered"}`,
+		admission.InvocationID); err != nil {
+		t.Fatalf("tamper current import start: %v", err)
+	}
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.GetCurrentImportStart(ctx, admission.InvocationID)
+		return err
+	}); !errors.Is(err, errRowInconsistent) {
+		t.Fatalf("tampered current import start = %v, want row inconsistent", err)
+	}
+}
+
 func TestExecutionIdentityParallelismIndexAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

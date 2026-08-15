@@ -100,6 +100,16 @@ type ExportRecorder interface {
 	) (domain.ExecutionExport, bool, error)
 }
 
+// ImportStartRecorder persists and authenticates the write-once boundary
+// after which every released-export retry must use current policy. The
+// driver's private phase is replay data and cannot provide this authority.
+type ImportStartRecorder interface {
+	RecordCurrentImportStart(context.Context, domain.CurrentImportStart) error
+	LookupCurrentImportStart(
+		context.Context, domain.InvocationID,
+	) (domain.CurrentImportStart, bool, error)
+}
+
 // OutcomeRecorder is the trusted durable authority for a non-export terminal
 // outcome. A private intent file can replay one only when this port returns
 // the same write-once record.
@@ -125,15 +135,15 @@ type OutcomeRecorder interface {
 }
 
 // AdmissionAuthority authenticates a reconstructed record against its durable
-// admission, requires current conformance before work can start or recover,
+// admission, requires current conformance before work can start or resume,
 // and derives the exact import policy bound to that admission's trust profile.
 // A private driver-state file is not an authority for any of those decisions.
 type AdmissionAuthority interface {
 	AuthenticateAdmission(context.Context, domain.InvocationID, exec.StartSpec) error
 	AuthenticateStart(context.Context, domain.InvocationID, exec.StartSpec) error
 	ImportOptions(context.Context, domain.InvocationID, exec.StartSpec, importer.Options) (importer.Options, error)
-	// ImportOptionsRecord reconstructs the exact policy of an already
-	// completed import from immutable admission and resolved-policy records.
+	// ImportOptionsRecord reconstructs the exact policy for a released export
+	// from immutable admission and resolved-policy records.
 	// Mutable daemon configuration may block new work but cannot retarget or
 	// strand terminal replay before the publisher applies its current gates.
 	ImportOptionsRecord(context.Context, domain.InvocationID, exec.StartSpec, importer.Options) (importer.Options, error)

@@ -77,7 +77,7 @@ func runDoctorCommand(
 	if err != nil {
 		return err
 	}
-	st, err := store.Open(ctx, *dbPath, store.Options{
+	st, _, err := openStoreWithTopicKey(ctx, *dbPath, store.Options{
 		ApprovedRecipes: approvedRecipes, BackupHealthSource: health,
 	})
 	if err != nil {

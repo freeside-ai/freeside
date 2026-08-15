@@ -48,12 +48,13 @@ type Config struct {
 	// ExportRoot is the daemon-owned durable root the ward Config declares.
 	// Returned and replayed export paths must be direct children of this
 	// exact root before the driver permits any read or deletion.
-	ExportRoot string
-	Gate       Gate
-	Seeder     Seeder
-	Exports    ExportRecorder
-	Outcomes   OutcomeRecorder
-	Authority  AdmissionAuthority
+	ExportRoot   string
+	Gate         Gate
+	Seeder       Seeder
+	Exports      ExportRecorder
+	ImportStarts ImportStartRecorder
+	Outcomes     OutcomeRecorder
+	Authority    AdmissionAuthority
 	// Artifacts persists released evidence before the export directory is
 	// removed; a result may name only what it has stored.
 	Artifacts Artifacts
@@ -110,6 +111,7 @@ type Driver struct {
 	gate              Gate
 	seeder            Seeder
 	exports           ExportRecorder
+	importStarts      ImportStartRecorder
 	outcomes          OutcomeRecorder
 	authority         AdmissionAuthority
 	artifacts         Artifacts
@@ -323,6 +325,8 @@ func New(cfg Config) (*Driver, error) {
 		return nil, newError("nil seeder")
 	case cfg.Exports == nil:
 		return nil, newError("nil export recorder")
+	case cfg.ImportStarts == nil:
+		return nil, newError("nil import-start recorder")
 	case cfg.Outcomes == nil:
 		return nil, newError("nil outcome recorder")
 	case cfg.Authority == nil:
@@ -356,7 +360,8 @@ func New(cfg Config) (*Driver, error) {
 		dir: cfg.Dir, seedRoot: cfg.SeedRoot, exportRoot: cfg.ExportRoot,
 		gate: cfg.Gate, seeder: cfg.Seeder,
 		seedFS:  seedFS,
-		exports: cfg.Exports, outcomes: cfg.Outcomes, authority: cfg.Authority,
+		exports: cfg.Exports, importStarts: cfg.ImportStarts,
+		outcomes: cfg.Outcomes, authority: cfg.Authority,
 		artifacts: cfg.Artifacts, provider: cfg.Provider,
 		credentialMount: cfg.CredentialMount,
 		preJob:          cfg.PreJob,
@@ -583,7 +588,7 @@ func (d *Driver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Insp
 		return exec.Inspection{Status: in.Result.Status}, nil
 	case phaseLost:
 		return exec.Inspection{Status: exec.StatusGone}, nil
-	case phaseSeeding, phaseRunning, phaseExported:
+	case phaseSeeding, phaseRunning, phaseExported, phaseImportPending:
 		if live {
 			return exec.Inspection{Status: exec.StatusRunning, Live: true}, nil
 		}
@@ -610,7 +615,7 @@ func (d *Driver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Insp
 		return exec.Inspection{Status: in.Result.Status}, nil
 	case phaseLost:
 		return exec.Inspection{Status: exec.StatusGone}, nil
-	case phaseSeeding, phaseRunning, phaseExported:
+	case phaseSeeding, phaseRunning, phaseExported, phaseImportPending:
 		// Recovery can restart a pre-handoff pipeline asynchronously, or leave
 		// a running handoff pending another ward observation. Both are live
 		// workflow states, not proof that the invocation was lost; liveness is
@@ -733,7 +738,7 @@ func (d *Driver) commitPreJournalCancellationLocked(
 	switch in.Phase {
 	case phaseCommitted, phaseLost:
 		return true, nil
-	case phaseExported:
+	case phaseExported, phaseImportPending:
 		// A returned export outraced the cancellation request. Its durable
 		// evidence, rather than an earlier journal miss, owns disposition.
 		return false, nil
@@ -780,7 +785,7 @@ func (d *Driver) Collect(ctx context.Context, id domain.InvocationID) (exec.Stag
 		return *in.Result, nil
 	case phaseLost:
 		return exec.StageResult{}, fmt.Errorf("invocation %s: %w", id, exec.ErrNoResult)
-	case phaseSeeding, phaseRunning, phaseExported:
+	case phaseSeeding, phaseRunning, phaseExported, phaseImportPending:
 		return exec.StageResult{}, fmt.Errorf("invocation %s: %w", id, exec.ErrResultNotReady)
 	}
 	return exec.StageResult{}, fmt.Errorf("invocation %s: phase %q: %w", id, in.Phase, exec.ErrInvalidStatus)

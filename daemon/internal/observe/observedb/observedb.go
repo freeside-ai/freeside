@@ -19,6 +19,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 )
 
 // Store is a read-only view of one daemon database's run observations.
@@ -32,7 +33,7 @@ type Store struct {
 // admission-floor configuration. Opening migrates the schema to head, the
 // same behaviour freesided submit and doctor already have on this transport.
 func Open(ctx context.Context, path string) (*Store, error) {
-	st, err := store.Open(ctx, path, store.Options{})
+	st, _, err := topicstore.Open(ctx, path, store.Options{})
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}

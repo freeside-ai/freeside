@@ -885,6 +885,33 @@ func (r exportRecorder) LookupExecutionExportRecord(
 	return r.lookupExecutionExport(ctx, id, false)
 }
 
+func (r exportRecorder) RecordCurrentImportStart(
+	ctx context.Context, start domain.CurrentImportStart,
+) error {
+	err := r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordCurrentImportStart(ctx, start)
+	})
+	if errors.Is(err, store.ErrImmutableConflict) {
+		return errors.Join(err, domain.ErrImmutableTransition)
+	}
+	return err
+}
+
+func (r exportRecorder) LookupCurrentImportStart(
+	ctx context.Context, id domain.InvocationID,
+) (domain.CurrentImportStart, bool, error) {
+	var start domain.CurrentImportStart
+	err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		start, err = tx.GetCurrentImportStart(ctx, id)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return domain.CurrentImportStart{}, false, nil
+	}
+	return start, err == nil, err
+}
+
 func (r exportRecorder) lookupExecutionExport(
 	ctx context.Context, id domain.InvocationID, requireCurrent bool,
 ) (domain.ExecutionExport, bool, error) {
@@ -1362,14 +1389,15 @@ func composeClaudeDriver(
 	}
 
 	driver, driverErr := claude.New(claude.Config{
-		Lifetime:   ctx,
-		Dir:        filepath.Join(cfg.StateDir, "claude-driver"),
-		SeedRoot:   cfg.SeedRoot,
-		ExportRoot: filepath.Join(cfg.StateDir, "ward-exports"),
-		Gate:       backend,
-		Seeder:     transportSeeder{transport: transport},
-		Exports:    exportRecorder{store: st},
-		Outcomes:   exportRecorder{store: st},
+		Lifetime:     ctx,
+		Dir:          filepath.Join(cfg.StateDir, "claude-driver"),
+		SeedRoot:     cfg.SeedRoot,
+		ExportRoot:   filepath.Join(cfg.StateDir, "ward-exports"),
+		Gate:         backend,
+		Seeder:       transportSeeder{transport: transport},
+		Exports:      exportRecorder{store: st},
+		ImportStarts: exportRecorder{store: st},
+		Outcomes:     exportRecorder{store: st},
 		Authority: storeAdmissionAuthority{
 			store: st, blobs: blobs, allowedPaths: slices.Clone(cfg.AllowedPaths),
 			commitAuthors:             commitAuthors,

@@ -126,7 +126,9 @@ func seedRecipeGatedEvidence(t *testing.T, dbPath string) domain.Digest {
 		t.Fatalf("NewAttentionItem: %v", err)
 	}
 	ctx := context.Background()
-	st, err := store.Open(ctx, dbPath, store.Options{ApprovedRecipes: approved})
+	st, _, err := openStoreWithTopicKey(
+		ctx, dbPath, store.Options{ApprovedRecipes: approved},
+	)
 	if err != nil {
 		t.Fatalf("open seed store: %v", err)
 	}

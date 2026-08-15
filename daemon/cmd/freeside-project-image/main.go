@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 )
 
 type stringList []string
@@ -66,7 +67,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("read recipe: %w", err)
 	}
-	s, err := store.Open(ctx, cfg.DBPath, store.Options{})
+	s, err := openProjectImageStore(ctx, cfg.DBPath)
 	if err != nil {
 		return err
 	}
@@ -115,6 +116,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("write result: %w", err)
 	}
 	return nil
+}
+
+func openProjectImageStore(ctx context.Context, path string) (*store.Store, error) {
+	s, _, err := topicstore.Open(ctx, path, store.Options{})
+	return s, err
 }
 
 func parseConfig(args []string, output io.Writer) (config, error) {

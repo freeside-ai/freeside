@@ -714,6 +714,36 @@ func ValidateExportBinding(a ExecutionAdmission, x ExecutionExport) error {
 	return nil
 }
 
+// CurrentImportStart is the trusted, write-once marker that a released export
+// crossed into the current-policy import lane. Private driver state can name
+// that lane for replay, but only this admission-bound record can require it.
+type CurrentImportStart struct {
+	InvocationID InvocationID `json:"invocation_id"`
+	AdmissionID  Digest       `json:"admission_id"`
+}
+
+// Validate reports whether the marker is well-formed. Its admission binding
+// is checked separately because the marker does not carry that record.
+func (x CurrentImportStart) Validate() error {
+	if x.InvocationID == "" {
+		return fmt.Errorf("current import start invocation_id: %w", ErrEmptyID)
+	}
+	if x.AdmissionID == "" {
+		return fmt.Errorf("current import start %s admission_id: %w", x.InvocationID, ErrEmptyID)
+	}
+	return nil
+}
+
+// ValidateCurrentImportStartBinding requires the marker to name the exact
+// immutable admission that authorized its invocation.
+func ValidateCurrentImportStartBinding(a ExecutionAdmission, x CurrentImportStart) error {
+	if x.InvocationID != a.InvocationID || x.AdmissionID != a.ID {
+		return fmt.Errorf("current import start %s disagrees with admission %s: %w",
+			x.InvocationID, a.InvocationID, ErrParentKeyMismatch)
+	}
+	return nil
+}
+
 // ExecutionOutcomeStatus is a non-export terminal class. Completed work is
 // authenticated by ExecutionExport instead; keeping it out of this vocabulary
 // makes the two authorities disjoint.

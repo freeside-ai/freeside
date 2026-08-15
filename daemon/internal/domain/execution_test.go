@@ -634,6 +634,36 @@ func TestValidateExportBinding(t *testing.T) {
 	}
 }
 
+func TestCurrentImportStartValidateAndBinding(t *testing.T) {
+	a := mustAdmission(t, admissionInput())
+	valid := domain.CurrentImportStart{InvocationID: a.InvocationID, AdmissionID: a.ID}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if err := domain.ValidateCurrentImportStartBinding(a, valid); err != nil {
+		t.Fatalf("ValidateCurrentImportStartBinding: %v", err)
+	}
+	for _, tc := range []struct {
+		name    string
+		start   domain.CurrentImportStart
+		wantErr error
+	}{
+		{"no invocation", domain.CurrentImportStart{AdmissionID: a.ID}, domain.ErrEmptyID},
+		{"no admission", domain.CurrentImportStart{InvocationID: a.InvocationID}, domain.ErrEmptyID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.start.Validate(); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Validate = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+	foreign := valid
+	foreign.AdmissionID = "sha256:other"
+	if err := domain.ValidateCurrentImportStartBinding(a, foreign); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("foreign binding = %v, want parent mismatch", err)
+	}
+}
+
 func validExportRejectionInput(a domain.ExecutionAdmission) domain.ExportRejectionInput {
 	return domain.ExportRejectionInput{
 		InvocationID: a.InvocationID,
