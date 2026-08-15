@@ -197,7 +197,8 @@ private struct FailingCredentialStore: DeviceCredentialStore {
                 mockMode: true,
                 readiness: local,
                 persistedServerURL: "https://daemon.example",
-                localDaemonURL: DaemonReadinessReader.supervisedAPIURL)
+                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                hasCredential: { _ in false })
                 == .live(URL(string: "http://127.0.0.1:9000")!, pairingCode: ""))
         #expect(
             AppSession.launchMode(
@@ -206,7 +207,8 @@ private struct FailingCredentialStore: DeviceCredentialStore {
                 mockMode: true,
                 readiness: local,
                 persistedServerURL: "https://daemon.example",
-                localDaemonURL: DaemonReadinessReader.supervisedAPIURL) == .pairingDemo)
+                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                hasCredential: { _ in false }) == .pairingDemo)
         #expect(
             AppSession.launchMode(
                 argumentServerURL: nil,
@@ -214,7 +216,8 @@ private struct FailingCredentialStore: DeviceCredentialStore {
                 mockMode: true,
                 readiness: local,
                 persistedServerURL: "https://daemon.example",
-                localDaemonURL: DaemonReadinessReader.supervisedAPIURL) == .mock)
+                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                hasCredential: { _ in false }) == .mock)
         #expect(
             AppSession.launchMode(
                 argumentServerURL: nil,
@@ -222,7 +225,8 @@ private struct FailingCredentialStore: DeviceCredentialStore {
                 mockMode: false,
                 readiness: local,
                 persistedServerURL: "https://daemon.example",
-                localDaemonURL: DaemonReadinessReader.supervisedAPIURL)
+                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                hasCredential: { _ in false })
                 == .live(local.apiURL, pairingCode: "483911"))
         let staleLocal = DaemonReadiness(
             apiURL: URL(string: "http://127.0.0.1:49152")!, pairingCode: "stale-code")
@@ -233,7 +237,8 @@ private struct FailingCredentialStore: DeviceCredentialStore {
                 mockMode: false,
                 readiness: staleLocal,
                 persistedServerURL: nil,
-                localDaemonURL: DaemonReadinessReader.supervisedAPIURL)
+                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                hasCredential: { _ in false })
                 == .live(DaemonReadinessReader.supervisedAPIURL, pairingCode: ""))
         #expect(
             AppSession.launchMode(
@@ -242,7 +247,8 @@ private struct FailingCredentialStore: DeviceCredentialStore {
                 mockMode: false,
                 readiness: nil,
                 persistedServerURL: "https://daemon.example",
-                localDaemonURL: DaemonReadinessReader.supervisedAPIURL)
+                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                hasCredential: { _ in false })
                 == .live(URL(string: "https://daemon.example")!, pairingCode: ""))
         #expect(
             AppSession.launchMode(
@@ -251,8 +257,73 @@ private struct FailingCredentialStore: DeviceCredentialStore {
                 mockMode: false,
                 readiness: nil,
                 persistedServerURL: nil,
-                localDaemonURL: DaemonReadinessReader.supervisedAPIURL)
+                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                hasCredential: { _ in false })
                 == .live(DaemonReadinessReader.supervisedAPIURL, pairingCode: ""))
+    }
+
+    @Test func launchResolutionPrefersTheDeploymentWithACredential() {
+        let readinessURL = URL(string: "http://127.0.0.1:7331")!
+        let persistedURL = URL(string: "http://127.0.0.1:8677")!
+        let readiness = DaemonReadiness(apiURL: readinessURL, pairingCode: "483911")
+
+        #expect(
+            AppSession.launchMode(
+                argumentServerURL: nil,
+                pairingDemo: false,
+                mockMode: false,
+                readiness: readiness,
+                persistedServerURL: persistedURL.absoluteString,
+                localDaemonURL: readinessURL,
+                hasCredential: { $0 == persistedURL })
+                == .live(persistedURL, pairingCode: ""))
+        #expect(
+            AppSession.launchMode(
+                argumentServerURL: nil,
+                pairingDemo: false,
+                mockMode: false,
+                readiness: readiness,
+                persistedServerURL: persistedURL.absoluteString,
+                localDaemonURL: readinessURL,
+                hasCredential: { _ in false })
+                == .live(readinessURL, pairingCode: "483911"))
+        #expect(
+            AppSession.launchMode(
+                argumentServerURL: nil,
+                pairingDemo: false,
+                mockMode: false,
+                readiness: readiness,
+                persistedServerURL: persistedURL.absoluteString,
+                localDaemonURL: readinessURL,
+                hasCredential: { $0 == readinessURL || $0 == persistedURL })
+                == .live(readinessURL, pairingCode: "483911"))
+        #expect(
+            AppSession.launchMode(
+                argumentServerURL: "http://127.0.0.1:9000",
+                pairingDemo: false,
+                mockMode: false,
+                readiness: readiness,
+                persistedServerURL: persistedURL.absoluteString,
+                localDaemonURL: readinessURL,
+                hasCredential: { $0 == persistedURL })
+                == .live(URL(string: "http://127.0.0.1:9000")!, pairingCode: ""))
+        for malformedURL in ["%", "http://daemon.example:65536"] {
+            var probedURLs: [URL] = []
+            #expect(
+                AppSession.launchMode(
+                    argumentServerURL: nil,
+                    pairingDemo: false,
+                    mockMode: false,
+                    readiness: readiness,
+                    persistedServerURL: malformedURL,
+                    localDaemonURL: readinessURL,
+                    hasCredential: {
+                        probedURLs.append($0)
+                        return $0 != readinessURL
+                    })
+                    == .live(readinessURL, pairingCode: "483911"))
+            #expect(probedURLs == [readinessURL])
+        }
     }
 
     @Test func readinessPrefillsPairingWithoutChangingManualFallback() {
@@ -402,10 +473,17 @@ private struct FailingCredentialStore: DeviceCredentialStore {
         // sanitization would collapse still get distinct directories.
         let colonPath = URL(string: "https://daemon.example/a:b")!
         let slashPath = URL(string: "https://daemon.example/a/b")!
+        let encodedSlashPath = URL(string: "https://daemon.example/a%2Fb")!
         #expect(
             AppSession.deploymentKey(for: colonPath) != AppSession.deploymentKey(for: slashPath))
         #expect(
             AppSession.cacheDirectory(for: colonPath)
+                != AppSession.cacheDirectory(for: slashPath))
+        #expect(
+            AppSession.deploymentKey(for: encodedSlashPath)
+                != AppSession.deploymentKey(for: slashPath))
+        #expect(
+            AppSession.cacheDirectory(for: encodedSlashPath)
                 != AppSession.cacheDirectory(for: slashPath))
     }
 

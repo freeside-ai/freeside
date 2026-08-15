@@ -96,7 +96,8 @@ public final class AppSession {
         mockMode: Bool,
         readiness: DaemonReadiness?,
         persistedServerURL: String?,
-        localDaemonURL: URL?
+        localDaemonURL: URL?,
+        hasCredential: (URL) -> Bool
     ) -> LaunchMode {
         if let argumentServerURL, let url = URL(string: argumentServerURL) {
             return .live(url, pairingCode: "")
@@ -107,17 +108,35 @@ public final class AppSession {
         if mockMode {
             return .mock
         }
+        let persistedURL = persistedServerURL.flatMap { rawValue -> URL? in
+            guard
+                let url = URL(string: rawValue),
+                let scheme = url.scheme?.lowercased(),
+                scheme == "http" || scheme == "https",
+                url.host?.isEmpty == false
+            else { return nil }
+            if let port = url.port, !(1...65535).contains(port) {
+                return nil
+            }
+            return url
+        }
         if let readiness {
             let matchesLocalDaemon =
                 localDaemonURL.map {
                     Self.deploymentKey(for: readiness.apiURL) == Self.deploymentKey(for: $0)
                 } ?? true
             if matchesLocalDaemon {
+                if !hasCredential(readiness.apiURL),
+                    let persistedURL,
+                    hasCredential(persistedURL)
+                {
+                    return .live(persistedURL, pairingCode: "")
+                }
                 return .live(readiness.apiURL, pairingCode: readiness.pairingCode)
             }
         }
-        if let persistedServerURL, let url = URL(string: persistedServerURL) {
-            return .live(url, pairingCode: "")
+        if let persistedURL {
+            return .live(persistedURL, pairingCode: "")
         }
         if let localDaemonURL {
             return .live(localDaemonURL, pairingCode: "")
@@ -126,9 +145,9 @@ public final class AppSession {
     }
 
     /// Explicit launch inputs stay the development override. Otherwise a
-    /// daemon-host readiness file selects and prefills the local deployment;
-    /// the persisted URL remains the fallback for remote clients and older
-    /// installs, followed by today's permissive mock experience.
+    /// daemon-host readiness file selects and prefills the local deployment,
+    /// unless only the persisted deployment holds a device credential. The
+    /// local daemon fallback and today's permissive mock experience follow.
     public static func fromEnvironment() -> AppSession {
         let defaults = UserDefaults.standard
         let arguments = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
@@ -147,7 +166,12 @@ public final class AppSession {
             mockMode: arguments["FreesideMock"] as? String == "YES",
             readiness: readiness,
             persistedServerURL: persistedServerURL,
-            localDaemonURL: localDaemonURL
+            localDaemonURL: localDaemonURL,
+            hasCredential: {
+                (try? KeychainCredentialStore(
+                    service: "ai.freeside.device-credential/\(deploymentKey(for: $0))"
+                ).load()) != nil
+            }
         ) {
         case .live(let url, let pairingCode):
             return live(serverURL: url, pairingCode: pairingCode)
@@ -181,11 +205,15 @@ public final class AppSession {
     /// One stable key per daemon deployment: scheme and host are
     /// case-insensitive and normalize, an explicit port and a non-root
     /// path distinguish deployments, and a bare trailing slash does not.
+    /// Do not fall back to the former decoded-path key for encoded paths:
+    /// it cannot prove which of two colliding deployments owns a credential.
     public static func deploymentKey(for url: URL) -> String {
         let scheme = url.scheme?.lowercased() ?? "http"
         let host = url.host?.lowercased() ?? ""
         let port = url.port.map { ":\($0)" } ?? ""
-        let path = url.path == "/" ? "" : url.path
+        let encodedPath =
+            URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? url.path
+        let path = encodedPath == "/" ? "" : encodedPath
         return "\(scheme)://\(host)\(port)\(path)"
     }
 
