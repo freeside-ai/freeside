@@ -1322,7 +1322,10 @@ Additional rules:
   item as a digest-addressed artifact, creates the elaboration run, and
   reserves the deterministic implementation identity. The implementation run
   starts only after elaboration accepts a specification and, when configured,
-  the operator approves that specification's digest.
+  the operator approves that specification's digest. Its result names the
+  source digest and artifact, elaboration identity and policy, and reserved
+  implementation identity as separate lanes; the approval claim, then the
+  created run, carries the approved implementation specification digest.
 - `auto_start` is bounded by WIP caps. The conservative default is `propose`.
 - Raw findings are immutable. Classification is a versioned annotation.
 - Low-confidence materiality enters the Section 7 adjudication residue and
