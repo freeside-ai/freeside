@@ -288,6 +288,50 @@ func TestValidateAttentionItemDecidedAtImmutable(t *testing.T) {
 	})
 }
 
+// TestValidateAttentionItemCreatedAtImmutable pins both halves of the
+// compatibility rule: a live stamp cannot move or disappear, and a legacy
+// nil cannot be backfilled during a later lifecycle transition.
+func TestValidateAttentionItemCreatedAtImmutable(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	stampedIn := validItemInput(domain.AttentionSpecApproval)
+	stampedIn.CreatedAt = &ts
+	stamped := mustItem(t, stampedIn)
+
+	t.Run("preserving the stamp", func(t *testing.T) {
+		next := stamped
+		next.ItemVersion = 2
+		if err := domain.ValidateAttentionItemTransition(stamped, next); err != nil {
+			t.Fatalf("stamp-preserving advance rejected: %v", err)
+		}
+	})
+	t.Run("erasing the stamp", func(t *testing.T) {
+		erased := stamped
+		erased.ItemVersion = 2
+		erased.CreatedAt = nil
+		if err := domain.ValidateAttentionItemTransition(stamped, erased); !errors.Is(err, domain.ErrImmutableTransition) {
+			t.Fatalf("erasing created_at = %v, want ErrImmutableTransition", err)
+		}
+	})
+	t.Run("moving the stamp", func(t *testing.T) {
+		moved := stamped
+		moved.ItemVersion = 2
+		later := ts.Add(time.Hour)
+		moved.CreatedAt = &later
+		if err := domain.ValidateAttentionItemTransition(stamped, moved); !errors.Is(err, domain.ErrImmutableTransition) {
+			t.Fatalf("moving created_at = %v, want ErrImmutableTransition", err)
+		}
+	})
+	t.Run("backfilling legacy nil", func(t *testing.T) {
+		legacy := mustItem(t, validItemInput(domain.AttentionSpecApproval))
+		backfilled := legacy
+		backfilled.ItemVersion = 2
+		backfilled.CreatedAt = &ts
+		if err := domain.ValidateAttentionItemTransition(legacy, backfilled); !errors.Is(err, domain.ErrImmutableTransition) {
+			t.Fatalf("backfilling created_at = %v, want ErrImmutableTransition", err)
+		}
+	})
+}
+
 // TestValidateAttentionItemSupersessionImmutable pins the condition as fixed
 // at creation (issue #321): a later write may neither add, remove, nor
 // retarget it, while an advance that carries it unchanged is legal.

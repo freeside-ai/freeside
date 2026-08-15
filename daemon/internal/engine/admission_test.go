@@ -25,16 +25,21 @@ func (stageInputBackend) Capabilities() exec.CapabilitySet {
 }
 
 func TestWaivedPostureItemIsExplicitlyBlocking(t *testing.T) {
+	createdAt := time.Date(2026, 8, 14, 1, 2, 3, 0, time.UTC)
 	item, err := waivedPostureItem(
 		domain.Run{ID: "run-1", ProjectID: "proj-1"},
 		"inv-1",
 		domain.BackupEncryptionWaiver{RepositoryID: 42, Reason: "temporary operator waiver"},
+		createdAt,
 	)
 	if err != nil {
 		t.Fatalf("waivedPostureItem: %v", err)
 	}
 	if item.Posture == nil || *item.Posture != domain.HealthPostureBlocking {
 		t.Fatalf("waived posture item = %v, want blocking", item.Posture)
+	}
+	if item.CreatedAt == nil || !item.CreatedAt.Equal(createdAt) {
+		t.Fatalf("waived posture created_at = %v, want %v", item.CreatedAt, createdAt)
 	}
 }
 

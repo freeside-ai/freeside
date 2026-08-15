@@ -105,6 +105,10 @@ func TestRunProjectionHealthMintedOnExclusion(t *testing.T) {
 	if item.Posture == nil || *item.Posture != domain.HealthPostureAdvisory {
 		t.Fatalf("item posture = %v, want advisory", item.Posture)
 	}
+	wantCreatedAt := f.at.Add(time.Hour)
+	if item.CreatedAt == nil || !item.CreatedAt.Equal(wantCreatedAt) {
+		t.Fatalf("item created_at = %v, want injected clock %v", item.CreatedAt, wantCreatedAt)
+	}
 
 	// The operator sees the item in the next bootstrap snapshot, not only a log
 	// line.

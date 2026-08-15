@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -150,6 +151,8 @@ func (e *Engine) ensureItem(ctx context.Context, want domain.AttentionItem) (boo
 		}
 		return false, nil
 	case errors.Is(err, store.ErrNotFound):
+		createdAt := time.Now().UTC()
+		want.CreatedAt = &createdAt
 		if err := e.signet.PutItem(ctx, want); err != nil {
 			return false, fmt.Errorf("create attention item %q: %w", want.ID, err)
 		}
@@ -208,7 +211,8 @@ func initialItem(run domain.Run) domain.AttentionItem {
 		// would make the two outcomes indistinguishable to the engine.
 		RequestedDecision: []domain.Action{domain.ActionApprove},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
-		Status: domain.StatusOpen,
+		CreatedAt: nil,
+		Status:    domain.StatusOpen,
 	}, nil)
 	if err != nil {
 		panic(fmt.Sprintf("engine initial item invariant: %v", err))
@@ -225,7 +229,8 @@ func feedbackItem(run domain.Run) domain.AttentionItem {
 		Reason:            "Discuss the approved fake run with the agent.",
 		RequestedDecision: []domain.Action{domain.ActionDiscuss},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
-		Status: domain.StatusOpen,
+		CreatedAt: nil,
+		Status:    domain.StatusOpen,
 	}, nil)
 	if err != nil {
 		panic(fmt.Sprintf("engine feedback item invariant: %v", err))

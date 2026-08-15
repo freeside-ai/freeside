@@ -232,6 +232,13 @@ type fakePublicationWorkflow struct {
 	candidates  map[domain.InvocationID]publish.RecoveryCandidate
 }
 
+func (w *fakePublicationWorkflow) attentionCreatedAt() time.Time {
+	if w.now == nil {
+		return time.Now().UTC()
+	}
+	return w.now().UTC()
+}
+
 type fakePublicationPolicyRecovery struct {
 	store *store.Store
 	mu    sync.Mutex
@@ -2187,6 +2194,7 @@ func (w *fakePublicationWorkflow) readyItem(
 	published publish.Result,
 ) (domain.AttentionItem, error) {
 	runID := task.RunID
+	createdAt := w.attentionCreatedAt()
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: readyItemID(task.RunID), ProjectID: task.ProjectID,
 		Subject: domain.Subject{
@@ -2205,7 +2213,8 @@ func (w *fakePublicationWorkflow) readyItem(
 		},
 		CommitPlanNotice: imported.CommitPlanNotice,
 		ItemVersion:      1, InterruptionClass: domain.InterruptionPlannedGate,
-		Status: domain.StatusOpen,
+		CreatedAt: &createdAt,
+		Status:    domain.StatusOpen,
 	}, w.approvedRecipes)
 }
 
@@ -2219,6 +2228,7 @@ func (w *fakePublicationWorkflow) putBlockedItem(
 	reason string,
 ) error {
 	runID := task.RunID
+	createdAt := w.attentionCreatedAt()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: blockedItemID(task.RunID), ProjectID: task.ProjectID,
 		Subject: domain.Subject{
@@ -2232,7 +2242,8 @@ func (w *fakePublicationWorkflow) putBlockedItem(
 		EvidenceSnapshot: artifacts, AgentClaims: claims,
 		PRHeadSHA: headSHA, CommitPlanNotice: notice,
 		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
-		Status: domain.StatusOpen,
+		CreatedAt: &createdAt,
+		Status:    domain.StatusOpen,
 	}, w.approvedRecipes)
 	if err != nil {
 		return fmt.Errorf("construct publish-blocked item: %w", err)
@@ -2273,6 +2284,9 @@ func (w *fakePublicationWorkflow) putTerminalItem(
 }
 
 func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
+	// Creation time is stamped when the item first lands. Recovery rebuilds
+	// the terminal shape, so compare it using the durable original stamp.
+	expected.CreatedAt = current.CreatedAt
 	normalized := current
 	normalized.ItemVersion = expected.ItemVersion
 	normalized.Status = expected.Status

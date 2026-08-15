@@ -34,6 +34,9 @@ enum MockContractValidation {
         if let conversation = item.conversation_id, conversation.isEmpty {
             return "empty conversation_id"
         }
+        if let created = item.created_at, created.timeIntervalSince1970 < -62_000_000_000 {
+            return "zero created_at"
+        }
         if let expires = item.expires_when, expires.timeIntervalSince1970 < -62_000_000_000 {
             return "zero expires_when"
         }

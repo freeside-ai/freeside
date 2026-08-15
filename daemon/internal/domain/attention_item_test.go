@@ -504,6 +504,49 @@ func TestValidateDecidedAt(t *testing.T) {
 	})
 }
 
+// TestCreatedAtContract covers the constructor and reconstruction boundary:
+// a present stamp is detached from caller input and must be a real UTC
+// instant, while nil remains valid for legacy rows.
+func TestCreatedAtContract(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	in := validItemInput(domain.AttentionSpecApproval)
+	in.CreatedAt = &ts
+	item, err := domain.NewAttentionItem(in, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts = ts.Add(time.Hour)
+	want := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	if item.CreatedAt == nil || !item.CreatedAt.Equal(want) {
+		t.Fatalf("created_at = %v, want %v", item.CreatedAt, want)
+	}
+
+	t.Run("legacy nil", func(t *testing.T) {
+		legacy, err := domain.NewAttentionItem(validItemInput(domain.AttentionSpecApproval), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if legacy.CreatedAt != nil {
+			t.Fatalf("created_at = %v, want nil", legacy.CreatedAt)
+		}
+	})
+	t.Run("zero", func(t *testing.T) {
+		invalid := item
+		invalid.CreatedAt = &time.Time{}
+		if err := invalid.Validate(); !errors.Is(err, domain.ErrMissingTimestamp) {
+			t.Fatalf("Validate() = %v, want ErrMissingTimestamp", err)
+		}
+	})
+	t.Run("non-UTC", func(t *testing.T) {
+		invalid := item
+		local := want.In(time.FixedZone("PST", -8*60*60))
+		invalid.CreatedAt = &local
+		if err := invalid.Validate(); !errors.Is(err, domain.ErrTimestampNotUTC) {
+			t.Fatalf("Validate() = %v, want ErrTimestampNotUTC", err)
+		}
+	})
+}
+
 // TestValidateExpiresWhen covers the reconstruction backstop for the optional
 // expiry: nil is absent, a present pointer must carry a real UTC instant. The
 // non-UTC case bypasses the constructor (which normalizes; see

@@ -822,6 +822,7 @@ func TestPutTerminalItemAcceptsCompatibleLifecycleAdvance(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	attention := signet.NewService(st)
 	runID := domain.RunID("run-terminal")
+	createdAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	expected, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: FakePublicationReadyItemID(runID), ProjectID: "project-terminal",
 		Subject: domain.Subject{
@@ -835,7 +836,7 @@ func TestPutTerminalItemAcceptsCompatibleLifecycleAdvance(t *testing.T) {
 		PRHeadSHA:   "0123456789012345678901234567890123456789",
 		PRReference: &domain.PRReference{Repo: "owner/repo", Number: 7},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
-		Status: domain.StatusOpen,
+		Status: domain.StatusOpen, CreatedAt: &createdAt,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -851,8 +852,22 @@ func TestPutTerminalItemAcceptsCompatibleLifecycleAdvance(t *testing.T) {
 	}
 
 	workflow := &fakePublicationWorkflow{store: st, attention: attention}
-	if err := workflow.putTerminalItem(ctx, expected); err != nil {
+	reconstructedAt := createdAt.Add(time.Hour)
+	reconstructed := expected
+	reconstructed.CreatedAt = &reconstructedAt
+	if err := workflow.putTerminalItem(ctx, reconstructed); err != nil {
 		t.Fatalf("compatible terminal replay: %v", err)
+	}
+	var persisted domain.AttentionItem
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		persisted, err = tx.GetAttentionItem(ctx, expected.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.CreatedAt == nil || !persisted.CreatedAt.Equal(createdAt) {
+		t.Fatalf("persisted created_at = %v, want %v", persisted.CreatedAt, createdAt)
 	}
 }
 

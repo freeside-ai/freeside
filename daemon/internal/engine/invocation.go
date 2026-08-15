@@ -1002,7 +1002,8 @@ func (e *Engine) recordAttempt(
 			// leave unattended work running on the exception with nothing
 			// telling the operator so.
 			if fresh.BackupEncryptionWaiver != nil {
-				item, err := waivedPostureItem(run, invocationID, *fresh.BackupEncryptionWaiver)
+				createdAt := e.admission.now().UTC()
+				item, err := waivedPostureItem(run, invocationID, *fresh.BackupEncryptionWaiver, createdAt)
 				if err != nil {
 					return err
 				}

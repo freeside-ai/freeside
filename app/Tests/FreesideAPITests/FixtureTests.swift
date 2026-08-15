@@ -85,6 +85,7 @@ import Testing
         let item = AttentionFixtures.fixture(type: type).item
         #expect(item.requested_decision == AttentionFixtures.phase1ActionSets[type])
         #expect(item.status == .open)
+        #expect(item.created_at == AttentionFixtures.createdInstant)
         // artifact_digests is the daemon-derived canonical binding set:
         // the sorted, deduplicated union of evidence and claim digests.
         let union = item.evidence_snapshot.map(\.digest) + item.agent_claims.map(\.digest)

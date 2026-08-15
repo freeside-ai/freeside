@@ -206,6 +206,7 @@ func legacyCodexReenrollmentMarker(
 			domain.ActionAcknowledge, domain.ActionStopUnattended,
 		},
 		ItemVersion: version, InterruptionClass: domain.InterruptionExceptional,
-		Posture: &posture, Status: status,
+		CreatedAt: nil,
+		Posture:   &posture, Status: status,
 	}, nil)
 }

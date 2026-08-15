@@ -108,6 +108,13 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		return fmt.Errorf("attention item %s: status %q is terminal and cannot become %q: %w",
 			updated.ID, old.Status, updated.Status, ErrImmutableTransition)
 	}
+	// Creation is an identity-bearing fact, not lifecycle state: live items
+	// receive it at construction, while a legacy nil remains nil forever.
+	// Neither side may add, move, or erase the stamp during an update.
+	if !timesEqual(updated.CreatedAt, old.CreatedAt) {
+		return fmt.Errorf("attention item %s: recorded created_at would change: %w",
+			updated.ID, ErrImmutableTransition)
+	}
 	// A recorded decision instant is the durable endpoint of the
 	// open-to-decision metric (issue #171): once stamped it never moves or
 	// disappears, so a writer holding a constructor-built copy (which always

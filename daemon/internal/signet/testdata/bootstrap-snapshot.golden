@@ -41,6 +41,7 @@
           "first_opened_at": null,
           "submit_to_first_open": null
         },
+        "created_at": "2026-08-10T12:34:56Z",
         "expires_when": "2026-08-11T12:34:56Z",
         "decided_at": null,
         "posture": null,

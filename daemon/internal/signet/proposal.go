@@ -252,6 +252,7 @@ func proposalReplacementItem(
 		},
 		EvidenceSnapshot: []domain.Artifact{artifact}, ItemVersion: priorItem.ItemVersion + 1,
 		InterruptionClass: priorItem.InterruptionClass, Status: domain.StatusResolved,
+		CreatedAt: &now,
 	}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})
 	if err != nil {
 		return domain.AttentionItem{}, err

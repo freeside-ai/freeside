@@ -449,6 +449,7 @@ type daemon struct {
 	closeErr      error
 	pairingCode   string
 	logger        *slog.Logger
+	now           func() time.Time
 }
 
 func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error) {
@@ -740,6 +741,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
 			ConfigurationDigest: claudeWiring.backend.ConfigurationDigest(),
 			Mode:                cfg.Claude.OperatingMode,
+			Now:                 cfg.now,
 		}).Run(runCtx)
 		return err
 	}
@@ -758,7 +760,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		lock:  lock,
 		store: st, attention: attention, workflow: workflow, driver: driver,
 		listener: listener, cancel: cancel, errs: make(chan error, 1),
-		logger: logger,
+		logger: logger, now: cfg.now,
 		server: &http.Server{
 			Handler: signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st), signet.HealthResponse{
 				Status: "ok", Version: buildVersion(), StartedAt: startedAt,

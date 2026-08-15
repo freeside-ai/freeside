@@ -219,8 +219,9 @@ and sampled decision audits.
 
 **AttentionItem** contains:
 
-`id`, `project_id`, `subject {subject_type: run | proposal_batch | project |
-system, subject_id, run_id?}`, `type`, `priority`, `reason`,
+`id`, `project_id`, immutable `created_at` (nullable only for legacy records),
+`subject {subject_type: run | proposal_batch | project | system, subject_id,
+run_id?}`, `type`, `priority`, `reason`,
 `requested_decision`, `evidence_snapshot`, `agent_claims`, `artifact_digests`,
 `pr_head_sha`, `pr_reference? {repo, number}`, `item_version`,
 `interruption_class`, `conversation_id?`, derived timing aggregates,

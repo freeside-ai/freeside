@@ -1020,6 +1020,7 @@ public actor MockServer {
                             first_opened_at: nil,
                             submit_to_first_open: nil
                         ),
+                        created_at: currentTime,
                         expires_when: nil,
                         decided_at: nil,
                         posture: .init(value1: .blocking),
@@ -1080,6 +1081,7 @@ public actor MockServer {
             replacement.item.artifact_digests = [revisedDigest]
             replacement.item.item_version += 1
             replacement.item.status = .resolved
+            replacement.item.created_at = currentTime
             replacement.item.decided_at = currentTime
             itemsByID[replacementID] = replacement
             proposalFactsByItemID[replacementID] = .init(

@@ -1336,7 +1336,8 @@ func (e *Engine) recordProductionTerminalWithAuthority(
 		}
 		inserted = true
 		if terminal.Status != exec.StatusCompleted {
-			item, err := productionFailureItem(run, terminal)
+			createdAt := time.Now().UTC()
+			item, err := productionFailureItem(run, terminal, createdAt)
 			if err != nil {
 				return err
 			}
@@ -1383,7 +1384,9 @@ func (e *Engine) recordProductionTerminalWithAuthority(
 // Only acknowledge is offered: retry has no honoring machinery yet, and an
 // action the system cannot honour is worse than an absent one (the
 // waived-posture precedent).
-func productionFailureItem(run domain.Run, terminal productionTerminalRecord) (domain.AttentionItem, error) {
+func productionFailureItem(
+	run domain.Run, terminal productionTerminalRecord, createdAt time.Time,
+) (domain.AttentionItem, error) {
 	runID := run.ID
 	reason := fmt.Sprintf("Unattended %s stage ended %q without an accepted result.",
 		productionStageName, terminal.Status)
@@ -1398,7 +1401,8 @@ func productionFailureItem(run domain.Run, terminal productionTerminalRecord) (d
 		Reason:            reason,
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
-		Status: domain.StatusOpen,
+		CreatedAt: &createdAt,
+		Status:    domain.StatusOpen,
 	}, nil)
 }
 
@@ -1468,7 +1472,8 @@ func productionQuarantineItem(
 		Reason:            reason,
 		RequestedDecision: []domain.Action{domain.ActionStop},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
-		Status: domain.StatusOpen,
+		CreatedAt: nil,
+		Status:    domain.StatusOpen,
 	}, nil)
 }
 
@@ -1555,6 +1560,8 @@ func recordProductionQuarantine(
 		if err != nil {
 			return fmt.Errorf("construct quarantine item for run %q: %w", runID, err)
 		}
+		createdAt := time.Now().UTC()
+		item.CreatedAt = &createdAt
 		if err := attention.PutItem(ctx, item); err != nil {
 			if !errors.Is(err, store.ErrStaleWrite) && !errors.Is(err, store.ErrImmutableConflict) {
 				return fmt.Errorf("create quarantine item for run %q: %w", runID, err)
@@ -1587,6 +1594,7 @@ func refreshProductionQuarantine(
 	if err != nil {
 		return fmt.Errorf("construct quarantine item for run %q: %w", runID, err)
 	}
+	want.CreatedAt = current.CreatedAt
 	if !sameProductionQuarantineBinding(current, want) {
 		return fmt.Errorf("quarantine item %q disagrees with run %q: %w",
 			current.ID, runID, domain.ErrParentKeyMismatch)
@@ -1657,9 +1665,16 @@ func confirmProductionQuarantineItem(
 	if !found {
 		return conflict
 	}
-	if !sameProductionQuarantineBinding(current, want) ||
-		current.Status != domain.StatusOpen ||
-		!sameProductionQuarantineNotice(current, want) {
+	if !sameProductionQuarantineBinding(current, want) || current.Status != domain.StatusOpen {
+		return errors.Join(conflict, fmt.Errorf(
+			"quarantine item %q disagrees with this run's notice: %w",
+			itemID, domain.ErrParentKeyMismatch))
+	}
+	// Each contender stamps its own candidate before PutItem. Compare the
+	// losing candidate using the durable winner's stamp so a legitimate
+	// create race converges without weakening the whole-shape check.
+	want.CreatedAt = current.CreatedAt
+	if !sameProductionQuarantineNotice(current, want) {
 		return errors.Join(conflict, fmt.Errorf(
 			"quarantine item %q disagrees with this run's notice: %w",
 			itemID, domain.ErrParentKeyMismatch))

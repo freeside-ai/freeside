@@ -102,6 +102,7 @@ import Testing
             path: .init(item_id: replacementID)
         ).ok.body.json
         #expect(replacement.item.status == .resolved)
+        #expect(replacement.item.created_at != before.item.created_at)
         #expect(replacement.item.artifact_digests == [facts.proposal_digest])
         #expect(facts.supersedes?.value1.proposal_digest == before.item.artifact_digests[0])
         #expect(facts.supersedes?.value1.expected_cost_units == 12)
@@ -937,6 +938,7 @@ import Testing
         #expect(notice.item.requested_decision == [.resume_unattended, .acknowledge])
         #expect(notice.item.posture?.value1 == .blocking)
         #expect(notice.item.blocking_supersession == nil)
+        #expect(notice.item.created_at != nil)
 
         _ =
             try await client

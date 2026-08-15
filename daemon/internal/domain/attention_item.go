@@ -476,7 +476,11 @@ type AttentionItem struct {
 	InterruptionClass           InterruptionClass                   `json:"interruption_class"`
 	ConversationID              *ConversationID                     `json:"conversation_id"`
 	Timing                      TimingSummary                       `json:"timing"`
-	ExpiresWhen                 *time.Time                          `json:"expires_when"`
+	// CreatedAt is the daemon-stamped instant this item was created. It is
+	// immutable across the item's lifecycle and nil only for legacy items
+	// persisted before the field existed.
+	CreatedAt   *time.Time `json:"created_at"`
+	ExpiresWhen *time.Time `json:"expires_when"`
 	// DecidedAt is the daemon-stamped instant the item's first concluding
 	// decision was accepted (plan §4: open-to-decision time is the headline
 	// attention-latency metric, with the §1 per-unit measure governing;
@@ -527,6 +531,7 @@ type AttentionItemInput struct {
 	ItemVersion                      int
 	InterruptionClass                InterruptionClass
 	ConversationID                   *ConversationID
+	CreatedAt                        *time.Time
 	ExpiresWhen                      *time.Time
 	// Posture must be set exactly by daemon-internal creators of system_health
 	// items; there is no client input path to it.
@@ -569,6 +574,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		ItemVersion:                      in.ItemVersion,
 		InterruptionClass:                in.InterruptionClass,
 		ConversationID:                   clonePtr(in.ConversationID),
+		CreatedAt:                        clonePtr(in.CreatedAt),
 		ExpiresWhen:                      clonePtr(in.ExpiresWhen),
 		Posture:                          clonePtr(in.Posture),
 		BlockingSupersession:             clonePtr(in.BlockingSupersession),
@@ -639,6 +645,14 @@ func (i AttentionItem) Validate() error {
 	// present-but-unusable field.
 	if i.ConversationID != nil && *i.ConversationID == "" {
 		return fmt.Errorf("item %s conversation_id: %w", i.ID, ErrEmptyID)
+	}
+	if i.CreatedAt != nil {
+		if i.CreatedAt.IsZero() {
+			return fmt.Errorf("item %s created_at: %w", i.ID, ErrMissingTimestamp)
+		}
+		if i.CreatedAt.Location() != time.UTC {
+			return fmt.Errorf("item %s created_at: %w", i.ID, ErrTimestampNotUTC)
+		}
 	}
 	if i.ExpiresWhen != nil {
 		if i.ExpiresWhen.IsZero() {

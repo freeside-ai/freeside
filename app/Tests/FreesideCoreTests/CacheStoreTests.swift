@@ -37,6 +37,29 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(store.load() == newer)
     }
 
+    @Test func preCreationTimestampCacheDecodesAsLegacyNil() throws {
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try store.save(sampleState())
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var state = try #require(object["state"] as? [String: Any])
+        var snapshots = try #require(state["attentionItems"] as? [[String: Any]])
+        var snapshot = snapshots[0]
+        var item = try #require(snapshot["item"] as? [String: Any])
+        item.removeValue(forKey: "created_at")
+        snapshot["item"] = item
+        snapshots[0] = snapshot
+        state["attentionItems"] = snapshots
+        object["state"] = state
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let legacy = try #require(store.load())
+        #expect(legacy.attentionItems[0].item.created_at == nil)
+    }
+
     @Test func anythingUnreadableLoadsAsAbsent() throws {
         // The cache is disposable by design: corruption, a foreign
         // format, or a future incompatible version all mean "bootstrap",

@@ -504,7 +504,15 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 			SupersededProfileDigest: domain.Digest("sha256:profile-" + req.ID),
 		}
 	}
-	expires := time.Now().Add(24 * time.Hour)
+	createdInstant := time.Now().UTC()
+	createdAt := &createdInstant
+	if existing, err := c.service.GetAttentionItem(r.Context(), domain.ItemID(req.ID)); err == nil {
+		createdAt = existing.Item.CreatedAt
+	} else if !errors.Is(err, store.ErrNotFound) {
+		controlJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	expires := createdInstant.Add(24 * time.Hour)
 	var posture *domain.HealthPosture
 	if itemType == domain.AttentionSystemHealth {
 		blocking := domain.HealthPostureBlocking
@@ -539,6 +547,7 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		ReviewConfigurationRecovery:      reviewConfigurationRecovery,
 		ItemVersion:                      req.ItemVersion,
 		InterruptionClass:                domain.InterruptionPlannedGate,
+		CreatedAt:                        createdAt,
 		ExpiresWhen:                      &expires,
 		Posture:                          posture,
 		Status:                           domain.StatusOpen,
