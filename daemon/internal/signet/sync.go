@@ -92,6 +92,8 @@ type RunSnapshot struct {
 type Run struct {
 	ID              domain.RunID             `json:"id"`
 	ProjectID       domain.ProjectID         `json:"project_id"`
+	CreatedAt       *time.Time               `json:"created_at"`
+	LastActivityAt  *time.Time               `json:"last_activity_at"`
 	SpecDigest      domain.Digest            `json:"spec_digest"`
 	PolicyDigest    domain.Digest            `json:"policy_digest"`
 	Stages          []domain.Stage           `json:"stages"`
@@ -697,6 +699,12 @@ func runSnapshot(
 		SpecDigest: normalized.SpecDigest, PolicyDigest: normalized.PolicyDigest,
 		Stages:  normalized.Stages,
 		Outcome: domain.ConcludeRun(observation).Outcome,
+	}
+	if createdAt, ok := observation.SubmittedAt(); ok {
+		projection.CreatedAt = &createdAt
+	}
+	if lastActivityAt, ok := observation.LastObservedAt(); ok {
+		projection.LastActivityAt = &lastActivityAt
 	}
 	if len(observation.Milestones) > 0 {
 		latest := observation.Milestones[len(observation.Milestones)-1].Kind

@@ -78,7 +78,10 @@ public struct MockServerTransport: ClientTransport {
             return try Self.json(status: .ok, body: await server.serverRevision())
         case "getSyncBootstrap":
             do {
-                return try Self.json(status: .ok, body: await server.bootstrapSnapshot())
+                return try Self.json(
+                    status: .ok,
+                    body: await server.bootstrapSnapshot(),
+                    insertingRequiredNullableRunTimestamps: true)
             } catch let invalid as MockServer.InvalidItemError {
                 // One invalid row fails the whole bootstrap closed, as the
                 // daemon's single-read upper-bound gate does (#105).
@@ -144,7 +147,10 @@ public struct MockServerTransport: ClientTransport {
             }
             return try Self.json(status: .ok, body: facts)
         case "listRuns":
-            return try Self.json(status: .ok, body: await server.listRuns())
+            return try Self.json(
+                status: .ok,
+                body: await server.listRuns(),
+                insertingRequiredNullableRunTimestamps: true)
         case "getRun":
             guard let runID = Self.lastPathComponent(request.path),
                 let run = await server.run(id: runID)
@@ -154,7 +160,10 @@ public struct MockServerTransport: ClientTransport {
                     body: Components.Schemas._Error(
                         message: "no entity exists under the identifier"))
             }
-            return try Self.json(status: .ok, body: run)
+            return try Self.json(
+                status: .ok,
+                body: run,
+                insertingRequiredNullableRunTimestamps: true)
         case "getRunTimeline":
             guard let runID = Self.runID(inTimelinePath: request.path),
                 let timeline = await server.runTimeline(id: runID)
@@ -407,13 +416,47 @@ public struct MockServerTransport: ClientTransport {
 
     private static func json(
         status: HTTPResponse.Status,
-        body: some Encodable
+        body: some Encodable,
+        insertingRequiredNullableRunTimestamps: Bool = false
     ) throws -> (HTTPResponse, HTTPBody?) {
         let response = HTTPResponse(
             status: status,
             headerFields: [.contentType: "application/json"]
         )
-        return (response, HTTPBody(try encoder.encode(body)))
+        var data = try encoder.encode(body)
+        if insertingRequiredNullableRunTimestamps {
+            data = try runTimestampsPresent(in: data)
+        }
+        return (response, HTTPBody(data))
+    }
+
+    /// Swift's synthesized Encodable omits nil optionals even when OpenAPI
+    /// declares them required and nullable. Patch only run-bearing mock
+    /// responses so their raw JSON exercises the production wire contract.
+    private static func runTimestampsPresent(in data: Data) throws -> Data {
+        let object = try JSONSerialization.jsonObject(with: data)
+        return try JSONSerialization.data(
+            withJSONObject: insertingRunTimestampNulls(in: object),
+            options: [.sortedKeys])
+    }
+
+    private static func insertingRunTimestampNulls(in value: Any) -> Any {
+        if let values = value as? [Any] {
+            return values.map(insertingRunTimestampNulls)
+        }
+        guard var object = value as? [String: Any] else { return value }
+        for (key, nested) in object {
+            object[key] = insertingRunTimestampNulls(in: nested)
+        }
+        guard var run = object["run"] as? [String: Any] else { return object }
+        if !run.keys.contains("created_at") {
+            run["created_at"] = NSNull()
+        }
+        if !run.keys.contains("last_activity_at") {
+            run["last_activity_at"] = NSNull()
+        }
+        object["run"] = run
+        return object
     }
 
     private static func lastPathComponent(_ path: String?) -> String? {

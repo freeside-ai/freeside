@@ -12,7 +12,8 @@ struct RunsListView: View {
     }
 
     private var visibleRuns: [Components.Schemas.RunSnapshot] {
-        runs.filter { projectID == nil || $0.run.project_id == projectID }
+        RunDisplay.sortedRuns(
+            runs.filter { projectID == nil || $0.run.project_id == projectID })
     }
 
     var body: some View {
@@ -157,6 +158,25 @@ private struct ScheduleBadge: View {
 }
 
 enum RunDisplay {
+    static func sortedRuns(
+        _ runs: [Components.Schemas.RunSnapshot]
+    ) -> [Components.Schemas.RunSnapshot] {
+        runs.sorted { lhs, rhs in
+            let lhsActivity = lhs.run.last_activity_at ?? lhs.run.created_at
+            let rhsActivity = rhs.run.last_activity_at ?? rhs.run.created_at
+            switch (lhsActivity, rhsActivity) {
+            case (let lhs?, let rhs?) where lhs != rhs:
+                return lhs > rhs
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            default:
+                return lhs.run.id < rhs.run.id
+            }
+        }
+    }
+
     static func round(_ stage: Components.Schemas.Stage) -> String? {
         guard !stage.attempts.isEmpty else { return nil }
         return "Round \(stage.attempts.count)"

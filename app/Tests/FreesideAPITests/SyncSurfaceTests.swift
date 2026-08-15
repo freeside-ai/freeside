@@ -1,5 +1,6 @@
 import Foundation
 import FreesideAPI
+import HTTPTypes
 import OpenAPIRuntime
 import Testing
 
@@ -32,6 +33,107 @@ import Testing
         #expect(timeline.run_id == RunFixtures.activeRunID)
         #expect(timeline.as_of_revision == heartbeat.revision)
         #expect(!timeline.milestones.isEmpty)
+    }
+
+    @Test func runReadsDeriveTimestampsFromTimelineFacts() async throws {
+        let observedID = RunFixtures.activeRunID
+        let legacyID = RunFixtures.legacyRunID
+        let submittedAt = Date(timeIntervalSince1970: 1_786_600_000)
+        let milestoneAt = submittedAt.addingTimeInterval(60)
+        let holdAt = submittedAt.addingTimeInterval(120)
+        let invocationAt = submittedAt.addingTimeInterval(180)
+        let forgedAt = submittedAt.addingTimeInterval(3_600)
+
+        var observed = try #require(
+            RunFixtures.defaultRuns().first { $0.run.id == observedID })
+        observed.run.created_at = forgedAt
+        observed.run.last_activity_at = forgedAt
+        var legacy = try #require(
+            RunFixtures.defaultRuns().first { $0.run.id == legacyID })
+        legacy.run.created_at = forgedAt
+        legacy.run.last_activity_at = forgedAt
+
+        let observedTimeline = Components.Schemas.RunTimeline(
+            as_of_revision: 12,
+            as_of: invocationAt,
+            run_id: observedID,
+            milestones: [
+                .init(
+                    run_id: observedID,
+                    kind: .run_submitted,
+                    invocation_id: "inv-observed-1",
+                    recorded_at: submittedAt),
+                .init(
+                    run_id: observedID,
+                    kind: .invocation_started,
+                    invocation_id: "inv-observed-1",
+                    recorded_at: milestoneAt),
+            ],
+            hold: .init(
+                value1: .init(
+                    run_id: observedID,
+                    invocation_id: "inv-observed-1",
+                    reason: .verification_findings,
+                    first_observed_at: holdAt,
+                    last_observed_at: holdAt)),
+            invocations: [
+                .init(
+                    invocation_id: "inv-observed-1",
+                    run_id: observedID,
+                    status: .running,
+                    live: true,
+                    observed_at: invocationAt)
+            ])
+        let legacyTimeline = Components.Schemas.RunTimeline(
+            as_of_revision: 12,
+            as_of: submittedAt,
+            run_id: legacyID,
+            milestones: [],
+            invocations: [])
+        let server = MockServer(
+            runs: [observed, legacy],
+            timelines: [observedTimeline, legacyTimeline])
+        let client = APIClientFactory.mock(server: server)
+
+        let listed = try await client.listRuns().ok.body.json
+        let fetched = try await client.getRun(path: .init(run_id: observedID)).ok.body.json
+        let bootstrap = try await client.getSyncBootstrap().ok.body.json
+
+        for runs in [listed, bootstrap.runs] {
+            let projected = try #require(runs.first { $0.run.id == observedID })
+            #expect(projected.run.created_at == submittedAt)
+            #expect(projected.run.last_activity_at == invocationAt)
+            let unobserved = try #require(runs.first { $0.run.id == legacyID })
+            #expect(unobserved.run.created_at == nil)
+            #expect(unobserved.run.last_activity_at == nil)
+        }
+        #expect(fetched.run.created_at == submittedAt)
+        #expect(fetched.run.last_activity_at == invocationAt)
+    }
+
+    @Test func legacyRunTimestampsArePresentAsExplicitNullsOnTheMockWire() async throws {
+        let transport = MockServerTransport(server: MockServer())
+        let request = HTTPRequest(
+            method: .get,
+            scheme: "https",
+            authority: "freeside.invalid",
+            path: "/runs")
+        let (_, body) = try await transport.send(
+            request,
+            body: nil,
+            baseURL: try #require(URL(string: "https://freeside.invalid")),
+            operationID: "listRuns")
+        let data = try await Data(collecting: #require(body), upTo: 1 << 20)
+        let rows = try #require(
+            JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        let snapshot = try #require(
+            rows.first { ($0["run"] as? [String: Any])?["id"] as? String == RunFixtures.legacyRunID })
+        let run = try #require(snapshot["run"] as? [String: Any])
+
+        #expect(run.keys.contains("created_at"))
+        #expect(run["created_at"] is NSNull)
+        #expect(run.keys.contains("last_activity_at"))
+        #expect(run["last_activity_at"] is NSNull)
     }
 
     @Test func bootstrapFailsClosedOnOneInvalidRow() async throws {

@@ -8,7 +8,9 @@ public enum RunFixtures {
     public static let legacyRunID = "run-freeside-540"
 
     public static func defaultRuns() -> [Components.Schemas.RunSnapshot] {
-        [
+        let timelines = Dictionary(
+            uniqueKeysWithValues: defaultTimelines().map { ($0.run_id, $0) })
+        return [
             snapshot(
                 id: activeRunID, projectID: "freeside", stage: "implementation",
                 attempt: 2, milestone: .invocation_started, outcome: .pending,
@@ -24,7 +26,7 @@ public enum RunFixtures {
             snapshot(
                 id: legacyRunID, projectID: "freeside", stage: "implementation",
                 attempt: 1, milestone: nil, outcome: .unobserved),
-        ]
+        ].map { projectingObservationTimes($0, from: timelines[$0.run.id]) }
     }
 
     public static func defaultSchedules() -> [Components.Schemas.ScheduleSnapshot] {
@@ -84,6 +86,18 @@ public enum RunFixtures {
                         invocation_id: "inv-\(readyRunID)-1", run_id: readyRunID,
                         status: .completed, live: false, observed_at: date(1_080))
                 ]),
+            .init(
+                as_of_revision: 12, as_of: date(600), run_id: "run-oriole-121",
+                milestones: [
+                    milestone(.run_submitted, runID: "run-oriole-121", minute: 0),
+                    milestone(.invocation_started, runID: "run-oriole-121", minute: 1),
+                    milestone(.terminal_recorded, runID: "run-oriole-121", minute: 10),
+                ],
+                invocations: [
+                    .init(
+                        invocation_id: "inv-run-oriole-121-1", run_id: "run-oriole-121",
+                        status: .failed, live: false, observed_at: date(600))
+                ]),
             // The legacy run's timeline is empty: no milestones synthesized,
             // matching the daemon's no-backfill projection of an unobserved run.
             .init(
@@ -113,6 +127,8 @@ public enum RunFixtures {
             run: .init(
                 id: id,
                 project_id: projectID,
+                created_at: nil,
+                last_activity_at: nil,
                 spec_digest: "sha256:\(String(repeating: "1", count: 64))",
                 policy_digest: "sha256:\(String(repeating: "2", count: 64))",
                 stages: [
@@ -127,6 +143,23 @@ public enum RunFixtures {
                 latest_milestone: milestone.map { .init(value1: $0) },
                 outcome: outcome,
                 hold_reason: hold.map { .init(value1: $0) }))
+    }
+
+    static func projectingObservationTimes(
+        _ snapshot: Components.Schemas.RunSnapshot,
+        from timeline: Components.Schemas.RunTimeline?
+    ) -> Components.Schemas.RunSnapshot {
+        var projected = snapshot
+        let milestones = timeline?.milestones ?? []
+        projected.run.created_at = milestones.first { $0.kind == .run_submitted }?.recorded_at
+
+        var activity = milestones.map(\.recorded_at)
+        activity.append(contentsOf: timeline?.invocations.map(\.observed_at) ?? [])
+        if let hold = timeline?.hold?.value1 {
+            activity.append(hold.last_observed_at)
+        }
+        projected.run.last_activity_at = activity.max()
+        return projected
     }
 
     private static func schedule(

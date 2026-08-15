@@ -137,6 +137,9 @@ struct RealDaemonConvergenceTests {
         #expect(run.run.latest_milestone?.value1 == .run_submitted)
         #expect(run.run.outcome == .pending)
         #expect(run.run.hold_reason?.value1 == .verification_findings)
+        let createdAt = try #require(run.run.created_at)
+        let lastActivityAt = try #require(run.run.last_activity_at)
+        #expect(lastActivityAt >= createdAt)
         #expect(coordinator.schedules.contains { $0.schedule.run_id == runID })
 
         let before = try #require(coordinator.cursors)

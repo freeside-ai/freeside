@@ -172,14 +172,15 @@ public actor MockServer {
         for snapshot in deliveries {
             deliveriesByKey[DeliveryKey(snapshot.delivery)] = snapshot
         }
-        for snapshot in runs {
-            runsByID[snapshot.run.id] = snapshot
-        }
         for snapshot in schedules {
             schedulesByID[snapshot.schedule.id] = snapshot
         }
         for timeline in timelines {
             timelinesByRunID[timeline.run_id] = timeline
+        }
+        for snapshot in runs {
+            runsByID[snapshot.run.id] = RunFixtures.projectingObservationTimes(
+                snapshot, from: timelinesByRunID[snapshot.run.id])
         }
         // The server revision starts at or beyond every seeded snapshot's
         // as_of_revision, so the heartbeat and the next CommandResult can
