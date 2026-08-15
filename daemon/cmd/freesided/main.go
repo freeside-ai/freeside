@@ -390,6 +390,13 @@ func newLogger(w io.Writer, level string) (*slog.Logger, error) {
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: parsed})), nil
 }
 
+func logEffectiveReviewConfiguration(logger *slog.Logger, digest domain.Digest) {
+	if logger == nil || digest == "" {
+		return
+	}
+	logger.Info("effective reviewer configuration", "digest", digest)
+}
+
 func (cfg config) storeOptions() (store.Options, error) {
 	opts := store.Options{ApprovedRecipes: maps.Clone(cfg.ApprovedRecipes)}
 	if cfg.BackupEncryptionWaiverRepositoryID != nil {
@@ -639,6 +646,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, err
 		}
+		logEffectiveReviewConfiguration(cfg.Logger, claudeWiring.reviewConfigurationDigest)
 		// Reconcile below can resume credential-bearing sessions before every
 		// later startup step has succeeded. Register their awaited cleanup
 		// immediately, while the store they need is still open.

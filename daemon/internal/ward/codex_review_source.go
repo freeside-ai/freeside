@@ -805,41 +805,43 @@ func CodexReviewResultEvidence(
 // CodexReviewConfigurationDigest binds the trust profile to every
 // deployment-owned input that can change a production review's behavior.
 // Credential material and host paths are deliberately excluded.
-func CodexReviewConfigurationDigest(
+type codexReviewConfigurationEnvelope struct {
+	Version                     string                `json:"version"`
+	Topology                    string                `json:"topology"`
+	ApprovedImage               string                `json:"approved_image"`
+	ObserverImage               string                `json:"observer_image"`
+	WorkspaceTarget             string                `json:"workspace_target"`
+	WorkspaceSizeMB             int64                 `json:"workspace_size_mb"`
+	ProviderEndpoints           []string              `json:"provider_endpoints"`
+	Model                       string                `json:"model"`
+	ReasoningEffort             string                `json:"reasoning_effort"`
+	AccessTokenLifetimeFloor    int64                 `json:"access_token_lifetime_floor_ns"`
+	AccessTokenRefreshThreshold int64                 `json:"access_token_refresh_threshold_ns"`
+	AuthMode                    CodexAuthMode         `json:"auth_mode"`
+	AuthIdentityID              domain.AuthIdentityID `json:"auth_identity_id"`
+	CostOwner                   string                `json:"cost_owner"`
+	CommandTemplateDigest       string                `json:"command_template_digest"`
+	PromptProtocol              string                `json:"prompt_protocol"`
+}
+
+func newCodexReviewConfigurationEnvelope(
 	cfg CodexReviewConfig,
 	workspaceSizeMB int64,
 	authMode CodexAuthMode,
 	authIdentityID domain.AuthIdentityID,
 	costOwner string,
-) (domain.Digest, error) {
+) (codexReviewConfigurationEnvelope, error) {
 	if cfg.WorkspaceTarget == "" || !digestPinnedImagePattern.MatchString(cfg.ApprovedImage) ||
 		!digestPinnedImagePattern.MatchString(cfg.ObserverImage) || cfg.Model == "" ||
 		cfg.ReasoningEffort == "" || len(cfg.ProviderEndpoints) == 0 ||
 		cfg.AccessTokenLifetimeFloor <= 0 || codexAuthRefreshThreshold(cfg) <= cfg.AccessTokenLifetimeFloor ||
 		workspaceSizeMB <= 0 || !authMode.valid() || authIdentityID == "" ||
 		costOwner == "" {
-		return "", ErrInvalidCodexReviewSpec
+		return codexReviewConfigurationEnvelope{}, ErrInvalidCodexReviewSpec
 	}
 	endpoints := slices.Clone(cfg.ProviderEndpoints)
 	slices.Sort(endpoints)
-	canonical := struct {
-		Version                     string                `json:"version"`
-		Topology                    string                `json:"topology"`
-		ApprovedImage               string                `json:"approved_image"`
-		ObserverImage               string                `json:"observer_image"`
-		WorkspaceTarget             string                `json:"workspace_target"`
-		WorkspaceSizeMB             int64                 `json:"workspace_size_mb"`
-		ProviderEndpoints           []string              `json:"provider_endpoints"`
-		Model                       string                `json:"model"`
-		ReasoningEffort             string                `json:"reasoning_effort"`
-		AccessTokenLifetimeFloor    int64                 `json:"access_token_lifetime_floor_ns"`
-		AccessTokenRefreshThreshold int64                 `json:"access_token_refresh_threshold_ns"`
-		AuthMode                    CodexAuthMode         `json:"auth_mode"`
-		AuthIdentityID              domain.AuthIdentityID `json:"auth_identity_id"`
-		CostOwner                   string                `json:"cost_owner"`
-		CommandTemplateDigest       string                `json:"command_template_digest"`
-		PromptProtocol              string                `json:"prompt_protocol"`
-	}{
+	return codexReviewConfigurationEnvelope{
 		Version: "codex-review-configuration-v3", Topology: codexReviewTopologyVersion,
 		ApprovedImage: cfg.ApprovedImage, ObserverImage: cfg.ObserverImage,
 		WorkspaceTarget: cfg.WorkspaceTarget, WorkspaceSizeMB: workspaceSizeMB,
@@ -851,12 +853,33 @@ func CodexReviewConfigurationDigest(
 			cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, "<runtime-review-prompt>",
 		)),
 		PromptProtocol: codexProductionReviewPromptVersion,
-	}
-	body, err := json.Marshal(canonical)
+	}, nil
+}
+
+func digestCodexReviewConfigurationEnvelope(
+	envelope codexReviewConfigurationEnvelope,
+) (domain.Digest, error) {
+	body, err := json.Marshal(envelope)
 	if err != nil {
 		return "", err
 	}
 	return domain.Digest(contentaddr.Sum(body)), nil
+}
+
+func CodexReviewConfigurationDigest(
+	cfg CodexReviewConfig,
+	workspaceSizeMB int64,
+	authMode CodexAuthMode,
+	authIdentityID domain.AuthIdentityID,
+	costOwner string,
+) (domain.Digest, error) {
+	envelope, err := newCodexReviewConfigurationEnvelope(
+		cfg, workspaceSizeMB, authMode, authIdentityID, costOwner,
+	)
+	if err != nil {
+		return "", err
+	}
+	return digestCodexReviewConfigurationEnvelope(envelope)
 }
 
 func (s *CodexReviewSource) Poll(

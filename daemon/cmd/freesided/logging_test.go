@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 )
 
@@ -22,6 +23,26 @@ func TestNewLoggerAcceptsTheDocumentedLevels(t *testing.T) {
 	}
 	if _, err := newLogger(&bytes.Buffer{}, defaultLogLevel); err != nil {
 		t.Fatalf("the documented default %q does not parse: %v", defaultLogLevel, err)
+	}
+}
+
+func TestLogEffectiveReviewConfigurationEmitsTheRecoveryPinOnce(t *testing.T) {
+	var out bytes.Buffer
+	logger, err := newLogger(&out, defaultLogLevel)
+	if err != nil {
+		t.Fatalf("newLogger: %v", err)
+	}
+	digest := domain.Digest("sha256:" + strings.Repeat("d", 64))
+	logEffectiveReviewConfiguration(logger, digest)
+
+	records := logRecords(t, out.String())
+	if len(records) != 1 {
+		t.Fatalf("effective configuration records = %d, want 1:\n%s", len(records), out.String())
+	}
+	if records[0]["level"] != "INFO" ||
+		records[0]["msg"] != "effective reviewer configuration" ||
+		records[0]["digest"] != string(digest) {
+		t.Fatalf("effective configuration record = %v", records[0])
 	}
 }
 

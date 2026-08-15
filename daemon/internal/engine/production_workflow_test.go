@@ -150,6 +150,24 @@ func TestNormalizeTerminalReviewFailurePreservesDeclaredClass(t *testing.T) {
 	}
 }
 
+func TestReviewConfigurationUnapprovedErrorNamesTheConfigurationMismatch(t *testing.T) {
+	pinned := domain.Digest("sha256:profile-pinned")
+	effective := domain.Digest("sha256:daemon-effective")
+	err := reviewConfigurationUnapprovedError(pinned, effective)
+
+	if !errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
+		t.Fatalf("configuration mismatch = %v, want %v", err, domain.ErrReviewConfigurationUnapproved)
+	}
+	if errors.Is(err, domain.ErrTrustProfileSuperseded) {
+		t.Fatalf("configuration mismatch misclassified as profile supersession: %v", err)
+	}
+	want := "profile pins sha256:profile-pinned, daemon effective is sha256:daemon-effective: " +
+		domain.ErrReviewConfigurationUnapproved.Error()
+	if err.Error() != want {
+		t.Fatalf("configuration mismatch reason = %q, want %q", err, want)
+	}
+}
+
 func TestProductionReviewTransientSourceFailureSchedulesSameInvocationRetry(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})

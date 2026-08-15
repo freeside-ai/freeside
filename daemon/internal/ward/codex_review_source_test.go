@@ -17,6 +17,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
 
 type testReviewInstructionArtifacts map[domain.Digest][]byte
@@ -2945,6 +2946,7 @@ func TestCodexReviewConfigurationDigestBindsEffectiveInputs(t *testing.T) {
 		return got
 	}
 	base := digest(cfg, 64, request.AuthMode, request.AuthIdentityID, "subscription:owner")
+	golden.Assert(t, "codex-review-configuration-digest", []byte(base+"\n"))
 	reordered := cfg
 	reordered.ProviderEndpoints = slices.Clone(cfg.ProviderEndpoints)
 	slices.Reverse(reordered.ProviderEndpoints)
@@ -2965,6 +2967,32 @@ func TestCodexReviewConfigurationDigestBindsEffectiveInputs(t *testing.T) {
 	if got := digest(cfg, 64, request.AuthMode, request.AuthIdentityID,
 		"different-owner"); got == base {
 		t.Fatal("cost owner change did not change configuration digest")
+	}
+	envelope, err := newCodexReviewConfigurationEnvelope(
+		cfg, 64, request.AuthMode, request.AuthIdentityID, "subscription:owner",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*codexReviewConfigurationEnvelope){
+		"command template": func(changed *codexReviewConfigurationEnvelope) {
+			changed.CommandTemplateDigest += "-different"
+		},
+		"prompt protocol": func(changed *codexReviewConfigurationEnvelope) {
+			changed.PromptProtocol += "-different"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := envelope
+			mutate(&changed)
+			got, err := digestCodexReviewConfigurationEnvelope(changed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got == base {
+				t.Fatalf("%s change did not change configuration digest", name)
+			}
+		})
 	}
 }
 

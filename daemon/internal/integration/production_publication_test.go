@@ -4726,6 +4726,33 @@ func parkOnSupersededReviewConfiguration(
 		snapshot.Item.ReviewConfigurationRecovery == nil {
 		t.Fatalf("parked configuration item = %#v", snapshot.Item)
 	}
+	var failure domain.ReviewFailure
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		failure, err = tx.GetReviewFailure(
+			p.ctx, engine.ProductionReviewInvocationID(p.runID, 1),
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"profile pins " + string(p.profile.Review.ConfigDigest),
+		"daemon effective is " + string(effective),
+		domain.ErrReviewConfigurationUnapproved.Error(),
+	} {
+		if !strings.Contains(failure.Reason, want) {
+			t.Fatalf("review failure reason %q does not name %q", failure.Reason, want)
+		}
+		if !strings.Contains(snapshot.Item.Reason, want) {
+			t.Fatalf("parked item reason %q does not name %q", snapshot.Item.Reason, want)
+		}
+	}
+	if strings.Contains(failure.Reason, domain.ErrTrustProfileSuperseded.Error()) ||
+		strings.Contains(snapshot.Item.Reason, domain.ErrTrustProfileSuperseded.Error()) {
+		t.Fatalf("reviewer configuration mismatch reports profile supersession: failure=%q item=%q",
+			failure.Reason, snapshot.Item.Reason)
+	}
 	return snapshot
 }
 
@@ -4756,8 +4783,8 @@ func submitOnParkedConfigurationItem(
 	return err
 }
 
-// TestProductionReviewConfigurationAdoptionResumesRun is issue #611's core
-// acceptance: a run parked on a superseded reviewer configuration resumes
+// TestProductionReviewConfigurationAdoptionResumesRun is issues #611 and #786's
+// core acceptance: a run parked on a superseded reviewer configuration resumes
 // after one operator-authorized adoption of a review-configuration-only
 // profile supersession, with the parked failure row and the superseded
 // profile revision byte-identical afterward and no terminal record written

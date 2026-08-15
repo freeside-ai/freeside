@@ -1916,7 +1916,10 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				binding.admission.Base.BaseSHA, task.HeadSHA,
 				&exec.ReviewSourceFailure{
 					Class: domain.ReviewFailureConfiguration,
-					Err:   domain.ErrTrustProfileSuperseded,
+					Err: reviewConfigurationUnapprovedError(
+						binding.profile.Review.ConfigDigest,
+						w.reviewConfigurationDigest,
+					),
 				})
 		}
 		// approved: the operator-authorized supersession approves the
@@ -2722,6 +2725,13 @@ func (w *productionPublicationWorkflow) reviewConfigurationAdoption(
 		return domain.ReviewConfigurationRecoveryTransition{}, false, err
 	}
 	return transition, true, nil
+}
+
+func reviewConfigurationUnapprovedError(pinned, effective domain.Digest) error {
+	return fmt.Errorf(
+		"profile pins %s, daemon effective is %s: %w",
+		pinned, effective, domain.ErrReviewConfigurationUnapproved,
+	)
 }
 
 // reviewConfigurationApproved reports whether the run's trust context
