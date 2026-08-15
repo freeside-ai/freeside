@@ -303,8 +303,9 @@ merge result against the current base tip without mutating the
 checkout and enforces the unit's declared path scope on it.
 
 - The spine role owns final integration ordering when multiple PRs are
-  ready; a work unit's Dependencies field encodes required
-  serialization and intentional stacks (see Stacked PRs).
+  ready; a work unit's Dependencies field records typed `merges-after`
+  integration constraints and `stacked-on` intentional bases (see Stacked
+  PRs).
 - After any merge to `main`, every remaining open PR's integration
   evidence is stale until revalidated against the new tip.
 - Before final handoff, and again after any base advance: fetch the
@@ -818,8 +819,9 @@ Objective, Non-goals (`none` allowed), Affected
 interfaces/contracts (the interface surfaces the unit touches, not the
 whole work contract; the issue as a whole is the contract), Acceptance
 (the fixture/test list is the spec), Scope / declared paths, Dependencies
-(blockers, required serialization, intentional stacked bases, and
-integration order, not only issue refs).
+(`starts-after`, `merges-after`, `stacked-on`, and `exclusive-with`, not
+untyped issue refs). Unknown or materially ambiguous relationships are
+recorded as `starts-after` until the spine resolves them.
 Labels: `lane:*` for ownership area, `kind:*` for type. Milestones carry the
 phase (1A, 1B). Each wave has a pinned tracking issue listing its units; the
 spine role maintains it. Any issue that tracks other issues (a wave tracker
@@ -852,16 +854,35 @@ names only a condition is inert until something else tells you to go look.
   or by browsing open issues.
 - **`needs-human` is never agent-selected.** It stays unmilestoned and
   fiat-only, and returns to a session by fiat after the maintainer acts.
-- **One claim per unit.** Check the issue for an active claim before
-  claiming; if one exists, pick another unit. A bare cross-reference
-  (`Refs #N`) is never a claim, and no new empty claim commits are created.
+- **One claim per unit, with exclusivity arbitration.** Check the current unit
+  and every forward or reverse `exclusive-with` partner before claiming. After
+  posting, repeat the complete query; among conflicting claims, the earliest
+  forge-issued claim comment wins by `created_at`, then numeric comment ID. A
+  losing claimant releases and stops. A bare cross-reference (`Refs #N`) is
+  never a claim, and no new empty claim commits are created.
 - **Claim state is verified, never assumed.** A comment or PR API read or
   write failure at any step fails closed: work does not begin, or continue
   past the failed step, while claim state cannot be verified.
-- **Dependencies must be merged before you start.** Verify every dependency's
-  PR is merged, whatever shape the work takes: a direct, session-contained
-  assignment carries the same dependencies-and-blockers contract as an
-  issue-backed unit, and reaches this gate without claiming anything.
+- **Typed relationships govern start, integration, stacks, and exclusivity.**
+  Check every relationship before starting, whatever shape the work takes: a
+  direct, session-contained assignment carries the same relationship contract
+  as an issue-backed unit, and reaches this gate without claiming anything.
+  A `starts-after` prerequisite must be merged before the unit starts. A
+  `merges-after` prerequisite never blocks start, but must be rechecked at
+  handoff and before integration. A `stacked-on` relation names its intended
+  base branch: use that branch explicitly while the base PR is open and verify
+  any existing child remains based there; after the base merges, the relation
+  is satisfied, but an existing child PR must be retargeted to the default
+  branch before it can integrate. An `exclusive-with` declaration on either
+  unit forbids both units from being active concurrently. Before starting,
+  check both the current unit's declarations and reverse `exclusive-with`
+  declarations in every open work-unit issue, then run the cross-unit claim
+  arbitration. Before adding an `exclusive-with` declaration, the editor
+  checks both endpoints and must not make the edit while both have active
+  claims; one claimant releases before the relationship changes. A declaration
+  appearing during claim arbitration makes that claimant stop until the edit
+  and a fresh relationship read complete. Treat an unknown or materially
+  ambiguous relationship as `starts-after` until the spine resolves it.
 - **Check open PRs for declared-path overlap before you start.** Compare
   every open PR's declared paths against yours, whatever shape the work
   takes; an overlap means stop and coordinate via issue comment before going
@@ -872,16 +893,17 @@ names only a condition is inert until something else tells you to go look.
   those in its Affected interfaces/contracts field; a direct assignment
   derives them from its declared scope. Claiming a `kind:contract` unit
   additionally blocks on every other open contract unit, excluding the one
-  you are claiming and any whose Dependencies chain includes it, so a
-  dependency-ordered chain keeps its head claimable. A `deferral`-labelled
+  you are claiming and any whose `starts-after` chain includes it, so a
+  `starts-after` contract chain keeps its head claimable. A `deferral`-labelled
   contract unit counts only once it is scheduled or actively claimed.
 
 ### Contract changes
 
 Shared packages (domain types, migrations, StageDriver/ReviewSource/
 RunnerBackend interfaces, the API schema) change only through
-`kind:contract` units: exclusive, serialized, spine-owned, their own PR,
-merged before dependents adapt. A contract PR carries its required
+`kind:contract` units: spine-owned, their own PR, under a standing
+`exclusive-with` regime against every other contract unit, and merged before
+dependents start. A contract PR carries its required
 generated consumers and mechanical adapters (the cross-component
 one-work-unit rule under Monorepo scope discipline); only downstream
 feature work waits for the merge. Lane work never edits shared packages
@@ -889,5 +911,5 @@ in passing; needing a contract change means filing the contract issue,
 linking it as a dependency, and blocking or switching units.
 
 Before a `kind:contract` deferral is scheduled or assigned by fiat, the spine
-inserts it into the serialized Dependencies chain; if it has no valid position,
-it stays dormant. Fiat never bypasses contract ordering.
+inserts it into the serialized contract `starts-after` chain; if it has no
+valid position, it stays dormant. Fiat never bypasses contract ordering.

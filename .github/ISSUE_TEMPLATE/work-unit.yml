@@ -65,9 +65,12 @@ body:
     attributes:
       label: Dependencies
       description: >
-        Blocking issue refs (#N; a dependency is satisfied when its PR is
-        MERGED, not when the issue is closed), required serialization with
-        other units, an intentional stacked base (name the open PR branch),
-        and integration order. Write "none" if none.
+        Type every relationship as starts-after (the prerequisite PR must merge
+        before this unit starts), merges-after (this unit may start, but its PR
+        integrates later), stacked-on (name the open PR branch used as the
+        base), or exclusive-with (the units may not be active concurrently; a
+        declaration on either unit applies symmetrically). Write "none" if
+        none; ambiguous relationships serialize as starts-after until the spine
+        resolves them.
     validations:
       required: true

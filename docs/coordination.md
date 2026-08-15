@@ -39,11 +39,22 @@ no-issue work needs no claim: it is not eligible for concurrent or
 multi-session execution, and gets promoted to an issue before that
 changes (see Work units).
 
+Claim arbitration includes the current unit and every unit directly related by
+a forward or reverse `exclusive-with` declaration. Claims conflict when they
+name the same unit or directly exclusive units. After posting, every contender
+rechecks the whole set and orders conflicting, non-expired, unreleased claim
+comments by `created_at`, with the numeric comment ID as the tie-breaker. The
+earliest wins. A conflicting claim either predates a contender's recheck and
+is seen there, or is posted later and sees the first claim on its own recheck;
+the total order prevents livelock without making exclusivity transitive.
+
 To claim a unit:
 
-1. Confirm the issue is authorized (scheduled or fiat-assigned) and has
-   no active claim: a full paginated read of its comments plus the
-   open-PR check below.
+1. Confirm the issue is authorized (scheduled or fiat-assigned). Page every
+   open work-unit issue body to find forward and reverse `exclusive-with`
+   declarations, then fully page comments and claiming PRs for the current
+   issue and every directly related unit. If any has a conflicting active
+   claim, pick another unit.
 2. Choose the branch name (per the Branches section) and post a claim
    comment on the issue: the versioned marker line plus one visible
    `Claim:` line naming that branch.
@@ -53,11 +64,16 @@ To claim a unit:
    Claim: feat/example-slug
    ```
 
-3. Re-read all of the issue's comments with pagination. Among
-   non-expired, unreleased claim comments, the earliest `created_at`
-   wins; the numeric comment ID is the deterministic tie-breaker (lower
-   wins). Ordering is by creation time; comment edits do not reorder
-   claims.
+3. Re-page the open work-unit issue bodies, rebuild the direct exclusivity set,
+   and re-read every set member's comments and claiming PRs. Among conflicting,
+   non-expired, unreleased claims, the earliest `created_at` wins; the numeric
+   comment ID is the deterministic tie-breaker (lower wins). Ordering is by
+   creation time; comment edits do not reorder claims. A new declaration
+   appearing between reads is a relationship edit: stop until that edit
+   completes, then repeat the relationship and claim reads. The edit protocol
+   below prevents the relationship from changing while both endpoints are
+   actively claimed.
+
 4. A losing claimant posts a release comment bound to its own claim and
    stops (it may re-claim later with a new comment). A release comment
    releases exactly the claim comment whose numeric ID its
@@ -76,26 +92,28 @@ To claim a unit:
    updated default-branch tip (per Branches) and begins work. No empty
    claim commit: the branch's first commit is real work.
 
-The lease expires 48 hours after the claim comment's creation if no open
-PR from the claimed branch carries the issue's close keyword by then; an
-expired lease is dead, and re-claiming needs a new comment. Once an open
-PR from the same branch contains the close keyword, that PR is the
-active claim and the comment lease is subsumed (no further expiry).
-Closing that PR unmerged releases the claim; merging closes the issue
-normally.
+The lease expires 48 hours after the claim comment's creation if no open PR
+from the claimed branch carries the issue's close keyword by then; an expired
+lease is dead, and re-claiming needs a new comment. Once an open PR from the
+same branch contains the close keyword, that PR is the active claim and the
+comment lease is subsumed (no further expiry), retaining the comment's
+`created_at` and numeric ID when arbitration needs its ordering key. Closing
+that PR unmerged releases the claim; merging closes the issue normally.
 
-The active claim for a unit is therefore: a non-expired, unreleased
-comment lease; or an open PR from the lease's branch with the issue's
-close keyword; or, during the transition from the previous protocol, a
-legacy open PR claiming the unit with a `Claim #N` commit or close
-keyword. A bare cross-reference (`Refs #N`) is never a claim. One claim
-per unit: if an active claim exists, pick another unit. Do not create
-new empty claim commits; drop any legacy one in the next branch rewrite
-(the fold-fix rules under Commits). Claim state is verified, never
-assumed: a comment or PR API read or write failure at any step fails
-closed, and work does not begin (or continue past the failed step) while
-claim state cannot be verified. Collaborator comments are trusted;
-adversarial comment editing is outside this protocol's threat model.
+The active claim for a unit is therefore: a non-expired, unreleased comment
+lease; or an open PR from the lease's branch with the issue's close keyword;
+or, during the transition from the previous protocol, a legacy open PR
+claiming the unit with a `Claim #N` commit or close keyword. A legacy open PR
+with no claim comment uses its PR `created_at` and numeric PR ID only when
+deterministic ordering is needed; a lease-backed PR always retains its claim
+comment's key. A bare cross-reference (`Refs #N`) is never a claim. One claim
+per unit: if an active claim exists, pick another unit. Do not create new empty
+claim commits; drop any legacy one in the next branch rewrite (the fold-fix
+rules under Commits). Claim state is verified, never assumed: a comment or PR
+API read or write failure at any step fails closed, and work does not begin (or
+continue past the failed step) while claim state cannot be verified.
+Collaborator comments are trusted; adversarial comment editing is outside this
+protocol's threat model.
 
 `needs-human` deferrals use the fiat door defined under Deferral escalation,
 never self-selection: after the maintainer acts, fiat assigns the issue to a
@@ -105,26 +123,46 @@ the outcome hits a Decision notes trigger or the mandatory-note list.
 
 ## Session Start
 
-1. Read docs/plan.md front-matter (revision, phase) and the sections your
+1. Read docs/plan.md front matter (revision), the current wave's pinned
+   tracking issue (phase, wave, and active front), and the plan sections your
    unit's Affected interfaces/contracts field cites.
 2. When resuming an existing unit, read its issue or PR and any decision
    note it links (Decision notes section).
 3. Status queries:
    - open PRs and their declared paths: overlap with yours means stop and
      coordinate via issue comment before claiming;
-   - active claims on any unit you intend to claim: the paginated
-     comment-lease read plus open-PR check under Claiming;
+   - active claims on any unit you intend to claim: the paginated reads and
+     deterministic direct-exclusivity-set arbitration under Claiming;
+   - reverse exclusivity declarations: page every open work-unit issue body,
+     find every `exclusive-with` declaration that names the current unit, and
+     verify that none of those declaring units has an active claim; a
+     declaration on either unit applies symmetrically, so checking only the
+     current unit's Dependencies field is insufficient;
    - the current wave's pinned tracking issue;
    - open `kind:contract` issues, ignoring a `deferral` issue until it is
      scheduled or has an active claim, then excluding the unit you are claiming
-     and any unit whose Dependencies chain includes it (a
-     dependency-ordered chain of contract units keeps at most one
+     and any unit whose `starts-after` chain includes it (a
+     `starts-after` chain of contract units keeps at most one
      claimable at a time, so downstream chain members may stay filed
      without blocking their chain head): among the remainder, if one
      touches your Affected interfaces/contracts, block on it; when claiming a
      `kind:contract` unit, block on every other remaining open contract unit
      (contract work is serialized).
-4. Verify each dependency's PR is merged.
+4. Resolve every typed relationship before starting:
+   - verify each `starts-after` prerequisite's PR is merged;
+   - record each `merges-after` prerequisite for the handoff and integration
+     checks; it does not block start;
+   - for each `stacked-on` relation, use the named branch explicitly while its
+     base PR is open, and verify any existing child PR still names that base.
+     If the base has merged, treat the relation as satisfied: start unbegun
+     work from the current default branch, or verify an existing child PR was
+     retargeted there. A base closed unmerged fails closed until it reopens or
+     the spine repairs the relationship; record the relation for the handoff
+     and integration checks; and
+   - verify no `exclusive-with` unit is active, including the reverse
+     declarations found by the status query above.
+   An unknown or materially ambiguous relationship is `starts-after` until the
+   spine resolves it.
 
 ## Session End
 
@@ -132,9 +170,15 @@ Write or update the unit's decision note only when a Decision notes
 trigger or the mandatory-note list applies. Additionally: deferrals
 discovered mid-unit follow Deferral escalation below; when your PR
 merges, tick your unit on the wave tracking issue and on any other open
-tracker that lists it, refreshing each tracker's Implementation order
-startable-now front in the same edit (Tracking Issues below), or note
-partial state on the issue.
+tracker that lists it, refreshing the **Startable now** and **Mergeable next**
+projections in each tracker's Implementation order in the same edit (Tracking
+Issues below), or note partial state on the issue.
+
+Before final handoff and again immediately before integration, verify every
+`merges-after` prerequisite is merged. A stacked child also remains
+non-mergeable until its base PR merges and the forge retargets the child PR to
+the default branch; verify both facts from the current PR object. These checks
+do not replace the base-freshness, review, or verification gates in AGENTS.md.
 
 ## Deferral Escalation
 
@@ -177,6 +221,46 @@ whenever the human runs one. Between sweeps the unscheduled queue is dormant
 by design; the Phase 1B scan initiator is the intended replacement for
 human-cadence sweeping.
 
+## Relationship Types
+
+The Dependencies field in each unit issue is authoritative for relationships;
+trackers derive views from it. A claim remains an occupancy signal only and
+never creates a relationship or authorizes work.
+
+- **`starts-after`:** A prerequisite's PR must merge before the dependent unit
+  starts. Example: wave 5 unit #653 `starts-after` #652 in the contract chain.
+- **`merges-after`:** A unit may start independently, but its PR must merge
+  after the prerequisite's PR. This constrains integration order, never start
+  order. Example: two disjoint documentation units may proceed in parallel
+  while the later vocabulary consumer declares `merges-after: #791` so the
+  spine integrates the defining change first.
+- **`stacked-on`:** A unit intentionally bases its branch and PR on another
+  unit's open PR branch. Example: #65 was stacked on #91's
+  `feat/store-snapshot-meta` branch so it could use the unmerged store snapshot
+  reads. The Stacked PRs section in AGENTS.md defines the branch and PR
+  mechanics. Once the base merges, the relation is satisfied; unbegun work
+  starts from the current default branch, while an existing child resumes only
+  after the forge retargets it there. A base closed unmerged leaves the
+  relation unsatisfied until it reopens or the spine repairs it.
+- **`exclusive-with`:** The named units may not be active concurrently; the
+  relation is symmetric, even when only one unit declares it, and does not
+  otherwise impose start or merge order. Session Start therefore checks both
+  the current unit's declarations and reverse declarations in every open
+  work-unit issue, then rechecks all directly conflicting claims after posting
+  its own. Before adding a declaration, the editor fully queries active claims
+  on both endpoints. If both are active, the declaration must not be written:
+  the editor coordinates through issue comment and waits until one claimant's
+  release is verified, then re-runs the claim reads before editing. A claimant
+  that observes a relationship edit stops until it completes and then repeats
+  both relationship and claim reads.
+  Example: wave 5 unit #680 was `exclusive-with` #448 and #492 while their
+  declared paths overlapped on the Codex review sources.
+
+Unknown or materially ambiguous relationships serialize as `starts-after`
+until the spine resolves and records the intended type. Coupled work still
+forms one unit, an explicit relationship chain, or a declared stack; worktree
+isolation alone never establishes independence.
+
 ## Tracking Issues
 
 An issue that tracks other issues (a wave tracker, or any ad hoc tracker
@@ -185,22 +269,35 @@ implementation order is the question a tracker's readers bring to it, and
 per-unit Dependencies fields scattered across the tracked issues do not
 answer it at a glance. Wave 5's tracker (#651) is the reference example.
 
-- **Prose digest first.** State the startable-now fronts, each serial
-  chain, the cross-cutting merge gates, and the critical path as scannable
-  text. The digest is the record; a reader who never renders the diagram
-  still gets the order.
-- **Diagram when the graph is nontrivial.** When the dependency graph is
+- **Prose digest first.** State **Startable now**, **Mergeable next**, each
+  typed relationship chain, the cross-cutting gates, and the critical path as
+  scannable text. **Startable now** is a structural projection: it contains
+  unfinished units whose `starts-after` prerequisites are merged; a
+  `stacked-on` unit also needs its named base PR to be open with any existing
+  child still based there, or merged with no child yet or with its existing
+  child retargeted to the default branch. A base closed unmerged needs to
+  reopen or have its relationship repaired. The projection deliberately omits
+  volatile claim and active-`exclusive-with` occupancy, which every session
+  must query live before claiming or starting. **Mergeable next**
+  contains open PRs whose `merges-after` prerequisites are merged, in spine
+  integration order; a stacked child remains excluded until its base PR is
+  merged and the forge has retargeted the child to the default branch. State
+  `none` when either projection is empty. Neither projection authorizes work
+  or replaces the PR's verification and review gates. The digest is the
+  record; a reader who never renders the diagram still gets the order.
+- **Diagram when the graph is nontrivial.** When the relationship graph is
   more than a single chain, follow the digest with a Mermaid
   `flowchart LR` (the forge renders it inline). A strictly linear sequence
   states its chain in prose and skips the diagram: a mandatory chart
   everywhere trains readers to skip charts.
-- **Fixed edge semantics, stated in a legend line.** Nodes are issue
-  numbers. Arrows point from prerequisite to dependent: `A --> B` means
-  A's PR merges before B starts. Solid arrows mean serialization within a
-  lane or chain; dotted arrows mean cross-cutting merge gates; a
-  highlighted `classDef` marks units under a repo-wide exclusivity regime
-  (e.g. the serialized contract chain). The legend line below the diagram
-  says which is which.
+- **Fixed edge semantics, stated in a legend line.** Nodes are issue numbers.
+  Each relationship has one Mermaid edge and no generic arrow is overloaded:
+  `A --> B` means B `starts-after` A; `A -.-> B` means B `merges-after` A;
+  `A ==> B` means B is `stacked-on` A; and the symmetric `A -.- B` means A is
+  `exclusive-with` B. The legend below every diagram states these exact
+  meanings, including unused styles so readers never infer semantics from
+  appearance. A `classDef` may highlight a category such as contract units,
+  but never encodes a relationship.
 - **Transitive reduction.** Draw only direct edges; an ordering already
   implied through drawn paths is not repeated as its own arrow.
 - **Authority disclaimer.** The digest and diagram are a derived view;
@@ -212,8 +309,15 @@ answer it at a glance. Wave 5's tracker (#651) is the reference example.
   updates the digest and diagram of every open tracker listing the unit
   in the same operation, mirroring the milestone-plus-listing rule under
   Work units in AGENTS.md.
+  A session that opens, reopens, closes unmerged, or manually retargets a
+  tracked unit's PR refreshes every affected projection in the same operation.
+  When a merge should retarget stacked children automatically, the session
+  recording that merge waits for and verifies each retarget before refreshing
+  the affected projections. If the retarget is not yet observable, it records
+  partial tracker state; the child session refreshes when it later verifies the
+  retarget.
   Merges advance the order the same way: the session recording a merged
   unit on a tracker, wave or ad hoc (the Session End tick), refreshes
-  that tracker's startable-now front in the same edit, so routine
-  progress never strands a digest at its publication state. A stale diagram misleads where no diagram merely
-  omits.
+  that tracker's **Startable now** and **Mergeable next** projections in the
+  same edit, so routine progress never strands a digest at its publication
+  state. A stale diagram misleads where no diagram merely omits.
