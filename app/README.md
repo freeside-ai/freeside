@@ -12,7 +12,7 @@ The SwiftUI multiplatform client: the macOS + iOS attention inbox, decision deta
 
 Launch arguments select the composition (`AppSession.fromEnvironment`):
 
-- macOS default: the supervised daemon at `http://127.0.0.1:7331`; a readable readiness file selects the same deployment and prefills its pairing code, while a missing file leaves the manual pairing entry available.
+- macOS default: the supervised daemon at `http://127.0.0.1:7331`; a readable readiness file selects the same deployment and prefills its pairing code, unless only the persisted deployment holds a device credential. A missing file leaves manual pairing entry available.
 - iOS default: the permissive in-process mock with a pre-paired identity — the inbox renders immediately.
 - `-FreesideMock YES`: the permissive in-process mock, used by unsigned development and screenshot launches.
 - `-FreesidePairingDemo YES`: the full pairing flow against an enforcing mock; the code is `483911`.
