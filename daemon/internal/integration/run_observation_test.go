@@ -1,20 +1,27 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
+	elaboratefake "github.com/freeside-ai/freeside/daemon/internal/elaborate/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -115,6 +122,301 @@ func TestRunObservationTimelineForAPublishedRun(t *testing.T) {
 	replayed := observeProductionRun(t, p.store, p.runID)
 	if len(replayed.Milestones) != len(observation.Milestones) {
 		t.Errorf("replay grew the timeline: %v", milestoneKinds(replayed))
+	}
+}
+
+// TestApprovedImplementationRemainsServedWhenObservationLagsExport is issue
+// #785's gated-approval regression. The real elaboration workflow creates the
+// digest-bound approval and implementation; the fixture records its ordinary
+// admission, start, and running observation before durable export advances
+// authority. Listing reads keep serving the run, the timeline derives
+// completed from the export, and no projection-health item is minted.
+func TestApprovedImplementationRemainsServedWhenObservationLagsExport(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	now := time.Date(2026, 8, 15, 4, 0, 0, 0, time.UTC)
+	st, err := store.Open(ctx, filepath.Join(root, "state.db"), store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	blobs, err := signet.NewBlobStore(filepath.Join(root, "blobs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	attention := signet.NewService(st, signet.WithBlobStore(blobs), signet.WithClock(func() time.Time { return now }))
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutDevice(ctx, domain.Device{
+			ID: "device-785", DisplayName: "Operator", Status: domain.DeviceActive, PairedAt: now,
+		}); err != nil {
+			return err
+		}
+		return tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
+			ID: "auth-785", Provider: "codex", AuthStoreMutationLease: true,
+			AuthStoreVolume: "provider-credentials", MaxParallelExecutions: 64,
+			RefreshStrategy: domain.RefreshOnDemand,
+		}, now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	elaborationRunID := domain.RunID("run-elaboration-785")
+	implementationRunID := domain.RunID("run-implementation-785")
+	provenance := domain.KeyProvenance{
+		Source: domain.ProvenancePreset, Digest: submissionDigest(string(elaborationRunID), "policy-source"),
+	}
+	source, policyArtifact, resolved := registerSubmissionArtifactsWithPolicyKeys(
+		t, st, string(elaborationRunID), []domain.PolicyKey{
+			{Key: elaborate.PolicySpecApproval, Value: "true", Provenance: provenance},
+			{Key: elaborate.PolicyMaxIterations, Value: "1", Provenance: provenance},
+			{Key: elaborate.PolicyStageActiveTime, Value: "1m", Provenance: provenance},
+			{Key: elaborate.PolicyApprovalWait, Value: "1m", Provenance: provenance},
+			{Key: elaborate.PolicyResearchAllowlist, Value: "https://docs.example", Provenance: provenance},
+			{Key: elaborate.PolicyResearchMaxBytes, Value: "1024", Provenance: provenance},
+		},
+	)
+	policyBody, err := json.Marshal(resolved.Keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []struct {
+		digest domain.Digest
+		body   []byte
+	}{
+		{source.Digest, submissionSpecification(string(elaborationRunID))},
+		{policyArtifact.Digest, policyBody},
+	} {
+		if _, err := blobs.Put(input.digest, bytes.NewReader(input.body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	implementationPromptBody := []byte("Implement the approved specification.\n")
+	implementationPrompt := domain.Digest(contentaddr.Sum(implementationPromptBody))
+	elaborationPromptBody := []byte("Elaborate the work item into a bounded specification.\n")
+	elaborationPrompt := domain.Digest(contentaddr.Sum(elaborationPromptBody))
+	if _, err := blobs.Put(implementationPrompt, bytes.NewReader(implementationPromptBody)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blobs.Put(elaborationPrompt, bytes.NewReader(elaborationPromptBody)); err != nil {
+		t.Fatal(err)
+	}
+
+	driver, err := fake.NewStageDriverAt(filepath.Join(root, "driver"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetcher, err := elaborate.NewFetcher(st, blobs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := domain.AuthIdentityID("auth-785")
+	workflow, err := engine.New(st, attention, driver,
+		engine.WithAdmission(fake.RunnerBackend{
+			BackendName: string(domain.BackendFreshVMReadOnlyVolumeHandoff),
+			Caps:        exec.NewCapabilitySet(exec.CapPostExitExport),
+		}, []exec.Capability{exec.CapPostExitExport}, engine.AdmissionEnvironment{
+			OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
+			EgressProfile:       domain.EgressProviderOnly,
+			ImageRef:            domain.ImageRef("agent@sha256:" + strings.Repeat("a", 64)),
+			PromptPackageDigest: implementationPrompt,
+			VendorInstructions: engine.VendorInstructionConfig{
+				Vendor: domain.AgentVendorCodex, Delivery: domain.VendorInstructionDeliveryAppendFile,
+				HostPath: filepath.Join(root, "missing-AGENTS.md"),
+			},
+			Base: domain.BaseRevision{
+				Repo: "owner/repo", RepositoryID: 785, BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
+			},
+			Workspace: "workspace-785", AuthIdentityID: &identity,
+		}, func() time.Time { return now }),
+		engine.WithElaboration(engine.ElaborationConfig{
+			Fetcher: fetcher, Blobs: blobs, Now: func() time.Time { return now },
+			PromptPackageDigest: elaborationPrompt,
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	elaborationInvocation := domain.InvocationID(engine.ElaborationDispatchMarkerKey(elaborationRunID))
+	if err := elaboratefake.Script(driver, elaborationInvocation, 0, 0, elaborate.Output{
+		Specification: &elaborate.Specification{
+			Summary:    "The implementation plan is ready.",
+			Body:       "# Approved Specification\n\nImplement issue 785.",
+			Addressals: []elaborate.Addressal{},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.SubmitElaborationRun(ctx, st, engine.ElaborationRunSpec{
+		ElaborationRunID: elaborationRunID, ImplementationRunID: implementationRunID,
+		ProjectID: "project-785", SourceArtifactID: source.ID, PolicyArtifactID: policyArtifact.ID,
+		ResolvedPolicy: resolved, Publication: engine.ProductionPublication{
+			Title: "Implement issue 785", Body: "Implements the approved specification.",
+			CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 785},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := attention.GetAttentionItem(ctx, "spec-approval-run-implementation-785-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := attention.Submit(ctx, signet.ClientCommand{
+		CommandID: "approve-785", DeviceID: "device-785", ExpectedEntityVersion: approval.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: approval.Item.ID, Action: domain.ActionApprove, ItemVersion: approval.Item.ItemVersion,
+			ArtifactDigests: approval.Item.ArtifactDigests,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	implementationInvocation := domain.InvocationID("inv-implement-" + string(implementationRunID))
+	if _, err := workflow.Reconcile(ctx); err != nil { // approval creates the implementation run
+		t.Fatal(err)
+	}
+	assertImplementationServed := func(stage string) {
+		t.Helper()
+		runs, err := attention.ListRuns(ctx)
+		if err != nil {
+			t.Fatalf("ListRuns after %s: %v", stage, err)
+		}
+		servedByList := false
+		for _, run := range runs {
+			servedByList = servedByList || run.Run.ID == implementationRunID
+		}
+		if !servedByList {
+			t.Fatalf("ListRuns after %s omitted approved implementation %q", stage, implementationRunID)
+		}
+		bootstrap, err := attention.Bootstrap(ctx)
+		if err != nil {
+			t.Fatalf("Bootstrap after %s: %v", stage, err)
+		}
+		servedByBootstrap := false
+		for _, run := range bootstrap.Runs {
+			servedByBootstrap = servedByBootstrap || run.Run.ID == implementationRunID
+		}
+		if !servedByBootstrap {
+			t.Fatalf("Bootstrap after %s omitted approved implementation %q", stage, implementationRunID)
+		}
+		for _, item := range bootstrap.AttentionItems {
+			if strings.HasPrefix(string(item.Item.ID), "system-health-run-projection-") {
+				t.Fatalf("%s minted projection health item %q", stage, item.Item.ID)
+			}
+		}
+	}
+	assertImplementationServed("spec approval")
+	var (
+		implementation       domain.Run
+		implementationRecord domain.AgentInvocation
+	)
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		implementation, err = tx.GetRun(ctx, implementationRunID)
+		if err != nil {
+			return err
+		}
+		implementationRecord, err = tx.GetAgentInvocation(ctx, implementationInvocation)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(implementation.Stages) != 1 {
+		t.Fatalf("approved implementation stages = %+v, want one", implementation.Stages)
+	}
+	attempt := domain.Attempt{
+		ID:      "attempt-" + domain.AttemptID(implementationInvocation),
+		StageID: implementation.Stages[0].ID, Number: 1, InvocationID: implementationInvocation,
+	}
+	implementation.Stages[0].Attempts = append(implementation.Stages[0].Attempts, attempt)
+	inputDigest, err := implementationRecord.ComputeInputDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: implementationInvocation, RunID: implementationRunID,
+		StageID: implementation.Stages[0].ID, AttemptID: attempt.ID,
+		Backend:       string(domain.BackendFreshVMReadOnlyVolumeHandoff),
+		Capabilities:  domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile: domain.EgressProviderOnly,
+		ImageRef:      domain.ImageRef("agent@sha256:" + strings.Repeat("a", 64)),
+		SpecDigest:    implementation.SpecDigest, PolicyDigest: implementation.PolicyDigest,
+		InputDigest: inputDigest,
+		Base: domain.BaseRevision{
+			Repo: "owner/repo", RepositoryID: 785, BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
+		},
+		Workspace: "workspace-785", AuthIdentityID: &identity, AdmittedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, implementation); err != nil {
+			return err
+		}
+		return tx.RecordExecutionAdmission(ctx, admission)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertImplementationServed("implementation admission")
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.MarkOutboxDispatched(ctx, string(implementationInvocation))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: implementationRunID, Kind: domain.MilestoneInvocationStarted,
+			InvocationID: &implementationInvocation, RecordedAt: now,
+		}); err != nil {
+			return err
+		}
+		return tx.RecordInvocationObservation(ctx, domain.InvocationObservation{
+			InvocationID: implementationInvocation, RunID: implementationRunID,
+			Status: domain.ObservedStatusRunning, Live: true, ObservedAt: now,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertImplementationServed("implementation start")
+	beforeExport := observeProductionRun(t, st, implementationRunID)
+	if len(beforeExport.Invocations) != 1 ||
+		beforeExport.Invocations[0].Status != domain.ObservedStatusRunning {
+		t.Fatalf("pre-export observation = %+v, want one running invocation", beforeExport.Invocations)
+	}
+
+	executionExport, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: implementationInvocation, AdmissionID: admission.ID,
+		ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
+		ManifestDigest: submissionDigest(string(implementationRunID), "manifest"), RecordedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.RecordExecutionExportRecord(ctx, executionExport)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stale := observeProductionRun(t, st, implementationRunID)
+	if len(stale.Invocations) != 1 || stale.Invocations[0].Status != domain.ObservedStatusRunning {
+		t.Fatalf("stored observation after export = %+v, want the paced row still running", stale.Invocations)
+	}
+	assertImplementationServed("execution export")
+	timeline, err := attention.GetRunTimeline(ctx, implementationRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(timeline.Invocations) != 1 ||
+		timeline.Invocations[0].Status != domain.ObservedStatusCompleted || timeline.Invocations[0].Live {
+		t.Fatalf("served timeline invocation = %+v, want completed and not live", timeline.Invocations)
 	}
 }
 

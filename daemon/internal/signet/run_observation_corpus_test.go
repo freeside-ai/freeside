@@ -434,6 +434,33 @@ func TestRunObservationCorpusValidBaselines(t *testing.T) {
 		}
 	})
 
+	t.Run("running_observation_behind_export", func(t *testing.T) {
+		f := newCorpusFixture(t)
+		f.seedAuthIdentity(t)
+		runID := domain.RunID("run-export-lag")
+		invocation := domain.InvocationID("inv-export-lag")
+		f.mustWrite(t, func(tx *store.WriteTx) error {
+			return tx.PutRun(ctx, corpusRun(runID, corpusAttempt(runID, invocation)))
+		})
+		admission := f.seedAdmission(t, runID, corpusStageID(runID), corpusAttempt(runID, invocation).ID, invocation)
+		f.seedExport(t, admission)
+		f.observe(t, domain.InvocationObservation{
+			InvocationID: invocation, RunID: runID, Status: domain.ObservedStatusRunning,
+			Live: true, ObservedAt: f.at.Add(time.Hour),
+		})
+		if err := f.read(ctx, runID); err != nil {
+			t.Fatalf("valid lagging export observation baseline: %v", err)
+		}
+		timeline, err := f.service.GetRunTimeline(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(timeline.Invocations) != 1 ||
+			timeline.Invocations[0].Status != domain.ObservedStatusCompleted || timeline.Invocations[0].Live {
+			t.Fatalf("served invocation = %+v, want completed and not live", timeline.Invocations)
+		}
+	})
+
 	t.Run("execution_outcome_recorded", func(t *testing.T) {
 		f := newCorpusFixture(t)
 		f.seedAuthIdentity(t)
@@ -446,6 +473,36 @@ func TestRunObservationCorpusValidBaselines(t *testing.T) {
 		f.seedOutcome(t, admission, domain.ExecutionOutcomeFailed)
 		if err := f.read(ctx, runID); err != nil {
 			t.Fatalf("valid execution_outcome_recorded baseline: %v", err)
+		}
+	})
+
+	t.Run("gone_observation_behind_failed_terminal", func(t *testing.T) {
+		f := newCorpusFixture(t)
+		f.seedAuthIdentity(t)
+		runID := domain.RunID("run-failed-lag")
+		invocation := domain.InvocationID("inv-failed-lag")
+		f.mustWrite(t, func(tx *store.WriteTx) error {
+			return tx.PutRun(ctx, corpusRun(runID, corpusAttempt(runID, invocation)))
+		})
+		admission := f.seedAdmission(t, runID, corpusStageID(runID), corpusAttempt(runID, invocation).ID, invocation)
+		f.seedOutcome(t, admission, domain.ExecutionOutcomeFailed)
+		f.appendMilestone(t, domain.RunMilestone{
+			RunID: runID, Kind: domain.MilestoneTerminalRecorded, InvocationID: &invocation,
+			Terminal: ptr(domain.ObservedStatusFailed), RecordedAt: f.at.Add(2 * time.Hour),
+		})
+		f.observe(t, domain.InvocationObservation{
+			InvocationID: invocation, RunID: runID, Status: domain.ObservedStatusGone,
+			Live: false, ObservedAt: f.at.Add(3 * time.Hour),
+		})
+		if err := f.read(ctx, runID); err != nil {
+			t.Fatalf("valid lagging failed observation baseline: %v", err)
+		}
+		timeline, err := f.service.GetRunTimeline(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(timeline.Invocations) != 1 || timeline.Invocations[0].Status != domain.ObservedStatusFailed {
+			t.Fatalf("served invocation = %+v, want failed", timeline.Invocations)
 		}
 	})
 
@@ -1062,10 +1119,10 @@ func TestRunObservationCorpusForges(t *testing.T) {
 			return runID
 		}},
 
-		// Observation-level: every invocation observation is an attempt, no
-		// observation contradicts a re-authenticated terminal authority, the
+		// Observation-level: every invocation observation is an attempt, the
 		// hold binds a run-owned invocation, and ready and blocked publication
-		// authority never coexist.
+		// authority never coexist. A status that lags terminal authority is a
+		// valid baseline above; the authenticated authority wins when served.
 		{"observation/invocation_not_an_attempt", func(t *testing.T, f corpusFixture) domain.RunID {
 			runID := domain.RunID("run-1")
 			f.mustWrite(t, func(tx *store.WriteTx) error {
@@ -1074,21 +1131,6 @@ func TestRunObservationCorpusForges(t *testing.T) {
 			f.observe(t, domain.InvocationObservation{
 				InvocationID: "inv-stranger", RunID: runID, Status: domain.ObservedStatusRunning,
 				Live: false, ObservedAt: f.at,
-			})
-			return runID
-		}},
-		{"observation/status_contradicts_terminal_authority", func(t *testing.T, f corpusFixture) domain.RunID {
-			f.seedAuthIdentity(t)
-			runID := domain.RunID("run-1")
-			invocation := domain.InvocationID("inv-1")
-			f.mustWrite(t, func(tx *store.WriteTx) error {
-				return tx.PutRun(ctx, corpusRun(runID, corpusAttempt(runID, invocation)))
-			})
-			admission := f.seedAdmission(t, runID, corpusStageID(runID), corpusAttempt(runID, invocation).ID, invocation)
-			f.seedExport(t, admission) // export milestone authenticates a completed terminal
-			f.observe(t, domain.InvocationObservation{
-				InvocationID: invocation, RunID: runID, Status: domain.ObservedStatusRunning,
-				Live: false, ObservedAt: f.at.Add(time.Hour),
 			})
 			return runID
 		}},

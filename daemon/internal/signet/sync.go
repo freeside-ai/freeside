@@ -17,10 +17,12 @@ import (
 // ServerState read in the same transaction.
 var ErrInvalidSyncSnapshot = errors.New("invalid sync snapshot")
 
-// ErrRunObservationIntegrity marks a run whose observation projection
-// contradicts its own durable authority (issue #767): a powerless observation
-// row that disagrees with the run's terminal, admission, or publication
-// records. The listing reads (Bootstrap, ListRuns) isolate such a run by
+// ErrRunObservationIntegrity marks a run whose observation projection cannot
+// bind to its own durable authority (issue #767): a powerless observation row
+// or milestone that retargets or lacks the run's attempt, admission, execution,
+// dispatch, or publication records. A paced status that merely lags
+// authenticated terminal authority is projected from that authority instead.
+// The listing reads (Bootstrap, ListRuns) isolate an integrity-failing run by
 // excluding it and logging the contradiction, so one damaged legacy run cannot
 // fail the whole operator observation surface; the single-run reads (GetRun,
 // GetRunTimeline) still surface it as this differentiated failure for the
@@ -569,6 +571,7 @@ func (s *Service) GetRun(ctx context.Context, id domain.RunID) (RunSnapshot, err
 		if err := authenticateRunObservation(ctx, tx, state, value.Value, observation, items); err != nil {
 			return asRunObservationIntegrityError(err)
 		}
+		observation = withAuthoritativeInvocationStatuses(observation)
 		out = runSnapshot(value.Value, value.Snapshot, observation, state.Revision)
 		return nil
 	})
@@ -609,6 +612,7 @@ func (s *Service) GetRunTimeline(ctx context.Context, id domain.RunID) (RunTimel
 		if err := authenticateRunObservation(ctx, tx, state, run.Value, observation, items); err != nil {
 			return asRunObservationIntegrityError(err)
 		}
+		observation = withAuthoritativeInvocationStatuses(observation)
 		out = runTimeline(observation, state.Revision, time.Now().UTC())
 		return nil
 	})
@@ -750,6 +754,7 @@ func projectRunSnapshot(
 	if err := authenticateRunObservation(ctx, tx, state, run, observation, items); err != nil {
 		return RunSnapshot{}, fmt.Errorf("run %q timeline: %w", run.ID, asRunObservationIntegrityError(err))
 	}
+	observation = withAuthoritativeInvocationStatuses(observation)
 	return runSnapshot(run, snapshot, observation, state.Revision), nil
 }
 
@@ -818,7 +823,6 @@ func authenticateRunObservation(
 	blockedReasons := make(map[domain.RunHoldReason]bool)
 	readyMilestone := false
 	blockedMilestone := false
-	terminalByInvocation := make(map[domain.InvocationID]domain.ObservedInvocationStatus)
 	for _, snapshot := range items {
 		if err := validateSnapshot(state, snapshot.Snapshot); err != nil {
 			return fmt.Errorf("attention item %q authority: %w", snapshot.Value.ID, err)
@@ -937,7 +941,6 @@ func authenticateRunObservation(
 			if err := authenticateAdmissionRun(ctx, tx, invocation, run.ID, attempts[invocation]); err != nil {
 				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
 			}
-			terminalByInvocation[invocation] = domain.ObservedStatusCompleted
 		case domain.MilestoneExecutionOutcomeRecorded:
 			outcome, err := tx.GetExecutionOutcomeRecord(ctx, invocation)
 			if err != nil {
@@ -950,12 +953,10 @@ func authenticateRunObservation(
 			if err := authenticateAdmissionRun(ctx, tx, invocation, run.ID, attempts[invocation]); err != nil {
 				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
 			}
-			terminalByInvocation[invocation] = observedStatusForExecutionOutcome(outcome.Status)
 		case domain.MilestoneTerminalRecorded:
 			if err := authenticateTerminal(ctx, tx, invocation, run.ID, attempts[invocation], *milestone.Terminal); err != nil {
 				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
 			}
-			terminalByInvocation[invocation] = *milestone.Terminal
 		case domain.MilestonePublicationReady:
 			readyMilestone = true
 			if err := authenticatePublicationInvocation(
@@ -980,25 +981,48 @@ func authenticateRunObservation(
 			}
 		}
 	}
-	for _, invocation := range observation.Invocations {
-		if err := validateTerminalObservation(invocation, terminalByInvocation); err != nil {
-			return err
-		}
-	}
 	if err := validatePublicationAuthorityExclusivity(run.ID, readyMilestone, blockedMilestone); err != nil {
 		return err
 	}
 	return nil
 }
 
-func validateTerminalObservation(
-	invocation domain.InvocationObservation, terminals map[domain.InvocationID]domain.ObservedInvocationStatus,
-) error {
-	if terminal, ok := terminals[invocation.InvocationID]; ok && invocation.Status != terminal {
-		return fmt.Errorf("invocation observation %q status %q contradicts terminal %q: %w",
-			invocation.InvocationID, invocation.Status, terminal, domain.ErrParentKeyMismatch)
+// withAuthoritativeInvocationStatuses overlays each authenticated terminal
+// fact on the paced driver observation returned to clients. An invocation
+// observation is a last-look cache and can legitimately lag an export,
+// outcome, or terminal record; the durable fact is the status authority while
+// the observation still owns its timestamp. A terminal invocation cannot be
+// live, so the projection also clears a stale live bit. The store-returned
+// slice is cloned before rewriting it.
+func withAuthoritativeInvocationStatuses(observation domain.RunObservation) domain.RunObservation {
+	terminalByInvocation := make(map[domain.InvocationID]domain.ObservedInvocationStatus)
+	for _, milestone := range observation.Milestones {
+		invocation := *milestone.InvocationID
+		switch milestone.Kind {
+		case domain.MilestoneExecutionExportRecorded:
+			terminalByInvocation[invocation] = domain.ObservedStatusCompleted
+		case domain.MilestoneExecutionOutcomeRecorded:
+			terminalByInvocation[invocation] = observedStatusForExecutionOutcome(*milestone.Outcome)
+		case domain.MilestoneTerminalRecorded:
+			terminalByInvocation[invocation] = *milestone.Terminal
+		case domain.MilestoneRunSubmitted, domain.MilestoneInvocationAdmitted,
+			domain.MilestoneInvocationStarted, domain.MilestonePublicationReady,
+			domain.MilestonePublicationBlocked:
+		}
 	}
-	return nil
+	if len(terminalByInvocation) == 0 || len(observation.Invocations) == 0 {
+		return observation
+	}
+	observation.Invocations = slices.Clone(observation.Invocations)
+	for index := range observation.Invocations {
+		status, ok := terminalByInvocation[observation.Invocations[index].InvocationID]
+		if !ok {
+			continue
+		}
+		observation.Invocations[index].Status = status
+		observation.Invocations[index].Live = false
+	}
+	return observation
 }
 
 func observedStatusForExecutionOutcome(status domain.ExecutionOutcomeStatus) domain.ObservedInvocationStatus {
