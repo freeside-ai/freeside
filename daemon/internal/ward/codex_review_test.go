@@ -911,11 +911,15 @@ func TestBackendCodexReviewReapsAuthenticatedLegacyOversizedObserverBeforeRelaun
 	owner := testOwnershipLabel()
 	journal.intent = legacyCodexReviewIntentForTest(runID, digest, owner.Value)
 	legacyObserver := legacyCodexReviewNames(runID).workspaceObserver
+	observerOwner := Label{Key: ownershipLabelKey, Value: strings.Repeat("2", 32)}
+	setCodexReviewIntentResourceEvidenceForTest(
+		t, journal.intent, legacyObserver, observerOwner.Value, "legacy-observer",
+	)
 	if err := validateRuntimeResourceName(legacyObserver); err == nil {
 		t.Fatal("production regression fixture is not oversized")
 	}
 	rt.ctrs[legacyObserver] = &fakeCtr{
-		spec:    ContainerSpec{Name: legacyObserver, Labels: append(runLabels(runID), owner)},
+		spec:    ContainerSpec{Name: legacyObserver, Labels: append(runLabels(runID), observerOwner)},
 		created: "legacy-observer",
 	}
 	launch, err := backend.CodexReview(context.Background(), cfg, launchSpec)
@@ -1468,6 +1472,314 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 			t.Fatalf("the un-wiped credential should remain for a retry: %v", err)
 		}
 	})
+}
+
+type codexReviewPrepRecoveryFixture struct {
+	backend *CodexReviewLifecycle
+	rt      *fakeRuntime
+	cfg     CodexReviewConfig
+	launch  CodexReviewLaunchSpec
+	journal *fakeCodexReviewJournal
+	leaser  *RuntimeCodexReviewVolumeLeaser
+	owner   Label
+	names   codexReviewResourceNames
+}
+
+func testCodexReviewPrepRecoveryFixture(t *testing.T) codexReviewPrepRecoveryFixture {
+	t.Helper()
+	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
+	digest, err := codexReviewIntentDigest(cfg, launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := testOwnershipLabel()
+	names := codexReviewNames(launch.RunID)
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+	for index := range journal.intent.Resources {
+		switch journal.intent.Resources[index].Name {
+		case names.shadowVolume:
+			journal.intent.Resources[index].Fingerprint = "shadow-created"
+		case names.snapshotVolume:
+			journal.intent.Resources[index].Fingerprint = "snapshot-created"
+		}
+	}
+	rt.vols[names.shadowVolume] = &fakeVol{
+		labels: append(runLabels(launch.RunID), owner), created: "shadow-created",
+	}
+	rt.vols[names.snapshotVolume] = &fakeVol{
+		labels: append(runLabels(launch.RunID), owner), created: "snapshot-created",
+	}
+	leaser, err := NewRuntimeCodexReviewVolumeLeaser(rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.VolumeLifecycleLeaser = leaser
+	return codexReviewPrepRecoveryFixture{
+		backend: backend, rt: rt, cfg: cfg, launch: launch, journal: journal,
+		leaser: leaser, owner: owner, names: names,
+	}
+}
+
+func setCodexReviewIntentResourceEvidenceForTest(
+	t *testing.T,
+	intent *CodexReviewLaunchIntent,
+	name, token, fingerprint string,
+) {
+	t.Helper()
+	for index := range intent.Resources {
+		if intent.Resources[index].Name == name {
+			intent.Resources[index].OwnershipToken = token
+			intent.Resources[index].Fingerprint = fingerprint
+			return
+		}
+	}
+	t.Fatalf("intent resource %q is not journaled", name)
+}
+
+func TestRecoverCodexReviewReapsPartialPreparationAttachmentsForRelaunch(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		containerName func(codexReviewResourceNames) string
+		volumeName    func(codexReviewResourceNames, CodexReviewLaunchSpec) string
+		owner         func(Label) Label
+		seededAuth    bool
+	}{
+		{
+			name:          "intent-token snapshot seeder",
+			containerName: func(names codexReviewResourceNames) string { return names.snapshotSeeder },
+			volumeName:    func(names codexReviewResourceNames, _ CodexReviewLaunchSpec) string { return names.snapshotVolume },
+			owner:         func(owner Label) Label { return owner },
+			seededAuth:    true,
+		},
+		{
+			name:          "per-resource-token workspace observer",
+			containerName: func(names codexReviewResourceNames) string { return names.workspaceObserver },
+			volumeName:    func(_ codexReviewResourceNames, launch CodexReviewLaunchSpec) string { return launch.WorkspaceVolume },
+			owner: func(Label) Label {
+				return Label{Key: ownershipLabelKey, Value: strings.Repeat("2", 32)}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := testCodexReviewPrepRecoveryFixture(t)
+			container := tc.containerName(fixture.names)
+			volume := tc.volumeName(fixture.names, fixture.launch)
+			containerOwner := tc.owner(fixture.owner)
+			setCodexReviewIntentResourceEvidenceForTest(
+				t, fixture.journal.intent, container, containerOwner.Value, "prep-created",
+			)
+			fixture.rt.ctrs[container] = &fakeCtr{
+				spec: ContainerSpec{
+					Name: container, Labels: append(runLabels(fixture.launch.RunID), containerOwner),
+					Mounts: []Mount{{Type: MountVolume, Source: volume, Target: "/prep"}},
+				},
+				created: "prep-created",
+			}
+			if tc.seededAuth {
+				fixture.rt.snapshotFiles[fixture.names.snapshotVolume] = map[string][]byte{
+					codexReviewSnapshotAuthName: []byte("SECRET-KEY"),
+				}
+			}
+
+			if err := fixture.backend.RecoverCodexReview(
+				context.Background(), fixture.cfg, fixture.launch,
+			); err != nil {
+				t.Fatalf("partial preparation recovery = %v, want convergence", err)
+			}
+			if _, exists := fixture.rt.ctrs[container]; exists {
+				t.Fatalf("recovery left preparation container %q", container)
+			}
+			for _, volume := range []string{fixture.names.shadowVolume, fixture.names.snapshotVolume} {
+				if _, exists := fixture.rt.vols[volume]; exists {
+					t.Fatalf("recovery left owned volume %q", volume)
+				}
+			}
+			if fixture.journal.intent.State != CodexReviewIntentClosed {
+				t.Fatalf("intent state = %q, want closed", fixture.journal.intent.State)
+			}
+			if len(fixture.leaser.holders) != 0 || len(fixture.leaser.transfers) != 0 {
+				t.Fatalf("recovery left volume lease state: holders=%v transfers=%v",
+					fixture.leaser.holders, fixture.leaser.transfers)
+			}
+			relaunched, err := fixture.backend.CodexReview(context.Background(), fixture.cfg, fixture.launch)
+			if err != nil {
+				t.Fatalf("relaunch after partial preparation recovery = %v", err)
+			}
+			t.Cleanup(func() { _ = relaunched.Close() })
+		})
+	}
+}
+
+func TestRecoverCodexReviewReapsLegacyPartialPreparationAttachmentForRelaunch(t *testing.T) {
+	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
+	digest, err := codexReviewIntentDigest(cfg, launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := testOwnershipLabel()
+	names := preSnapshotCodexReviewNames(launch.RunID)
+	observerOwner := Label{Key: ownershipLabelKey, Value: strings.Repeat("2", 32)}
+	journal.intent = preSnapshotCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+	setCodexReviewIntentResourceEvidenceForTest(
+		t, journal.intent, names.workspaceObserver, observerOwner.Value, "legacy-prep-created",
+	)
+	setCodexReviewIntentResourceEvidenceForTest(
+		t, journal.intent, names.shadowVolume, owner.Value, "legacy-shadow-created",
+	)
+	rt.vols[names.shadowVolume] = &fakeVol{
+		labels: append(runLabels(launch.RunID), owner), created: "legacy-shadow-created",
+	}
+	rt.ctrs[names.workspaceObserver] = &fakeCtr{
+		spec: ContainerSpec{
+			Name:   names.workspaceObserver,
+			Labels: append(runLabels(launch.RunID), observerOwner),
+			Mounts: []Mount{{
+				Type: MountVolume, Source: launch.WorkspaceVolume, Target: "/legacy-prep", ReadOnly: true,
+			}},
+		},
+		created: "legacy-prep-created",
+	}
+	leaser, err := NewRuntimeCodexReviewVolumeLeaser(rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.VolumeLifecycleLeaser = leaser
+
+	if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err != nil {
+		t.Fatalf("legacy partial preparation recovery = %v, want convergence", err)
+	}
+	if _, exists := rt.ctrs[names.workspaceObserver]; exists {
+		t.Fatal("legacy recovery left the workspace-only observer")
+	}
+	if _, exists := rt.vols[names.shadowVolume]; exists {
+		t.Fatal("legacy recovery left the owned shadow volume")
+	}
+	if journal.intent.State != CodexReviewIntentClosed || len(leaser.holders) != 0 {
+		t.Fatalf("legacy recovery did not close and release: state=%q holders=%v",
+			journal.intent.State, leaser.holders)
+	}
+	relaunched, err := backend.CodexReview(context.Background(), cfg, launch)
+	if err != nil {
+		t.Fatalf("relaunch after legacy partial preparation recovery = %v", err)
+	}
+	t.Cleanup(func() { _ = relaunched.Close() })
+}
+
+func TestRecoverCodexReviewLeavesUnauthenticatedPartialPreparationAttachments(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		add  func(*testing.T, codexReviewPrepRecoveryFixture) string
+	}{
+		{
+			name: "observer token never journaled",
+			add: func(_ *testing.T, fixture codexReviewPrepRecoveryFixture) string {
+				name := fixture.names.workspaceObserver
+				fixture.rt.ctrs[name] = &fakeCtr{
+					spec: ContainerSpec{
+						Name: name, Labels: []Label{fixture.owner},
+						Mounts: []Mount{{Type: MountVolume, Source: fixture.launch.WorkspaceVolume, Target: "/prep"}},
+					},
+					created: "forged-observer-created",
+				}
+				return name
+			},
+		},
+		{
+			name: "empty observer ownership label",
+			add: func(_ *testing.T, fixture codexReviewPrepRecoveryFixture) string {
+				name := fixture.names.workspaceObserver
+				fixture.rt.ctrs[name] = &fakeCtr{
+					spec: ContainerSpec{
+						Name: name, Labels: []Label{{Key: ownershipLabelKey}},
+						Mounts: []Mount{{Type: MountVolume, Source: fixture.launch.WorkspaceVolume, Target: "/prep"}},
+					},
+					created: "empty-owner-observer-created",
+				}
+				return name
+			},
+		},
+		{
+			name: "wrong recorded token",
+			add: func(t *testing.T, fixture codexReviewPrepRecoveryFixture) string {
+				name := fixture.names.snapshotSeeder
+				setCodexReviewIntentResourceEvidenceForTest(
+					t, fixture.journal.intent, name, fixture.owner.Value, "prep-created",
+				)
+				fixture.rt.ctrs[name] = &fakeCtr{
+					spec: ContainerSpec{
+						Name:   name,
+						Labels: []Label{{Key: ownershipLabelKey, Value: strings.Repeat("f", 32)}},
+						Mounts: []Mount{{Type: MountVolume, Source: fixture.names.snapshotVolume, Target: "/prep"}},
+					},
+					created: "prep-created",
+				}
+				return name
+			},
+		},
+		{
+			name: "forged label on replacement",
+			add: func(t *testing.T, fixture codexReviewPrepRecoveryFixture) string {
+				name := fixture.names.snapshotSeeder
+				setCodexReviewIntentResourceEvidenceForTest(
+					t, fixture.journal.intent, name, fixture.owner.Value, "journal-created",
+				)
+				fixture.rt.ctrs[name] = &fakeCtr{
+					spec: ContainerSpec{
+						Name: name, Labels: []Label{fixture.owner},
+						Mounts: []Mount{{Type: MountVolume, Source: fixture.names.snapshotVolume, Target: "/prep"}},
+					},
+					created: "replacement-created",
+				}
+				return name
+			},
+		},
+		{
+			name: "unjournaled container",
+			add: func(_ *testing.T, fixture codexReviewPrepRecoveryFixture) string {
+				name := "foreign-prep"
+				fixture.rt.ctrs[name] = &fakeCtr{
+					spec: ContainerSpec{
+						Name: name, Labels: []Label{fixture.owner},
+						Mounts: []Mount{{Type: MountVolume, Source: fixture.names.snapshotVolume, Target: "/prep"}},
+					},
+					created: "foreign-created",
+				}
+				return name
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := testCodexReviewPrepRecoveryFixture(t)
+			container := tc.add(t, fixture)
+			stage := codexReviewSnapshotStagePath(fixture.backend.cfg.ExportRoot, fixture.launch.RunID)
+			if err := os.Mkdir(stage, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(
+				filepath.Join(stage, codexReviewSnapshotAuthName), []byte("SECRET-KEY"), 0o400,
+			); err != nil {
+				t.Fatal(err)
+			}
+
+			err := fixture.backend.RecoverCodexReview(context.Background(), fixture.cfg, fixture.launch)
+			if !errors.Is(err, ErrConformance) ||
+				!strings.Contains(err.Error(), ErrCodexReviewVolumeLeaseForeignOwner.Error()) {
+				t.Fatalf("unauthenticated partial recovery = %v, want foreign-owner conformance refusal", err)
+			}
+			if _, exists := fixture.rt.ctrs[container]; !exists {
+				t.Fatalf("recovery deleted unauthenticated container %q", container)
+			}
+			if _, exists := fixture.rt.vols[fixture.names.snapshotVolume]; !exists {
+				t.Fatal("foreign-owner refusal deleted the snapshot volume")
+			}
+			if fixture.journal.intent.State == CodexReviewIntentClosed {
+				t.Fatal("foreign-owner refusal closed the intent")
+			}
+			if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("foreign-owner refusal left the host credential stage: stat err = %v", err)
+			}
+		})
+	}
 }
 
 // TestCreatePrivateStageDirDefeatsSymlinkPreattack covers the R1 stage

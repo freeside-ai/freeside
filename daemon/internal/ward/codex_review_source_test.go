@@ -2723,8 +2723,12 @@ func TestCodexReviewRestartRecoversLegacyRoundAndRelaunchesSameRequest(t *testin
 	owner := testOwnershipLabel()
 	journal.intent = legacyCodexReviewIntentForTest(string(id), digest, owner.Value)
 	legacyObserver := legacyCodexReviewNames(string(id)).workspaceObserver
+	observerOwner := Label{Key: ownershipLabelKey, Value: strings.Repeat("2", 32)}
+	setCodexReviewIntentResourceEvidenceForTest(
+		t, journal.intent, legacyObserver, observerOwner.Value, "legacy-observer",
+	)
 	fx.rt.ctrs[legacyObserver] = &fakeCtr{
-		spec:    ContainerSpec{Name: legacyObserver, Labels: append(runLabels(string(id)), owner)},
+		spec:    ContainerSpec{Name: legacyObserver, Labels: append(runLabels(string(id)), observerOwner)},
 		created: "legacy-observer",
 	}
 	recovery, err := NewCodexReviewRecovery(
