@@ -240,7 +240,8 @@ type Config struct {
 	Now func() time.Time
 	// Sleep waits between state polls; tests inject a recording stub. Nil
 	// defaults to a context-aware real sleep.
-	Sleep func(context.Context, time.Duration) error
+	Sleep              func(context.Context, time.Duration) error
+	checkSeedWorkspace func(context.Context, string, int) error
 }
 
 // withDefaults returns cfg with unset optional fields filled.

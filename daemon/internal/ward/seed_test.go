@@ -1,6 +1,7 @@
 package ward
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -447,6 +448,184 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	}
 }
 
+func TestStageSeedSourceExcludesOSMetadata(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSeedCheckout(t, root, testBaseSHA)
+	if err := os.Mkdir(filepath.Join(dir, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+	cfg.SeedRoot = root
+	baseline, err := stageSeedSource(
+		cfg, dir, testBaseRevision().Repo, testBaseRevision().RepositoryID, t.TempDir(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := []struct {
+		path string
+		mode os.FileMode
+	}{
+		{path: ".DS_Store", mode: 0o600},
+		{path: filepath.Join("nested", "._debris"), mode: 0o700},
+		{path: filepath.Join("nested", "Icon\r"), mode: 0o600},
+	}
+	for _, entry := range metadata {
+		if err := os.WriteFile(filepath.Join(dir, entry.path), []byte("metadata\n"), entry.mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot := t.TempDir()
+	got, err := stageSeedSource(
+		cfg, dir, testBaseRevision().Repo, testBaseRevision().RepositoryID, snapshot,
+	)
+	if err != nil {
+		t.Fatalf("stage metadata-bearing source: %v", err)
+	}
+	if got != baseline {
+		t.Errorf("metadata changed staged tree digest: got %q, want %q", got, baseline)
+	}
+	if observed := digestOfDir(t, snapshot); observed != baseline {
+		t.Errorf("snapshot digest = %q, want metadata-free %q", observed, baseline)
+	}
+	for _, entry := range metadata {
+		if _, err := os.Lstat(filepath.Join(snapshot, entry.path)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("snapshot metadata %q: stat error = %v, want not-exist", entry.path, err)
+		}
+	}
+}
+
+func TestCheckCanonicalSeedWorkspaceClean(t *testing.T) {
+	newCheckout := func(t *testing.T) string {
+		t.Helper()
+		dir := initLiveSeedCheckout(t, t.TempDir())
+		if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("ignored.txt\ncache/\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("clean\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		commitLiveSeedCheckout(t, dir)
+		return dir
+	}
+	write := func(t *testing.T, dir, path string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, path), []byte("dirty\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("denylisted debris", func(t *testing.T) {
+		dir := newCheckout(t)
+		for _, path := range []string{".DS_Store", "._debris", "Icon\r"} {
+			write(t, dir, path)
+		}
+		if err := os.Mkdir(filepath.Join(dir, "cache"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		write(t, dir, filepath.Join("cache", ".DS_Store"))
+		if err := checkCanonicalSeedWorkspaceClean(context.Background(), dir, testConfig().MaxSeedEntries); err != nil {
+			t.Fatalf("checkCanonicalSeedWorkspaceClean() = %v, want nil", err)
+		}
+	})
+	t.Run("tracked metadata", func(t *testing.T) {
+		dir := newCheckout(t)
+		write(t, dir, ".DS_Store")
+		rungitLive(t, dir, "add", ".DS_Store")
+		rungitLive(t, dir, "commit", "-q", "-m", "track metadata")
+		err := checkCanonicalSeedWorkspaceClean(context.Background(), dir, testConfig().MaxSeedEntries)
+		wantCheckFailure(t, err, CheckWorkspaceSeeding)
+		if got := err.Error(); !strings.Contains(got, "workspace not clean: .DS_Store") {
+			t.Errorf("error = %q, want tracked metadata path", got)
+		}
+	})
+	t.Run("assume unchanged tracked edit", func(t *testing.T) {
+		dir := newCheckout(t)
+		rungitLive(t, dir, "update-index", "--assume-unchanged", "README.md")
+		write(t, dir, "README.md")
+		err := checkCanonicalSeedWorkspaceClean(context.Background(), dir, testConfig().MaxSeedEntries)
+		wantCheckFailure(t, err, CheckWorkspaceSeeding)
+		if got := err.Error(); !strings.Contains(got, "workspace not clean: README.md") {
+			t.Errorf("error = %q, want assume-unchanged path", got)
+		}
+	})
+	t.Run("case-insensitive config cannot hide a case collision", func(t *testing.T) {
+		dir := newCheckout(t)
+		tracked, err := os.Stat(filepath.Join(dir, "README.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, dir, "readme.md")
+		collision, err := os.Stat(filepath.Join(dir, "readme.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if os.SameFile(tracked, collision) {
+			t.Skip("fixture filesystem is case-insensitive")
+		}
+		rungitLive(t, dir, "config", "core.ignorecase", "true")
+		err = checkCanonicalSeedWorkspaceClean(context.Background(), dir, testConfig().MaxSeedEntries)
+		wantCheckFailure(t, err, CheckWorkspaceSeeding)
+		if got := err.Error(); !strings.Contains(got, "workspace not clean: readme.md") {
+			t.Errorf("error = %q, want case-colliding path", got)
+		}
+	})
+	t.Run("status enumeration is entry bounded", func(t *testing.T) {
+		err := checkCanonicalSeedWorkspaceClean(context.Background(), newCheckout(t), 1)
+		wantCheckFailure(t, err, CheckWorkspaceSeeding)
+		if got := err.Error(); !strings.Contains(got, "seed source exceeds the entry budget of 1") {
+			t.Errorf("error = %q, want entry-budget refusal", got)
+		}
+	})
+	t.Run("source without git metadata", func(t *testing.T) {
+		if err := checkCanonicalSeedWorkspaceClean(context.Background(), t.TempDir(), testConfig().MaxSeedEntries); err != nil {
+			t.Fatalf("checkCanonicalSeedWorkspaceClean() = %v, want nil", err)
+		}
+	})
+	t.Run("gitlink is named without nested repository inspection", func(t *testing.T) {
+		dir := newCheckout(t)
+		head := strings.TrimSpace(rungitLive(t, dir, "rev-parse", "HEAD"))
+		rungitLive(t, dir, "update-index", "--add", "--cacheinfo", "160000,"+head+",deps/sub")
+		rungitLive(t, dir, "commit", "-q", "-m", "track gitlink")
+		nested := filepath.Join(dir, "deps", "sub")
+		if err := os.MkdirAll(nested, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		rungitLive(t, nested, "init", "-q")
+		if err := os.WriteFile(
+			filepath.Join(nested, ".git", "config"), []byte("[malformed\n"), 0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+		err := checkCanonicalSeedWorkspaceClean(context.Background(), dir, testConfig().MaxSeedEntries)
+		wantCheckFailure(t, err, CheckWorkspaceSeeding)
+		if got := err.Error(); !strings.Contains(got, "workspace not clean: deps/sub") {
+			t.Errorf("error = %q, want gitlink path", got)
+		}
+	})
+	for _, tc := range []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "untracked file", path: "debris.txt", want: "debris.txt"},
+		{name: "ignored untracked file", path: "ignored.txt", want: "ignored.txt"},
+		{name: "modified tracked file", path: "README.md", want: "README.md"},
+		{name: "control character is quoted", path: "line\nbreak", want: `"line\nbreak"`},
+		{name: "bidi control is quoted", path: "spoof\u202etxt", want: `"spoof\u202etxt"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := newCheckout(t)
+			write(t, dir, tc.path)
+			err := checkCanonicalSeedWorkspaceClean(context.Background(), dir, testConfig().MaxSeedEntries)
+			wantCheckFailure(t, err, CheckWorkspaceSeeding)
+			if got := err.Error(); !strings.Contains(got, "workspace not clean: "+tc.want) {
+				t.Errorf("error = %q, want named dirty path %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestStageSeedSourceUsesRootedPaths(t *testing.T) {
 	seedRoot := t.TempDir()
 	source := writeSeedCheckout(t, seedRoot, testBaseSHA)
@@ -579,6 +758,20 @@ func TestVerifySeedSourceFailsClosed(t *testing.T) {
 			}
 			return dir
 		}},
+		{"tree contains an OS metadata directory", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			if err := os.Mkdir(filepath.Join(dir, ".DS_Store"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		}},
+		{"tree contains a non-metadata carriage return path", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			if err := os.WriteFile(filepath.Join(dir, "ordinary\r"), []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		}},
 		{"tree exceeds the entry budget", func(t *testing.T, root string, cfg *Config) string {
 			dir := writeSeedCheckout(t, root, testBaseSHA)
 			cfg.MaxSeedEntries = 2
@@ -613,6 +806,20 @@ func TestVerifySeedSourceFailsClosed(t *testing.T) {
 		{"no git config at all", func(t *testing.T, root string, _ *Config) string {
 			dir := writeSeedCheckout(t, root, testBaseSHA)
 			if err := os.Remove(filepath.Join(dir, ".git", "config")); err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		}},
+		{"git config redirects through a common directory", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			if err := os.WriteFile(filepath.Join(dir, ".git", "commondir"), []byte("common\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		}},
+		{"git config carries a worktree-local file", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			if err := os.WriteFile(filepath.Join(dir, ".git", "config.worktree"), []byte("[core]\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			return dir

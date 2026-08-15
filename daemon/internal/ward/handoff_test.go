@@ -39,6 +39,7 @@ func newHandoffFixture(t *testing.T) *handoffFixture {
 		sleeps++
 		return nil
 	}
+	cfg.checkSeedWorkspace = func(context.Context, string, int) error { return nil }
 	return &handoffFixture{rt: newFakeRuntime(t), cfg: cfg, sleeps: &sleeps}
 }
 
@@ -92,6 +93,62 @@ func (fx *handoffFixture) runSeeded(t *testing.T) (*HandoffResult, error) {
 		t.Cleanup(func() { _ = os.RemoveAll(res.ExportDir) })
 	}
 	return res, err
+}
+
+func TestHandoffChecksCanonicalSeedSnapshotBeforeLaunchingAContainer(t *testing.T) {
+	fx := newHandoffFixture(t)
+	hs := fx.seed(t)
+	fx.cfg.checkSeedWorkspace = func(_ context.Context, dir string, _ int) error {
+		if dir == hs.Seed.SourceDir {
+			t.Error("workspace check received the caller-controlled checkout")
+		}
+		config, err := os.ReadFile(filepath.Join(dir, ".git", "config")) //nolint:gosec // G304: injected path is the test-owned staged snapshot
+		if err != nil {
+			t.Fatalf("read staged git config: %v", err)
+		}
+		if !bytes.Contains(config, []byte("[user]\n")) {
+			t.Errorf("staged git config was not canonicalized: %q", config)
+		}
+		return failf(CheckWorkspaceSeeding, "workspace not clean: debris.txt")
+	}
+	_, err := fx.backend(t).Handoff(context.Background(), hs)
+	wantCheckFailure(t, err, CheckWorkspaceSeeding)
+	for _, call := range fx.rt.calls {
+		if strings.HasPrefix(call, "create-container ") || strings.HasPrefix(call, "start-container ") {
+			t.Errorf("workspace preflight failure still launched a container: %v", fx.rt.calls)
+			break
+		}
+	}
+}
+
+func TestHandoffRejectsSourceGitConfigBeforeWorkspaceCheck(t *testing.T) {
+	fx := newHandoffFixture(t)
+	hs := fx.seed(t)
+	configPath := filepath.Join(hs.Seed.SourceDir, ".git", "config")
+	config, err := os.ReadFile(configPath) //nolint:gosec // G304: fixture path is under the test-owned seed checkout
+	if err != nil {
+		t.Fatal(err)
+	}
+	config = append(config, []byte("\n[filter \"unexpected\"]\n\tclean = cat\n")...)
+	if err := os.WriteFile(configPath, config, 0o600); err != nil { //nolint:gosec // G703: fixture path is under the test-owned seed checkout
+		t.Fatal(err)
+	}
+	checked := false
+	fx.cfg.checkSeedWorkspace = func(context.Context, string, int) error {
+		checked = true
+		return nil
+	}
+	_, err = fx.backend(t).Handoff(context.Background(), hs)
+	wantCheckFailure(t, err, CheckWorkspaceSeeding)
+	if checked {
+		t.Error("workspace check ran before source Git config was rejected")
+	}
+	for _, call := range fx.rt.calls {
+		if strings.HasPrefix(call, "create-container ") || strings.HasPrefix(call, "start-container ") {
+			t.Errorf("source Git config failure still launched a container: %v", fx.rt.calls)
+			break
+		}
+	}
 }
 
 // assertReaped proves teardown left nothing: no containers, no volumes

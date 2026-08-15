@@ -1,6 +1,7 @@
 package ward
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,6 +15,9 @@ import (
 	"strings"
 	"syscall"
 	"unicode"
+	"unicode/utf8"
+
+	"github.com/freeside-ai/freeside/daemon/internal/gitrun"
 )
 
 // gitHeadPath is the file the observer later reads the seeded base from. A
@@ -104,6 +108,16 @@ func stageSeedSource(cfg Config, dir, declaredRepo string, declaredRepositoryID 
 		entries++
 		if cfg.MaxSeedEntries > 0 && entries > cfg.MaxSeedEntries {
 			return false, failf(CheckWorkspaceSeeding, "seed source exceeds the entry budget of %d", cfg.MaxSeedEntries)
+		}
+		if rel != "." && osMetadataName(d.Name()) {
+			info, infoErr := d.Info()
+			if infoErr != nil {
+				return false, failf(CheckWorkspaceSeeding, "seed source OS metadata entry could not be examined")
+			}
+			if info.Mode().IsRegular() {
+				return false, nil
+			}
+			return false, failf(CheckWorkspaceSeeding, "seed source contains a non-regular OS metadata entry")
 		}
 		// A newline in a path would make the guest's line-oriented digest
 		// ambiguous, and no git checkout needs one. Refused rather than
@@ -197,6 +211,267 @@ func stageSeedSource(cfg Config, dir, declaredRepo string, declaredRepositoryID 
 	}
 	contentLines[gitConfigContentIndex] = configSum + "  ./.git/config"
 	return treeDigest(contentLines, execPaths, dirPaths), nil
+}
+
+// osMetadataName is the one staging exception to the ward's fail-closed
+// source policy. These are regular files Finder and macOS create merely by
+// browsing a checkout; every other name and every non-regular entry remains
+// part of the proof or a hard refusal.
+func osMetadataName(base string) bool {
+	return base == ".DS_Store" || base == "Icon\r" || strings.HasPrefix(base, "._")
+}
+
+// checkCanonicalSeedWorkspaceClean names source dirt from the private
+// snapshot after stageSeedSource has replaced its repository config with
+// daemon-authored values. Running Git against the caller's checkout before
+// that gate could execute a configured clean filter. The guest proof remains
+// categorical because its bytes are attacker-influenceable; this preflight
+// only improves diagnosis before any VM launches. A snapshot without Git
+// metadata is used by the Codex review path and has no host repository status
+// to inspect.
+func checkCanonicalSeedWorkspaceClean(ctx context.Context, dir string, maxEntries int) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return failf(CheckWorkspaceSeeding, "workspace cleanliness could not be checked")
+	}
+	defer root.Close() //nolint:errcheck // read-only checkout handle
+	if _, err := root.Lstat(".git"); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return failf(CheckWorkspaceSeeding, "workspace cleanliness could not be checked")
+	}
+
+	scratch, err := os.MkdirTemp("", "freeside-ward-git-status-")
+	if err != nil {
+		return failf(CheckWorkspaceSeeding, "workspace cleanliness could not be checked")
+	}
+	defer os.RemoveAll(scratch) //nolint:errcheck // best-effort cleanup of empty Git scratch state
+	runner, err := gitrun.New(gitrun.Options{
+		Scratch: scratch,
+		ConfigExtra: []string{
+			"-c", "safe.directory=" + dir,
+			"-c", "core.worktree=" + dir,
+			"-c", "core.filemode=true",
+			"-c", "core.ignorecase=false",
+			"-c", "core.untrackedCache=false",
+		},
+	})
+	if err != nil {
+		return failf(CheckWorkspaceSeeding, "workspace cleanliness could not be checked")
+	}
+	dirtyPath := ""
+	dirty := func(path string) error {
+		dirtyPath = path
+		return errWorkspaceStatusDirty
+	}
+	indexed := func(record []byte) error {
+		tab := bytes.IndexByte(record, '\t')
+		if tab < 0 {
+			return errWorkspaceStatusMalformed
+		}
+		fields := bytes.Fields(record[:tab])
+		if len(fields) != 3 {
+			return errWorkspaceStatusMalformed
+		}
+		path, err := workspaceStatusPath(record[tab+1:])
+		if err != nil {
+			return err
+		}
+		// The raw observer admits only ordinary blobs. Refuse gitlinks and
+		// every other unsupported index mode before status, so Git never has
+		// reason to enter a nested repository whose config was not canonicalized.
+		mode, stage := string(fields[0]), string(fields[2])
+		if (mode != "100644" && mode != "100755") || stage != "0" {
+			return dirty(path)
+		}
+		return nil
+	}
+	if err := runWorkspaceStatusRecords(
+		ctx, runner, maxEntries, indexed, "-C", dir, "ls-files", "-z", "--stage",
+	); err != nil {
+		return workspaceStatusFailure(err, dirtyPath, maxEntries)
+	}
+	tracked := func(record []byte) error {
+		if len(record) < 3 || record[1] != ' ' {
+			return errWorkspaceStatusMalformed
+		}
+		path, err := workspaceStatusPath(record[2:])
+		if err != nil {
+			return err
+		}
+		// git ls-files -v lowercases an assume-unchanged tag; S is a
+		// skip-worktree entry. Neither index promise is trustworthy enough to
+		// suppress the raw worktree diagnostic the guest will enforce.
+		if record[0] != 'H' || osMetadataName(filepath.Base(filepath.FromSlash(path))) {
+			return dirty(path)
+		}
+		return nil
+	}
+	if err := runWorkspaceStatusRecords(
+		ctx, runner, maxEntries, tracked, "-C", dir, "ls-files", "-z", "-v", "--cached",
+	); err != nil {
+		return workspaceStatusFailure(err, dirtyPath, maxEntries)
+	}
+
+	status := func(record []byte) error {
+		if len(record) < 4 || record[2] != ' ' {
+			return errWorkspaceStatusMalformed
+		}
+		state := string(record[:2])
+		path, err := workspaceStatusPath(record[3:])
+		if err != nil {
+			return err
+		}
+		if state == "??" {
+			allowed, err := regularOSMetadata(root, path)
+			if err != nil {
+				return err
+			}
+			if allowed {
+				return nil
+			}
+		}
+		return dirty(path)
+	}
+	if err := runWorkspaceStatusRecords(
+		ctx, runner, maxEntries, status, "-C", dir, "status", "--porcelain=v1", "-z",
+		"--untracked-files=all", "--no-renames", "--ignore-submodules=all",
+	); err != nil {
+		return workspaceStatusFailure(err, dirtyPath, maxEntries)
+	}
+
+	ignored := func(record []byte) error {
+		path, err := workspaceStatusPath(record)
+		if err != nil {
+			return err
+		}
+		allowed, err := regularOSMetadata(root, path)
+		if err != nil {
+			return err
+		}
+		if allowed {
+			return nil
+		}
+		return dirty(path)
+	}
+	if err := runWorkspaceStatusRecords(
+		ctx, runner, maxEntries, ignored,
+		"-C", dir, "ls-files", "-z", "--others", "--ignored", "--exclude-standard",
+	); err != nil {
+		return workspaceStatusFailure(err, dirtyPath, maxEntries)
+	}
+	return nil
+}
+
+const maxWorkspaceStatusRecordBytes = 1 << 20
+
+var (
+	errWorkspaceStatusDirty     = errors.New("workspace status found dirt")
+	errWorkspaceStatusMalformed = errors.New("workspace status is malformed")
+	errWorkspaceStatusBudget    = errors.New("workspace status exceeds the entry budget")
+)
+
+type nulRecordWriter struct {
+	pending    []byte
+	records    int
+	maxRecords int
+	consume    func([]byte) error
+	err        error
+}
+
+func (w *nulRecordWriter) Write(p []byte) (int, error) {
+	written := 0
+	for len(p) > 0 {
+		end := bytes.IndexByte(p, 0)
+		if end < 0 {
+			if len(w.pending)+len(p) > maxWorkspaceStatusRecordBytes {
+				w.err = errWorkspaceStatusMalformed
+				return written, w.err
+			}
+			w.pending = append(w.pending, p...)
+			return written + len(p), nil
+		}
+		if len(w.pending)+end > maxWorkspaceStatusRecordBytes {
+			w.err = errWorkspaceStatusMalformed
+			return written, w.err
+		}
+		w.pending = append(w.pending, p[:end]...)
+		written += end + 1
+		p = p[end+1:]
+		w.records++
+		if w.maxRecords > 0 && w.records > w.maxRecords {
+			w.err = errWorkspaceStatusBudget
+			return written, w.err
+		}
+		if err := w.consume(w.pending); err != nil {
+			w.err = err
+			return written, err
+		}
+		w.pending = w.pending[:0]
+	}
+	return written, nil
+}
+
+func runWorkspaceStatusRecords(
+	ctx context.Context,
+	runner *gitrun.Runner,
+	maxRecords int,
+	consume func([]byte) error,
+	args ...string,
+) error {
+	w := &nulRecordWriter{maxRecords: maxRecords, consume: consume}
+	runErr := runner.RunTo(ctx, nil, w, args...)
+	if w.err != nil {
+		return w.err
+	}
+	if runErr != nil || len(w.pending) != 0 {
+		return errWorkspaceStatusMalformed
+	}
+	return nil
+}
+
+func workspaceStatusPath(raw []byte) (string, error) {
+	path := string(raw)
+	if path == "" || !filepath.IsLocal(filepath.FromSlash(path)) {
+		return "", errWorkspaceStatusMalformed
+	}
+	return path, nil
+}
+
+func regularOSMetadata(root *os.Root, path string) (bool, error) {
+	localPath := filepath.FromSlash(path)
+	if !osMetadataName(filepath.Base(localPath)) {
+		return false, nil
+	}
+	info, err := root.Lstat(localPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, errWorkspaceStatusMalformed
+	}
+	return info.Mode().IsRegular(), nil
+}
+
+func workspaceStatusFailure(err error, dirtyPath string, maxEntries int) error {
+	switch {
+	case errors.Is(err, errWorkspaceStatusDirty):
+		return failf(CheckWorkspaceSeeding, "workspace not clean: %s", printableWorkspacePath(dirtyPath))
+	case errors.Is(err, errWorkspaceStatusBudget):
+		return failf(CheckWorkspaceSeeding, "seed source exceeds the entry budget of %d", maxEntries)
+	default:
+		return failf(CheckWorkspaceSeeding, "workspace cleanliness could not be checked")
+	}
+}
+
+func printableWorkspacePath(path string) string {
+	unsafe := func(r rune) bool {
+		return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+	}
+	if strings.IndexFunc(path, unsafe) >= 0 || !utf8.ValidString(path) {
+		return strconv.QuoteToGraphic(path)
+	}
+	return path
 }
 
 // findPath renders a source-relative path the way `find .` prints it in the
@@ -321,6 +596,16 @@ var seedGitConfigKeyOrder = []string{
 // and formatting are discarded when the canonical file is written, so no
 // ignored input reaches the credential-bearing writer.
 func canonicalizeSeedRepoBinding(root *os.Root, declaredRepo string, declaredRepositoryID int64) error {
+	// A linked-worktree layout can redirect local config through commondir and
+	// optionally add config.worktree. The daemon-owned checkout needs neither;
+	// refuse both before Git can choose a config other than the one below.
+	for _, path := range []string{".git/commondir", ".git/config.worktree"} {
+		if _, err := root.Lstat(filepath.FromSlash(path)); err == nil {
+			return failf(CheckWorkspaceSeeding, "seed source git config uses an alternate layout")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return failf(CheckWorkspaceSeeding, "seed source git config layout could not be examined")
+		}
+	}
 	f, err := root.Open(".git/config")
 	if err != nil {
 		return failf(CheckWorkspaceSeeding, "seed source carries no readable git config to bind it to a repository")
@@ -614,6 +899,13 @@ func (b runtimeOps) seedWorkspace(
 		seedCfg, hs.Seed.SourceDir, hs.Seed.Base.Repo, hs.Seed.Base.RepositoryID, snapshot,
 	)
 	if err != nil {
+		return err
+	}
+	// Git may honor command-bearing repository configuration while computing
+	// status. stageSeedSource directly validated and replaced that config in
+	// this private snapshot, so the diagnostic never invokes Git against the
+	// caller-controlled checkout.
+	if err := b.cfg.checkWorkspace(ctx, snapshot, b.cfg.MaxSeedEntries); err != nil {
 		return err
 	}
 	source := snapshot

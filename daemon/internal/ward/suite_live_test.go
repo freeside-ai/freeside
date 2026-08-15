@@ -104,6 +104,14 @@ func TestLiveConformanceSuite(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := commitLiveSeedCheckout(t, seedDir)
+	// Finder may touch both the daemon-owned seed root and the checkout while
+	// an operator browses it. Only the inside file reaches staging, and the
+	// ward must exclude it before hashing and seeding the guest.
+	for _, path := range []string{filepath.Join(seedRoot, ".DS_Store"), filepath.Join(seedDir, ".DS_Store")} {
+		if err := os.WriteFile(path, []byte("finder metadata\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	cfg := Config{
 		ProviderEndpoints: []string{"api.anthropic.com:443"},
 		// The exporter runs the REAL freeside-export helper from the pinned
@@ -127,7 +135,7 @@ func TestLiveConformanceSuite(t *testing.T) {
 		Seed: WorkspaceSeed{
 			Mode: SeedBaseCheckout, SourceDir: seedDir, Base: base,
 		},
-	})
+	}, WithConformanceRecorder(&recordingConformance{}))
 	if err != nil {
 		t.Fatal(err)
 	}

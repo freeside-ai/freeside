@@ -497,6 +497,21 @@ func TestObserverGitScriptComparesAgainstCommit(t *testing.T) {
 	if sha, state, replacements := run(t, checkout); sha != base.BaseSHA || state != "clean" || replacements != "absent" {
 		t.Fatalf("clean checkout = (%q, %q, %q), want (%q, clean, absent)", sha, state, replacements, base.BaseSHA)
 	}
+	if err := os.WriteFile(filepath.Join(root, ".DS_Store"), []byte("beside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, state, _ := run(t, checkout); state != "clean" {
+		t.Errorf("metadata beside checkout reported %q, want clean", state)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, ".DS_Store"), []byte("inside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, state, _ := run(t, checkout); state != "dirty" {
+		t.Errorf("metadata inside checkout reported %q, want dirty", state)
+	}
+	if err := os.Remove(filepath.Join(checkout, ".DS_Store")); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := os.WriteFile(filepath.Join(checkout, `"foo"`), []byte("dirty quoted path\n"), 0o600); err != nil {
 		t.Fatal(err)
