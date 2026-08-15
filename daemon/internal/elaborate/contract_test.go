@@ -90,3 +90,51 @@ func TestOutputRejectsCardinalityAndPresentationOverflow(t *testing.T) {
 		t.Fatalf("aggregate output bound error = %v, want ErrInvalidOutput", err)
 	}
 }
+
+// TestDecodeOutputToleratesSingleFence enumerates the fence-tolerance input
+// space (issue #780): exactly one whole-payload Markdown fence pair decodes;
+// every other presentation defect still fails strict decode and carries a
+// bounded raw-output prefix for diagnosis.
+func TestDecodeOutputToleratesSingleFence(t *testing.T) {
+	const inner = `{"fetch_requests":[{"url":"https://example.com/a","purpose":"confirm behavior"}],"specification":null}`
+	accepted := []struct{ name, body string }{
+		{"bare fence", "```\n" + inner + "\n```"},
+		{"json tag", "```json\n" + inner + "\n```"},
+		{"uppercase tag", "```JSON\n" + inner + "\n```"},
+		{"surrounding whitespace", "\n\n  ```json\n" + inner + "\n```  \n"},
+		{"indented closing fence", "```json\n" + inner + "\n  ```"},
+		{"unfenced unchanged", inner},
+	}
+	for _, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := elaborate.DecodeOutput([]byte(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(out.FetchRequests) != 1 {
+				t.Fatalf("fetch_requests = %d, want 1", len(out.FetchRequests))
+			}
+		})
+	}
+	rejected := []struct{ name, body string }{
+		{"prose before fence", "Here you go:\n```json\n" + inner + "\n```"},
+		{"prose after fence", "```json\n" + inner + "\n```\nHope this helps!"},
+		{"unclosed fence", "```json\n" + inner},
+		{"closing fence only", inner + "\n```"},
+		{"double-wrapped fence", "```\n```json\n" + inner + "\n```\n```"},
+		{"tag with content", "```json {\"x\":1}\n" + inner + "\n```"},
+		{"single line fence", "```" + inner + "```"},
+		{"truncated inside fence", "```json\n" + inner[:40]},
+	}
+	for _, tc := range rejected {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := elaborate.DecodeOutput([]byte(tc.body))
+			if err == nil {
+				t.Fatal("decode accepted a payload outside the single-fence tolerance")
+			}
+			if !strings.Contains(err.Error(), "output begins") {
+				t.Fatalf("error %q lacks the raw-output prefix", err)
+			}
+		})
+	}
+}
