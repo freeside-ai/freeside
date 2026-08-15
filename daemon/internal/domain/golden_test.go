@@ -564,6 +564,10 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	currentImportStart := domain.CurrentImportStart{
+		InvocationID: admission.InvocationID,
+		AdmissionID:  admission.ID,
+	}
 
 	// The command binds the item above: its accepted version, head, and the
 	// item's derived binding set (union of the evidence and claim digests). The
@@ -1004,6 +1008,7 @@ func TestGolden(t *testing.T) {
 		{"execution_admission", admission},
 		{"execution_admission_waived", waivedAdmission},
 		{"execution_export", export},
+		{"current_import_start", currentImportStart},
 		{"project_image", projectImage},
 		{"project", project},
 		{"backend_conformance", backendConformance},

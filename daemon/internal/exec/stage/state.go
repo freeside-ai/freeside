@@ -34,10 +34,14 @@ const (
 	// and ward's own recovery is what adopts or loses the run.
 	phaseRunning phase = "running"
 	// phaseExported: the gate returned a released export and closed its
-	// journal record. Ward recovery refuses a closed record by design, so
-	// this driver carries the released facts itself and finishes the
-	// pipeline from them rather than asking the gate again.
+	// journal record, but the live path has not yet started its current-policy
+	// import. Ward recovery refuses a closed record by design, so a restart
+	// finishes this crash-only window from immutable admission policy.
 	phaseExported phase = "exported"
+	// phaseImportPending: the live path or running recovery started the import
+	// sequence under current policy. Every retry must re-apply that policy; it
+	// must never fall back to phaseExported's admission-bound crash recovery.
+	phaseImportPending phase = "import_pending"
 	// phaseCommitted: a terminal StageResult is durable and collectable.
 	phaseCommitted phase = "committed"
 	// phaseLost: recovery proved every runtime object absent with no export.
@@ -155,7 +159,7 @@ func (i intent) validate() error {
 		return fmt.Errorf("driver intent run_id: %w", domain.ErrEmptyID)
 	case !i.Phase.valid():
 		return fmt.Errorf("driver intent phase %q is invalid", i.Phase)
-	case i.Phase == phaseExported && i.Export == nil:
+	case (i.Phase == phaseExported || i.Phase == phaseImportPending) && i.Export == nil:
 		return fmt.Errorf("driver intent %q is exported without its released facts", i.InvocationID)
 	case i.RecordedAt.IsZero() || i.CommitDate.IsZero():
 		return fmt.Errorf("driver intent %q: pinned instants are required", i.InvocationID)
@@ -190,7 +194,7 @@ func (i intent) validate() error {
 // it so a new member must be handled.
 func (p phase) valid() bool {
 	switch p {
-	case phaseSeeding, phaseRunning, phaseExported, phaseCommitted, phaseLost:
+	case phaseSeeding, phaseRunning, phaseExported, phaseImportPending, phaseCommitted, phaseLost:
 		return true
 	default:
 		return false
@@ -604,7 +608,12 @@ func (d *Driver) regateWithCurrentPolicy(
 		if err := d.authenticateLost(ctx, i); err != nil {
 			return err
 		}
-	case phaseExported:
+	case phaseExported, phaseImportPending:
+		// Immutable admission and the released export were authenticated above.
+		// A durable export record is terminal authority and needs no mutable
+		// policy. Without one, the independent import-start record distinguishes
+		// a current-policy retry from admission-bound legacy or crash-only replay;
+		// the decoded private phase never supplies that authority.
 		record, found, err := d.exports.LookupExecutionExportRecord(ctx, i.InvocationID)
 		if err != nil {
 			return fmt.Errorf("%w: authenticate exported result %s: %w",
@@ -616,8 +625,13 @@ func (d *Driver) regateWithCurrentPolicy(
 			); err != nil {
 				return fmt.Errorf("%w: %w", errExportAuthorityConflict, err)
 			}
-		} else if applyCurrentPolicy {
-			requireCurrent = true
+		} else {
+			current, err := d.currentImportStarted(ctx, i)
+			if err != nil {
+				return fmt.Errorf("%w: authenticate current import start %s: %w",
+					ErrRecoveryRetryable, i.InvocationID, err)
+			}
+			requireCurrent = current && applyCurrentPolicy
 		}
 	case phaseSeeding, phaseRunning:
 		requireCurrent = applyCurrentPolicy

@@ -74,6 +74,15 @@ SELECT invocation_id, admission_id, observed_base_sha, head_sha, manifest_digest
        evidence_manifest_digest, commit_plan_present, recorded_at, body
 FROM execution_exports WHERE invocation_id = ?`
 
+	recordCurrentImportStartSQL = `
+INSERT INTO current_import_starts (invocation_id, admission_id, body)
+VALUES (?, ?, ?)
+ON CONFLICT (invocation_id) DO NOTHING`
+	selectCurrentImportStartBodySQL = `SELECT body FROM current_import_starts WHERE invocation_id = ?`
+	getCurrentImportStartSQL        = `
+SELECT invocation_id, admission_id, body
+FROM current_import_starts WHERE invocation_id = ?`
+
 	recordExecutionOutcomeSQL = `
 INSERT INTO execution_outcomes
     (invocation_id, admission_id, status, summary, recorded_at, body)
@@ -732,6 +741,70 @@ func (tx *ReadTx) getExecutionExport(
 		return domain.ExecutionExport{}, fmt.Errorf("get execution export %q: %w", id, err)
 	}
 	return export, nil
+}
+
+// RecordCurrentImportStart persists the trusted marker that a released export
+// entered the current-policy import lane. It binds to immutable admission
+// history rather than current policy: recording the requirement must remain
+// possible even when that very policy will refuse the subsequent import.
+//
+// Write-once: a byte-identical replay converges, and a marker naming different
+// authority for the invocation fails with ErrImmutableConflict.
+func (tx *InternalTx) RecordCurrentImportStart(
+	ctx context.Context, start domain.CurrentImportStart,
+) error {
+	body, err := encode(start)
+	if err != nil {
+		return fmt.Errorf("record current import start %q: %w", start.InvocationID, err)
+	}
+	admission, err := tx.GetExecutionAdmissionRecord(ctx, start.InvocationID)
+	if err != nil {
+		return fmt.Errorf("record current import start %q: %w", start.InvocationID, err)
+	}
+	if err := domain.ValidateCurrentImportStartBinding(admission, start); err != nil {
+		return fmt.Errorf("record current import start %q: %w", start.InvocationID, err)
+	}
+	if err := tx.putImmutable(ctx, recordCurrentImportStartSQL,
+		[]any{start.InvocationID, start.AdmissionID, body},
+		selectCurrentImportStartBodySQL, []any{start.InvocationID}, body); err != nil {
+		return fmt.Errorf("record current import start %q: %w", start.InvocationID, err)
+	}
+	return nil
+}
+
+// GetCurrentImportStart reconstructs the current-policy import marker and
+// re-checks every extracted column plus its immutable admission binding.
+func (tx *ReadTx) GetCurrentImportStart(
+	ctx context.Context, id domain.InvocationID,
+) (domain.CurrentImportStart, error) {
+	var invocationID, admissionID string
+	var body []byte
+	err := tx.tx.QueryRowContext(ctx, getCurrentImportStartSQL, id).
+		Scan(&invocationID, &admissionID, &body)
+	if err != nil {
+		return domain.CurrentImportStart{}, fmt.Errorf(
+			"get current import start %q: %w", id, notFoundOr(err))
+	}
+	start, err := decode[domain.CurrentImportStart](body)
+	if err != nil {
+		return domain.CurrentImportStart{}, fmt.Errorf(
+			"get current import start %q: %w", id, err)
+	}
+	if start.InvocationID != id || invocationID != string(start.InvocationID) ||
+		admissionID != string(start.AdmissionID) {
+		return domain.CurrentImportStart{}, fmt.Errorf(
+			"get current import start %q: %w", id, errRowInconsistent)
+	}
+	admission, err := tx.GetExecutionAdmissionRecord(ctx, id)
+	if err != nil {
+		return domain.CurrentImportStart{}, fmt.Errorf(
+			"get current import start %q: %w", id, err)
+	}
+	if err := domain.ValidateCurrentImportStartBinding(admission, start); err != nil {
+		return domain.CurrentImportStart{}, fmt.Errorf(
+			"get current import start %q: %w", id, err)
+	}
+	return start, nil
 }
 
 // RecordExecutionOutcome persists a trusted non-export terminal outcome.

@@ -36,22 +36,23 @@ type AuthStoreVolumes interface {
 
 // Config preserves the Claude driver's existing construction surface.
 type Config struct {
-	Lifetime    context.Context
-	Dir         string
-	SeedRoot    string
-	ExportRoot  string
-	Gate        stage.Gate
-	Seeder      stage.Seeder
-	Exports     stage.ExportRecorder
-	Outcomes    stage.OutcomeRecorder
-	Authority   stage.AdmissionAuthority
-	Artifacts   stage.Artifacts
-	Volumes     AuthStoreVolumes
-	PreJob      func(context.Context, domain.InvocationID) error
-	Import      importer.Options
-	Preparation []string
-	Now         func() time.Time
-	Logger      *slog.Logger
+	Lifetime     context.Context
+	Dir          string
+	SeedRoot     string
+	ExportRoot   string
+	Gate         stage.Gate
+	Seeder       stage.Seeder
+	Exports      stage.ExportRecorder
+	ImportStarts stage.ImportStartRecorder
+	Outcomes     stage.OutcomeRecorder
+	Authority    stage.AdmissionAuthority
+	Artifacts    stage.Artifacts
+	Volumes      AuthStoreVolumes
+	PreJob       func(context.Context, domain.InvocationID) error
+	Import       importer.Options
+	Preparation  []string
+	Now          func() time.Time
+	Logger       *slog.Logger
 }
 
 // New constructs the Claude provider over the shared durable stage machine.
@@ -75,6 +76,7 @@ func New(cfg Config) (*Driver, error) {
 		Gate:                cfg.Gate,
 		Seeder:              cfg.Seeder,
 		Exports:             cfg.Exports,
+		ImportStarts:        cfg.ImportStarts,
 		Outcomes:            cfg.Outcomes,
 		Authority:           cfg.Authority,
 		Artifacts:           cfg.Artifacts,

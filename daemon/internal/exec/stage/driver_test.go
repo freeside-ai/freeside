@@ -323,8 +323,10 @@ func (s refuseOnCancelSeeder) FetchBaseWorktree(
 }
 
 type stubAuthority struct {
-	err      error
-	startErr error
+	err                error
+	startErr           error
+	currentImportCalls *int
+	recordImportCalls  *int
 }
 
 func (a stubAuthority) AuthenticateAdmission(
@@ -345,6 +347,9 @@ func (a stubAuthority) AuthenticateStart(
 func (a stubAuthority) ImportOptions(
 	_ context.Context, _ domain.InvocationID, _ exec.StartSpec, opts importer.Options,
 ) (importer.Options, error) {
+	if a.currentImportCalls != nil {
+		(*a.currentImportCalls)++
+	}
 	if a.startErr != nil {
 		return opts, a.startErr
 	}
@@ -354,6 +359,9 @@ func (a stubAuthority) ImportOptions(
 func (a stubAuthority) ImportOptionsRecord(
 	_ context.Context, _ domain.InvocationID, _ exec.StartSpec, opts importer.Options,
 ) (importer.Options, error) {
+	if a.recordImportCalls != nil {
+		(*a.recordImportCalls)++
+	}
 	return opts, a.err
 }
 
@@ -390,21 +398,23 @@ func (v *secondLookupRefusingVolumes) AuthStoreVolume(
 }
 
 type stubExports struct {
-	mu         sync.Mutex
-	records    map[domain.InvocationID]domain.ExecutionExport
-	replays    map[domain.InvocationID]ExecutionReplay
-	outcomes   map[domain.InvocationID]domain.ExecutionOutcome
-	rejections map[domain.InvocationID]domain.ExportRejection
-	rejectErr  error
-	lookupErr  error
+	mu           sync.Mutex
+	records      map[domain.InvocationID]domain.ExecutionExport
+	importStarts map[domain.InvocationID]domain.CurrentImportStart
+	replays      map[domain.InvocationID]ExecutionReplay
+	outcomes     map[domain.InvocationID]domain.ExecutionOutcome
+	rejections   map[domain.InvocationID]domain.ExportRejection
+	rejectErr    error
+	lookupErr    error
 }
 
 func newStubExports() *stubExports {
 	return &stubExports{
-		records:    map[domain.InvocationID]domain.ExecutionExport{},
-		replays:    map[domain.InvocationID]ExecutionReplay{},
-		outcomes:   map[domain.InvocationID]domain.ExecutionOutcome{},
-		rejections: map[domain.InvocationID]domain.ExportRejection{},
+		records:      map[domain.InvocationID]domain.ExecutionExport{},
+		importStarts: map[domain.InvocationID]domain.CurrentImportStart{},
+		replays:      map[domain.InvocationID]ExecutionReplay{},
+		outcomes:     map[domain.InvocationID]domain.ExecutionOutcome{},
+		rejections:   map[domain.InvocationID]domain.ExportRejection{},
 	}
 }
 
@@ -448,6 +458,33 @@ func (e *stubExports) LookupExecutionExportRecord(
 	ctx context.Context, id domain.InvocationID,
 ) (domain.ExecutionExport, bool, error) {
 	return e.LookupExecutionExport(ctx, id)
+}
+
+func (e *stubExports) RecordCurrentImportStart(
+	_ context.Context, start domain.CurrentImportStart,
+) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if stored, ok := e.importStarts[start.InvocationID]; ok {
+		if stored == start {
+			return nil
+		}
+		return domain.ErrImmutableTransition
+	}
+	e.importStarts[start.InvocationID] = start
+	return nil
+}
+
+func (e *stubExports) LookupCurrentImportStart(
+	_ context.Context, id domain.InvocationID,
+) (domain.CurrentImportStart, bool, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.lookupErr != nil {
+		return domain.CurrentImportStart{}, false, e.lookupErr
+	}
+	start, ok := e.importStarts[id]
+	return start, ok, nil
 }
 
 func (e *stubExports) RecordExecutionOutcome(
@@ -762,7 +799,8 @@ func newTestDriver(t *testing.T, gate *stubGate, exports *stubExports) *Driver {
 		Lifetime:        context.Background(),
 		Dir:             filepath.Join(root, "driver"), SeedRoot: filepath.Join(root, "seeds"),
 		ExportRoot: filepath.Clean(os.TempDir()),
-		Gate:       gate, Seeder: stubSeeder{}, Exports: exports, Outcomes: exports,
+		Gate:       gate, Seeder: stubSeeder{}, Exports: exports,
+		ImportStarts: exports, Outcomes: exports,
 		Authority: stubAuthority{},
 		Artifacts: newStubArtifacts(),
 		Now:       func() time.Time { return fixedNow },
@@ -787,7 +825,7 @@ func newPreparingTestDriver(t *testing.T) *Driver {
 		Dir:             filepath.Join(root, "driver"), SeedRoot: filepath.Join(root, "seeds"),
 		ExportRoot: filepath.Clean(os.TempDir()),
 		Gate:       &stubGate{}, Seeder: stubSeeder{},
-		Exports: newStubExports(), Outcomes: newStubExports(),
+		Exports: newStubExports(), ImportStarts: newStubExports(), Outcomes: newStubExports(),
 		Authority:   stubAuthority{},
 		Artifacts:   newStubArtifacts(),
 		Now:         func() time.Time { return fixedNow },
@@ -832,7 +870,7 @@ func TestNewRejectsUnapprovedPreparation(t *testing.T) {
 			Dir:             filepath.Join(root, "driver"), SeedRoot: filepath.Join(root, "seeds"),
 			ExportRoot: filepath.Clean(os.TempDir()),
 			Gate:       &stubGate{}, Seeder: stubSeeder{},
-			Exports: newStubExports(), Outcomes: newStubExports(),
+			Exports: newStubExports(), ImportStarts: newStubExports(), Outcomes: newStubExports(),
 			Authority: stubAuthority{},
 			Artifacts: newStubArtifacts(),
 			Now:       func() time.Time { return fixedNow },
@@ -876,7 +914,7 @@ func TestNewRejectsUnapprovedCredentialMountPolicy(t *testing.T) {
 			Dir:             filepath.Join(root, "driver"), SeedRoot: filepath.Join(root, "seeds"),
 			ExportRoot: filepath.Clean(os.TempDir()),
 			Gate:       &stubGate{}, Seeder: stubSeeder{},
-			Exports: newStubExports(), Outcomes: newStubExports(),
+			Exports: newStubExports(), ImportStarts: newStubExports(), Outcomes: newStubExports(),
 			Authority: stubAuthority{}, Artifacts: newStubArtifacts(),
 			Now: func() time.Time { return fixedNow },
 		}
@@ -920,6 +958,7 @@ func TestNewOrdersProviderValidationWithExistingConfigChecks(t *testing.T) {
 			Gate:                &stubGate{},
 			Seeder:              stubSeeder{},
 			Exports:             newStubExports(),
+			ImportStarts:        newStubExports(),
 			Outcomes:            newStubExports(),
 			Authority:           stubAuthority{},
 			Artifacts:           newStubArtifacts(),
@@ -956,7 +995,7 @@ func TestWorkspaceSeedFetchesAMaterializedWorktree(t *testing.T) {
 		Dir:             filepath.Join(root, "driver"), SeedRoot: filepath.Join(root, "seeds"),
 		ExportRoot: filepath.Clean(os.TempDir()),
 		Gate:       &stubGate{}, Seeder: seeder,
-		Exports: newStubExports(), Outcomes: newStubExports(),
+		Exports: newStubExports(), ImportStarts: newStubExports(), Outcomes: newStubExports(),
 		Authority: stubAuthority{},
 		Artifacts: newStubArtifacts(),
 		Now:       func() time.Time { return fixedNow },
@@ -2005,7 +2044,8 @@ func TestTerminalOutcomeCommitsAfterCurrentPolicyDrifts(t *testing.T) {
 func TestTerminalSeedCleanupIsRootScopedAndPhaseGated(t *testing.T) {
 	t.Parallel()
 	for _, ph := range []phase{
-		"", "future", phaseSeeding, phaseRunning, phaseExported, phaseCommitted, phaseLost,
+		"", "future", phaseSeeding, phaseRunning, phaseExported, phaseImportPending,
+		phaseCommitted, phaseLost,
 	} {
 		t.Run(string(ph), func(t *testing.T) {
 			t.Parallel()
