@@ -4,7 +4,10 @@
 
 Category: an agent control plane. Harnesses (Claude Code, Codex) run the agent's inner loop; Freeside is the outer loop: what work starts, inside what boundary, with which credentials withheld, what counts as done, when a human is interrupted, and what survives a crash. The harness runs the agent; you hold the reins.
 
-**Status:** Phase 1B (the useful workflow), wave 4, is underway. The `daemon/`, `app/`, `api/`, `images/`, and `prompts/` components are initialized; `policy/` is not yet initialized.
+**Status:** Resolve the live phase, wave, and active implementation front from
+the single open [`Wave N (...) tracking` issue](https://github.com/freeside-ai/freeside/issues)
+pinned in this repository. The roadmap and resolution rule live in the
+[plan's implementation-coordination section](docs/plan.md#implementation-coordination-building-freeside-with-agents).
 
 - **Start here** — the goals and core ideas in plain language: [`docs/intro.md`](docs/intro.md).
 - **Everything** — charter, architecture, roadmap, decisions: [`docs/plan.md`](docs/plan.md).

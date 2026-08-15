@@ -240,4 +240,6 @@ whether passing them is worth it.
   roadmap and exit criteria, and 13–15 decisions, risks, and naming.
 - [`AGENTS.md`](../AGENTS.md) holds the development conventions for this
   repository.
-- [README.md](../README.md) carries current status.
+- The [plan's implementation-coordination section](plan.md#implementation-coordination-building-freeside-with-agents)
+  explains how to resolve the live phase, wave, and active implementation
+  front.
