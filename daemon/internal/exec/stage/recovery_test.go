@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,6 +21,52 @@ import (
 type blockingSeeder struct {
 	entered chan struct{}
 	release chan struct{}
+}
+
+type recoveryGitSeeder struct{ repo string }
+
+func (s recoveryGitSeeder) FetchBase(ctx context.Context, _, _, baseSHA, dir string) error {
+	if err := runRecoveryGit(ctx, s.repo, "clone", "-q", "--no-hardlinks", ".", dir); err != nil {
+		return err
+	}
+	return runRecoveryGit(ctx, dir, "checkout", "-q", "--detach", baseSHA)
+}
+
+func (s recoveryGitSeeder) FetchBaseWorktree(
+	ctx context.Context, repo, baseRef, baseSHA, dir string,
+) error {
+	return s.FetchBase(ctx, repo, baseRef, baseSHA, dir)
+}
+
+func runRecoveryGit(ctx context.Context, dir string, args ...string) error {
+	_, err := runRecoveryGitOutput(ctx, dir, args...)
+	return err
+}
+
+func runRecoveryGitOutput(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := osexec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // G204: test-owned fixture paths and fixed arguments
+	env := make([]string, 0, len(os.Environ())+9)
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "GIT_") {
+			env = append(env, entry)
+		}
+	}
+	cmd.Env = append(env,
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_SYSTEM="+os.DevNull,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=fixture",
+		"GIT_AUTHOR_EMAIL=fixture@test.invalid",
+		"GIT_AUTHOR_DATE=1700000000 +0000",
+		"GIT_COMMITTER_NAME=fixture",
+		"GIT_COMMITTER_EMAIL=fixture@test.invalid",
+		"GIT_COMMITTER_DATE=1700000000 +0000",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %v: %w: %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (s blockingSeeder) FetchBase(context.Context, string, string, string, string) error {
@@ -40,6 +88,13 @@ func (s blockingSeeder) FetchBaseWorktree(
 func orphan(t *testing.T, d *Driver, ph phase, released *releasedExport) intent {
 	t.Helper()
 	spec := testStartSpec()
+	return orphanWithSpec(t, d, ph, released, spec)
+}
+
+func orphanWithSpec(
+	t *testing.T, d *Driver, ph phase, released *releasedExport, spec exec.StartSpec,
+) intent {
+	t.Helper()
 	inputs := stageInputs(t, &spec)
 	instructions, err := ward.VendorInstructionsFromStageInputs(inputs)
 	if err != nil {
@@ -197,16 +252,20 @@ func TestDurableOutcomeRestoresBeforeMutablePolicy(t *testing.T) {
 		wantPhase  phase
 		wantStatus exec.Status
 	}{
-		{"failed", phaseSeeding, domain.ExecutionOutcomeFailed, "input materialization failed", phaseCommitted, exec.StatusFailed},
-		{"canceled", phaseExported, domain.ExecutionOutcomeCanceled, "daemon stopped", phaseCommitted, exec.StatusCanceled},
-		{"lost", phaseRunning, domain.ExecutionOutcomeLost, "", phaseLost, ""},
+		{"seeding failed", phaseSeeding, domain.ExecutionOutcomeFailed, "input materialization failed", phaseCommitted, exec.StatusFailed},
+		{"exported failed", phaseExported, domain.ExecutionOutcomeFailed, "export failed", phaseCommitted, exec.StatusFailed},
+		{"exported canceled", phaseExported, domain.ExecutionOutcomeCanceled, "daemon stopped", phaseCommitted, exec.StatusCanceled},
+		{"import pending failed", phaseImportPending, domain.ExecutionOutcomeFailed, "import failed", phaseCommitted, exec.StatusFailed},
+		{"running lost", phaseRunning, domain.ExecutionOutcomeLost, "", phaseLost, ""},
+		{"exported lost", phaseExported, domain.ExecutionOutcomeLost, "", phaseLost, ""},
+		{"import pending lost", phaseImportPending, domain.ExecutionOutcomeLost, "", phaseLost, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			outcomes := newStubExports()
 			d := newTestDriver(t, &stubGate{}, outcomes)
 			var released *releasedExport
-			if tc.initial == phaseExported {
+			if tc.initial == phaseExported || tc.initial == phaseImportPending {
 				released = &releasedExport{Dir: filepath.Join(os.TempDir(),
 					"freeside-handoff-"+testRunIDFor(testInvoke)+"-out-stale")}
 			}
@@ -479,6 +538,168 @@ func TestRecoveryReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.
 	}
 }
 
+func TestLiveImportPhasePersistenceRetriesBeforeCurrentPolicy(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	drift := errors.New("current import policy changed")
+	recordImportCalls := 0
+	var (
+		d         *Driver
+		outDir    string
+		protected bool
+	)
+	gate := &stubGate{
+		handoffFn: func(ward.HandoffSpec) (*ward.HandoffResult, error) {
+			manifest := export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}}
+			body, err := manifest.Encode()
+			if err != nil {
+				return nil, err
+			}
+			outDir, err = os.MkdirTemp("", "freeside-handoff-"+testRunIDFor(testInvoke)+"-out-")
+			if err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(filepath.Join(outDir, export.ManifestFilename), body, 0o600); err != nil {
+				return nil, err
+			}
+			return &ward.HandoffResult{
+				ExportDir: outDir, Manifest: manifest,
+				Workspace: ward.WorkspaceObservation{ObservedBaseSHA: testBase.BaseSHA},
+			}, nil
+		},
+		authenticateFn: func(string, string) error {
+			if protected {
+				return nil
+			}
+			protected = true
+			d.authority = stubAuthority{startErr: drift, recordImportCalls: &recordImportCalls}
+			return os.Chmod(d.dir, 0o500) //nolint:gosec // G302: force the phase write to fail
+		},
+	}
+	d = newTestDriver(t, gate, newStubExports())
+	t.Cleanup(func() {
+		_ = os.Chmod(d.dir, 0o700) //nolint:gosec // G302: state directory, not a file
+		if outDir != "" {
+			_ = os.RemoveAll(outDir)
+		}
+	})
+	spec := testStartSpec()
+	inputs := stageInputs(t, &spec)
+	if err := d.StartWithInputs(ctx, testInvoke, spec,
+		func(context.Context) (exec.StageInputs, error) { return inputs, nil },
+	); err != nil {
+		t.Fatalf("StartWithInputs: %v", err)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		d.mu.Lock()
+		sess := d.running[testInvoke]
+		pending := sess != nil && sess.pendingIntent != nil
+		finished := false
+		if sess != nil {
+			select {
+			case <-sess.done:
+				finished = true
+			default:
+			}
+		}
+		d.mu.Unlock()
+		if pending && finished {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("current-policy phase was not retained after its write failed")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if err := os.Chmod(d.dir, 0o700); err != nil { //nolint:gosec // G302: state directory, not a file
+		t.Fatalf("restore driver state permissions: %v", err)
+	}
+	if _, err := d.Inspect(ctx, testInvoke); !errors.Is(err, drift) {
+		t.Fatalf("Inspect after phase-write retry = %v, want current-policy refusal", err)
+	}
+	persisted, err := d.loadIntentAdmission(ctx, testInvoke)
+	if err != nil {
+		t.Fatalf("load retried import intent: %v", err)
+	}
+	if persisted.Phase != phaseImportPending || persisted.Export == nil {
+		t.Fatalf("retried import intent = %#v, want current-policy import pending", persisted)
+	}
+	if recordImportCalls != 0 {
+		t.Fatalf("admission-bound import-option calls = %d, want none", recordImportCalls)
+	}
+}
+
+func TestRecoveredImportPhasePersistenceRetriesBeforeCurrentPolicy(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	drift := errors.New("current recovered-import policy changed")
+	recordImportCalls := 0
+	var (
+		d         *Driver
+		outDir    string
+		protected bool
+	)
+	gate := &stubGate{
+		recoverFn: func(string, ward.HandoffSpec) (*ward.RecoveryResult, error) {
+			manifest := export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}}
+			body, err := manifest.Encode()
+			if err != nil {
+				return nil, err
+			}
+			outDir, err = os.MkdirTemp("", "freeside-handoff-"+testRunIDFor(testInvoke)+"-out-")
+			if err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(filepath.Join(outDir, export.ManifestFilename), body, 0o600); err != nil {
+				return nil, err
+			}
+			return &ward.RecoveryResult{
+				Outcome: ward.RecoveryExported, ExportDir: outDir, Manifest: manifest,
+				Workspace: ward.WorkspaceObservation{ObservedBaseSHA: testBase.BaseSHA},
+			}, nil
+		},
+		authenticateFn: func(string, string) error {
+			if protected {
+				return nil
+			}
+			protected = true
+			d.authority = stubAuthority{startErr: drift, recordImportCalls: &recordImportCalls}
+			return os.Chmod(d.dir, 0o500) //nolint:gosec // G302: force the phase write to fail
+		},
+	}
+	d = newTestDriver(t, gate, newStubExports())
+	t.Cleanup(func() {
+		_ = os.Chmod(d.dir, 0o700) //nolint:gosec // G302: state directory, not a file
+		if outDir != "" {
+			_ = os.RemoveAll(outDir)
+		}
+	})
+	orphan(t, d, phaseRunning, nil)
+
+	if err := d.Reconcile(ctx); !errors.Is(err, ErrRecoveryRetryable) {
+		t.Fatalf("Reconcile after phase-write failure = %v, want retryable", err)
+	}
+	if err := os.Chmod(d.dir, 0o700); err != nil { //nolint:gosec // G302: state directory, not a file
+		t.Fatalf("restore driver state permissions: %v", err)
+	}
+	if _, err := d.Inspect(ctx, testInvoke); !errors.Is(err, drift) {
+		t.Fatalf("Inspect after recovered phase-write retry = %v, want current-policy refusal", err)
+	}
+	persisted, err := d.loadIntentAdmission(ctx, testInvoke)
+	if err != nil {
+		t.Fatalf("load retried recovered import intent: %v", err)
+	}
+	if persisted.Phase != phaseImportPending || persisted.Export == nil {
+		t.Fatalf("retried recovered import intent = %#v, want current-policy import pending", persisted)
+	}
+	if recordImportCalls != 0 {
+		t.Fatalf("admission-bound import-option calls = %d, want none", recordImportCalls)
+	}
+}
+
 // TestPreHandoffCrashRerunsInsteadOfRecovering: with no gate call made, no
 // ward object and no journal record exist, so the work is rerun-safe and
 // must not be handed to a recovery that has nothing to find.
@@ -533,28 +754,36 @@ func TestPreHandoffCrashRerunsInsteadOfRecovering(t *testing.T) {
 	}
 }
 
-func TestOnlyPreterminalIntentsRequireCurrentConformance(t *testing.T) {
+func TestCurrentPolicyRequiredForWorkAndImportRetries(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	drift := errors.New("current backend conformance changed")
 
-	for _, preterminalPhase := range []phase{phaseSeeding, phaseRunning, phaseExported} {
+	for _, preterminalPhase := range []phase{phaseSeeding, phaseRunning, phaseImportPending} {
 		t.Run(string(preterminalPhase), func(t *testing.T) {
 			t.Parallel()
 			d := newTestDriver(t, &stubGate{}, newStubExports())
 			var released *releasedExport
-			if preterminalPhase == phaseExported {
+			if preterminalPhase == phaseImportPending {
 				released = &releasedExport{
 					Dir: filepath.Join(os.TempDir(),
-						"freeside-handoff-"+testRunIDFor(testInvoke)+"-out-unrecorded"),
+						"freeside-handoff-"+testRunIDFor(testInvoke)+"-out-current-import"),
 					Manifest:        export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}},
 					ObservedBaseSHA: testBase.BaseSHA,
 				}
 			}
 			orphan(t, d, preterminalPhase, released)
+			if preterminalPhase == phaseImportPending {
+				if err := d.recordCurrentImportStart(ctx, intent{
+					InvocationID: testInvoke,
+					Spec:         testStartSpec(),
+				}); err != nil {
+					t.Fatalf("record current import start: %v", err)
+				}
+			}
 			d.authority = stubAuthority{startErr: drift}
 			if _, err := d.listIntents(ctx); !errors.Is(err, drift) {
-				t.Fatalf("list %s intent = %v, want current-conformance refusal",
+				t.Fatalf("list %s intent = %v, want current-policy refusal",
 					preterminalPhase, err)
 			}
 		})
@@ -579,7 +808,7 @@ func TestOnlyPreterminalIntentsRequireCurrentConformance(t *testing.T) {
 				if err := d.commitLost(ctx, testInvoke); err != nil {
 					t.Fatalf("commit lost result: %v", err)
 				}
-			case phaseSeeding, phaseRunning, phaseExported:
+			case phaseSeeding, phaseRunning, phaseExported, phaseImportPending:
 				t.Fatalf("test table contains nonterminal phase %q", terminalPhase)
 			}
 
@@ -596,6 +825,171 @@ func TestOnlyPreterminalIntentsRequireCurrentConformance(t *testing.T) {
 				t.Fatalf("Collect committed intent after conformance drift: %v", err)
 			}
 		})
+	}
+}
+
+func TestCurrentImportStartReturnedBindingIsReauthenticated(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	exports := newStubExports()
+	d := newTestDriver(t, &stubGate{}, exports)
+	orphan(t, d, phaseExported, &releasedExport{
+		Dir: filepath.Join(os.TempDir(),
+			"freeside-handoff-"+testRunIDFor(testInvoke)+"-out-untrusted-marker"),
+		Manifest:        export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}},
+		ObservedBaseSHA: testBase.BaseSHA,
+	})
+	exports.importStarts[testInvoke] = domain.CurrentImportStart{
+		InvocationID: testInvoke,
+		AdmissionID:  "sha256:other",
+	}
+	if _, err := d.listIntents(ctx); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("list intent with foreign import marker = %v, want parent mismatch", err)
+	}
+}
+
+func TestGoneExportConvergesToLostAfterCurrentPolicyDrift(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	in := orphan(t, d, phaseExported, &releasedExport{
+		Dir: filepath.Join(os.TempDir(),
+			"freeside-handoff-"+testRunIDFor(testInvoke)+"-out-gone-after-drift"),
+		Manifest:        export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}},
+		ObservedBaseSHA: testBase.BaseSHA,
+	})
+	d.authority = stubAuthority{startErr: errors.New("current backend conformance changed")}
+
+	if err := d.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile exported intent after conformance drift: %v", err)
+	}
+	if status, err := d.Inspect(ctx, in.InvocationID); err != nil || status.Status != exec.StatusGone {
+		t.Fatalf("Inspect after recovered loss = %#v, %v; want gone", status, err)
+	}
+	if _, err := d.Collect(ctx, in.InvocationID); !errors.Is(err, exec.ErrNoResult) {
+		t.Fatalf("Collect after recovered loss = %v, want ErrNoResult", err)
+	}
+	if err := d.Reconcile(ctx); err != nil {
+		t.Fatalf("second Reconcile after recovered loss: %v", err)
+	}
+}
+
+func TestSurvivingExportCompletesFromAdmissionAfterCurrentPolicyDrift(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := t.TempDir()
+	if err := runRecoveryGit(ctx, repo, "init", "-q"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runRecoveryGit(ctx, repo, "commit", "-q", "--allow-empty", "-m", "base"); err != nil {
+		t.Fatal(err)
+	}
+	baseSHA, err := runRecoveryGitOutput(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("read fixture head: %v", err)
+	}
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "candidate.txt"), []byte("recovered\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outDir, err := os.MkdirTemp("", "freeside-handoff-"+testRunIDFor(testInvoke)+"-out-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(outDir) })
+	manifest, err := export.Export(os.DirFS(workspace), outDir, export.Options{})
+	if err != nil {
+		t.Fatalf("export fixture workspace: %v", err)
+	}
+
+	exports := newStubExports()
+	gate := &stubGate{}
+	d := newTestDriver(t, gate, exports)
+	d.seeder = recoveryGitSeeder{repo: repo}
+	d.authority = stubAuthority{startErr: errors.New("current backend conformance changed")}
+	spec := testStartSpec()
+	spec.Base.BaseSHA = baseSHA
+	in := orphanWithSpec(t, d, phaseExported, &releasedExport{
+		Dir: outDir, Manifest: manifest, ObservedBaseSHA: spec.Base.BaseSHA,
+	}, spec)
+
+	if err := d.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile surviving export after conformance drift: %v", err)
+	}
+	result, err := d.Collect(ctx, in.InvocationID)
+	if err != nil {
+		t.Fatalf("Collect recovered export: %v", err)
+	}
+	if result.Status != exec.StatusCompleted || result.HeadSHA == "" {
+		t.Fatalf("recovered result = %#v, want completed candidate", result)
+	}
+	if len(exports.records) != 1 {
+		t.Fatalf("durable exports = %d, want one", len(exports.records))
+	}
+	if len(gate.specs) != 0 {
+		t.Fatal("export recovery started new agent work")
+	}
+}
+
+func TestLiveImportRefusalRemainsBoundToCurrentPolicy(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	drift := errors.New("current import policy changed")
+	currentImportCalls := 0
+	recordImportCalls := 0
+	manifest := export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}}
+	manifestBody, err := manifest.Encode()
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+	outDir, err := os.MkdirTemp("", "freeside-handoff-"+testRunIDFor(testInvoke)+"-out-")
+	if err != nil {
+		t.Fatalf("create released export: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(outDir) })
+	if err := os.WriteFile(filepath.Join(outDir, export.ManifestFilename), manifestBody, 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	gate := &stubGate{handoffFn: func(ward.HandoffSpec) (*ward.HandoffResult, error) {
+		return &ward.HandoffResult{
+			ExportDir: outDir, Manifest: manifest,
+			Workspace: ward.WorkspaceObservation{ObservedBaseSHA: testBase.BaseSHA},
+		}, nil
+	}}
+	d := newTestDriver(t, gate, newStubExports())
+	d.authority = stubAuthority{
+		startErr: drift, currentImportCalls: &currentImportCalls,
+		recordImportCalls: &recordImportCalls,
+	}
+	in := orphan(t, d, phaseSeeding, nil)
+
+	if _, err := d.handoffAndImport(ctx, in); !errors.Is(err, ErrRecoveryRetryable) ||
+		!errors.Is(err, drift) {
+		t.Fatalf("live import error = %v, want retryable current-policy refusal", err)
+	}
+	persisted, err := d.loadIntentAdmission(ctx, testInvoke)
+	if err != nil {
+		t.Fatalf("load refused import intent: %v", err)
+	}
+	if persisted.Phase != phaseImportPending || persisted.Export == nil {
+		t.Fatalf("refused import intent = %#v, want current-policy import pending", persisted)
+	}
+	// The private phase is replay data. Rolling it back must not erase the
+	// independent store authority that current-policy import already began.
+	persisted.Phase = phaseExported
+	if err := d.saveIntent(persisted); err != nil {
+		t.Fatalf("tamper import phase: %v", err)
+	}
+	if _, err := d.Inspect(ctx, testInvoke); !errors.Is(err, drift) {
+		t.Fatalf("Inspect after private phase rollback = %v, want same current refusal", err)
+	}
+	if currentImportCalls != 1 {
+		t.Fatalf("current import-option calls = %d, want the original live attempt only", currentImportCalls)
+	}
+	if recordImportCalls != 0 {
+		t.Fatalf("admission-bound import-option calls = %d, want none", recordImportCalls)
 	}
 }
 
@@ -947,8 +1341,8 @@ func TestRecoveredExportPhaseIsDurableBeforeImportResumes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load intent while recovered import is blocked: %v", err)
 	}
-	if reconstructed.Phase != phaseExported || reconstructed.Export == nil {
-		t.Fatalf("recovered intent = %#v, want durable exported phase", reconstructed)
+	if reconstructed.Phase != phaseImportPending || reconstructed.Export == nil {
+		t.Fatalf("recovered intent = %#v, want durable current-policy import phase", reconstructed)
 	}
 	close(seeder.release)
 	if err := <-done; !errors.Is(err, ErrRecoveryRetryable) {

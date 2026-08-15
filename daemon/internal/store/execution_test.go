@@ -944,6 +944,47 @@ func TestExecutionExportBinding(t *testing.T) {
 	}
 }
 
+func TestCurrentImportStartBindingAndConvergence(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newAdmissionFixture(t, nil)
+	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
+	if err := recordAdmission(t, s, f.admission); err != nil {
+		t.Fatalf("record admission: %v", err)
+	}
+	start := domain.CurrentImportStart{
+		InvocationID: f.admission.InvocationID,
+		AdmissionID:  f.admission.ID,
+	}
+	record := func(x domain.CurrentImportStart) error {
+		return s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			return tx.RecordCurrentImportStart(ctx, x)
+		})
+	}
+	if err := record(start); err != nil {
+		t.Fatalf("record current import start: %v", err)
+	}
+	if err := record(start); err != nil {
+		t.Fatalf("identical replay must converge: %v", err)
+	}
+	var got domain.CurrentImportStart
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		got, err = tx.GetCurrentImportStart(ctx, f.admission.InvocationID)
+		return err
+	}); err != nil {
+		t.Fatalf("GetCurrentImportStart: %v", err)
+	}
+	if got != start {
+		t.Fatalf("round-tripped current import start = %+v, want %+v", got, start)
+	}
+	foreign := start
+	foreign.AdmissionID = "sha256:other"
+	if err := record(foreign); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("foreign current import start = %v, want parent mismatch", err)
+	}
+}
+
 func TestExecutionOutcomeBinding(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

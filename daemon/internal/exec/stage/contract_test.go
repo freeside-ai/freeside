@@ -158,6 +158,7 @@ func (h *stageContractHarness) build(t *testing.T, seeder Seeder) {
 		Gate:            h.gate,
 		Seeder:          seeder,
 		Exports:         h.records,
+		ImportStarts:    h.records,
 		Outcomes:        h.records,
 		Authority:       stubAuthority{},
 		Artifacts:       h.artifacts,

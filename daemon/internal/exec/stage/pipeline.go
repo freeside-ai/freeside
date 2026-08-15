@@ -70,7 +70,8 @@ var errExportAuthorityConflict = errors.New("released export conflicts with dura
 
 // runPipeline drives one invocation from seeded workspace to committed
 // result. Operational failures after a handoff has returned deliberately
-// remain in phaseExported so Inspect can retry them without discarding work.
+// remain in an exported preterminal phase so Inspect can retry them without
+// discarding work.
 func (d *Driver) runPipeline(ctx context.Context, in intent) {
 	log := d.logger.With("invocation", string(in.InvocationID), "run", in.RunID)
 	log.Debug("pipeline started", "phase", string(in.Phase))
@@ -231,6 +232,21 @@ func (d *Driver) handoffAndImport(ctx context.Context, in intent) (exec.StageRes
 	if err := d.authenticateReleasedExport(ctx, in, out.dir); err != nil {
 		return exec.StageResult{}, classifyReleasedExportAuthentication(err)
 	}
+	if err := d.recordCurrentImportStart(ctx, in); err != nil {
+		return exec.StageResult{}, fmt.Errorf("%w: record current-policy import authority: %w",
+			ErrRecoveryRetryable, err)
+	}
+	// The gap after phaseExported became durable and before the marker above is
+	// the admission-bound crash window. Once the marker lands, it, not this
+	// private replay phase, makes every retry retain the current-policy gate the
+	// live import is about to apply.
+	if err := d.advance(&in, phaseImportPending, nil); err != nil {
+		if retainErr := d.retainPendingIntent(in, err); retainErr != nil {
+			return exec.StageResult{}, errors.Join(err, retainErr)
+		}
+		return exec.StageResult{}, fmt.Errorf("%w: record current-policy import: %w",
+			ErrRecoveryRetryable, err)
+	}
 	return d.completeReleasedExport(ctx, in, out)
 }
 
@@ -262,6 +278,10 @@ type exportOutcome struct {
 	observedBaseSHA   string
 }
 
+type importOptionsProvider func(
+	context.Context, domain.InvocationID, exec.StartSpec, importer.Options,
+) (importer.Options, error)
+
 // finish imports the released export into a candidate commit and records the
 // durable ExecutionExport before the result becomes collectable.
 //
@@ -269,7 +289,9 @@ type exportOutcome struct {
 // first, then the row, then the collectable result. A crash may leave
 // unreferenced content-addressed bytes, but can never leave a durable export
 // asserting evidence that was not persisted.
-func (d *Driver) finish(ctx context.Context, in intent, out exportOutcome) (exec.StageResult, error) {
+func (d *Driver) finish(
+	ctx context.Context, in intent, out exportOutcome, importOptions importOptionsProvider,
+) (exec.StageResult, error) {
 	checkoutDir := filepath.Join(in.Seed+"-import", "checkout")
 	if err := os.RemoveAll(filepath.Dir(checkoutDir)); err != nil {
 		return exec.StageResult{}, fmt.Errorf("clear import checkout: %w", err)
@@ -281,7 +303,7 @@ func (d *Driver) finish(ctx context.Context, in intent, out exportOutcome) (exec
 	}
 	defer func() { _ = os.RemoveAll(filepath.Dir(checkoutDir)) }()
 
-	opts, err := d.authority.ImportOptions(ctx, in.InvocationID, in.Spec, d.imports)
+	opts, err := importOptions(ctx, in.InvocationID, in.Spec, d.imports)
 	if err != nil {
 		return exec.StageResult{}, fmt.Errorf("derive import policy: %w", err)
 	}
@@ -362,18 +384,56 @@ func (d *Driver) finish(ctx context.Context, in intent, out exportOutcome) (exec
 	}, nil
 }
 
-// completeReleasedExport owns the cleanup decision after phaseExported. A
-// successful import or a conclusive trust-boundary rejection consumes the
-// directory. Operational and ambiguous failures retain it and advertise the
-// retryable recovery class, including failures after a possibly successful
-// ExecutionExport write.
+// completeReleasedExport owns the cleanup decision after the current-policy
+// import phase begins. A successful import or a conclusive trust-boundary
+// rejection consumes the directory. Operational and ambiguous failures retain
+// it and advertise the retryable recovery class, including failures after a
+// possibly successful ExecutionExport write.
 func (d *Driver) completeReleasedExport(
 	ctx context.Context, in intent, out exportOutcome,
+) (exec.StageResult, error) {
+	return d.completeReleasedExportWithOptions(ctx, in, out, d.authority.ImportOptions)
+}
+
+// completeReleasedExportFromAdmission imports a tree that was already
+// released before a restart under the immutable admission-bound policy. The
+// current policy still gates work that can start or resume, but cannot strand
+// this terminal-only recovery path after the agent and gate have stopped.
+func (d *Driver) completeReleasedExportFromAdmission(
+	ctx context.Context, in intent, out exportOutcome,
+) (exec.StageResult, error) {
+	return d.completeReleasedExportWithOptions(ctx, in, out, d.authority.ImportOptionsRecord)
+}
+
+func (d *Driver) recordCurrentImportStart(ctx context.Context, in intent) error {
+	return d.importStarts.RecordCurrentImportStart(ctx, domain.CurrentImportStart{
+		InvocationID: in.InvocationID,
+		AdmissionID:  in.Spec.AdmissionID,
+	})
+}
+
+func (d *Driver) currentImportStarted(ctx context.Context, in intent) (bool, error) {
+	start, found, err := d.importStarts.LookupCurrentImportStart(ctx, in.InvocationID)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+	if start.InvocationID != in.InvocationID || start.AdmissionID != in.Spec.AdmissionID {
+		return false, fmt.Errorf("current import start disagrees with intent %s: %w",
+			in.InvocationID, domain.ErrParentKeyMismatch)
+	}
+	return true, nil
+}
+
+func (d *Driver) completeReleasedExportWithOptions(
+	ctx context.Context, in intent, out exportOutcome, importOptions importOptionsProvider,
 ) (exec.StageResult, error) {
 	if err := validateReleasedExport(d.exportRoot, in, out); err != nil {
 		return classifyExportCompletion(out.dir, exec.StageResult{}, err)
 	}
-	result, err := d.finish(ctx, in, out)
+	result, err := d.finish(ctx, in, out, importOptions)
 	return classifyExportCompletion(out.dir, result, err)
 }
 
@@ -640,13 +700,13 @@ func (d *Driver) persistCommitPlan(
 }
 
 // recordExecutionReplay closes the durable-export/source-material crash
-// window. It advances no lifecycle phase: it only enriches phaseExported with
-// independently re-auditable replay data before the authoritative export row
-// is allowed to commit.
+// window. It advances no lifecycle phase: it only enriches an exported
+// preterminal intent with independently re-auditable replay data before the
+// authoritative export row is allowed to commit.
 func (d *Driver) recordExecutionReplay(in intent, replay executionReplay) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if in.Phase != phaseExported || in.Export == nil {
+	if (in.Phase != phaseExported && in.Phase != phaseImportPending) || in.Export == nil {
 		return fmt.Errorf("record execution replay from phase %q: %w", in.Phase, ErrUnsupportedStart)
 	}
 	copyReplay := replay
@@ -972,7 +1032,7 @@ func (d *Driver) cleanupTerminalSeed(in intent) error {
 	}
 	switch in.Phase {
 	case phaseCommitted, phaseLost:
-	case phaseSeeding, phaseRunning, phaseExported:
+	case phaseSeeding, phaseRunning, phaseExported, phaseImportPending:
 		return fmt.Errorf("refuse seed cleanup for nonterminal invocation %s in phase %q",
 			in.InvocationID, in.Phase)
 	}
@@ -1202,7 +1262,7 @@ func (d *Driver) commitLost(ctx context.Context, id domain.InvocationID) error {
 	case phaseCommitted, phaseLost:
 		d.reportTerminalSeedCleanup(in)
 		return nil
-	case phaseRunning, phaseExported:
+	case phaseRunning, phaseExported, phaseImportPending:
 	case phaseSeeding:
 		return fmt.Errorf("cannot record invocation %s lost before handoff: %w",
 			id, exec.ErrInvalidStatus)
@@ -1417,7 +1477,7 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 		// both safe and better than losing the work item: the intent already
 		// pins every value a replay must reproduce.
 		return d.resume(in)
-	case phaseExported:
+	case phaseExported, phaseImportPending:
 		// The gate closed its journal when Handoff returned and refuses to
 		// recover a closed record, so this window is the driver's to finish.
 		return d.recoverExported(ctx, in)
@@ -1472,6 +1532,17 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 		}
 		if err := d.authenticateReleasedExport(ctx, in, out.dir); err != nil {
 			return classifyReleasedExportAuthentication(err)
+		}
+		if err := d.recordCurrentImportStart(ctx, in); err != nil {
+			return fmt.Errorf("%w: record recovered current-policy import authority: %w",
+				ErrRecoveryRetryable, err)
+		}
+		if err := d.advance(&in, phaseImportPending, nil); err != nil {
+			if retainErr := d.retainRecoveredIntent(in, err); retainErr != nil {
+				return errors.Join(err, retainErr)
+			}
+			return fmt.Errorf("%w: record recovered current-policy import: %w",
+				ErrRecoveryRetryable, err)
 		}
 		result, err := d.completeReleasedExport(ctx, in, out)
 		if err != nil {
@@ -1640,7 +1711,9 @@ func (d *Driver) resume(in intent) error {
 
 // recoverExported finishes an invocation whose export the gate had already
 // released. A durable export record is terminal authority and outranks its
-// expendable source directory; without a record, the directory is replayed.
+// expendable source directory. Without a terminal record, the trusted import-
+// start marker chooses current policy; its absence preserves admission-bound
+// legacy and crash-only recovery. The private phase never chooses policy.
 func (d *Driver) recoverExported(ctx context.Context, in intent) error {
 	out := in.Export.outcome()
 	if err := d.authenticateReleasedExport(ctx, in, out.dir); err != nil {
@@ -1675,7 +1748,18 @@ func (d *Driver) recoverExported(ctx context.Context, in intent) error {
 	// No terminal outcome is recorded. A surviving directory is replayed through
 	// finish(); a gone directory means nothing durable was decided.
 	if _, err := os.Stat(out.dir); err == nil {
-		result, err := d.completeReleasedExport(ctx, in, out)
+		var result exec.StageResult
+		var err error
+		current, authorityErr := d.currentImportStarted(ctx, in)
+		if authorityErr != nil {
+			return fmt.Errorf("%w: authenticate current import start: %w",
+				ErrRecoveryRetryable, authorityErr)
+		}
+		if current {
+			result, err = d.completeReleasedExport(ctx, in, out)
+		} else {
+			result, err = d.completeReleasedExportFromAdmission(ctx, in, out)
+		}
 		if err != nil {
 			// A re-derived definitive rejection is a normal terminal, not a
 			// recovery failure. Commit it through the same terminal path as the
