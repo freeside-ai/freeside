@@ -77,7 +77,9 @@ func runEnrollCodexCommandWithRefresher(
 		return errors.New("-auth-store is required")
 	}
 
-	st, err := store.Open(ctx, *dbPath, store.Options{ApprovedRecipes: approvedRecipes})
+	st, _, err := openStoreWithTopicKey(
+		ctx, *dbPath, store.Options{ApprovedRecipes: approvedRecipes},
+	)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}

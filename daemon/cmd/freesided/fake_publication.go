@@ -104,7 +104,9 @@ func runFakePublicationCommand(
 	recipeDigest := verify.RecipeDigest(recipe)
 	approvedRecipes := map[domain.Digest]bool{recipeDigest: true}
 
-	st, err := store.Open(ctx, cfg.DBPath, store.Options{ApprovedRecipes: approvedRecipes})
+	st, _, err := openStoreWithTopicKey(
+		ctx, cfg.DBPath, store.Options{ApprovedRecipes: approvedRecipes},
+	)
 	if err != nil {
 		return fakePublicationCommandResult{}, err
 	}
@@ -308,7 +310,7 @@ func fakePublicationReplayBinding(
 	} else if err != nil {
 		return engine.FakePublicationReplayBinding{}, false, err
 	}
-	bootstrap, err := store.Open(ctx, cfg.DBPath, store.Options{})
+	bootstrap, _, err := openStoreWithTopicKey(ctx, cfg.DBPath, store.Options{})
 	if err != nil {
 		return engine.FakePublicationReplayBinding{}, false, err
 	}
@@ -322,7 +324,7 @@ func fakePublicationReplay(
 	cfg fakePublicationCommandConfig,
 	artifacts engine.ArtifactStore,
 ) (_ engine.FakePublicationReplay, _ bool, err error) {
-	bootstrap, err := store.Open(ctx, cfg.DBPath, store.Options{})
+	bootstrap, _, err := openStoreWithTopicKey(ctx, cfg.DBPath, store.Options{})
 	if err != nil {
 		return engine.FakePublicationReplay{}, false, err
 	}

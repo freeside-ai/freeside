@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"os"
@@ -57,6 +58,52 @@ func TestParseOnboardConfigBuildEgress(t *testing.T) {
 			t.Fatalf("BuildProxy = %q, want empty", cfg.BuildProxy)
 		}
 	})
+}
+
+func TestOnboardStoreCanPassSubmitTopicKeyGate(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "freeside.db")
+	recipePath := filepath.Join(root, "verify.json")
+	if err := os.WriteFile(
+		recipePath, []byte(`{"commands":[["go","test","./..."]],"capture":"none"}`), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	err := runOnboardCommand(t.Context(), []string{
+		"example/repo",
+		"-db", dbPath,
+		"-state-dir", filepath.Join(root, "state"),
+		"-credentials-dir", filepath.Join(root, "credentials"),
+		"-registration-id", "11",
+		"-repository-id", "44",
+		"-commit", "0123456789012345678901234567890123456789",
+		"-base-ref", "main",
+		"-base-image", "example.invalid/agent@sha256:test",
+		"-base-build-ref", "local/agent:test",
+		"-review-config-digest", "sha256:review",
+		"-recipe", recipePath,
+	}, io.Discard, io.Discard)
+	const want = "-account, positive -account-id, and non-negative -installation-id are required until the repository is trusted"
+	if err == nil || err.Error() != want {
+		t.Fatalf("runOnboardCommand error = %v, want %q", err, want)
+	}
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("stat onboarded store: %v", err)
+	}
+	info, err := os.Stat(dbPath + topicKeySuffix)
+	if err != nil {
+		t.Fatalf("stat onboarded topic key: %v", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() != sha256.Size {
+		t.Fatalf("onboarded topic key mode/size = %v/%d, want regular 0600/%d", info.Mode(), info.Size(), sha256.Size)
+	}
+	key, err := loadOrCreateTopicKey(dbPath, true)
+	if err != nil {
+		t.Fatalf("submit topic-key gate: %v", err)
+	}
+	if len(key) != sha256.Size {
+		t.Fatalf("topic key length = %d, want %d", len(key), sha256.Size)
+	}
 }
 
 func TestOnboardRejectsInvalidCommitPlanBeforeStoreWork(t *testing.T) {

@@ -314,15 +314,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	}
 	policy := submissionFile{digest: resolvedPolicy.Digest, body: policyBody}
 
-	_, statErr := os.Stat(cfg.DBPath)
-	storePreexisting := statErr == nil
-	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-		return submitResult{}, fmt.Errorf("submit: inspect store: %w", statErr)
-	}
-	if _, err := loadOrCreateTopicKey(cfg.DBPath, storePreexisting); err != nil {
-		return submitResult{}, fmt.Errorf("submit: initialize topic key: %w", err)
-	}
-	st, err := store.Open(ctx, cfg.DBPath, store.Options{})
+	st, _, err := openStoreWithTopicKey(ctx, cfg.DBPath, store.Options{})
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: open store: %w", err)
 	}
