@@ -17,6 +17,7 @@
 #
 # Required environment:
 #   FREESIDE_REAL_RUN_STATE_ROOT     daemon state root (holds the SQLite store)
+#   FREESIDE_REAL_RUN_LISTEN         fixed, nonzero signet listener address
 #   FREESIDE_REAL_RUN_AGENT_IMAGE    digest-pinned admitted project image
 #   FREESIDE_WARD_EXPORTER_IMAGE     digest-pinned export helper image
 #   FREESIDE_REAL_RUN_REVIEW_IMAGE   digest-pinned Codex reviewer image
@@ -46,13 +47,9 @@
 #   FREESIDE_REAL_RUN_ALLOWED_PATHS  comma-separated declared path scope the
 #                                    agent may rewrite (no match-everything
 #                                    default: it is a containment control)
-#
 # Optional environment:
-#   FREESIDE_REAL_RUN_LISTEN         fixed signet listener address (for
-#                                    example 127.0.0.1:8677) so a paired
-#                                    client with a stored server URL can
-#                                    reach the specification-approval gate;
-#                                    unset keeps the ephemeral default
+#   FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS clean rig-holder shutdown
+#                                    bound (default 30)
 #
 # Requires: Go, Apple `container` running, macOS, an authenticated credential
 # volume for the named identity, and an operator watching a Freeside client to
@@ -73,6 +70,7 @@
 # distinct work item from an undeclared submission of the same spec,
 # policy, and publication bytes.
 set -euo pipefail
+umask 077
 
 spec_file="${1:-}"
 policy_file="${2:-}"
@@ -90,7 +88,8 @@ for path in "$spec_file" "$policy_file" "$publication_file" ${work_unit_file:+"$
 done
 
 required=(
-  FREESIDE_REAL_RUN_STATE_ROOT FREESIDE_REAL_RUN_AGENT_IMAGE FREESIDE_WARD_EXPORTER_IMAGE
+  FREESIDE_REAL_RUN_STATE_ROOT FREESIDE_REAL_RUN_LISTEN
+  FREESIDE_REAL_RUN_AGENT_IMAGE FREESIDE_WARD_EXPORTER_IMAGE
   FREESIDE_REAL_RUN_REVIEW_IMAGE FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT
   FREESIDE_REAL_RUN_REVIEW_AUTH_MODE FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY
   FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS
@@ -132,8 +131,94 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$(mktemp -d)"
 daemon_pid=""
+rig_pid=""
+rig_acquisition="$workdir/rig-acquisition.json"
+rig_log="$workdir/rig-hold.log"
+db_path="$FREESIDE_REAL_RUN_STATE_ROOT/freeside.db"
+listen_address="$FREESIDE_REAL_RUN_LISTEN"
+rig_release_timeout=${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}
+
+if [[ ! "$rig_release_timeout" =~ ^[1-9][0-9]*$ ]]; then
+	echo "run-real-work: FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS must be a positive integer" >&2
+	exit 2
+fi
+
+rig_child_active() {
+	[[ -n "$rig_pid" ]] && jobs -pr | grep -qx -- "$rig_pid"
+}
+
+child_job_exists() {
+	local child_pid=$1
+	case " $(jobs -pr) $(jobs -ps) " in
+	*" $child_pid "*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+rig_child_exists() {
+	[[ -n "$rig_pid" ]] && child_job_exists "$rig_pid"
+}
+
+run_rig_cleanup() {
+	local cleanup_pid cleanup_status cleanup_status_file
+	cleanup_status_file=$workdir/rig-cleanup-status
+	set -m
+	(
+		set +m
+		set +e
+		"$workdir/freesided" rig cleanup \
+			-state-root "$FREESIDE_REAL_RUN_STATE_ROOT" \
+			-token-file "$rig_acquisition" >/dev/null &
+		cleanup_command_pid=$!
+		# The command keeps the default TERM disposition. The supervisor ignores
+		# TERM only after spawn, so a group cancellation reaches freesided and
+		# lets its context terminate procbound runtime subprocess groups.
+		trap '' TERM
+		wait "$cleanup_command_pid"
+		printf '%s\n' "$?" >"$cleanup_status_file"
+		# Remain the process-group leader until the parent kills the whole
+		# group. This reserves the PGID and keeps a failed cleanup's orphaned
+		# runtime child inside the authority boundary until it is terminated.
+		while :; do sleep 3600; done
+	) &
+	cleanup_pid=$!
+	for _ in $(seq 1 $((rig_release_timeout * 10))); do
+		[[ ! -s "$cleanup_status_file" ]] || break
+		sleep 0.1
+	done
+	if [[ -s "$cleanup_status_file" ]]; then
+		read -r cleanup_status <"$cleanup_status_file" || cleanup_status=1
+	else
+		echo "run-real-work: exact-resource cleanup exceeded ${rig_release_timeout}s; cancelling it" >&2
+		cleanup_status=124
+		kill -TERM -- "-$cleanup_pid" 2>/dev/null || true
+		for _ in $(seq 1 $((rig_release_timeout * 10))); do
+			[[ ! -s "$cleanup_status_file" ]] || break
+			sleep 0.1
+		done
+	fi
+	# The supervisor never exits by itself, so it keeps this PGID reserved until
+	# this signal and prevents the number from naming an unrelated process group.
+	kill -KILL -- "-$cleanup_pid" 2>/dev/null || true
+	wait "$cleanup_pid" 2>/dev/null || true
+	set +m
+	rm -f "$cleanup_status_file"
+	return "$cleanup_status"
+}
+
+require_live_rig() {
+	if ! rig_child_active || ! "$workdir/freesided" rig check \
+		-state-root "$FREESIDE_REAL_RUN_STATE_ROOT" \
+		-token-file "$rig_acquisition"; then
+		echo "run-real-work: production rig lease holder is no longer live" >&2
+		return 1
+	fi
+}
 
 cleanup() {
+	status=$?
+	trap - EXIT
+	cleanup_failed=false
   if [[ -n "$daemon_pid" ]] && kill -0 "$daemon_pid" 2>/dev/null; then
     kill "$daemon_pid" 2>/dev/null || true
     # A wedged writer container can block the daemon's own shutdown, and this
@@ -150,10 +235,87 @@ cleanup() {
       kill -9 "$daemon_pid" 2>/dev/null || true
     fi
     wait "$daemon_pid" 2>/dev/null || true
-  fi
-  rm -rf "$workdir"
+	fi
+	if [[ -n "$rig_pid" ]]; then
+		if rig_child_exists; then
+			if run_rig_cleanup; then
+				if rig_child_exists; then
+					kill -USR1 "$rig_pid" 2>/dev/null || true
+				fi
+				for _ in $(seq 1 "$rig_release_timeout"); do
+					rig_child_exists || break
+					sleep 1
+				done
+				if rig_child_exists; then
+					echo "run-real-work: rig holder did not exit within ${rig_release_timeout}s; sending SIGKILL and preserving the stale rig manifest" >&2
+					kill -KILL "$rig_pid" 2>/dev/null || true
+					cleanup_failed=true
+				fi
+			else
+				echo "run-real-work: exact-resource cleanup failed; preserving the stale rig manifest" >&2
+				if rig_child_exists; then
+					kill -KILL "$rig_pid" 2>/dev/null || true
+				fi
+				cleanup_failed=true
+			fi
+		else
+			echo "run-real-work: rig holder exited; preserving the stale rig manifest" >&2
+			cleanup_failed=true
+		fi
+		if ! wait "$rig_pid" 2>/dev/null && [[ "$cleanup_failed" == false ]]; then
+			echo "run-real-work: rig holder failed during release; preserving its diagnostics" >&2
+			cleanup_failed=true
+		fi
+	fi
+	rm -rf "$workdir"
+	if [[ "$cleanup_failed" == true && "$status" -eq 0 ]]; then
+		exit 1
+	fi
+	exit "$status"
 }
 trap cleanup EXIT
+
+echo "building freesided" >&2
+build_version="$(git -C "$repo_root" rev-parse --short=12 HEAD)"
+(cd "$repo_root/daemon" && go build -ldflags "-X main.version=$build_version" -o "$workdir/freesided" ./cmd/freesided)
+
+echo "acquiring the production rig lease" >&2
+"$workdir/freesided" rig hold \
+	-state-root "$FREESIDE_REAL_RUN_STATE_ROOT" \
+	-db "$db_path" \
+	-listen "$listen_address" \
+	-seed-root "$FREESIDE_REAL_RUN_SEED_ROOT" \
+	>"$rig_acquisition" 2>"$rig_log" &
+rig_pid=$!
+for _ in $(seq 1 100); do
+	[[ ! -s "$rig_acquisition" ]] || break
+	if ! rig_child_active; then
+		wait "$rig_pid" 2>/dev/null || true
+		rig_pid=""
+		cat "$rig_log" >&2
+		exit 1
+	fi
+	sleep 0.05
+done
+if [[ ! -s "$rig_acquisition" ]]; then
+	echo "run-real-work: timed out waiting for the production rig lease" >&2
+	if rig_child_active; then
+		kill -KILL "$rig_pid" 2>/dev/null || true
+	fi
+	wait "$rig_pid" 2>/dev/null || true
+	rig_pid=""
+	exit 1
+fi
+FREESIDE_REAL_RUN_STATE_ROOT="$("$workdir/freesided" rig resource \
+	-token-file "$rig_acquisition" -name state-root)"
+db_path="$("$workdir/freesided" rig resource \
+	-token-file "$rig_acquisition" -name database-path)"
+listen_address="$("$workdir/freesided" rig resource \
+	-token-file "$rig_acquisition" -name listen-address)"
+FREESIDE_REAL_RUN_SEED_ROOT="$("$workdir/freesided" rig resource \
+	-token-file "$rig_acquisition" -name seed-root)"
+export FREESIDE_REAL_RUN_STATE_ROOT FREESIDE_REAL_RUN_SEED_ROOT
+require_live_rig
 
 # Duplicated from observerScript, observerGitScript, and credObserverScript in
 # daemon/internal/ward/spec.go. Shell syntax and builtins are excluded; every
@@ -231,14 +393,8 @@ EOF
   exit 2
 fi
 
-db_path="$FREESIDE_REAL_RUN_STATE_ROOT/freeside.db"
-mkdir -p "$FREESIDE_REAL_RUN_STATE_ROOT" "$FREESIDE_REAL_RUN_SEED_ROOT"
-
-echo "building freesided" >&2
-build_version="$(git -C "$repo_root" rev-parse --short=12 HEAD)"
-(cd "$repo_root/daemon" && go build -ldflags "-X main.version=$build_version" -o "$workdir/freesided" ./cmd/freesided)
-
 echo "submitting the work item" >&2
+require_live_rig
 submit_log="$workdir/submit.json"
 submit_args=(
   -db "$db_path"
@@ -290,11 +446,11 @@ env -u FREESIDE_REAL_RUN_INVOCATION FREESIDE_REAL_RUN_LIVE_TEST=1 \
 }
 
 echo "starting the daemon with the production Claude driver" >&2
-# FREESIDE_REAL_RUN_LISTEN pins the signet listener so an operator's paired
-# client (whose stored server URL names a fixed port) can reach the
-# specification-approval gate; unset, the daemon keeps its ephemeral default.
+require_live_rig
+# FREESIDE_REAL_RUN_LISTEN pins the exact leased listener so an operator's
+# paired client can reach the specification-approval gate.
 "$workdir/freesided" \
-  ${FREESIDE_REAL_RUN_LISTEN:+-listen "$FREESIDE_REAL_RUN_LISTEN"} \
+  -listen "$listen_address" \
   -db "$db_path" \
   -driver claude \
   -agent-image "$FREESIDE_REAL_RUN_AGENT_IMAGE" \
@@ -310,6 +466,7 @@ echo "starting the daemon with the production Claude driver" >&2
   -review-cost-owner "$FREESIDE_REAL_RUN_REVIEW_COST_OWNER" \
   -seed-root "$FREESIDE_REAL_RUN_SEED_ROOT" \
   -state-dir "$FREESIDE_REAL_RUN_STATE_ROOT" \
+  -rig-token-file "$rig_acquisition" \
   -prompt-package "$FREESIDE_REAL_RUN_PROMPT_PACKAGE" \
   -elaboration-prompt-package "$FREESIDE_REAL_RUN_ELABORATION_PROMPT_PACKAGE" \
   -vendor-instructions "$FREESIDE_REAL_RUN_INSTRUCTIONS" \
@@ -336,7 +493,10 @@ fi
 # authority on success; this loop only bounds the wait.
 deadline=$(( SECONDS + ${FREESIDE_REAL_RUN_TIMEOUT_SECONDS:-2400} ))
 while (( SECONDS < deadline )); do
-  if ! kill -0 "$daemon_pid" 2>/dev/null; then
+	if ! require_live_rig; then
+		exit 1
+	fi
+	if ! kill -0 "$daemon_pid" 2>/dev/null; then
     echo "run-real-work: the daemon exited before the run finished" >&2
     cat "$workdir/daemon.log" >&2
     exit 1

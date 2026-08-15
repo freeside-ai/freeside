@@ -181,6 +181,14 @@ func (s *CodexReviewSource) startRequestedReview(
 	if err := codexReviewOutcomeFence(ctx, s.cfg.Journal, string(id)); err != nil {
 		return &exec.ReviewSourceFailure{Class: classifyCodexLaunchFailure(err), Err: err}
 	}
+	if err := s.cfg.Lifecycle.authorizeRuntime(
+		ctx, CodexReviewRuntimeResourceNamesFor(string(id)),
+	); err != nil {
+		return &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureTransient,
+			Err:   codexReviewOperationalf("authorize Codex review runtime resources: %v", err),
+		}
+	}
 	candidate := domain.BaseRevision{
 		Repo: req.Repo, RepositoryID: req.RepositoryID, BaseRef: req.BaseRef, BaseSHA: req.HeadSHA,
 	}

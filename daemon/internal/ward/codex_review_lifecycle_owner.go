@@ -3,6 +3,7 @@ package ward
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 )
@@ -44,7 +45,8 @@ func (c codexReviewLifecycleConfig) seedConfig() Config {
 // for every source and recovery path that can address the same run IDs.
 type CodexReviewLifecycle struct {
 	runtimeOps
-	cfg codexReviewLifecycleConfig
+	cfg                       codexReviewLifecycleConfig
+	authorizeRuntimeResources RuntimeResourceAuthorizer
 
 	// codexReviewMu guards per-run lifecycle gates. A rejected request must not
 	// recover a preparing intent while the in-process launch still creates and
@@ -56,7 +58,9 @@ type CodexReviewLifecycle struct {
 // NewCodexReviewLifecycle builds the Codex review runtime owner. Config is
 // defaulted, validated, and frozen independently of Backend. Review-specific
 // host auth dependencies arrive through CodexReviewConfig at launch.
-func NewCodexReviewLifecycle(rt Runtime, cfg Config) (*CodexReviewLifecycle, error) {
+func NewCodexReviewLifecycle(
+	rt Runtime, cfg Config, authorizeRuntimeResources RuntimeResourceAuthorizer,
+) (*CodexReviewLifecycle, error) {
 	if rt == nil {
 		return nil, fmt.Errorf("%w: Runtime is required", ErrInvalidConfig)
 	}
@@ -66,14 +70,27 @@ func NewCodexReviewLifecycle(rt Runtime, cfg Config) (*CodexReviewLifecycle, err
 		return nil, err
 	}
 	return &CodexReviewLifecycle{
-		runtimeOps:      newRuntimeOps(rt, cfg),
-		cfg:             newCodexReviewLifecycleConfig(cfg),
-		codexReviewRuns: map[string]chan struct{}{},
+		runtimeOps:                newRuntimeOps(rt, cfg),
+		cfg:                       newCodexReviewLifecycleConfig(cfg),
+		authorizeRuntimeResources: authorizeRuntimeResources,
+		codexReviewRuns:           map[string]chan struct{}{},
 	}, nil
 }
 
 func (l *CodexReviewLifecycle) valid() bool {
 	return l != nil && l.rt != nil && l.codexReviewRuns != nil
+}
+
+func (l *CodexReviewLifecycle) authorizeRuntime(
+	ctx context.Context, resources RuntimeResourceNames,
+) error {
+	if l.authorizeRuntimeResources == nil {
+		return nil
+	}
+	resources.Containers = slices.Clone(resources.Containers)
+	resources.Volumes = slices.Clone(resources.Volumes)
+	resources.Networks = slices.Clone(resources.Networks)
+	return l.authorizeRuntimeResources(ctx, resources)
 }
 
 // Running Codex workspaces never hold the handoff gate's auth-store lease.

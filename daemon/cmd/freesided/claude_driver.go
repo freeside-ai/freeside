@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -50,6 +51,7 @@ type claudeDriverConfig struct {
 	ContainerBin      string
 	SeedRoot          string
 	StateDir          string
+	RigTokenFile      string
 	ProviderEndpoints []string
 	// PromptPackageFile and ElaborationPromptPackageFile are the trusted
 	// implementation- and elaboration-stage prompt files. The daemon ingests
@@ -118,6 +120,9 @@ func (c claudeDriverConfig) validate() error {
 		return fmt.Errorf("-allowed-paths must name explicit declared paths in claude driver mode")
 	case c.StateDir == "":
 		return fmt.Errorf("-state-dir is required in claude driver mode")
+	case c.RigTokenFile != "" &&
+		(!filepath.IsAbs(c.RigTokenFile) || filepath.Clean(c.RigTokenFile) != c.RigTokenFile):
+		return fmt.Errorf("-rig-token-file must be a clean absolute path")
 	case c.StateRoot == "" || c.CredentialsDir == "":
 		return fmt.Errorf("-publication-state-dir and -publication-credentials-dir are required in claude driver mode")
 	case c.OperatingMode == domain.ModeUnattended &&
@@ -1269,7 +1274,9 @@ func composeClaudeDriver(
 	if backendErr != nil {
 		return nil, fmt.Errorf("compose ward backend: %w", backendErr)
 	}
-	reviewLifecycle, lifecycleErr := ward.NewCodexReviewLifecycle(runtime, wardConfig)
+	reviewLifecycle, lifecycleErr := ward.NewCodexReviewLifecycle(
+		runtime, wardConfig, productionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile),
+	)
 	if lifecycleErr != nil {
 		return nil, fmt.Errorf("compose Codex review lifecycle: %w", lifecycleErr)
 	}
@@ -1371,8 +1378,10 @@ func composeClaudeDriver(
 		Artifacts: artifactStore{blobs: blobs, store: st},
 		Volumes:   adapters.Leaser,
 		PreJob: func(ctx context.Context, id domain.InvocationID) error {
-			sum := sha256.Sum256([]byte(id))
-			return backend.PreJob(ctx, hex.EncodeToString(sum[:8]))
+			if err := bindRigInvocationResources(cfg.StateDir, cfg.RigTokenFile, id); err != nil {
+				return err
+			}
+			return backend.PreJob(ctx, ward.PreJobRunIDForInvocation(id))
 		},
 		Import: importer.Options{
 			Policy: importer.Policy{Allowlist: cfg.AllowedPaths},
@@ -1455,6 +1464,45 @@ func composeClaudeDriver(
 	return composition, nil
 }
 
+func bindRigInvocationResources(
+	stateRoot, tokenFile string, invocationID domain.InvocationID,
+) error {
+	resources := ward.RuntimeResourceNamesFor(claude.RunIDFor(invocationID))
+	resources.Containers = append(
+		resources.Containers, ward.PreJobContainerNameForInvocation(invocationID),
+	)
+	return bindRigRuntimeResources(stateRoot, tokenFile, resources)
+}
+
+func productionRigRuntimeAuthorizer(
+	stateRoot, tokenFile string,
+) ward.RuntimeResourceAuthorizer {
+	if tokenFile == "" {
+		return nil
+	}
+	return func(_ context.Context, resources ward.RuntimeResourceNames) error {
+		return bindRigRuntimeResources(stateRoot, tokenFile, resources)
+	}
+}
+
+func bindRigRuntimeResources(
+	stateRoot, tokenFile string, resources ward.RuntimeResourceNames,
+) error {
+	if tokenFile == "" {
+		return nil
+	}
+	token, err := readRigToken(tokenFile)
+	if err != nil {
+		return fmt.Errorf("read production rig token: %w", err)
+	}
+	if _, err := daemonlock.BindRigRuntimeResources(
+		stateRoot, token, resources.Containers, resources.Volumes, resources.Networks,
+	); err != nil {
+		return fmt.Errorf("bind production rig runtime resources: %w", err)
+	}
+	return nil
+}
+
 type storeConformanceRecorder struct {
 	store *store.Store
 }
@@ -1481,6 +1529,11 @@ func runClaudeConformance(
 		return fmt.Errorf("mint conformance run identity: %w", err)
 	}
 	runID := "conf-" + hex.EncodeToString(nonce[:])
+	if err := bindRigRuntimeResources(
+		cfg.StateDir, cfg.RigTokenFile, ward.FullConformanceRuntimeResourceNamesFor(runID),
+	); err != nil {
+		return fmt.Errorf("bind production rig conformance resources: %w", err)
+	}
 	if err := os.MkdirAll(cfg.SeedRoot, 0o700); err != nil {
 		return fmt.Errorf("create conformance seed root: %w", err)
 	}

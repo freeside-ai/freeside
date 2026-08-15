@@ -220,8 +220,12 @@ func (b *CodexReviewLifecycle) cleanupCodexReview(
 	// stored rows: a rewritten intent or binding must not be able to redirect
 	// deletion at a sibling invocation's resources or fake convergence by
 	// naming resources that never existed.
-	if intent.validateIdentity(runID) != nil {
+	names, namesErr := intent.validatedResourceNames(runID)
+	if namesErr != nil {
 		return failf(CheckControlPlaneIsolation, "Codex review launch intent is invalid")
+	}
+	if err := b.authorizeRuntime(ctx, codexReviewRuntimeResourceNames(runID, names)); err != nil {
+		return codexReviewOperationalf("authorize Codex review cleanup resources: %v", err)
 	}
 	binding, err := cfg.Journal.GetCodexReviewBinding(ctx, runID)
 	if err != nil {

@@ -116,6 +116,9 @@ func main() {
 		case "enroll-codex":
 			runEnrollCodexMain(os.Args[2:])
 			return
+		case "rig":
+			runRigMain(os.Args[2:])
+			return
 		}
 	}
 	flags := flag.NewFlagSet("freesided", flag.ContinueOnError)
@@ -148,6 +151,7 @@ func main() {
 	containerBin := flags.String("container-bin", "container", "Apple container CLI path")
 	seedRoot := flags.String("seed-root", "", "daemon-owned exact-base checkout root")
 	stateDir := flags.String("state-dir", "", "production driver state directory")
+	rigTokenFile := flags.String("rig-token-file", "", "production rig acquisition file (optional)")
 	providerEndpoints := flags.String("provider-endpoints", "api.anthropic.com:443", "comma-separated provider host:port allowlist")
 	promptPackage := flags.String("prompt-package", "", "trusted prompt-package file (ingested into the artifact store at startup)")
 	elaborationPromptPackage := flags.String("elaboration-prompt-package", "", "trusted elaborator prompt-package file (ingested into the artifact store at startup)")
@@ -256,7 +260,7 @@ func main() {
 		daemonConfig.Claude = &claudeDriverConfig{
 			AgentImage: domain.ImageRef(*agentImage), ExporterImage: *exporterImage,
 			ContainerBin: *containerBin, SeedRoot: *seedRoot,
-			StateDir:                     *stateDir,
+			StateDir: *stateDir, RigTokenFile: *rigTokenFile,
 			ProviderEndpoints:            strings.Split(*providerEndpoints, ","),
 			PromptPackageFile:            *promptPackage,
 			ElaborationPromptPackageFile: *elaborationPromptPackage,

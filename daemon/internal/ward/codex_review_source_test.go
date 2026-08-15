@@ -318,6 +318,51 @@ func TestCodexReviewRecoveryRemovesOrphanWorkspaceInstructionSnapshot(t *testing
 	}
 }
 
+func TestCodexReviewRecoveryAuthorizesOrphanWorkspaceBeforeRuntime(t *testing.T) {
+	fx := newHandoffFixture(t)
+	bindFailure := errors.New("rig bind failed")
+	var authorized RuntimeResourceNames
+	backend, err := NewCodexReviewLifecycle(
+		fx.rt, fx.cfg,
+		func(_ context.Context, resources RuntimeResourceNames) error {
+			authorized = resources
+			return bindFailure
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "review-" + strings.Repeat("e", 24)
+	workspace := namesFor(id).Workspace
+	j := &fakeCodexReviewJournal{workspaceBinding: CodexReviewWorkspaceBinding{
+		SourceRunID: id, Volume: workspace,
+		OwnershipToken: testOwnershipLabel().Value, CreationFingerprint: "workspace-created",
+	}}
+	fx.rt.vols[workspace] = &fakeVol{created: "workspace-created"}
+	leaser, err := NewRuntimeCodexReviewVolumeLeaser(fx.rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := NewCodexReviewRecovery(backend, j, leaser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = recovery.Reconcile(t.Context())
+	if err == nil || !strings.Contains(err.Error(), bindFailure.Error()) {
+		t.Fatalf("orphan workspace recovery error = %v, want %v", err, bindFailure)
+	}
+	if want := codexReviewWorkspaceRuntimeResourceNames(id); !reflect.DeepEqual(authorized, want) {
+		t.Fatalf("orphan workspace authorization = %#v, want %#v", authorized, want)
+	}
+	if len(fx.rt.calls) != 0 {
+		t.Fatalf("runtime calls after refused orphan authorization = %v", fx.rt.calls)
+	}
+	if _, ok := fx.rt.vols[workspace]; !ok || j.workspaceBinding.SourceRunID != id {
+		t.Fatalf("refused orphan recovery removed durable state: volume=%v binding=%#v",
+			ok, j.workspaceBinding)
+	}
+}
+
 func TestCodexReviewRecoveryKeepsOrphanWorkspaceWhenSnapshotRemovalFails(t *testing.T) {
 	ctx := t.Context()
 	fx := newHandoffFixture(t)
@@ -844,6 +889,118 @@ func TestNewCodexReviewSourceRejectsUninitializedLifecycle(t *testing.T) {
 
 	if _, err := NewCodexReviewSource(sourceConfig); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("NewCodexReviewSource(uninitialized lifecycle) = %v, want ErrInvalidConfig", err)
+	}
+}
+
+func TestCodexReviewSourceAuthorizesCompleteNamespaceBeforeRuntime(t *testing.T) {
+	ctx := t.Context()
+	fx := newHandoffFixture(t)
+	seedSpec := fx.seed(t)
+	var authorized RuntimeResourceNames
+	lifecycle, err := NewCodexReviewLifecycle(
+		fx.rt, fx.cfg,
+		func(_ context.Context, resources RuntimeResourceNames) error {
+			authorized = resources
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, requestSpec := testCodexReview(t)
+	journal := &fakeCodexReviewJournal{}
+	sourceConfig := codexReviewSourceConfigForTest(t, lifecycle, cfg, requestSpec, journal)
+	source, err := NewCodexReviewSource(sourceConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := domain.InvocationID("review-" + strings.Repeat("b", 24))
+	request := exec.ReviewRequest{
+		RunID: "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
+	}
+	if err := source.RequestReview(ctx, id, request); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		source.mu.Lock()
+		defer source.mu.Unlock()
+		if launch := source.launches[id]; launch != nil {
+			_ = launch.Close()
+		}
+	})
+	want := CodexReviewRuntimeResourceNamesFor(string(id))
+	if !reflect.DeepEqual(authorized, want) {
+		t.Fatalf("authorized resources = %#v, want %#v", authorized, want)
+	}
+	created := RuntimeResourceNames{}
+	for _, call := range fx.rt.calls {
+		switch {
+		case strings.HasPrefix(call, "create-container "):
+			created.Containers = append(created.Containers, strings.TrimPrefix(call, "create-container "))
+		case strings.HasPrefix(call, "create-volume "):
+			created.Volumes = append(created.Volumes, strings.TrimPrefix(call, "create-volume "))
+		case strings.HasPrefix(call, "create-network "):
+			created.Networks = append(created.Networks, strings.TrimPrefix(call, "create-network "))
+		}
+	}
+	for _, names := range []struct {
+		kind       string
+		created    []string
+		authorized []string
+	}{
+		{kind: "containers", created: created.Containers, authorized: authorized.Containers},
+		{kind: "volumes", created: created.Volumes, authorized: authorized.Volumes},
+		{kind: "networks", created: created.Networks, authorized: authorized.Networks},
+	} {
+		slices.Sort(names.created)
+		slices.Sort(names.authorized)
+		created := slices.Compact(names.created)
+		authorized := slices.Compact(names.authorized)
+		if !slices.Equal(created, authorized) {
+			t.Errorf("created %s = %v, authorized %v", names.kind, created, authorized)
+		}
+	}
+}
+
+func TestCodexReviewSourceAuthorizationFailureCreatesNoRuntimeObjects(t *testing.T) {
+	fx := newHandoffFixture(t)
+	seedSpec := fx.seed(t)
+	bindFailure := errors.New("rig bind failed")
+	lifecycle, err := NewCodexReviewLifecycle(
+		fx.rt, fx.cfg,
+		func(context.Context, RuntimeResourceNames) error { return bindFailure },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, requestSpec := testCodexReview(t)
+	journal := &fakeCodexReviewJournal{}
+	sourceConfig := codexReviewSourceConfigForTest(t, lifecycle, cfg, requestSpec, journal)
+	source, err := NewCodexReviewSource(sourceConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := domain.InvocationID("review-" + strings.Repeat("c", 24))
+	err = source.RequestReview(t.Context(), id, exec.ReviewRequest{
+		RunID: "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
+	})
+	if err == nil || !strings.Contains(err.Error(), bindFailure.Error()) {
+		t.Fatalf("RequestReview authorization error = %v, want %v", err, bindFailure)
+	}
+	if len(fx.rt.calls) != 0 {
+		t.Fatalf("runtime calls after refused authorization = %v", fx.rt.calls)
+	}
+	if journal.workspaceBinding.SourceRunID != "" || journal.intent != nil {
+		t.Fatalf("authorization failure persisted runtime intent: workspace=%#v intent=%#v",
+			journal.workspaceBinding, journal.intent)
 	}
 }
 

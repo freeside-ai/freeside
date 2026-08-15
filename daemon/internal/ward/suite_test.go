@@ -268,6 +268,35 @@ func TestSuiteFullSuccess(t *testing.T) {
 	if err := s.Full(context.Background()); err != nil {
 		t.Fatalf("Full = %v, want nil", err)
 	}
+	created := RuntimeResourceNames{}
+	for _, call := range rt.calls {
+		switch {
+		case strings.HasPrefix(call, "create-container "):
+			created.Containers = append(created.Containers, strings.TrimPrefix(call, "create-container "))
+		case strings.HasPrefix(call, "create-volume "):
+			created.Volumes = append(created.Volumes, strings.TrimPrefix(call, "create-volume "))
+		case strings.HasPrefix(call, "create-network "):
+			created.Networks = append(created.Networks, strings.TrimPrefix(call, "create-network "))
+		}
+	}
+	authorized := FullConformanceRuntimeResourceNamesFor(s.fx.RunID)
+	for _, names := range []struct {
+		kind       string
+		created    []string
+		authorized []string
+	}{
+		{kind: "containers", created: created.Containers, authorized: authorized.Containers},
+		{kind: "volumes", created: created.Volumes, authorized: authorized.Volumes},
+		{kind: "networks", created: created.Networks, authorized: authorized.Networks},
+	} {
+		slices.Sort(names.created)
+		slices.Sort(names.authorized)
+		created := slices.Compact(names.created)
+		authorized := slices.Compact(names.authorized)
+		if !slices.Equal(created, authorized) {
+			t.Errorf("Full created %s = %v, authorized %v", names.kind, created, authorized)
+		}
+	}
 	seeder := namesFor(s.fx.RunID).Seeder
 	var seedCopies int
 	for _, copy := range rt.copies {
@@ -308,6 +337,7 @@ func TestConformanceObjectNamesFitReferenceRuntime(t *testing.T) {
 		"cred", "liveness", "liveness-ws", "seed", "audit", "prejob",
 		"excl-ws", "excl-writer", "excl-second", networklessProbeSuffix,
 		networklessLivenessProbeSuffix, networklessLivenessVolumeProbeSuffix,
+		inExporterProbeSuffix, inExporterLivenessSuffix, inExporterVolumeProbeSuffix,
 	}
 	for _, role := range roles {
 		if name := conformanceObjectName(runID, role); len(name) > appleContainerIDLimit {

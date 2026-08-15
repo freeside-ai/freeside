@@ -959,6 +959,10 @@ func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 	if intent.State == CodexReviewIntentClosed {
 		return nil
 	}
+	if err := b.authorizeRuntime(ctx, codexReviewRuntimeResourceNames(intent.RunID, names)); err != nil {
+		return codexReviewOperationalCheckf(
+			CheckControlPlaneIsolation, "authorize Codex review recovery resources: %v", err)
+	}
 	// Wipe the daemon's own host credential stage BEFORE the lease gate, so a
 	// crash in the seeder window cannot strand the plaintext auth.json even when
 	// the later runtime-object recovery fails closed. This is the daemon's own

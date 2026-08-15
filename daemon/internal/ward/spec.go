@@ -1,7 +1,9 @@
 package ward
 
 import (
+	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path"
@@ -780,6 +782,51 @@ func namesFor(runID string) handoffNames {
 		Exporter:            "freeside-handoff-" + runID + "-exporter",
 		Network:             "freeside-handoff-" + runID + "-egress",
 	}
+}
+
+// RuntimeResourceNames is the complete deterministic host-runtime namespace
+// one handoff run may create. Production coordination records all three
+// classes so a stale gate cannot be cleared while durable ward objects remain.
+type RuntimeResourceNames struct {
+	Containers []string
+	Volumes    []string
+	Networks   []string
+}
+
+// RuntimeResourceAuthorizer durably grants one exact deterministic namespace
+// before the runtime owner may create or clean up any member of it.
+type RuntimeResourceAuthorizer func(context.Context, RuntimeResourceNames) error
+
+// RuntimeResourceNamesFor returns every deterministic runtime object name for
+// runID from ward's single naming authority.
+func RuntimeResourceNamesFor(runID string) RuntimeResourceNames {
+	names := namesFor(runID)
+	return RuntimeResourceNames{
+		Containers: []string{
+			names.Seeder, names.Observer, names.InstructionSeeder, names.InstructionObserver,
+			names.ConfigRootSeeder, names.ConfigRootObserver, names.ContinuityObserver,
+			names.ScratchObserver, names.WriterObserver, names.CredObsPre, names.CredObsPost,
+			names.Agent, names.Exporter,
+		},
+		Volumes: []string{
+			names.Workspace, names.Instructions, names.ConfigRoot, names.Continuity,
+			names.SessionScratch,
+		},
+		Networks: []string{names.Network},
+	}
+}
+
+// PreJobRunIDForInvocation is the deterministic, bounded conformance run ID
+// used by the lightweight pre-job probe for one invocation.
+func PreJobRunIDForInvocation(invocationID domain.InvocationID) string {
+	digest := sha256.Sum256([]byte(invocationID))
+	return hex.EncodeToString(digest[:8])
+}
+
+// PreJobContainerNameForInvocation is the exact deterministic host container
+// the pre-job probe may create before an invocation starts.
+func PreJobContainerNameForInvocation(invocationID domain.InvocationID) string {
+	return conformanceObjectName(PreJobRunIDForInvocation(invocationID), "prejob")
 }
 
 // WorkspaceRef is the ward lane's opaque workspace reference for a run: the

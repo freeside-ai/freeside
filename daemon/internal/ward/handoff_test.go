@@ -54,7 +54,7 @@ func (fx *handoffFixture) backend(t *testing.T) *Backend {
 
 func (fx *handoffFixture) codexReviewLifecycle(t *testing.T) *CodexReviewLifecycle {
 	t.Helper()
-	lifecycle, err := NewCodexReviewLifecycle(fx.rt, fx.cfg)
+	lifecycle, err := NewCodexReviewLifecycle(fx.rt, fx.cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
