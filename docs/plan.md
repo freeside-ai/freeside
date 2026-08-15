@@ -1,9 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 31
+revision: 32
 status: active
-phase: 1A
-updated: 2026-08-11
+updated: 2026-08-15
 ---
 
 # Freeside
@@ -2744,9 +2743,32 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 Review bandwidth limits parallel width. Every wave ends with a fresh-context
 adversarial review by an agent given only the repository and its documents,
 never this design history. `AGENTS.md` defines the issue protocol; each
-wave's unit list lives in its pinned tracking issue, while this table
-records shape and sequencing. The 1A backlog also serves as elaborator
-fixtures.
+wave's unit list lives in its pinned tracking issue, while this table records
+shape and sequencing. The single source for resolving the current phase,
+current wave, and active implementation front is the single open pinned issue
+whose title matches `^Wave [0-9]+ \([^)]*\) tracking$`. Its title gives the
+wave and internal exit, this table's row gives the phase and shape, and its
+Implementation order digest gives the active front. Pinning alone is
+insufficient because other tracker types may also be pinned; a zero- or
+multiple-match state is a spine-repair error that must be escalated to the
+human, never guessed through.
+
+The digest remains a derived view of the authoritative Dependencies fields in
+the tracked unit issues. If they diverge, the unit issue wins and the tracker
+is repaired in the same operation; readers still use the tracker as the one
+entrypoint for live status rather than searching unit issues or stable files
+for a competing projection.
+
+Stable repository documents point to that resolution rule instead of
+asserting live phase or wave status. Any competing assertion is a coherence
+defect. Verify the invariant with the following sweep, whose only result must
+be the resolution rule above:
+
+```sh
+grep -rniE "current (phase|wave)([^'[:alnum:]_]|$)|wave [0-9]+[^.]*underway" README.md AGENTS.md docs/
+```
+
+The 1A backlog also serves as elaborator fixtures.
 
 ### Phase 2: breadth and hardening
 
@@ -2821,26 +2843,18 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 31 ("Finding adjudication before remediation"):
+Revision 32 ("Wave tracker authority"):
 
-1. **Every finding batch is adjudicated before remediation authority is
-   exercised** (Sections 1, 4, 5.6, 5.12, 5.13, 5.19, 7, 9, 11): an
-   immutable, digest-bound FindingAdjudication artifact records a
-   per-finding decision — goal relationship, work-unit compatibility,
-   and recommended route, with proposal vocabulary reserved for
-   model-residue entries — under validity constraints that leave
-   `required` no route to a deferred disposition. The engine derives compatibility
-   deterministically where mechanically decidable — in-surface remediation
-   is presumptively `allowed`, and `allowed` is engine-derived only — so an
-   unambiguous in-scope finding routes to the remediator with no model
-   call, while the deferral direction always takes adjudication; the model
-   residue is a second Section 5.13 ceiling-bounded annotation site,
-   separate from the classifier. A required finding incompatible with
-   the current work unit parks or replans the run, never defers into a
-   ready result. Revisit when wave 6 convergence measurement shows
-   credible, material, in-surface findings routinely reaching the model
-   residue: the deterministic dispatch predicate is then miscalibrated.
-   (User; devlog 2026-08-11-1504-review-finding-adjudication.md; #697.)
+1. **One open pinned wave tracker is authoritative for live implementation
+   status** (Section 11): stable repository documents carry the resolution
+   rule, not a duplicate status value. The matching tracker's title supplies
+   its wave and internal exit, the Section 11 table supplies its phase and
+   shape, and the tracker's Implementation order digest supplies its active
+   front. A zero- or multiple-match state fails to human repair rather than
+   inference. This keeps status forge-visible and maintained at the same wave
+   boundary that already replaces the tracker, without adding a local ledger
+   or deriving intent from git history.
+   (User; devlog 2026-08-15-1016-status-authority.md; #792.)
 
 ## 14. Risks
 

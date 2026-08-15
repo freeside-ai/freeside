@@ -988,7 +988,7 @@ Held from revision 29: everything.
 
 ---
 
-## Revision 31 (Current)
+## Revision 31
 
 Revision 31 inserts finding adjudication between review and remediation.
 Held from revision 30: everything.
