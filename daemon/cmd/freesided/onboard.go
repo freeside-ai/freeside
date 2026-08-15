@@ -32,90 +32,62 @@ func runOnboardMain(args []string) {
 	}
 }
 
+type onboardConfig struct {
+	Repository        string
+	DBPath            string
+	StateDir          string
+	RegistrationID    int64
+	RepositoryID      int64
+	Account           string
+	AccountID         int64
+	InstallationID    int64
+	Resume            bool
+	InstallWait       time.Duration
+	CredentialsDir    string
+	Commit            string
+	BaseRef           string
+	RecipePath        string
+	SourceDir         string
+	BaseImage         string
+	BaseBuildRef      string
+	ReviewConfig      string
+	CommitPlan        domain.CommitPlanMode
+	Approval          string
+	Registry          string
+	LocalRegistryPort int
+	ImageName         string
+	RefTag            string
+	GitPath           string
+	ContainerPath     string
+	TempDir           string
+	DNS               []string
+	BuildProxy        string
+}
+
+type stringList []string
+
+func (v *stringList) String() string { return fmt.Sprint([]string(*v)) }
+
+func (v *stringList) Set(value string) error {
+	if value == "" {
+		return errors.New("value must not be empty")
+	}
+	*v = append(*v, value)
+	return nil
+}
+
 func runOnboardCommand(
 	ctx context.Context, args []string, stdout, stderr io.Writer,
 ) (err error) {
-	if len(args) == 0 {
-		return errors.New("repository owner/name is required")
-	}
-	repository := args[0]
-	flags := flag.NewFlagSet("freesided onboard", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	dbPath := flags.String("db", "", "SQLite database path (required)")
-	stateDir := flags.String("state-dir", "", "GitHub App authority state directory (required)")
-	registrationID := flags.Int64("registration-id", 0, "selected numeric GitHub App ID (required)")
-	repositoryID := flags.Int64("repository-id", 0, "canonical numeric repository ID (required)")
-	account := flags.String("account", "", "canonical repository-owning account login")
-	accountID := flags.Int64("account-id", 0, "canonical numeric repository-owning account ID")
-	installationID := flags.Int64("installation-id", 0, "selected installation ID; zero before GitHub assigns one")
-	resume := flags.Bool("resume", false, "resume the existing bounded installation intent")
-	installWait := flags.Duration("install-wait", 10*time.Minute, "maximum wait for native installation approval")
-	credentialsDir := flags.String(
-		"credentials-dir", "",
-		"GitHub App credentials directory (defaults beside the state directory)")
-	commit := flags.String("commit", "", "exact full lowercase repository commit (required)")
-	baseRef := flags.String("base-ref", "", "branch whose live workflow authority is reviewed (required)")
-	recipePath := flags.String("recipe", "", "detected trusted verification recipe (required)")
-	sourceDir := flags.String(
-		"source", "",
-		"repository checkout used to detect .freeside/verify.json when -recipe is omitted")
-	baseImage := flags.String("base-image", "", "digest-pinned approved agent base (required)")
-	baseBuildRef := flags.String("base-build-ref", "", "local base tag matching -base-image (required)")
-	reviewConfig := flags.String("review-config-digest", "", "digest of the reviewed automated-review configuration (required)")
-	commitPlan := flags.String(
-		"commit-plan", string(domain.CommitPlanSingleCommit),
-		"commit-plan mode: single_commit or plan_preferred")
-	approval := flags.String("approve", "", "exact proposed review digest; omit for the one-time review")
-	registry := flags.String("registry", "", "registry host/path destination")
-	localRegistryPort := flags.Int("local-registry-port", 0, "managed loopback registry port")
-	imageName := flags.String("image-name", "", "project image name")
-	refTag := flags.String("ref-tag", "v1", "one-shot image tag prefix")
-	gitPath := flags.String("git", "", "git executable (default from PATH)")
-	containerPath := flags.String("container", "", "Apple container executable (default from PATH)")
-	tempDir := flags.String("temp-dir", "", "bindable scratch parent")
-	if err := flags.Parse(args[1:]); err != nil {
+	cfg, err := parseOnboardConfig(args, stderr)
+	if err != nil {
 		return err
 	}
-	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected positional arguments: %v", flags.Args())
-	}
-	for _, required := range []struct {
-		name  string
-		value string
-	}{
-		{"-db", *dbPath},
-		{"-state-dir", *stateDir},
-		{"-commit", *commit},
-		{"-base-ref", *baseRef},
-		{"-base-image", *baseImage},
-		{"-base-build-ref", *baseBuildRef},
-		{"-review-config-digest", *reviewConfig},
-	} {
-		if required.value == "" {
-			return fmt.Errorf("%s is required", required.name)
-		}
-	}
-	commitPlanMode := domain.CommitPlanMode(*commitPlan)
-	if !slices.Contains(domain.AllCommitPlanModes, commitPlanMode) {
-		return fmt.Errorf(
-			"-commit-plan %q is invalid; valid values: %v",
-			*commitPlan, domain.AllCommitPlanModes,
-		)
-	}
-	if *registrationID <= 0 || *repositoryID <= 0 {
-		return errors.New("-registration-id and -repository-id must be positive")
-	}
-	if *installWait <= 0 {
-		return errors.New("-install-wait must be positive")
-	}
 	var recipe []byte
-	if *recipePath == "" {
-		if *sourceDir == "" {
-			return errors.New("-recipe or -source is required")
-		}
-		recipe, err = detectRecipe(ctx, *gitPath, *sourceDir, *commit)
+	if cfg.RecipePath == "" {
+		recipe, err = detectRecipe(ctx, cfg.GitPath, cfg.SourceDir, cfg.Commit)
 	} else {
-		recipe, err = os.ReadFile(*recipePath)
+		recipe, err = os.ReadFile(cfg.RecipePath)
 	}
 	if err != nil {
 		return err
@@ -123,19 +95,19 @@ func runOnboardCommand(
 	if _, err := verify.ParseRecipe(recipe); err != nil {
 		return fmt.Errorf("detected recipe: %w", err)
 	}
-	st, err := store.Open(ctx, *dbPath, store.Options{})
+	st, err := store.Open(ctx, cfg.DBPath, store.Options{})
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, st.Close()) }()
-	authority, err := publish.NewInstallationAuthorityStore(*stateDir)
+	authority, err := publish.NewInstallationAuthorityStore(cfg.StateDir)
 	if err != nil {
 		return err
 	}
-	if *credentialsDir == "" {
-		*credentialsDir = filepath.Join(filepath.Dir(*stateDir), "credentials")
+	if cfg.CredentialsDir == "" {
+		cfg.CredentialsDir = filepath.Join(filepath.Dir(cfg.StateDir), "credentials")
 	}
-	keystore, err := publish.NewKeystore(*credentialsDir, *stateDir)
+	keystore, err := publish.NewKeystore(cfg.CredentialsDir, cfg.StateDir)
 	if err != nil {
 		return err
 	}
@@ -148,28 +120,28 @@ func runOnboardCommand(
 		registrationIDs = append(registrationIDs, app.AppID)
 	}
 	trusted, err := trustedInstallation(
-		ctx, authority, registrationIDs, *registrationID, *repositoryID,
+		ctx, authority, registrationIDs, cfg.RegistrationID, cfg.RepositoryID,
 	)
 	if err != nil {
 		return err
 	}
 	if trusted == nil {
-		if *account == "" || *accountID <= 0 || *installationID < 0 {
+		if cfg.Account == "" || cfg.AccountID <= 0 || cfg.InstallationID < 0 {
 			return errors.New(
 				"-account, positive -account-id, and non-negative -installation-id " +
 					"are required until the repository is trusted")
 		}
 		intent := operations.InstallationIntentRequest{
-			RegistrationID: *registrationID,
-			Account:        *account,
-			AccountID:      *accountID,
-			InstallationID: *installationID,
-			RepositoryID:   *repositoryID,
-			ExpiresAt:      time.Now().UTC().Add(*installWait),
+			RegistrationID: cfg.RegistrationID,
+			Account:        cfg.Account,
+			AccountID:      cfg.AccountID,
+			InstallationID: cfg.InstallationID,
+			RepositoryID:   cfg.RepositoryID,
+			ExpiresAt:      time.Now().UTC().Add(cfg.InstallWait),
 		}
-		if !*resume {
+		if !cfg.Resume {
 			installURL, err := installationURLForRegistration(
-				*credentialsDir, *stateDir, *registrationID,
+				cfg.CredentialsDir, cfg.StateDir, cfg.RegistrationID,
 			)
 			if err != nil {
 				return err
@@ -219,11 +191,11 @@ func runOnboardCommand(
 		gate := onboardingJanitorGate{janitor: janitor}
 		tokens := publish.NewOnboardingTokenSource(
 			minter, authority, gate,
-			*registrationID, *repositoryID, time.Now,
+			cfg.RegistrationID, cfg.RepositoryID, time.Now,
 		)
 		builder, builderErr := projectimage.New(projectimage.Options{
-			GitPath: *gitPath, ContainerPath: *containerPath,
-			TempDir: *tempDir, Log: stderr, Tokens: tokens,
+			GitPath: cfg.GitPath, ContainerPath: cfg.ContainerPath,
+			TempDir: cfg.TempDir, Log: stderr, Tokens: tokens,
 			Record: func(recordCtx context.Context, image domain.ProjectImage) error {
 				return st.WriteInternal(recordCtx, func(tx *store.InternalTx) error {
 					return tx.RecordProjectImage(recordCtx, image)
@@ -255,23 +227,24 @@ func runOnboardCommand(
 			Store: st, Builder: builder, Auditor: auditor, Authority: authority,
 			Documents: authority, Gate: gate, Now: time.Now,
 		}).Run(ctx, operations.OnboardRequest{
-			Repository: repository, RepositoryID: *repositoryID,
-			RegistrationID: *registrationID,
-			BaseRef:        *baseRef,
-			ApprovalDigest: domain.Digest(*approval),
+			Repository: cfg.Repository, RepositoryID: cfg.RepositoryID,
+			RegistrationID: cfg.RegistrationID,
+			BaseRef:        cfg.BaseRef,
+			ApprovalDigest: domain.Digest(cfg.Approval),
 			Policy: operations.OnboardPolicy{
 				PRExecution:    domain.PRExecutionAuditedSameRepo,
-				CommitPlan:     commitPlanMode,
+				CommitPlan:     cfg.CommitPlan,
 				MessageRuleset: domain.MessageRulesetGitHub1,
 				ReviewMode:     domain.ReviewFreesideInvoked,
-				ReviewConfig:   domain.Digest(*reviewConfig),
+				ReviewConfig:   domain.Digest(cfg.ReviewConfig),
 			},
 			Image: projectimage.Request{
-				Repository: repository, RepositoryID: *repositoryID,
-				CommitSHA: *commit, Recipe: recipe,
-				BaseImageRef: domain.ImageRef(*baseImage), BaseBuildRef: *baseBuildRef,
-				Registry: *registry, LocalRegistryPort: *localRegistryPort,
-				ImageName: *imageName, RefTag: *refTag,
+				Repository: cfg.Repository, RepositoryID: cfg.RepositoryID,
+				CommitSHA: cfg.Commit, Recipe: recipe,
+				BaseImageRef: domain.ImageRef(cfg.BaseImage), BaseBuildRef: cfg.BaseBuildRef,
+				Registry: cfg.Registry, LocalRegistryPort: cfg.LocalRegistryPort,
+				ImageName: cfg.ImageName, RefTag: cfg.RefTag,
+				DNS: cfg.DNS, BuildProxy: cfg.BuildProxy,
 			},
 		})
 		if runErr != nil {
@@ -284,18 +257,102 @@ func runOnboardCommand(
 	}
 	if trusted != nil {
 		return withInstallationJanitor(
-			ctx, st, authority, *credentialsDir, *stateDir, *installWait,
+			ctx, st, authority, cfg.CredentialsDir, cfg.StateDir, cfg.InstallWait,
 			func(janitor *publish.InstallationJanitor) (bool, error) {
 				return janitor.AllowsRepository(
-					*registrationID, trusted.InstallationID, *repositoryID,
+					cfg.RegistrationID, trusted.InstallationID, cfg.RepositoryID,
 				), nil
 			},
 			runOnboard,
 		)
 	}
 	return withDurableInstallationPoll(
-		ctx, st, authority, *credentialsDir, *stateDir, *registrationID, runOnboard,
+		ctx, st, authority, cfg.CredentialsDir, cfg.StateDir, cfg.RegistrationID, runOnboard,
 	)
+}
+
+func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) {
+	if len(args) == 0 {
+		return onboardConfig{}, errors.New("repository owner/name is required")
+	}
+	flags := flag.NewFlagSet("freesided onboard", flag.ContinueOnError)
+	flags.SetOutput(output)
+	cfg := onboardConfig{Repository: args[0]}
+	var commitPlan string
+	var dns stringList
+	flags.StringVar(&cfg.DBPath, "db", "", "SQLite database path (required)")
+	flags.StringVar(&cfg.StateDir, "state-dir", "", "GitHub App authority state directory (required)")
+	flags.Int64Var(&cfg.RegistrationID, "registration-id", 0, "selected numeric GitHub App ID (required)")
+	flags.Int64Var(&cfg.RepositoryID, "repository-id", 0, "canonical numeric repository ID (required)")
+	flags.StringVar(&cfg.Account, "account", "", "canonical repository-owning account login")
+	flags.Int64Var(&cfg.AccountID, "account-id", 0, "canonical numeric repository-owning account ID")
+	flags.Int64Var(&cfg.InstallationID, "installation-id", 0, "selected installation ID; zero before GitHub assigns one")
+	flags.BoolVar(&cfg.Resume, "resume", false, "resume the existing bounded installation intent")
+	flags.DurationVar(&cfg.InstallWait, "install-wait", 10*time.Minute, "maximum wait for native installation approval")
+	flags.StringVar(&cfg.CredentialsDir, "credentials-dir", "",
+		"GitHub App credentials directory (defaults beside the state directory)")
+	flags.StringVar(&cfg.Commit, "commit", "", "exact full lowercase repository commit (required)")
+	flags.StringVar(&cfg.BaseRef, "base-ref", "", "branch whose live workflow authority is reviewed (required)")
+	flags.StringVar(&cfg.RecipePath, "recipe", "", "detected trusted verification recipe (required)")
+	flags.StringVar(&cfg.SourceDir, "source", "",
+		"repository checkout used to detect .freeside/verify.json when -recipe is omitted")
+	flags.StringVar(&cfg.BaseImage, "base-image", "", "digest-pinned approved agent base (required)")
+	flags.StringVar(&cfg.BaseBuildRef, "base-build-ref", "", "local base tag matching -base-image (required)")
+	flags.StringVar(&cfg.ReviewConfig, "review-config-digest", "", "digest of the reviewed automated-review configuration (required)")
+	flags.StringVar(&commitPlan,
+		"commit-plan", string(domain.CommitPlanSingleCommit),
+		"commit-plan mode: single_commit or plan_preferred")
+	flags.StringVar(&cfg.Approval, "approve", "", "exact proposed review digest; omit for the one-time review")
+	flags.StringVar(&cfg.Registry, "registry", "", "registry host/path destination")
+	flags.IntVar(&cfg.LocalRegistryPort, "local-registry-port", 0, "managed loopback registry port")
+	flags.StringVar(&cfg.ImageName, "image-name", "", "project image name")
+	flags.StringVar(&cfg.RefTag, "ref-tag", "v1", "one-shot image tag prefix")
+	flags.StringVar(&cfg.GitPath, "git", "", "git executable (default from PATH)")
+	flags.StringVar(&cfg.ContainerPath, "container", "", "Apple container executable (default from PATH)")
+	flags.StringVar(&cfg.TempDir, "temp-dir", "", "bindable scratch parent")
+	flags.Var(&dns, "dns", "build DNS server; repeatable")
+	flags.StringVar(&cfg.BuildProxy, "build-proxy", "",
+		"optional build-only HTTP proxy URL without credentials")
+	if err := flags.Parse(args[1:]); err != nil {
+		return onboardConfig{}, err
+	}
+	if flags.NArg() != 0 {
+		return onboardConfig{}, fmt.Errorf("unexpected positional arguments: %v", flags.Args())
+	}
+	cfg.DNS = append([]string(nil), dns...)
+	for _, required := range []struct {
+		name  string
+		value string
+	}{
+		{"-db", cfg.DBPath},
+		{"-state-dir", cfg.StateDir},
+		{"-commit", cfg.Commit},
+		{"-base-ref", cfg.BaseRef},
+		{"-base-image", cfg.BaseImage},
+		{"-base-build-ref", cfg.BaseBuildRef},
+		{"-review-config-digest", cfg.ReviewConfig},
+	} {
+		if required.value == "" {
+			return onboardConfig{}, fmt.Errorf("%s is required", required.name)
+		}
+	}
+	cfg.CommitPlan = domain.CommitPlanMode(commitPlan)
+	if !slices.Contains(domain.AllCommitPlanModes, cfg.CommitPlan) {
+		return onboardConfig{}, fmt.Errorf(
+			"-commit-plan %q is invalid; valid values: %v",
+			commitPlan, domain.AllCommitPlanModes,
+		)
+	}
+	if cfg.RegistrationID <= 0 || cfg.RepositoryID <= 0 {
+		return onboardConfig{}, errors.New("-registration-id and -repository-id must be positive")
+	}
+	if cfg.InstallWait <= 0 {
+		return onboardConfig{}, errors.New("-install-wait must be positive")
+	}
+	if cfg.RecipePath == "" && cfg.SourceDir == "" {
+		return onboardConfig{}, errors.New("-recipe or -source is required")
+	}
+	return cfg, nil
 }
 
 // withDurableInstallationPoll resumes a pending install-or-expansion intent

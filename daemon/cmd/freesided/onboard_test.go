@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -13,6 +14,50 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+func TestParseOnboardConfigBuildEgress(t *testing.T) {
+	baseArgs := []string{
+		"example/repo",
+		"-db", "/tmp/freeside.db",
+		"-state-dir", "/tmp/freeside-state",
+		"-registration-id", "11",
+		"-repository-id", "44",
+		"-commit", "0123456789012345678901234567890123456789",
+		"-base-ref", "main",
+		"-base-image", "example.invalid/agent@sha256:test",
+		"-base-build-ref", "local/agent:test",
+		"-review-config-digest", "sha256:review",
+		"-recipe", "/tmp/verify.json",
+	}
+	t.Run("provided values preserve order", func(t *testing.T) {
+		cfg, err := parseOnboardConfig(append(baseArgs,
+			"-dns", "1.1.1.1",
+			"-build-proxy", "http://192.168.64.1:53536",
+			"-dns", "8.8.8.8",
+		), io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"1.1.1.1", "8.8.8.8"}; !slices.Equal(cfg.DNS, want) {
+			t.Fatalf("DNS = %v, want %v", cfg.DNS, want)
+		}
+		if want := "http://192.168.64.1:53536"; cfg.BuildProxy != want {
+			t.Fatalf("BuildProxy = %q, want %q", cfg.BuildProxy, want)
+		}
+	})
+	t.Run("absent values stay zero", func(t *testing.T) {
+		cfg, err := parseOnboardConfig(baseArgs, io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.DNS != nil {
+			t.Fatalf("DNS = %v, want nil", cfg.DNS)
+		}
+		if cfg.BuildProxy != "" {
+			t.Fatalf("BuildProxy = %q, want empty", cfg.BuildProxy)
+		}
+	})
+}
 
 func TestOnboardRejectsInvalidCommitPlanBeforeStoreWork(t *testing.T) {
 	recipePath := filepath.Join(t.TempDir(), "verify.json")
