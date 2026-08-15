@@ -42,6 +42,9 @@ func runDoctorCommand(
 	configurationDigest := flags.String(
 		"backend-configuration-digest", "",
 		"active backend configuration digest (required)")
+	reviewConfigurationDigest := flags.String(
+		"review-configuration-digest", "",
+		"effective review configuration digest (required in unattended mode)")
 	approvedRecipes := digestSetFlag{}
 	flags.Var(&approvedRecipes, "approved-recipe",
 		"approved verification-recipe digest (repeatable)")
@@ -60,6 +63,12 @@ func runDoctorCommand(
 	mode, err := parseOperatingMode(*operatingMode)
 	if err != nil {
 		return err
+	}
+	if *reviewConfigurationDigest != "" && !contentaddr.Valid(*reviewConfigurationDigest) {
+		return errors.New("-review-configuration-digest must be a canonical sha256 digest")
+	}
+	if mode == domain.ModeUnattended && *reviewConfigurationDigest == "" {
+		return errors.New("-review-configuration-digest is required in unattended mode")
 	}
 	blobs, err := signet.NewBlobStore(*dbPath + ".blobs")
 	if err != nil {
@@ -87,10 +96,11 @@ func runDoctorCommand(
 	attention := signet.NewService(st, signet.WithBlobStore(blobs))
 	report, err := (operations.Doctor{
 		Store: st, Attention: attention,
-		ProjectID:           domain.ProjectID(*projectID),
-		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
-		ConfigurationDigest: domain.Digest(*configurationDigest),
-		Mode:                mode,
+		ProjectID:                 domain.ProjectID(*projectID),
+		Backend:                   domain.BackendFreshVMReadOnlyVolumeHandoff,
+		ConfigurationDigest:       domain.Digest(*configurationDigest),
+		ReviewConfigurationDigest: domain.Digest(*reviewConfigurationDigest),
+		Mode:                      mode,
 	}).Run(ctx)
 	if err != nil {
 		return err

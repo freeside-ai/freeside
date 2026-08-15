@@ -744,6 +744,54 @@ func TestPublishExecutionRejectsForeignReviewInstructionsAtDecision(t *testing.T
 	}
 }
 
+func TestPublishExecutionReportsReviewConfigurationMismatchAtDecision(t *testing.T) {
+	t.Parallel()
+	head := testHeadSHA
+	s := newExecutionBoundStore(t, executionChainOptions{exportHead: &head})
+	seedDecisionRecords(t, s)
+	reservation := seedExecutionPublicationChain(
+		t, s, executionChainOptions{exportHead: &head},
+	)
+	gh := newFakeGitHub(t)
+	p := storeBackedPublisher(
+		t, s, gh, fixedWorkflowAuditor{audit: executionWorkflowAudit(t)},
+	)
+	candidate := testCandidate(t)
+	candidate.RunID = reservation.RunID
+	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+	drifted := domain.Digest("sha256:" + strings.Repeat("7", 64))
+	record, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-drifted-configuration", RunID: candidate.RunID, Round: 2,
+		Provider: "openai", ModelConfiguration: "codex/high",
+		ConfigurationDigest: drifted,
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		CostOwner:           "operator", BaseSHA: testBaseSHA, HeadSHA: candidate.HeadSHA,
+		CompletedAt:        fixtureTime.Add(time.Minute),
+		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("8", 64)),
+		Outcome:            domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.PutReviewRecord(t.Context(), record, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.PublishExecution(t.Context(), publish.ExecutionCandidate{
+		Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
+	}, testApprovedRecipes())
+	if !errors.Is(err, domain.ErrReviewConfigurationUnapproved) ||
+		!strings.Contains(err.Error(), string(testRecipe)) ||
+		!strings.Contains(err.Error(), string(drifted)) {
+		t.Fatalf("PublishExecution under drifted review configuration = %v", err)
+	}
+	assertDecisionRows(t, s, 1, 0)
+	if requests := gh.requestLog(); len(requests) != 0 {
+		t.Fatalf("drifted review configuration reached forge: %v", requests)
+	}
+}
+
 func TestPublishExecutionRecoversCommittedIntentAfterTargetAdvances(t *testing.T) {
 	t.Parallel()
 	head := testHeadSHA

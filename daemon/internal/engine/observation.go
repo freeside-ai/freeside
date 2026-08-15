@@ -140,7 +140,8 @@ func dispatchHoldReason(err error) (domain.RunHoldReason, bool) {
 		errors.Is(err, domain.ErrWaiverNotConfigured),
 		errors.Is(err, domain.ErrRepositoryIdentityMismatch),
 		errors.Is(err, domain.ErrPathBoundaryMismatch),
-		errors.Is(err, domain.ErrTrustProfileSuperseded):
+		errors.Is(err, domain.ErrTrustProfileSuperseded),
+		errors.Is(err, domain.ErrReviewConfigurationUnapproved):
 		return domain.HoldAdmissionPolicyRefused, true
 	}
 	return "", false

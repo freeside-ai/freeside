@@ -149,6 +149,117 @@ func TestTrustProfileRoundTrip(t *testing.T) {
 	}
 }
 
+func TestInspectLatestTrustProfilesReturnsOneCurrentProfilePerRepo(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	t0 := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	profileZ := trustProfileForRepo(t, "example/zeta", 2, "sha256:review-zeta")
+	profileAOld := trustProfileForRepo(t, "example/alpha", 1, "sha256:review-old")
+	profileANew := trustProfileForRepo(t, "example/alpha", 1, "sha256:review-new")
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.RecordTrustProfile(ctx, profileZ, t0); err != nil {
+			return err
+		}
+		if err := tx.RecordTrustProfile(ctx, profileAOld, t0); err != nil {
+			return err
+		}
+		return tx.RecordTrustProfile(ctx, profileANew, t0.Add(time.Minute))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		inspections, err := tx.InspectLatestTrustProfiles(ctx)
+		if err != nil {
+			return err
+		}
+		if len(inspections) != 2 ||
+			inspections[0].Repo != profileANew.Repo ||
+			inspections[0].Profile.ProfileDigest != profileANew.ProfileDigest ||
+			inspections[0].ReconstructionError != nil ||
+			inspections[1].Repo != profileZ.Repo ||
+			inspections[1].Profile.ProfileDigest != profileZ.ProfileDigest ||
+			inspections[1].ReconstructionError != nil {
+			t.Fatalf("latest profile inspections = %#v", inspections)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRequireReviewConfigurationApprovedChecksEveryCurrentProfile(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	effective := domain.Digest("sha256:review-effective")
+	t0 := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	profileA := trustProfileForRepo(t, "example/alpha", 1, effective)
+	profileB := trustProfileForRepo(t, "example/beta", 2, effective)
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.RecordTrustProfile(ctx, profileA, t0); err != nil {
+			return err
+		}
+		return tx.RecordTrustProfile(ctx, profileB, t0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		return tx.RequireReviewConfigurationApproved(ctx, effective)
+	}); err != nil {
+		t.Fatalf("matching current profiles: %v", err)
+	}
+
+	drifted := trustProfileForRepo(t, profileA.Repo, profileA.RepositoryID, "sha256:review-drifted")
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(ctx, drifted, t0.Add(time.Minute))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		return tx.RequireReviewConfigurationApproved(ctx, effective)
+	}); !errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
+		t.Fatalf("cross-repository drift = %v, want %v",
+			err, domain.ErrReviewConfigurationUnapproved)
+	}
+}
+
+func TestInspectLatestTrustProfilesPropagatesQueryFailure(t *testing.T) {
+	t.Parallel()
+	s := openStore(t, store.Options{})
+	err := s.Read(context.Background(), func(tx *store.ReadTx) error {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := tx.InspectLatestTrustProfiles(ctx)
+		return err
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("inspect latest profiles with canceled query = %v, want context.Canceled", err)
+	}
+}
+
+func trustProfileForRepo(
+	t *testing.T, repo string, repositoryID int64, reviewDigest domain.Digest,
+) domain.AutomationTrustProfile {
+	t.Helper()
+	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: repo, RepositoryID: repositoryID,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest:        "sha256:workflow-audit",
+		Review: domain.ReviewSettings{
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: reviewDigest,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return profile
+}
+
 // TestTrustProfileExactReactivation proves that current selection is an
 // owner-decision axis rather than profile insertion order: A -> B -> A is
 // representable without mutating immutable profile content, while replaying

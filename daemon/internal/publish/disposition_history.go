@@ -230,8 +230,15 @@ func loadDispositionHistoryFromTx(
 	if failureErr == nil && failure.Round >= review.Round {
 		return DispositionHistory{}, fmt.Errorf("latest review failure supersedes clean review: %w", domain.ErrParentKeyMismatch)
 	}
+	if review.ConfigurationDigest != profile.Review.ConfigDigest {
+		return DispositionHistory{}, fmt.Errorf(
+			"review record configuration is %s, profile pins %s: %w",
+			review.ConfigurationDigest, profile.Review.ConfigDigest,
+			domain.ErrReviewConfigurationUnapproved,
+		)
+	}
 	if expectedInstructionDigest == "" || review.InstructionDigest != expectedInstructionDigest ||
-		review.BaseSHA != auth.BaseSHA || review.ConfigurationDigest != profile.Review.ConfigDigest {
+		review.BaseSHA != auth.BaseSHA {
 		return DispositionHistory{}, fmt.Errorf("review authority disagrees with current publication decision: %w", domain.ErrParentKeyMismatch)
 	}
 	run, err := tx.GetRun(ctx, c.RunID)

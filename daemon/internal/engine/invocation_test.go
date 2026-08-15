@@ -104,6 +104,7 @@ func TestMutableAdmissionPolicyRefusalIsAHold(t *testing.T) {
 		publish.ErrJanitorInactive,
 		domain.ErrRepositoryIdentityMismatch,
 		domain.ErrTrustProfileSuperseded,
+		domain.ErrReviewConfigurationUnapproved,
 	} {
 		if !MutableAdmissionPolicyRefusal(fmt.Errorf("accept result: %w", err)) {
 			t.Errorf("%v was not classified as mutable policy drift", err)

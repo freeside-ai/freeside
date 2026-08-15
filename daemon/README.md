@@ -244,8 +244,12 @@ authenticated fetch, so the janitor's deliberate mid-pass withdrawal cannot
 terminate the daemon. Doctor applies the selected mode's full capability floor; unattended
 health therefore requires the networkless-export and enforced-provider-egress
 proofs in addition to the attended handoff floor. Pass `-operating-mode
-unattended` to a one-shot doctor for an unattended daemon; the default is
-`attended_dev`.
+unattended -review-configuration-digest <digest>` to a one-shot doctor for an
+unattended daemon. Use the `digest` field from that daemon's startup log record
+whose message is `effective reviewer configuration`; it is computed from the
+same effective review image, model, auth, instruction, and workspace inputs
+that unattended admission enforces. The default mode is `attended_dev`, where
+the review-configuration flag is not required.
 
 `freesided follow -db <path> -run <run-id>` follows one run's observed
 timeline: submission, admission or hold, invocation start, terminal

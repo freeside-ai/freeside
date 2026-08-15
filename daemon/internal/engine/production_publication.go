@@ -1463,6 +1463,9 @@ func (w *productionPublicationWorkflow) reconcileTask(
 				ctx, task, binding, checkpoint, reviewInstructions,
 			)
 			if err != nil {
+				if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
+					return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
+				}
 				if errors.Is(err, domain.ErrParentKeyMismatch) {
 					return w.holdBlockedTask(
 						ctx, task, checkpoint.Imported,
@@ -1477,6 +1480,9 @@ func (w *productionPublicationWorkflow) reconcileTask(
 				ctx, w.store, candidate, reviewInstructions.ResultDigest,
 			)
 			if err != nil {
+				if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
+					return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
+				}
 				if errors.Is(err, domain.ErrParentKeyMismatch) {
 					return w.holdBlockedTask(
 						ctx, task, checkpoint.Imported,
@@ -1589,6 +1595,9 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	// flatten the review/verification pair into an inferred ready bit.
 	_, persistReadiness, err := w.assertReviewedCandidate(ctx, task, binding, checkpoint, reviewInstructions)
 	if err != nil {
+		if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
+			return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
+		}
 		if errors.Is(err, domain.ErrParentKeyMismatch) {
 			return w.holdBlockedTask(
 				ctx, task, checkpoint.Imported,
@@ -1613,6 +1622,9 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		ctx, w.store, candidate, reviewInstructions.ResultDigest,
 	)
 	if err != nil {
+		if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
+			return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
+		}
 		return productionTaskOutcome{}, fmt.Errorf("load publication disposition history: %w", err)
 	}
 	candidate.DispositionHistory = &dispositionHistory
@@ -3195,11 +3207,23 @@ func (w *productionPublicationWorkflow) assertReviewedCandidate(
 	if err != nil {
 		return domain.ReadinessVerdict{}, nil, err
 	}
+	if !approved {
+		return domain.ReadinessVerdict{}, nil, reviewConfigurationUnapprovedError(
+			binding.profile.Review.ConfigDigest, w.reviewConfigurationDigest,
+		)
+	}
+	if record != nil && record.ConfigurationDigest != w.reviewConfigurationDigest {
+		return domain.ReadinessVerdict{}, nil, fmt.Errorf(
+			"clean review record configuration is %s: %w",
+			record.ConfigurationDigest,
+			reviewConfigurationUnapprovedError(
+				record.ConfigurationDigest, w.reviewConfigurationDigest,
+			),
+		)
+	}
 	if binding.profile.Review.Mode != domain.ReviewFreesideInvoked ||
-		!approved ||
 		record == nil ||
 		record.Outcome != domain.ReviewClean ||
-		record.ConfigurationDigest != w.reviewConfigurationDigest ||
 		record.InstructionDigest != reviewInstructions.ResultDigest ||
 		record.BaseSHA != binding.admission.Base.BaseSHA ||
 		record.HeadSHA != task.HeadSHA ||
@@ -3232,7 +3256,8 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		// Decision 2 promises operator-visible disposition, not a lane-fatal
 		// error. The re-gate stays fail-closed (never silent readiness); only
 		// its failure handling is task-scoped here. On a fail-closed mismatch
-		// (ErrParentKeyMismatch) this holds the one run with an operator-visible
+		// (ErrParentKeyMismatch or ErrReviewConfigurationUnapproved) this holds
+		// the one run with an operator-visible
 		// item, exactly as the sibling recipe-approval re-gate below does, so
 		// the reconcile lane keeps advancing every other queued publication and
 		// the run recovers if the reviewer configuration is restored (an
@@ -3241,6 +3266,9 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		// environmental and still propagates for retry. The already-published
 		// PR carries no binding on this held item, matching the recipe re-gate's
 		// pre-existing behavior across axes (tracked as a follow-up, not #527).
+		if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
+			return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
+		}
 		if errors.Is(err, domain.ErrParentKeyMismatch) {
 			return w.holdBlockedTask(
 				ctx, task, checkpoint.Imported,
@@ -3332,6 +3360,22 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 	return productionTaskOutcome{
 		completed: true, accepted: accepted, readiness: &verdict, prNumber: published.PRNumber,
 	}, nil
+}
+
+func (w *productionPublicationWorkflow) holdReviewConfigurationMismatch(
+	ctx context.Context,
+	task productionPublicationTask,
+	imported importer.Result,
+	err error,
+) (productionTaskOutcome, error) {
+	return w.holdBlockedTask(
+		ctx, task, imported,
+		fmt.Sprintf(
+			"Publication is durably held because the reviewer configuration lacks approval under the current trust-approved reviewer configuration: %v. Restore the approved reviewer configuration or disposition the run manually.",
+			err,
+		),
+		domain.HoldTrustBlocked,
+	)
 }
 
 func (w *productionPublicationWorkflow) hasCompatibleReadyItem(
