@@ -63,6 +63,26 @@ func (f corpusFixture) getItem(t *testing.T, id domain.ItemID) domain.AttentionI
 	return item
 }
 
+func (f corpusFixture) seedOpenRunProjectionHealthItem(t *testing.T, runID domain.RunID) {
+	t.Helper()
+	posture := domain.HealthPostureAdvisory
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: runProjectionHealthItemID(runID), ProjectID: "proj-1",
+		Subject: domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID,
+		},
+		Type: domain.AttentionSystemHealth, Priority: domain.PriorityHigh,
+		Reason:            "Run was excluded before terminal authority won over observation lag.",
+		RequestedDecision: []domain.Action{domain.ActionRunDoctor, domain.ActionAcknowledge},
+		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt: &f.at, Posture: &posture, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatalf("build run-projection health item: %v", err)
+	}
+	f.seedItem(t, item)
+}
+
 // TestRunProjectionHealthMintedOnExclusion is #770's core acceptance: a run
 // excluded for a projection integrity contradiction produces exactly one open
 // advisory AttentionSystemHealth item, bound to the run so it passes the same
@@ -71,10 +91,8 @@ func (f corpusFixture) getItem(t *testing.T, id domain.ItemID) domain.AttentionI
 func TestRunProjectionHealthMintedOnExclusion(t *testing.T) {
 	ctx := context.Background()
 	f := newCorpusFixture(t)
-	f.seedAuthIdentity(t)
 	damaged := domain.RunID("run-damaged")
-	invocation := domain.InvocationID("inv-damaged")
-	f.seedTerminalRun(t, damaged, invocation, domain.ObservedStatusCompleted, domain.ObservedStatusRunning)
+	f.seedObservationBindingFailureRun(t, damaged)
 
 	// The converge runs after the read builds its snapshot, so the item is
 	// minted post-read and surfaces on the next poll, not the read that dropped
@@ -133,9 +151,8 @@ func TestRunProjectionHealthMintedOnExclusion(t *testing.T) {
 func TestRunProjectionHealthIdempotent(t *testing.T) {
 	ctx := context.Background()
 	f := newCorpusFixture(t)
-	f.seedAuthIdentity(t)
 	damaged := domain.RunID("run-damaged")
-	f.seedTerminalRun(t, damaged, "inv-damaged", domain.ObservedStatusCompleted, domain.ObservedStatusRunning)
+	f.seedObservationBindingFailureRun(t, damaged)
 
 	for i := 0; i < 3; i++ {
 		if _, err := f.service.ListRuns(ctx); err != nil {
@@ -155,10 +172,10 @@ func TestRunProjectionHealthIdempotent(t *testing.T) {
 	}
 }
 
-// TestRunProjectionHealthResolvesOnRepair pins the resolve path and, by serving
-// the repaired run, proves the minted item's binding passes
-// authenticateRunObservation: were it mis-bound, the still-open item would
-// re-exclude the repaired run instead of letting it project and resolve.
+// TestRunProjectionHealthResolvesOnRepair pins issue #785's repair path: a
+// health item minted under the old status-equality rule resolves once terminal
+// authority wins over the legitimately lagging observation row. Serving the
+// run also proves the item's binding passes authenticateRunObservation.
 func TestRunProjectionHealthResolvesOnRepair(t *testing.T) {
 	ctx := context.Background()
 	f := newCorpusFixture(t)
@@ -166,20 +183,10 @@ func TestRunProjectionHealthResolvesOnRepair(t *testing.T) {
 	damaged := domain.RunID("run-damaged")
 	invocation := domain.InvocationID("inv-damaged")
 	f.seedTerminalRun(t, damaged, invocation, domain.ObservedStatusCompleted, domain.ObservedStatusRunning)
-
-	if _, err := f.service.ListRuns(ctx); err != nil {
-		t.Fatalf("ListRuns (mint) = %v", err)
-	}
+	f.seedOpenRunProjectionHealthItem(t, damaged)
 	if items := f.listSystemHealth(t); len(items) != 1 || items[0].Status != domain.StatusOpen {
-		t.Fatalf("after mint, items = %+v, want one open item", items)
+		t.Fatalf("seeded items = %+v, want one open item", items)
 	}
-
-	// Repair: re-observe the invocation consistent with its recorded terminal
-	// (last write wins), so the run projects cleanly again.
-	f.observe(t, domain.InvocationObservation{
-		InvocationID: invocation, RunID: damaged, Status: domain.ObservedStatusCompleted,
-		Live: false, ObservedAt: f.at.Add(3 * time.Hour),
-	})
 
 	runs, err := f.service.ListRuns(ctx)
 	if err != nil {
@@ -214,11 +221,11 @@ func TestRunProjectionHealthWriteFailureDoesNotFailRead(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	f := newCorpusFixture(t, signet.WithLogger(logger))
-	f.seedAuthIdentity(t)
 	healthy := domain.RunID("run-healthy")
 	damaged := domain.RunID("run-damaged")
+	f.seedAuthIdentity(t)
 	f.seedTerminalRun(t, healthy, "inv-healthy", domain.ObservedStatusCompleted, domain.ObservedStatusCompleted)
-	f.seedTerminalRun(t, damaged, "inv-damaged", domain.ObservedStatusCompleted, domain.ObservedStatusRunning)
+	f.seedObservationBindingFailureRun(t, damaged)
 
 	// Seed a resolved v2 item at the damaged run's deterministic id. The next
 	// mint attempt (v1, open) cannot advance past it and fails closed.

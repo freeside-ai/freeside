@@ -17,10 +17,9 @@ import (
 )
 
 // seedTerminalRun records a run with a real terminal authority (admission +
-// export + terminal_recorded milestone) and one invocation observation. A
-// healthy run observes the same terminal it recorded; a damaged run observes a
-// non-terminal status, reproducing #767's legacy running-vs-completed row that
-// authenticates structurally but contradicts its own terminal.
+// export + terminal_recorded milestone) and one invocation observation. The
+// observed status may lag the terminal authority; that is legitimate paced
+// observation staleness, and the served projection derives the terminal status.
 func (f corpusFixture) seedTerminalRun(
 	t *testing.T, runID domain.RunID, invocation domain.InvocationID,
 	terminal, observed domain.ObservedInvocationStatus,
@@ -43,18 +42,32 @@ func (f corpusFixture) seedTerminalRun(
 	})
 }
 
+// seedObservationBindingFailureRun records a structurally valid observation
+// for an invocation the run does not own. Unlike a status lag, this is a genuine
+// returned-object binding failure and must remain excluded by #767.
+func (f corpusFixture) seedObservationBindingFailureRun(t *testing.T, runID domain.RunID) {
+	t.Helper()
+	ctx := context.Background()
+	owned := domain.InvocationID("inv-owned-" + string(runID))
+	f.mustWrite(t, func(tx *store.WriteTx) error {
+		return tx.PutRun(ctx, corpusRun(runID, corpusAttempt(runID, owned)))
+	})
+	f.observe(t, domain.InvocationObservation{
+		InvocationID: domain.InvocationID("inv-stranger-" + string(runID)), RunID: runID,
+		Status: domain.ObservedStatusRunning, Live: false, ObservedAt: f.at,
+	})
+}
+
 // TestRunObservationIntegrityRaisesTypedSentinel pins that a run whose
-// observation row contradicts its recorded terminal fails the authenticated
+// observation row is not bound to one of its attempts fails the authenticated
 // projection with ErrRunObservationIntegrity, chained over the underlying
 // ErrParentKeyMismatch so both remain matchable (#767). The single-run reads
 // return this differentiated failure rather than a false-empty.
 func TestRunObservationIntegrityRaisesTypedSentinel(t *testing.T) {
 	ctx := context.Background()
 	f := newCorpusFixture(t)
-	f.seedAuthIdentity(t)
 	runID := domain.RunID("run-contradiction")
-	invocation := domain.InvocationID("inv-contradiction")
-	f.seedTerminalRun(t, runID, invocation, domain.ObservedStatusCompleted, domain.ObservedStatusRunning)
+	f.seedObservationBindingFailureRun(t, runID)
 
 	for _, tc := range []struct {
 		name string
@@ -74,7 +87,7 @@ func TestRunObservationIntegrityRaisesTypedSentinel(t *testing.T) {
 }
 
 // TestListingReadsIsolateDamagedRun is #767's core acceptance: one run whose
-// observation rows contradict its terminal is excluded from Bootstrap and
+// observation row names an invocation it does not own is excluded from Bootstrap and
 // ListRuns instead of failing them, the healthy sibling is still served, and
 // the contradiction is logged durably naming the excluded run.
 func TestListingReadsIsolateDamagedRun(t *testing.T) {
@@ -82,12 +95,11 @@ func TestListingReadsIsolateDamagedRun(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	f := newCorpusFixture(t, signet.WithLogger(logger))
-	f.seedAuthIdentity(t)
-
 	healthy := domain.RunID("run-healthy")
 	damaged := domain.RunID("run-damaged")
+	f.seedAuthIdentity(t)
 	f.seedTerminalRun(t, healthy, "inv-healthy", domain.ObservedStatusCompleted, domain.ObservedStatusCompleted)
-	f.seedTerminalRun(t, damaged, "inv-damaged", domain.ObservedStatusCompleted, domain.ObservedStatusRunning)
+	f.seedObservationBindingFailureRun(t, damaged)
 
 	assertOnlyHealthy := func(t *testing.T, ids []domain.RunID) {
 		t.Helper()
@@ -133,7 +145,7 @@ func TestHTTPBootstrapExcludesDamagedRunReturns200(t *testing.T) {
 	f := newCorpusFixture(t)
 	f.seedAuthIdentity(t)
 	f.seedTerminalRun(t, "run-healthy", "inv-healthy", domain.ObservedStatusCompleted, domain.ObservedStatusCompleted)
-	f.seedTerminalRun(t, "run-damaged", "inv-damaged", domain.ObservedStatusCompleted, domain.ObservedStatusRunning)
+	f.seedObservationBindingFailureRun(t, "run-damaged")
 
 	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
 	response := authenticatedRequest(t, handler, http.MethodGet, "/sync/bootstrap", nil)
