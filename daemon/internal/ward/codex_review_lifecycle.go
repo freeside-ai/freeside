@@ -961,9 +961,8 @@ func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 	}
 	// Wipe the daemon's own host credential stage BEFORE the lease gate, so a
 	// crash in the seeder window cannot strand the plaintext auth.json even when
-	// the lease reconstruction later fails closed on a leftover partial-attachment
-	// prep container (a pre-existing recovery limitation tracked separately; see
-	// the follow-up issue). This is the daemon's own host file, derived from the
+	// the later runtime-object recovery fails closed. This is the daemon's own
+	// host file, derived from the
 	// trusted b.cfg.ExportRoot plus the validated runID, not a runtime object, so
 	// it needs no lease, claim, or owner proof. Fail closed on error: return an
 	// operational (retryable) error BEFORE acquiring the lease or closing the
@@ -980,6 +979,29 @@ func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 		RunID: intent.RunID, WorkspaceVolume: namesFor(intent.RunID).Workspace,
 	}
 	owner := Label{Key: ownershipLabelKey, Value: intent.OwnershipToken}
+	claims, owners := codexReviewRecoveryEvidence(intent)
+	preparationContainers := codexReviewPreparationContainers(names)
+	// Preparation containers attach only one member of the leased set, so they
+	// cannot pass the atomic-transfer reconstruction below. Reap only the exact
+	// journaled names whose current runtime identity authenticates against the
+	// intent. A foreign or unprovable candidate stays in place for the unchanged
+	// lease gate to reject; the transferred review container is deliberately not
+	// part of this pre-gate subset.
+	cleanupErrs, listErr := b.reapCodexReviewRecoveryContainers(
+		ctx, preparationContainers, claims, owners, false,
+	)
+	if listErr != nil {
+		return codexReviewOperationalCheckf(
+			CheckControlPlaneIsolation, "list pre-lease Codex review preparation containers: %v", listErr)
+	}
+	if len(cleanupErrs) > 0 {
+		err := errors.Join(cleanupErrs...)
+		if allCodexReviewFailuresOperational(cleanupErrs) {
+			return codexReviewOperationalCheckf(
+				CheckTeardown, "Codex review pre-lease preparation recovery: %v", err)
+		}
+		return failf(CheckTeardown, "Codex review pre-lease preparation recovery: %v", err)
+	}
 	leaseVolumes := codexReviewLeaseVolumes(launch.WorkspaceVolume, intent.ShadowVolume, intent.SnapshotVolume)
 	lease, transfer, err := cfg.VolumeLifecycleLeaser.RecoverCodexReviewVolumeLease(
 		ctx, owner.Value, leaseVolumes,
@@ -1022,56 +1044,32 @@ func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 		}
 		_ = lease.ReleaseCodexReviewVolumeLease(context.WithoutCancel(ctx))
 	}()
-	claims := make(map[string]objectClaim, len(intent.Resources))
-	owners := make(map[string]Label, len(intent.Resources))
-	for _, resource := range intent.Resources {
-		claims[resource.Name] = objectClaim{attempted: true, owned: true, fingerprint: resource.Fingerprint}
-		token := resource.OwnershipToken
-		if token == "" {
-			token = intent.OwnershipToken
-		}
-		owners[resource.Name] = Label{Key: ownershipLabelKey, Value: token}
+	cleanupErrs, listErr = b.reapCodexReviewRecoveryContainers(
+		ctx, preparationContainers, claims, owners, true,
+	)
+	if listErr != nil {
+		return codexReviewOperationalCheckf(
+			CheckControlPlaneIsolation, "list Codex review recovery containers: %v", listErr)
 	}
-	var cleanupErrs []error
 	containers, listErr := b.rt.ListContainers(ctx)
 	if listErr != nil {
 		return codexReviewOperationalCheckf(
 			CheckControlPlaneIsolation, "list Codex review recovery containers: %v", listErr)
 	}
-	recoveryContainers := []string{names.workspaceObserver, names.shadowInitializer, names.shadowObserver}
-	if names.snapshotSeeder != "" {
-		recoveryContainers = append(recoveryContainers, names.snapshotSeeder)
-	}
-	if names.snapshotObserver != "" {
-		recoveryContainers = append(recoveryContainers, names.snapshotObserver)
-	}
-	recoveryContainers = append(recoveryContainers, names.reviewContainer)
-	for _, name := range recoveryContainers {
-		if !slices.ContainsFunc(containers, func(c ContainerSummary) bool { return c.ID == name }) {
-			continue
-		}
+	if slices.ContainsFunc(containers, func(c ContainerSummary) bool { return c.ID == names.reviewContainer }) {
+		name := names.reviewContainer
 		report, inspectErr := b.rt.Inspect(ctx, name)
 		if inspectErr != nil {
 			cleanupErrs = append(cleanupErrs, codexReviewOperationalf(
 				"inspect Codex review recovery container %q: %v", name, inspectErr))
-			if name == intent.ReviewContainer {
-				leaseReleasable = false
-			}
-			continue
-		}
-		if report.ID != name || classifyEvidence(
+			leaseReleasable = false
+		} else if report.ID != name || classifyEvidence(
 			claims[name], owners[name], report.CreationDate, report.Labels, report.LabelsObserved,
 		) != evidenceOurs {
 			cleanupErrs = append(cleanupErrs, fmt.Errorf("recovery container %q is foreign or unprovable", name))
-			if name == intent.ReviewContainer {
-				leaseReleasable = false
-			}
-			continue
-		}
-		if err := b.reapCodexReviewContainer(ctx, name, claims[name], owners[name]); err != nil {
-			if name == intent.ReviewContainer {
-				leaseReleasable = false
-			}
+			leaseReleasable = false
+		} else if err := b.reapCodexReviewContainer(ctx, name, claims[name], owners[name]); err != nil {
+			leaseReleasable = false
 			cleanupErrs = append(cleanupErrs, err)
 		}
 	}
@@ -1155,6 +1153,76 @@ func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 		}
 	}
 	return nil
+}
+
+func codexReviewRecoveryEvidence(
+	intent CodexReviewLaunchIntent,
+) (map[string]objectClaim, map[string]Label) {
+	claims := make(map[string]objectClaim, len(intent.Resources))
+	owners := make(map[string]Label, len(intent.Resources))
+	for _, resource := range intent.Resources {
+		claims[resource.Name] = objectClaim{attempted: true, owned: true, fingerprint: resource.Fingerprint}
+		// Ward-created resources journal the intent token explicitly. Observers
+		// journal their independently minted token before CreateContainer; an
+		// empty observer token therefore proves no legitimate observer could yet
+		// exist and must not inherit the intent owner during destructive recovery.
+		owners[resource.Name] = Label{Key: ownershipLabelKey, Value: resource.OwnershipToken}
+	}
+	return claims, owners
+}
+
+func codexReviewPreparationContainers(names codexReviewResourceNames) []string {
+	containers := []string{names.workspaceObserver, names.shadowInitializer, names.shadowObserver}
+	if names.snapshotSeeder != "" {
+		containers = append(containers, names.snapshotSeeder)
+	}
+	if names.snapshotObserver != "" {
+		containers = append(containers, names.snapshotObserver)
+	}
+	return containers
+}
+
+// reapCodexReviewRecoveryContainers reaps authenticated containers from one
+// caller-selected resource subset. Pre-lease recovery tolerates foreign or
+// unprovable candidates so the lease gate remains the fail-closed authority;
+// post-lease cleanup reports the same evidence as a teardown contradiction.
+func (b *CodexReviewLifecycle) reapCodexReviewRecoveryContainers(
+	ctx context.Context,
+	names []string,
+	claims map[string]objectClaim,
+	owners map[string]Label,
+	requireOwned bool,
+) ([]error, error) {
+	containers, err := b.rt.ListContainers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var cleanupErrs []error
+	for _, name := range names {
+		if !slices.ContainsFunc(containers, func(c ContainerSummary) bool { return c.ID == name }) {
+			continue
+		}
+		report, inspectErr := b.rt.Inspect(ctx, name)
+		if inspectErr != nil {
+			cleanupErrs = append(cleanupErrs, codexReviewOperationalf(
+				"inspect Codex review recovery container %q: %v", name, inspectErr))
+			continue
+		}
+		owner, ownerJournaled := owners[name]
+		if report.ID != name || !ownerJournaled || !codexReviewOwnershipLabelValid(owner) || classifyEvidence(
+			claims[name], owner, report.CreationDate, report.Labels, report.LabelsObserved,
+		) != evidenceOurs {
+			if requireOwned {
+				cleanupErrs = append(cleanupErrs, fmt.Errorf(
+					"recovery container %q is foreign or unprovable", name))
+			}
+			continue
+		}
+		if err := b.reapCodexReviewContainer(ctx, name, claims[name], owners[name]); err != nil {
+			cleanupErrs = append(cleanupErrs, err)
+		}
+	}
+	return cleanupErrs, nil
 }
 
 // CodexReviewRecovery converges only durable review topology left by a prior
