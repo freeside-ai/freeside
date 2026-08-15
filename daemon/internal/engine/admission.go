@@ -38,6 +38,10 @@ type AdmissionEnvironment struct {
 	// every stage this environment admits. It is configuration because the
 	// prompt package is control-plane authority, not invocation-owned input.
 	PromptPackageDigest domain.Digest
+	// ReviewConfigurationDigest is the effective Freeside-invoked reviewer
+	// configuration. Unattended admission re-gates the active profile against it
+	// before recording or starting an attempt.
+	ReviewConfigurationDigest domain.Digest
 	// VendorInstructions names the host file whose dereferenced regular-file
 	// bytes are snapshotted at admission. Missing is an explicit admitted
 	// absence; every other source failure refuses admission.
@@ -157,6 +161,9 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 				return fmt.Errorf("with admission: unattended backend configuration digest %q is not bound",
 					backendConfigurationDigest)
 			}
+			if env.ReviewConfigurationDigest == "" {
+				return errors.New("with admission: unattended review configuration digest is empty")
+			}
 		}
 		if !contentaddr.Valid(string(env.PromptPackageDigest)) {
 			return fmt.Errorf("with admission: prompt package digest %q is not canonical",
@@ -255,8 +262,10 @@ func (e *Engine) admitAttempt(
 	// recorded stale.
 	var profileDigest *domain.Digest
 	if env.OperatingMode == domain.ModeUnattended || env.BackupEncryptionWaiver != nil {
+		var profile domain.AutomationTrustProfile
 		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
-			profile, err := tx.LatestTrustProfile(ctx, env.Base.Repo)
+			var err error
+			profile, err = tx.LatestTrustProfile(ctx, env.Base.Repo)
 			if err != nil {
 				return err
 			}
@@ -266,6 +275,16 @@ func (e *Engine) admitAttempt(
 		}); err != nil {
 			return domain.ExecutionAdmission{}, false,
 				fmt.Errorf("admit invocation %q: trusted profile for %q: %w", invocationID, env.Base.Repo, err)
+		}
+		if env.OperatingMode == domain.ModeUnattended &&
+			profile.Review.ConfigDigest != env.ReviewConfigurationDigest {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q: review configuration for %q: %w",
+				invocationID, env.Base.Repo,
+				reviewConfigurationUnapprovedError(
+					profile.Review.ConfigDigest, env.ReviewConfigurationDigest,
+				),
+			)
 		}
 	}
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{

@@ -36,8 +36,64 @@ type Doctor struct {
 	ProjectID           domain.ProjectID
 	Backend             domain.RunnerBackendClass
 	ConfigurationDigest domain.Digest
-	Mode                domain.OperatingMode
-	Now                 func() time.Time
+	// ReviewConfigurationDigest is the effective Freeside-invoked reviewer
+	// configuration. It is required only in unattended mode, where activated
+	// trust profiles bind it.
+	ReviewConfigurationDigest domain.Digest
+	Mode                      domain.OperatingMode
+	Now                       func() time.Time
+}
+
+// ConvergeReviewConfiguration re-evaluates only the activated-profile
+// reviewer configuration finding. The unattended engine calls this narrow
+// pass before dispatch so a repaired profile clears its stale blocker without
+// waiting for the next full scheduled doctor run.
+func (d Doctor) ConvergeReviewConfiguration(ctx context.Context) error {
+	if d.Store == nil || d.Attention == nil || d.ProjectID == "" {
+		return fmt.Errorf("doctor review configuration: nil or invalid dependency")
+	}
+	switch d.Mode {
+	case domain.ModeAttendedDev, domain.ModeUnattended:
+	default:
+		return fmt.Errorf("doctor review configuration: invalid operating mode %q", d.Mode)
+	}
+	if d.Mode == domain.ModeUnattended && d.ReviewConfigurationDigest == "" {
+		return fmt.Errorf("doctor review configuration: empty unattended review configuration digest")
+	}
+	finding, err := d.reviewConfigurationFinding(ctx)
+	if err != nil {
+		return err
+	}
+	if err := d.converge(ctx, []DoctorFinding{finding}); err != nil {
+		return fmt.Errorf("doctor review configuration: %w", err)
+	}
+	if finding.Healthy {
+		if err := d.resolveReviewConfigurationItemsAcrossProjects(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d Doctor) resolveReviewConfigurationItemsAcrossProjects(ctx context.Context) error {
+	snapshots, err := d.Attention.ListAttentionItems(ctx)
+	if err != nil {
+		return fmt.Errorf("doctor review configuration: list cross-project items: %w", err)
+	}
+	prefix := doctorItemPrefix + "review_configuration-"
+	for _, snapshot := range snapshots {
+		item := snapshot.Item
+		if item.Type != domain.AttentionSystemHealth || item.Status != domain.StatusOpen ||
+			!strings.HasPrefix(string(item.ID), prefix) {
+			continue
+		}
+		item.ItemVersion++
+		item.Status = domain.StatusResolved
+		if err := d.Attention.PutItem(ctx, item); err != nil {
+			return fmt.Errorf("doctor review configuration: clear cross-project item %s: %w", item.ID, err)
+		}
+	}
+	return nil
 }
 
 // Run checks conformance/workspace handoff and every backup-health dimension.
@@ -51,6 +107,9 @@ func (d Doctor) Run(ctx context.Context) (DoctorReport, error) {
 	case domain.ModeAttendedDev, domain.ModeUnattended:
 	default:
 		return DoctorReport{}, fmt.Errorf("doctor: invalid operating mode %q", d.Mode)
+	}
+	if d.Mode == domain.ModeUnattended && d.ReviewConfigurationDigest == "" {
+		return DoctorReport{}, fmt.Errorf("doctor: empty unattended review configuration digest")
 	}
 	var (
 		conformance domain.BackendConformance
@@ -96,6 +155,11 @@ func (d Doctor) Run(ctx context.Context) (DoctorReport, error) {
 			),
 		},
 	}
+	reviewConfiguration, err := d.reviewConfigurationFinding(ctx)
+	if err != nil {
+		return DoctorReport{}, err
+	}
+	findings = append(findings, reviewConfiguration)
 	backup, err := d.Store.BackupHealth(ctx)
 	if err != nil {
 		return DoctorReport{}, fmt.Errorf("doctor: backup health: %w", err)
@@ -119,6 +183,57 @@ func (d Doctor) Run(ctx context.Context) (DoctorReport, error) {
 		}
 	}
 	return report, nil
+}
+
+func (d Doctor) reviewConfigurationFinding(ctx context.Context) (DoctorFinding, error) {
+	const code = "review_configuration"
+	if d.Mode == domain.ModeAttendedDev {
+		return DoctorFinding{
+			Code: code, Healthy: true,
+			Detail: "not applicable in attended_dev mode",
+		}, nil
+	}
+	var inspections []store.CurrentTrustProfileInspection
+	var mismatches []string
+	if err := d.Store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		inspections, err = tx.InspectLatestTrustProfiles(ctx)
+		if err != nil {
+			return err
+		}
+		for _, inspection := range inspections {
+			if inspection.ReconstructionError != nil {
+				mismatches = append(mismatches, fmt.Sprintf(
+					"%s current activated profile is unreadable: %v",
+					inspection.Repo, inspection.ReconstructionError,
+				))
+				continue
+			}
+			profile := inspection.Profile
+			if profile.Review.ConfigDigest == d.ReviewConfigurationDigest {
+				continue
+			}
+			mismatches = append(mismatches, fmt.Sprintf(
+				"%s pins %s; daemon effective is %s",
+				profile.Repo, profile.Review.ConfigDigest, d.ReviewConfigurationDigest,
+			))
+		}
+		return nil
+	}); err != nil {
+		return DoctorFinding{}, fmt.Errorf("doctor: read trust profile activations: %w", err)
+	}
+	if len(mismatches) != 0 {
+		return DoctorFinding{
+			Code: code, Healthy: false, Detail: strings.Join(mismatches, "; "),
+		}, nil
+	}
+	return DoctorFinding{
+		Code: code, Healthy: true,
+		Detail: fmt.Sprintf(
+			"daemon effective configuration %s satisfies %d activated trust profiles",
+			d.ReviewConfigurationDigest, len(inspections),
+		),
+	}, nil
 }
 
 func workspaceHandoffDetail(

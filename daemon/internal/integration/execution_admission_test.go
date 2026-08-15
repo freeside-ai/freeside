@@ -13,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -688,12 +689,131 @@ func TestEncryptedAdmissionDoesNotSurfaceRetiredWaiverPosture(t *testing.T) {
 	}
 }
 
+func TestReviewConfigurationMismatchRefusesAdmissionBeforeStarting(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := openUnattendedFixture(t)
+	profile := unattendedTrustProfile(t)
+	effective := domain.Digest("sha256:review-config-effective")
+	env := admissionEnvironment()
+	env.OperatingMode = domain.ModeUnattended
+	env.ReviewConfigurationDigest = effective
+	env.Base.Repo, env.Base.RepositoryID = profile.Repo, profile.RepositoryID
+	backend := fake.RunnerBackend{
+		BackendName: string(domain.BackendFreshVMReadOnlyVolumeHandoff),
+		Caps:        exec.NewCapabilitySet(conformantCeiling(t)...),
+	}
+	doctor := operations.Doctor{
+		Store: f.store, Attention: f.signet, ProjectID: "project-system",
+		ReviewConfigurationDigest: effective, Mode: domain.ModeUnattended,
+		Now: func() time.Time { return admittedAt },
+	}
+	injectForeignDrift := false
+	foreignDrifted := unattendedTrustProfileFor(
+		t, "freeside-ai/other-repo", 424243, "sha256:review-config-foreign",
+	)
+	refreshHealth := func(refreshCtx context.Context) error {
+		if err := doctor.ConvergeReviewConfiguration(refreshCtx); err != nil {
+			return err
+		}
+		if !injectForeignDrift {
+			return nil
+		}
+		injectForeignDrift = false
+		return f.store.WriteInternal(refreshCtx, func(tx *store.InternalTx) error {
+			return tx.RecordTrustProfile(refreshCtx, foreignDrifted, admittedAt.Add(2*time.Minute))
+		})
+	}
+	if err := doctor.ConvergeReviewConfiguration(ctx); err != nil {
+		t.Fatalf("seed review configuration blocker: %v", err)
+	}
+	workflow, err := engine.New(f.store, f.signet, f.driver,
+		engine.WithAdmission(
+			backend, []exec.Capability{exec.CapPostExitExport}, env,
+			func() time.Time { return admittedAt },
+		),
+		engine.WithUnattendedHealthRefresh(refreshHealth),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.engine = workflow
+	invocationID, held, err := dispatchOneInvocation(t, f)
+	if err != nil {
+		t.Fatalf("review configuration refusal = %v, want quiet hold", err)
+	}
+	if held.InvocationsStarted != 0 {
+		t.Fatalf("review configuration refusal started %d invocations", held.InvocationsStarted)
+	}
+	assertNoAttemptRecorded(t, f, invocationID)
+	if _, started := f.driver.StartSpec(invocationID); started {
+		t.Fatal("review configuration refusal reached the driver")
+	}
+
+	recovered, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: profile.Repo, RepositoryID: profile.RepositoryID,
+		PRExecution:                profile.PRExecution,
+		CandidateAutomationChanges: profile.CandidateAutomationChanges,
+		PRGitHubTokenPermissions:   profile.PRGitHubTokenPermissions,
+		CommitPlan:                 profile.CommitPlan,
+		MessageRuleset:             profile.MessageRuleset,
+		WorkflowAuditDigest:        profile.WorkflowAuditDigest,
+		Review: domain.ReviewSettings{
+			Mode: profile.Review.Mode, ConfigDigest: effective,
+		},
+		ProtectedPaths: profile.ProtectedPaths,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(ctx, recovered, admittedAt.Add(time.Minute))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	injectForeignDrift = true
+	heldAcrossRepo, err := f.engine.Reconcile(ctx)
+	if err != nil {
+		t.Fatalf("cross-repository activation race: %v", err)
+	}
+	if heldAcrossRepo.InvocationsStarted != 0 {
+		t.Fatalf("cross-repository activation race started %d invocations",
+			heldAcrossRepo.InvocationsStarted)
+	}
+	assertNoAttemptRecorded(t, f, invocationID)
+
+	foreignRecovered := unattendedTrustProfileFor(
+		t, foreignDrifted.Repo, foreignDrifted.RepositoryID, effective,
+	)
+	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(ctx, foreignRecovered, admittedAt.Add(3*time.Minute))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := f.engine.Reconcile(ctx)
+	if err != nil {
+		t.Fatalf("reconcile after matching profile activation: %v", err)
+	}
+	if resumed.InvocationsStarted != 1 {
+		t.Fatalf("matching profile activation started %d invocations, want 1", resumed.InvocationsStarted)
+	}
+}
+
 // unattendedTrustProfile is the approved profile an unattended admission is
 // anchored to.
 func unattendedTrustProfile(t *testing.T) domain.AutomationTrustProfile {
 	t.Helper()
+	return unattendedTrustProfileFor(
+		t, "freeside-ai/candidate-repo", 424242, "sha256:review-config",
+	)
+}
+
+func unattendedTrustProfileFor(
+	t *testing.T, repo string, repositoryID int64, reviewDigest domain.Digest,
+) domain.AutomationTrustProfile {
+	t.Helper()
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
-		Repo: "freeside-ai/candidate-repo", RepositoryID: 424242,
+		Repo: repo, RepositoryID: repositoryID,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
@@ -701,7 +821,7 @@ func unattendedTrustProfile(t *testing.T) domain.AutomationTrustProfile {
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: reviewDigest,
 		},
 	})
 	if err != nil {

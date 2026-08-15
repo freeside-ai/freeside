@@ -938,6 +938,18 @@ func TestLatestTrustProfileSurvivesStaleHistory(t *testing.T) {
 	}
 
 	// Before re-approval the stale row is the newest: still fail closed.
+	var inspections []CurrentTrustProfileInspection
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		inspections, err = tx.InspectLatestTrustProfiles(ctx)
+		return err
+	}); err != nil {
+		t.Fatalf("inspect stale current profile: %v", err)
+	}
+	if len(inspections) != 1 || inspections[0].Repo != "freeside-ai/candidate-repo" ||
+		!errors.Is(inspections[0].ReconstructionError, domain.ErrNonPositive) {
+		t.Fatalf("stale current profile inspection = %#v", inspections)
+	}
 	err = s.Read(ctx, func(tx *ReadTx) error {
 		_, err := tx.LatestTrustProfile(ctx, "freeside-ai/candidate-repo")
 		return err
@@ -979,6 +991,41 @@ func TestLatestTrustProfileSurvivesStaleHistory(t *testing.T) {
 	}
 	if current.ProfileDigest != reapproved.ProfileDigest {
 		t.Fatalf("latest profile digest = %q, want re-approved %q", current.ProfileDigest, reapproved.ProfileDigest)
+	}
+	inspections = nil
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		inspections, err = tx.InspectLatestTrustProfiles(ctx)
+		return err
+	}); err != nil {
+		t.Fatalf("inspect current profiles after re-approval: %v", err)
+	}
+	if len(inspections) != 1 || inspections[0].ReconstructionError != nil ||
+		inspections[0].Profile.ProfileDigest != reapproved.ProfileDigest {
+		t.Fatalf("current profile inspection after re-approval = %#v", inspections)
+	}
+	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable foreign keys for orphan simulation: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`DELETE FROM trust_profiles WHERE profile_digest = ?`, reapproved.ProfileDigest,
+	); err != nil {
+		t.Fatalf("orphan current activation: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("restore foreign keys after orphan simulation: %v", err)
+	}
+	inspections = nil
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		inspections, err = tx.InspectLatestTrustProfiles(ctx)
+		return err
+	}); err != nil {
+		t.Fatalf("inspect orphaned current activation: %v", err)
+	}
+	if len(inspections) != 1 || inspections[0].Repo != reapproved.Repo ||
+		!errors.Is(inspections[0].ReconstructionError, errRowInconsistent) {
+		t.Fatalf("orphaned current activation inspection = %#v", inspections)
 	}
 
 	// The validating full-history read still fails closed on the stale row.

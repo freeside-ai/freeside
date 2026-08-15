@@ -1424,11 +1424,12 @@ func composeClaudeDriver(
 
 	identity := cfg.AuthIdentityID
 	env := engine.AdmissionEnvironment{
-		OperatingMode:       cfg.OperatingMode,
-		CredentialMode:      domain.CredentialSubscriptionContained,
-		EgressProfile:       domain.EgressProviderOnly,
-		ImageRef:            cfg.AgentImage,
-		PromptPackageDigest: promptPackage,
+		OperatingMode:             cfg.OperatingMode,
+		CredentialMode:            domain.CredentialSubscriptionContained,
+		EgressProfile:             domain.EgressProviderOnly,
+		ImageRef:                  cfg.AgentImage,
+		PromptPackageDigest:       promptPackage,
+		ReviewConfigurationDigest: reviewConfigurationDigest,
 		VendorInstructions: engine.VendorInstructionConfig{
 			Vendor:   domain.AgentVendorClaude,
 			Delivery: domain.VendorInstructionDeliveryAppendFile,

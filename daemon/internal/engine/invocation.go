@@ -51,6 +51,11 @@ func (e *Engine) reconcileInvocations(ctx context.Context) (int, int, error) {
 // its store contract and become dispatched without making the result
 // undiscoverable after a daemon restart.
 func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
+	if e.refreshUnattendedHealth != nil {
+		if err := e.refreshUnattendedHealth(ctx); err != nil {
+			return 0, fmt.Errorf("refresh unattended health before dispatch: %w", err)
+		}
+	}
 	var (
 		pending            []store.QueueEntry
 		pendingProduction  []store.QueueEntry
@@ -408,7 +413,8 @@ func MutableAdmissionPolicyRefusal(err error) bool {
 		errors.Is(err, publish.ErrJanitorInactive) ||
 		errors.Is(err, domain.ErrRepositoryIdentityMismatch) ||
 		errors.Is(err, domain.ErrPathBoundaryMismatch) ||
-		errors.Is(err, domain.ErrTrustProfileSuperseded)
+		errors.Is(err, domain.ErrTrustProfileSuperseded) ||
+		errors.Is(err, domain.ErrReviewConfigurationUnapproved)
 }
 
 func backendConformanceRefusal(err error) bool {
@@ -951,6 +957,9 @@ func (e *Engine) recordAttempt(
 						if err := tx.RequireUnattendedAdmissible(ctx, stored); err != nil {
 							return fmt.Errorf("replayed invocation %q: %w", invocationID, err)
 						}
+						if err := e.requireReviewConfigurationApproved(ctx, tx, stored); err != nil {
+							return fmt.Errorf("replayed invocation %q: %w", invocationID, err)
+						}
 						if err := tx.RequireIdentityExecutionCapacity(ctx, stored); err != nil {
 							return fmt.Errorf("replayed invocation %q: %w", invocationID, err)
 						}
@@ -980,6 +989,11 @@ func (e *Engine) recordAttempt(
 		}
 		if stageIndex < 0 {
 			return fmt.Errorf("run %q has no stage %q", runID, stageID)
+		}
+		if fresh != nil {
+			if err := e.requireReviewConfigurationApproved(ctx, tx, *fresh); err != nil {
+				return err
+			}
 		}
 		stage := run.Stages[stageIndex]
 		stage.Attempts = append(stage.Attempts, domain.Attempt{
@@ -1023,6 +1037,26 @@ func (e *Engine) recordAttempt(
 			fmt.Errorf("record invocation %q on run %q: %w", invocationID, runID, err)
 	}
 	return added, effective, bound, nil
+}
+
+func (e *Engine) requireReviewConfigurationApproved(
+	ctx context.Context, tx *store.WriteTx, admission domain.ExecutionAdmission,
+) error {
+	if admission.OperatingMode != domain.ModeUnattended {
+		return nil
+	}
+	if e.admission == nil ||
+		e.admission.environment.OperatingMode != domain.ModeUnattended {
+		// A replay under an unconfigured or attended engine remains governed
+		// by its immutable admission record. Such an engine has no live
+		// reviewer configuration to compare; the production unattended
+		// composition always configures one, which is where this mutable
+		// cross-repository gate applies.
+		return nil
+	}
+	return tx.RequireReviewConfigurationApproved(
+		ctx, e.admission.environment.ReviewConfigurationDigest,
+	)
 }
 
 func findFeedbackStage(run domain.Run) (domain.Stage, bool) {

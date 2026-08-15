@@ -62,6 +62,11 @@ type Engine struct {
 	// derive supplies the per-attempt workspace and base when configured
 	// (see WithAdmissionDerivation); nil keeps the static environment.
 	derive AdmissionDerivation
+	// refreshUnattendedHealth re-evaluates activation-dependent health before
+	// the per-pass operating-state gate. The admitting transaction remains the
+	// race-free authority; this refresh keeps a repaired blocker from waiting
+	// for the scheduled doctor cadence.
+	refreshUnattendedHealth func(context.Context) error
 	// pace bounds the per-pass observation writes (issue #394); process
 	// state only, never authority.
 	pace observationPace
@@ -106,6 +111,19 @@ func WithInference(client *inference.Client) Option {
 			return errors.New("engine inference: nil client")
 		}
 		e.inference = client
+		return nil
+	}
+}
+
+// WithUnattendedHealthRefresh installs the daemon-composed health refresh that
+// runs before invocation dispatch. It is configured only for unattended
+// operation, with the daemon's effective runtime authority.
+func WithUnattendedHealthRefresh(refresh func(context.Context) error) Option {
+	return func(e *Engine) error {
+		if refresh == nil {
+			return errors.New("engine unattended health refresh: nil function")
+		}
+		e.refreshUnattendedHealth = refresh
 		return nil
 	}
 }

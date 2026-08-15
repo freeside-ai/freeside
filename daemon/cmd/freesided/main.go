@@ -597,8 +597,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 	}
 	var (
-		workflow     *engine.Engine
-		claudeWiring *claudeComposition
+		workflow              *engine.Engine
+		claudeWiring          *claudeComposition
+		doctorConvergenceLock sync.Mutex
 	)
 	attention := signet.NewService(st,
 		signet.WithPairingKey(pairingKey),
@@ -718,6 +719,21 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				return ward.NewProjectImageRoom(claudeWiring.containerBin, image)
 			},
 		}))
+		if cfg.Claude.OperatingMode == domain.ModeUnattended {
+			engineOptions = append(engineOptions, engine.WithUnattendedHealthRefresh(
+				func(refreshCtx context.Context) error {
+					doctorConvergenceLock.Lock()
+					defer doctorConvergenceLock.Unlock()
+					return (operations.Doctor{
+						Store: st, Attention: attention,
+						ProjectID:                 domain.ProjectID("project-system"),
+						ReviewConfigurationDigest: claudeWiring.reviewConfigurationDigest,
+						Mode:                      domain.ModeUnattended,
+						Now:                       cfg.now,
+					}).ConvergeReviewConfiguration(refreshCtx)
+				},
+			))
+		}
 		if cfg.Logger != nil {
 			engineOptions = append(engineOptions, engine.WithLogger(cfg.Logger))
 		}
@@ -737,13 +753,16 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if cfg.Claude == nil {
 			return nil
 		}
+		doctorConvergenceLock.Lock()
+		defer doctorConvergenceLock.Unlock()
 		_, err := (operations.Doctor{
 			Store: st, Attention: attention,
-			ProjectID:           domain.ProjectID("project-system"),
-			Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
-			ConfigurationDigest: claudeWiring.backend.ConfigurationDigest(),
-			Mode:                cfg.Claude.OperatingMode,
-			Now:                 cfg.now,
+			ProjectID:                 domain.ProjectID("project-system"),
+			Backend:                   domain.BackendFreshVMReadOnlyVolumeHandoff,
+			ConfigurationDigest:       claudeWiring.backend.ConfigurationDigest(),
+			ReviewConfigurationDigest: claudeWiring.reviewConfigurationDigest,
+			Mode:                      cfg.Claude.OperatingMode,
+			Now:                       cfg.now,
 		}).Run(runCtx)
 		return err
 	}

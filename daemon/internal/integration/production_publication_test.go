@@ -583,7 +583,8 @@ func (p *productionPublicationHarness) newEngineForMode(
 		OperatingMode:  mode,
 		CredentialMode: domain.CredentialSubscriptionContained,
 		EgressProfile:  domain.EgressProviderOnly, ImageRef: p.image.ImageRef,
-		PromptPackageDigest: productionDigest([]byte("prompt package")),
+		PromptPackageDigest:       productionDigest([]byte("prompt package")),
+		ReviewConfigurationDigest: p.reviewConfigurationDigest,
 		VendorInstructions: engine.VendorInstructionConfig{
 			Vendor:   domain.AgentVendorClaude,
 			Delivery: domain.VendorInstructionDeliveryAppendFile,
@@ -1594,7 +1595,10 @@ func TestProductionPublishedReviewConfigMustStayProfileApproved(t *testing.T) {
 		p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
 	)
 	if err != nil ||
-		!strings.Contains(blocked.Item.Reason, "trust-approved reviewer configuration") {
+		!strings.Contains(blocked.Item.Reason, "trust-approved reviewer configuration") ||
+		!strings.Contains(blocked.Item.Reason, string(fake.DefaultReviewConfigurationDigest)) ||
+		!strings.Contains(blocked.Item.Reason, string(drifted)) ||
+		!strings.Contains(blocked.Item.Reason, domain.ErrReviewConfigurationUnapproved.Error()) {
 		t.Fatalf("profile-unapproved hold item = %#v, %v", blocked, err)
 	}
 }
@@ -4705,9 +4709,13 @@ func parkOnSupersededReviewConfiguration(
 	t *testing.T, p *productionPublicationHarness, effective domain.Digest,
 ) signet.AttentionItemSnapshot {
 	t.Helper()
+	// Model a run admitted by the previously approved daemon configuration.
+	// The effective reviewer configuration changes only after the execution is
+	// durable, so this helper continues to exercise the recovery path for work
+	// that predates the admission-time preflight.
+	p.startAndRecordExport(t)
 	p.reviewConfigurationDigest = effective
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	p.startAndRecordExport(t)
 	if result, err := p.reconcileLanes(); err != nil ||
 		result.PublicationTasksCompleted != 0 || result.BlockedItemsCreated != 0 {
 		t.Fatalf("park on superseded configuration = %#v, %v", result, err)
@@ -5099,9 +5107,11 @@ func TestProductionReviewConfigurationAdoptionRejectsIneffectiveTarget(t *testin
 func TestProductionReviewLegacyDisputeItemStillTerminalizes(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
+	// This is explicitly a pre-preflight upgrade seam: admit the work under the
+	// approved configuration, then restart under the drifted configuration.
+	p.startAndRecordExport(t)
 	p.reviewConfigurationDigest = domain.Digest("sha256:" + strings.Repeat("d", 64))
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	p.startAndRecordExport(t)
 	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("record configuration failure: %v", err)
 	}
