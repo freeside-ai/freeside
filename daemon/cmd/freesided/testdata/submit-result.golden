@@ -1,0 +1,18 @@
+{
+  "run_id": "run-implementation",
+  "elaboration_run_id": "run-elaboration",
+  "project_id": "project-golden",
+  "invocation_id": "inv-implement",
+  "stage_id": "implement-run-implementation",
+  "implementation_run_id": "run-implementation",
+  "implementation_invocation_id": "inv-implement",
+  "implementation_stage_id": "implement-run-implementation",
+  "elaboration_invocation_id": "inv-elaborate",
+  "elaboration_stage_id": "elaborate-run-elaboration",
+  "source_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "elaboration_policy_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "source_artifact_id": "source-artifact",
+  "elaboration_policy_artifact_id": "elaboration-policy-artifact",
+  "publication_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "work_unit_id": "work-unit-implementation"
+}

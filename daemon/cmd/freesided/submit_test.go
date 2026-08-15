@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -91,6 +94,50 @@ func submissionPolicyBody(paths, digestHex string) string {
 		`,{"key":"research.max_response_bytes","value":"1024"` + provenance + `]`
 }
 
+func TestSubmitUsageDocumentsResultLanes(t *testing.T) {
+	t.Parallel()
+	flags := flag.NewFlagSet("freesided submit", flag.ContinueOnError)
+	var output bytes.Buffer
+	flags.SetOutput(&output)
+	configureSubmitUsage(flags)
+	flags.Usage()
+
+	for _, phrase := range []string{
+		"source submission: source_digest, source_artifact_id, publication_digest",
+		"elaboration_policy_digest, elaboration_policy_artifact_id",
+		"reserved implementation: implementation_run_id, implementation_invocation_id",
+		"run_id, invocation_id, stage_id, and work_unit_id are",
+		"No deprecated\ndigest or artifact aliases are emitted",
+		"legacy production-only replay leaves\nthe elaboration fields empty",
+		"spec_digest field returned by GET /runs/{implementation_run_id}",
+	} {
+		if !strings.Contains(output.String(), phrase) {
+			t.Errorf("submit help missing %q:\n%s", phrase, output.String())
+		}
+	}
+}
+
+func TestSubmitResultGolden(t *testing.T) {
+	t.Parallel()
+	result := submitResult{
+		RunID: "run-implementation", ElaborationRunID: "run-elaboration", ProjectID: "project-golden",
+		InvocationID: "inv-implement", StageID: "implement-run-implementation",
+		ImplementationRunID: "run-implementation", ImplementationInvocationID: "inv-implement",
+		ImplementationStageID:   "implement-run-implementation",
+		ElaborationInvocationID: "inv-elaborate", ElaborationStageID: "elaborate-run-elaboration",
+		SourceDigest:            "sha256:" + domain.Digest(strings.Repeat("a", 64)),
+		ElaborationPolicyDigest: "sha256:" + domain.Digest(strings.Repeat("b", 64)),
+		SourceArtifactID:        "source-artifact", ElaborationPolicyArtifactID: "elaboration-policy-artifact",
+		PublicationDigest: "sha256:" + domain.Digest(strings.Repeat("c", 64)),
+		WorkUnitID:        "work-unit-implementation",
+	}
+	body, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden.Assert(t, "submit-result", append(body, '\n'))
+}
+
 func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -125,8 +172,10 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		first.ElaborationStageID == first.ImplementationStageID {
 		t.Fatalf("submission identities = %+v, want distinct elaboration and implementation runs", first)
 	}
-	if first.SpecDigest == "" || first.PolicyDigest == "" || first.SpecDigest == first.PolicyDigest {
-		t.Fatalf("digests = %q/%q, want distinct content digests", first.SpecDigest, first.PolicyDigest)
+	if first.SourceDigest == "" || first.ElaborationPolicyDigest == "" ||
+		first.SourceDigest == first.ElaborationPolicyDigest {
+		t.Fatalf("digests = %q/%q, want distinct content digests",
+			first.SourceDigest, first.ElaborationPolicyDigest)
 	}
 	if first.PublicationDigest == "" {
 		t.Fatal("publication metadata has no durable digest binding")
@@ -147,7 +196,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		t.Fatalf("same specification in another project: %v", err)
 	}
 	if otherProjectResult.RunID == first.RunID ||
-		otherProjectResult.SpecDigest != first.SpecDigest {
+		otherProjectResult.SourceDigest != first.SourceDigest {
 		t.Fatalf("other-project result = %#v, want same spec under a distinct run", otherProjectResult)
 	}
 
@@ -162,7 +211,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		t.Fatalf("same specification under another policy: %v", err)
 	}
 	if otherPolicyResult.RunID == first.RunID ||
-		otherPolicyResult.PolicyDigest == first.PolicyDigest {
+		otherPolicyResult.ElaborationPolicyDigest == first.ElaborationPolicyDigest {
 		t.Fatalf("other-policy result = %#v, want distinct policy and run", otherPolicyResult)
 	}
 
@@ -200,9 +249,9 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if run.SpecDigest != first.SpecDigest || run.PolicyDigest != first.PolicyDigest {
+		if run.SpecDigest != first.SourceDigest || run.PolicyDigest != first.ElaborationPolicyDigest {
 			t.Errorf("run digests = %q/%q, want %q/%q",
-				run.SpecDigest, run.PolicyDigest, first.SpecDigest, first.PolicyDigest)
+				run.SpecDigest, run.PolicyDigest, first.SourceDigest, first.ElaborationPolicyDigest)
 		}
 		observation, err := tx.ObserveRun(ctx, first.ElaborationRunID)
 		if err != nil {
@@ -218,14 +267,14 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if resolved.Digest != first.PolicyDigest || len(resolved.Keys) != 7 {
+		if resolved.Digest != first.ElaborationPolicyDigest || len(resolved.Keys) != 7 {
 			t.Errorf("resolved policy = %#v, want the run-bound submitted policy", resolved)
 		}
-		artifact, err := tx.GetArtifact(ctx, first.SpecArtifactID)
+		artifact, err := tx.GetArtifact(ctx, first.SourceArtifactID)
 		if err != nil {
 			return err
 		}
-		if artifact.Digest != first.SpecDigest || artifact.PublishEligible {
+		if artifact.Digest != first.SourceDigest || artifact.PublishEligible {
 			t.Errorf("spec artifact = %#v, want submitted digest, never publish-eligible", artifact)
 		}
 		entry, err := tx.GetOutbox(ctx, string(first.ElaborationInvocationID))
@@ -261,7 +310,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	}
 	authoritySubmission, err := engine.SubmitProductionRun(ctx, st, engine.ProductionRunSpec{
 		RunID: authorityRunID, ProjectID: first.ProjectID,
-		SpecArtifactID: first.SpecArtifactID, PolicyArtifactID: first.PolicyArtifactID,
+		SpecArtifactID: first.SourceArtifactID, PolicyArtifactID: first.ElaborationPolicyArtifactID,
 		ResolvedPolicy: authorityPolicy,
 		Publication: engine.ProductionPublication{
 			Title: "Test the work item", Body: "## Why\n\nCloses #123.\n",
@@ -278,8 +327,8 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	}
 	otherAuthoritySubmission, err := engine.SubmitProductionRun(ctx, st, engine.ProductionRunSpec{
 		RunID: otherAuthorityRunID, ProjectID: otherPublicationResult.ProjectID,
-		SpecArtifactID:   otherPublicationResult.SpecArtifactID,
-		PolicyArtifactID: otherPublicationResult.PolicyArtifactID,
+		SpecArtifactID:   otherPublicationResult.SourceArtifactID,
+		PolicyArtifactID: otherPublicationResult.ElaborationPolicyArtifactID,
 		ResolvedPolicy:   otherAuthorityPolicy,
 		Publication: engine.ProductionPublication{
 			Title: "Describe another outcome", Body: "## Why\n\nCloses #456.\n",
@@ -527,7 +576,9 @@ func TestSubmitCommandReplaysMatchingPreElaborationProductionRun(t *testing.T) {
 	}
 	if replay.RunID != runID || replay.ImplementationRunID != runID ||
 		replay.ElaborationRunID != "" || replay.ElaborationInvocationID != "" ||
-		replay.ElaborationStageID != "" {
+		replay.ElaborationStageID != "" || replay.SourceDigest != specArtifact.Digest ||
+		replay.SourceArtifactID != specArtifact.ID ||
+		replay.ElaborationPolicyDigest != "" || replay.ElaborationPolicyArtifactID != "" {
 		t.Fatalf("legacy replay result = %+v", replay)
 	}
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
@@ -606,8 +657,9 @@ func TestStoreAdmissionAuthorityDerivesFallbackCommitMessage(t *testing.T) {
 	}
 	production, err := engine.SubmitProductionRun(ctx, st, engine.ProductionRunSpec{
 		RunID: productionRunID, ProjectID: submitted.ProjectID,
-		SpecArtifactID: submitted.SpecArtifactID, PolicyArtifactID: submitted.PolicyArtifactID,
-		ResolvedPolicy: productionPolicy,
+		SpecArtifactID:   submitted.SourceArtifactID,
+		PolicyArtifactID: submitted.ElaborationPolicyArtifactID,
+		ResolvedPolicy:   productionPolicy,
 		Publication: engine.ProductionPublication{
 			Title: "Test the work item", Body: "## Why\n\nCloses #123.\n",
 			CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
@@ -618,7 +670,7 @@ func TestStoreAdmissionAuthorityDerivesFallbackCommitMessage(t *testing.T) {
 	}
 	authority := storeAdmissionAuthority{store: st, blobs: blobs}
 	admission := domain.ExecutionAdmission{
-		RunID: production.Run.ID, SpecDigest: submitted.SpecDigest,
+		RunID: production.Run.ID, SpecDigest: submitted.SourceDigest,
 	}
 	got, err := authority.fallbackCommitMessage(ctx, admission, importer.Policy{})
 	if err != nil {

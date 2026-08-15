@@ -36,12 +36,44 @@ import (
 // mistaken path than a real work item.
 const maxSubmissionFileBytes = 4 << 20
 
+const submitResultHelp = `
+Result JSON fields by lane:
+  source submission: source_digest, source_artifact_id, publication_digest
+  elaboration: elaboration_run_id, elaboration_invocation_id, elaboration_stage_id,
+    elaboration_policy_digest, elaboration_policy_artifact_id
+  reserved implementation: implementation_run_id, implementation_invocation_id,
+    implementation_stage_id
+  shared: project_id
+
+The legacy fields run_id, invocation_id, stage_id, and work_unit_id are
+compatibility aliases bound to the reserved implementation run. The former
+spec_digest and spec_artifact_id fields are source_digest and
+source_artifact_id; policy_digest and policy_artifact_id are
+elaboration_policy_digest and elaboration_policy_artifact_id. No deprecated
+digest or artifact aliases are emitted. A legacy production-only replay leaves
+the elaboration fields empty because its source is already the implementation
+specification.
+
+The approved implementation specification digest is available before start on
+the specification-approval AttentionItem claim, and after the run exists from
+the spec_digest field returned by GET /runs/{implementation_run_id}.
+`
+
+func configureSubmitUsage(flags *flag.FlagSet) {
+	flags.Usage = func() {
+		_, _ = fmt.Fprintf(flags.Output(), "Usage of %s:\n", flags.Name())
+		flags.PrintDefaults()
+		_, _ = fmt.Fprint(flags.Output(), submitResultHelp)
+	}
+}
+
 // runSubmitMain parses the submit verb's flags and runs the command,
 // printing one JSON result line on success. Exit contract: 0 converged,
 // 1 refused, 2 flag misuse.
 func runSubmitMain(args []string) {
 	flags := flag.NewFlagSet("freesided submit", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
+	configureSubmitUsage(flags)
 	dbPath := flags.String("db", "", "SQLite database path (required)")
 	specPath := flags.String("spec", "", "source work-item specification file (required)")
 	policyPath := flags.String("policy", "", "resolved per-run policy-key JSON array (required)")
@@ -91,22 +123,22 @@ type submittedWorkUnit struct {
 }
 
 type submitResult struct {
-	RunID                      domain.RunID        `json:"run_id"`
-	ElaborationRunID           domain.RunID        `json:"elaboration_run_id"`
-	ProjectID                  domain.ProjectID    `json:"project_id"`
-	InvocationID               domain.InvocationID `json:"invocation_id"`
-	StageID                    domain.StageID      `json:"stage_id"`
-	ImplementationRunID        domain.RunID        `json:"implementation_run_id"`
-	ImplementationInvocationID domain.InvocationID `json:"implementation_invocation_id"`
-	ImplementationStageID      domain.StageID      `json:"implementation_stage_id"`
-	ElaborationInvocationID    domain.InvocationID `json:"elaboration_invocation_id"`
-	ElaborationStageID         domain.StageID      `json:"elaboration_stage_id"`
-	SpecDigest                 domain.Digest       `json:"spec_digest"`
-	PolicyDigest               domain.Digest       `json:"policy_digest"`
-	SpecArtifactID             domain.ArtifactID   `json:"spec_artifact_id"`
-	PolicyArtifactID           domain.ArtifactID   `json:"policy_artifact_id"`
-	PublicationDigest          domain.Digest       `json:"publication_digest"`
-	WorkUnitID                 domain.WorkUnitID   `json:"work_unit_id,omitempty"`
+	RunID                       domain.RunID        `json:"run_id"`
+	ElaborationRunID            domain.RunID        `json:"elaboration_run_id"`
+	ProjectID                   domain.ProjectID    `json:"project_id"`
+	InvocationID                domain.InvocationID `json:"invocation_id"`
+	StageID                     domain.StageID      `json:"stage_id"`
+	ImplementationRunID         domain.RunID        `json:"implementation_run_id"`
+	ImplementationInvocationID  domain.InvocationID `json:"implementation_invocation_id"`
+	ImplementationStageID       domain.StageID      `json:"implementation_stage_id"`
+	ElaborationInvocationID     domain.InvocationID `json:"elaboration_invocation_id"`
+	ElaborationStageID          domain.StageID      `json:"elaboration_stage_id"`
+	SourceDigest                domain.Digest       `json:"source_digest"`
+	ElaborationPolicyDigest     domain.Digest       `json:"elaboration_policy_digest"`
+	SourceArtifactID            domain.ArtifactID   `json:"source_artifact_id"`
+	ElaborationPolicyArtifactID domain.ArtifactID   `json:"elaboration_policy_artifact_id"`
+	PublicationDigest           domain.Digest       `json:"publication_digest"`
+	WorkUnitID                  domain.WorkUnitID   `json:"work_unit_id,omitempty"`
 }
 
 type submissionFile struct {
@@ -355,18 +387,20 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	result := submitResult{
 		RunID: submitted.ImplementationRunID, ElaborationRunID: submitted.Run.ID,
 		ProjectID: submitted.Run.ProjectID,
-		// Keep the original fields as implementation aliases for existing
-		// harness consumers while exposing both lanes without ambiguity.
-		InvocationID:               submitted.ImplementationInvocationID,
-		StageID:                    submitted.ImplementationStageID,
-		ImplementationRunID:        submitted.ImplementationRunID,
-		ImplementationInvocationID: submitted.ImplementationInvocationID,
-		ImplementationStageID:      submitted.ImplementationStageID,
-		ElaborationInvocationID:    submitted.ElaborationInvocationID,
-		ElaborationStageID:         submitted.ElaborationStageID,
-		SpecDigest:                 spec.digest, PolicyDigest: submitted.Run.PolicyDigest,
-		SpecArtifactID: specArtifact.ID, PolicyArtifactID: policyArtifact.ID,
-		PublicationDigest: publicationFile.digest,
+		// Keep the original fields as implementation aliases for compatibility
+		// while exposing both lanes without ambiguity.
+		InvocationID:                submitted.ImplementationInvocationID,
+		StageID:                     submitted.ImplementationStageID,
+		ImplementationRunID:         submitted.ImplementationRunID,
+		ImplementationInvocationID:  submitted.ImplementationInvocationID,
+		ImplementationStageID:       submitted.ImplementationStageID,
+		ElaborationInvocationID:     submitted.ElaborationInvocationID,
+		ElaborationStageID:          submitted.ElaborationStageID,
+		SourceDigest:                spec.digest,
+		ElaborationPolicyDigest:     submitted.Run.PolicyDigest,
+		SourceArtifactID:            specArtifact.ID,
+		ElaborationPolicyArtifactID: policyArtifact.ID,
+		PublicationDigest:           publicationFile.digest,
 	}
 	if workUnit != nil {
 		result.WorkUnitID = domain.WorkUnitIDForRun(submitted.ImplementationRunID)
@@ -472,9 +506,9 @@ func legacyProductionReplay(
 		InvocationID: invocationID, StageID: stageID,
 		ImplementationRunID: runID, ImplementationInvocationID: invocationID,
 		ImplementationStageID: stageID,
-		SpecDigest:            specArtifact.Digest, PolicyDigest: policyArtifact.Digest,
-		SpecArtifactID: specArtifact.ID, PolicyArtifactID: policyArtifact.ID,
-		PublicationDigest: publicationDigest,
+		SourceDigest:          specArtifact.Digest,
+		SourceArtifactID:      specArtifact.ID,
+		PublicationDigest:     publicationDigest,
 	}
 	if declarationFound {
 		result.WorkUnitID = domain.WorkUnitIDForRun(runID)

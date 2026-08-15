@@ -29,10 +29,35 @@ func (submitElaborationBackend) Capabilities() exec.CapabilitySet {
 }
 
 func TestSubmitCommandElaboratesBeforeCreatingProductionRun(t *testing.T) {
+	tests := []struct {
+		name           string
+		acceptedBody   string
+		wantSameDigest bool
+	}{
+		{
+			name:           "byte-identical specification",
+			acceptedBody:   "# Work item\n\nImplement the thing.",
+			wantSameDigest: true,
+		},
+		{
+			name:           "revised specification",
+			acceptedBody:   "# Work item\n\nImplement the improved thing.",
+			wantSameDigest: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			testSubmitCommandElaborationDigest(t, tc.acceptedBody, tc.wantSameDigest)
+		})
+	}
+}
+
+func testSubmitCommandElaborationDigest(t *testing.T, acceptedBody string, wantSameDigest bool) {
+	t.Helper()
 	root := t.TempDir()
 	specPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
-	byteIdenticalSpec := "# Work item\n\nImplement the thing."
-	if err := os.WriteFile(specPath, []byte(byteIdenticalSpec), 0o600); err != nil {
+	sourceBody := "# Work item\n\nImplement the thing."
+	if err := os.WriteFile(specPath, []byte(sourceBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := submitCommandConfig{
@@ -89,7 +114,7 @@ func TestSubmitCommandElaboratesBeforeCreatingProductionRun(t *testing.T) {
 	if err := elaboratefake.Script(driver, submitted.ElaborationInvocationID, 0, 0, elaborate.Output{
 		Specification: &elaborate.Specification{
 			Summary:    "Ready for implementation.",
-			Body:       byteIdenticalSpec,
+			Body:       acceptedBody,
 			Addressals: []elaborate.Addressal{},
 		},
 	}); err != nil {
@@ -155,12 +180,13 @@ func TestSubmitCommandElaboratesBeforeCreatingProductionRun(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	var implementationRun domain.Run
 	for range 5 {
 		if _, err := workflow.Reconcile(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 		err = st.Read(t.Context(), func(tx *store.ReadTx) error {
-			_, err = tx.GetRun(t.Context(), submitted.RunID)
+			implementationRun, err = tx.GetRun(t.Context(), submitted.RunID)
 			return err
 		})
 		if err == nil {
@@ -172,6 +198,14 @@ func TestSubmitCommandElaboratesBeforeCreatingProductionRun(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatalf("approved implementation run was not created: %v", err)
+	}
+	if gotSame := implementationRun.SpecDigest == submitted.SourceDigest; gotSame != wantSameDigest {
+		t.Fatalf("implementation/source digest equality = %t, want %t (%q / %q)",
+			gotSame, wantSameDigest, implementationRun.SpecDigest, submitted.SourceDigest)
+	}
+	if len(item.AgentClaims) != 1 || item.AgentClaims[0].Digest != implementationRun.SpecDigest {
+		t.Fatalf("approval claim = %+v, want approved implementation digest %q",
+			item.AgentClaims, implementationRun.SpecDigest)
 	}
 	if replay, err := workflow.Reconcile(t.Context()); err != nil || replay.RunTransitions != 0 {
 		t.Fatalf("approval replay = %+v, %v", replay, err)
