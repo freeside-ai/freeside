@@ -4,10 +4,12 @@
 package elaborate
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -58,15 +60,60 @@ type Output struct {
 }
 
 // DecodeOutput strictly reconstructs and validates one typed stage payload.
+// One tolerated presentation defect: a single Markdown code fence around the
+// whole object (issue #780). Fence-wrapping is the model class's dominant
+// output-shape failure despite the prompt forbidding it, and each occurrence
+// otherwise costs a full elaboration execution; anything beyond that exact
+// shape (prose, truncation, a second fence) still fails strict decode, with a
+// bounded prefix of the raw output preserved for diagnosis.
 func DecodeOutput(data []byte) (Output, error) {
 	var out Output
-	if err := strictjson.Decode(data, &out, strictjson.RejectInvalidUTF8, MaxOutputBytes); err != nil {
-		return Output{}, fmt.Errorf("decode elaborator output: %w", err)
+	if err := strictjson.Decode(stripMarkdownFence(data), &out,
+		strictjson.RejectInvalidUTF8, MaxOutputBytes); err != nil {
+		return Output{}, fmt.Errorf("decode elaborator output: %w (output begins %q)",
+			err, outputPrefix(data))
 	}
 	if err := out.Validate(); err != nil {
 		return Output{}, err
 	}
 	return out, nil
+}
+
+// fenceTagPattern admits the optional language tag on an opening fence line
+// ("```json"): a bare alphanumeric token, nothing else, so an opening line
+// carrying real content is never treated as presentation.
+var fenceTagPattern = regexp.MustCompile(`^[A-Za-z0-9_-]*$`)
+
+// stripMarkdownFence removes exactly one whole-payload fence pair and nothing
+// else: the trimmed payload's first line must be a fence with at most a bare
+// language tag, its last line exactly a closing fence. Any other shape
+// returns the input unchanged for strict decode to reject.
+func stripMarkdownFence(data []byte) []byte {
+	trimmed := bytes.TrimSpace(data)
+	if !bytes.HasPrefix(trimmed, []byte("```")) || !bytes.HasSuffix(trimmed, []byte("```")) {
+		return data
+	}
+	firstBreak := bytes.IndexByte(trimmed, '\n')
+	if firstBreak < 0 {
+		return data
+	}
+	openTag := bytes.TrimSpace(trimmed[len("```"):firstBreak])
+	body := trimmed[firstBreak+1 : len(trimmed)-len("```")]
+	lastBreak := bytes.LastIndexByte(body, '\n')
+	if !fenceTagPattern.Match(openTag) || lastBreak < 0 ||
+		len(bytes.TrimSpace(body[lastBreak:])) != 0 {
+		return data
+	}
+	return body[:lastBreak]
+}
+
+// outputPrefix bounds the diagnostic snippet a decode failure carries.
+func outputPrefix(data []byte) string {
+	const max = 80
+	if len(data) > max {
+		return string(data[:max]) + "…"
+	}
+	return string(data)
 }
 
 // EncodeOutput emits the canonical bytes the real path and fake authenticate.
