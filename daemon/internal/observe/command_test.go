@@ -3,7 +3,9 @@ package observe
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 )
 
 const (
@@ -34,7 +37,7 @@ func followAt(seconds int) time.Time {
 func openFollowStore(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "freeside.db")
-	st, err := store.Open(context.Background(), path, store.Options{})
+	st, _, err := topicstore.Open(context.Background(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -106,6 +109,25 @@ func runFollowCLI(t *testing.T, args ...string) (string, error) {
 		t.Logf("stderr: %s", stderr.String())
 	}
 	return stdout.String(), err
+}
+
+func TestFollowCommandCreatesAStoreThroughTheTopicKeyBoundary(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	_, err := runFollowCLI(t, "-db", dbPath, "-run", string(followRun), "-once")
+	if !errors.Is(err, ErrNoObservedTimeline) {
+		t.Fatalf("follow error = %v, want ErrNoObservedTimeline", err)
+	}
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("stat follow-created store: %v", err)
+	}
+	info, err := os.Stat(dbPath + topicstore.KeySuffix)
+	if err != nil {
+		t.Fatalf("stat follow-created topic key: %v", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() != sha256.Size {
+		t.Fatalf("follow-created topic key mode/size = %v/%d, want regular 0600/%d",
+			info.Mode(), info.Size(), sha256.Size)
+	}
 }
 
 func assertFollowContains(t *testing.T, output string, want ...string) {

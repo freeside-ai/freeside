@@ -12,7 +12,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"maps"
 	"net"
@@ -529,15 +528,6 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 	}()
 
-	_, statErr := os.Stat(cfg.DBPath)
-	storePreexisting := statErr == nil
-	if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
-		return nil, fmt.Errorf("stat store path: %w", statErr)
-	}
-	topicKey, err := loadOrCreateTopicKey(cfg.DBPath, storePreexisting)
-	if err != nil {
-		return nil, err
-	}
 	pairingKey := make([]byte, 32)
 	if _, err := rand.Read(pairingKey); err != nil {
 		return nil, fmt.Errorf("generate pairing key: %w", err)
@@ -558,7 +548,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		return nil, err
 	}
 	storeOptions.BackupHealthSource = backupHealth
-	st, err := store.Open(parent, cfg.DBPath, storeOptions)
+	st, topicKey, err := openStoreWithTopicKey(parent, cfg.DBPath, storeOptions)
 	if err != nil {
 		return nil, err
 	}

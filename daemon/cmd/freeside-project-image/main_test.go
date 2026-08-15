@@ -2,13 +2,35 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 )
+
+func TestProjectImageStoreBirthMintsTopicKey(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	st, err := openProjectImageStore(t.Context(), dbPath)
+	if err != nil {
+		t.Fatalf("open project-image store: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close project-image store: %v", err)
+	}
+	info, err := os.Stat(dbPath + topicstore.KeySuffix)
+	if err != nil {
+		t.Fatalf("stat project-image topic key: %v", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() != sha256.Size {
+		t.Fatalf("project-image topic key mode/size = %v/%d, want regular 0600/%d",
+			info.Mode(), info.Size(), sha256.Size)
+	}
+}
 
 func validArgs() []string {
 	return []string{
