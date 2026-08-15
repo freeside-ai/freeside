@@ -893,8 +893,8 @@ names only a condition is inert until something else tells you to go look.
   those in its Affected interfaces/contracts field; a direct assignment
   derives them from its declared scope. Claiming a `kind:contract` unit
   additionally blocks on every other open contract unit, excluding the one
-  you are claiming and any whose Dependencies chain includes it, so a
-  dependency-ordered chain keeps its head claimable. A `deferral`-labelled
+  you are claiming and any whose `starts-after` chain includes it, so a
+  `starts-after` contract chain keeps its head claimable. A `deferral`-labelled
   contract unit counts only once it is scheduled or actively claimed.
 
 ### Contract changes
@@ -911,5 +911,5 @@ in passing; needing a contract change means filing the contract issue,
 linking it as a dependency, and blocking or switching units.
 
 Before a `kind:contract` deferral is scheduled or assigned by fiat, the spine
-inserts it into the serialized Dependencies chain; if it has no valid position,
-it stays dormant. Fiat never bypasses contract ordering.
+inserts it into the serialized contract `starts-after` chain; if it has no
+valid position, it stays dormant. Fiat never bypasses contract ordering.

@@ -141,8 +141,8 @@ the outcome hits a Decision notes trigger or the mandatory-note list.
    - the current wave's pinned tracking issue;
    - open `kind:contract` issues, ignoring a `deferral` issue until it is
      scheduled or has an active claim, then excluding the unit you are claiming
-     and any unit whose Dependencies chain includes it (a
-     dependency-ordered chain of contract units keeps at most one
+     and any unit whose `starts-after` chain includes it (a
+     `starts-after` chain of contract units keeps at most one
      claimable at a time, so downstream chain members may stay filed
      without blocking their chain head): among the remainder, if one
      touches your Affected interfaces/contracts, block on it; when claiming a
@@ -285,7 +285,7 @@ answer it at a glance. Wave 5's tracker (#651) is the reference example.
   `none` when either projection is empty. Neither projection authorizes work
   or replaces the PR's verification and review gates. The digest is the
   record; a reader who never renders the diagram still gets the order.
-- **Diagram when the graph is nontrivial.** When the dependency graph is
+- **Diagram when the graph is nontrivial.** When the relationship graph is
   more than a single chain, follow the digest with a Mermaid
   `flowchart LR` (the forge renders it inline). A strictly linear sequence
   states its chain in prose and skips the diagram: a mandatory chart
