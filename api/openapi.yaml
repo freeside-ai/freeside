@@ -2690,8 +2690,8 @@ components:
         the run to its typed inputs; summary fields are computed from the
         observation timeline and never persisted as workflow authority.
       required:
-        [id, project_id, spec_digest, policy_digest, stages,
-         latest_milestone, outcome, hold_reason]
+        [id, project_id, created_at, last_activity_at, spec_digest,
+         policy_digest, stages, latest_milestone, outcome, hold_reason]
       properties:
         id:
           type: string
@@ -2699,6 +2699,21 @@ components:
         project_id:
           type: string
           minLength: 1
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            UTC instant of the run_submitted observation. Null only when no
+            run_submitted milestone exists, as for a pre-migration-0024
+            legacy run; other observation facts may still exist.
+        last_activity_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            Newest UTC instant across milestone, invocation, and current-hold
+            observations. Null only when the run has no observation facts.
         spec_digest:
           $ref: "#/components/schemas/Digest"
         policy_digest:
@@ -2720,6 +2735,8 @@ components:
       example:
         id: "run-1"
         project_id: "proj-1"
+        created_at: "2026-01-02T03:04:05Z"
+        last_activity_at: "2026-01-02T03:06:05Z"
         spec_digest: "sha256:spec"
         policy_digest: "sha256:policy"
         latest_milestone: "invocation_started"
