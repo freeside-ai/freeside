@@ -1139,3 +1139,146 @@ func TestRunReachesItsAdmissionAndExport(t *testing.T) {
 		t.Fatalf("export head %q did not round-trip (wrote %q)", stored.HeadSHA, export.HeadSHA)
 	}
 }
+
+// TestExportRejectionRoundTrip covers the diagnostic record's write-once
+// contract: the per-finding detail comes back as it went in, an identical
+// replay converges, and a different rejection body for one invocation is an
+// immutable conflict. It also proves the record coexists with the
+// ExecutionOutcome(failed) the same rejection produces, since the rejection is
+// finding detail, not a competing terminal authority.
+func TestExportRejectionRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newAdmissionFixture(t, nil)
+	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
+	if err := recordAdmission(t, s, f.admission); err != nil {
+		t.Fatalf("record admission: %v", err)
+	}
+
+	rejection, err := domain.NewExportRejection(domain.ExportRejectionInput{
+		InvocationID: "inv-1", AdmissionID: f.admission.ID,
+		Findings: []domain.ExportRejectionFinding{
+			{Kind: "secret", Path: "config.yaml", Rule: "aws_key", Line: 12, Detail: "match"},
+			{Kind: "allowlist_violation", Path: "dist/bundle.js"},
+		},
+		TotalFindings: 2,
+		RecordedAt:    admissionEpoch.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("NewExportRejection: %v", err)
+	}
+	record := func(r domain.ExportRejection) error {
+		return s.Write(ctx, func(tx *store.WriteTx) error {
+			return tx.RecordExportRejection(ctx, r)
+		})
+	}
+	if err := record(rejection); err != nil {
+		t.Fatalf("record rejection: %v", err)
+	}
+	if err := record(rejection); err != nil {
+		t.Fatalf("identical replay must converge: %v", err)
+	}
+
+	// The same rejection also records a failed outcome; the diagnostic row must
+	// not be held mutually exclusive with it.
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
+			InvocationID: "inv-1", AdmissionID: f.admission.ID,
+			Status: domain.ExecutionOutcomeFailed, Summary: "rejected",
+			RecordedAt: admissionEpoch.Add(time.Hour),
+		})
+	}); err != nil {
+		t.Fatalf("record failed outcome beside rejection: %v", err)
+	}
+
+	var got domain.ExportRejection
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		got, err = tx.GetExportRejection(ctx, "inv-1")
+		return err
+	}); err != nil {
+		t.Fatalf("GetExportRejection: %v", err)
+	}
+	if len(got.Findings) != 2 || got.Findings[0].Kind != "secret" ||
+		got.Findings[0].Path != "config.yaml" || got.Findings[0].Line != 12 ||
+		got.Findings[1].Kind != "allowlist_violation" || got.Findings[1].Path != "dist/bundle.js" {
+		t.Fatalf("round-tripped rejection = %+v", got)
+	}
+
+	diverged, err := domain.NewExportRejection(domain.ExportRejectionInput{
+		InvocationID: "inv-1", AdmissionID: f.admission.ID,
+		Findings:      []domain.ExportRejectionFinding{{Kind: "size_violation", Path: "big.bin"}},
+		TotalFindings: 1,
+		RecordedAt:    admissionEpoch.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("NewExportRejection: %v", err)
+	}
+	if err := record(diverged); !errors.Is(err, store.ErrImmutableConflict) {
+		t.Fatalf("divergent rejection replay = %v, want %v", err, store.ErrImmutableConflict)
+	}
+}
+
+// TestExportRejectionBinding covers the admission binding: a rejection for an
+// unadmitted invocation has no record to bind to, and one naming a foreign
+// admission is refused.
+func TestExportRejectionBinding(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newAdmissionFixture(t, nil)
+	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
+	if err := recordAdmission(t, s, f.admission); err != nil {
+		t.Fatalf("record admission: %v", err)
+	}
+	record := func(r domain.ExportRejection) error {
+		return s.Write(ctx, func(tx *store.WriteTx) error {
+			return tx.RecordExportRejection(ctx, r)
+		})
+	}
+
+	unadmitted, err := domain.NewExportRejection(domain.ExportRejectionInput{
+		InvocationID: "inv-2", AdmissionID: f.admission.ID,
+		Findings:      []domain.ExportRejectionFinding{{Kind: "secret", Path: "x"}},
+		TotalFindings: 1,
+		RecordedAt:    admissionEpoch.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("NewExportRejection: %v", err)
+	}
+	if err := record(unadmitted); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("rejection for an unadmitted invocation = %v, want %v", err, store.ErrNotFound)
+	}
+
+	foreign, err := domain.NewExportRejection(domain.ExportRejectionInput{
+		InvocationID: "inv-1", AdmissionID: domain.Digest("sha256:" + strings.Repeat("ab", 32)),
+		Findings:      []domain.ExportRejectionFinding{{Kind: "secret", Path: "x"}},
+		TotalFindings: 1,
+		RecordedAt:    admissionEpoch.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("NewExportRejection: %v", err)
+	}
+	if err := record(foreign); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("rejection naming a foreign admission = %v, want %v", err, domain.ErrParentKeyMismatch)
+	}
+}
+
+// TestExportRejectionAbsent proves a missing rejection is a clean not-found,
+// so a completed or plain-failed invocation reads no diagnostic detail rather
+// than an error.
+func TestExportRejectionAbsent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newAdmissionFixture(t, nil)
+	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
+	if err := recordAdmission(t, s, f.admission); err != nil {
+		t.Fatalf("record admission: %v", err)
+	}
+	err := s.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetExportRejection(ctx, "inv-1")
+		return err
+	})
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("GetExportRejection for an absent row = %v, want %v", err, store.ErrNotFound)
+	}
+}

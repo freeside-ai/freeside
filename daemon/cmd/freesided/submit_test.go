@@ -325,6 +325,36 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	); err != nil || production || author != (engine.ProductionCommitAuthor{}) {
 		t.Fatalf("authenticate elaboration replay author = %#v, production=%t, err=%v", author, production, err)
 	}
+	// An elaboration invocation imports under the specification finding profile,
+	// so investigation debris does not definitively fail it (#768). Both
+	// ImportOptions and ImportOptionsRecord set it through this one helper, so
+	// the live import and its terminal replay reconstruct the same profile.
+	var elaborationOpts importer.Options
+	if err := authority.applyElaborationFindingProfile(
+		ctx, first.ElaborationInvocationID, elaborationAdmission, &elaborationOpts,
+	); err != nil {
+		t.Fatalf("apply elaboration finding profile: %v", err)
+	}
+	if elaborationOpts.Policy.FindingProfile == nil ||
+		*elaborationOpts.Policy.FindingProfile != importer.FindingProfileSpecification {
+		t.Fatalf("elaboration finding profile = %v, want specification",
+			elaborationOpts.Policy.FindingProfile)
+	}
+	// A production invocation is left with a nil profile (the default
+	// publish-strict, omitted on the wire), so its recorded ImportOptions and
+	// publication task payload are byte-identical.
+	var productionOpts importer.Options
+	if err := authority.applyElaborationFindingProfile(
+		ctx, authoritySubmission.InvocationID,
+		domain.ExecutionAdmission{RunID: authorityRunID, OperatingMode: domain.ModeUnattended},
+		&productionOpts,
+	); err != nil {
+		t.Fatalf("apply finding profile for production invocation: %v", err)
+	}
+	if productionOpts.Policy.FindingProfile != nil {
+		t.Fatalf("production finding profile = %v, want nil (publish-strict default)",
+			productionOpts.Policy.FindingProfile)
+	}
 	authority.commitAuthors = fixedProductionCommitAuthorResolver{identity: publish.AppBotIdentity{
 		AppSlug: "freeside-test", BotUserID: 12345,
 	}}

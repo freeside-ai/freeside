@@ -633,3 +633,122 @@ func TestValidateExportBinding(t *testing.T) {
 		})
 	}
 }
+
+func validExportRejectionInput(a domain.ExecutionAdmission) domain.ExportRejectionInput {
+	return domain.ExportRejectionInput{
+		InvocationID: a.InvocationID,
+		AdmissionID:  a.ID,
+		Findings: []domain.ExportRejectionFinding{
+			{Kind: "secret", Path: "config.yaml", Rule: "aws_key", Line: 12, Detail: "match"},
+			{Kind: "allowlist_violation", Path: "dist/bundle.js"},
+		},
+		TotalFindings: 2,
+		RecordedAt:    a.AdmittedAt.Add(time.Minute),
+	}
+}
+
+// TestNewExportRejectionValidates covers the record's own well-formedness: a
+// findings-free rejection is meaningless, a finding needs a kind, path and
+// path_hex are mutually exclusive, and the timestamp is a UTC instant.
+func TestNewExportRejectionValidates(t *testing.T) {
+	a := mustAdmission(t, admissionInput())
+	cases := []struct {
+		name    string
+		mutate  func(in *domain.ExportRejectionInput)
+		wantErr error
+	}{
+		{"no invocation", func(in *domain.ExportRejectionInput) { in.InvocationID = "" }, domain.ErrEmptyID},
+		{"no admission", func(in *domain.ExportRejectionInput) { in.AdmissionID = "" }, domain.ErrEmptyID},
+		{"no findings", func(in *domain.ExportRejectionInput) { in.Findings = nil }, domain.ErrExportRejectionEmpty},
+		{"finding without kind", func(in *domain.ExportRejectionInput) {
+			in.Findings = []domain.ExportRejectionFinding{{Path: "x"}}
+		}, domain.ErrEmptyField},
+		{"finding path and path_hex", func(in *domain.ExportRejectionInput) {
+			in.Findings = []domain.ExportRejectionFinding{{Kind: "invalid_path_entry", Path: "x", PathHex: "6162"}}
+		}, domain.ErrFindingPathConflict},
+		{"zero time", func(in *domain.ExportRejectionInput) { in.RecordedAt = time.Time{} }, domain.ErrMissingTimestamp},
+		{"total below retained", func(in *domain.ExportRejectionInput) { in.TotalFindings = 1 }, domain.ErrOutcomeInconsistent},
+		{"truncated subset ok", func(in *domain.ExportRejectionInput) { in.TotalFindings = 9999 }, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := validExportRejectionInput(a)
+			tc.mutate(&in)
+			if _, err := domain.NewExportRejection(in); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("NewExportRejection = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestExportRejectionValidateRejectsNonUTC covers the decode backstop: the
+// constructor renders UTC, but a stored body carrying a zoned instant would
+// address two identities for one moment, so Validate refuses it directly.
+func TestExportRejectionValidateRejectsNonUTC(t *testing.T) {
+	a := mustAdmission(t, admissionInput())
+	in := validExportRejectionInput(a)
+	r := domain.ExportRejection{
+		InvocationID: in.InvocationID, AdmissionID: in.AdmissionID,
+		Findings: in.Findings, TotalFindings: in.TotalFindings,
+		RecordedAt: in.RecordedAt.In(time.FixedZone("east", 3600)),
+	}
+	if err := r.Validate(); !errors.Is(err, domain.ErrTimestampNotUTC) {
+		t.Fatalf("Validate = %v, want %v", err, domain.ErrTimestampNotUTC)
+	}
+}
+
+// TestNewExportRejectionNormalizesTime pins that the constructor renders the
+// instant UTC, so a caller-supplied zoned instant still converges on one body.
+func TestNewExportRejectionNormalizesTime(t *testing.T) {
+	a := mustAdmission(t, admissionInput())
+	in := validExportRejectionInput(a)
+	in.RecordedAt = a.AdmittedAt.Add(time.Minute).In(time.FixedZone("east", 3600))
+	r, err := domain.NewExportRejection(in)
+	if err != nil {
+		t.Fatalf("NewExportRejection: %v", err)
+	}
+	if r.RecordedAt.Location() != time.UTC {
+		t.Fatalf("recorded_at location = %v, want UTC", r.RecordedAt.Location())
+	}
+	body, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var round domain.ExportRejection
+	if err := json.Unmarshal(body, &round); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if err := round.Validate(); err != nil {
+		t.Fatalf("round-trip Validate: %v", err)
+	}
+}
+
+func TestValidateExportRejectionBinding(t *testing.T) {
+	a := mustAdmission(t, admissionInput())
+	cases := []struct {
+		name    string
+		mutate  func(in *domain.ExportRejectionInput)
+		wantErr error
+	}{
+		{"ok", func(*domain.ExportRejectionInput) {}, nil},
+		{"foreign admission", func(in *domain.ExportRejectionInput) {
+			in.AdmissionID = domain.Digest("sha256:" + strings.Repeat("ab", 32))
+		}, domain.ErrParentKeyMismatch},
+		{"recorded before admission", func(in *domain.ExportRejectionInput) {
+			in.RecordedAt = a.AdmittedAt.Add(-time.Second)
+		}, domain.ErrTimestampOutOfOrder},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := validExportRejectionInput(a)
+			tc.mutate(&in)
+			r, err := domain.NewExportRejection(in)
+			if err != nil {
+				t.Fatalf("NewExportRejection: %v", err)
+			}
+			if err := domain.ValidateExportRejectionBinding(a, r); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("ValidateExportRejectionBinding = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}

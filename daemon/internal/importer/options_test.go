@@ -28,6 +28,8 @@ func TestOptionsDefaults(t *testing.T) {
 	}
 }
 
+func profilePtr(p FindingProfile) *FindingProfile { return &p }
+
 func TestOptionsValidate(t *testing.T) {
 	cases := []struct {
 		name string
@@ -44,6 +46,9 @@ func TestOptionsValidate(t *testing.T) {
 		{"negative cap", Options{BaseSHA: testBaseSHA, Policy: Policy{MaxEntries: -1}}, false},
 		{"invalid commit plan", Options{BaseSHA: testBaseSHA, Policy: Policy{CommitPlan: "plan_required"}}, false},
 		{"invalid message ruleset", Options{BaseSHA: testBaseSHA, Policy: Policy{MessageRuleset: "github/2"}}, false},
+		{"nil finding profile", Options{BaseSHA: testBaseSHA}, true},
+		{"specification profile", Options{BaseSHA: testBaseSHA, Policy: Policy{FindingProfile: profilePtr(FindingProfileSpecification)}}, true},
+		{"invalid finding profile", Options{BaseSHA: testBaseSHA, Policy: Policy{FindingProfile: profilePtr("loose")}}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
