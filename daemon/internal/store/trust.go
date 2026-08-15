@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +33,16 @@ import (
 type TrustProfileRecord struct {
 	Profile    domain.AutomationTrustProfile
 	RecordedAt time.Time
+}
+
+// CurrentTrustProfileInspection is one latest activation reconstructed for an
+// ambient health check. ReconstructionError is limited to deterministic body
+// decoding, validation, and key-column consistency failures. Query and scan
+// failures are returned by InspectLatestTrustProfiles instead.
+type CurrentTrustProfileInspection struct {
+	Repo                string
+	Profile             domain.AutomationTrustProfile
+	ReconstructionError error
 }
 
 // WorkflowAuditRecord pairs a stored audit observation with its assigned
@@ -82,6 +93,18 @@ FROM trust_profile_activations AS a
 JOIN trust_profiles AS p
   ON p.repo = a.repo AND p.profile_digest = a.profile_digest
 WHERE a.repo = ? ORDER BY a.id DESC LIMIT 1`
+	inspectLatestTrustProfilesSQL = `
+SELECT a.repo, a.profile_digest,
+       p.profile_digest, p.repo, p.recorded_at, p.body
+FROM trust_profile_activations AS a
+JOIN (
+    SELECT repo, MAX(id) AS activation_id
+    FROM trust_profile_activations
+    GROUP BY repo
+) AS latest ON latest.activation_id = a.id
+LEFT JOIN trust_profiles AS p
+  ON p.repo = a.repo AND p.profile_digest = a.profile_digest
+ORDER BY a.repo`
 	latestActiveWorkflowAuditBindingSQL = `
 SELECT a.profile_digest, a.workflow_audit_digest, p.repo, p.body
 FROM trust_profile_activations AS a
@@ -275,11 +298,16 @@ func (tx *InternalTx) requireRetainedProfileEvidence(
 	return nil
 }
 
-// scanTrustProfile is the one reconstruction path for profile rows: decode
-// re-runs Validate (which recomputes the content digest), and the extracted
-// key columns are cross-checked against the body so a row edited around the
-// store fails closed.
-func scanTrustProfile(sc scanner, wantDigest domain.Digest) (TrustProfileRecord, error) {
+// trustProfileRow separates database scan failures from deterministic profile
+// reconstruction failures for the ambient inspection path.
+type trustProfileRow struct {
+	digest     domain.Digest
+	repo       string
+	recordedAt string
+	body       []byte
+}
+
+func scanTrustProfileRow(sc scanner, wantDigest domain.Digest) (trustProfileRow, error) {
 	var (
 		digest     = wantDigest
 		repo       string
@@ -291,20 +319,36 @@ func scanTrustProfile(sc scanner, wantDigest domain.Digest) (TrustProfileRecord,
 		dest = append([]any{&digest}, dest...)
 	}
 	if err := sc.Scan(dest...); err != nil {
-		return TrustProfileRecord{}, err
+		return trustProfileRow{}, err
 	}
-	profile, err := decode[domain.AutomationTrustProfile](body)
+	return trustProfileRow{digest: digest, repo: repo, recordedAt: recordedAt, body: body}, nil
+}
+
+func reconstructTrustProfile(row trustProfileRow) (TrustProfileRecord, error) {
+	profile, err := decode[domain.AutomationTrustProfile](row.body)
 	if err != nil {
 		return TrustProfileRecord{}, err
 	}
-	if profile.ProfileDigest != digest || profile.Repo != repo {
+	if profile.ProfileDigest != row.digest || profile.Repo != row.repo {
 		return TrustProfileRecord{}, errRowInconsistent
 	}
-	at, err := parseTime(recordedAt)
+	at, err := parseTime(row.recordedAt)
 	if err != nil {
 		return TrustProfileRecord{}, fmt.Errorf("stored recorded_at invalid: %w", err)
 	}
 	return TrustProfileRecord{Profile: profile, RecordedAt: at}, nil
+}
+
+// scanTrustProfile is the ordinary fail-closed reconstruction path: decode
+// re-runs Validate (which recomputes the content digest), and the extracted
+// key columns are cross-checked against the body so a row edited around the
+// store fails closed.
+func scanTrustProfile(sc scanner, wantDigest domain.Digest) (TrustProfileRecord, error) {
+	row, err := scanTrustProfileRow(sc, wantDigest)
+	if err != nil {
+		return TrustProfileRecord{}, err
+	}
+	return reconstructTrustProfile(row)
 }
 
 // GetTrustProfile reconstructs one profile by its content digest.
@@ -333,6 +377,97 @@ func (tx *ReadTx) LatestTrustProfile(ctx context.Context, repo string) (domain.A
 		return domain.AutomationTrustProfile{}, fmt.Errorf("latest trust profile %q: %w", repo, notFoundOr(err))
 	}
 	return rec.Profile, nil
+}
+
+// InspectLatestTrustProfiles reconstructs the explicitly activated profile for
+// every repository, ordered by repository name. A deterministic reconstruction
+// failure stays attached to that repository so an ambient health check can
+// report it without making re-approval unreachable. Query and scan failures
+// remain source errors and abort the inspection.
+func (tx *ReadTx) InspectLatestTrustProfiles(ctx context.Context) ([]CurrentTrustProfileInspection, error) {
+	rows, err := tx.tx.QueryContext(ctx, inspectLatestTrustProfilesSQL)
+	if err != nil {
+		return nil, fmt.Errorf("inspect latest trust profiles: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var inspections []CurrentTrustProfileInspection
+	for rows.Next() {
+		var (
+			activationRepo   string
+			activationDigest string
+			profileDigest    sql.NullString
+			profileRepo      sql.NullString
+			recordedAt       sql.NullString
+			body             []byte
+		)
+		if err := rows.Scan(
+			&activationRepo, &activationDigest,
+			&profileDigest, &profileRepo, &recordedAt, &body,
+		); err != nil {
+			return nil, fmt.Errorf("inspect latest trust profiles: %w", err)
+		}
+		var (
+			rec               TrustProfileRecord
+			reconstructionErr error
+		)
+		if !profileDigest.Valid || !profileRepo.Valid || !recordedAt.Valid || body == nil {
+			reconstructionErr = errRowInconsistent
+		} else {
+			row := trustProfileRow{
+				digest: domain.Digest(profileDigest.String), repo: profileRepo.String,
+				recordedAt: recordedAt.String, body: body,
+			}
+			if activationRepo != row.repo || activationDigest != string(row.digest) {
+				reconstructionErr = errRowInconsistent
+			} else {
+				rec, reconstructionErr = reconstructTrustProfile(row)
+			}
+		}
+		inspections = append(inspections, CurrentTrustProfileInspection{
+			Repo: activationRepo, Profile: rec.Profile, ReconstructionError: reconstructionErr,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect latest trust profiles: %w", err)
+	}
+	return inspections, nil
+}
+
+// RequireReviewConfigurationApproved re-gates every repository's current
+// activated profile against the daemon's effective reviewer configuration.
+// Callers use it inside the same write transaction that records unattended
+// admission, so an activation cannot land between this global policy check
+// and the admission record. Deterministic reconstruction failures and digest
+// drift fail as mutable configuration refusals; query and scan failures remain
+// operational source errors.
+func (tx *ReadTx) RequireReviewConfigurationApproved(
+	ctx context.Context, effective domain.Digest,
+) error {
+	if effective == "" {
+		return fmt.Errorf("empty effective review configuration: %w",
+			domain.ErrReviewConfigurationUnapproved)
+	}
+	inspections, err := tx.InspectLatestTrustProfiles(ctx)
+	if err != nil {
+		return err
+	}
+	for _, inspection := range inspections {
+		if inspection.ReconstructionError != nil {
+			return fmt.Errorf("current trust profile for %q is unreadable: %w",
+				inspection.Repo,
+				errors.Join(domain.ErrReviewConfigurationUnapproved, inspection.ReconstructionError),
+			)
+		}
+		pinned := inspection.Profile.Review.ConfigDigest
+		if pinned != effective {
+			return fmt.Errorf(
+				"current trust profile for %q pins %s; daemon effective is %s: %w",
+				inspection.Repo, pinned, effective,
+				domain.ErrReviewConfigurationUnapproved,
+			)
+		}
+	}
+	return nil
 }
 
 // ListTrustProfiles returns every recorded profile revision for a

@@ -60,6 +60,7 @@ func openUnattendedFixtureAtWithIdentity(
 
 	env := admissionEnvironment()
 	env.OperatingMode = domain.ModeUnattended
+	env.ReviewConfigurationDigest = profile.Review.ConfigDigest
 	env.Base.Repo, env.Base.RepositoryID = profile.Repo, profile.RepositoryID
 	identityID := identity.ID
 	env.AuthIdentityID = &identityID
