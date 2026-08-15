@@ -2,6 +2,7 @@ package publish_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,7 +17,17 @@ func newTestReconciler(t *testing.T, gh *fakeGitHub) *publish.Reconciler {
 	return publish.NewReconciler(testTokenSource(), srv.Client(), srv.URL)
 }
 
-const testRepo = "freeside-ai/evidence-repo"
+const (
+	testRepo              = "freeside-ai/evidence-repo"
+	testClosedEventNodeID = "issue-event-443-0"
+)
+
+func graphQLIssueClosureResponse(issueNumber int, eventNodeID, closer string) string {
+	return fmt.Sprintf(
+		`{"data":{"repository":{"issue":{"number":%d,"timelineItems":{"nodes":[{"__typename":"ClosedEvent","id":%q,"closer":%s}]}}}}}`,
+		issueNumber, eventNodeID, closer,
+	)
+}
 
 // conditionalRequests counts logged requests that carried
 // If-None-Match.
@@ -433,6 +444,178 @@ func TestReconcileIssueConditional(t *testing.T) {
 	}
 }
 
+// TestReconcileIssuePRBodyClosureAttribution observes the merge commit of the
+// PR that actually closed an issue through a body keyword, then retains the
+// attributed observation across the issue resource's normal 304 path.
+func TestReconcileIssuePRBodyClosureAttribution(t *testing.T) {
+	t.Parallel()
+	gh := newFakeGitHub(t)
+	gh.issues[443] = fakeIssue{State: "closed", Events: []fakeIssueEvent{{Event: "closed", NodeID: testClosedEventNodeID}}}
+	gh.graphqlIssueResponses[443] = fakeGraphQLResponse{Body: graphQLIssueClosureResponse(
+		443,
+		testClosedEventNodeID,
+		`{"__typename":"PullRequest","number":96,"merged":true,"mergeCommit":{"oid":"`+testOtherSHA+`"}}`,
+	)}
+	r := newTestReconciler(t, gh)
+
+	first, err := r.ReconcileIssue(t.Context(), testRepo, 443)
+	if err != nil {
+		t.Fatalf("first ReconcileIssue: %v", err)
+	}
+	if first.State != "closed" || first.ClosedByCommitSHA != testOtherSHA || first.NotModified {
+		t.Errorf("first = %+v", first)
+	}
+	second, err := r.ReconcileIssue(t.Context(), testRepo, 443)
+	if err != nil {
+		t.Fatalf("second ReconcileIssue: %v", err)
+	}
+	if !second.NotModified || second.ClosedByCommitSHA != testOtherSHA {
+		t.Errorf("second = %+v", second)
+	}
+	if got := gh.requestLog(); strings.Count(strings.Join(got, "\n"), "POST /graphql") != 1 {
+		t.Errorf("GraphQL request count != 1: %v", got)
+	}
+}
+
+// TestReconcileIssueManualClosureIsNotCached proves a definitive manual close
+// cannot pin an empty attribution behind the issue ETag. Each poll retries the
+// full observation unconditionally, while the fact itself remains empty.
+func TestReconcileIssueManualClosureIsNotCached(t *testing.T) {
+	t.Parallel()
+	gh := newFakeGitHub(t)
+	gh.issues[443] = fakeIssue{State: "closed", Events: []fakeIssueEvent{{Event: "closed"}}}
+	r := newTestReconciler(t, gh)
+
+	for i := 0; i < 2; i++ {
+		obs, err := r.ReconcileIssue(t.Context(), testRepo, 443)
+		if err != nil {
+			t.Fatalf("ReconcileIssue poll %d: %v", i+1, err)
+		}
+		if obs.State != "closed" || obs.ClosedByCommitSHA != "" || obs.NotModified {
+			t.Errorf("poll %d = %+v", i+1, obs)
+		}
+	}
+	requests := gh.requestLog()
+	counts := map[string]int{}
+	for _, request := range requests {
+		counts[request]++
+	}
+	if got := counts["GET "+testRepoPath+"/issues/443"]; got != 2 {
+		t.Errorf("issue request count = %d, want 2: %v", got, requests)
+	}
+	if got := counts["GET "+testRepoPath+"/issues/443/events"]; got != 2 {
+		t.Errorf("event request count = %d, want 2: %v", got, requests)
+	}
+	if got := counts["POST /graphql"]; got != 2 {
+		t.Errorf("GraphQL request count = %d, want 2: %v", got, requests)
+	}
+	if conditionalRequests(gh) != 0 {
+		t.Errorf("manual closure poll used a cached validator: %v", gh.requestLog())
+	}
+}
+
+// TestReconcileIssueManualClosureRetriesAttribution proves the uncached empty
+// result can adopt a later-attributable closer even when the issue ETag does
+// not change, then resumes the normal attributed 304 path.
+func TestReconcileIssueManualClosureRetriesAttribution(t *testing.T) {
+	t.Parallel()
+	gh := newFakeGitHub(t)
+	gh.issues[443] = fakeIssue{State: "closed", Events: []fakeIssueEvent{{Event: "closed", NodeID: testClosedEventNodeID}}}
+	r := newTestReconciler(t, gh)
+
+	first, err := r.ReconcileIssue(t.Context(), testRepo, 443)
+	if err != nil {
+		t.Fatalf("first ReconcileIssue: %v", err)
+	}
+	if first.ClosedByCommitSHA != "" || first.NotModified {
+		t.Errorf("first = %+v", first)
+	}
+	gh.mu.Lock()
+	gh.graphqlIssueResponses[443] = fakeGraphQLResponse{Body: graphQLIssueClosureResponse(
+		443,
+		testClosedEventNodeID,
+		`{"__typename":"PullRequest","number":96,"merged":true,"mergeCommit":{"oid":"`+testOtherSHA+`"}}`,
+	)}
+	gh.mu.Unlock()
+	second, err := r.ReconcileIssue(t.Context(), testRepo, 443)
+	if err != nil {
+		t.Fatalf("second ReconcileIssue: %v", err)
+	}
+	if second.ClosedByCommitSHA != testOtherSHA || second.NotModified {
+		t.Errorf("second = %+v", second)
+	}
+	third, err := r.ReconcileIssue(t.Context(), testRepo, 443)
+	if err != nil {
+		t.Fatalf("third ReconcileIssue: %v", err)
+	}
+	if third.ClosedByCommitSHA != testOtherSHA || !third.NotModified {
+		t.Errorf("third = %+v", third)
+	}
+}
+
+// TestReconcileIssueCommitCloserAttribution covers GraphQL's direct Commit
+// closer variant when REST omitted the commit id for that same closed event.
+func TestReconcileIssueCommitCloserAttribution(t *testing.T) {
+	t.Parallel()
+	gh := newFakeGitHub(t)
+	gh.issues[443] = fakeIssue{State: "closed", Events: []fakeIssueEvent{{Event: "closed", NodeID: testClosedEventNodeID}}}
+	gh.graphqlIssueResponses[443] = fakeGraphQLResponse{Body: graphQLIssueClosureResponse(
+		443, testClosedEventNodeID, `{"__typename":"Commit","oid":"`+testOtherSHA+`"}`,
+	)}
+	r := newTestReconciler(t, gh)
+
+	obs, err := r.ReconcileIssue(t.Context(), testRepo, 443)
+	if err != nil {
+		t.Fatalf("ReconcileIssue: %v", err)
+	}
+	if obs.ClosedByCommitSHA != testOtherSHA {
+		t.Errorf("ClosedByCommitSHA = %q, want %q", obs.ClosedByCommitSHA, testOtherSHA)
+	}
+}
+
+// TestReconcileIssueClosureAttributionRejectsUntrustedResponses refutes the
+// new returned-object boundary: ambiguous or malformed closer data must fail
+// the observation instead of becoming an empty or mismatched completion fact.
+func TestReconcileIssueClosureAttributionRejectsUntrustedResponses(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		response fakeGraphQLResponse
+	}{
+		{name: "non-200", response: fakeGraphQLResponse{Status: http.StatusBadGateway}},
+		{name: "malformed JSON", response: fakeGraphQLResponse{Body: `{"data":`}},
+		{name: "GraphQL errors", response: fakeGraphQLResponse{Body: `{"errors":[{"message":"denied"}],"data":{"repository":null}}`}},
+		{name: "null repository", response: fakeGraphQLResponse{Body: `{"data":{"repository":null}}`}},
+		{name: "null issue", response: fakeGraphQLResponse{Body: `{"data":{"repository":{"issue":null}}}`}},
+		{name: "different issue", response: fakeGraphQLResponse{Body: graphQLIssueClosureResponse(444, testClosedEventNodeID, `null`)}},
+		{name: "empty nodes", response: fakeGraphQLResponse{Body: `{"data":{"repository":{"issue":{"number":443,"timelineItems":{"nodes":[]}}}}}`}},
+		{name: "null node", response: fakeGraphQLResponse{Body: `{"data":{"repository":{"issue":{"number":443,"timelineItems":{"nodes":[null]}}}}}`}},
+		{name: "multiple nodes", response: fakeGraphQLResponse{Body: `{"data":{"repository":{"issue":{"number":443,"timelineItems":{"nodes":[{"id":"first","closer":null},{"id":"second","closer":null}]}}}}}`}},
+		{name: "unexpected event type", response: fakeGraphQLResponse{Body: `{"data":{"repository":{"issue":{"number":443,"timelineItems":{"nodes":[{"__typename":"ReopenedEvent","id":"` + testClosedEventNodeID + `","closer":null}]}}}}}`}},
+		{name: "different closed event", response: fakeGraphQLResponse{Body: graphQLIssueClosureResponse(443, "older-event", `{"__typename":"PullRequest","number":96,"merged":true,"mergeCommit":{"oid":"`+testOtherSHA+`"}}`)}},
+		{name: "omitted closer", response: fakeGraphQLResponse{Body: `{"data":{"repository":{"issue":{"number":443,"timelineItems":{"nodes":[{"__typename":"ClosedEvent","id":"` + testClosedEventNodeID + `"}]}}}}}`}},
+		{name: "unexpected closer", response: fakeGraphQLResponse{Body: graphQLIssueClosureResponse(443, testClosedEventNodeID, `{"__typename":"Milestone"}`)}},
+		{name: "commit without oid", response: fakeGraphQLResponse{Body: graphQLIssueClosureResponse(443, testClosedEventNodeID, `{"__typename":"Commit"}`)}},
+		{name: "pull without number", response: fakeGraphQLResponse{Body: graphQLIssueClosureResponse(443, testClosedEventNodeID, `{"__typename":"PullRequest","merged":true,"mergeCommit":{"oid":"`+testOtherSHA+`"}}`)}},
+		{name: "unmerged pull", response: fakeGraphQLResponse{Body: graphQLIssueClosureResponse(443, testClosedEventNodeID, `{"__typename":"PullRequest","number":96,"merged":false,"mergeCommit":{"oid":"`+testOtherSHA+`"}}`)}},
+		{name: "pull without merge commit", response: fakeGraphQLResponse{Body: graphQLIssueClosureResponse(443, testClosedEventNodeID, `{"__typename":"PullRequest","number":96,"merged":true,"mergeCommit":null}`)}},
+		{name: "pull with empty merge oid", response: fakeGraphQLResponse{Body: graphQLIssueClosureResponse(443, testClosedEventNodeID, `{"__typename":"PullRequest","number":96,"merged":true,"mergeCommit":{"oid":""}}`)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			gh := newFakeGitHub(t)
+			gh.issues[443] = fakeIssue{State: "closed", Events: []fakeIssueEvent{{Event: "closed", NodeID: testClosedEventNodeID}}}
+			gh.graphqlIssueResponses[443] = tt.response
+			r := newTestReconciler(t, gh)
+
+			if obs, err := r.ReconcileIssue(t.Context(), testRepo, 443); err == nil {
+				t.Errorf("ReconcileIssue = %+v, want returned-object error", obs)
+			}
+		})
+	}
+}
+
 // TestReconcileIssueEventPagination: the closing-commit walk follows
 // rel="next" pages, so the latest closed event on a later page wins.
 func TestReconcileIssueEventPagination(t *testing.T) {
@@ -455,6 +638,9 @@ func TestReconcileIssueEventPagination(t *testing.T) {
 	}
 	if obs.ClosedByCommitSHA != commit {
 		t.Errorf("ClosedByCommitSHA = %q, want the last page's closed event %q", obs.ClosedByCommitSHA, commit)
+	}
+	if got := strings.Count(strings.Join(gh.requestLog(), "\n"), "POST /graphql"); got != 0 {
+		t.Errorf("direct REST attribution issued %d GraphQL requests: %v", got, gh.requestLog())
 	}
 }
 
