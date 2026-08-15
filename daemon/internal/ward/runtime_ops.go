@@ -27,9 +27,14 @@ type runtimeOpsConfig struct {
 	MaxSeedEntries  int
 	MaxArchiveBytes int64
 	Sleep           func(context.Context, time.Duration) error
+	checkWorkspace  func(context.Context, string, int) error
 }
 
 func newRuntimeOps(rt Runtime, cfg Config) runtimeOps {
+	checkWorkspace := cfg.checkSeedWorkspace
+	if checkWorkspace == nil {
+		checkWorkspace = checkCanonicalSeedWorkspaceClean
+	}
 	return runtimeOps{rt: rt, cfg: runtimeOpsConfig{
 		ExporterImage:   cfg.ExporterImage,
 		WorkspaceTarget: cfg.WorkspaceTarget,
@@ -44,6 +49,7 @@ func newRuntimeOps(rt Runtime, cfg Config) runtimeOps {
 		MaxSeedEntries:  cfg.MaxSeedEntries,
 		MaxArchiveBytes: cfg.MaxArchiveBytes,
 		Sleep:           cfg.Sleep,
+		checkWorkspace:  checkWorkspace,
 	}}
 }
 
