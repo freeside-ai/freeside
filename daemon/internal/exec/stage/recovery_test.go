@@ -8,6 +8,7 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -114,6 +115,56 @@ func orphanWithSpec(
 		t.Fatalf("save orphan intent: %v", err)
 	}
 	return in
+}
+
+var stageDurableTransitionMatrix = []struct {
+	name  string
+	side  string
+	phase phase
+}{
+	{"seed_handoff", "before", phaseSeeding},
+	{"seed_handoff", "after", phaseRunning},
+	{"execution_export", "before", phaseRunning},
+	{"execution_export", "after", phaseExported},
+}
+
+// TestStageDurableTransitionMatrixRegistersCrashPhases keeps the stage-owned
+// boundaries enumerable beside the deeper recovery fixtures below. Each phase
+// is the exact durable state a killed process leaves on that side of the
+// boundary; the per-phase tests exercise convergence and duplicate handoff,
+// credential-mount, export, and outcome suppression.
+func TestStageDurableTransitionMatrixRegistersCrashPhases(t *testing.T) {
+	for _, transition := range stageDurableTransitionMatrix {
+		t.Run(transition.name+"/"+transition.side, func(t *testing.T) {
+			exports := newStubExports()
+			d := newTestDriver(t, &stubGate{}, exports)
+			var released *releasedExport
+			if transition.phase == phaseExported {
+				released = &releasedExport{
+					Dir: filepath.Join(os.TempDir(),
+						"freeside-handoff-"+testRunIDFor(testInvoke)+"-out-matrix"),
+					Manifest: export.Manifest{
+						Version: export.ManifestVersion,
+						Entries: []export.Entry{},
+					},
+					ObservedBaseSHA: testBase.BaseSHA,
+				}
+			}
+			want := orphan(t, d, transition.phase, released)
+			got, err := d.loadIntent(t.Context(), testInvoke)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.InvocationID != want.InvocationID || got.RunID != want.RunID ||
+				got.Phase != transition.phase || !reflect.DeepEqual(got.Export, released) {
+				t.Fatalf("registered restart state = %#v, want %#v", got, want)
+			}
+			if len(exports.records) != 0 || len(exports.outcomes) != 0 {
+				t.Fatalf("phase registration caused effects: records=%d outcomes=%d",
+					len(exports.records), len(exports.outcomes))
+			}
+		})
+	}
 }
 
 // TestRecoveryErrorPreservesTheRunningIntent is the regression for treating

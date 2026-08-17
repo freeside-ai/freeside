@@ -149,6 +149,80 @@ func (f *workflowFixture) approve(t *testing.T) signet.CommandResult {
 	return result
 }
 
+var attentionResolutionTransitionMatrix = []struct {
+	name string
+	side engine.DurableTransitionSide
+}{
+	{"attention_item_resolution", engine.DurableTransitionBefore},
+	{"attention_item_resolution", engine.DurableTransitionAfter},
+}
+
+func TestAttentionItemResolutionRestartsAcrossAtomicBoundary(t *testing.T) {
+	for _, tc := range attentionResolutionTransitionMatrix {
+		t.Run(tc.name+"/"+string(tc.side), func(t *testing.T) {
+			root := t.TempDir()
+			f := openWorkflowFixture(t, root)
+			f.seed(t)
+			item, err := f.signet.GetAttentionItem(
+				t.Context(), domain.ItemID("approval-"+string(testRunID)),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := signet.ClientCommand{
+				CommandID: "approve-restart-boundary", DeviceID: deviceA,
+				ExpectedEntityVersion: item.EntityVersion,
+				Payload: signet.DecisionPayload{
+					ItemID: item.Item.ID, Action: domain.ActionApprove,
+					ItemVersion: item.Item.ItemVersion,
+					PRHeadSHA:   item.Item.PRHeadSHA, ArtifactDigests: item.Item.ArtifactDigests,
+				},
+			}
+
+			var first signet.CommandResult
+			if tc.side == engine.DurableTransitionAfter {
+				first, err = f.signet.Submit(t.Context(), command)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.close(t)
+			restarted := openWorkflowFixture(t, root)
+			replayed, err := restarted.signet.Submit(t.Context(), command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.side == engine.DurableTransitionBefore {
+				first = replayed
+				replayed, err = restarted.signet.Submit(t.Context(), command)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !reflect.DeepEqual(replayed, first) {
+				t.Fatalf("resolution replay = %#v, want %#v", replayed, first)
+			}
+			feedback := restarted.openFeedback(t)
+			if feedback.Item.Status != domain.StatusOpen || len(feedback.Item.RequestedDecision) == 0 ||
+				feedback.Item.Subject.RunID == nil || *feedback.Item.Subject.RunID != testRunID {
+				t.Fatalf("recovered actionable item = %#v", feedback)
+			}
+			if err := restarted.store.Read(t.Context(), func(tx *store.ReadTx) error {
+				commands, err := tx.ListCommandsForItem(t.Context(), item.Item.ID)
+				if err != nil {
+					return err
+				}
+				if len(commands) != 1 || commands[0].CommandID != command.CommandID {
+					return fmt.Errorf("resolution commands = %#v, want one exact command", commands)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func (f *workflowFixture) openFeedback(t *testing.T) signet.AttentionItemSnapshot {
 	t.Helper()
 	if _, err := f.engine.Reconcile(context.Background()); err != nil {
