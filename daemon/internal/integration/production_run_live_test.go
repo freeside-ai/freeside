@@ -34,6 +34,73 @@ import (
 
 const realRunLiveEnv = "FREESIDE_REAL_RUN_LIVE_TEST"
 
+const (
+	realRunImplementationRunIDEnv      = "FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID"
+	realRunImplementationInvocationEnv = "FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION"
+	realRunLegacyRunIDEnv              = "FREESIDE_REAL_RUN_RUN_ID"
+	realRunLegacyInvocationEnv         = "FREESIDE_REAL_RUN_INVOCATION"
+)
+
+type realRunImplementationIdentityInput struct {
+	implementationRunID           string
+	implementationRunIDSet        bool
+	implementationInvocationID    string
+	implementationInvocationIDSet bool
+	legacyRunIDSet                bool
+	legacyInvocationIDSet         bool
+}
+
+type realRunImplementationBinding struct {
+	runID        domain.RunID
+	invocationID domain.InvocationID
+}
+
+func realRunImplementationIdentityFromEnvironment() realRunImplementationIdentityInput {
+	runID, runIDSet := os.LookupEnv(realRunImplementationRunIDEnv)
+	invocationID, invocationIDSet := os.LookupEnv(realRunImplementationInvocationEnv)
+	_, legacyRunIDSet := os.LookupEnv(realRunLegacyRunIDEnv)
+	_, legacyInvocationIDSet := os.LookupEnv(realRunLegacyInvocationEnv)
+	return realRunImplementationIdentityInput{
+		implementationRunID: runID, implementationRunIDSet: runIDSet,
+		implementationInvocationID:    invocationID,
+		implementationInvocationIDSet: invocationIDSet,
+		legacyRunIDSet:                legacyRunIDSet, legacyInvocationIDSet: legacyInvocationIDSet,
+	}
+}
+
+func validateRealRunImplementationBinding(
+	input realRunImplementationIdentityInput, admittedRunID *domain.RunID,
+) (realRunImplementationBinding, bool, error) {
+	if input.legacyRunIDSet || input.legacyInvocationIDSet {
+		return realRunImplementationBinding{}, false, fmt.Errorf(
+			"legacy real-run identity variables are not supported: replace %s with %s and %s with %s",
+			realRunLegacyRunIDEnv, realRunImplementationRunIDEnv,
+			realRunLegacyInvocationEnv, realRunImplementationInvocationEnv,
+		)
+	}
+	if !input.implementationRunIDSet && !input.implementationInvocationIDSet {
+		return realRunImplementationBinding{}, false, nil
+	}
+	if !input.implementationRunIDSet || !input.implementationInvocationIDSet ||
+		input.implementationRunID == "" || input.implementationInvocationID == "" {
+		return realRunImplementationBinding{}, false, fmt.Errorf(
+			"%s and %s must be set together to non-empty implementation-lane identities",
+			realRunImplementationRunIDEnv, realRunImplementationInvocationEnv,
+		)
+	}
+	binding := realRunImplementationBinding{
+		runID:        domain.RunID(input.implementationRunID),
+		invocationID: domain.InvocationID(input.implementationInvocationID),
+	}
+	if admittedRunID != nil && *admittedRunID != binding.runID {
+		return realRunImplementationBinding{}, false, fmt.Errorf(
+			"cross-lane real-run identity: implementation invocation %q belongs to admitted run %q, not bound implementation run %q; do not substitute an elaboration run for %s",
+			binding.invocationID, *admittedRunID, binding.runID, realRunImplementationRunIDEnv,
+		)
+	}
+	return binding, true, nil
+}
+
 type realRunEnv struct {
 	stateRoot            string
 	agentImage           domain.ImageRef
@@ -122,6 +189,11 @@ func requireEnv(t *testing.T, name string) string {
 // the full production composition driven by scripts/run-real-work.sh.
 func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	t.Parallel()
+	identityInput := realRunImplementationIdentityFromEnvironment()
+	binding, bindingSet, bindingErr := validateRealRunImplementationBinding(identityInput, nil)
+	if os.Getenv(realRunLiveEnv) == "1" && bindingErr != nil {
+		t.Fatal(bindingErr)
+	}
 	env := realRunEnvironment(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
@@ -238,12 +310,13 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	// than the one shipped, which is exactly what this test exists to check.
 	// scripts/run-real-work.sh performs the run; this test is its verifier
 	// and can also be pointed at a state root a manual run produced.
-	invocationID := domain.InvocationID(os.Getenv("FREESIDE_REAL_RUN_INVOCATION"))
-	if invocationID == "" {
-		t.Skip("set FREESIDE_REAL_RUN_INVOCATION to the submitted run's invocation id " +
-			"to verify a completed run; scripts/run-real-work.sh sets it")
+	if !bindingSet {
+		t.Skip("set " + realRunImplementationRunIDEnv + " and " +
+			realRunImplementationInvocationEnv + " to the submitted implementation run " +
+			"to verify a completed run; scripts/run-real-work.sh sets them")
 	}
-	runID := domain.RunID(requireEnv(t, "FREESIDE_REAL_RUN_RUN_ID"))
+	invocationID := binding.invocationID
+	runID := binding.runID
 
 	var (
 		admission domain.ExecutionAdmission
@@ -254,6 +327,14 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 		outcome   publish.Outcome
 	)
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		admission, err = tx.GetExecutionAdmission(ctx, invocationID)
+		if err != nil {
+			return err
+		}
+		if _, _, err := validateRealRunImplementationBinding(identityInput, &admission.RunID); err != nil {
+			return err
+		}
 		executionOutcome, outcomeErr := tx.GetExecutionOutcomeRecord(ctx, invocationID)
 		switch {
 		case outcomeErr == nil:
@@ -261,11 +342,6 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 			return nil
 		case !errors.Is(outcomeErr, store.ErrNotFound):
 			return outcomeErr
-		}
-		var err error
-		admission, err = tx.GetExecutionAdmission(ctx, invocationID)
-		if err != nil {
-			return err
 		}
 		export, err = tx.GetExecutionExport(ctx, invocationID)
 		if err != nil {

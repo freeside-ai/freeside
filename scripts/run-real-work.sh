@@ -51,6 +51,12 @@
 #   FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS clean rig-holder shutdown
 #                                    bound (default 30)
 #
+# The harness supplies FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID and
+# FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION to its verifier after submit.
+# A manual verifier run must set both to the implementation-lane identities;
+# the former generic FREESIDE_REAL_RUN_RUN_ID and
+# FREESIDE_REAL_RUN_INVOCATION names are rejected.
+#
 # Requires: Go, Apple `container` running, macOS, an authenticated credential
 # volume for the named identity, and an operator watching a Freeside client to
 # approve or revise the generated specification. The harness runs and durably
@@ -408,12 +414,12 @@ if [[ -n "$work_unit_file" ]]; then
 fi
 "$workdir/freesided" submit "${submit_args[@]}" | tee "$submit_log"
 
-invocation_id="$(sed -n 's/.*"implementation_invocation_id":"\([^"]*\)".*/\1/p' "$submit_log")"
-run_id="$(sed -n 's/.*"run_id":"\([^"]*\)".*/\1/p' "$submit_log")"
+implementation_invocation_id="$(sed -n 's/.*"implementation_invocation_id":"\([^"]*\)".*/\1/p' "$submit_log")"
+implementation_run_id="$(sed -n 's/.*"run_id":"\([^"]*\)".*/\1/p' "$submit_log")"
 elaboration_run_id="$(sed -n 's/.*"elaboration_run_id":"\([^"]*\)".*/\1/p' "$submit_log")"
 elaboration_invocation_id="$(sed -n 's/.*"elaboration_invocation_id":"\([^"]*\)".*/\1/p' "$submit_log")"
-if [[ -z "$invocation_id" || -z "$run_id" ]]; then
-  echo "run-real-work: submit produced no run identity: $(cat "$submit_log")" >&2
+if [[ -z "$implementation_invocation_id" || -z "$implementation_run_id" ]]; then
+  echo "run-real-work: submit produced no implementation run identity: $(cat "$submit_log")" >&2
   exit 1
 fi
 if [[ -n "$elaboration_run_id" && -n "$elaboration_invocation_id" ]]; then
@@ -424,7 +430,7 @@ elif [[ -n "$elaboration_run_id" || -n "$elaboration_invocation_id" ]]; then
 else
   echo "legacy production-only replay: no elaboration approval gate" >&2
 fi
-echo "reserved implementation run=$run_id invocation=$invocation_id" >&2
+echo "reserved implementation run=$implementation_run_id invocation=$implementation_invocation_id" >&2
 
 # Seed the durable auth-identity binding before the daemon can reach
 # admission. The verifier records it too, but that call happens inside the
@@ -432,12 +438,17 @@ echo "reserved implementation run=$run_id invocation=$invocation_id" >&2
 # makes the harness race its own precondition. Running the verifier once here
 # is the seeding step; it exits without verifying because no invocation id is
 # set yet.
-# FREESIDE_REAL_RUN_INVOCATION is unset for this call on purpose: an exported
-# value left over from an earlier run would make the seeding step verify that
-# old invocation instead of skipping, and its failure would surface here as
-# the misleading "could not record the auth identity binding".
+# Both implementation identity variables are unset for this call on purpose:
+# exported values left over from an earlier run would make the seeding step
+# verify that old invocation instead of skipping, and its failure would surface
+# here as the misleading "could not record the auth identity binding". The
+# legacy generic names are scrubbed from every verifier call too, so stale
+# operator exports cannot trip the verifier's migration guard.
 echo "recording the auth identity binding" >&2
-env -u FREESIDE_REAL_RUN_INVOCATION FREESIDE_REAL_RUN_LIVE_TEST=1 \
+env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
+  -u FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID \
+  -u FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION \
+  FREESIDE_REAL_RUN_LIVE_TEST=1 \
   go test -C "$repo_root/daemon" ./internal/integration/ \
     -run TestRealWorkItemCompletesProductionPipeline -count=1 > "$workdir/seed.log" 2>&1 || {
   echo "run-real-work: could not record the auth identity binding" >&2
@@ -501,8 +512,10 @@ while (( SECONDS < deadline )); do
     cat "$workdir/daemon.log" >&2
     exit 1
   fi
-  if FREESIDE_REAL_RUN_LIVE_TEST=1 FREESIDE_REAL_RUN_INVOCATION="$invocation_id" \
-    FREESIDE_REAL_RUN_RUN_ID="$run_id" \
+  if env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
+    FREESIDE_REAL_RUN_LIVE_TEST=1 \
+    FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID="$implementation_run_id" \
+    FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION="$implementation_invocation_id" \
     go test -C "$repo_root/daemon" ./internal/integration/ \
     -run TestRealWorkItemCompletesProductionPipeline -count=1 > "$workdir/verify.log" 2>&1; then
     break
@@ -531,8 +544,10 @@ daemon_pid=""
 # Positive evidence, not the absence of an error: a Go test binary exits 0
 # for a skipped test too, so require the harness's own success line.
 verify_log="$workdir/verify-final.log"
-FREESIDE_REAL_RUN_LIVE_TEST=1 FREESIDE_REAL_RUN_INVOCATION="$invocation_id" \
-  FREESIDE_REAL_RUN_RUN_ID="$run_id" \
+env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
+  FREESIDE_REAL_RUN_LIVE_TEST=1 \
+  FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID="$implementation_run_id" \
+  FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION="$implementation_invocation_id" \
   go test -C "$repo_root/daemon" ./internal/integration/ \
     -run TestRealWorkItemCompletesProductionPipeline -count=1 -v 2>&1 | tee "$verify_log"
 if ! grep -q "real production pipeline verified: PR #" "$verify_log"; then
@@ -541,4 +556,4 @@ if ! grep -q "real production pipeline verified: PR #" "$verify_log"; then
   tail -50 "$workdir/daemon.log" >&2
   exit 1
 fi
-echo "run-real-work: verified ready publication for run=$run_id invocation=$invocation_id" >&2
+echo "run-real-work: verified ready publication for implementation run=$implementation_run_id invocation=$implementation_invocation_id" >&2
