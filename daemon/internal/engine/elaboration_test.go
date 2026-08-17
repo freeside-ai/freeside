@@ -364,6 +364,14 @@ func (f elaborationFixture) newDriver(t *testing.T) *execfake.StageDriver {
 }
 
 func (f elaborationFixture) newEngine(t *testing.T, driver exec.StageDriver) *Engine {
+	return f.newEngineWithTransitionHook(t, driver, nil)
+}
+
+func (f elaborationFixture) newEngineWithTransitionHook(
+	t *testing.T,
+	driver exec.StageDriver,
+	hook DurableTransitionHook,
+) *Engine {
 	t.Helper()
 	transport := elaborationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		f.fetchCalls.Add(1)
@@ -397,6 +405,7 @@ func (f elaborationFixture) newEngine(t *testing.T, driver exec.StageDriver) *En
 		WithElaboration(ElaborationConfig{
 			Fetcher: fetcher, Blobs: f.blobs, Now: func() time.Time { return *f.now },
 			PromptPackageDigest: f.elaborationPrompt,
+			TransitionHook:      hook,
 			ValidateDelivery: func(_ context.Context, spec exec.StartSpec) error {
 				f.validationCalls.Add(1)
 				if spec.StageInputs == nil {
@@ -416,6 +425,167 @@ func (f elaborationFixture) newEngine(t *testing.T, driver exec.StageDriver) *En
 		t.Fatal(err)
 	}
 	return engine
+}
+
+func (f elaborationFixture) reopen(t *testing.T) elaborationFixture {
+	t.Helper()
+	if err := f.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(t.Context(), f.dbPath, store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	f.store = reopened
+	f.signet = signet.NewService(reopened, signet.WithBlobStore(f.blobs),
+		signet.WithClock(func() time.Time { return *f.now }))
+	return f
+}
+
+func TestElaborationRestartsAcrossDurableBoundaries(t *testing.T) {
+	for _, transition := range []DurableTransition{
+		DurableTransitionElaborationOutcome,
+		DurableTransitionSpecificationApproval,
+	} {
+		for _, side := range AllDurableTransitionSides {
+			t.Run(string(transition)+"/"+string(side), func(t *testing.T) {
+				f := newElaborationFixture(t, true, 2)
+				driver := f.newDriver(t)
+				invocationID := elaborationInvocationID("elaboration-run", 1)
+				specification := "# Approved Specification\n\nImplement the restart-safe workflow."
+				if err := elaboratefake.Script(driver, invocationID, 0, 0, elaborate.Output{
+					Specification: &elaborate.Specification{
+						Summary: "The implementation contract is ready.", Body: specification,
+						Addressals: []elaborate.Addressal{},
+					},
+				}); err != nil {
+					t.Fatal(err)
+				}
+				f.submit(t)
+
+				if transition == DurableTransitionSpecificationApproval {
+					workflow := f.newEngine(t, driver)
+					for pass := 1; pass <= 3; pass++ {
+						if _, err := workflow.Reconcile(t.Context()); err != nil {
+							t.Fatalf("prepare approval pass %d: %v", pass, err)
+						}
+						if _, err := f.signet.GetAttentionItem(
+							t.Context(), "spec-approval-implementation-run-1",
+						); err == nil {
+							break
+						}
+					}
+					item, snapshot := f.item(t, "spec-approval-implementation-run-1")
+					if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+						CommandID: "approve-restart-matrix", DeviceID: "device-1",
+						ExpectedEntityVersion: snapshot.EntityVersion,
+						Payload: signet.DecisionPayload{
+							ItemID: item.ID, Action: domain.ActionApprove,
+							ItemVersion: item.ItemVersion, ArtifactDigests: item.ArtifactDigests,
+						},
+					}); err != nil {
+						t.Fatal(err)
+					}
+				}
+
+				injected := false
+				workflow := f.newEngineWithTransitionHook(t, driver, func(
+					observed DurableTransition,
+					observedSide DurableTransitionSide,
+				) error {
+					if !injected && observed == transition && observedSide == side {
+						injected = true
+						return errors.New("injected process loss")
+					}
+					return nil
+				})
+				var crashErr error
+				for pass := 1; pass <= 8; pass++ {
+					if _, err := workflow.Reconcile(t.Context()); err != nil {
+						crashErr = err
+						break
+					}
+				}
+				if !injected {
+					t.Fatalf("%s/%s crash hook was not reached: %v", transition, side, crashErr)
+				}
+
+				f = f.reopen(t)
+				driver = f.newDriver(t)
+				workflow = f.newEngine(t, driver)
+				if transition == DurableTransitionElaborationOutcome {
+					var approval signet.AttentionItemSnapshot
+					for pass := 1; pass <= 3; pass++ {
+						if _, err := workflow.Reconcile(t.Context()); err != nil {
+							t.Fatalf("outcome restart pass %d: %v", pass, err)
+						}
+						var err error
+						approval, err = f.signet.GetAttentionItem(
+							t.Context(), "spec-approval-implementation-run-1",
+						)
+						if err == nil {
+							break
+						}
+					}
+					wantDigest := domain.Digest(contentaddr.Sum([]byte(specification)))
+					if approval.Item.ID == "" || approval.Item.Status != domain.StatusOpen ||
+						!slices.Equal(approval.Item.ArtifactDigests, []domain.Digest{wantDigest}) ||
+						len(approval.Item.RequestedDecision) == 0 {
+						t.Fatalf("recovered approval = %#v, want one actionable exact-spec item", approval)
+					}
+					return
+				}
+
+				var implementation domain.Run
+				for pass := 1; pass <= 3; pass++ {
+					_, reconcileErr := workflow.Reconcile(t.Context())
+					var err error
+					implementation, err = f.run("implementation-run")
+					if err == nil {
+						break
+					}
+					if reconcileErr != nil {
+						t.Fatalf("approval restart pass %d: %v", pass, reconcileErr)
+					}
+				}
+				wantDigest := domain.Digest(contentaddr.Sum([]byte(specification)))
+				var (
+					attempt  domain.ProductionAttempt
+					commands []domain.Command
+				)
+				if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+					var err error
+					if implementation.CampaignID != "" {
+						attempt, err = tx.GetProductionAttempt(
+							t.Context(), implementation.CampaignID, implementation.AttemptNumber,
+						)
+						if err != nil {
+							return err
+						}
+					}
+					commands, err = tx.ListCommandsForItem(
+						t.Context(), "spec-approval-implementation-run-1",
+					)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				attemptMismatch := implementation.CampaignID != "" &&
+					(attempt.SourceDigest != f.source.Digest || attempt.ApprovedSpecDigest != wantDigest ||
+						attempt.ImplementationRunID != implementation.ID)
+				if implementation.ID != "implementation-run" || implementation.SpecDigest != wantDigest ||
+					attemptMismatch || len(commands) != 1 {
+					t.Fatalf("recovered approval identity drifted: run=%#v attempt=%#v commands=%#v",
+						implementation, attempt, commands)
+				}
+			})
+		}
+	}
 }
 
 func (f elaborationFixture) submit(t *testing.T) {

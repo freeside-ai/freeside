@@ -103,6 +103,7 @@ type ProductionPublicationConfig struct {
 	AfterBlocked         func() error
 	AfterTerminal        func() error
 	AfterTaskLockRelease func() error
+	TransitionHook       DurableTransitionHook
 }
 
 // ProductionVerificationRoom executes verification and returns the exact
@@ -182,6 +183,7 @@ type productionPublicationWorkflow struct {
 	afterBlocked         func() error
 	afterTerminal        func() error
 	afterTaskLockRelease func() error
+	transitionHook       DurableTransitionHook
 	reconcileMu          sync.Mutex
 }
 
@@ -263,6 +265,7 @@ func newProductionPublicationWorkflow(
 		afterPublication:  cfg.AfterPublication, afterReady: cfg.AfterReady,
 		afterBlocked: cfg.AfterBlocked, afterTerminal: cfg.AfterTerminal,
 		afterTaskLockRelease: cfg.AfterTaskLockRelease,
+		transitionHook:       cfg.TransitionHook,
 	}, nil
 }
 
@@ -1650,6 +1653,10 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	} else if found {
 		return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
 	}
+	if err := runDurableTransitionHook(w.transitionHook,
+		DurableTransitionPublicationEffect, DurableTransitionBefore); err != nil {
+		return productionTaskOutcome{}, err
+	}
 	published, err := w.publisher.PublishExecutionAfterGateAndFinalize(
 		ctx,
 		publish.ExecutionCandidate{Candidate: candidate, ProducingInvocationID: task.ProducingInvocationID},
@@ -1702,6 +1709,10 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			return productionTaskOutcome{}, err
 		}
 		return productionTaskOutcome{}, fmt.Errorf("publish execution candidate: %w", err)
+	}
+	if err := runDurableTransitionHook(w.transitionHook,
+		DurableTransitionPublicationEffect, DurableTransitionAfter); err != nil {
+		return productionTaskOutcome{}, err
 	}
 	if w.afterPublication != nil {
 		if err := w.afterPublication(); err != nil {
@@ -2148,8 +2159,16 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				"retained review workspace changed: %w", domain.ErrPathBoundaryMismatch,
 			)
 		}
+		if err := runDurableTransitionHook(w.transitionHook,
+			DurableTransitionReviewRequest, DurableTransitionBefore); err != nil {
+			return productionReviewPending, err
+		}
 		if err := w.reviewSource.RequestReview(ctx, id, req); err != nil {
 			return w.retryOrRecordReviewFailure(ctx, task, id, round, req.BaseSHA, req.HeadSHA, err)
+		}
+		if err := runDurableTransitionHook(w.transitionHook,
+			DurableTransitionReviewRequest, DurableTransitionAfter); err != nil {
+			return productionReviewPending, err
 		}
 		status, err = w.reviewSource.Inspect(ctx, id)
 		if err != nil {
@@ -2261,12 +2280,20 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	}
 	// The completed record supersedes any pending same-invocation retry for
 	// this run: clear the durable row atomically with the record it writes.
+	if err := runDurableTransitionHook(w.transitionHook,
+		DurableTransitionReviewResult, DurableTransitionBefore); err != nil {
+		return productionReviewPending, err
+	}
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutReviewRecord(ctx, record, result.Findings); err != nil {
 			return err
 		}
 		return tx.DeleteReviewRetry(ctx, task.RunID)
 	}); err != nil {
+		return productionReviewPending, err
+	}
+	if err := runDurableTransitionHook(w.transitionHook,
+		DurableTransitionReviewResult, DurableTransitionAfter); err != nil {
 		return productionReviewPending, err
 	}
 	requiresAttention, err := w.classifyReviewFindings(ctx, task, record)
@@ -3045,7 +3072,7 @@ func (w *productionPublicationWorkflow) completeReviewEscalationTask(
 	task productionPublicationTask,
 	binding productionBinding,
 ) (productionTaskOutcome, error) {
-	accepted, err := w.recordCompletedTerminal(ctx, binding.run, task)
+	accepted, err := w.recordCompletedTerminalAtBoundary(ctx, binding.run, task)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -3306,7 +3333,15 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
+		if err := runDurableTransitionHook(w.transitionHook,
+			DurableTransitionReadyItem, DurableTransitionBefore); err != nil {
+			return productionTaskOutcome{}, err
+		}
 		if err := w.attention.PutItem(ctx, ready); err != nil {
+			return productionTaskOutcome{}, err
+		}
+		if err := runDurableTransitionHook(w.transitionHook,
+			DurableTransitionReadyItem, DurableTransitionAfter); err != nil {
 			return productionTaskOutcome{}, err
 		}
 	}
@@ -3344,7 +3379,7 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 	if err := w.supersedeBlockedHold(ctx, task); err != nil {
 		return productionTaskOutcome{}, err
 	}
-	accepted, err := w.recordCompletedTerminal(ctx, binding.run, task)
+	accepted, err := w.recordCompletedTerminalAtBoundary(ctx, binding.run, task)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -4166,7 +4201,15 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 		TaskKey: productionPublicationTaskKey(task.RunID), ProjectImage: binding.image.ID,
 		Imported: imported, Authorization: authorization, Artifacts: artifacts,
 	}
+	if err := runDurableTransitionHook(w.transitionHook,
+		DurableTransitionVerificationEvidence, DurableTransitionBefore); err != nil {
+		return productionVerificationCheckpoint{}, err
+	}
 	if err := w.persistCheckpoint(ctx, task, checkpoint); err != nil {
+		return productionVerificationCheckpoint{}, err
+	}
+	if err := runDurableTransitionHook(w.transitionHook,
+		DurableTransitionVerificationEvidence, DurableTransitionAfter); err != nil {
 		return productionVerificationCheckpoint{}, err
 	}
 	return checkpoint, nil
@@ -4517,7 +4560,7 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 			return nil, err
 		}
 	}
-	accepted, err := w.recordCompletedTerminal(ctx, binding.run, task)
+	accepted, err := w.recordCompletedTerminalAtBoundary(ctx, binding.run, task)
 	if err != nil {
 		return nil, err
 	}
@@ -4560,7 +4603,7 @@ func (w *productionPublicationWorkflow) completeBlockedTask(
 				errors.Join(err, errProductionCrashSeam))
 		}
 	}
-	accepted, err := w.recordCompletedTerminal(ctx, run, task)
+	accepted, err := w.recordCompletedTerminalAtBoundary(ctx, run, task)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -4619,6 +4662,26 @@ func (w *productionPublicationWorkflow) recordCompletedTerminal(
 		StageID: productionStageID(task.RunID), Status: exec.StatusCompleted,
 		HeadSHA: task.HeadSHA, Artifacts: slices.Clone(task.Artifacts), Summary: task.Summary,
 	}, false)
+}
+
+func (w *productionPublicationWorkflow) recordCompletedTerminalAtBoundary(
+	ctx context.Context,
+	run domain.Run,
+	task productionPublicationTask,
+) (bool, error) {
+	if err := runDurableTransitionHook(w.transitionHook,
+		DurableTransitionTerminalCompletion, DurableTransitionBefore); err != nil {
+		return false, err
+	}
+	accepted, err := w.recordCompletedTerminal(ctx, run, task)
+	if err != nil {
+		return false, err
+	}
+	if err := runDurableTransitionHook(w.transitionHook,
+		DurableTransitionTerminalCompletion, DurableTransitionAfter); err != nil {
+		return false, err
+	}
+	return accepted, nil
 }
 
 func (w *productionPublicationWorkflow) finishTask(

@@ -58,6 +58,7 @@ type elaborationWorkflow struct {
 	now              func() time.Time
 	promptPackage    domain.Digest
 	validateDelivery func(context.Context, exec.StartSpec) error
+	transitionHook   DurableTransitionHook
 }
 
 type ElaborationConfig struct {
@@ -66,6 +67,7 @@ type ElaborationConfig struct {
 	Now                 func() time.Time
 	PromptPackageDigest domain.Digest
 	ValidateDelivery    func(context.Context, exec.StartSpec) error
+	TransitionHook      DurableTransitionHook
 }
 
 func WithElaboration(cfg ElaborationConfig) Option {
@@ -81,6 +83,7 @@ func WithElaboration(cfg ElaborationConfig) Option {
 			fetcher: cfg.Fetcher, blobs: cfg.Blobs, now: cfg.Now,
 			promptPackage:    cfg.PromptPackageDigest,
 			validateDelivery: cfg.ValidateDelivery,
+			transitionHook:   cfg.TransitionHook,
 		}
 		return nil
 	}
@@ -2107,6 +2110,10 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 	if err != nil {
 		return false, err
 	}
+	if err := runDurableTransitionHook(e.elaboration.transitionHook,
+		DurableTransitionElaborationOutcome, DurableTransitionBefore); err != nil {
+		return false, err
+	}
 	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
 		verified, err := verifyElaborationChain(ctx, &tx.ReadTx, request)
 		if err != nil {
@@ -2152,6 +2159,10 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 		return false, nil
 	}
 	if err != nil {
+		return false, err
+	}
+	if err := runDurableTransitionHook(e.elaboration.transitionHook,
+		DurableTransitionElaborationOutcome, DurableTransitionAfter); err != nil {
 		return false, err
 	}
 	if !settings.SpecApproval {
@@ -2644,6 +2655,10 @@ func (e *Engine) startApprovedImplementation(ctx context.Context, request elabor
 	if err != nil {
 		return false, err
 	}
+	if err := runDurableTransitionHook(e.elaboration.transitionHook,
+		DurableTransitionSpecificationApproval, DurableTransitionBefore); err != nil {
+		return false, err
+	}
 	_, err = submitProductionRun(ctx, e.store, ProductionRunSpec{
 		RunID: request.ImplementationRunID, ProjectID: request.ProjectID,
 		SpecArtifactID: specArtifactID, PolicyArtifactID: request.PolicyArtifactID,
@@ -2651,6 +2666,10 @@ func (e *Engine) startApprovedImplementation(ctx context.Context, request elabor
 		WorkUnit:   cloneElaborationWorkUnit(request.WorkUnit),
 		CampaignID: request.CampaignID, AttemptNumber: request.AttemptNumber,
 	}, &request)
+	if err == nil {
+		err = runDurableTransitionHook(e.elaboration.transitionHook,
+			DurableTransitionSpecificationApproval, DurableTransitionAfter)
+	}
 	return !alreadyExists && err == nil, err
 }
 

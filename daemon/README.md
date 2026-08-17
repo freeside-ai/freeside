@@ -67,6 +67,33 @@ flakiness and no wasted real time.
 `internal/scheduler/run_synctest_test.go`, which drives `Scheduler.Run`'s real
 `time.NewTicker` cadence, is the worked example.
 
+**Durable transition matrix.** The production restart matrix injects process
+loss on both sides of every registered durable boundary, closes and reopens the
+same SQLite store, rebuilds the engine and disk-backed fake reviewer, and gives
+retry-only states an explicit reconcile-pass bound. It runs under ordinary
+`go test` with injected clocks and local fakes only.
+
+- `internal/engine/durable_transition.go` is the engine registry.
+  `internal/engine/elaboration_test.go` owns elaboration outcome and
+  specification-approval rows; `internal/integration/production_publication_test.go`
+  owns verification, review request/result, publication, ready-item, and
+  terminal rows plus the registry-completeness check.
+- `internal/exec/stage/recovery_test.go` is the sibling registry for seed
+  handoff and execution export. Its durable phases feed the deeper per-phase
+  recovery fixtures that assert single handoff, credential attachment, export,
+  and outcome effects.
+- `internal/integration/workflow_engine_test.go` owns the pre/post matrix for
+  atomic AttentionItem resolution.
+
+When adding a durable transition, add its closed-set engine constant (or the
+stage sibling row), place nil-default before/after hooks immediately around the
+persistence transaction or external effect, register both crash sides in the
+owning matrix, and assert the exact identities and effect counts applicable at
+that stage. A transition is incomplete until the engine completeness test or
+the owning sibling registry names it. Policy/profile and reviewer-configuration
+drift remains covered by the adjacent fail-closed recovery fixtures; a new
+drift axis needs both a preterminal refusal and a terminal-fact adoption case.
+
 ## GitHub App Credential Onboarding
 
 The default publish identity is one public GitHub App owned by the operator's
