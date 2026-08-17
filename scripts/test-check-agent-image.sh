@@ -321,6 +321,8 @@ if [ "${1:-}" = submit ]; then
 	: >"${STUB_DIR:?}/submit.called"
 	if [ "${GO_STUB_SUBMIT_SHAPE:-current}" = legacy ]; then
 		printf '%s\n' '{"run_id":"impl-run","project_id":"freeside","invocation_id":"impl-inv","stage_id":"impl-stage","implementation_run_id":"impl-run","implementation_invocation_id":"impl-inv","implementation_stage_id":"impl-stage"}'
+	elif [ "${GO_STUB_SUBMIT_SHAPE:-current}" = missing-implementation ]; then
+		printf '%s\n' '{"elaboration_run_id":"elab-run","elaboration_invocation_id":"elab-inv","elaboration_stage_id":"elab-stage"}'
 	else
 		printf '%s\n' '{"run_id":"impl-run","elaboration_run_id":"elab-run","project_id":"freeside","invocation_id":"impl-inv","stage_id":"impl-stage","implementation_run_id":"impl-run","implementation_invocation_id":"impl-inv","implementation_stage_id":"impl-stage","elaboration_invocation_id":"elab-inv","elaboration_stage_id":"elab-stage"}'
 	fi
@@ -339,7 +341,9 @@ FREESIDED_STUB
 	if [ "${GO_STUB_MODE:-}" != lifecycle ]; then
 		exit 97
 	fi
-	if [ -z "${FREESIDE_REAL_RUN_INVOCATION:-}" ]; then
+	[ -z "${FREESIDE_REAL_RUN_RUN_ID+x}" ]
+	[ -z "${FREESIDE_REAL_RUN_INVOCATION+x}" ]
+	if [ -z "${FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION:-}" ]; then
 		exit 0
 	fi
 	attempts=0
@@ -348,10 +352,10 @@ FREESIDED_STUB
 		attempts=$((attempts + 1))
 	done
 	[ -f "${STUB_DIR:?}/daemon.args.ready" ]
-	printf '%s\t%s\n' "$FREESIDE_REAL_RUN_RUN_ID" \
-		"$FREESIDE_REAL_RUN_INVOCATION" >>"${STUB_DIR:?}/verification-identities.log"
-	[ "$FREESIDE_REAL_RUN_RUN_ID" = impl-run ]
-	[ "$FREESIDE_REAL_RUN_INVOCATION" = impl-inv ]
+	printf '%s\t%s\n' "$FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID" \
+		"$FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION" >>"${STUB_DIR:?}/verification-identities.log"
+	[ "$FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID" = impl-run ]
+	[ "$FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION" = impl-inv ]
 	printf '%s\n' 'real production pipeline verified: PR #7'
 	;;
 *)
@@ -398,6 +402,8 @@ GO_STUB
     FREESIDE_REAL_RUN_APP_CREDS="$CASE_DIR/app-creds" \
     FREESIDE_REAL_RUN_PROJECT=freeside \
     FREESIDE_REAL_RUN_ALLOWED_PATHS=scripts/ \
+		FREESIDE_REAL_RUN_RUN_ID=stale-generic-run \
+		FREESIDE_REAL_RUN_INVOCATION=stale-generic-invocation \
     "$REAL_RUN" "$input_dir/spec.md" "$input_dir/policy.json" \
     "$input_dir/publication.json" 2>&1)
   RC=$?
@@ -1032,7 +1038,13 @@ else
 	report_failure "legacy replay did not delegate per-invocation rig binding to the daemon"
 fi
 
-begin_case "48 a competing rig refuses before preflight or submit"
+begin_case "48 missing implementation identity fails before daemon start"
+run_real_work lifecycle missing-implementation
+assert_rc 1
+assert_contains "submit produced no implementation run identity"
+assert_not_exists "$CASE_DIR/daemon.args"
+
+begin_case "49 a competing rig refuses before preflight or submit"
 run_real_work lifecycle current refuse
 assert_rc 1
 assert_contains "production rig lease is held by other@host"
@@ -1043,24 +1055,24 @@ else
 	report_failure "refused rig still launched the exporter preflight"
 fi
 
-begin_case "49 a failed clean release fails the campaign"
+begin_case "50 a failed clean release fails the campaign"
 run_real_work lifecycle current release-fail
 assert_rc 1
 assert_contains "rig holder failed during release"
 
-begin_case "50 a wedged clean release is killed within its bound"
+begin_case "51 a wedged clean release is killed within its bound"
 export FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS=1
 run_real_work lifecycle current release-hang
 assert_rc 1
 assert_contains "rig holder did not exit within 1s; sending SIGKILL"
 
-begin_case "51 a stopped clean release is killed within its bound"
+begin_case "52 a stopped clean release is killed within its bound"
 export FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS=1
 run_real_work lifecycle current release-stop
 assert_rc 1
 assert_contains "rig holder did not exit within 1s; sending SIGKILL"
 
-begin_case "52 a wedged exact-resource cleanup is cancelled within its bound"
+begin_case "53 a wedged exact-resource cleanup is cancelled within its bound"
 export FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS=1
 run_real_work lifecycle current ok procbound-hang
 assert_rc 1
@@ -1068,7 +1080,7 @@ assert_contains "exact-resource cleanup exceeded 1s; cancelling it"
 assert_contains "exact-resource cleanup failed; preserving the stale rig manifest"
 assert_helper_stopped
 
-begin_case "53 failed cleanup cannot orphan a mutating descendant"
+begin_case "54 failed cleanup cannot orphan a mutating descendant"
 export FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS=1
 run_real_work lifecycle current ok orphan
 assert_rc 1

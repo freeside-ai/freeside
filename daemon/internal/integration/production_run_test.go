@@ -71,6 +71,85 @@ func TestRealRunAttentionStateDetectsOpenPublicationBlock(t *testing.T) {
 	}
 }
 
+func TestValidateRealRunImplementationBinding(t *testing.T) {
+	t.Parallel()
+	implementationRunID := domain.RunID("implementation-run")
+	elaborationRunID := domain.RunID("elaboration-run")
+	valid := realRunImplementationIdentityInput{
+		implementationRunID: "implementation-run", implementationRunIDSet: true,
+		implementationInvocationID:    "implementation-invocation",
+		implementationInvocationIDSet: true,
+	}
+	tests := []struct {
+		name          string
+		input         realRunImplementationIdentityInput
+		admittedRunID *domain.RunID
+		wantSet       bool
+		wantError     string
+	}{
+		{name: "absent pair preserves seed mode"},
+		{
+			name: "legacy run id", input: realRunImplementationIdentityInput{legacyRunIDSet: true},
+			wantError: realRunImplementationRunIDEnv,
+		},
+		{
+			name: "legacy invocation", input: realRunImplementationIdentityInput{legacyInvocationIDSet: true},
+			wantError: realRunImplementationInvocationEnv,
+		},
+		{
+			name: "run only",
+			input: realRunImplementationIdentityInput{
+				implementationRunID: "implementation-run", implementationRunIDSet: true,
+			},
+			wantError: "must be set together",
+		},
+		{
+			name: "invocation only",
+			input: realRunImplementationIdentityInput{
+				implementationInvocationID:    "implementation-invocation",
+				implementationInvocationIDSet: true,
+			},
+			wantError: "must be set together",
+		},
+		{
+			name: "empty pair",
+			input: realRunImplementationIdentityInput{
+				implementationRunIDSet: true, implementationInvocationIDSet: true,
+			},
+			wantError: "non-empty implementation-lane identities",
+		},
+		{
+			name: "valid pair", input: valid, admittedRunID: &implementationRunID, wantSet: true,
+		},
+		{
+			name: "cross-lane pair", input: valid, admittedRunID: &elaborationRunID,
+			wantError: "do not substitute an elaboration run",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			binding, bindingSet, err := validateRealRunImplementationBinding(tt.input, tt.admittedRunID)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("binding error = %v, want %q", err, tt.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bindingSet != tt.wantSet {
+				t.Fatalf("binding set = %t, want %t", bindingSet, tt.wantSet)
+			}
+			if bindingSet && (binding.runID != implementationRunID ||
+				binding.invocationID != "implementation-invocation") {
+				t.Fatalf("binding = %#v, want implementation identity", binding)
+			}
+		})
+	}
+}
+
 // The production lane (#237): `freesided submit` persists a run whose
 // implement stage the engine dispatches from an artifact-bound invocation
 // (no conversation), and whose terminal result it records at most once,
