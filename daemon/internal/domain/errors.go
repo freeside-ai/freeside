@@ -77,6 +77,7 @@ var (
 	ErrInvalidIntakeStartRefusalReason  = errors.New("invalid intake start refusal reason")
 	ErrInvalidIntakeSupersessionReason  = errors.New("invalid intake supersession reason")
 	ErrInvalidElaborationSourceKind     = errors.New("invalid elaboration source kind")
+	ErrInvalidProductionAttemptKind     = errors.New("invalid production attempt kind")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -156,6 +157,7 @@ var (
 	ErrElaborationSourceInconsistent      = errors.New("elaboration source fields do not match its kind")
 	ErrIntakeOccurrenceInconsistent       = errors.New("intake occurrence fields are internally inconsistent")
 	ErrProjectInvalid                     = errors.New("project record is invalid")
+	ErrProductionAttemptInconsistent      = errors.New("production attempt lineage is inconsistent")
 
 	// Trust-boundary failures.
 	ErrPlaintextCredential               = errors.New("credential material must be a sha256 digest, never plaintext")

@@ -457,7 +457,18 @@ func TestGolden(t *testing.T) {
 
 	attempt := domain.Attempt{ID: "attempt-1", StageID: "stage-1", Number: 1, InvocationID: "inv-1"}
 	stage := domain.Stage{ID: "stage-1", RunID: "run-1", Name: "implementation", Attempts: []domain.Attempt{attempt}}
-	run := domain.Run{ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: resolvedPolicy.Digest, Stages: []domain.Stage{stage}}
+	run := domain.Run{
+		ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: resolvedPolicy.Digest,
+		CampaignID: "campaign-1", AttemptNumber: 2,
+		AttemptReason: "Retry after repairing the acceptance rig", ParentRunID: "run-0",
+		Stages: []domain.Stage{stage},
+	}
+	productionAttempt := domain.ProductionAttempt{
+		CampaignID: "campaign-1", AttemptNumber: 2, Kind: domain.ProductionAttemptRetry,
+		Reason: "Retry after repairing the acceptance rig", ParentRunID: "run-0",
+		SourceDigest: "sha256:source", ApprovedSpecDigest: "sha256:spec",
+		ElaborationRunID: "run-elaboration-1", ImplementationRunID: "run-1",
+	}
 
 	// The provider identity the stage below runs under, and a live lease on
 	// its auth store.
@@ -997,6 +1008,7 @@ func TestGolden(t *testing.T) {
 		{"candidate_authorization", authorization},
 		{"candidate_authorization_blocked", blockedAuthorization},
 		{"run", run},
+		{"production_attempt", productionAttempt},
 		{"initiator_config", initiator},
 		{"initiator_config_manual", manualInitiator},
 		{"stage", stage},

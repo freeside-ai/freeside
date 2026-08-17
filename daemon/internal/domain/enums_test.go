@@ -178,6 +178,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["ElaborationSourceKind"] = append(valids["ElaborationSourceKind"], v.valid)
 	}
 	invalids["ElaborationSourceKind"] = ElaborationSourceKind("").valid
+	for _, v := range AllProductionAttemptKinds {
+		valids["ProductionAttemptKind"] = append(valids["ProductionAttemptKind"], v.valid)
+	}
+	invalids["ProductionAttemptKind"] = ProductionAttemptKind("").valid
 	for _, v := range AllBackupHealthStatuses {
 		valids["BackupHealthStatus"] = append(valids["BackupHealthStatus"], v.valid)
 	}

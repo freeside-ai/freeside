@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -86,9 +87,18 @@ func TestBootstrapProjectsOneTransactionalSnapshot(t *testing.T) {
 func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
+	campaignID, err := engine.ProductionCampaignIDForImplementation("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	elaborationRunID, err := engine.ElaborationRunIDForImplementation("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	run := domain.Run{
 		ID: "run-1", ProjectID: "proj-1",
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+		CampaignID: campaignID, AttemptNumber: 1,
 		Stages: []domain.Stage{{
 			ID: "stage-1", RunID: "run-1", Name: "implementation",
 			Attempts: []domain.Attempt{{
@@ -98,6 +108,27 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 		}},
 	}
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		source, err := domain.NewArtifact(domain.ArtifactInput{ID: "artifact-source", Type: domain.ArtifactKindSpecification, Digest: "sha256:source", Provenance: domain.Provenance{ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-elaborate", HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal}}, map[domain.Digest]bool{})
+		if err != nil {
+			return err
+		}
+		if err := tx.PutArtifact(ctx, source); err != nil {
+			return err
+		}
+		if err := tx.PutProductionAttempt(ctx, domain.ProductionAttempt{
+			CampaignID: campaignID, AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
+			SourceDigest:     "sha256:source",
+			ElaborationRunID: elaborationRunID, ImplementationRunID: run.ID,
+		}); err != nil {
+			return err
+		}
+		if _, err := tx.ApproveProductionAttempt(ctx, campaignID, 1, run.SpecDigest); err != nil {
+			return err
+		}
+		if _, _, err := tx.EnqueueOutbox(ctx, "inv-elaborate-"+string(elaborationRunID)+"-1",
+			string(domain.ElaborationInvocationRequestedKind), []byte(`{"elaboration_run_id":"`+string(elaborationRunID)+`","implementation_run_id":"run-1","campaign_id":"`+string(campaignID)+`","attempt_number":1,"input_artifact_ids":["artifact-source"]}`)); err != nil {
+			return err
+		}
 		return tx.PutRun(ctx, run)
 	}); err != nil {
 		t.Fatalf("PutRun: %v", err)

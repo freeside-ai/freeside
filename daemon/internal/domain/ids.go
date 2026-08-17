@@ -13,6 +13,7 @@ type (
 	ConversationID      string
 	MessageID           string
 	RunID               string
+	CampaignID          string
 	StageID             string
 	AttemptID           string
 	InvocationID        string

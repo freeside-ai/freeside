@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 32
+revision: 33
 status: active
-updated: 2026-08-15
+updated: 2026-08-17
 ---
 
 # Freeside
@@ -1325,6 +1325,17 @@ Additional rules:
   source digest and artifact, elaboration identity and policy, and reserved
   implementation identity as separate lanes; the approval claim, then the
   created run, carries the approved implementation specification digest.
+- **Production acceptance identity is explicit.** The first manual submission
+  deterministically derives a campaign from its content-addressed attempt-1
+  implementation identity, so an exact submit remains idempotent. A deliberate
+  retry allocates the campaign's next monotonic attempt number and binds the
+  new implementation run to its exact terminal parent, operator reason,
+  original source digest, approving elaboration run, and unchanged approved
+  specification digest. Operational retry intent never requires changing
+  specification bytes. `freesided resume` instead targets one exact live run
+  and mints no identity; a terminal run can only continue as a deliberate new
+  attempt. This command-level resume is distinct from provider-session resume
+  in Section 5.7 and AttentionItem actions in Section 4.
 - `auto_start` is bounded by WIP caps. The conservative default is `propose`.
 - Raw findings are immutable. Classification is a versioned annotation.
 - Low-confidence materiality enters the Section 7 adjudication residue and
@@ -2355,6 +2366,8 @@ Build the installer only after the underlying interfaces survive real use. The
 | `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls; a callback or `--resume` reopens the same review after approval. |
 | `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe). It runs on a schedule and files `system_health` items. |
 | `freesided submit` | Registers a manually initiated source work item, starts elaboration, and reserves its future implementation run. |
+| `freesided reattempt --parent-run <run>` or `--campaign <campaign>` | Requires an operator reason and allocates the campaign's next attempt from an already approved specification; a live parent is refused. |
+| `freesided resume --run <run>` | Reattaches observation to one exact non-terminal run without creating a replacement; terminal runs are refused and point to `reattempt`. |
 
 The project-image builder is an internal primitive, not an onboarding-only
 implementation. Phase 1A manually proves that primitive against the selected
@@ -2843,18 +2856,17 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 32 ("Wave tracker authority"):
+Revision 33 ("Production acceptance identity"):
 
-1. **One open pinned wave tracker is authoritative for live implementation
-   status** (Section 11): stable repository documents carry the resolution
-   rule, not a duplicate status value. The matching tracker's title supplies
-   its wave and internal exit, the Section 11 table supplies its phase and
-   shape, and the tracker's Implementation order digest supplies its active
-   front. A zero- or multiple-match state fails to human repair rather than
-   inference. This keeps status forge-visible and maintained at the same wave
-   boundary that already replaces the tracker, without adding a local ledger
-   or deriving intent from git history.
-   (User; devlog 2026-08-15-1016-status-authority.md; #792.)
+1. **Production acceptance identity is an explicit campaign contract**
+   (Section 5.12): an idempotent initial submit reserves campaign attempt 1;
+   specification approval binds its accepted digest; and a terminal retry
+   allocates exactly the next attempt while preserving the original source,
+   raw publication-byte digest, elaboration root, and approved specification.
+   Resume targets one live run and never mints an attempt. This keeps
+   operational retry intent separate from specification bytes and makes every
+   implementation attempt auditable to its exact parent.
+   (User; devlog 2026-08-16-2238-production-attempt-identity.md; #794.)
 
 ## 14. Risks
 

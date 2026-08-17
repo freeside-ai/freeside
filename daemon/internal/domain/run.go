@@ -5,11 +5,15 @@ import "fmt"
 // Run is one workflow execution over an approved spec (plan §5.12). The spec is
 // digest-addressed; stages and their attempts hold the execution structure.
 type Run struct {
-	ID           RunID     `json:"id"`
-	ProjectID    ProjectID `json:"project_id"`
-	SpecDigest   Digest    `json:"spec_digest"`
-	PolicyDigest Digest    `json:"policy_digest"`
-	Stages       []Stage   `json:"stages"`
+	ID            RunID      `json:"id"`
+	ProjectID     ProjectID  `json:"project_id"`
+	SpecDigest    Digest     `json:"spec_digest"`
+	PolicyDigest  Digest     `json:"policy_digest"`
+	CampaignID    CampaignID `json:"campaign_id,omitempty"`
+	AttemptNumber int        `json:"attempt_number,omitempty"`
+	AttemptReason string     `json:"attempt_reason,omitempty"`
+	ParentRunID   RunID      `json:"parent_run_id,omitempty"`
+	Stages        []Stage    `json:"stages"`
 }
 
 // Validate reports whether the run is well-formed. A run is project-scoped and
@@ -28,6 +32,9 @@ func (r Run) Validate() error {
 	}
 	if r.PolicyDigest == "" {
 		return fmt.Errorf("run %s policy_digest: %w", r.ID, ErrEmptyField)
+	}
+	if err := validateProductionLineage(r.CampaignID, r.AttemptNumber, r.AttemptReason, r.ParentRunID); err != nil {
+		return fmt.Errorf("run %s: %w", r.ID, err)
 	}
 	seenStages := make(map[StageID]struct{}, len(r.Stages))
 	// invocation_id is the run-wide reconciliation key (plan §5.3: one committed

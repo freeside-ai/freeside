@@ -38,7 +38,9 @@ func ValidateRunTransition(old, updated Run) error {
 		return fmt.Errorf("run %s: identity would change from %s: %w", updated.ID, old.ID, ErrImmutableTransition)
 	}
 	if updated.ProjectID != old.ProjectID || updated.SpecDigest != old.SpecDigest ||
-		updated.PolicyDigest != old.PolicyDigest || !stagesExtend(old.Stages, updated.Stages) {
+		updated.PolicyDigest != old.PolicyDigest || updated.CampaignID != old.CampaignID ||
+		updated.AttemptNumber != old.AttemptNumber || updated.AttemptReason != old.AttemptReason ||
+		updated.ParentRunID != old.ParentRunID || !stagesExtend(old.Stages, updated.Stages) {
 		return fmt.Errorf("run %s: fixed bindings or recorded history would change: %w", updated.ID, ErrImmutableTransition)
 	}
 	return nil
