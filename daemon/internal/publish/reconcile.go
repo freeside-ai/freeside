@@ -141,9 +141,9 @@ type PullObservation struct {
 
 // IssueObservation is the reconciled state of one issue; see
 // RefObservation for NotModified. ClosedByCommitSHA is the commit the
-// issue's latest `closed` event attributes the closure to, or "" for an
-// open issue or a closure with no commit attribution — the explicit
-// closed-by link the §5.18 issue criterion evaluates.
+// issue's latest `closed` event attributes the closure to, directly or via
+// the closing pull request, or "" for an open issue or a manual closure —
+// the explicit closed-by link the §5.18 issue criterion evaluates.
 type IssueObservation struct {
 	Number            int
 	State             string
@@ -350,15 +350,21 @@ func (r *Reconciler) ReconcileIssue(ctx context.Context, repo string, number int
 
 	obs := IssueObservation{Number: read.Issue.Number, State: read.Issue.State}
 	if read.Issue.State == "closed" {
-		commit, err := r.forge.issueClosingCommit(ctx, ref, number)
+		commit, eventNodeID, err := r.forge.issueClosingCommit(ctx, ref, number)
 		if err != nil {
 			return IssueObservation{}, fmt.Errorf("reconcile: %w", err)
+		}
+		if commit == "" {
+			commit, err = r.forge.issueClosureAttribution(ctx, ref, number, eventNodeID)
+			if err != nil {
+				return IssueObservation{}, fmt.Errorf("reconcile: %w", err)
+			}
 		}
 		obs.ClosedByCommitSHA = commit
 	}
 	r.mu.Lock()
 	if epoch == r.cacheEpoch {
-		if read.ETag != "" {
+		if read.ETag != "" && (obs.State != "closed" || obs.ClosedByCommitSHA != "") {
 			r.issues[key] = issueCacheEntry{etag: read.ETag, obs: obs}
 		} else {
 			delete(r.issues, key)

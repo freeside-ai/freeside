@@ -463,12 +463,12 @@ type IssueStateFact struct {
 	RepositoryID int64      `json:"repository_id"`
 	IssueNumber  int        `json:"issue_number"`
 	State        IssueState `json:"state"`
-	// ClosedByCommitSHA is the commit id of the issue's latest `closed`
-	// event, when the forge attributes the closure to a commit; empty for
-	// an open issue or a closure with no commit attribution (a manual
-	// close). It is the explicit closed-by link §5.18's issue criterion
-	// evaluates — "closed while some PR happened to be merged" is exactly
-	// the inference the capture vocabulary refuses to represent.
+	// ClosedByCommitSHA is the commit id the issue's latest `closed` event
+	// attributes the closure to, directly or via the closing pull request's
+	// merge commit; empty for an open issue or a manual close. It is the
+	// explicit closed-by link §5.18's issue criterion evaluates — "closed
+	// while some PR happened to be merged" is exactly the inference the
+	// capture vocabulary refuses to represent.
 	ClosedByCommitSHA string    `json:"closed_by_commit_sha,omitempty"`
 	ObservedAt        time.Time `json:"observed_at"`
 }

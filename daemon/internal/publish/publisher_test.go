@@ -62,11 +62,12 @@ type fakePR struct {
 	MergeCommitSHA string
 }
 
-// fakeIssueEvent is one row of an issue's event list; CommitID nil is a
-// closure with no commit attribution (a manual close).
+// fakeIssueEvent is one row of an issue's REST event list; CommitID nil is a
+// closure with no direct commit attribution.
 type fakeIssueEvent struct {
 	Event    string
 	CommitID *string
+	NodeID   string
 }
 
 type fakeIssue struct {
@@ -76,6 +77,11 @@ type fakeIssue struct {
 	// IsPR marks the number as secretly a pull request: the issues API
 	// serves both, flagged by a pull_request object.
 	IsPR bool
+}
+
+type fakeGraphQLResponse struct {
+	Status int
+	Body   string
 }
 
 // fakeGitHub is a stateful in-memory GitHub for the endpoints the
@@ -93,6 +99,10 @@ type fakeGitHub struct {
 
 	issues    map[int]fakeIssue
 	issueRevs map[int]int // issue number -> revision, drives issue ETags
+	// graphqlIssueResponses overrides the default null-closer response by
+	// issue number. Raw bodies let returned-object tests exercise malformed
+	// and adversarial GraphQL shapes.
+	graphqlIssueResponses map[int]fakeGraphQLResponse
 	// labelIssueRevs drives the labeled open-issue list ETag per label; bump
 	// to invalidate one label's cached list.
 	labelIssueRevs map[string]int
@@ -140,7 +150,8 @@ func newFakeGitHub(t *testing.T) *fakeGitHub {
 	return &fakeGitHub{
 		t: t, refs: map[string]string{}, prRevs: map[int]int{}, nextPR: 101,
 		issues: map[int]fakeIssue{}, issueRevs: map[int]int{}, labelIssueRevs: map[string]int{},
-		reviews: map[int][]fakeReview{}, reviewRevs: map[int]int{},
+		graphqlIssueResponses: map[int]fakeGraphQLResponse{},
+		reviews:               map[int][]fakeReview{}, reviewRevs: map[int]int{},
 		reviewComments: map[int][]fakeReviewComment{}, reviewCommentRevs: map[int]int{},
 		reactions: map[int][]fakeReaction{}, reactionRevs: map[int]int{},
 		repositoryID: testRepoID,
@@ -189,7 +200,7 @@ func (g *fakeGitHub) requestLog() []string {
 func (g *fakeGitHub) writeRequests() []string {
 	var writes []string
 	for _, r := range g.requestLog() {
-		if !strings.HasPrefix(r, http.MethodGet+" ") {
+		if !strings.HasPrefix(r, http.MethodGet+" ") && r != http.MethodPost+" /graphql" {
 			writes = append(writes, r)
 		}
 	}
@@ -222,6 +233,52 @@ func (g *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 
 	path := r.URL.Path
 	switch {
+	case r.Method == http.MethodPost && path == "/graphql":
+		var request struct {
+			Query     string `json:"query"`
+			Variables struct {
+				Owner  string `json:"owner"`
+				Name   string `json:"name"`
+				Number int    `json:"number"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			g.t.Errorf("decode GraphQL request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if request.Variables.Owner != "freeside-ai" || request.Variables.Name != "evidence-repo" || request.Variables.Number <= 0 {
+			g.t.Errorf("GraphQL variables = %+v", request.Variables)
+		}
+		if !strings.Contains(request.Query, "timelineItems(last: 1, itemTypes: [CLOSED_EVENT])") ||
+			!strings.Contains(request.Query, "nodes { __typename") || !strings.Contains(request.Query, "id closer") {
+			g.t.Errorf("GraphQL query does not select the latest closed event")
+		}
+		response, overridden := g.graphqlIssueResponses[request.Variables.Number]
+		if response.Status == 0 {
+			response.Status = http.StatusOK
+		}
+		w.WriteHeader(response.Status)
+		if response.Body != "" {
+			_, _ = io.WriteString(w, response.Body)
+			return
+		}
+		if overridden {
+			return
+		}
+		issue := g.issues[request.Variables.Number]
+		eventNodeID := ""
+		for i, event := range issue.Events {
+			if event.Event == "closed" {
+				eventNodeID = fakeIssueEventNodeID(request.Variables.Number, i, event)
+			}
+		}
+		if eventNodeID == "" {
+			_, _ = fmt.Fprintf(w, `{"data":{"repository":{"issue":{"number":%d,"timelineItems":{"nodes":[]}}}}}`, request.Variables.Number)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"data":{"repository":{"issue":{"number":%d,"timelineItems":{"nodes":[{"__typename":"ClosedEvent","id":%q,"closer":null}]}}}}}`, request.Variables.Number, eventNodeID)
+
 	case r.Method == http.MethodGet && strings.HasPrefix(path, testRepoPath+"/git/ref/heads/"):
 		branch := strings.TrimPrefix(path, testRepoPath+"/git/ref/heads/")
 		sha, ok := g.refs[branch]
@@ -487,8 +544,11 @@ func (g *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		out := []map[string]any{} // GitHub returns [], never null, for an empty page
 		if start < len(events) {
-			for _, ev := range events[start:end] {
-				row := map[string]any{"event": ev.Event, "commit_id": nil}
+			for i, ev := range events[start:end] {
+				row := map[string]any{
+					"event": ev.Event, "commit_id": nil,
+					"node_id": fakeIssueEventNodeID(number, start+i, ev),
+				}
 				if ev.CommitID != nil {
 					row["commit_id"] = *ev.CommitID
 				}
@@ -549,6 +609,13 @@ func (g *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		g.t.Errorf("unexpected request: %s %s", r.Method, path)
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+func fakeIssueEventNodeID(number, index int, event fakeIssueEvent) string {
+	if event.NodeID != "" {
+		return event.NodeID
+	}
+	return fmt.Sprintf("issue-event-%d-%d", number, index)
 }
 
 func prJSON(pr fakePR) map[string]any {
