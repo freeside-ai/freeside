@@ -33,28 +33,32 @@ code identifiers, package names, or API vocabulary, which stay functional
 ## Claiming
 
 A claim records occupancy only; authorization comes from scheduling or
-fiat (see Pickup), never from the claim itself. Issue-backed work is
-claimed with an issue-comment lease that hands off to a real PR. Direct
-no-issue work needs no claim: it is not eligible for concurrent or
-multi-session execution, and gets promoted to an issue before that
-changes (see Work units).
+fiat (see Pickup), never from the claim itself. Issue-backed implementation
+work is claimed with an issue-comment lease that hands off to a real PR. The
+planning stage never claims its issue: its guarded-write reservation under
+Stages blocks implementation of that issue while planning is active, but does
+not authorize planning or implementation. Direct no-issue work needs no claim:
+it is not eligible for concurrent or multi-session execution, and gets promoted
+to an issue before that changes (see Work units).
 
 Claim arbitration includes the current unit and every unit directly related by
 a forward or reverse `exclusive-with` declaration. Claims conflict when they
-name the same unit or directly exclusive units. After posting, every contender
-rechecks the whole set and orders conflicting, non-expired, unreleased claim
-comments by `created_at`, with the numeric comment ID as the tie-breaker. The
-earliest wins. A conflicting claim either predates a contender's recheck and
-is seen there, or is posted later and sees the first claim on its own recheck;
-the total order prevents livelock without making exclusivity transitive.
+name the same unit or directly exclusive units; an active planning reservation
+blocks a claim across that same set. After posting, every contender rechecks
+the whole set and orders conflicting, non-expired, unreleased claim comments
+by `created_at`, with the numeric comment ID as the tie-breaker. The earliest
+wins. A conflicting claim either predates a contender's recheck and is seen
+there, or is posted later and sees the first claim on its own recheck; the
+total order prevents livelock without making exclusivity transitive.
 
 To claim a unit:
 
 1. Confirm the issue is authorized (scheduled or fiat-assigned). Page every
    open work-unit issue body to find forward and reverse `exclusive-with`
    declarations, then fully page comments and claiming PRs for the current
-   issue and every directly related unit. If any has a conflicting active
-   claim, pick another unit.
+   issue and every directly related unit. If any member has an active planning
+   reservation, stop until it is replaced by a current plan or an explicit
+   release marker. If any has a conflicting active claim, pick another unit.
 2. Choose the branch name (per the Branches section) and post a claim
    comment on the issue: the versioned marker line plus one visible
    `Claim:` line naming that branch.
@@ -65,14 +69,14 @@ To claim a unit:
    ```
 
 3. Re-page the open work-unit issue bodies, rebuild the direct exclusivity set,
-   and re-read every set member's comments and claiming PRs. Among conflicting,
-   non-expired, unreleased claims, the earliest `created_at` wins; the numeric
-   comment ID is the deterministic tie-breaker (lower wins). Ordering is by
-   creation time; comment edits do not reorder claims. A new declaration
-   appearing between reads is a relationship edit: stop until that edit
-   completes, then repeat the relationship and claim reads. The edit protocol
-   below prevents the relationship from changing while both endpoints are
-   actively claimed.
+   and re-read every set member's comments and claiming PRs. An active planning
+   reservation on any member blocks the claim. Among conflicting, non-expired,
+   unreleased claims, the earliest `created_at` wins; the numeric comment ID is
+   the deterministic tie-breaker (lower wins). Ordering is by creation time;
+   comment edits do not reorder claims. A new declaration appearing between
+   reads is a relationship edit: stop until that edit completes, then repeat
+   the relationship and claim reads. The edit protocol below prevents the
+   relationship from changing while both endpoints are actively claimed.
 
 4. A losing claimant posts a release comment bound to its own claim and
    stops (it may re-claim later with a new comment). A release comment
@@ -135,7 +139,8 @@ the outcome hits a Decision notes trigger or the mandatory-note list.
      deterministic direct-exclusivity-set arbitration under Claiming;
    - reverse exclusivity declarations: page every open work-unit issue body,
      find every `exclusive-with` declaration that names the current unit, and
-     verify that none of those declaring units has an active claim; a
+     verify that none of those declaring units has an active claim or planning
+     reservation; a
      declaration on either unit applies symmetrically, so checking only the
      current unit's Dependencies field is insufficient;
    - the current wave's pinned tracking issue;
@@ -163,6 +168,82 @@ the outcome hits a Decision notes trigger or the mandatory-note list.
      declarations found by the status query above.
    An unknown or materially ambiguous relationship is `starts-after` until the
    spine resolves it.
+
+## Stages
+
+AGENTS.md declares the work-unit stages and their binding mutation boundaries.
+Planning is optional: an implementation unit whose issue has no planning-stage
+handoff follows the ordinary implementation workflow. When planning does run,
+its issue-body contract and plan comment carry the handoff across sessions.
+
+Exactly one implementation-plan comment is current for a planned unit. Revise
+that comment in place or mark it explicitly non-current before publishing its
+replacement; never leave two comments that both appear current. The issue-body
+work contract remains authoritative over its plan. AGENTS.md remains
+authoritative project policy, and dependencies and current code reality may
+invalidate a plan assumption. Implementation executes the plan rather than
+replanning it, but surfaces any such conflict and follows the authoritative
+source.
+
+Planning reserves its assigned issue before it can change the authoritative
+contract. Inside the conflict guard, the planner verifies that the issue has no
+active work claim and writes one comment with this marker and visible line:
+
+```text
+<!-- freeside-planning-reservation:v1 -->
+Plan: #N
+```
+
+The reservation blocks any implementation claim or scheduled pickup for that
+issue and every direct `exclusive-with` partner. It does not authorize either
+stage and is not a work claim. Inside the same guard, the planner verifies no
+member of that direct conflict set has an active work claim or reservation
+before posting it. On a completed plan, revise the reservation in place into
+the single current implementation-plan comment; on a blocked attempt, revise
+it in place with an explicit release marker. An implementation session pages
+the comments of its entire direct conflict set and stops on an active
+reservation before claiming or starting, even when its scheduling or fiat
+authorization is otherwise valid.
+
+A reservation expires 48 hours after its forge-issued `created_at`. A new
+owner-authorized `Plan #N` may recover an expired reservation only inside the
+complete guard: re-read the conflict set, revise the expired comment with an
+explicit release marker, then create its own reservation. No session takes
+over an unexpired reservation; it stops for the active planner or owner to
+release it.
+
+Before any planning write, derive the complete transaction. A Dependencies
+change first discovers every open tracker that lists the unit and every input
+needed to refresh each projection: tracker membership and Implementation order,
+each listed unit's contract and Dependencies, prerequisite merge state, the
+relevant open-PR set, and stacked base/child lifecycle and target state. The
+conflict guard spans that discovery as well as the moving authoritative branch
+reference, issue body, comment collection, current-plan set, active planning
+reservation, and active work-claim state. An `exclusive-with` change includes
+the active claims and planning reservations of both proposed endpoints; the
+planner's own reservation on its assigned issue is the only permitted active
+endpoint record.
+
+Acquire and validate the complete guard before the first Dependencies write;
+hold it through the issue-body change, every tracker repair, and post-write
+verification. The guard must provide verified exclusive mutation ownership or
+atomically reject the entire transaction when any guarded input changes. A
+per-resource rejection after the issue change is unsafe because it can leave
+the authoritative Dependencies ahead of its tracker projections. A fresh
+reread alone does not close the cross-resource race. When the complete set
+cannot be discovered or guarded, prepare ready-to-post artifacts from freshly
+reread state but make no planning mutation and report the stage blocked.
+
+Inside an available guard, freshly reread every guarded input immediately
+before writing. Afterward, reread the authoritative representation of every
+intended write while the guard still holds. Any intervening change, incomplete
+result, or mismatch rejects the entire mutation set; report it instead of
+claiming the planning finish line.
+
+After implementation, the human merge gate remains unchanged. A session that
+records a verified merge applies the tracker transition and projection refresh
+under [Session End](#session-end) and [Tracking Issues](#tracking-issues), then
+reports the post-merge results required by AGENTS.md.
 
 ## Session End
 
@@ -248,11 +329,13 @@ never creates a relationship or authorizes work.
   the current unit's declarations and reverse declarations in every open
   work-unit issue, then rechecks all directly conflicting claims after posting
   its own. Before adding a declaration, the editor fully queries active claims
-  on both endpoints. If both are active, the declaration must not be written:
-  the editor coordinates through issue comment and waits until one claimant's
-  release is verified, then re-runs the claim reads before editing. A claimant
-  that observes a relationship edit stops until it completes and then repeats
-  both relationship and claim reads.
+  and planning reservations on both endpoints. A planning transaction may keep
+  its own reservation on its assigned issue; every claim and every other
+  reservation blocks the declaration. The editor coordinates through issue
+  comment and waits until the blocking record is released, then re-runs the
+  claim and reservation reads before editing. A claimant that observes a
+  relationship edit stops until it completes and then repeats both relationship,
+  claim, and reservation reads.
   Example: wave 5 unit #680 was `exclusive-with` #448 and #492 while their
   declared paths overlapped on the Codex review sources.
 

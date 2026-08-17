@@ -57,6 +57,78 @@ Routine implementation and coordination require no note. GitHub issues
 and git remain the only sources of active work state; a note records
 why, never status.
 
+## Work-Unit Stages
+
+Freeside adopts planning and implementation as its work-unit stages. Review
+convergence, the human merge gate, and post-merge cleanup remain phases of the
+existing finish-line workflow, not additional stages. A stage adds no new
+authorization door and weakens none of the claim, overlap, contract,
+relationship, review, or merge gates elsewhere in this file.
+
+### Planning
+
+- **Activation:** Explicit owner fiat in the form `Plan #N`. A bare issue,
+  label, claim, existing plan, or satisfied dependency does not activate the
+  stage.
+- **Allowed mutations:** The assigned issue's body as the authoritative work
+  contract; one versioned planning-reservation comment, replaced in place by
+  the current implementation-plan comment or an explicit release marker; an
+  edit or explicit non-current marker on a superseded plan comment; and repairs
+  to trackers whose projections derive from an edited Dependencies field. The
+  reservation blocks implementation of that issue and its direct
+  `exclusive-with` partners while planning is active; it is not a claim or an
+  authorization door. No claim, branch, PR, code, or implementation change is
+  allowed.
+- **Required input:** The assigned issue and freshly resolved default-branch
+  state; when changing Dependencies, the complete containing-tracker discovery
+  and guarded projection-input set required by `docs/coordination.md`.
+- **Durable output:** The completed issue-body contract and one current
+  implementation-plan comment.
+- **Finish line:** Both outputs are verified on the forge, with no claim or
+  implementation started.
+- **Transition:** Owner fiat hands the unit to implementation with `Handle #N,
+  implementation plan in comments`; an already scheduled issue may instead
+  enter implementation through the existing pickup door. Completing a plan
+  alone never authorizes implementation.
+
+### Implementation
+
+- **Activation:** Explicit owner fiat in the form `Handle #N` for an
+  issue-backed unit, a direct session-contained owner assignment with no
+  issue, or pickup through the project's existing explicitly authorized
+  scheduling door. When planning preceded it, the implementation input
+  includes the plan in comments.
+- **Allowed mutations:** The ordinary work-unit surface: its claim, isolated
+  branch or worktree, declared paths, implementation and verification
+  artifacts, review responses, and PR.
+- **Required input:** The authoritative issue contract or, for a direct
+  session-contained assignment, its prompt-backed work contract; when a
+  planning stage ran, its single current implementation-plan comment. Execute
+  that plan instead of replanning unless it conflicts with the work contract,
+  this project's policy, dependencies, or current code reality; the
+  authoritative source wins and the mismatch is surfaced.
+- **Durable output:** An open, evidence-backed PR carrying the implementation
+  and its verification record.
+- **Finish line:** The Default agent finish line in this file: an open,
+  review-ready PR with required checks green.
+- **Transition:** A human decides whether to merge; after a verified merge,
+  post-merge cleanup follows the record below.
+
+## Merge Cleanup
+
+### Post-merge obligations
+
+- **Containing trackers:** For an issue-backed merged unit, identify every
+  open tracker that lists its verified closing issue, including the wave
+  tracker resolved as the single open pinned issue whose title matches
+  `^Wave [0-9]+ \([^)]*\) tracking$` when it lists the unit. A direct,
+  session-contained unit has no containing tracker.
+- **Refresh:** In each containing tracker's Implementation order, recompute
+  **Startable now** and **Mergeable next** as separate projections.
+- **Detailed mechanics:** `docs/coordination.md`.
+- **Report:** Surface newly unblocked units without claiming or starting them,
+  and identify integration evidence invalidated by the base advance.
+
 <!-- agents-md:managed:finish-line -->
 
 ## Default agent finish line
@@ -71,16 +143,30 @@ Before implementation, establish a lightweight work contract: objective,
 testable acceptance criteria, scope, dependencies and blockers, and explicit
 non-goals. Direct user-assigned work needs no issue; the prompt and
 eventual PR may carry the contract together. Persist that same contract
-in a tracker issue when the work must survive a session boundary,
-coordinate concurrent workers, or join a backlog. Actionable work
-deferred out of the unit's scope gets a tracker issue before handoff.
+in a tracker issue when the work must survive a session boundary, pass
+sequentially between agents or sessions (even within one short session),
+coordinate concurrent workers, or join a backlog. For a sequential handoff,
+put the durable input and output in the issue and its comments, never only in
+transient chat context. Actionable work deferred out of the unit's scope gets
+a tracker issue before handoff.
+
+A project may declare optional work-unit stages in an unmanaged,
+project-specific section. While a declared stage is active, its recorded
+allowed mutations and finish line govern. Completing one stage creates a
+handoff to the next; it does not authorize that next stage to begin.
 
 By default, begin work only through explicit user assignment. An issue, label,
-backlog entry, satisfied dependency, or claim is not authorization to select
-and start work. Agent self-selection requires an explicit project-specific
-opt-in policy.
+backlog entry, satisfied dependency, completed plan, or claim is not
+authorization to select and start work. Agent self-selection requires an
+explicit project-specific opt-in policy.
 
-Use this checklist for each work session:
+For implementation work that is not itself a declared stage, use this
+checklist except actions assigned to any separately declared stage. With no
+stage record, that means the entire checklist. While a declared implementation
+stage is active, use only the steps compatible with its allowed mutations and
+recorded finish line, then stop at its recorded transition. A declared
+non-implementation stage skips this checklist and follows its recorded allowed
+mutations and finish line instead:
 
 1. Read the README and, when resuming an existing work unit, its issue or
    PR and any decision note it links. Resolve the repository's
@@ -275,6 +361,10 @@ Changes to `docs/plan.md`, ADRs (`docs/decisions/`), and (later) the control-pla
 ## Markdown conventions
 
 Markdown headings use **title case** at every level (`docs/intro.md` is the reference example). Convergence is a **ratchet, not a retroactive sweep**: new docs and any heading a substantial revision already touches adopt title case; existing sentence-case docs (`docs/plan.md`, this file, the component READMEs) stay as they are until a substantive revision brings them along, and a heading-only retitle of an otherwise-unchanged doc is not a work unit. The point is that no doc drifts *away* from title case, not that every doc is converted at once.
+
+A heading whose exact spelling is a machine-read record identifier preserves
+that spelling; for example, `### Post-merge obligations` is an interface token,
+not ordinary prose to retitle.
 
 ## Automated reviewer
 
@@ -878,11 +968,14 @@ names only a condition is inert until something else tells you to go look.
   check both the current unit's declarations and reverse `exclusive-with`
   declarations in every open work-unit issue, then run the cross-unit claim
   arbitration. Before adding an `exclusive-with` declaration, the editor
-  checks both endpoints and must not make the edit while both have active
-  claims; one claimant releases before the relationship changes. A declaration
-  appearing during claim arbitration makes that claimant stop until the edit
-  and a fresh relationship read complete. Treat an unknown or materially
-  ambiguous relationship as `starts-after` until the spine resolves it.
+  checks both endpoints and must not make the edit while any claim or foreign
+  planning reservation is active; a planning transaction may retain only its
+  own reservation on its assigned endpoint. The editor waits for the blocking
+  record to release before the relationship changes. A declaration appearing
+  during claim arbitration makes that claimant stop until the edit and a fresh
+  relationship, claim, and reservation read complete. Treat an unknown or
+  materially ambiguous relationship as `starts-after` until the spine resolves
+  it.
 - **Check open PRs for declared-path overlap before you start.** Compare
   every open PR's declared paths against yours, whatever shape the work
   takes; an overlap means stop and coordinate via issue comment before going
