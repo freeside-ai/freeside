@@ -1,6 +1,9 @@
 package observedb
 
 import (
+	"context"
+	"database/sql"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -9,6 +12,12 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 )
 
 // wantSurface is every exported name this package may have. The follow view's
@@ -18,10 +27,418 @@ import (
 // surface the load-bearing claim, and a claim in a comment is one a later
 // edit walks past; this pins it.
 var wantSurface = map[string]bool{
-	"Store":            true,
-	"Open":             true,
-	"Store.ObserveRun": true,
-	"Store.Close":      true,
+	"Admission":                                 true,
+	"Admission.Base":                            true,
+	"Admission.ImageDigest":                     true,
+	"Admission.ImageRef":                        true,
+	"Admission.InvocationID":                    true,
+	"Admission.ReviewConfigurationDigest":       true,
+	"Admission.Stage":                           true,
+	"Admission.TrustProfileDigest":              true,
+	"AttentionItem":                             true,
+	"AttentionItem.CreatedAt":                   true,
+	"AttentionItem.ID":                          true,
+	"AttentionItem.RequestedDecision":           true,
+	"AttentionItem.ReviewConfigurationRecovery": true,
+	"AttentionItem.Status":                      true,
+	"AttentionItem.Type":                        true,
+	"Lineage":                                   true,
+	"Lineage.ApprovedSpecDigest":                true,
+	"Lineage.AttemptNumber":                     true,
+	"Lineage.CampaignID":                        true,
+	"Lineage.ElaborationRunID":                  true,
+	"Lineage.ImplementationRunID":               true,
+	"Lineage.Kind":                              true,
+	"Lineage.ParentRunID":                       true,
+	"Lineage.PublicationDigest":                 true,
+	"Lineage.SourceDigest":                      true,
+	"Open":                                      true,
+	"Snapshot":                                  true,
+	"Snapshot.Admissions":                       true,
+	"Snapshot.Attempt":                          true,
+	"Snapshot.AttentionItems":                   true,
+	"Snapshot.Observation":                      true,
+	"Snapshot.LastStage":                        true,
+	"Snapshot.PublicationInvocationID":          true,
+	"Store":                                     true,
+	"Store.Close":                               true,
+	"Store.ObserveRun":                          true,
+	"Store.ObserveSnapshot":                     true,
+}
+
+func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	rootImplementationRunID := domain.RunID("run-snapshot-root")
+	campaignID, err := engine.ProductionCampaignIDForImplementation(rootImplementationRunID)
+	if err != nil {
+		t.Fatalf("ProductionCampaignIDForImplementation: %v", err)
+	}
+	implementationRunID, err := engine.ProductionAttemptRunID(campaignID, 2)
+	if err != nil {
+		t.Fatalf("ProductionAttemptRunID: %v", err)
+	}
+	elaborationRunID, err := engine.ElaborationRunIDForImplementation(rootImplementationRunID)
+	if err != nil {
+		t.Fatalf("ElaborationRunIDForImplementation: %v", err)
+	}
+	initialAttempt := domain.ProductionAttempt{
+		CampaignID: campaignID, AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
+		SourceDigest: "sha256:source", PublicationDigest: "sha256:publication",
+		ElaborationRunID: elaborationRunID, ImplementationRunID: rootImplementationRunID,
+	}
+	productionAttempt := domain.ProductionAttempt{
+		CampaignID: campaignID, AttemptNumber: 2, Kind: domain.ProductionAttemptRetry,
+		Reason: "retry after rig repair", ParentRunID: rootImplementationRunID,
+		SourceDigest: initialAttempt.SourceDigest, PublicationDigest: initialAttempt.PublicationDigest,
+		ApprovedSpecDigest: "sha256:approved-spec",
+		ElaborationRunID:   elaborationRunID, ImplementationRunID: implementationRunID,
+	}
+	invocationID := domain.InvocationID("inv-snapshot")
+	run := domain.Run{
+		ID: implementationRunID, ProjectID: "project-snapshot",
+		SpecDigest: "sha256:approved-spec", PolicyDigest: "sha256:policy",
+		Stages: []domain.Stage{{
+			ID: "stage-snapshot", RunID: implementationRunID, Name: string(domain.StageNameImplementation),
+			Attempts: []domain.Attempt{{
+				ID: "attempt-snapshot", StageID: "stage-snapshot", Number: 1, InvocationID: invocationID,
+			}},
+		}},
+	}
+	elaborationRun := domain.Run{
+		ID: elaborationRunID, ProjectID: run.ProjectID,
+		SpecDigest: initialAttempt.SourceDigest, PolicyDigest: run.PolicyDigest,
+		CampaignID: campaignID, AttemptNumber: 1,
+		Stages: []domain.Stage{{
+			ID: "stage-elaboration", RunID: elaborationRunID, Name: string(domain.StageNameElaboration),
+		}},
+	}
+	foreignRun := domain.Run{
+		ID: "run-snapshot-foreign", ProjectID: run.ProjectID,
+		SpecDigest: run.SpecDigest, PolicyDigest: run.PolicyDigest,
+		Stages: []domain.Stage{{
+			ID: "stage-snapshot-foreign", RunID: "run-snapshot-foreign",
+			Name: string(domain.StageNameImplementation),
+			Attempts: []domain.Attempt{{
+				ID: "attempt-snapshot-foreign", StageID: "stage-snapshot-foreign",
+				Number: 1, InvocationID: invocationID,
+			}},
+		}},
+	}
+	staleRun := domain.Run{
+		ID: "run-snapshot-stale-evidence", ProjectID: run.ProjectID,
+		SpecDigest: run.SpecDigest, PolicyDigest: run.PolicyDigest,
+		Stages: []domain.Stage{},
+	}
+	malformedRun := domain.Run{
+		ID: "run-snapshot-malformed-attention", ProjectID: run.ProjectID,
+		SpecDigest: run.SpecDigest, PolicyDigest: run.PolicyDigest,
+		Stages: []domain.Stage{},
+	}
+	retargetedRun := domain.Run{
+		ID: "run-snapshot-retargeted-attention", ProjectID: run.ProjectID,
+		SpecDigest: run.SpecDigest, PolicyDigest: run.PolicyDigest,
+		Stages: []domain.Stage{},
+	}
+	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: "owner/repo", RepositoryID: 42,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest: "sha256:workflow-audit",
+		Review: domain.ReviewSettings{
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile: %v", err)
+	}
+	identity := domain.AuthIdentity{
+		ID: "auth-snapshot", Provider: "claude", AuthStoreMutationLease: true,
+		AuthStoreVolume: "provider-cred", MaxParallelExecutions: 1,
+		RefreshStrategy: domain.RefreshOnDemand,
+	}
+	identityID := identity.ID
+	admittedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	staleRecipe := domain.Digest("sha256:stale-recipe")
+	staleRecipes := map[domain.Digest]bool{staleRecipe: true}
+	staleArtifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "artifact-stale-evidence", Type: domain.ArtifactKindVerifyLog,
+		Digest: "sha256:stale-evidence",
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerVerifier, ProducerInvocationID: "inv-stale-evidence",
+			HeadBinding: domain.HeadIndependent, VerificationRecipeDigest: &staleRecipe,
+			SensitivityClass: domain.SensitivityNormal,
+		},
+	}, staleRecipes)
+	if err != nil {
+		t.Fatalf("NewArtifact(stale evidence): %v", err)
+	}
+	staleRunID := staleRun.ID
+	staleAttention, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "execution-failure-stale-evidence", ProjectID: staleRun.ProjectID,
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(staleRunID), RunID: &staleRunID},
+		Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
+		Reason: "old run evidence", RequestedDecision: []domain.Action{domain.ActionRetry, domain.ActionStop},
+		EvidenceSnapshot: []domain.Artifact{staleArtifact}, ItemVersion: 1,
+		InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+	}, staleRecipes)
+	if err != nil {
+		t.Fatalf("NewAttentionItem(stale evidence): %v", err)
+	}
+	readyRunID := run.ID
+	historicalReady, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "ready-historical-recipe", ProjectID: run.ProjectID,
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(readyRunID), RunID: &readyRunID},
+		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason:            "historical ready evidence must not hide publication",
+		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionDismiss},
+		EvidenceSnapshot:  []domain.Artifact{staleArtifact}, PRHeadSHA: "head-ready",
+		PRReference: &domain.PRReference{Repo: "owner/repo", Number: 821},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+	}, staleRecipes)
+	if err != nil {
+		t.Fatalf("NewAttentionItem(historical ready): %v", err)
+	}
+	attentionForRun := func(id domain.ItemID, selected domain.Run) domain.AttentionItem {
+		t.Helper()
+		selectedRunID := selected.ID
+		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+			ID: id, ProjectID: selected.ProjectID,
+			Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(selectedRunID), RunID: &selectedRunID},
+			Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
+			Reason: "run-scoped corruption fixture", RequestedDecision: []domain.Action{domain.ActionRetry, domain.ActionStop},
+			ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+		}, nil)
+		if err != nil {
+			t.Fatalf("NewAttentionItem(%s): %v", id, err)
+		}
+		return item
+	}
+	malformedAttention := attentionForRun("execution-failure-malformed", malformedRun)
+	retargetedAttention := attentionForRun("execution-failure-retargeted", retargetedRun)
+	capabilities, ok := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
+	if !ok {
+		t.Fatal("fresh VM backend has no provable capability ceiling")
+	}
+	backendConfigurationDigest := domain.Digest("sha256:" + strings.Repeat("b", 64))
+	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: invocationID, RunID: run.ID, StageID: "stage-snapshot", AttemptID: "attempt-snapshot",
+		Backend: string(domain.BackendFreshVMReadOnlyVolumeHandoff), Capabilities: capabilities,
+		BackendConfigurationDigest: backendConfigurationDigest,
+		OperatingMode:              domain.ModeUnattended, CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile: domain.EgressProviderOnly,
+		ImageRef:      domain.ImageRef("registry/agent@sha256:" + strings.Repeat("a", 64)),
+		SpecDigest:    run.SpecDigest, PolicyDigest: run.PolicyDigest, InputDigest: "sha256:input",
+		Base:      domain.BaseRevision{Repo: profile.Repo, RepositoryID: profile.RepositoryID, BaseRef: "main", BaseSHA: "base-sha"},
+		Workspace: "workspace-snapshot", AuthIdentityID: &identityID,
+		TrustProfileDigest: &profile.ProfileDigest, AdmittedAt: admittedAt,
+	})
+	if err != nil {
+		t.Fatalf("NewExecutionAdmission: %v", err)
+	}
+	recovery := domain.ReviewConfigurationRecoveryBinding{
+		RunID: run.ID, InvocationID: "review-snapshot", Round: 1,
+		BaseSHA: admission.Base.BaseSHA, HeadSHA: "head-sha", FailureDigest: "sha256:failure",
+		Repo: profile.Repo, RepositoryID: profile.RepositoryID,
+		SupersededProfileDigest: profile.ProfileDigest,
+	}
+	runID := run.ID
+	attention, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "review-snapshot-1", ProjectID: run.ProjectID,
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
+		Type:    domain.AttentionReviewConfiguration, Priority: domain.PriorityHigh,
+		Reason:            "this arbitrary reason must not be projected",
+		RequestedDecision: []domain.Action{domain.ActionAdoptReviewConfiguration},
+		PRHeadSHA:         recovery.HeadSHA, ReviewConfigurationRecovery: &recovery,
+		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		CreatedAt: &admittedAt, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem: %v", err)
+	}
+
+	st, _, err := topicstore.Open(ctx, path, store.Options{
+		ApprovedRecipes: staleRecipes,
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeUnattended: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
+		BackupHealthSource: store.BackupHealthSourceFunc(func(
+			context.Context, store.BackupHealthContext,
+		) (domain.BackupHealth, error) {
+			return domain.BackupHealth{
+				Encryption: domain.BackupHealthHealthy, CheckpointCurrency: domain.BackupHealthHealthy,
+				ArtifactClosure: domain.BackupHealthHealthy, RestoreTestAge: domain.BackupHealthHealthy,
+			}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("open seed store: %v", err)
+	}
+	conformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff, Outcome: domain.ConformancePassed,
+		ConfigurationDigest: backendConfigurationDigest, Capabilities: capabilities,
+		ProvedAt: admittedAt,
+	})
+	if err != nil {
+		t.Fatalf("NewBackendConformance: %v", err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, err := tx.RecordBackendConformance(ctx, conformance)
+		return err
+	}); err != nil {
+		t.Fatalf("RecordBackendConformance: %v", err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutProductionAttempt(ctx, initialAttempt); err != nil {
+			return err
+		}
+		if _, err := tx.ApproveProductionAttempt(ctx, campaignID, 1, run.SpecDigest); err != nil {
+			return err
+		}
+		if err := tx.PutProductionAttempt(ctx, productionAttempt); err != nil {
+			return err
+		}
+		if err := tx.PutRun(ctx, elaborationRun); err != nil {
+			return err
+		}
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		if err := tx.PutRun(ctx, foreignRun); err != nil {
+			return err
+		}
+		if err := tx.PutRun(ctx, staleRun); err != nil {
+			return err
+		}
+		if err := tx.PutRun(ctx, malformedRun); err != nil {
+			return err
+		}
+		if err := tx.PutRun(ctx, retargetedRun); err != nil {
+			return err
+		}
+		if err := tx.RecordTrustProfile(ctx, profile, admittedAt); err != nil {
+			return err
+		}
+		if err := tx.RecordAuthIdentity(ctx, identity, admittedAt); err != nil {
+			return err
+		}
+		if err := tx.RecordExecutionAdmission(ctx, admission); err != nil {
+			return err
+		}
+		if err := tx.PutAttentionItem(ctx, attention); err != nil {
+			return err
+		}
+		if err := tx.PutAttentionItem(ctx, staleAttention); err != nil {
+			return err
+		}
+		if err := tx.PutAttentionItem(ctx, historicalReady); err != nil {
+			return err
+		}
+		if err := tx.PutAttentionItem(ctx, malformedAttention); err != nil {
+			return err
+		}
+		if err := tx.PutAttentionItem(ctx, retargetedAttention); err != nil {
+			return err
+		}
+		if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: run.ID, Kind: domain.MilestoneInvocationAdmitted,
+			InvocationID: &invocationID, RecordedAt: admittedAt,
+		}); err != nil {
+			return err
+		}
+		if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: run.ID, Kind: domain.MilestonePublicationReady,
+			InvocationID: &invocationID, RecordedAt: admittedAt.Add(time.Minute),
+		}); err != nil {
+			return err
+		}
+		completed := domain.ObservedStatusCompleted
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: run.ID, Kind: domain.MilestoneTerminalRecorded,
+			InvocationID: &invocationID, Terminal: &completed,
+			RecordedAt: admittedAt.Add(2 * time.Minute),
+		})
+	}); err != nil {
+		_ = st.Close()
+		t.Fatalf("seed store: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close seed store: %v", err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open raw store: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx,
+		`UPDATE attention_items SET body = '{' WHERE id = ?`, malformedAttention.ID); err != nil {
+		_ = raw.Close()
+		t.Fatalf("malform unrelated attention body: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `UPDATE attention_items
+		SET body = json_set(body, '$.subject.subject_id', 'run-other', '$.subject.run_id', 'run-other')
+		WHERE id = ?`, retargetedAttention.ID); err != nil {
+		_ = raw.Close()
+		t.Fatalf("retarget attention body: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw store: %v", err)
+	}
+
+	observed, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = observed.Close() })
+	snapshot, err := observed.ObserveSnapshot(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("ObserveSnapshot: %v", err)
+	}
+	if conclusion := domain.ConcludeRun(snapshot.Observation); !conclusion.Final ||
+		conclusion.Outcome != domain.RunOutcomePublished {
+		t.Fatalf("published observation conclusion = %+v", conclusion)
+	}
+	if snapshot.PublicationInvocationID != "" {
+		t.Fatalf("snapshot projected absent publication completion as %q", snapshot.PublicationInvocationID)
+	}
+	if len(snapshot.Admissions) != 1 || snapshot.Admissions[0].ImageDigest != "sha256:"+domain.Digest(strings.Repeat("a", 64)) ||
+		snapshot.Admissions[0].ReviewConfigurationDigest == nil ||
+		*snapshot.Admissions[0].ReviewConfigurationDigest != profile.Review.ConfigDigest {
+		t.Fatalf("admissions = %+v", snapshot.Admissions)
+	}
+	if len(snapshot.AttentionItems) != 1 || snapshot.AttentionItems[0].ID != attention.ID ||
+		snapshot.AttentionItems[0].ReviewConfigurationRecovery == nil {
+		t.Fatalf("attention = %+v", snapshot.AttentionItems)
+	}
+	elaborationSnapshot, err := observed.ObserveSnapshot(ctx, elaborationRun.ID)
+	if err != nil {
+		t.Fatalf("ObserveSnapshot(elaboration): %v", err)
+	}
+	if elaborationSnapshot.Attempt == nil ||
+		elaborationSnapshot.Attempt.ElaborationRunID != elaborationRun.ID ||
+		elaborationSnapshot.Attempt.ImplementationRunID != rootImplementationRunID ||
+		elaborationSnapshot.Attempt.ApprovedSpecDigest != run.SpecDigest {
+		t.Fatalf("elaboration lineage = %+v", elaborationSnapshot.Attempt)
+	}
+	if _, err := observed.ObserveSnapshot(ctx, foreignRun.ID); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("ObserveSnapshot(foreign admission) error = %v, want ErrParentKeyMismatch", err)
+	}
+	if _, err := observed.ObserveSnapshot(ctx, staleRun.ID); !errors.Is(err, domain.ErrUnapprovedRecipe) {
+		t.Fatalf("ObserveSnapshot(stale run evidence) error = %v, want ErrUnapprovedRecipe", err)
+	}
+	for name, selectedRunID := range map[string]domain.RunID{
+		"malformed body":  malformedRun.ID,
+		"retargeted body": retargetedRun.ID,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := observed.ObserveSnapshot(ctx, selectedRunID); err == nil ||
+				!strings.Contains(err.Error(), "stored row body inconsistent") {
+				t.Fatalf("ObserveSnapshot(%s) error = %v, want fail-closed row inconsistency", selectedRunID, err)
+			}
+		})
+	}
 }
 
 // TestExportedSurfaceStaysNarrow fails when this package grows an exported

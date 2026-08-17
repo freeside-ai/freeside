@@ -1418,6 +1418,107 @@ func validPublicationTask(
 	}
 }
 
+func TestProductionPublicationCompletionAuthenticatesTaskAndTerminal(t *testing.T) {
+	t.Parallel()
+	run := domain.Run{ID: "run-supervision-completion", ProjectID: "project-supervision"}
+	task := validPublicationTask(t, run.ID, run.ProjectID)
+	taskPayload, err := json.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal := productionTerminalRecord{
+		InvocationID: task.ProducingInvocationID, RunID: task.RunID,
+		StageID: productionStageID(task.RunID), Status: exec.StatusCompleted,
+		HeadSHA: task.HeadSHA, Artifacts: task.Artifacts, Summary: task.Summary,
+	}
+	terminalPayload, err := json.Marshal(terminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name            string
+		taskPayload     []byte
+		terminalPayload []byte
+		dispatch        bool
+		wantComplete    bool
+		wantErr         error
+	}{
+		{name: "pending", taskPayload: taskPayload},
+		{
+			name: "authenticated completion", taskPayload: taskPayload,
+			terminalPayload: terminalPayload, dispatch: true, wantComplete: true,
+		},
+		{
+			name: "malformed task", taskPayload: []byte(`{}`),
+			dispatch: true, wantErr: domain.ErrParentKeyMismatch,
+		},
+		{
+			name: "missing terminal", taskPayload: taskPayload,
+			dispatch: true, wantErr: domain.ErrImmutableTransition,
+		},
+		{
+			name: "divergent terminal", taskPayload: taskPayload,
+			terminalPayload: func() []byte {
+				changed := terminal
+				changed.Summary = "foreign summary"
+				payload, marshalErr := json.Marshal(changed)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				return payload
+			}(),
+			dispatch: true, wantErr: domain.ErrParentKeyMismatch,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				if _, _, err := tx.EnqueueOutbox(
+					ctx, productionPublicationTaskKey(run.ID),
+					KindProductionPublicationRequested, tc.taskPayload,
+				); err != nil {
+					return err
+				}
+				if tc.terminalPayload != nil {
+					if _, _, err := tx.RecordInbox(
+						ctx, string(task.ProducingInvocationID),
+						kindProductionStageTerminal, tc.terminalPayload,
+					); err != nil {
+						return err
+					}
+				}
+				if tc.dispatch {
+					return tx.MarkOutboxDispatched(ctx, productionPublicationTaskKey(run.ID))
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Read(ctx, func(tx *store.ReadTx) error {
+				invocationID, complete, err := ProductionPublicationCompletion(ctx, tx, run)
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("completion error = %v, want %v", err, tc.wantErr)
+				}
+				if err == nil && (complete != tc.wantComplete ||
+					invocationID != task.ProducingInvocationID) {
+					t.Fatalf("completion = %q, %v, want %q, %v",
+						invocationID, complete, task.ProducingInvocationID, tc.wantComplete)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

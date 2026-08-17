@@ -330,6 +330,42 @@ if [ "${1:-}" = submit ]; then
 	fi
 	exit 0
 fi
+if [ "${1:-}" = follow ]; then
+	run_id=""
+	while [ "$#" -gt 0 ]; do
+		if [ "$1" = -run ]; then
+			run_id=$2
+			break
+		fi
+		shift
+	done
+	[ -n "$run_id" ]
+	count_file="${STUB_DIR:?}/follow-$run_id-count"
+	count=$(($(cat "$count_file" 2>/dev/null || echo 0) + 1))
+	printf '%s\n' "$count" >"$count_file"
+	identity='"lineage":{"campaign_id":"campaign-1","attempt_number":1,"kind":"initial","source_digest":"sha256:source","approved_spec_digest":"sha256:spec","elaboration_run_id":"elab-run","implementation_run_id":"impl-run"},"last_stage":"implementation","attention_items":[]'
+	if [ "$run_id" = impl-run ]; then
+		printf '{"run_id":"impl-run","state":"published","outcome":"published",%s}\n' "$identity"
+		exit 0
+	fi
+	case "${GO_STUB_VERIFY_MODE:-success}" in
+	elaboration-failure)
+		printf '{"run_id":"elab-run","state":"failed","outcome":"failed","terminal":"failed",%s,"last_attention_item":{"id":"execution-failure-inv-elaborate-elab-run-1","type":"execution_failure","status":"open","requested_decision":["retry"]}}\n' "$identity"
+		;;
+	pending)
+		if [ "$count" -eq 1 ]; then state=pending; else state=implementation_bound; fi
+		printf '{"run_id":"elab-run","state":"%s","outcome":"pending",%s}\n' "$state" "$identity"
+		;;
+	approval-wait)
+		if [ "$count" -eq 1 ]; then state=waiting_for_specification_approval; else state=implementation_bound; fi
+		printf '{"run_id":"elab-run","state":"%s","outcome":"pending",%s}\n' "$state" "$identity"
+		;;
+	*)
+		printf '{"run_id":"elab-run","state":"implementation_bound","outcome":"pending",%s}\n' "$identity"
+		;;
+	esac
+	exit 0
+fi
 printf '%s\n' 'daemon-start' >>"${STUB_DIR:?}/lifecycle.log"
 printf '%s\n' "$@" >"${STUB_DIR:?}/daemon.args.tmp"
 mv "${STUB_DIR:?}/daemon.args.tmp" "${STUB_DIR:?}/daemon.args"
@@ -382,12 +418,7 @@ FREESIDED_STUB
 			exit 1
 		fi
 		;;
-	pending|approval-wait)
-		if [ "$verify_count" -eq 1 ]; then
-			echo "${GO_STUB_VERIFY_MODE}: implementation admission not found"
-			exit 1
-		fi
-		;;
+	pending|approval-wait) ;;
 	success) ;;
 	*) exit 96 ;;
 	esac
@@ -404,7 +435,7 @@ GO_STUB
 		cat >"$stub_bin/sleep" <<'SLEEP_STUB'
 #!/usr/bin/env bash
 set -euo pipefail
-if [ "${1:-}" = 15 ]; then
+if [ "${1:-}" = 1 ]; then
 	printf '%s\n' "$1" >>"${STUB_DIR:?}/poll-sleeps.log"
 	exit 0
 fi
@@ -424,6 +455,7 @@ SLEEP_STUB
 		GO_STUB_VERIFY_MODE="$verify_mode" \
 		REAL_SLEEP="$real_sleep" \
 		FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS="${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}" \
+		FREESIDE_REAL_RUN_DIAGNOSTIC_DIR="$CASE_DIR" \
     FREESIDE_REAL_RUN_STATE_ROOT="$CASE_DIR/state" \
     FREESIDE_REAL_RUN_LISTEN=127.0.0.1:8677 \
     FREESIDE_REAL_RUN_AGENT_IMAGE="example.test/agent@$digest" \
@@ -1098,9 +1130,8 @@ begin_case "49 durable elaboration failure exits before the polling delay"
 export FREESIDE_REAL_RUN_TIMEOUT_SECONDS=60
 run_real_work lifecycle current ok ok elaboration-failure
 assert_rc 1
-assert_contains "elaboration failed before implementation admission"
-assert_contains "run=elab-run item=execution-failure-inv-elaborate-elab-run-1"
-assert_contains "Driver summary: invalid output"
+assert_contains "elaboration run=elab-run ended outcome=failed terminal=failed"
+assert_contains "attention=execution-failure-inv-elaborate-elab-run-1 type=execution_failure"
 assert_not_exists "$CASE_DIR/poll-sleeps.log"
 if grep -q '^daemon-stop$' "$CASE_DIR/lifecycle.log"; then
 	pass=$((pass + 1))
@@ -1112,16 +1143,17 @@ begin_case "50 pending elaboration keeps polling to implementation admission"
 run_real_work lifecycle current ok ok pending
 assert_rc 0
 assert_contains "verified ready publication"
+assert_contains "elaboration run=elab-run state=pending"
 assert_exists "$CASE_DIR/poll-sleeps.log"
 
 begin_case "51 approval wait keeps polling to implementation admission"
 run_real_work lifecycle current ok ok approval-wait
 assert_rc 0
 assert_contains "verified ready publication"
+assert_contains "state=waiting_for_specification_approval"
 assert_exists "$CASE_DIR/poll-sleeps.log"
 
 begin_case "52 final verification preserves a late elaboration failure"
-export FREESIDE_REAL_RUN_TIMEOUT_SECONDS=0
 run_real_work lifecycle current ok ok elaboration-failure-final
 assert_rc 1
 assert_contains "elaboration failed before implementation admission"
@@ -1210,6 +1242,10 @@ for doc in \
   assert_lacks "runtime inspection JSON is ambiguous"
   assert_contains "would fail the ward allowlist"
 done
+
+# Keep the production-lifecycle supervisor fixtures on the existing scripts
+# CI path without widening automation-control files.
+bash "$SCRIPT_DIR/test-run-real-work-supervision.sh"
 
 # ---------------------------------------------------------------- summary
 echo

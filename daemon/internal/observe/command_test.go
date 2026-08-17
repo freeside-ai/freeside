@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 )
@@ -234,6 +236,128 @@ func TestFollowCommandReportsATerminalFailure(t *testing.T) {
 	)
 }
 
+func TestFollowCommandPrintsBoundedSupervisionSnapshot(t *testing.T) {
+	st, path := openFollowStore(t)
+	run := domain.Run{
+		ID: followRun, ProjectID: "project-follow", SpecDigest: "sha256:spec",
+		PolicyDigest: "sha256:policy",
+		Stages: []domain.Stage{{
+			ID: "stage-elaboration", RunID: followRun, Name: string(domain.StageNameElaboration),
+			Attempts: []domain.Attempt{{
+				ID: "attempt-elaboration", StageID: "stage-elaboration", Number: 1,
+				InvocationID: followInvocation,
+			}},
+		}},
+	}
+	runID := followRun
+	createdAt := followAt(5)
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "spec-approval-run-follow-cli-1", ProjectID: run.ProjectID,
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Type:    domain.AttentionSpecApproval, Priority: domain.PriorityNormal,
+		Reason:            "free-form specification text must not reach the snapshot",
+		RequestedDecision: []domain.Action{domain.ActionApprove, domain.ActionRequestChanges},
+		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
+		CreatedAt: &createdAt, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem: %v", err)
+	}
+	if err := st.Write(context.Background(), func(tx *store.WriteTx) error {
+		if err := tx.PutRun(context.Background(), run); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(context.Background(), item)
+	}); err != nil {
+		t.Fatalf("seed supervision snapshot: %v", err)
+	}
+	appendFollowMilestones(t, st, followMilestone(domain.MilestoneRunSubmitted, 0))
+
+	output, err := runFollowCLI(t, "-db", path, "-run", string(followRun), "-snapshot")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	var got supervisionSnapshot
+	if err := json.Unmarshal([]byte(output), &got); err != nil {
+		t.Fatalf("decode snapshot %q: %v", output, err)
+	}
+	if got.RunID != followRun || got.State != "waiting_for_specification_approval" ||
+		got.Outcome != domain.RunOutcomePending || got.LastStage != string(domain.StageNameElaboration) {
+		t.Fatalf("snapshot identity/state = %+v", got)
+	}
+	if len(got.AttentionItems) != 1 || got.AttentionItems[0].ID != item.ID ||
+		got.LastAttentionItem == nil || got.LastAttentionItem.ID != item.ID {
+		t.Fatalf("snapshot attention = %+v / %+v", got.AttentionItems, got.LastAttentionItem)
+	}
+	if strings.Contains(output, item.Reason) {
+		t.Fatalf("snapshot leaked free-form attention reason: %s", output)
+	}
+	if strings.Count(strings.TrimSpace(output), "\n") != 0 {
+		t.Fatalf("snapshot is not one JSON document line: %q", output)
+	}
+}
+
+func TestFollowCommandReportsPersistedElaborationAsImplementationBound(t *testing.T) {
+	st, path := openFollowStore(t)
+	rootImplementationRunID := domain.RunID("run-follow-implementation")
+	campaignID, err := engine.ProductionCampaignIDForImplementation(rootImplementationRunID)
+	if err != nil {
+		t.Fatalf("ProductionCampaignIDForImplementation: %v", err)
+	}
+	elaborationRunID, err := engine.ElaborationRunIDForImplementation(rootImplementationRunID)
+	if err != nil {
+		t.Fatalf("ElaborationRunIDForImplementation: %v", err)
+	}
+	approvedSpec := domain.Digest("sha256:approved-spec")
+	attempt := domain.ProductionAttempt{
+		CampaignID: campaignID, AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
+		SourceDigest: "sha256:source", PublicationDigest: "sha256:publication",
+		ElaborationRunID:    elaborationRunID,
+		ImplementationRunID: rootImplementationRunID,
+	}
+	run := domain.Run{
+		ID: elaborationRunID, ProjectID: "project-follow", SpecDigest: attempt.SourceDigest,
+		PolicyDigest: "sha256:policy", CampaignID: campaignID, AttemptNumber: 1,
+		Stages: []domain.Stage{{
+			ID: "stage-elaboration", RunID: elaborationRunID, Name: string(domain.StageNameElaboration),
+		}},
+	}
+	ctx := context.Background()
+	invocationID := domain.InvocationID("inv-follow-elaboration")
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutProductionAttempt(ctx, attempt); err != nil {
+			return err
+		}
+		if _, err := tx.ApproveProductionAttempt(ctx, campaignID, 1, approvedSpec); err != nil {
+			return err
+		}
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: elaborationRunID, Kind: domain.MilestoneRunSubmitted,
+			InvocationID: &invocationID, RecordedAt: followAt(0),
+		})
+	}); err != nil {
+		t.Fatalf("seed persisted elaboration: %v", err)
+	}
+
+	output, err := runFollowCLI(t, "-db", path, "-run", string(elaborationRunID), "-snapshot")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	var got supervisionSnapshot
+	if err := json.Unmarshal([]byte(output), &got); err != nil {
+		t.Fatalf("decode snapshot %q: %v", output, err)
+	}
+	if got.State != "implementation_bound" || got.Lineage == nil ||
+		got.Lineage.ElaborationRunID != elaborationRunID ||
+		got.Lineage.ImplementationRunID != rootImplementationRunID ||
+		got.Lineage.ApprovedSpecDigest != approvedSpec {
+		t.Fatalf("persisted elaboration snapshot = %+v", got)
+	}
+}
+
 // TestFollowCommandResumesAcrossReconnectAndDaemonRestart is the reconnect
 // scenario: the timeline is durable, so a second command run replays every
 // milestone the first one saw, and the observation that the stopped daemon
@@ -385,6 +509,14 @@ func TestFollowCommandRejectsFlagMisuse(t *testing.T) {
 		{
 			name: "non-positive freshness window",
 			args: []string{"-db", path, "-run", string(followRun), "-freshness-window", "-1s"},
+		},
+		{
+			name: "two snapshot modes",
+			args: []string{"-db", path, "-run", string(followRun), "-once", "-snapshot"},
+		},
+		{
+			name: "recipe without snapshot",
+			args: []string{"-db", path, "-run", string(followRun), "-approved-recipe", "sha256:recipe"},
 		},
 		{name: "unknown flag", args: []string{"-db", path, "-run", string(followRun), "-tail"}},
 	} {

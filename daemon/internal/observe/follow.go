@@ -3,14 +3,13 @@
 // a pure consumer of the run-observation aggregate: it classifies, formats,
 // and paces, and it decides nothing the workflow reads back.
 //
-// Containment is structural, not a runtime check. The only run state this
-// package can reach is domain.RunObservation, which cannot express a writer's
-// stdout, stderr, filesystem, transcript, or any free-text reason (#394). Its
-// dependencies are the domain vocabulary and observe/observedb, whose whole
-// exported surface is open, read one aggregate, close; nothing here can name
-// a file, start a process, or open a socket. containment_test.go pins that
-// import boundary, and states where a mechanical proof stops and reading the
-// observedb surface takes over.
+// Containment is structural, not a runtime check. The run state this package
+// can reach is the observation aggregate plus observedb's bounded lineage,
+// admission, and AttentionItem identity projections. None can express a
+// writer's stdout, stderr, filesystem, transcript, attention reason, evidence,
+// or claims (#394). Nothing here can name a file, start a process, or open a
+// socket. containment_test.go pins that import boundary and states where a
+// mechanical proof stops and reading the observedb surface takes over.
 package observe
 
 import (
@@ -24,6 +23,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
 )
 
 // DefaultInterval paces the follow loop's reads. The engine refreshes an
@@ -466,6 +466,56 @@ type (
 	Conclusion = domain.RunConclusion
 )
 
+// SupervisionState is the closed lifecycle vocabulary consumed by the
+// production real-run supervisor.
+type SupervisionState string
+
+const (
+	SupervisionUnobserved             SupervisionState = "unobserved"
+	SupervisionPending                SupervisionState = "pending"
+	SupervisionWaitingForSpecApproval SupervisionState = "waiting_for_specification_approval"
+	SupervisionImplementationBound    SupervisionState = "implementation_bound"
+	SupervisionAttentionRequired      SupervisionState = "attention_required"
+	SupervisionPublicationReady       SupervisionState = "publication_ready"
+	SupervisionPublished              SupervisionState = "published"
+	SupervisionBlocked                SupervisionState = "blocked"
+	SupervisionFailed                 SupervisionState = "failed"
+	SupervisionLost                   SupervisionState = "lost"
+)
+
+// AllSupervisionStates is the single registration point for the snapshot
+// lifecycle contract shared with scripts/run-real-work-supervision.sh.
+var AllSupervisionStates = []SupervisionState{
+	SupervisionUnobserved,
+	SupervisionPending,
+	SupervisionWaitingForSpecApproval,
+	SupervisionImplementationBound,
+	SupervisionAttentionRequired,
+	SupervisionPublicationReady,
+	SupervisionPublished,
+	SupervisionBlocked,
+	SupervisionFailed,
+	SupervisionLost,
+}
+
+func (s SupervisionState) valid() bool {
+	switch s {
+	case SupervisionUnobserved,
+		SupervisionPending,
+		SupervisionWaitingForSpecApproval,
+		SupervisionImplementationBound,
+		SupervisionAttentionRequired,
+		SupervisionPublicationReady,
+		SupervisionPublished,
+		SupervisionBlocked,
+		SupervisionFailed,
+		SupervisionLost:
+		return true
+	default:
+		return false
+	}
+}
+
 const (
 	OutcomePending   = domain.RunOutcomePending
 	OutcomePublished = domain.RunOutcomePublished
@@ -483,4 +533,53 @@ var (
 
 func Conclude(observation domain.RunObservation) Conclusion {
 	return domain.ConcludeRun(observation)
+}
+
+func deriveSupervisionState(snapshot observedb.Snapshot, conclusion Conclusion) SupervisionState {
+	if conclusion.Final {
+		if conclusion.Outcome == OutcomePublished && !publicationAccepted(snapshot) {
+			return SupervisionPublicationReady
+		}
+		return SupervisionState(conclusion.Outcome)
+	}
+	for _, item := range snapshot.AttentionItems {
+		if item.Type == domain.AttentionSpecApproval && len(item.RequestedDecision) > 0 {
+			return SupervisionWaitingForSpecApproval
+		}
+	}
+	for _, item := range snapshot.AttentionItems {
+		if len(item.RequestedDecision) > 0 {
+			return SupervisionAttentionRequired
+		}
+	}
+	if snapshot.Attempt != nil && snapshot.Attempt.ApprovedSpecDigest != "" &&
+		snapshot.Observation.RunID == snapshot.Attempt.ElaborationRunID {
+		return SupervisionImplementationBound
+	}
+	return SupervisionState(conclusion.Outcome)
+}
+
+// publicationAccepted requires both sides of the publication worker's final
+// durable boundary: a completed terminal for the exact ready invocation and
+// the selected run's publication task marked dispatched. publication_ready
+// alone deliberately remains an outcome for operators, but is not permission
+// for the real-run supervisor to stop the daemon.
+func publicationAccepted(snapshot observedb.Snapshot) bool {
+	if snapshot.PublicationInvocationID == "" {
+		return false
+	}
+	completed := false
+	ready := false
+	for _, milestone := range snapshot.Observation.Milestones {
+		if milestone.Kind == domain.MilestoneTerminalRecorded &&
+			*milestone.InvocationID == snapshot.PublicationInvocationID &&
+			milestone.Terminal != nil && *milestone.Terminal == domain.ObservedStatusCompleted {
+			completed = true
+		}
+		if milestone.Kind == domain.MilestonePublicationReady &&
+			*milestone.InvocationID == snapshot.PublicationInvocationID {
+			ready = true
+		}
+	}
+	return completed && ready
 }

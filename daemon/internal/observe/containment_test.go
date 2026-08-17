@@ -19,17 +19,19 @@ import (
 // method surface, including WriteInternal, Checkpoint, Restore, and the
 // backup files, none of which a run observer has any business holding; the
 // follow path reaches the database only through observe/observedb, whose
-// three exported functions open, read one aggregate, and close.
+// bounded exported surface opens, reads one run's observation or supervision
+// snapshot, and closes.
 var permittedImports = map[string]bool{
-	"context": true,
-	"errors":  true,
-	"flag":    true,
-	"fmt":     true,
-	"io":      true,
-	"slices":  true,
-	"strconv": true,
-	"strings": true,
-	"time":    true,
+	"context":       true,
+	"encoding/json": true,
+	"errors":        true,
+	"flag":          true,
+	"fmt":           true,
+	"io":            true,
+	"slices":        true,
+	"strconv":       true,
+	"strings":       true,
+	"time":          true,
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain":            true,
 	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb": true,
@@ -55,7 +57,7 @@ var permittedImports = map[string]bool{
 // can name, never which methods of a permitted package it calls. So the proof
 // only reaches as far as the smallest permitted surface, and the regress has
 // to stop somewhere a human can check by eye. It stops at observe/observedb:
-// one short file exporting open, observe-one-run, and close. Opening the
+// one short file exporting open, two bounded read views, and close. Opening the
 // operator's -db path is the intended capability, and nothing here
 // distinguishes a careful use of it from a careless one.
 func TestFollowReachesNoWriterSurface(t *testing.T) {

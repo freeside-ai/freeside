@@ -52,6 +52,8 @@
 # Optional environment:
 #   FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS clean rig-holder shutdown
 #                                    bound (default 30)
+#   FREESIDE_REAL_RUN_DIAGNOSTIC_DIR operator-visible diagnostic destination
+#                                    (default current directory)
 #
 # The harness supplies FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID,
 # FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION, and (when present)
@@ -138,19 +140,54 @@ if [[ ! "$FREESIDE_REAL_RUN_APPROVED_RECIPE" =~ ^sha256:[0-9a-f]{64}$ ]]; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/run-real-work-supervision.sh
+source "$repo_root/scripts/run-real-work-supervision.sh"
 workdir="$(mktemp -d)"
 daemon_pid=""
 rig_pid=""
+elaboration_run_id=""
+implementation_run_id=""
+last_supervision_snapshot="$workdir/supervision.json"
+diagnostic_path=""
 rig_acquisition="$workdir/rig-acquisition.json"
 rig_log="$workdir/rig-hold.log"
 db_path="$FREESIDE_REAL_RUN_STATE_ROOT/freeside.db"
 listen_address="$FREESIDE_REAL_RUN_LISTEN"
 rig_release_timeout=${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}
+diagnostic_dir=${FREESIDE_REAL_RUN_DIAGNOSTIC_DIR:-$PWD}
 
 if [[ ! "$rig_release_timeout" =~ ^[1-9][0-9]*$ ]]; then
 	echo "run-real-work: FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS must be a positive integer" >&2
 	exit 2
 fi
+if [[ ! -d "$diagnostic_dir" ]]; then
+	echo "run-real-work: diagnostic directory is not a directory: $diagnostic_dir" >&2
+	exit 2
+fi
+
+write_diagnostic() {
+	local selected_run="" candidate
+	[[ -z "$implementation_run_id" ]] || selected_run=$implementation_run_id
+	[[ -n "$selected_run" || -z "$elaboration_run_id" ]] || selected_run=$elaboration_run_id
+	[[ -n "$selected_run" ]] || return 0
+	if [[ ! -s "$last_supervision_snapshot" ]]; then
+		for candidate in "$selected_run" "$elaboration_run_id"; do
+			[[ -n "$candidate" ]] || continue
+			if "$workdir/freesided" follow -db "$db_path" -run "$candidate" -snapshot \
+				-approved-recipe "$FREESIDE_REAL_RUN_APPROVED_RECIPE" \
+				>"$last_supervision_snapshot" 2>/dev/null; then
+				break
+			fi
+		done
+	fi
+	if [[ ! -s "$last_supervision_snapshot" ]]; then
+		echo "run-real-work: could not produce the final diagnostic snapshot" >&2
+		return 1
+	fi
+	diagnostic_path=$(mktemp "${diagnostic_dir%/}/freeside-real-work.XXXXXX.json")
+	cp "$last_supervision_snapshot" "$diagnostic_path"
+	echo "run-real-work: diagnostic artifact: $diagnostic_path" >&2
+}
 
 rig_child_active() {
 	[[ -n "$rig_pid" ]] && jobs -pr | grep -qx -- "$rig_pid"
@@ -228,6 +265,9 @@ cleanup() {
 	status=$?
 	trap - EXIT
 	cleanup_failed=false
+	if ! write_diagnostic; then
+		cleanup_failed=true
+	fi
   if [[ -n "$daemon_pid" ]] && kill -0 "$daemon_pid" 2>/dev/null; then
     kill "$daemon_pid" 2>/dev/null || true
     # A wedged writer container can block the daemon's own shutdown, and this
@@ -509,50 +549,22 @@ if [[ -n "$elaboration_run_id" ]]; then
   echo "implementation verification resumes automatically after approval" >&2
 fi
 
-# Wait for the run to reach the durable ready state. The verifier below is the
-# authority on success; this loop only bounds the wait.
-deadline=$(( SECONDS + ${FREESIDE_REAL_RUN_TIMEOUT_SECONDS:-2400} ))
-while (( SECONDS < deadline )); do
-	if ! require_live_rig; then
-		exit 1
-	fi
-	if ! kill -0 "$daemon_pid" 2>/dev/null; then
-    echo "run-real-work: the daemon exited before the run finished" >&2
-    cat "$workdir/daemon.log" >&2
-    exit 1
-  fi
-  if env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
-		"${elaboration_verifier_env[@]}" \
-    FREESIDE_REAL_RUN_LIVE_TEST=1 \
-    FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID="$implementation_run_id" \
-    FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION="$implementation_invocation_id" \
-    go test -C "$repo_root/daemon" ./internal/integration/ \
-    -run TestRealWorkItemCompletesProductionPipeline -count=1 > "$workdir/verify.log" 2>&1; then
-    break
-  fi
-	if grep -q "real run elaboration failed:" "$workdir/verify.log"; then
-		echo "run-real-work: elaboration failed before implementation admission" >&2
-		cat "$workdir/verify.log" >&2
+# Follow durable, read-only snapshots instead of rerunning the integration
+# verifier as a polling mechanism. The verifier below remains the one final
+# success authority after observation reaches published.
+set +e
+real_work_supervise "$workdir/freesided" "$db_path" "$elaboration_run_id" \
+	"$implementation_run_id" "$daemon_pid" \
+	"${FREESIDE_REAL_RUN_TIMEOUT_SECONDS:-2400}" "$last_supervision_snapshot"
+supervision_status=$?
+set -e
+if [[ "$supervision_status" -ne 0 ]]; then
+	if [[ "$supervision_status" -eq 124 ]]; then
 		echo "daemon log:" >&2
 		tail -50 "$workdir/daemon.log" >&2
-		exit 1
 	fi
-  if grep -q "real run terminal outcome:" "$workdir/verify.log"; then
-    echo "run-real-work: the run reached a failed terminal outcome" >&2
-    cat "$workdir/verify.log" >&2
-    echo "daemon log:" >&2
-    tail -50 "$workdir/daemon.log" >&2
-    exit 1
-  fi
-  if grep -q "real run publication blocked:" "$workdir/verify.log"; then
-    echo "run-real-work: publication was durably blocked" >&2
-    cat "$workdir/verify.log" >&2
-    echo "daemon log:" >&2
-    tail -50 "$workdir/daemon.log" >&2
-    exit 1
-  fi
-  sleep 15
-done
+	exit "$supervision_status"
+fi
 
 kill "$daemon_pid" 2>/dev/null || true
 wait "$daemon_pid" 2>/dev/null || true
