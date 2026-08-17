@@ -205,12 +205,34 @@ the comments of its entire direct conflict set and stops on an active
 reservation before claiming or starting, even when its scheduling or fiat
 authorization is otherwise valid.
 
-A reservation expires 48 hours after its forge-issued `created_at`. A new
-owner-authorized `Plan #N` may recover an expired reservation only inside the
-complete guard: re-read the conflict set, revise the expired comment with an
-explicit release marker, then create its own reservation. No session takes
-over an unexpired reservation; it stops for the active planner or owner to
-release it.
+A reservation is active only while unreleased and less than 48 hours past its
+forge-issued `created_at`. Expiry ends the holder's planning-write authority.
+The holder's own reservation deadline is a guarded input, reread immediately
+before every planning write. A write may be issued only when enough reservation
+margin remains to complete that write and its post-write verification before
+the deadline. At or after the deadline the session makes no further planning
+mutation; when the remaining margin is insufficient, it first obtains a fresh
+reservation through the procedure below.
+
+The margin is a pre-write fence, not an atomic visibility guarantee. If
+verification nevertheless completes after expiry, the mutation remains visible
+but unverified. The session makes no further planning mutation and does not
+claim the planning finish line. Its sole post-expiry write is one recovery-only
+comment on the assigned issue reporting the exact partial state; that comment
+is not planning output or authority to continue planning. A successor includes
+the report and every authoritative affected resource in the complete guarded
+reread and recovery before writing.
+
+Any owner-authorized `Plan #N` session, whether the original planner resuming
+or a successor, may recover an expired reservation only inside the complete
+guard. The original planner may use the same guard to replace its own
+unexpired reservation when too little margin remains. In either case: re-read
+the conflict set; stop if a successor claim or reservation is present; revise
+the old reservation comment with an explicit release marker; then create a
+fresh reservation. Existing claim and reservation arbitration decides recovery
+races. Replacing one's own reservation is not a takeover; no session takes over
+another holder's unexpired reservation, and it stops for the active planner or
+owner to release it.
 
 Before any planning write, derive the complete transaction. A Dependencies
 change first discovers every open tracker that lists the unit and every input
@@ -218,11 +240,12 @@ needed to refresh each projection: tracker membership and Implementation order,
 each listed unit's contract and Dependencies, prerequisite merge state, the
 relevant open-PR set, and stacked base/child lifecycle and target state. The
 conflict guard spans that discovery as well as the moving authoritative branch
-reference, issue body, comment collection, current-plan set, active planning
-reservation, and active work-claim state. An `exclusive-with` change includes
-the active claims and planning reservations of both proposed endpoints; the
-planner's own reservation on its assigned issue is the only permitted active
-endpoint record.
+reference, issue body, comment collection, current-plan set, the planner's own
+reservation deadline, active planning reservations, and active work-claim
+state. An `exclusive-with` change includes the active claims and planning
+reservations of both proposed endpoints; the planner's own unexpired
+reservation with sufficient write-and-verification margin on its assigned
+issue is the only permitted active endpoint record.
 
 Acquire and validate the complete guard before the first Dependencies write;
 hold it through the issue-body change, every tracker repair, and post-write
@@ -330,12 +353,13 @@ never creates a relationship or authorizes work.
   work-unit issue, then rechecks all directly conflicting claims after posting
   its own. Before adding a declaration, the editor fully queries active claims
   and planning reservations on both endpoints. A planning transaction may keep
-  its own reservation on its assigned issue; every claim and every other
-  reservation blocks the declaration. The editor coordinates through issue
-  comment and waits until the blocking record is released, then re-runs the
-  claim and reservation reads before editing. A claimant that observes a
-  relationship edit stops until it completes and then repeats both relationship,
-  claim, and reservation reads.
+  its own unexpired reservation on its assigned issue; every claim and every
+  other active reservation blocks the declaration, and its own reservation
+  must have sufficient write-and-verification margin. The editor coordinates
+  through issue comment and waits until the blocking record is released, then
+  re-runs the claim and reservation reads before editing. A claimant that
+  observes a relationship edit stops until it completes and then repeats both
+  relationship, claim, and reservation reads.
   Example: wave 5 unit #680 was `exclusive-with` #448 and #492 while their
   declared paths overlapped on the Codex review sources.
 

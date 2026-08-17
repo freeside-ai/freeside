@@ -70,13 +70,21 @@ relationship, review, or merge gates elsewhere in this file.
 - **Activation:** Explicit owner fiat in the form `Plan #N`. A bare issue,
   label, claim, existing plan, or satisfied dependency does not activate the
   stage.
-- **Allowed mutations:** The assigned issue's body as the authoritative work
-  contract; one versioned planning-reservation comment, replaced in place by
-  the current implementation-plan comment or an explicit release marker; an
-  edit or explicit non-current marker on a superseded plan comment; and repairs
-  to trackers whose projections derive from an edited Dependencies field. The
-  reservation blocks implementation of that issue and its direct
-  `exclusive-with` partners while planning is active; it is not a claim or an
+- **Allowed mutations:** After acquiring or recovering a reservation that is
+  unexpired with enough remaining margin for the write and its post-write
+  verification under `docs/coordination.md`, the stage may mutate the assigned
+  issue's body as the authoritative work contract; its one versioned
+  planning-reservation comment, replaced in place by the current
+  implementation-plan comment or an explicit release marker; an edit or
+  explicit non-current marker on a superseded plan comment; and trackers whose
+  projections derive from an edited Dependencies field. Expiry ends
+  planning-write authority; continuation requires a fresh reservation through
+  that document's recovery procedure. A mutation whose verification finishes
+  after expiry remains visible but unverified and never satisfies the planning
+  finish line. The session may post only the recovery-only partial-state report
+  that procedure requires; the report is not planning output or authority to
+  continue planning. While active, the reservation blocks implementation of
+  that issue and its direct `exclusive-with` partners; it is not a claim or an
   authorization door. No claim, branch, PR, code, or implementation change is
   allowed.
 - **Required input:** The assigned issue and freshly resolved default-branch
@@ -970,12 +978,12 @@ names only a condition is inert until something else tells you to go look.
   arbitration. Before adding an `exclusive-with` declaration, the editor
   checks both endpoints and must not make the edit while any claim or foreign
   planning reservation is active; a planning transaction may retain only its
-  own reservation on its assigned endpoint. The editor waits for the blocking
-  record to release before the relationship changes. A declaration appearing
-  during claim arbitration makes that claimant stop until the edit and a fresh
-  relationship, claim, and reservation read complete. Treat an unknown or
-  materially ambiguous relationship as `starts-after` until the spine resolves
-  it.
+  own unexpired reservation with sufficient write-and-verification margin on
+  its assigned endpoint. The editor waits for the blocking record to release
+  before the relationship changes. A declaration appearing during claim
+  arbitration makes that claimant stop until the edit and a fresh relationship,
+  claim, and reservation read complete. Treat an unknown or materially
+  ambiguous relationship as `starts-after` until the spine resolves it.
 - **Check open PRs for declared-path overlap before you start.** Compare
   every open PR's declared paths against yours, whatever shape the work
   takes; an overlap means stop and coordinate via issue comment before going
