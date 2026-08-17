@@ -145,6 +145,9 @@ func (b *CodexReviewLifecycle) cleanupCodexReviewWorkspace(
 		binding.OwnershipToken == "" {
 		return failf(CheckTeardown, "stored Codex review workspace ownership is invalid")
 	}
+	if err := b.authorizeRuntime(ctx, codexReviewWorkspaceRuntimeResourceNames(sourceRunID)); err != nil {
+		return codexReviewOperationalf("authorize Codex review workspace cleanup resources: %v", err)
+	}
 	owner := Label{Key: ownershipLabelKey, Value: binding.OwnershipToken}
 	if err := b.deleteCodexReviewVolume(
 		ctx, binding.Volume,

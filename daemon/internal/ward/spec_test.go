@@ -319,6 +319,17 @@ func TestNamesFor(t *testing.T) {
 	}
 }
 
+func TestPreJobResourceNamesForInvocation(t *testing.T) {
+	invocationID := domain.InvocationID("inv-implement")
+	if got, want := PreJobRunIDForInvocation(invocationID), "5f800d2395e91a5e"; got != want {
+		t.Fatalf("PreJobRunIDForInvocation() = %q, want %q", got, want)
+	}
+	if got, want := PreJobContainerNameForInvocation(invocationID),
+		"freeside-ward-conf-5f800d2395e91a5e-prejob"; got != want {
+		t.Fatalf("PreJobContainerNameForInvocation() = %q, want %q", got, want)
+	}
+}
+
 // TestNamesForFitsRuntimeIDLimit pins every role name against the longest
 // valid run ID: Apple container 1.1.0 refuses an ID over 64 bytes, and the
 // networkless-export work already had to shorten a role prefix once for

@@ -159,6 +159,7 @@ begin_case() {
   mkdir -p "$CASE_DIR"
   export STUB_DIR=$CASE_DIR
   unset FREESIDE_CHECK_AGENT_IMAGE_RUNTIME_BOUND_SECONDS
+	unset FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS
   printf 'ok' >"$CASE_DIR/create_mode"
   echo "case: $CASE"
 }
@@ -215,8 +216,10 @@ run_checker_then_term() {
 }
 
 run_real_work() {
-	go_stub_mode=${1:-build-fail}
+	go_stub_mode=${1:-test-fail}
 	submit_shape=${2:-current}
+	rig_hold_mode=${3:-ok}
+	rig_cleanup_mode=${4:-ok}
 	input_dir=$CASE_DIR/inputs
   stub_bin=$CASE_DIR/bin
   mkdir -p "$input_dir" "$stub_bin"
@@ -227,11 +230,11 @@ run_real_work() {
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'called\n' >"${STUB_DIR:?}/go.log"
-if [ "${GO_STUB_MODE:-}" != lifecycle ]; then
-	exit 97
-fi
 case " ${*} " in
 *" build "*)
+	if [ "${GO_STUB_MODE:-}" = build-fail ]; then
+		exit 97
+	fi
 	output=""
 	while [ "$#" -gt 0 ]; do
 		if [ "$1" = -o ]; then
@@ -241,10 +244,81 @@ case " ${*} " in
 		shift
 	done
 	[ -n "$output" ]
-	cat >"$output" <<'FREESIDED_STUB'
+cat >"$output" <<'FREESIDED_STUB'
 #!/usr/bin/env bash
 set -euo pipefail
+if [ "${1:-}" = rig ]; then
+	case "${2:-}" in
+	hold)
+		if [ "${GO_STUB_RIG_HOLD_MODE:-ok}" = refuse ]; then
+			echo 'production rig lease is held by other@host' >&2
+			exit 1
+		fi
+		printf '%s\n' 'rig-hold' >>"${STUB_DIR:?}/lifecycle.log"
+		printf '%s\n' '{"token":"test-token","manifest":{"version":1,"owner":{"user":"test","host":"host","pid":1},"acquired_at":"2026-08-15T12:00:00Z","resources":{"state_root":"/state","database_path":"/state/freeside.db","listen_address":"127.0.0.1:0","seed_root":"/seed","containers":[]},"token_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}'
+		printf '%s\n' "$*" >"${STUB_DIR:?}/rig-hold.args"
+		if [ "${GO_STUB_RIG_HOLD_MODE:-ok}" = release-fail ]; then
+			trap 'exit 17' USR1
+		elif [ "${GO_STUB_RIG_HOLD_MODE:-ok}" = release-hang ]; then
+			trap '' USR1
+		elif [ "${GO_STUB_RIG_HOLD_MODE:-ok}" = release-stop ]; then
+			trap '' USR1
+			kill -STOP "$$"
+		else
+			trap 'printf "%s\n" rig-release >>"${STUB_DIR:?}/lifecycle.log"; exit 0' USR1
+		fi
+		trap 'exit 0' TERM INT
+		while :; do sleep 1; done
+		;;
+	bind)
+		printf '%s\n' 'rig-bind' >>"${STUB_DIR:?}/lifecycle.log"
+		printf '%s\n' "$*" >"${STUB_DIR:?}/rig-bind.args"
+		printf '%s\n' '{}'
+		;;
+	check)
+		;;
+	resource)
+		case "$*" in
+		*"-name state-root"*) printf '%s\n' "${FREESIDE_REAL_RUN_STATE_ROOT:?}" ;;
+		*"-name database-path"*) printf '%s/freeside.db\n' "${FREESIDE_REAL_RUN_STATE_ROOT:?}" ;;
+		*"-name listen-address"*) printf '%s\n' "${FREESIDE_REAL_RUN_LISTEN:?}" ;;
+		*"-name seed-root"*) printf '%s\n' "${FREESIDE_REAL_RUN_SEED_ROOT:?}" ;;
+		*) exit 99 ;;
+		esac
+		;;
+	cleanup)
+		printf '%s\n' 'rig-cleanup' >>"${STUB_DIR:?}/lifecycle.log"
+		printf '%s\n' "$*" >"${STUB_DIR:?}/rig-cleanup.args"
+		if [ "${GO_STUB_RIG_CLEANUP_MODE:-ok}" = hang ]; then
+			trap '' TERM INT
+			while :; do sleep 1; done
+		elif [ "${GO_STUB_RIG_CLEANUP_MODE:-ok}" = procbound-hang ]; then
+			set -m
+			(
+				trap '' TERM INT
+				while :; do sleep 1; done
+			) &
+			helper_pid=$!
+			set +m
+			printf '%s\n' "$helper_pid" >"${STUB_DIR:?}/helper-pid"
+			trap 'kill -KILL -- "-$helper_pid" 2>/dev/null || true; exit 143' TERM
+			while :; do sleep 1; done
+		elif [ "${GO_STUB_RIG_CLEANUP_MODE:-ok}" = orphan ]; then
+			(
+				trap '' TERM INT
+				printf '%s\n' "$BASHPID" >"${STUB_DIR:?}/helper-pid"
+				while :; do sleep 1; done
+			) &
+			exit 19
+		fi
+		;;
+	*) exit 99 ;;
+	esac
+	exit 0
+fi
 if [ "${1:-}" = submit ]; then
+	printf '%s\n' 'submit' >>"${STUB_DIR:?}/lifecycle.log"
+	: >"${STUB_DIR:?}/submit.called"
 	if [ "${GO_STUB_SUBMIT_SHAPE:-current}" = legacy ]; then
 		printf '%s\n' '{"run_id":"impl-run","project_id":"freeside","invocation_id":"impl-inv","stage_id":"impl-stage","implementation_run_id":"impl-run","implementation_invocation_id":"impl-inv","implementation_stage_id":"impl-stage"}'
 	else
@@ -252,15 +326,19 @@ if [ "${1:-}" = submit ]; then
 	fi
 	exit 0
 fi
+printf '%s\n' 'daemon-start' >>"${STUB_DIR:?}/lifecycle.log"
 printf '%s\n' "$@" >"${STUB_DIR:?}/daemon.args.tmp"
 mv "${STUB_DIR:?}/daemon.args.tmp" "${STUB_DIR:?}/daemon.args"
 : >"${STUB_DIR:?}/daemon.args.ready"
-trap 'exit 0' TERM INT
+trap 'printf "%s\n" daemon-stop >>"${STUB_DIR:?}/lifecycle.log"; exit 0' TERM INT
 while :; do sleep 1; done
 FREESIDED_STUB
 	chmod +x "$output"
 	;;
 *" test "*)
+	if [ "${GO_STUB_MODE:-}" != lifecycle ]; then
+		exit 97
+	fi
 	if [ -z "${FREESIDE_REAL_RUN_INVOCATION:-}" ]; then
 		exit 0
 	fi
@@ -289,7 +367,11 @@ GO_STUB
 		PATH="$stub_bin:$TMP:$PATH" \
 		GO_STUB_MODE="$go_stub_mode" \
 		GO_STUB_SUBMIT_SHAPE="$submit_shape" \
+		GO_STUB_RIG_HOLD_MODE="$rig_hold_mode" \
+		GO_STUB_RIG_CLEANUP_MODE="$rig_cleanup_mode" \
+		FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS="${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}" \
     FREESIDE_REAL_RUN_STATE_ROOT="$CASE_DIR/state" \
+    FREESIDE_REAL_RUN_LISTEN=127.0.0.1:8677 \
     FREESIDE_REAL_RUN_AGENT_IMAGE="example.test/agent@$digest" \
     FREESIDE_WARD_EXPORTER_IMAGE="example.test/exporter@$digest" \
     FREESIDE_REAL_RUN_REVIEW_IMAGE="example.test/reviewer@$digest" \
@@ -846,14 +928,16 @@ run_real_work
 assert_rc 2
 assert_contains "example.test/exporter@sha256:"
 assert_contains "missing required observer tools: sh git env mkdir rm cat head find xargs sort cmp sha256sum cut readlink stat ls sync"
-assert_not_exists "$CASE_DIR/go.log"
+assert_exists "$CASE_DIR/go.log"
+assert_exists "$CASE_DIR/rig-hold.args"
 
 begin_case "41 a current exporter pin passes preflight and reaches the build"
 run_real_work
-assert_rc 97
+assert_rc 1
 assert_contains "building freesided"
 assert_lacks "missing required observer tools"
 assert_exists "$CASE_DIR/go.log"
+assert_contains "could not record the auth identity binding"
 
 begin_case "42 an unrecognized missing-tool marker is a generic runtime failure"
 printf '%s\n' 'freeside-missing-tool:not-from-observer-script' \
@@ -863,7 +947,7 @@ run_real_work
 assert_rc 2
 assert_contains "could not preflight exporter image"
 assert_lacks "missing required observer tools"
-assert_not_exists "$CASE_DIR/go.log"
+assert_exists "$CASE_DIR/go.log"
 
 begin_case "43 a non-command-not-found exit cannot convict the image contents"
 printf '%s\n' 'freeside-missing-tool:git' >"$CASE_DIR/run_output"
@@ -872,7 +956,7 @@ run_real_work
 assert_rc 2
 assert_contains "could not preflight exporter image"
 assert_lacks "missing required observer tools"
-assert_not_exists "$CASE_DIR/go.log"
+assert_exists "$CASE_DIR/go.log"
 
 begin_case "44 oversized exporter preflight output is capped before buffering"
 {
@@ -885,7 +969,7 @@ assert_rc 2
 assert_contains "exporter preflight output exceeded the 65536-byte cap"
 assert_contains "could not preflight exporter image"
 assert_lacks "missing required observer tools"
-assert_not_exists "$CASE_DIR/go.log"
+assert_exists "$CASE_DIR/go.log"
 
 begin_case "45 a NUL-bearing marker cannot convict the exporter image"
 {
@@ -897,7 +981,7 @@ run_real_work
 assert_rc 2
 assert_contains "could not preflight exporter image"
 assert_lacks "missing required observer tools"
-assert_not_exists "$CASE_DIR/go.log"
+assert_exists "$CASE_DIR/go.log"
 
 begin_case "46 the gated real-work harness keeps both lane identities distinct"
 run_real_work lifecycle
@@ -917,6 +1001,18 @@ if grep -qx -- '-prompt-package' "$CASE_DIR/daemon.args" &&
 else
 	report_failure "daemon invocation omitted one of the stage prompt flags"
 fi
+if grep -q -- '-rig-token-file' "$CASE_DIR/daemon.args" &&
+  grep -q -- 'rig cleanup -state-root' "$CASE_DIR/rig-cleanup.args"; then
+	pass=$((pass + 1))
+else
+	report_failure "daemon did not receive dynamic rig binding authority and clean up through the live lease"
+fi
+rig_lifecycle=$(tr '\n' ' ' <"$CASE_DIR/lifecycle.log")
+case "$rig_lifecycle" in
+*"rig-hold submit daemon-start daemon-stop rig-cleanup rig-release "*)
+	pass=$((pass + 1)) ;;
+*) report_failure "rig lifecycle was out of order: $rig_lifecycle" ;;
+esac
 
 begin_case "47 a legacy production-only replay remains runnable across upgrade"
 run_real_work lifecycle legacy
@@ -929,6 +1025,55 @@ if grep -qx $'impl-run\timpl-inv' "$CASE_DIR/verification-identities.log"; then
 else
 	report_failure "legacy replay verification lost the implementation identity"
 fi
+if grep -q -- '-rig-token-file' "$CASE_DIR/daemon.args" &&
+  [ ! -e "$CASE_DIR/rig-bind.args" ]; then
+	pass=$((pass + 1))
+else
+	report_failure "legacy replay did not delegate per-invocation rig binding to the daemon"
+fi
+
+begin_case "48 a competing rig refuses before preflight or submit"
+run_real_work lifecycle current refuse
+assert_rc 1
+assert_contains "production rig lease is held by other@host"
+assert_not_exists "$CASE_DIR/submit.called"
+if ! grep -q '^run --rm --network none' "$CASE_DIR/calls.log" 2>/dev/null; then
+	pass=$((pass + 1))
+else
+	report_failure "refused rig still launched the exporter preflight"
+fi
+
+begin_case "49 a failed clean release fails the campaign"
+run_real_work lifecycle current release-fail
+assert_rc 1
+assert_contains "rig holder failed during release"
+
+begin_case "50 a wedged clean release is killed within its bound"
+export FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS=1
+run_real_work lifecycle current release-hang
+assert_rc 1
+assert_contains "rig holder did not exit within 1s; sending SIGKILL"
+
+begin_case "51 a stopped clean release is killed within its bound"
+export FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS=1
+run_real_work lifecycle current release-stop
+assert_rc 1
+assert_contains "rig holder did not exit within 1s; sending SIGKILL"
+
+begin_case "52 a wedged exact-resource cleanup is cancelled within its bound"
+export FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS=1
+run_real_work lifecycle current ok procbound-hang
+assert_rc 1
+assert_contains "exact-resource cleanup exceeded 1s; cancelling it"
+assert_contains "exact-resource cleanup failed; preserving the stale rig manifest"
+assert_helper_stopped
+
+begin_case "53 failed cleanup cannot orphan a mutating descendant"
+export FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS=1
+run_real_work lifecycle current ok orphan
+assert_rc 1
+assert_contains "exact-resource cleanup failed; preserving the stale rig manifest"
+assert_helper_stopped
 
 # --------------------- detector battery: adversarial input-space fixtures
 # Each document stands in for the whole inspect report. Duplicates of every

@@ -819,6 +819,60 @@ func TestCodexReviewResourceNamesFitReferenceRuntime(t *testing.T) {
 	}
 }
 
+func TestCodexReviewRuntimeResourceNamesAreComplete(t *testing.T) {
+	runID := "review-" + strings.Repeat("a", 24)
+	got := CodexReviewRuntimeResourceNamesFor(runID)
+	want := RuntimeResourceNames{
+		Containers: []string{
+			"freeside-handoff-" + runID + "-seeder",
+			"freeside-handoff-" + runID + "-observer",
+			"freeside-review-" + runID + "-ws-obs",
+			"freeside-review-" + runID + "-agents-init",
+			"freeside-review-" + runID + "-agents-obs",
+			"freeside-review-" + runID + "-codex",
+			"freeside-review-" + runID + "-snap-init",
+			"freeside-review-" + runID + "-snap-obs",
+		},
+		Volumes: []string{
+			"freeside-handoff-" + runID + "-ws",
+			"freeside-review-" + runID + "-agents",
+			"freeside-review-" + runID + "-snap",
+		},
+		Networks: []string{"freeside-review-" + runID + "-egress"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Codex review runtime resources = %#v, want %#v", got, want)
+	}
+}
+
+func TestRecoverCodexReviewAuthorizesExactLegacyTopologyBeforeRuntime(t *testing.T) {
+	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
+	owner := testOwnershipLabel()
+	intent := legacyCodexReviewIntentForTest(launch.RunID, "legacy-digest", owner.Value)
+	journal.intent = intent
+	want := codexReviewRuntimeResourceNames(launch.RunID, legacyCodexReviewNames(launch.RunID))
+	bindFailure := errors.New("rig authority unavailable")
+	var authorized RuntimeResourceNames
+	backend.authorizeRuntimeResources = func(_ context.Context, resources RuntimeResourceNames) error {
+		authorized = resources
+		return bindFailure
+	}
+	beforeCalls := len(rt.calls)
+	err := backend.recoverCodexReviewIntent(t.Context(), cfg, *intent, true)
+	if err == nil || !strings.Contains(err.Error(), bindFailure.Error()) {
+		t.Fatalf("recovery authorization error = %v, want %v", err, bindFailure)
+	}
+	if !reflect.DeepEqual(authorized, want) {
+		t.Fatalf("legacy recovery resources = %#v, want %#v", authorized, want)
+	}
+	if len(rt.calls) != beforeCalls {
+		t.Fatalf("runtime calls after refused recovery authorization = %v", rt.calls[beforeCalls:])
+	}
+	if journal.intent.State != CodexReviewIntentPreparing {
+		t.Fatalf("intent state = %q, want preserved preparing", journal.intent.State)
+	}
+}
+
 func TestBackendCodexReviewMaximumInvocationReachesRuntimeLaunch(t *testing.T) {
 	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
 	retargetCodexReviewLifecycle(t, rt, &launchSpec, journal, strings.Repeat("a", 32))

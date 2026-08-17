@@ -1,4 +1,5 @@
-// Package daemonlock owns the process lifetime lock for one Freeside database.
+// Package daemonlock owns the process-lifetime database lock and the
+// operator-held production acceptance rig lease.
 package daemonlock
 
 import (

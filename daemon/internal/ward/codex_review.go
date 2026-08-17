@@ -1554,6 +1554,41 @@ func codexReviewNames(runID string) codexReviewResourceNames {
 	}
 }
 
+// CodexReviewRuntimeResourceNamesFor returns the complete current runtime
+// namespace one review invocation may create, including workspace preparation.
+func CodexReviewRuntimeResourceNamesFor(runID string) RuntimeResourceNames {
+	return codexReviewRuntimeResourceNames(runID, codexReviewNames(runID))
+}
+
+func codexReviewRuntimeResourceNames(
+	runID string, review codexReviewResourceNames,
+) RuntimeResourceNames {
+	handoff := namesFor(runID)
+	containers := []string{
+		handoff.Seeder, handoff.Observer,
+		review.workspaceObserver, review.shadowInitializer, review.shadowObserver,
+		review.reviewContainer,
+	}
+	volumes := []string{handoff.Workspace, review.shadowVolume}
+	if review.snapshotVolume != "" {
+		containers = append(containers, review.snapshotSeeder, review.snapshotObserver)
+		volumes = append(volumes, review.snapshotVolume)
+	}
+	return RuntimeResourceNames{
+		Containers: containers,
+		Volumes:    volumes,
+		Networks:   []string{review.network},
+	}
+}
+
+func codexReviewWorkspaceRuntimeResourceNames(runID string) RuntimeResourceNames {
+	names := namesFor(runID)
+	return RuntimeResourceNames{
+		Containers: []string{names.Seeder, names.Observer},
+		Volumes:    []string{names.Workspace},
+	}
+}
+
 // legacyCodexReviewNames re-derives the exact topology persisted before #587.
 // It is accepted only while authenticating existing intents for cleanup; no
 // new resource is ever created with these names. It carries no snapshot

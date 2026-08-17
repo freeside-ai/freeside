@@ -541,6 +541,37 @@ func (s *Suite) conformanceName(role string) string {
 	return conformanceObjectName(s.fx.RunID, role)
 }
 
+// FullConformanceRuntimeResourceNamesFor returns every deterministic runtime
+// object the full suite may create, including its synthetic handoff. The
+// caller binds this complete namespace before Full can make its first runtime
+// call, so a crashed suite cannot outlive the production rig's global gate.
+func FullConformanceRuntimeResourceNamesFor(runID string) RuntimeResourceNames {
+	handoff := namesFor(runID)
+	resources := RuntimeResourceNames{
+		Containers: []string{
+			handoff.Seeder, handoff.Observer,
+			handoff.InstructionSeeder, handoff.InstructionObserver,
+			handoff.Agent, handoff.Exporter,
+		},
+		Volumes:  []string{handoff.Workspace, handoff.Instructions},
+		Networks: []string{handoff.Network},
+	}
+	for _, role := range []string{
+		"liveness", "seed", "audit", "excl-writer", "excl-second",
+		networklessLivenessProbeSuffix, networklessProbeSuffix,
+		inExporterLivenessSuffix, inExporterProbeSuffix,
+	} {
+		resources.Containers = append(resources.Containers, conformanceObjectName(runID, role))
+	}
+	for _, role := range []string{
+		"cred", "liveness-ws", "excl-ws",
+		networklessLivenessVolumeProbeSuffix, inExporterVolumeProbeSuffix,
+	} {
+		resources.Volumes = append(resources.Volumes, conformanceObjectName(runID, role))
+	}
+	return resources
+}
+
 // auditMarkerPath is the audit container's rootfs path where it writes the run
 // sentinel (probeCredentialContainment). It must stay disjoint from the
 // credential mount target, or the mount would shadow the sentinel write.
