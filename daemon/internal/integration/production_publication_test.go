@@ -4874,6 +4874,22 @@ func TestProductionReviewConfigurationAdoptionResumesRun(t *testing.T) {
 		if record.Round != 2 || record.InvocationID != secondID {
 			t.Fatalf("adopted review record = %#v", record)
 		}
+		admission, err := tx.GetExecutionAdmission(p.ctx, p.invocation)
+		if err != nil {
+			return err
+		}
+		if admission.InvocationID != p.invocation ||
+			admission.TrustProfileDigest == nil ||
+			*admission.TrustProfileDigest != p.profile.ProfileDigest {
+			t.Fatalf("strict admission after adoption = %#v", admission)
+		}
+		export, err := tx.GetExecutionExport(p.ctx, p.invocation)
+		if err != nil {
+			return err
+		}
+		if export.InvocationID != p.invocation || export.AdmissionID != admission.ID {
+			t.Fatalf("strict export after adoption = %#v, admission %#v", export, admission)
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -5007,6 +5023,14 @@ func TestProductionReviewConfigurationAdoptionRejectsTrustWidening(t *testing.T)
 	if result, err := p.reconcileLanes(); err != nil ||
 		result.PublicationTasksCompleted != 0 || result.BlockedItemsCreated != 0 {
 		t.Fatalf("run left the park after a rejected adoption = %#v, %v", result, err)
+	}
+	err = p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetExecutionAdmission(p.ctx, p.invocation)
+		return err
+	})
+	if !errors.Is(err, domain.ErrTrustProfileSuperseded) {
+		t.Fatalf("strict admission after widened supersession = %v, want %v",
+			err, domain.ErrTrustProfileSuperseded)
 	}
 }
 

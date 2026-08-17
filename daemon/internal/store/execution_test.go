@@ -354,6 +354,176 @@ func seedTrustProfile(t *testing.T, s *store.Store, repo string, repositoryID in
 	}
 }
 
+func reviewConfigurationRevision(
+	t *testing.T, profile domain.AutomationTrustProfile, configDigest domain.Digest,
+) domain.AutomationTrustProfile {
+	t.Helper()
+	revised, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo:                       profile.Repo,
+		RepositoryID:               profile.RepositoryID,
+		PRExecution:                profile.PRExecution,
+		CandidateAutomationChanges: profile.CandidateAutomationChanges,
+		PRGitHubTokenPermissions:   profile.PRGitHubTokenPermissions,
+		AllowOIDC:                  profile.AllowOIDC,
+		AllowEnvironmentSecrets:    profile.AllowEnvironmentSecrets,
+		AllowSecretBearingPRJobs:   profile.AllowSecretBearingPRJobs,
+		AllowSelfHostedCI:          profile.AllowSelfHostedCI,
+		AllowPullRequestTarget:     profile.AllowPullRequestTarget,
+		AllowReusableWorkflows:     profile.AllowReusableWorkflows,
+		AllowPackagePublishing:     profile.AllowPackagePublishing,
+		AllowArtifactConsumers:     profile.AllowArtifactConsumers,
+		CommitPlan:                 profile.CommitPlan,
+		MessageRuleset:             profile.MessageRuleset,
+		WorkflowAuditDigest:        profile.WorkflowAuditDigest,
+		Review: domain.ReviewSettings{
+			Mode: profile.Review.Mode, ConfigDigest: configDigest,
+		},
+		ProtectedPaths: profile.ProtectedPaths,
+	})
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile revision: %v", err)
+	}
+	return revised
+}
+
+func recordTrustProfileRevision(
+	t *testing.T, s *store.Store, profile domain.AutomationTrustProfile, activatedAt time.Time,
+) {
+	t.Helper()
+	if err := s.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(context.Background(), profile, activatedAt)
+	}); err != nil {
+		t.Fatalf("RecordTrustProfile revision: %v", err)
+	}
+}
+
+func recordAdmissionExport(
+	t *testing.T, s *store.Store, admission domain.ExecutionAdmission,
+) domain.ExecutionExport {
+	t.Helper()
+	export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+		ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
+		ManifestDigest: "sha256:manifest", RecordedAt: admissionEpoch.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("NewExecutionExport: %v", err)
+	}
+	if err := s.Write(context.Background(), func(tx *store.WriteTx) error {
+		return tx.RecordExecutionExport(context.Background(), export)
+	}); err != nil {
+		t.Fatalf("RecordExecutionExport: %v", err)
+	}
+	return export
+}
+
+func openTrustBoundAdmission(
+	t *testing.T, active domain.AutomationTrustProfile,
+) (*store.Store, admissionFixture, domain.ExecutionExport) {
+	t.Helper()
+	f := newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
+		in.OperatingMode = domain.ModeUnattended
+		in.Capabilities = conformantCapabilities(t)
+		in.TrustProfileDigest = &active.ProfileDigest
+	})
+	floors := map[domain.OperatingMode]domain.CapabilitySnapshot{
+		domain.ModeUnattended: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+	}
+	s := openWithFixture(t, f, store.Options{
+		AdmissionFloors:         floors,
+		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
+		BackupHealthSource:      healthyBackupHealthSource(),
+	})
+	recordTrustProfileRevision(t, s, active, admissionEpoch)
+	if err := recordAdmission(t, s, f.admission); err != nil {
+		t.Fatalf("record admission: %v", err)
+	}
+	return s, f, recordAdmissionExport(t, s, f.admission)
+}
+
+func recordReviewConfigurationAdoption(
+	t *testing.T,
+	s *store.Store,
+	run domain.Run,
+	superseded domain.AutomationTrustProfile,
+	superseding domain.AutomationTrustProfile,
+) {
+	t.Helper()
+	ctx := context.Background()
+	failure := domain.ReviewFailure{
+		RunID: run.ID, InvocationID: "review-config-recovery", Round: 1,
+		BaseSHA: "deadbeef", HeadSHA: "cafebabe", Class: domain.ReviewFailureConfiguration,
+		Reason:     "trust profile no longer approves the reviewer configuration",
+		ObservedAt: admissionEpoch.Add(3 * time.Hour),
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewFailure(ctx, failure)
+	}); err != nil {
+		t.Fatalf("PutReviewFailure: %v", err)
+	}
+	var failureDigest domain.Digest
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		failureDigest, err = tx.ReviewFailureBodyDigest(ctx, failure.InvocationID)
+		return err
+	}); err != nil {
+		t.Fatalf("ReviewFailureBodyDigest: %v", err)
+	}
+	binding := domain.ReviewConfigurationRecoveryBinding{
+		RunID: failure.RunID, InvocationID: failure.InvocationID, Round: failure.Round,
+		BaseSHA: failure.BaseSHA, HeadSHA: failure.HeadSHA, FailureDigest: failureDigest,
+		Repo: superseded.Repo, RepositoryID: superseded.RepositoryID,
+		SupersededProfileDigest: superseded.ProfileDigest,
+	}
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "review-config-recovery-item", ProjectID: run.ProjectID,
+		Subject: domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,
+		},
+		Type: domain.AttentionReviewConfiguration, Priority: domain.PriorityHigh,
+		Reason:            "review parked on an unapproved configuration",
+		RequestedDecision: []domain.Action{domain.ActionAdoptReviewConfiguration},
+		PRHeadSHA:         failure.HeadSHA, ReviewConfigurationRecovery: &binding,
+		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem: %v", err)
+	}
+	commandID := "command-adopt-review-configuration"
+	command, err := domain.NewCommand(domain.CommandInput{
+		CommandID: commandID, DeviceID: "device-1", ItemID: item.ID,
+		ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA,
+		ArtifactDigests: item.ArtifactDigests, Action: domain.ActionAdoptReviewConfiguration,
+	})
+	if err != nil {
+		t.Fatalf("NewCommand: %v", err)
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutAttentionItem(ctx, item); err != nil {
+			return err
+		}
+		return tx.PutCommand(ctx, command)
+	}); err != nil {
+		t.Fatalf("record adoption authority: %v", err)
+	}
+	transition := domain.ReviewConfigurationRecoveryTransition{
+		RunID: binding.RunID, InvocationID: binding.InvocationID, Round: binding.Round,
+		BaseSHA: binding.BaseSHA, HeadSHA: binding.HeadSHA, FailureDigest: binding.FailureDigest,
+		Repo: binding.Repo, RepositoryID: binding.RepositoryID,
+		SupersededProfileDigest:  superseded.ProfileDigest,
+		SupersedingProfileDigest: superseding.ProfileDigest,
+		CommandID:                &commandID,
+		Reason:                   "operator adopted the superseding review configuration",
+		OccurredAt:               admissionEpoch.Add(4 * time.Hour),
+	}
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordReviewConfigurationRecoveryTransition(ctx, transition)
+	}); err != nil {
+		t.Fatalf("RecordReviewConfigurationRecoveryTransition: %v", err)
+	}
+}
+
 // TestOptionsAdmissionPolicyIsSnapshotted proves a caller cannot widen the
 // boundary policy after Open by mutating the maps and slices it passed in.
 func TestOptionsAdmissionPolicyIsSnapshotted(t *testing.T) {
@@ -792,6 +962,116 @@ func TestAdmissionBoundToTheActiveTrustProfileRevision(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("read immutable terminal history under a revised profile: %v", err)
+	}
+}
+
+func TestAdoptedReviewConfigurationAuthorizesAdmissionRead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	active := testTrustProfile(t, "owner/repo", 424242)
+	s, f, wantExport := openTrustBoundAdmission(t, active)
+	revised := reviewConfigurationRevision(t, active, "sha256:review-config-v2")
+	recordTrustProfileRevision(t, s, revised, admissionEpoch.Add(time.Hour))
+	recordReviewConfigurationAdoption(t, s, f.run, active, revised)
+
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		admission, err := tx.GetExecutionAdmission(ctx, f.admission.InvocationID)
+		if err != nil {
+			return err
+		}
+		if admission.ID != f.admission.ID {
+			t.Errorf("strict admission id = %s, want %s", admission.ID, f.admission.ID)
+		}
+		export, err := tx.GetExecutionExport(ctx, f.admission.InvocationID)
+		if err != nil {
+			return err
+		}
+		if export != wantExport {
+			t.Errorf("strict export = %#v, want %#v", export, wantExport)
+		}
+		historicalAdmission, err := tx.GetExecutionAdmissionRecord(ctx, f.admission.InvocationID)
+		if err != nil {
+			return err
+		}
+		historicalExport, err := tx.GetExecutionExportRecord(ctx, f.admission.InvocationID)
+		if err != nil {
+			return err
+		}
+		if historicalAdmission.ID != admission.ID ||
+			historicalAdmission.TrustProfileDigest == nil ||
+			*historicalAdmission.TrustProfileDigest != active.ProfileDigest ||
+			historicalExport != export {
+			t.Errorf("record variants changed: admission %#v/%#v, export %#v/%#v",
+				historicalAdmission, admission, historicalExport, export)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("strict reads after adoption: %v", err)
+	}
+
+	err := s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.RecordExecutionExport(ctx, wantExport)
+	})
+	if !errors.Is(err, domain.ErrTrustProfileSuperseded) {
+		t.Fatalf("normal export write after adoption = %v, want %v",
+			err, domain.ErrTrustProfileSuperseded)
+	}
+}
+
+func TestAdmissionRejectsOutlivedReviewConfigurationAdoption(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	active := testTrustProfile(t, "owner/repo", 424242)
+	s, f, _ := openTrustBoundAdmission(t, active)
+	revised := reviewConfigurationRevision(t, active, "sha256:review-config-v2")
+	recordTrustProfileRevision(t, s, revised, admissionEpoch.Add(time.Hour))
+	recordReviewConfigurationAdoption(t, s, f.run, active, revised)
+	newest := reviewConfigurationRevision(t, revised, "sha256:review-config-v3")
+	recordTrustProfileRevision(t, s, newest, admissionEpoch.Add(5*time.Hour))
+
+	for name, read := range map[string]func(*store.ReadTx) error{
+		"admission": func(tx *store.ReadTx) error {
+			_, err := tx.GetExecutionAdmission(ctx, f.admission.InvocationID)
+			return err
+		},
+		"export": func(tx *store.ReadTx) error {
+			_, err := tx.GetExecutionExport(ctx, f.admission.InvocationID)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := s.Read(ctx, read)
+			if !errors.Is(err, domain.ErrTrustProfileSuperseded) {
+				t.Fatalf("read after adopted profile moved on = %v, want %v",
+					err, domain.ErrTrustProfileSuperseded)
+			}
+			if errors.Is(err, domain.ErrReviewConfigRecoveryIneffective) {
+				t.Fatalf("read leaked ineffective-transition detail instead of supersession: %v", err)
+			}
+		})
+	}
+}
+
+func TestAdmissionRejectsReviewConfigurationAdoptionForAnotherHop(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	oldest := reviewConfigurationRevision(
+		t, testTrustProfile(t, "owner/repo", 424242), "sha256:review-config-v1",
+	)
+	s, f, _ := openTrustBoundAdmission(t, oldest)
+	middle := reviewConfigurationRevision(t, oldest, "sha256:review-config-v2")
+	recordTrustProfileRevision(t, s, middle, admissionEpoch.Add(time.Hour))
+	newest := reviewConfigurationRevision(t, middle, "sha256:review-config-v3")
+	recordTrustProfileRevision(t, s, newest, admissionEpoch.Add(2*time.Hour))
+	recordReviewConfigurationAdoption(t, s, f.run, middle, newest)
+
+	err := s.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetExecutionAdmission(ctx, f.admission.InvocationID)
+		return err
+	})
+	if !errors.Is(err, domain.ErrTrustProfileSuperseded) {
+		t.Fatalf("read across an adoption for another hop = %v, want %v",
+			err, domain.ErrTrustProfileSuperseded)
 	}
 }
 
