@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -17,8 +18,14 @@ VALUES (?, ?, ?, ?)`
 SELECT state, command_id, reason, occurred_at
 FROM unattended_operation_transitions ORDER BY id DESC LIMIT 1`
 	listOpenAttentionItemsByTypeSQL = `
-SELECT id, project_id, conversation_id, item_type, status, health_posture, entity_version, as_of_revision, body
+SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, entity_version, as_of_revision, body
 FROM attention_items WHERE item_type = ? AND status = 'open' ORDER BY id`
+	listOpenAttentionItemsForRunSQL = `
+SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, entity_version, as_of_revision, body
+FROM attention_items WHERE subject_run_id = ? AND status = 'open' ORDER BY id`
+	attentionRunBodyLookupSQL = `
+SELECT id, item_type, status, subject_run_id, body
+FROM attention_items ORDER BY id`
 	// The lookup columns can only fail open by omission: a row whose column
 	// diverges from its canonical body is invisible to the WHERE clause
 	// above, so the per-row cross-check in scanAttentionItemSnapshot never
@@ -30,7 +37,102 @@ FROM attention_items WHERE item_type = ? AND status = 'open' ORDER BY id`
 SELECT COUNT(*) FROM attention_items
 WHERE item_type <> COALESCE(json_extract(body, '$.type'), '')
    OR status <> COALESCE(json_extract(body, '$.status'), '')
-   OR COALESCE(health_posture, '') <> COALESCE(json_extract(body, '$.posture'), '')`
+   OR COALESCE(health_posture, '') <> COALESCE(json_extract(body, '$.posture'), '')
+   OR COALESCE(subject_run_id, '') <> COALESCE(json_extract(body, '$.subject.run_id'), '')`
+	// Restrict the omission guard to rows that either independent view binds
+	// to the selected run. json_each preserves object member order, so taking
+	// the last case-insensitive match mirrors encoding/json's scalar-field
+	// lookup. Repeated struct fields merge in Go, so candidate selection also
+	// considers a matching run_id in every subject occurrence before rejecting
+	// the duplicate as ambiguous. SQLite lower handles ASCII and replace handles
+	// long s, the only non-ASCII simple-fold mate of a letter in these lookup
+	// keys. Every body walk is json_valid-guarded, so an unreadable unrelated row
+	// cannot abort the query; an unreadable selected row still disagrees with
+	// its non-empty persisted binding and fails closed.
+	attentionRunColumnDivergenceSQL = `
+WITH top_level AS (
+    SELECT subject_run_id, item_type, status,
+           CASE WHEN json_valid(body) THEN
+                COALESCE((
+                    SELECT CASE WHEN type = 'object' THEN value ELSE '{}' END
+                    FROM json_each(body)
+                    WHERE lower(replace(key, 'ſ', 's')) = 'subject'
+                    ORDER BY id DESC LIMIT 1
+                ), '{}') ELSE '{}' END AS body_subject,
+           CASE WHEN json_valid(body) THEN COALESCE((
+                SELECT value FROM json_each(body)
+                WHERE lower(replace(key, 'ſ', 's')) = 'type'
+                ORDER BY id DESC LIMIT 1
+           ), '') ELSE '' END AS body_item_type,
+           CASE WHEN json_valid(body) THEN COALESCE((
+                SELECT value FROM json_each(body)
+                WHERE lower(replace(key, 'ſ', 's')) = 'status'
+                ORDER BY id DESC LIMIT 1
+           ), '') ELSE '' END AS body_status,
+           CASE WHEN json_valid(body) THEN EXISTS (
+                SELECT 1
+                FROM json_each(body) AS subject_member
+                JOIN json_each(CASE WHEN subject_member.type = 'object'
+                                    THEN subject_member.value ELSE '{}' END) AS run_member
+                WHERE lower(replace(subject_member.key, 'ſ', 's')) = 'subject'
+                  AND lower(replace(run_member.key, 'ſ', 's')) = 'run_id'
+                  AND NULLIF(run_member.value, '') = ?1
+           ) ELSE 0 END AS body_mentions_selected_run,
+           CASE WHEN json_valid(body) THEN (
+                SELECT COUNT(*) FROM json_each(body)
+                WHERE lower(replace(key, 'ſ', 's')) = 'subject'
+           ) ELSE 0 END AS body_subject_keys,
+           CASE WHEN json_valid(body) THEN (
+                SELECT COUNT(*) FROM json_each(body)
+                WHERE lower(replace(key, 'ſ', 's')) = 'subject' AND key <> 'subject'
+           ) ELSE 0 END AS body_subject_aliases,
+           CASE WHEN json_valid(body) THEN (
+                SELECT COUNT(*) FROM json_each(body)
+                WHERE lower(replace(key, 'ſ', 's')) = 'type'
+           ) ELSE 0 END AS body_type_keys,
+           CASE WHEN json_valid(body) THEN (
+                SELECT COUNT(*) FROM json_each(body)
+                WHERE lower(replace(key, 'ſ', 's')) = 'type' AND key <> 'type'
+           ) ELSE 0 END AS body_type_aliases,
+           CASE WHEN json_valid(body) THEN (
+                SELECT COUNT(*) FROM json_each(body)
+                WHERE lower(replace(key, 'ſ', 's')) = 'status'
+           ) ELSE 0 END AS body_status_keys,
+           CASE WHEN json_valid(body) THEN (
+                SELECT COUNT(*) FROM json_each(body)
+                WHERE lower(replace(key, 'ſ', 's')) = 'status' AND key <> 'status'
+           ) ELSE 0 END AS body_status_aliases
+    FROM attention_items
+), bindings AS (
+    SELECT subject_run_id, item_type, status, body_item_type, body_status,
+           NULLIF((
+                SELECT value FROM json_each(body_subject)
+                WHERE lower(replace(key, 'ſ', 's')) = 'run_id'
+                ORDER BY id DESC LIMIT 1
+           ), '') AS body_run_id,
+           body_mentions_selected_run,
+           body_subject_keys, body_subject_aliases,
+           body_type_keys, body_type_aliases,
+           body_status_keys, body_status_aliases,
+           (SELECT COUNT(*) FROM json_each(body_subject)
+            WHERE lower(replace(key, 'ſ', 's')) = 'run_id') AS body_run_id_keys,
+           (SELECT COUNT(*) FROM json_each(body_subject)
+            WHERE lower(replace(key, 'ſ', 's')) = 'run_id' AND key <> 'run_id') AS body_run_id_aliases
+    FROM top_level
+)
+SELECT COUNT(*) FROM bindings
+WHERE (subject_run_id = ?1 OR body_run_id = ?1 OR body_mentions_selected_run)
+  AND (COALESCE(subject_run_id, '') <> COALESCE(body_run_id, '')
+       OR item_type <> body_item_type
+       OR status <> body_status
+       OR body_subject_keys > 1
+       OR body_subject_aliases > 0
+       OR body_type_keys > 1
+       OR body_type_aliases > 0
+       OR body_status_keys > 1
+       OR body_status_aliases > 0
+       OR body_run_id_keys > 1
+       OR body_run_id_aliases > 0)`
 )
 
 // RecordUnattendedOperationTransition appends one operator stop/resume
@@ -250,4 +352,101 @@ func (tx *ReadTx) ListOpenAttentionItems(
 		return nil, fmt.Errorf("list open %q items: %w", itemType, err)
 	}
 	return items, nil
+}
+
+// ListOpenAttentionItemsForRun returns every open item bound to one run, in
+// id order. The independent subject_run_id column scopes the candidate set
+// before body reconstruction and mutable evidence-policy gating, so corrupt
+// or stale-policy rows for other runs do not block observation of this run.
+// The scoped divergence guard still fails closed if either view would omit a
+// selected row. The production-lifecycle supervisor (#795) is the consumer.
+func (tx *ReadTx) ListOpenAttentionItemsForRun(
+	ctx context.Context, runID domain.RunID,
+) ([]domain.AttentionItem, error) {
+	var divergent int
+	if err := tx.tx.QueryRowContext(ctx, attentionRunColumnDivergenceSQL, runID).Scan(&divergent); err != nil {
+		return nil, fmt.Errorf("list open items for run %q: column integrity: %w", runID, err)
+	}
+	if divergent > 0 {
+		return nil, fmt.Errorf("list open items for run %q: %d row(s) whose lookup columns diverge from their bodies: %w",
+			runID, divergent, errRowInconsistent)
+	}
+	if err := tx.checkAttentionRunBodyLookup(ctx, runID); err != nil {
+		return nil, fmt.Errorf("list open items for run %q: column integrity: %w", runID, err)
+	}
+	rows, err := tx.tx.QueryContext(ctx, listOpenAttentionItemsForRunSQL, runID)
+	if err != nil {
+		return nil, fmt.Errorf("list open items for run %q: %w", runID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var items []domain.AttentionItem
+	for rows.Next() {
+		item, _, err := tx.scanAttentionItemSnapshot(ctx, rows)
+		if err != nil {
+			return nil, fmt.Errorf("list open items for run %q: %w", runID, err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list open items for run %q: %w", runID, err)
+	}
+	return items, nil
+}
+
+// checkAttentionRunBodyLookup closes the remaining parser-differential hole
+// in the SQLite preflight above. SQLite JSON1 intentionally rejects nesting
+// beyond 1,000 levels, while decode uses encoding/json and accepts a deeper
+// otherwise-valid body. A tampered subject_run_id could hide that body from
+// SQLite's dual-view candidate set, so this lightweight pass uses the same Go
+// decoder to find candidate bodies before the indexed query reconstructs and
+// policy-gates its selected rows. It only examines lookup fields: unrelated
+// malformed or stale-policy rows remain isolated from the requested run.
+func (tx *ReadTx) checkAttentionRunBodyLookup(ctx context.Context, runID domain.RunID) error {
+	rows, err := tx.tx.QueryContext(ctx, attentionRunBodyLookupSQL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var (
+			id           string
+			itemType     string
+			status       string
+			subjectRunID sql.NullString
+			body         []byte
+		)
+		if err := rows.Scan(&id, &itemType, &status, &subjectRunID, &body); err != nil {
+			return err
+		}
+		var lookup struct {
+			Subject domain.Subject       `json:"subject"`
+			Type    domain.AttentionType `json:"type"`
+			Status  domain.ItemStatus    `json:"status"`
+		}
+		if err := json.Unmarshal(body, &lookup); err != nil {
+			if subjectRunID.Valid && subjectRunID.String == string(runID) {
+				return fmt.Errorf("item %q: %w", id, errRowInconsistent)
+			}
+			continue
+		}
+		bodyRunID := ""
+		if lookup.Subject.RunID != nil {
+			bodyRunID = string(*lookup.Subject.RunID)
+		}
+		if (!subjectRunID.Valid || subjectRunID.String != string(runID)) && bodyRunID != string(runID) {
+			continue
+		}
+		columnRunID := ""
+		if subjectRunID.Valid {
+			columnRunID = subjectRunID.String
+		}
+		if columnRunID != bodyRunID || itemType != string(lookup.Type) || status != string(lookup.Status) {
+			return fmt.Errorf("item %q: %w", id, errRowInconsistent)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return nil
 }

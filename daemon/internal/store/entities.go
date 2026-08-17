@@ -384,14 +384,15 @@ func (tx *ReadTx) GetArtifact(ctx context.Context, id domain.ArtifactID) (domain
 }
 
 const putAttentionItemSQL = `
-INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, health_posture, entity_version, as_of_revision, body)
-VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, entity_version, as_of_revision, body)
+VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     project_id      = excluded.project_id,
     conversation_id = excluded.conversation_id,
     item_type       = excluded.item_type,
     status          = excluded.status,
     health_posture  = excluded.health_posture,
+    subject_run_id  = excluded.subject_run_id,
     entity_version  = attention_items.entity_version + 1,
     as_of_revision  = excluded.as_of_revision,
     body            = excluded.body`
@@ -443,7 +444,7 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	}
 	if _, err := tx.tx.ExecContext(ctx, putAttentionItemSQL,
 		item.ID, item.ProjectID, item.ConversationID, item.Type, item.Status,
-		item.Posture, tx.asOfRevision, body); err != nil {
+		item.Posture, item.Subject.RunID, tx.asOfRevision, body); err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
 	}
 	if err := tx.putAttentionItemPRReference(ctx, item); err != nil {
@@ -466,7 +467,7 @@ func (tx *ReadTx) GetAttentionItem(ctx context.Context, id domain.ItemID) (domai
 // domain content matches, so acceptance needs the store's own version counter.
 func (tx *ReadTx) GetAttentionItemSnapshot(ctx context.Context, id domain.ItemID) (domain.AttentionItem, Snapshot, error) {
 	item, snap, err := tx.scanAttentionItemSnapshot(ctx, tx.tx.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
 	if err != nil {
 		return domain.AttentionItem{}, Snapshot{}, fmt.Errorf("get attention item %q: %w", id, notFoundOr(err))
 	}
@@ -482,7 +483,7 @@ func (tx *ReadTx) GetAttentionItemRecord(
 	id domain.ItemID,
 ) (domain.AttentionItem, error) {
 	item, _, err := scanAttentionItemRecord(tx.tx.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
 	if err != nil {
 		return domain.AttentionItem{}, fmt.Errorf("get attention item record %q: %w", id, notFoundOr(err))
 	}
@@ -520,10 +521,11 @@ func scanAttentionItemRecord(sc scanner) (domain.AttentionItem, Snapshot, error)
 		itemType       string
 		status         string
 		healthPosture  sql.NullString
+		subjectRunID   sql.NullString
 		snap           Snapshot
 		body           []byte
 	)
-	if err := sc.Scan(&id, &projectID, &conversationID, &itemType, &status, &healthPosture, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
+	if err := sc.Scan(&id, &projectID, &conversationID, &itemType, &status, &healthPosture, &subjectRunID, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	item, err := decode[domain.AttentionItem](body)
@@ -532,8 +534,9 @@ func scanAttentionItemRecord(sc scanner) (domain.AttentionItem, Snapshot, error)
 	}
 	// item_type and status are the admission gate's lookup keys (issue #321),
 	// while health_posture independently binds the safety decision the gate
-	// acts on (issue #625). A column diverging from the canonical body is a
-	// forged or corrupt row, not repairable skew.
+	// acts on (issue #625), and subject_run_id binds run-scoped selection
+	// (issue #824). A column diverging from the canonical body is a forged or
+	// corrupt row, not repairable skew.
 	consistent := item.ID == domain.ItemID(id) && item.ProjectID == domain.ProjectID(projectID) &&
 		item.Type == domain.AttentionType(itemType) && item.Status == domain.ItemStatus(status)
 	if conversationID.Valid {
@@ -547,6 +550,12 @@ func scanAttentionItemRecord(sc scanner) (domain.AttentionItem, Snapshot, error)
 			*item.Posture == domain.HealthPosture(healthPosture.String)
 	} else {
 		consistent = consistent && item.Posture == nil
+	}
+	if subjectRunID.Valid {
+		consistent = consistent && item.Subject.RunID != nil &&
+			*item.Subject.RunID == domain.RunID(subjectRunID.String)
+	} else {
+		consistent = consistent && item.Subject.RunID == nil
 	}
 	// The metadata is store-stamped, so anything outside the values the Puts
 	// can produce (versions start at 1, revisions are client-visible and
