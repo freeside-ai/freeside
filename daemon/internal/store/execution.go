@@ -315,6 +315,28 @@ func (tx *ReadTx) GetExecutionAdmission(ctx context.Context, id domain.Invocatio
 	return admission, nil
 }
 
+// getExecutionAdmissionForWrite loads an admission for a boundary that accepts
+// new caller-supplied state. Review-configuration recovery makes one parked
+// admission reconstructible, but cannot authorize a new record derived from
+// that superseded profile.
+func (tx *ReadTx) getExecutionAdmissionForWrite(
+	ctx context.Context, id domain.InvocationID,
+) (domain.ExecutionAdmission, error) {
+	admission, err := scanExecutionAdmissionRecord(tx.tx.QueryRowContext(ctx, getExecutionAdmissionSQL, id))
+	if err != nil {
+		return domain.ExecutionAdmission{}, fmt.Errorf(
+			"get execution admission %q: %w", id, notFoundOr(err))
+	}
+	if admission.InvocationID != id {
+		return domain.ExecutionAdmission{}, fmt.Errorf(
+			"get execution admission %q: %w", id, errRowInconsistent)
+	}
+	if err := tx.gateAdmission(ctx, admission); err != nil {
+		return domain.ExecutionAdmission{}, fmt.Errorf("get execution admission %q: %w", id, err)
+	}
+	return admission, nil
+}
+
 // GetExecutionAdmissionRecord authenticates the immutable recorded admission
 // without re-applying mutable current admission policy. It is for terminal
 // history and backup closure only; any path that may still start, recover, or
@@ -367,7 +389,7 @@ func (tx *ReadTx) scanExecutionAdmission(ctx context.Context, row scanner) (doma
 	if err != nil {
 		return domain.ExecutionAdmission{}, err
 	}
-	if err := tx.gateAdmission(ctx, admission); err != nil {
+	if err := tx.gateReconstructedAdmission(ctx, admission); err != nil {
 		return domain.ExecutionAdmission{}, err
 	}
 	return admission, nil
@@ -448,6 +470,22 @@ func evidenceDigestColumnEqual(column sql.NullString, want *domain.Digest) bool 
 // human-approved state the record cannot write, so the name-to-id pair stops
 // being self-asserted and the legacy field cannot validate its own target.
 func (tx *ReadTx) gateAdmission(ctx context.Context, admission domain.ExecutionAdmission) error {
+	return tx.gateAdmissionWithReviewConfigurationRecovery(ctx, admission, false)
+}
+
+// gateReconstructedAdmission re-gates a durable admission read. A command-backed
+// review-configuration recovery is authority to reconstruct the parked run
+// under its superseded profile, but it does not relax the gate for a new
+// caller-supplied admission.
+func (tx *ReadTx) gateReconstructedAdmission(
+	ctx context.Context, admission domain.ExecutionAdmission,
+) error {
+	return tx.gateAdmissionWithReviewConfigurationRecovery(ctx, admission, true)
+}
+
+func (tx *ReadTx) gateAdmissionWithReviewConfigurationRecovery(
+	ctx context.Context, admission domain.ExecutionAdmission, allowReviewConfigurationRecovery bool,
+) error {
 	policy := tx.admissionPolicy
 	if admission.OperatingMode == domain.ModeUnattended {
 		health, err := tx.transactionBackupHealth(ctx)
@@ -501,6 +539,27 @@ func (tx *ReadTx) gateAdmission(ctx context.Context, admission domain.ExecutionA
 	// operator who activates a revised profile expects it to bind in-flight
 	// work, not just the next run.
 	if admission.TrustProfileDigest == nil || *admission.TrustProfileDigest != profile.ProfileDigest {
+		// A review-configuration adoption authorizes the run, not merely the
+		// parked review invocation that carries its decision. The transition's
+		// full authority is re-derived on every read, including that its
+		// superseding revision is still latest and changes only reviewer
+		// configuration. Accept exactly that one recorded hop for admissions
+		// the run minted under its superseded revision. Launch currency remains
+		// an engine concern because only the engine knows the daemon's effective
+		// reviewer-configuration digest.
+		if allowReviewConfigurationRecovery && admission.TrustProfileDigest != nil {
+			transition, found, recoveryErr := tx.LatestReviewConfigurationRecoveryTransition(
+				ctx, admission.RunID,
+			)
+			if recoveryErr != nil &&
+				!errors.Is(recoveryErr, domain.ErrReviewConfigRecoveryIneffective) {
+				return recoveryErr
+			}
+			if recoveryErr == nil && found &&
+				transition.SupersededProfileDigest == *admission.TrustProfileDigest {
+				return nil
+			}
+		}
 		return fmt.Errorf("admission %q was admitted under trust profile %v, %q now activates %s: %w",
 			admission.InvocationID, admission.TrustProfileDigest,
 			admission.Base.Repo, profile.ProfileDigest, domain.ErrTrustProfileSuperseded)
@@ -634,7 +693,7 @@ func (tx *WriteTx) recordExecutionExport(
 	}
 	var admission domain.ExecutionAdmission
 	if requireCurrent {
-		admission, err = tx.GetExecutionAdmission(ctx, export.InvocationID)
+		admission, err = tx.getExecutionAdmissionForWrite(ctx, export.InvocationID)
 	} else {
 		admission, err = tx.GetExecutionAdmissionRecord(ctx, export.InvocationID)
 	}

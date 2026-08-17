@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,9 +64,15 @@ func configRecoveryProfile(t *testing.T, configDigest domain.Digest, widen bool)
 }
 
 func seedReviewConfigurationRecovery(t *testing.T) (*Store, domain.ReviewConfigurationRecoveryTransition) {
+	return seedReviewConfigurationRecoveryWithOptions(t, Options{})
+}
+
+func seedReviewConfigurationRecoveryWithOptions(
+	t *testing.T, opts Options,
+) (*Store, domain.ReviewConfigurationRecoveryTransition) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), opts)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -347,6 +354,91 @@ func TestReviewConfigurationRecoveryReadFailsClosedOnTamper(t *testing.T) {
 				t.Fatalf("tampered read = %v, want %v", err, domain.ErrReviewConfigRecoveryIneffective)
 			}
 		})
+	}
+}
+
+func TestAdmissionGateRejectsAnIneffectiveReviewConfigurationRecovery(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	capabilities, ok := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
+	if !ok {
+		t.Fatal("fresh-vm backend has no provable capabilities")
+	}
+	healthy := domain.BackupHealth{
+		Encryption: domain.BackupHealthHealthy, CheckpointCurrency: domain.BackupHealthHealthy,
+		ArtifactClosure: domain.BackupHealthHealthy, RestoreTestAge: domain.BackupHealthHealthy,
+	}
+	st, transition := seedReviewConfigurationRecoveryWithOptions(t, Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeUnattended: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
+		BackupHealthSource: BackupHealthSourceFunc(func(
+			context.Context, BackupHealthContext,
+		) (domain.BackupHealth, error) {
+			return healthy, nil
+		}),
+	})
+	identity := domain.AuthIdentity{
+		ID: "auth-config-recovery", Provider: "claude", AuthStoreMutationLease: true,
+		AuthStoreVolume: "provider-cred", MaxParallelExecutions: 1,
+		RefreshStrategy: domain.RefreshOnDemand,
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		return tx.RecordAuthIdentity(ctx, identity, transition.OccurredAt)
+	}); err != nil {
+		t.Fatalf("seed auth identity: %v", err)
+	}
+	identityID := identity.ID
+	pinned := transition.SupersededProfileDigest
+	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: "inv-implement-config-recovery", RunID: transition.RunID,
+		StageID: "stage-implement", AttemptID: "attempt-implement",
+		Backend: string(domain.BackendFreshVMReadOnlyVolumeHandoff), Capabilities: capabilities,
+		BackendConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("1", 64)),
+		OperatingMode:              domain.ModeUnattended,
+		CredentialMode:             domain.CredentialSubscriptionContained,
+		EgressProfile:              domain.EgressProviderOnly,
+		ImageRef: domain.ImageRef(
+			"ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32),
+		),
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy", InputDigest: "sha256:input",
+		Base: domain.BaseRevision{
+			Repo: transition.Repo, RepositoryID: transition.RepositoryID,
+			BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
+		},
+		Workspace: "workspace-1", AuthIdentityID: &identityID,
+		TrustProfileDigest: &pinned, AdmittedAt: transition.OccurredAt,
+	})
+	if err != nil {
+		t.Fatalf("NewExecutionAdmission: %v", err)
+	}
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		return tx.gateReconstructedAdmission(ctx, admission)
+	}); err != nil {
+		t.Fatalf("effective recovery did not authorize admission: %v", err)
+	}
+	err = st.Write(ctx, func(tx *WriteTx) error {
+		return tx.RecordExecutionAdmission(ctx, admission)
+	})
+	if !errors.Is(err, domain.ErrTrustProfileSuperseded) {
+		t.Fatalf("fresh admission under adopted recovery = %v, want %v",
+			err, domain.ErrTrustProfileSuperseded)
+	}
+
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE review_configuration_recovery_transitions SET command_id = NULL`); err != nil {
+		t.Fatalf("tamper transition authority: %v", err)
+	}
+	err = st.Read(ctx, func(tx *ReadTx) error {
+		return tx.gateReconstructedAdmission(ctx, admission)
+	})
+	if !errors.Is(err, domain.ErrTrustProfileSuperseded) {
+		t.Fatalf("admission under tampered recovery = %v, want %v",
+			err, domain.ErrTrustProfileSuperseded)
+	}
+	if errors.Is(err, domain.ErrReviewConfigRecoveryIneffective) {
+		t.Fatalf("admission leaked ineffective-transition detail instead of supersession: %v", err)
 	}
 }
 
