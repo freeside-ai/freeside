@@ -98,6 +98,10 @@ type Run struct {
 	LastActivityAt  *time.Time               `json:"last_activity_at"`
 	SpecDigest      domain.Digest            `json:"spec_digest"`
 	PolicyDigest    domain.Digest            `json:"policy_digest"`
+	CampaignID      *domain.CampaignID       `json:"campaign_id"`
+	AttemptNumber   *int                     `json:"attempt_number"`
+	AttemptReason   *string                  `json:"attempt_reason"`
+	ParentRunID     *domain.RunID            `json:"parent_run_id"`
 	Stages          []domain.Stage           `json:"stages"`
 	LatestMilestone *domain.RunMilestoneKind `json:"latest_milestone"`
 	Outcome         domain.RunOutcome        `json:"outcome"`
@@ -703,6 +707,20 @@ func runSnapshot(
 		SpecDigest: normalized.SpecDigest, PolicyDigest: normalized.PolicyDigest,
 		Stages:  normalized.Stages,
 		Outcome: domain.ConcludeRun(observation).Outcome,
+	}
+	if normalized.CampaignID != "" {
+		campaignID := normalized.CampaignID
+		attemptNumber := normalized.AttemptNumber
+		projection.CampaignID = &campaignID
+		projection.AttemptNumber = &attemptNumber
+		if normalized.AttemptReason != "" {
+			reason := normalized.AttemptReason
+			projection.AttemptReason = &reason
+		}
+		if normalized.ParentRunID != "" {
+			parentRunID := normalized.ParentRunID
+			projection.ParentRunID = &parentRunID
+		}
 	}
 	if createdAt, ok := observation.SubmittedAt(); ok {
 		projection.CreatedAt = &createdAt

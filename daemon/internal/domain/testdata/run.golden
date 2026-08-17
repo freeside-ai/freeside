@@ -3,6 +3,10 @@
   "project_id": "proj-1",
   "spec_digest": "sha256:spec",
   "policy_digest": "sha256:dc1af0d4d3c8cdc2f6b59b72234a6988199c4d9dd9c3f2e663452eb58cd97ca7",
+  "campaign_id": "campaign-1",
+  "attempt_number": 2,
+  "attempt_reason": "Retry after repairing the acceptance rig",
+  "parent_run_id": "run-0",
   "stages": [
     {
       "id": "stage-1",

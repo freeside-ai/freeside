@@ -5,6 +5,16 @@ import Testing
 @testable import FreesideCore
 
 @Suite struct RunsListViewTests {
+    @Test func campaignAttemptLabelCarriesExactIdentity() {
+        let run = RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }!.run
+
+        #expect(
+            RunDisplay.campaign(run)
+                == "Campaign campaign-freeside-acceptance · Attempt 2")
+        #expect(run.attempt_reason == "Retry after repairing the acceptance rig")
+        #expect(run.parent_run_id == "run-freeside-656")
+    }
+
     @Test func ordersByActivityFallbackAndID() {
         let first = Date(timeIntervalSinceReferenceDate: 100)
         let second = Date(timeIntervalSinceReferenceDate: 200)

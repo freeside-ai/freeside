@@ -32,16 +32,26 @@ import (
 // (see scanner), which their collection Lists reuse.
 
 const putRunSQL = `
-INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body)
-VALUES (?, ?, ?, 1, ?, ?)
+INSERT INTO runs (
+    id, project_id, policy_digest, campaign_id, attempt_number,
+    attempt_reason, parent_run_id, entity_version, as_of_revision, body
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     project_id     = excluded.project_id,
     policy_digest  = excluded.policy_digest,
+    campaign_id    = excluded.campaign_id,
+    attempt_number = excluded.attempt_number,
+    attempt_reason = excluded.attempt_reason,
+    parent_run_id  = excluded.parent_run_id,
     entity_version = runs.entity_version + 1,
     as_of_revision = excluded.as_of_revision,
     body           = excluded.body`
 
 func (tx *WriteTx) PutRun(ctx context.Context, run domain.Run) error {
+	if err := tx.authenticateRunProductionLineage(ctx, run); err != nil {
+		return fmt.Errorf("put run %q: %w", run.ID, err)
+	}
 	body, err := encode(run)
 	if err != nil {
 		return fmt.Errorf("put run %q: %w", run.ID, err)
@@ -59,7 +69,10 @@ func (tx *WriteTx) PutRun(ctx context.Context, run domain.Run) error {
 			return fmt.Errorf("put run %q: %w", run.ID, mapTransition(err))
 		}
 	}
-	if _, err := tx.tx.ExecContext(ctx, putRunSQL, run.ID, run.ProjectID, run.PolicyDigest, tx.asOfRevision, body); err != nil {
+	if _, err := tx.tx.ExecContext(ctx, putRunSQL,
+		run.ID, run.ProjectID, run.PolicyDigest, nullableString(string(run.CampaignID)),
+		nullableInt(run.AttemptNumber), nullableString(run.AttemptReason),
+		nullableString(string(run.ParentRunID)), tx.asOfRevision, body); err != nil {
 		return fmt.Errorf("put run %q: %w", run.ID, err)
 	}
 	return nil
@@ -157,15 +170,22 @@ WHERE id = ? AND policy_digest = ?`,
 // scanRunSnapshot reconstructs one runs row (see the scanner doc for the
 // shared gate sequence). Errors are returned unwrapped; callers add the
 // entity/key context.
-func (tx *ReadTx) scanRunSnapshot(sc scanner) (domain.Run, Snapshot, error) {
+func (tx *ReadTx) scanRunSnapshot(ctx context.Context, sc scanner) (domain.Run, Snapshot, error) {
 	var (
 		id           string
 		projectID    string
 		policyDigest string
+		campaignID   sql.NullString
+		attempt      sql.NullInt64
+		reason       sql.NullString
+		parentRunID  sql.NullString
 		snap         Snapshot
 		body         []byte
 	)
-	if err := sc.Scan(&id, &projectID, &policyDigest, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
+	if err := sc.Scan(
+		&id, &projectID, &policyDigest, &campaignID, &attempt, &reason,
+		&parentRunID, &snap.EntityVersion, &snap.AsOfRevision, &body,
+	); err != nil {
 		return domain.Run{}, Snapshot{}, err
 	}
 	run, err := decode[domain.Run](body)
@@ -174,8 +194,15 @@ func (tx *ReadTx) scanRunSnapshot(sc scanner) (domain.Run, Snapshot, error) {
 	}
 	if run.ID != domain.RunID(id) || run.ProjectID != domain.ProjectID(projectID) ||
 		run.PolicyDigest != domain.Digest(policyDigest) ||
+		!optionalStringEqual(campaignID, string(run.CampaignID)) ||
+		!optionalIntEqual(attempt, run.AttemptNumber) ||
+		!optionalStringEqual(reason, run.AttemptReason) ||
+		!optionalStringEqual(parentRunID, string(run.ParentRunID)) ||
 		snap.EntityVersion < 1 || snap.AsOfRevision < 1 {
 		return domain.Run{}, Snapshot{}, errRowInconsistent
+	}
+	if err := tx.authenticateRunProductionLineage(ctx, run); err != nil {
+		return domain.Run{}, Snapshot{}, err
 	}
 	return run, snap, nil
 }
@@ -189,8 +216,10 @@ func (tx *ReadTx) GetRun(ctx context.Context, id domain.RunID) (domain.Run, erro
 // same row. It shares scanRunSnapshot with GetRun and ListRuns so every read
 // re-runs the identical returned-object trust gate.
 func (tx *ReadTx) GetRunSnapshot(ctx context.Context, id domain.RunID) (Snapshotted[domain.Run], error) {
-	run, snapshot, err := tx.scanRunSnapshot(tx.tx.QueryRowContext(ctx,
-		`SELECT id, project_id, policy_digest, entity_version, as_of_revision, body FROM runs WHERE id = ?`, id))
+	run, snapshot, err := tx.scanRunSnapshot(ctx, tx.tx.QueryRowContext(ctx,
+		`SELECT id, project_id, policy_digest, campaign_id, attempt_number, attempt_reason,
+                parent_run_id, entity_version, as_of_revision, body
+         FROM runs WHERE id = ?`, id))
 	if err != nil {
 		return Snapshotted[domain.Run]{}, fmt.Errorf("get run %q: %w", id, notFoundOr(err))
 	}

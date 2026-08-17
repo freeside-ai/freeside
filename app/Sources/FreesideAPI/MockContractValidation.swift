@@ -12,6 +12,50 @@ import Foundation
 /// approved-recipe set as a parameter so the actor's bridge can pass its
 /// own policy set. `MockContractValidationTests` pins each in isolation.
 enum MockContractValidation {
+    static func runSnapshotBreach(
+        _ snapshot: Components.Schemas.RunSnapshot, serverRevision: Int64
+    ) -> String? {
+        if snapshot.entity_version < 1 { return "non-positive entity_version" }
+        if snapshot.as_of_revision < 1 || snapshot.as_of_revision > serverRevision {
+            return "as_of_revision outside the server revision"
+        }
+        let run = snapshot.run
+        if run.id.isEmpty || run.project_id.isEmpty { return "empty run identity" }
+        if run.spec_digest.isEmpty || run.policy_digest.isEmpty { return "empty run digest" }
+        switch (run.campaign_id, run.attempt_number, run.attempt_reason, run.parent_run_id) {
+        case (nil, nil, nil, nil):
+            break
+        case (let campaign?, 1?, nil, nil) where !campaign.isEmpty:
+            break
+        case (let campaign?, let number?, let reason?, let parent?)
+        where !campaign.isEmpty && number >= 2 && !parent.isEmpty
+            && reason == reason.trimmingCharacters(in: .whitespacesAndNewlines)
+            && !reason.isEmpty:
+            break
+        default:
+            return "inconsistent production attempt lineage"
+        }
+        var stageIDs = Set<String>()
+        var invocationIDs = Set<String>()
+        for stage in run.stages {
+            if stage.id.isEmpty || stage.run_id != run.id || stage.name.isEmpty {
+                return "invalid stage binding"
+            }
+            if !stageIDs.insert(stage.id).inserted { return "duplicate stage id" }
+            for (index, attempt) in stage.attempts.enumerated() {
+                if attempt.id.isEmpty || attempt.stage_id != stage.id
+                    || attempt.number != index + 1 || attempt.invocation_id.isEmpty
+                {
+                    return "invalid stage attempt"
+                }
+                if !invocationIDs.insert(attempt.invocation_id).inserted {
+                    return "duplicate invocation id"
+                }
+            }
+        }
+        return nil
+    }
+
     /// Field-for-field mirror of domain.AttentionItem.Validate over the
     /// generated shapes. Checks the schema already makes unrepresentable
     /// are omitted: invalid enum members, an agent producer class in

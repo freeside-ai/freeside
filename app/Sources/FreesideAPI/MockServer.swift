@@ -581,18 +581,28 @@ public actor MockServer {
             revision: revision,
             attention_items: try listAttentionItems(),
             attention_deliveries: try listAttentionDeliveries(),
-            runs: listRuns(),
+            runs: try listRuns(),
             conversations: [],
             schedules: listSchedules()
         )
     }
 
-    func listRuns() -> [Components.Schemas.RunSnapshot] {
-        runsByID.keys.sorted().compactMap { runsByID[$0] }
+    func listRuns() throws -> [Components.Schemas.RunSnapshot] {
+        try runsByID.keys.sorted().compactMap { id in
+            guard let snapshot = runsByID[id] else { return nil }
+            if let reason = MockContractValidation.runSnapshotBreach(snapshot, serverRevision: revision) {
+                throw InvalidRunError(runID: id, reason: reason)
+            }
+            return snapshot
+        }
     }
 
-    func run(id: String) -> Components.Schemas.RunSnapshot? {
-        runsByID[id]
+    func run(id: String) throws -> Components.Schemas.RunSnapshot? {
+        guard let snapshot = runsByID[id] else { return nil }
+        if let reason = MockContractValidation.runSnapshotBreach(snapshot, serverRevision: revision) {
+            throw InvalidRunError(runID: id, reason: reason)
+        }
+        return snapshot
     }
 
     func runTimeline(id: String) -> Components.Schemas.RunTimeline? {
@@ -605,6 +615,11 @@ public actor MockServer {
 
     struct InvalidDeliveryError: Error {
         let itemID: String
+        let reason: String
+    }
+
+    struct InvalidRunError: Error {
+        let runID: String
         let reason: String
     }
 

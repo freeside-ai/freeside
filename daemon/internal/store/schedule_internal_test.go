@@ -51,10 +51,18 @@ func TestScheduleAuthorityMigrationBackfillsAndNormalizesOneShots(t *testing.T) 
 	}
 	st := &Store{db: db}
 	if err := st.Write(ctx, func(tx *WriteTx) error {
-		if err := tx.PutRun(ctx, domain.Run{
+		run := domain.Run{
 			ID: runID, ProjectID: item.ProjectID,
 			SpecDigest: "sha256:spec", PolicyDigest: policy.Digest,
-		}); err != nil {
+		}
+		body, err := encode(run)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.tx.ExecContext(ctx, `INSERT INTO runs
+			(id, project_id, policy_digest, entity_version, as_of_revision, body)
+			VALUES (?, ?, ?, 1, ?, ?)`, run.ID, run.ProjectID, run.PolicyDigest,
+			tx.asOfRevision, body); err != nil {
 			return err
 		}
 		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
@@ -398,7 +406,9 @@ func migrationsBeforeScheduleAuthority(t *testing.T) fs.FS {
 			entry.Name() == "0044_agent_claims.sql" ||
 			entry.Name() == "0045_projects.sql" ||
 			entry.Name() == "0046_export_rejections.sql" ||
-			entry.Name() == "0047_current_import_starts.sql" || entry.IsDir() {
+			entry.Name() == "0047_current_import_starts.sql" ||
+			entry.Name() == "0048_production_attempts.sql" ||
+			entry.Name() == "0049_production_attempt_publication_digest.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())

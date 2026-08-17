@@ -395,6 +395,13 @@ func TestIntakeWorkItemCarriesNoIssueContent(t *testing.T) {
 	if run.SpecDigest != domain.Digest(contentaddr.Sum(intakeWorkItemDocument(o))) {
 		t.Fatal("reserved run spec digest is not the coordinate work-item digest")
 	}
+	wantCampaign, err := engine.ProductionCampaignIDForImplementation(intakeImplementationRunID(o))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.CampaignID != wantCampaign || run.AttemptNumber != 1 {
+		t.Fatalf("reserved run lineage = %q/%d, want %q/1", run.CampaignID, run.AttemptNumber, wantCampaign)
+	}
 }
 
 // TestIntakeSupersedesDepartedProposal covers acceptance #3: an open admitted

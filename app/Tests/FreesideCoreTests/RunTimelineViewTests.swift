@@ -43,4 +43,25 @@ import Testing
         #expect(presentation.label == "Running")
         #expect(presentation.symbol == "wave.3.right.circle.fill")
     }
+
+    @Test func elaborationCampaignLabelsItsSourceSpecification() {
+        var elaboration = RunFixtures.defaultRuns()[0].run
+        elaboration.stages[0].name = "elaboration"
+
+        #expect(RunDisplay.specificationLabel(elaboration) == "Source specification")
+    }
+
+    @Test func productionLaneKeepsApprovedSpecificationAfterLaterStages() {
+        var active = RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }!.run
+        var ready = RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.readyRunID }!.run
+        active.stages.insert(
+            .init(id: "stage-active-implement", run_id: active.id, name: "implement", attempts: []),
+            at: 0)
+        ready.stages.insert(
+            .init(id: "stage-ready-implement", run_id: ready.id, name: "implement", attempts: []),
+            at: 0)
+
+        #expect(RunDisplay.specificationLabel(active) == "Approved specification")
+        #expect(RunDisplay.specificationLabel(ready) == "Approved specification")
+    }
 }

@@ -1011,3 +1011,21 @@ Held from revision 30: everything.
    credible, material, in-surface findings routinely reaching the model
    residue: the deterministic dispatch predicate is then miscalibrated.
    (User; devlog 2026-08-11-1504-review-finding-adjudication.md; #697.)
+
+---
+
+## Revision 32
+
+Revision 32 makes the wave tracker authoritative for live implementation
+status. Held from revision 31: everything.
+
+1. **One open pinned wave tracker is authoritative for live implementation
+   status** (Section 11): stable repository documents carry the resolution
+   rule, not a duplicate status value. The matching tracker's title supplies
+   its wave and internal exit, the Section 11 table supplies its phase and
+   shape, and the tracker's Implementation order digest supplies its active
+   front. A zero- or multiple-match state fails to human repair rather than
+   inference. This keeps status forge-visible and maintained at the same wave
+   boundary that already replaces the tracker, without adding a local ledger
+   or deriving intent from git history.
+   (User; devlog 2026-08-15-1016-status-authority.md; #792.)

@@ -11,6 +11,26 @@ import Testing
 /// for a valid input), so a regression that trips the wrong invariant, or
 /// silently accepts a bad one, is caught at its source.
 @Suite struct MockContractValidationTests {
+    @Test func runAttemptLineageMatchesDaemonValidation() {
+        let snapshot = RunFixtures.defaultRuns().first {
+            $0.run.id == RunFixtures.activeRunID
+        }!
+        #expect(
+            MockContractValidation.runSnapshotBreach(snapshot, serverRevision: 12) == nil)
+
+        var missingReason = snapshot
+        missingReason.run.attempt_reason = nil
+        #expect(
+            MockContractValidation.runSnapshotBreach(missingReason, serverRevision: 12)
+                == "inconsistent production attempt lineage")
+
+        var noncontiguous = snapshot
+        noncontiguous.run.stages[0].attempts[1].number = 3
+        #expect(
+            MockContractValidation.runSnapshotBreach(noncontiguous, serverRevision: 12)
+                == "invalid stage attempt")
+    }
+
     // MARK: - itemValidityBreach
 
     @Test func validItemHasNoBreach() {

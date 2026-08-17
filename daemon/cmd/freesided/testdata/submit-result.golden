@@ -14,5 +14,10 @@
   "source_artifact_id": "source-artifact",
   "elaboration_policy_artifact_id": "elaboration-policy-artifact",
   "publication_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-  "work_unit_id": "work-unit-implementation"
+  "work_unit_id": "work-unit-implementation",
+  "campaign_id": "campaign-golden",
+  "attempt_number": 2,
+  "attempt_reason": "Retry after repairing the acceptance rig",
+  "parent_run_id": "run-parent",
+  "approved_spec_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 }

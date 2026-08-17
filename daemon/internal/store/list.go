@@ -34,12 +34,16 @@ type Snapshotted[T any] struct {
 //     empty, non-nil slice, so a direct JSON projection emits [] not null.
 
 const listRunsSQL = `
-SELECT id, project_id, policy_digest, entity_version, as_of_revision, body
+SELECT id, project_id, policy_digest, campaign_id, attempt_number, attempt_reason,
+       parent_run_id, entity_version, as_of_revision, body
 FROM runs ORDER BY id`
 
 // ListRuns enumerates every persisted run (List semantics above).
 func (tx *ReadTx) ListRuns(ctx context.Context) ([]Snapshotted[domain.Run], error) {
-	runs, err := listSnapshotted(ctx, tx, listRunsSQL, (*ReadTx).scanRunSnapshot)
+	runs, err := listSnapshotted(ctx, tx, listRunsSQL,
+		func(tx *ReadTx, sc scanner) (domain.Run, Snapshot, error) {
+			return tx.scanRunSnapshot(ctx, sc)
+		})
 	if err != nil {
 		return nil, fmt.Errorf("list runs: %w", err)
 	}
