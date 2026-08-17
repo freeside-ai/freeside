@@ -71,6 +71,92 @@ func TestRealRunAttentionStateDetectsOpenPublicationBlock(t *testing.T) {
 	}
 }
 
+func TestRealRunElaborationFailure(t *testing.T) {
+	t.Parallel()
+	elaborationRunID := domain.RunID("elaboration-run")
+	implementationRunID := domain.RunID("implementation-run")
+	matching := store.Snapshotted[domain.AttentionItem]{Value: domain.AttentionItem{
+		ID:   "execution-failure-inv-elaborate-elaboration-run-1",
+		Type: domain.AttentionExecutionFailure, Status: domain.StatusOpen,
+		Subject: domain.Subject{RunID: &elaborationRunID}, Reason: "invalid elaborator output",
+	}}
+
+	if got := realRunElaborationFailure(
+		[]store.Snapshotted[domain.AttentionItem]{matching}, elaborationRunID,
+	); got.ID != matching.Value.ID || got.Reason != matching.Value.Reason {
+		t.Fatalf("elaboration failure = %+v, want %+v", got, matching.Value)
+	}
+
+	revisionFailure := matching
+	revisionFailure.Value.ID = "execution-failure-spec-revision-implementation-run-2"
+	if got := realRunElaborationFailure(
+		[]store.Snapshotted[domain.AttentionItem]{revisionFailure}, elaborationRunID,
+	); got.ID != revisionFailure.Value.ID {
+		t.Fatalf("elaboration revision failure = %+v, want %+v", got, revisionFailure.Value)
+	}
+
+	resolvedTerminal := matching
+	resolvedTerminal.Value.Status = domain.StatusResolved
+	if got := realRunElaborationFailure(
+		[]store.Snapshotted[domain.AttentionItem]{resolvedTerminal}, elaborationRunID,
+	); got.ID != resolvedTerminal.Value.ID {
+		t.Fatalf("resolved elaboration failure = %+v, want %+v", got, resolvedTerminal.Value)
+	}
+
+	tests := []struct {
+		name string
+		item domain.AttentionItem
+	}{
+		{
+			name: "marker quarantine",
+			item: domain.AttentionItem{
+				ID:   "elaboration-marker-quarantined-1-elaboration-run",
+				Type: domain.AttentionExecutionFailure, Status: domain.StatusOpen,
+				Subject: domain.Subject{RunID: &elaborationRunID},
+			},
+		},
+		{
+			name: "malformed terminal identity",
+			item: domain.AttentionItem{
+				ID:   "execution-failure-inv-elaborate-elaboration-run-01",
+				Type: domain.AttentionExecutionFailure, Status: domain.StatusOpen,
+				Subject: domain.Subject{RunID: &elaborationRunID},
+			},
+		},
+		{
+			name: "implementation run",
+			item: domain.AttentionItem{
+				ID: "execution-failure-implementation", Type: domain.AttentionExecutionFailure,
+				Status: domain.StatusOpen, Subject: domain.Subject{RunID: &implementationRunID},
+			},
+		},
+		{
+			name: "other item type",
+			item: domain.AttentionItem{
+				ID: "publish-blocked", Type: domain.AttentionPublishBlocked,
+				Status: domain.StatusOpen, Subject: domain.Subject{RunID: &elaborationRunID},
+			},
+		},
+		{
+			name: "resolved failure",
+			item: domain.AttentionItem{
+				ID: "execution-failure-resolved", Type: domain.AttentionExecutionFailure,
+				Status: domain.StatusResolved, Subject: domain.Subject{RunID: &elaborationRunID},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := realRunElaborationFailure(
+				[]store.Snapshotted[domain.AttentionItem]{{Value: test.item}}, elaborationRunID,
+			); got.ID != "" {
+				t.Fatalf("ignored item produced elaboration failure %+v", got)
+			}
+		})
+	}
+}
+
 func TestValidateRealRunImplementationBinding(t *testing.T) {
 	t.Parallel()
 	implementationRunID := domain.RunID("implementation-run")

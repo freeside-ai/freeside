@@ -37,6 +37,7 @@ const realRunLiveEnv = "FREESIDE_REAL_RUN_LIVE_TEST"
 const (
 	realRunImplementationRunIDEnv      = "FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID"
 	realRunImplementationInvocationEnv = "FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION"
+	realRunElaborationRunIDEnv         = "FREESIDE_REAL_RUN_ELABORATION_RUN_ID"
 	realRunLegacyRunIDEnv              = "FREESIDE_REAL_RUN_RUN_ID"
 	realRunLegacyInvocationEnv         = "FREESIDE_REAL_RUN_INVOCATION"
 )
@@ -315,21 +316,34 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 			realRunImplementationInvocationEnv + " to the submitted implementation run " +
 			"to verify a completed run; scripts/run-real-work.sh sets them")
 	}
+	elaborationRunID := domain.RunID(os.Getenv(realRunElaborationRunIDEnv))
 	invocationID := binding.invocationID
 	runID := binding.runID
 
 	var (
-		admission domain.ExecutionAdmission
-		export    domain.ExecutionExport
-		terminal  *domain.ExecutionOutcome
-		ready     domain.AttentionItem
-		blocked   domain.AttentionItem
-		outcome   publish.Outcome
+		admission          domain.ExecutionAdmission
+		export             domain.ExecutionExport
+		terminal           *domain.ExecutionOutcome
+		ready              domain.AttentionItem
+		blocked            domain.AttentionItem
+		elaborationFailure domain.AttentionItem
+		outcome            publish.Outcome
 	)
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		admission, err = tx.GetExecutionAdmission(ctx, invocationID)
 		if err != nil {
+			if !errors.Is(err, store.ErrNotFound) || elaborationRunID == "" {
+				return err
+			}
+			items, listErr := tx.ListAttentionItems(ctx)
+			if listErr != nil {
+				return listErr
+			}
+			elaborationFailure = realRunElaborationFailure(items, elaborationRunID)
+			if elaborationFailure.ID != "" {
+				return nil
+			}
 			return err
 		}
 		if _, _, err := validateRealRunImplementationBinding(identityInput, &admission.RunID); err != nil {
@@ -386,6 +400,14 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatalf("read durable execution record: %v", err)
+	}
+	if elaborationFailure.ID != "" {
+		t.Fatalf(
+			"real run elaboration failed: run=%s item=%s reason=%q",
+			elaborationRunID,
+			elaborationFailure.ID,
+			elaborationFailure.Reason,
+		)
 	}
 	if blocked.ID != "" {
 		t.Fatalf("real run publication blocked: %s", blocked.Reason)
@@ -506,6 +528,28 @@ func TestRealRunBackupPayloadExtractorsIncludeElaborationMarkers(t *testing.T) {
 			t.Errorf("backup payload extractor %q is not registered", kind)
 		}
 	}
+}
+
+func realRunElaborationFailure(
+	items []store.Snapshotted[domain.AttentionItem], runID domain.RunID,
+) domain.AttentionItem {
+	for _, item := range items {
+		if item.Value.Type == domain.AttentionExecutionFailure &&
+			item.Value.Subject.RunID != nil && *item.Value.Subject.RunID == runID &&
+			realRunElaborationFailureID(item.Value.ID, runID) {
+			return item.Value
+		}
+	}
+	return domain.AttentionItem{}
+}
+
+func realRunElaborationFailureID(id domain.ItemID, runID domain.RunID) bool {
+	terminalPrefix := "execution-failure-inv-elaborate-" + string(runID) + "-"
+	if suffix, ok := strings.CutPrefix(string(id), terminalPrefix); ok {
+		iteration, err := strconv.ParseUint(suffix, 10, 64)
+		return err == nil && iteration > 0 && strconv.FormatUint(iteration, 10) == suffix
+	}
+	return strings.HasPrefix(string(id), "execution-failure-spec-revision-")
 }
 
 func realRunAttentionState(

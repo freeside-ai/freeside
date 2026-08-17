@@ -8,7 +8,9 @@
 # gate. After an operator approves the spec in a Freeside client, the daemon
 # runs implementation to a ready-for-review outcome and the script verifies
 # the durable export, networkless verification evidence, publication outcome,
-# and exact published head with the real-run harness test.
+# and exact published head with the real-run harness test. A durable
+# elaboration failure exits promptly with its recorded diagnostic instead of
+# waiting for the global deadline.
 #
 # It never mints its own preconditions. Every binding below is the
 # operator's, supplied through the environment, because each one lands in
@@ -51,8 +53,9 @@
 #   FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS clean rig-holder shutdown
 #                                    bound (default 30)
 #
-# The harness supplies FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID and
-# FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION to its verifier after submit.
+# The harness supplies FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID,
+# FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION, and (when present)
+# FREESIDE_REAL_RUN_ELABORATION_RUN_ID to its verifier after submit.
 # A manual verifier run must set both to the implementation-lane identities;
 # the former generic FREESIDE_REAL_RUN_RUN_ID and
 # FREESIDE_REAL_RUN_INVOCATION names are rejected.
@@ -432,6 +435,11 @@ else
 fi
 echo "reserved implementation run=$implementation_run_id invocation=$implementation_invocation_id" >&2
 
+elaboration_verifier_env=(-u FREESIDE_REAL_RUN_ELABORATION_RUN_ID)
+if [[ -n "$elaboration_run_id" ]]; then
+	elaboration_verifier_env+=(FREESIDE_REAL_RUN_ELABORATION_RUN_ID="$elaboration_run_id")
+fi
+
 # Seed the durable auth-identity binding before the daemon can reach
 # admission. The verifier records it too, but that call happens inside the
 # polling loop, i.e. after the daemon is already dispatching: leaving it there
@@ -448,6 +456,7 @@ echo "recording the auth identity binding" >&2
 env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
   -u FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID \
   -u FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION \
+	-u FREESIDE_REAL_RUN_ELABORATION_RUN_ID \
   FREESIDE_REAL_RUN_LIVE_TEST=1 \
   go test -C "$repo_root/daemon" ./internal/integration/ \
     -run TestRealWorkItemCompletesProductionPipeline -count=1 > "$workdir/seed.log" 2>&1 || {
@@ -513,6 +522,7 @@ while (( SECONDS < deadline )); do
     exit 1
   fi
   if env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
+		"${elaboration_verifier_env[@]}" \
     FREESIDE_REAL_RUN_LIVE_TEST=1 \
     FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID="$implementation_run_id" \
     FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION="$implementation_invocation_id" \
@@ -520,6 +530,13 @@ while (( SECONDS < deadline )); do
     -run TestRealWorkItemCompletesProductionPipeline -count=1 > "$workdir/verify.log" 2>&1; then
     break
   fi
+	if grep -q "real run elaboration failed:" "$workdir/verify.log"; then
+		echo "run-real-work: elaboration failed before implementation admission" >&2
+		cat "$workdir/verify.log" >&2
+		echo "daemon log:" >&2
+		tail -50 "$workdir/daemon.log" >&2
+		exit 1
+	fi
   if grep -q "real run terminal outcome:" "$workdir/verify.log"; then
     echo "run-real-work: the run reached a failed terminal outcome" >&2
     cat "$workdir/verify.log" >&2
@@ -544,13 +561,24 @@ daemon_pid=""
 # Positive evidence, not the absence of an error: a Go test binary exits 0
 # for a skipped test too, so require the harness's own success line.
 verify_log="$workdir/verify-final.log"
+set +e
 env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
+	"${elaboration_verifier_env[@]}" \
   FREESIDE_REAL_RUN_LIVE_TEST=1 \
   FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID="$implementation_run_id" \
   FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION="$implementation_invocation_id" \
   go test -C "$repo_root/daemon" ./internal/integration/ \
     -run TestRealWorkItemCompletesProductionPipeline -count=1 -v 2>&1 | tee "$verify_log"
-if ! grep -q "real production pipeline verified: PR #" "$verify_log"; then
+verify_status=${PIPESTATUS[0]}
+set -e
+if grep -q "real run elaboration failed:" "$verify_log"; then
+	echo "run-real-work: elaboration failed before implementation admission" >&2
+	echo "daemon log:" >&2
+	tail -50 "$workdir/daemon.log" >&2
+	exit 1
+fi
+if [[ "$verify_status" -ne 0 ]] ||
+	! grep -q "real production pipeline verified: PR #" "$verify_log"; then
   echo "run-real-work: the run did not reach a verified ready publication" >&2
   echo "daemon log:" >&2
   tail -50 "$workdir/daemon.log" >&2
