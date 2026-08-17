@@ -134,6 +134,10 @@ import Testing
         #expect(run["created_at"] is NSNull)
         #expect(run.keys.contains("last_activity_at"))
         #expect(run["last_activity_at"] is NSNull)
+        for key in ["campaign_id", "attempt_number", "attempt_reason", "parent_run_id"] {
+            #expect(run.keys.contains(key))
+            #expect(run[key] is NSNull)
+        }
     }
 
     @Test func bootstrapFailsClosedOnOneInvalidRow() async throws {
@@ -151,6 +155,32 @@ import Testing
             return
         }
         #expect(statusCode == 500)
+    }
+
+    @Test func invalidRunReadsAreAuthoritativeServerFailures() async throws {
+        var forged = try #require(
+            RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID })
+        forged.run.attempt_reason = nil
+        let client = APIClientFactory.mock(server: MockServer(runs: [forged]))
+
+        let list = try await client.listRuns()
+        guard case .undocumented(let listStatus, _) = list else {
+            Issue.record("expected list reconstruction failure, got \(list)")
+            return
+        }
+        #expect(listStatus == 500)
+        let get = try await client.getRun(path: .init(run_id: forged.run.id))
+        guard case .undocumented(let getStatus, _) = get else {
+            Issue.record("expected get reconstruction failure, got \(get)")
+            return
+        }
+        #expect(getStatus == 500)
+        let bootstrap = try await client.getSyncBootstrap()
+        guard case .undocumented(let bootstrapStatus, _) = bootstrap else {
+            Issue.record("expected bootstrap reconstruction failure, got \(bootstrap)")
+            return
+        }
+        #expect(bootstrapStatus == 500)
     }
 
     @Test func rotatedEpochReachesBothSyncReadsWithoutTouchingRows() async throws {

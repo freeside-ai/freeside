@@ -100,6 +100,13 @@ public struct MockServerTransport: ClientTransport {
                             "bootstrap reconstruction failed: delivery for item \(invalid.itemID): \(invalid.reason)"
                     )
                 )
+            } catch let invalid as MockServer.InvalidRunError {
+                return try Self.json(
+                    status: .internalServerError,
+                    body: Components.Schemas._Error(
+                        message: "bootstrap reconstruction failed: run \(invalid.runID): \(invalid.reason)"
+                    )
+                )
             }
         case "listAttentionItems":
             do {
@@ -147,23 +154,41 @@ public struct MockServerTransport: ClientTransport {
             }
             return try Self.json(status: .ok, body: facts)
         case "listRuns":
-            return try Self.json(
-                status: .ok,
-                body: await server.listRuns(),
-                insertingRequiredNullableRunTimestamps: true)
-        case "getRun":
-            guard let runID = Self.lastPathComponent(request.path),
-                let run = await server.run(id: runID)
-            else {
+            do {
                 return try Self.json(
-                    status: .notFound,
+                    status: .ok,
+                    body: try await server.listRuns(),
+                    insertingRequiredNullableRunTimestamps: true)
+            } catch let invalid as MockServer.InvalidRunError {
+                return try Self.json(
+                    status: .internalServerError,
                     body: Components.Schemas._Error(
-                        message: "no entity exists under the identifier"))
+                        message: "list reconstruction failed: run \(invalid.runID): \(invalid.reason)"
+                    )
+                )
             }
-            return try Self.json(
-                status: .ok,
-                body: run,
-                insertingRequiredNullableRunTimestamps: true)
+        case "getRun":
+            do {
+                guard let runID = Self.lastPathComponent(request.path),
+                    let run = try await server.run(id: runID)
+                else {
+                    return try Self.json(
+                        status: .notFound,
+                        body: Components.Schemas._Error(
+                            message: "no entity exists under the identifier"))
+                }
+                return try Self.json(
+                    status: .ok,
+                    body: run,
+                    insertingRequiredNullableRunTimestamps: true)
+            } catch let invalid as MockServer.InvalidRunError {
+                return try Self.json(
+                    status: .internalServerError,
+                    body: Components.Schemas._Error(
+                        message: "reconstruction failed: run \(invalid.runID): \(invalid.reason)"
+                    )
+                )
+            }
         case "getRunTimeline":
             guard let runID = Self.runID(inTimelinePath: request.path),
                 let timeline = await server.runTimeline(id: runID)
@@ -454,6 +479,9 @@ public struct MockServerTransport: ClientTransport {
         }
         if !run.keys.contains("last_activity_at") {
             run["last_activity_at"] = NSNull()
+        }
+        for key in ["campaign_id", "attempt_number", "attempt_reason", "parent_run_id"] where !run.keys.contains(key) {
+            run[key] = NSNull()
         }
         object["run"] = run
         return object

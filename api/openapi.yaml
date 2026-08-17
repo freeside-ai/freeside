@@ -2687,11 +2687,14 @@ components:
       description: >
         A run aggregate with stages and attempts embedded plus a
         daemon-derived progress summary. spec_digest and policy_digest bind
-        the run to its typed inputs; summary fields are computed from the
-        observation timeline and never persisted as workflow authority.
+        the run to its typed inputs. Campaign fields identify a deliberate
+        production-acceptance attempt and are null on legacy or non-production
+        runs; summary fields are computed from the observation timeline and
+        never persisted as workflow authority.
       required:
         [id, project_id, created_at, last_activity_at, spec_digest,
-         policy_digest, stages, latest_milestone, outcome, hold_reason]
+         policy_digest, campaign_id, attempt_number, attempt_reason,
+         parent_run_id, stages, latest_milestone, outcome, hold_reason]
       properties:
         id:
           type: string
@@ -2718,6 +2721,26 @@ components:
           $ref: "#/components/schemas/Digest"
         policy_digest:
           $ref: "#/components/schemas/Digest"
+        campaign_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: Stable production-acceptance campaign identity.
+        attempt_number:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: Monotonic campaign attempt number allocated by the daemon.
+        attempt_reason:
+          type: string
+          minLength: 1
+          nullable: true
+          description: Operator reason for a retry; null for attempt 1.
+        parent_run_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: Exact terminal run retried by this attempt; null for attempt 1.
         stages:
           type: array
           items:
@@ -2739,6 +2762,10 @@ components:
         last_activity_at: "2026-01-02T03:06:05Z"
         spec_digest: "sha256:spec"
         policy_digest: "sha256:policy"
+        campaign_id: "campaign-1"
+        attempt_number: 2
+        attempt_reason: "Retry after correcting the acceptance rig"
+        parent_run_id: "run-0"
         latest_milestone: "invocation_started"
         outcome: "pending"
         hold_reason: null

@@ -14,10 +14,13 @@ public enum RunFixtures {
             snapshot(
                 id: activeRunID, projectID: "freeside", stage: "implementation",
                 attempt: 2, milestone: .invocation_started, outcome: .pending,
-                hold: .verification_findings),
+                hold: .verification_findings, campaignID: "campaign-freeside-acceptance",
+                campaignAttempt: 2, attemptReason: "Retry after repairing the acceptance rig",
+                parentRunID: "run-freeside-656"),
             snapshot(
                 id: readyRunID, projectID: "freeside", stage: "publication",
-                attempt: 1, milestone: .publication_ready, outcome: .published),
+                attempt: 1, milestone: .publication_ready, outcome: .published,
+                campaignID: "campaign-freeside-ready", campaignAttempt: 1),
             snapshot(
                 id: "run-oriole-121", projectID: "oriole", stage: "verification",
                 attempt: 1, milestone: .terminal_recorded, outcome: .failed),
@@ -118,7 +121,11 @@ public enum RunFixtures {
         attempt: Int,
         milestone: Components.Schemas.RunMilestoneKind?,
         outcome: Components.Schemas.RunOutcome,
-        hold: Components.Schemas.RunHoldReason? = nil
+        hold: Components.Schemas.RunHoldReason? = nil,
+        campaignID: String? = nil,
+        campaignAttempt: Int? = nil,
+        attemptReason: String? = nil,
+        parentRunID: String? = nil
     ) -> Components.Schemas.RunSnapshot {
         let stageID = "stage-\(id)"
         return .init(
@@ -131,6 +138,10 @@ public enum RunFixtures {
                 last_activity_at: nil,
                 spec_digest: "sha256:\(String(repeating: "1", count: 64))",
                 policy_digest: "sha256:\(String(repeating: "2", count: 64))",
+                campaign_id: campaignID,
+                attempt_number: campaignAttempt,
+                attempt_reason: attemptReason,
+                parent_run_id: parentRunID,
                 stages: [
                     .init(
                         id: stageID, run_id: id, name: stage,

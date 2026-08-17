@@ -85,6 +85,11 @@ private struct RunRowView: View {
             Text(run.id)
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
+            if let campaign = RunDisplay.campaign(run) {
+                Text(campaign)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+            }
             HStack(spacing: 8) {
                 if let stage = run.stages.last {
                     Label(stage.name.capitalized, systemImage: "square.stack.3d.up")
@@ -180,6 +185,15 @@ enum RunDisplay {
     static func round(_ stage: Components.Schemas.Stage) -> String? {
         guard !stage.attempts.isEmpty else { return nil }
         return "Round \(stage.attempts.count)"
+    }
+
+    static func campaign(_ run: Components.Schemas.Run) -> String? {
+        guard let campaignID = run.campaign_id, let attempt = run.attempt_number else { return nil }
+        return "Campaign \(campaignID) · Attempt \(attempt)"
+    }
+
+    static func specificationLabel(_ run: Components.Schemas.Run) -> String {
+        run.stages.contains { $0.name == "implement" } ? "Approved specification" : "Source specification"
     }
 
     static func label(_ value: Components.Schemas.RunOutcome) -> String {

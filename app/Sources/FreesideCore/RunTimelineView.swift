@@ -80,6 +80,22 @@ struct RunTimelineView: View {
             }
             .font(.subheadline)
             .foregroundStyle(.secondary)
+            if let campaign = RunDisplay.campaign(snapshot.run) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(campaign)
+                        .font(.callout.monospaced().weight(.semibold))
+                    if let reason = snapshot.run.attempt_reason {
+                        Text("Reason: \(reason)")
+                    }
+                    if let parent = snapshot.run.parent_run_id {
+                        Text("Parent run: \(parent)")
+                            .font(.caption.monospaced())
+                    }
+                    Text("\(RunDisplay.specificationLabel(snapshot.run)): \(snapshot.run.spec_digest)")
+                        .font(.caption.monospaced())
+                }
+                .foregroundStyle(.secondary)
+            }
             Label("Daemon observations", systemImage: "eye")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
