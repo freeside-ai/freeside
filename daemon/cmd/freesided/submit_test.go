@@ -130,6 +130,9 @@ func TestSubmitResultGolden(t *testing.T) {
 		SourceArtifactID:        "source-artifact", ElaborationPolicyArtifactID: "elaboration-policy-artifact",
 		PublicationDigest: "sha256:" + domain.Digest(strings.Repeat("c", 64)),
 		WorkUnitID:        "work-unit-implementation",
+		CampaignID:        "campaign-golden", AttemptNumber: 2,
+		AttemptReason: "Retry after repairing the acceptance rig", ParentRunID: "run-parent",
+		ApprovedSpecDigest: "sha256:" + domain.Digest(strings.Repeat("d", 64)),
 	}
 	body, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
@@ -179,6 +182,10 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	}
 	if first.PublicationDigest == "" {
 		t.Fatal("publication metadata has no durable digest binding")
+	}
+	if first.CampaignID == "" || first.AttemptNumber != 1 {
+		t.Fatalf("production attempt identity = %q/%d, want campaign attempt 1",
+			first.CampaignID, first.AttemptNumber)
 	}
 
 	replay, err := runSubmitCommand(ctx, cfg)
@@ -252,6 +259,18 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		if run.SpecDigest != first.SourceDigest || run.PolicyDigest != first.ElaborationPolicyDigest {
 			t.Errorf("run digests = %q/%q, want %q/%q",
 				run.SpecDigest, run.PolicyDigest, first.SourceDigest, first.ElaborationPolicyDigest)
+		}
+		if run.CampaignID != first.CampaignID || run.AttemptNumber != 1 {
+			t.Errorf("elaboration run attempt = %q/%d, want %q/1",
+				run.CampaignID, run.AttemptNumber, first.CampaignID)
+		}
+		attempt, err := tx.GetProductionAttempt(ctx, first.CampaignID, 1)
+		if err != nil {
+			return err
+		}
+		if attempt.SourceDigest != first.SourceDigest || attempt.ApprovedSpecDigest != "" ||
+			attempt.ImplementationRunID != first.RunID {
+			t.Errorf("pre-approval attempt = %+v, want source-bound reservation", attempt)
 		}
 		observation, err := tx.ObserveRun(ctx, first.ElaborationRunID)
 		if err != nil {

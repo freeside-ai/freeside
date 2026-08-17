@@ -251,6 +251,10 @@ func (r *intakeReconciler) admit(
 	if err != nil {
 		return domain.IntakeOccurrence{}, err
 	}
+	campaignID, err := engine.ProductionCampaignIDForImplementation(implementationRunID)
+	if err != nil {
+		return domain.IntakeOccurrence{}, err
+	}
 	// The forge host must be in the operator's own research allowlist with
 	// authentic provenance; the loop never silently widens operator-attributed
 	// policy (a rewritten value under an unchanged provenance would falsely
@@ -275,6 +279,11 @@ func (r *intakeReconciler) admit(
 	if err != nil {
 		return domain.IntakeOccurrence{}, err
 	}
+	publicationBody, err := json.Marshal(intakePublication(init, occurrence))
+	if err != nil {
+		return domain.IntakeOccurrence{}, fmt.Errorf("encode publication: %w", err)
+	}
+	publicationDigest := submissionBytes(publicationBody).digest
 	project, err := domain.NewProject(init.ProjectID, init.Repo, init.RepositoryID)
 	if err != nil {
 		return domain.IntakeOccurrence{}, fmt.Errorf("project authority: %w", err)
@@ -290,11 +299,20 @@ func (r *intakeReconciler) admit(
 	}
 	reservedRun := engine.NewReservedElaborationRun(
 		elaborationRunID, init.ProjectID, workItem.Digest, resolvedPolicy.Digest)
+	reservedRun.CampaignID = campaignID
+	reservedRun.AttemptNumber = 1
 	if err := r.store.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutArtifact(ctx, workItem); err != nil {
 			return err
 		}
 		if err := tx.PutArtifact(ctx, policyArtifact); err != nil {
+			return err
+		}
+		if err := tx.PutProductionAttempt(ctx, domain.ProductionAttempt{
+			CampaignID: campaignID, AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
+			SourceDigest: workItem.Digest, PublicationDigest: publicationDigest, Publication: publicationBody, ElaborationRunID: elaborationRunID,
+			ImplementationRunID: implementationRunID,
+		}); err != nil {
 			return err
 		}
 		if err := tx.PutRun(ctx, reservedRun); err != nil {
@@ -482,6 +500,11 @@ func (r *intakeReconciler) startSpec(
 	ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence,
 ) (engine.ElaborationRunSpec, error) {
 	elaborationRunID := occurrence.Admission.Subject.ElaborationRunID
+	implementationRunID := intakeImplementationRunID(occurrence)
+	campaignID, err := engine.ProductionCampaignIDForImplementation(implementationRunID)
+	if err != nil {
+		return engine.ElaborationRunSpec{}, err
+	}
 	var resolved domain.ResolvedPolicy
 	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -496,14 +519,55 @@ func (r *intakeReconciler) startSpec(
 		return engine.ElaborationRunSpec{}, err
 	}
 	issue := occurrence.IssueNumber
+	var attempt domain.ProductionAttempt
+	attemptErr := r.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		attempt, err = tx.GetProductionAttempt(ctx, campaignID, 1)
+		return err
+	})
+	publication := intakePublication(init, occurrence)
+	publicationDigest := domain.Digest("")
+	publicationBytes := json.RawMessage(nil)
+	if attemptErr == nil {
+		if err := json.Unmarshal(attempt.Publication, &publication); err != nil {
+			return engine.ElaborationRunSpec{}, fmt.Errorf("decode admitted publication: %w", err)
+		}
+		if attempt.PublicationDigest == "" || submissionBytes(attempt.Publication).digest != attempt.PublicationDigest {
+			return engine.ElaborationRunSpec{}, fmt.Errorf("admitted publication disagrees with attempt: %w", domain.ErrParentKeyMismatch)
+		}
+		publicationDigest, publicationBytes = attempt.PublicationDigest, attempt.Publication
+	} else if !errors.Is(attemptErr, store.ErrNotFound) {
+		return engine.ElaborationRunSpec{}, attemptErr
+	} else {
+		var reserved domain.Run
+		if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			reserved, err = tx.GetRun(ctx, elaborationRunID)
+			return err
+		}); err != nil || reserved.CampaignID != "" || reserved.AttemptNumber != 0 {
+			return engine.ElaborationRunSpec{}, fmt.Errorf("legacy reservation lookup: %w", attemptErr)
+		}
+		body, err := json.Marshal(publication)
+		if err != nil {
+			return engine.ElaborationRunSpec{}, fmt.Errorf("encode legacy publication: %w", err)
+		}
+		publicationDigest = submissionBytes(body).digest
+	}
+	if err := publication.Validate(); err != nil {
+		return engine.ElaborationRunSpec{}, fmt.Errorf("validate publication: %w", err)
+	}
 	return engine.ElaborationRunSpec{
 		ElaborationRunID:    elaborationRunID,
-		ImplementationRunID: intakeImplementationRunID(occurrence),
+		ImplementationRunID: implementationRunID,
+		CampaignID:          campaignID,
+		AttemptNumber:       1,
 		ProjectID:           occurrence.Admission.Subject.ProjectID,
 		SourceArtifactID:    workItem.ID,
 		PolicyArtifactID:    occurrence.Admission.Subject.PolicyArtifactID,
 		ResolvedPolicy:      resolved,
-		Publication:         intakePublication(init, occurrence),
+		Publication:         publication,
+		PublicationDigest:   publicationDigest,
+		PublicationBytes:    publicationBytes,
 		WorkUnit: &domain.WorkUnitDeclarationInput{
 			CompletionCriterion: domain.CompletionBoundPRMerged,
 			BoundIssue:          &issue,

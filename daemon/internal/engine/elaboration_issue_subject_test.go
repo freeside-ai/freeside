@@ -45,6 +45,10 @@ func newIssueSubjectReservation(t *testing.T, stageAttempts ...domain.Attempt) i
 	if err != nil {
 		t.Fatal(err)
 	}
+	campaignID, err := ProductionCampaignIDForImplementation(implementationRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	provenance := domain.KeyProvenance{
 		Source: domain.ProvenanceOverride,
 		Digest: domain.Digest(contentaddr.Sum([]byte("issue-subject-test-policy"))),
@@ -80,6 +84,8 @@ func newIssueSubjectReservation(t *testing.T, stageAttempts ...domain.Attempt) i
 		t.Fatal(err)
 	}
 	reservedRun := NewReservedElaborationRun(elaborationRunID, "project-1", workItemDigest, policy.Digest)
+	reservedRun.CampaignID = campaignID
+	reservedRun.AttemptNumber = 1
 	if len(stageAttempts) > 0 {
 		reservedRun.Stages[0].Attempts = stageAttempts
 	}
@@ -102,6 +108,14 @@ func newIssueSubjectReservation(t *testing.T, stageAttempts ...domain.Attempt) i
 		if err := tx.PutArtifact(t.Context(), policyArt); err != nil {
 			return err
 		}
+		if err := tx.PutProductionAttempt(t.Context(), domain.ProductionAttempt{
+			CampaignID: campaignID, AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
+			SourceDigest: workItem.Digest, PublicationDigest: "sha256:publication",
+			ElaborationRunID:    elaborationRunID,
+			ImplementationRunID: implementationRunID,
+		}); err != nil {
+			return err
+		}
 		if err := tx.PutRun(t.Context(), reservedRun); err != nil {
 			return err
 		}
@@ -115,13 +129,15 @@ func newIssueSubjectReservation(t *testing.T, stageAttempts ...domain.Attempt) i
 	specWorkUnit := workUnitInput
 	spec := ElaborationRunSpec{
 		ElaborationRunID: elaborationRunID, ImplementationRunID: implementationRunID,
+		CampaignID: campaignID, AttemptNumber: 1,
 		ProjectID: "project-1", SourceArtifactID: workItem.ID,
 		PolicyArtifactID: policyArt.ID, ResolvedPolicy: policy,
 		Publication: ProductionPublication{
 			Title: "Resolve labeled issue #7", Body: "Daemon-composed publication.",
 			CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside-bot", BotUserID: 12345},
 		},
-		WorkUnit: &specWorkUnit,
+		PublicationDigest: "sha256:publication",
+		WorkUnit:          &specWorkUnit,
 		Source: domain.ElaborationSource{
 			Kind: domain.ElaborationSourceIssueSubject,
 			IssueSubject: &domain.IssueSubjectRef{
@@ -152,6 +168,18 @@ func TestSubmitIssueSubjectElaborationRunAdoptsReservedRun(t *testing.T) {
 	}
 	if submitted.ImplementationRunID != r.spec.ImplementationRunID {
 		t.Fatalf("implementation run = %q, want %q", submitted.ImplementationRunID, r.spec.ImplementationRunID)
+	}
+	if err := r.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		attempt, err := tx.GetProductionAttempt(t.Context(), r.spec.CampaignID, 1)
+		if err != nil {
+			return err
+		}
+		if attempt.ElaborationRunID != r.elaborationRunID || attempt.ImplementationRunID != r.spec.ImplementationRunID {
+			t.Errorf("production attempt = %+v, want reserved and implementation run IDs", attempt)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read production attempt: %v", err)
 	}
 	invocationID := elaborationInvocationID(r.elaborationRunID, 1)
 
@@ -237,6 +265,10 @@ func TestSubmitIssueSubjectElaborationRunRequiresReservedRun(t *testing.T) {
 	spec := r.spec
 	spec.ElaborationRunID = other
 	spec.ImplementationRunID = "run-unreserved"
+	spec.CampaignID, err = ProductionCampaignIDForImplementation(spec.ImplementationRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	policy, err := domain.NewResolvedPolicy(other, r.spec.ResolvedPolicy.Keys)
 	if err != nil {
 		t.Fatal(err)

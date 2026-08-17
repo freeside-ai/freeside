@@ -207,7 +207,11 @@ type ProductionRunSpec struct {
 	// declaration, captured verbatim in the submission transaction; nil
 	// submits an undeclared run, which records nothing (capture stores
 	// explicit declarations only).
-	WorkUnit *domain.WorkUnitDeclarationInput
+	WorkUnit      *domain.WorkUnitDeclarationInput
+	CampaignID    domain.CampaignID
+	AttemptNumber int
+	AttemptReason string
+	ParentRunID   domain.RunID
 }
 
 // ProductionRun reports the durable identities one submission converges on.
@@ -326,6 +330,8 @@ func submitProductionRun(
 		want := domain.Run{
 			ID: spec.RunID, ProjectID: spec.ProjectID,
 			SpecDigest: specArtifact.Digest, PolicyDigest: policyArtifact.Digest,
+			CampaignID: spec.CampaignID, AttemptNumber: spec.AttemptNumber,
+			AttemptReason: spec.AttemptReason, ParentRunID: spec.ParentRunID,
 			Stages: []domain.Stage{{
 				ID: stageID, RunID: spec.RunID,
 				Name: productionStageName, Attempts: []domain.Attempt{},
@@ -334,12 +340,17 @@ func submitProductionRun(
 		if err := want.Validate(); err != nil {
 			return err
 		}
+		if err := authenticateProductionAttempt(ctx, tx, spec, specArtifact.Digest, elaborationGrant); err != nil {
+			return err
+		}
 
 		existing, err := tx.GetRun(ctx, spec.RunID)
 		switch {
 		case err == nil:
 			if existing.ProjectID != want.ProjectID || existing.SpecDigest != want.SpecDigest ||
-				existing.PolicyDigest != want.PolicyDigest {
+				existing.PolicyDigest != want.PolicyDigest || existing.CampaignID != want.CampaignID ||
+				existing.AttemptNumber != want.AttemptNumber || existing.AttemptReason != want.AttemptReason ||
+				existing.ParentRunID != want.ParentRunID {
 				return fmt.Errorf("fixed bindings disagree with stored run: %w", domain.ErrImmutableTransition)
 			}
 			if _, ok := findProductionStage(existing); !ok {
@@ -580,9 +591,68 @@ func authorizeProductionSubmission(
 	if claim.Kind != KindElaborationImplementationClaim || !claim.Dispatched() ||
 		grant.ImplementationRunID != spec.RunID || grant.ProjectID != spec.ProjectID ||
 		grant.PolicyArtifactID != spec.PolicyArtifactID || grant.Publication != spec.Publication ||
+		grant.CampaignID != spec.CampaignID || grant.AttemptNumber != spec.AttemptNumber ||
 		!sameElaborationWorkUnit(grant.WorkUnit, spec.WorkUnit) {
 		return fmt.Errorf("implementation reservation disagrees with production submission: %w",
 			domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+func authenticateProductionAttempt(
+	ctx context.Context,
+	tx *store.WriteTx,
+	spec ProductionRunSpec,
+	approvedSpecDigest domain.Digest,
+	grant *elaborationRequest,
+) error {
+	if spec.CampaignID == "" {
+		if spec.AttemptNumber != 0 || spec.AttemptReason != "" || spec.ParentRunID != "" {
+			return fmt.Errorf("partial production attempt lineage: %w", domain.ErrProductionAttemptInconsistent)
+		}
+		return nil
+	}
+	var (
+		attempt domain.ProductionAttempt
+		err     error
+	)
+	if grant != nil {
+		attempt, err = tx.ApproveProductionAttempt(ctx, spec.CampaignID, spec.AttemptNumber, approvedSpecDigest)
+	} else {
+		attempt, err = tx.GetProductionAttempt(ctx, spec.CampaignID, spec.AttemptNumber)
+	}
+	if err != nil {
+		return fmt.Errorf("authenticate production attempt %s/%d: %w", spec.CampaignID, spec.AttemptNumber, err)
+	}
+	if grant == nil && attempt.Kind != domain.ProductionAttemptRetry {
+		return fmt.Errorf("initial production attempt requires elaboration grant: %w", domain.ErrParentKeyMismatch)
+	}
+	if grant == nil && attempt.Kind == domain.ProductionAttemptRetry {
+		observation, err := tx.ObserveRun(ctx, attempt.ParentRunID)
+		if err != nil {
+			return fmt.Errorf("observe retry parent %q: %w", attempt.ParentRunID, err)
+		}
+		if !domain.ConcludeRun(observation).Final {
+			return fmt.Errorf("retry parent %q is still live: %w", attempt.ParentRunID, domain.ErrParentKeyMismatch)
+		}
+	}
+	if grant != nil {
+		if len(grant.InputArtifactIDs) != 1 {
+			return fmt.Errorf("elaboration grant source inputs: %w", domain.ErrParentKeyMismatch)
+		}
+		sourceArtifact, err := tx.GetArtifact(ctx, grant.InputArtifactIDs[0])
+		if err != nil {
+			return fmt.Errorf("load elaboration source artifact: %w", err)
+		}
+		if attempt.SourceDigest != sourceArtifact.Digest ||
+			attempt.PublicationDigest != grant.PublicationDigest ||
+			attempt.ElaborationRunID != grant.ElaborationRunID {
+			return fmt.Errorf("production attempt disagrees with elaboration grant: %w", domain.ErrParentKeyMismatch)
+		}
+	}
+	if attempt.ImplementationRunID != spec.RunID || attempt.ApprovedSpecDigest != approvedSpecDigest ||
+		attempt.ParentRunID != spec.ParentRunID || attempt.Reason != spec.AttemptReason {
+		return fmt.Errorf("production attempt disagrees with run: %w", domain.ErrParentKeyMismatch)
 	}
 	return nil
 }

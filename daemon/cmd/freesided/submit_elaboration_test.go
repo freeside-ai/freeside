@@ -207,6 +207,20 @@ func testSubmitCommandElaborationDigest(t *testing.T, acceptedBody string, wantS
 		t.Fatalf("approval claim = %+v, want approved implementation digest %q",
 			item.AgentClaims, implementationRun.SpecDigest)
 	}
+	var initialAttempt domain.ProductionAttempt
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		initialAttempt, err = tx.GetProductionAttemptByRun(t.Context(), implementationRun.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if initialAttempt.CampaignID != submitted.CampaignID || initialAttempt.AttemptNumber != 1 ||
+		initialAttempt.SourceDigest != submitted.SourceDigest ||
+		initialAttempt.PublicationDigest != submitted.PublicationDigest ||
+		initialAttempt.ApprovedSpecDigest != implementationRun.SpecDigest {
+		t.Fatalf("initial production attempt = %+v, want submitted/approved lineage", initialAttempt)
+	}
 	if replay, err := workflow.Reconcile(t.Context()); err != nil || replay.RunTransitions != 0 {
 		t.Fatalf("approval replay = %+v, %v", replay, err)
 	}
@@ -216,5 +230,36 @@ func testSubmitCommandElaborationDigest(t *testing.T, acceptedBody string, wantS
 	}
 	if resubmitted != submitted {
 		t.Fatalf("re-submit result = %#v, want full elaboration result %#v", resubmitted, submitted)
+	}
+	if _, err := engine.ReattemptProductionRun(t.Context(), st, engine.ProductionReattemptSpec{
+		ParentRunID: implementationRun.ID, Reason: "retry while live",
+	}); err == nil || !strings.Contains(err.Error(), "use resume while it is live") {
+		t.Fatalf("live-parent reattempt = %v, want resume refusal", err)
+	}
+	terminal := domain.ObservedStatusFailed
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.AppendRunMilestone(t.Context(), domain.RunMilestone{
+			RunID: implementationRun.ID, Kind: domain.MilestoneTerminalRecorded,
+			InvocationID: &submitted.ImplementationInvocationID, Terminal: &terminal,
+			RecordedAt: now.Add(time.Minute),
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := engine.ReattemptProductionRun(t.Context(), st, engine.ProductionReattemptSpec{
+		ParentRunID: implementationRun.ID, Reason: "retry after acceptance rig repair",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.Attempt.CampaignID != submitted.CampaignID || retry.Attempt.AttemptNumber != 2 ||
+		retry.Attempt.ParentRunID != implementationRun.ID ||
+		retry.Attempt.ApprovedSpecDigest != implementationRun.SpecDigest ||
+		retry.Attempt.SourceDigest != submitted.SourceDigest ||
+		retry.Attempt.PublicationDigest != submitted.PublicationDigest ||
+		retry.RootSourceArtifactID != submitted.SourceArtifactID ||
+		retry.Run.Run.SpecDigest != implementationRun.SpecDigest ||
+		retry.Run.Run.ID == implementationRun.ID {
+		t.Fatalf("retry = %+v, want new attempt over unchanged approved/source digests", retry)
 	}
 }

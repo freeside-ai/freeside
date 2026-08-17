@@ -42,7 +42,7 @@ Result JSON fields by lane:
   elaboration: elaboration_run_id, elaboration_invocation_id, elaboration_stage_id,
     elaboration_policy_digest, elaboration_policy_artifact_id
   reserved implementation: implementation_run_id, implementation_invocation_id,
-    implementation_stage_id
+    implementation_stage_id, campaign_id, attempt_number
   shared: project_id
 
 The legacy fields run_id, invocation_id, stage_id, and work_unit_id are
@@ -139,6 +139,11 @@ type submitResult struct {
 	ElaborationPolicyArtifactID domain.ArtifactID   `json:"elaboration_policy_artifact_id"`
 	PublicationDigest           domain.Digest       `json:"publication_digest"`
 	WorkUnitID                  domain.WorkUnitID   `json:"work_unit_id,omitempty"`
+	CampaignID                  domain.CampaignID   `json:"campaign_id,omitempty"`
+	AttemptNumber               int                 `json:"attempt_number,omitempty"`
+	AttemptReason               string              `json:"attempt_reason,omitempty"`
+	ParentRunID                 domain.RunID        `json:"parent_run_id,omitempty"`
+	ApprovedSpecDigest          domain.Digest       `json:"approved_spec_digest,omitempty"`
 }
 
 type submissionFile struct {
@@ -202,6 +207,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: read publication metadata: %w", err)
 	}
+	publicationDigest := publicationFile.digest
 	if err := ward.RejectDuplicateJSONKeys(publicationFile.body); err != nil {
 		return submitResult{}, fmt.Errorf("submit: decode publication metadata: %w", err)
 	}
@@ -296,6 +302,10 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
+	campaignID, err := engine.ProductionCampaignIDForImplementation(implementationRunID)
+	if err != nil {
+		return submitResult{}, fmt.Errorf("submit: %w", err)
+	}
 	resolvedPolicy, err := domain.NewResolvedPolicy(elaborationRunID, keys)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: validate resolved policy: %w", err)
@@ -358,7 +368,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	}
 	if !elaborationStatePresent {
 		legacy, found, err := legacyProductionReplay(ctx, st, implementationRunID, cfg.ProjectID,
-			specArtifact, policyArtifact, keys, publication, workUnit, publicationFile.digest)
+			specArtifact, policyArtifact, keys, publication, workUnit, publicationDigest)
 		if err != nil {
 			return submitResult{}, fmt.Errorf("submit: inspect legacy production replay: %w", err)
 		}
@@ -371,7 +381,8 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		ElaborationRunID: elaborationRunID, ImplementationRunID: implementationRunID,
 		ProjectID: cfg.ProjectID, SourceArtifactID: specArtifact.ID,
 		PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: resolvedPolicy, Publication: publication,
-		WorkUnit: workUnit,
+		PublicationDigest: publicationDigest,
+		WorkUnit:          workUnit, CampaignID: campaignID, AttemptNumber: 1,
 	})
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
@@ -392,7 +403,9 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		ElaborationPolicyDigest:     submitted.Run.PolicyDigest,
 		SourceArtifactID:            specArtifact.ID,
 		ElaborationPolicyArtifactID: policyArtifact.ID,
-		PublicationDigest:           publicationFile.digest,
+		PublicationDigest:           publicationDigest,
+		CampaignID:                  submitted.Run.CampaignID,
+		AttemptNumber:               submitted.Run.AttemptNumber,
 	}
 	if workUnit != nil {
 		result.WorkUnitID = domain.WorkUnitIDForRun(submitted.ImplementationRunID)

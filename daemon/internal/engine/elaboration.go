@@ -130,7 +130,11 @@ type ElaborationRunSpec struct {
 	PolicyArtifactID    domain.ArtifactID
 	ResolvedPolicy      domain.ResolvedPolicy
 	Publication         ProductionPublication
+	PublicationDigest   domain.Digest
+	PublicationBytes    json.RawMessage
 	WorkUnit            *domain.WorkUnitDeclarationInput
+	CampaignID          domain.CampaignID
+	AttemptNumber       int
 	// Source optionally names what this run elaborates from as a typed union
 	// (plan §5.12, #720). SubmitElaborationRun executes only the spec_artifact
 	// arm and requires it to agree with SourceArtifactID; the issue_subject arm
@@ -152,7 +156,10 @@ type elaborationRequest struct {
 	FeedbackArtifactIDs []domain.ArtifactID              `json:"feedback_artifact_ids"`
 	PolicyArtifactID    domain.ArtifactID                `json:"policy_artifact_id"`
 	Publication         ProductionPublication            `json:"publication"`
+	PublicationDigest   domain.Digest                    `json:"publication_digest,omitempty"`
 	WorkUnit            *domain.WorkUnitDeclarationInput `json:"work_unit,omitempty"`
+	CampaignID          domain.CampaignID                `json:"campaign_id,omitempty"`
+	AttemptNumber       int                              `json:"attempt_number,omitempty"`
 	// IssueSubject marks the label-intake issue-subject arm and pins the
 	// occurrence-bound issue the run elaborates (plan §5.12, #659). Nil on the
 	// spec-artifact arm (freesided submit). It carries only issue coordinates,
@@ -275,6 +282,28 @@ func ElaborationRunIDForImplementation(implementationRunID domain.RunID) (domain
 	return domain.RunID("run-elaboration-" + hex.EncodeToString(sum[:])), nil
 }
 
+// ProductionCampaignIDForImplementation derives the stable campaign identity
+// from attempt 1's byte-for-byte-compatible implementation run identity.
+func ProductionCampaignIDForImplementation(implementationRunID domain.RunID) (domain.CampaignID, error) {
+	if implementationRunID == "" {
+		return "", fmt.Errorf("derive production campaign id: %w", domain.ErrEmptyID)
+	}
+	sum := sha256.Sum256([]byte("freeside.production-campaign/v1\x00" + string(implementationRunID)))
+	return domain.CampaignID("campaign-" + hex.EncodeToString(sum[:])), nil
+}
+
+// ProductionAttemptRunID derives retry run identities from the stable
+// campaign identity and store-allocated ordinal. Attempt 1 deliberately uses
+// the pre-existing content-addressed derivation and never calls this helper.
+func ProductionAttemptRunID(campaignID domain.CampaignID, attemptNumber int) (domain.RunID, error) {
+	if campaignID == "" || attemptNumber < 2 {
+		return "", fmt.Errorf("derive production attempt run id: campaign and retry ordinal are required")
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf(
+		"freeside.production-attempt/v1\x00%s\x00%d", campaignID, attemptNumber)))
+	return domain.RunID("run-" + hex.EncodeToString(sum[:])), nil
+}
+
 // HasElaborationIntakeState prevents compatibility replay from treating a
 // current elaboration-owned implementation as a pre-elaboration production
 // run. Any partial deterministic state counts as current so SubmitElaborationRun
@@ -377,6 +406,26 @@ func SubmitElaborationRun(ctx context.Context, st *store.Store, spec Elaboration
 		return ElaborationRun{}, fmt.Errorf("submit elaboration run: policy run %q differs from %q: %w",
 			spec.ResolvedPolicy.RunID, spec.ElaborationRunID, domain.ErrParentKeyMismatch)
 	}
+	if spec.CampaignID == "" {
+		if spec.AttemptNumber != 0 {
+			return ElaborationRun{}, errors.New("submit elaboration run: attempt number requires a campaign")
+		}
+	} else {
+		wantCampaign, err := ProductionCampaignIDForImplementation(spec.ImplementationRunID)
+		if err != nil {
+			return ElaborationRun{}, err
+		}
+		wantElaboration, err := ElaborationRunIDForImplementation(spec.ImplementationRunID)
+		if err != nil {
+			return ElaborationRun{}, err
+		}
+		if spec.AttemptNumber != 1 || spec.CampaignID != wantCampaign ||
+			spec.ElaborationRunID != wantElaboration {
+			return ElaborationRun{}, fmt.Errorf(
+				"submit elaboration run: initial campaign identity disagrees: %w",
+				domain.ErrParentKeyMismatch)
+		}
+	}
 	if _, err := elaborate.ParsePolicy(spec.ResolvedPolicy); err != nil {
 		return ElaborationRun{}, fmt.Errorf("submit elaboration run: %w", err)
 	}
@@ -401,8 +450,9 @@ func SubmitElaborationRun(ctx context.Context, st *store.Store, spec Elaboration
 		ImplementationRunID: spec.ImplementationRunID, ProjectID: spec.ProjectID,
 		InvocationID: invocationID, Iteration: 1,
 		InputArtifactIDs: []domain.ArtifactID{spec.SourceArtifactID},
-		PolicyArtifactID: spec.PolicyArtifactID, Publication: spec.Publication,
-		WorkUnit: cloneElaborationWorkUnit(spec.WorkUnit),
+		PolicyArtifactID: spec.PolicyArtifactID, Publication: spec.Publication, PublicationDigest: spec.PublicationDigest,
+		WorkUnit: cloneElaborationWorkUnit(spec.WorkUnit), CampaignID: spec.CampaignID,
+		AttemptNumber: spec.AttemptNumber,
 	}
 	payload, err := encodeElaborationRequest(request)
 	if err != nil {
@@ -431,22 +481,39 @@ func SubmitElaborationRun(ctx context.Context, st *store.Store, spec Elaboration
 		want := domain.Run{
 			ID: spec.ElaborationRunID, ProjectID: spec.ProjectID,
 			SpecDigest: source.Digest, PolicyDigest: spec.ResolvedPolicy.Digest,
+			CampaignID: spec.CampaignID, AttemptNumber: spec.AttemptNumber,
 			Stages: []domain.Stage{{
 				ID: elaborationStageID(spec.ElaborationRunID), RunID: spec.ElaborationRunID,
 				Name: elaborationStageName, Attempts: []domain.Attempt{},
 			}},
 		}
 		if existing, err := tx.GetRun(ctx, want.ID); err == nil {
+			expectedPayload := payload
+			legacyCampaignReplay := existing.CampaignID == "" && existing.AttemptNumber == 0 &&
+				spec.CampaignID != ""
+			if legacyCampaignReplay {
+				legacyRequest := request
+				legacyRequest.CampaignID = ""
+				legacyRequest.AttemptNumber = 0
+				legacyRequest.PublicationDigest = ""
+				expectedPayload, err = encodeElaborationRequest(legacyRequest)
+				if err != nil {
+					return err
+				}
+			}
 			stored, markerErr := tx.GetOutbox(ctx, string(invocationID))
 			claim, claimErr := tx.GetOutbox(ctx,
 				elaborationImplementationClaimKey(spec.ImplementationRunID))
 			storedPolicy, policyErr := tx.GetResolvedPolicy(ctx, want.ID)
 			storedInvocation, invocationErr := tx.GetAgentInvocation(ctx, invocationID)
+			lineageDisagrees := !legacyCampaignReplay &&
+				(existing.CampaignID != want.CampaignID || existing.AttemptNumber != want.AttemptNumber)
 			if existing.ProjectID != want.ProjectID || existing.SpecDigest != want.SpecDigest ||
-				existing.PolicyDigest != want.PolicyDigest ||
-				markerErr != nil || stored.Kind != KindElaborationInvocationRequested || !bytes.Equal(stored.Payload, payload) ||
+				existing.PolicyDigest != want.PolicyDigest || lineageDisagrees ||
+				markerErr != nil || stored.Kind != KindElaborationInvocationRequested ||
+				!bytes.Equal(stored.Payload, expectedPayload) ||
 				claimErr != nil || claim.Kind != KindElaborationImplementationClaim ||
-				!claim.Dispatched() || !bytes.Equal(claim.Payload, payload) ||
+				!claim.Dispatched() || !bytes.Equal(claim.Payload, expectedPayload) ||
 				policyErr != nil || storedPolicy.Digest != spec.ResolvedPolicy.Digest ||
 				!slices.Equal(storedPolicy.Keys, spec.ResolvedPolicy.Keys) || invocationErr != nil ||
 				storedInvocation.ConversationID != nil ||
@@ -460,6 +527,19 @@ func SubmitElaborationRun(ctx context.Context, st *store.Store, spec Elaboration
 			if len(existing.Stages) != 1 {
 				return fmt.Errorf("stored elaboration run has foreign stages: %w", domain.ErrImmutableTransition)
 			}
+			if spec.CampaignID != "" && !legacyCampaignReplay {
+				attempt, attemptErr := tx.GetProductionAttempt(ctx, spec.CampaignID, spec.AttemptNumber)
+				if attemptErr != nil || attempt.SourceDigest != source.Digest ||
+					attempt.ElaborationRunID != spec.ElaborationRunID ||
+					attempt.ImplementationRunID != spec.ImplementationRunID {
+					return fmt.Errorf("stored production attempt disagrees: %w", domain.ErrImmutableTransition)
+				}
+			} else if legacyCampaignReplay {
+				if _, attemptErr := tx.GetProductionAttemptByRun(ctx, spec.ImplementationRunID); !errors.Is(attemptErr, store.ErrNotFound) {
+					return fmt.Errorf("legacy elaboration replay has campaign attempt state: %w",
+						domain.ErrImmutableTransition)
+				}
+			}
 			run = existing
 			return nil
 		} else if !errors.Is(err, store.ErrNotFound) {
@@ -470,6 +550,16 @@ func SubmitElaborationRun(ctx context.Context, st *store.Store, spec Elaboration
 				spec.ImplementationRunID, domain.ErrImmutableTransition)
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return err
+		}
+		if spec.CampaignID != "" {
+			if err := tx.PutProductionAttempt(ctx, domain.ProductionAttempt{
+				CampaignID: spec.CampaignID, AttemptNumber: spec.AttemptNumber,
+				Kind: domain.ProductionAttemptInitial, SourceDigest: source.Digest, PublicationDigest: spec.PublicationDigest,
+				ElaborationRunID:    spec.ElaborationRunID,
+				ImplementationRunID: spec.ImplementationRunID,
+			}); err != nil {
+				return err
+			}
 		}
 		if err := tx.PutRun(ctx, want); err != nil {
 			return err
@@ -541,9 +631,11 @@ func submitIssueSubjectElaborationRun(
 		ImplementationRunID: spec.ImplementationRunID, ProjectID: spec.ProjectID,
 		InvocationID: invocationID, Iteration: 1,
 		InputArtifactIDs: []domain.ArtifactID{spec.SourceArtifactID},
-		PolicyArtifactID: spec.PolicyArtifactID, Publication: spec.Publication,
-		WorkUnit:     cloneElaborationWorkUnit(spec.WorkUnit),
-		IssueSubject: cloneIssueSubject(spec.Source.IssueSubject),
+		PolicyArtifactID: spec.PolicyArtifactID, Publication: spec.Publication, PublicationDigest: spec.PublicationDigest,
+		WorkUnit:      cloneElaborationWorkUnit(spec.WorkUnit),
+		IssueSubject:  cloneIssueSubject(spec.Source.IssueSubject),
+		CampaignID:    spec.CampaignID,
+		AttemptNumber: spec.AttemptNumber,
 	}
 	payload, err := encodeElaborationRequest(request)
 	if err != nil {
@@ -583,7 +675,11 @@ func submitIssueSubjectElaborationRun(
 		if err != nil {
 			return err
 		}
+		legacyCampaignReservation := existing.CampaignID == "" && existing.AttemptNumber == 0 &&
+			spec.CampaignID != "" && spec.AttemptNumber == 1
 		if existing.ProjectID != spec.ProjectID || existing.PolicyDigest != spec.ResolvedPolicy.Digest ||
+			(!legacyCampaignReservation &&
+				(existing.CampaignID != spec.CampaignID || existing.AttemptNumber != spec.AttemptNumber)) ||
 			storedPolicy.Digest != spec.ResolvedPolicy.Digest ||
 			!slices.Equal(storedPolicy.Keys, spec.ResolvedPolicy.Keys) {
 			return fmt.Errorf("reserved elaboration run disagrees with submission: %w", domain.ErrParentKeyMismatch)
@@ -645,6 +741,14 @@ func submitIssueSubjectElaborationRun(
 		// reconciler would then stall on.
 		if len(stage.Attempts) != 0 {
 			return fmt.Errorf("reserved elaboration run stage is not bare: %w", domain.ErrImmutableTransition)
+		}
+		if err := tx.PutProductionAttempt(ctx, domain.ProductionAttempt{
+			CampaignID: spec.CampaignID, AttemptNumber: spec.AttemptNumber,
+			Kind: domain.ProductionAttemptInitial, SourceDigest: source.Digest, PublicationDigest: spec.PublicationDigest,
+			Publication:      spec.PublicationBytes,
+			ElaborationRunID: spec.ElaborationRunID, ImplementationRunID: spec.ImplementationRunID,
+		}); err != nil {
+			return err
 		}
 		// First start: the implementation run is created fresh at spec approval,
 		// so it must not exist yet.
@@ -753,6 +857,23 @@ func (r elaborationRequest) validate() error {
 	}
 	if err := r.Publication.Validate(); err != nil {
 		return err
+	}
+	if r.CampaignID == "" {
+		if r.AttemptNumber != 0 {
+			return fmt.Errorf("attempt number requires a campaign: %w", domain.ErrParentKeyMismatch)
+		}
+	} else {
+		campaignID, err := ProductionCampaignIDForImplementation(r.ImplementationRunID)
+		if err != nil {
+			return err
+		}
+		elaborationRunID, err := ElaborationRunIDForImplementation(r.ImplementationRunID)
+		if err != nil {
+			return err
+		}
+		if r.AttemptNumber != 1 || r.CampaignID != campaignID || r.ElaborationRunID != elaborationRunID {
+			return fmt.Errorf("elaboration request carries inconsistent campaign identity: %w", domain.ErrParentKeyMismatch)
+		}
 	}
 	if r.WorkUnit != nil {
 		if _, err := domain.NewWorkUnitDeclaration(
@@ -942,7 +1063,9 @@ func authenticateElaborationRoot(
 		request.ElaborationRunID != root.ElaborationRunID ||
 		request.ImplementationRunID != root.ImplementationRunID ||
 		request.ProjectID != root.ProjectID || request.PolicyArtifactID != root.PolicyArtifactID ||
-		request.Publication != root.Publication || !sameElaborationWorkUnit(request.WorkUnit, root.WorkUnit) ||
+		request.Publication != root.Publication || request.PublicationDigest != root.PublicationDigest || request.CampaignID != root.CampaignID ||
+		request.AttemptNumber != root.AttemptNumber ||
+		!sameElaborationWorkUnit(request.WorkUnit, root.WorkUnit) ||
 		!sameIssueSubject(request.IssueSubject, root.IssueSubject) ||
 		len(request.InputArtifactIDs) == 0 || request.InputArtifactIDs[0] != root.InputArtifactIDs[0] {
 		return fmt.Errorf("elaboration request disagrees with initial claim: %w", domain.ErrParentKeyMismatch)
@@ -1021,6 +1144,7 @@ func sameElaborationRequest(left, right elaborationRequest) bool {
 		slices.Equal(left.FeedbackArtifactIDs, right.FeedbackArtifactIDs) &&
 		left.PolicyArtifactID == right.PolicyArtifactID &&
 		left.Publication == right.Publication &&
+		left.PublicationDigest == right.PublicationDigest &&
 		sameElaborationWorkUnit(left.WorkUnit, right.WorkUnit) &&
 		sameIssueSubject(left.IssueSubject, right.IssueSubject)
 }
@@ -1032,6 +1156,7 @@ func sameElaborationRoot(left, right elaborationRequest) bool {
 		left.ProjectID == right.ProjectID &&
 		left.PolicyArtifactID == right.PolicyArtifactID &&
 		left.Publication == right.Publication &&
+		left.PublicationDigest == right.PublicationDigest &&
 		sameElaborationWorkUnit(left.WorkUnit, right.WorkUnit) &&
 		sameIssueSubject(left.IssueSubject, right.IssueSubject)
 }
@@ -2523,7 +2648,8 @@ func (e *Engine) startApprovedImplementation(ctx context.Context, request elabor
 		RunID: request.ImplementationRunID, ProjectID: request.ProjectID,
 		SpecArtifactID: specArtifactID, PolicyArtifactID: request.PolicyArtifactID,
 		ResolvedPolicy: implementationPolicy, Publication: request.Publication,
-		WorkUnit: cloneElaborationWorkUnit(request.WorkUnit),
+		WorkUnit:   cloneElaborationWorkUnit(request.WorkUnit),
+		CampaignID: request.CampaignID, AttemptNumber: request.AttemptNumber,
 	}, &request)
 	return !alreadyExists && err == nil, err
 }

@@ -2401,6 +2401,101 @@ func TestConcurrentDirectSubmissionsCannotBypassElaborationReservation(t *testin
 	}
 }
 
+func TestDirectSubmissionRejectsApprovedInitialAttemptWithoutGrant(t *testing.T) {
+	f := newElaborationFixture(t, true, 2)
+	implementationRunID := domain.RunID("ungranted-initial-implementation")
+	campaignID, err := ProductionCampaignIDForImplementation(implementationRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	elaborationRunID, err := ElaborationRunIDForImplementation(implementationRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		if err := tx.PutProductionAttempt(t.Context(), domain.ProductionAttempt{
+			CampaignID: campaignID, AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
+			SourceDigest: f.source.Digest, PublicationDigest: "sha256:publication",
+			ElaborationRunID:    elaborationRunID,
+			ImplementationRunID: implementationRunID,
+		}); err != nil {
+			return err
+		}
+		_, err := tx.ApproveProductionAttempt(t.Context(), campaignID, 1, f.source.Digest)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := domain.NewResolvedPolicy(implementationRunID, f.policy.Keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = SubmitProductionRun(t.Context(), f.store, ProductionRunSpec{
+		RunID: implementationRunID, ProjectID: "project-1",
+		SpecArtifactID: f.source.ID, PolicyArtifactID: f.policyArt.ID,
+		ResolvedPolicy: policy, CampaignID: campaignID, AttemptNumber: 1,
+		Publication: ProductionPublication{
+			Title: "Implement approved work item", Body: "Implements the operator-approved specification.",
+			CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
+		},
+	})
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("direct submission with approved initial attempt = %v, want ErrParentKeyMismatch", err)
+	}
+	if _, err := f.run(implementationRunID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ungranted initial submission persisted implementation = %v", err)
+	}
+}
+
+func TestAuthenticateProductionAttemptBindsInitialLineageToGrant(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mutate  func(*domain.ProductionAttempt)
+		wantErr bool
+	}{
+		{"matching lineage", func(*domain.ProductionAttempt) {}, false},
+		{"source digest", func(attempt *domain.ProductionAttempt) { attempt.SourceDigest = "sha256:forged-source" }, true},
+		{"publication digest", func(attempt *domain.ProductionAttempt) { attempt.PublicationDigest = "sha256:forged-publication" }, true},
+		{"elaboration root", func(attempt *domain.ProductionAttempt) { attempt.ElaborationRunID = "run-forged-elaboration" }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newElaborationFixture(t, true, 2)
+			implementationRunID := domain.RunID("run-implementation")
+			campaignID, err := ProductionCampaignIDForImplementation(implementationRunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			elaborationRunID, err := ElaborationRunIDForImplementation(implementationRunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			attempt := domain.ProductionAttempt{
+				CampaignID: campaignID, AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
+				SourceDigest: f.source.Digest, PublicationDigest: "sha256:publication",
+				ElaborationRunID: elaborationRunID, ImplementationRunID: implementationRunID,
+			}
+			tc.mutate(&attempt)
+			err = f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+				if err := tx.PutProductionAttempt(t.Context(), attempt); err != nil {
+					return err
+				}
+				return authenticateProductionAttempt(t.Context(), tx, ProductionRunSpec{
+					RunID: attempt.ImplementationRunID, CampaignID: attempt.CampaignID, AttemptNumber: attempt.AttemptNumber,
+				}, "sha256:approved", &elaborationRequest{
+					ElaborationRunID: elaborationRunID, InputArtifactIDs: []domain.ArtifactID{f.source.ID},
+					PublicationDigest: "sha256:publication",
+				})
+			})
+			if tc.wantErr && !errors.Is(err, domain.ErrParentKeyMismatch) {
+				t.Fatalf("authenticate forged %s = %v, want ErrParentKeyMismatch", tc.name, err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("authenticate matching lineage = %v", err)
+			}
+		})
+	}
+}
+
 func TestDamagedElaborationReservationFailsClosed(t *testing.T) {
 	f := newElaborationFixture(t, true, 2)
 	implementationRunID := domain.RunID("damaged-implementation-run")
