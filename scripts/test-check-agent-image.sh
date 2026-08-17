@@ -159,7 +159,8 @@ begin_case() {
   mkdir -p "$CASE_DIR"
   export STUB_DIR=$CASE_DIR
   unset FREESIDE_CHECK_AGENT_IMAGE_RUNTIME_BOUND_SECONDS
-	unset FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS
+  unset FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS
+  unset FREESIDE_REAL_RUN_TIMEOUT_SECONDS
   printf 'ok' >"$CASE_DIR/create_mode"
   echo "case: $CASE"
 }
@@ -220,6 +221,7 @@ run_real_work() {
 	submit_shape=${2:-current}
 	rig_hold_mode=${3:-ok}
 	rig_cleanup_mode=${4:-ok}
+	verify_mode=${5:-success}
 	input_dir=$CASE_DIR/inputs
   stub_bin=$CASE_DIR/bin
   mkdir -p "$input_dir" "$stub_bin"
@@ -346,16 +348,49 @@ FREESIDED_STUB
 	if [ -z "${FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION:-}" ]; then
 		exit 0
 	fi
+	if [ "${GO_STUB_VERIFY_MODE:-success}" = elaboration-failure-final ] &&
+		[[ " ${*} " == *" -v "* ]]; then
+		[ "${FREESIDE_REAL_RUN_ELABORATION_RUN_ID:-}" = elab-run ]
+		echo 'real run elaboration failed: run=elab-run item=execution-failure-inv-elaborate-elab-run-1 reason="Elaboration ended \"failed\". Driver summary: invalid output"'
+		exit 1
+	fi
 	attempts=0
 	while [ ! -f "${STUB_DIR:?}/daemon.args.ready" ] && [ "$attempts" -lt 100 ]; do
 		sleep 0.01
 		attempts=$((attempts + 1))
 	done
 	[ -f "${STUB_DIR:?}/daemon.args.ready" ]
-	printf '%s\t%s\n' "$FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID" \
-		"$FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION" >>"${STUB_DIR:?}/verification-identities.log"
+	if [ "${GO_STUB_SUBMIT_SHAPE:-current}" = legacy ]; then
+		[ -z "${FREESIDE_REAL_RUN_ELABORATION_RUN_ID+x}" ]
+		elaboration_run_id='<unset>'
+	else
+		[ "${FREESIDE_REAL_RUN_ELABORATION_RUN_ID:-}" = elab-run ]
+		elaboration_run_id=$FREESIDE_REAL_RUN_ELABORATION_RUN_ID
+	fi
+	printf '%s\t%s\t%s\n' "$FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID" \
+		"$FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION" "$elaboration_run_id" \
+		>>"${STUB_DIR:?}/verification-identities.log"
 	[ "$FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID" = impl-run ]
 	[ "$FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION" = impl-inv ]
+	verify_count_file="${STUB_DIR:?}/verify-count"
+	verify_count=$(($(cat "$verify_count_file" 2>/dev/null || echo 0) + 1))
+	printf '%s\n' "$verify_count" >"$verify_count_file"
+	case "${GO_STUB_VERIFY_MODE:-success}" in
+	elaboration-failure|elaboration-failure-final)
+		if [ "${GO_STUB_VERIFY_MODE}" = elaboration-failure ] || [[ " ${*} " == *" -v "* ]]; then
+			echo 'real run elaboration failed: run=elab-run item=execution-failure-inv-elaborate-elab-run-1 reason="Elaboration ended \"failed\". Driver summary: invalid output"'
+			exit 1
+		fi
+		;;
+	pending|approval-wait)
+		if [ "$verify_count" -eq 1 ]; then
+			echo "${GO_STUB_VERIFY_MODE}: implementation admission not found"
+			exit 1
+		fi
+		;;
+	success) ;;
+	*) exit 96 ;;
+	esac
 	printf '%s\n' 'real production pipeline verified: PR #7'
 	;;
 *)
@@ -364,6 +399,19 @@ FREESIDED_STUB
 esac
 GO_STUB
   chmod +x "$stub_bin/go"
+	real_sleep=$(command -v sleep)
+	if [ "$verify_mode" = pending ] || [ "$verify_mode" = approval-wait ]; then
+		cat >"$stub_bin/sleep" <<'SLEEP_STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = 15 ]; then
+	printf '%s\n' "$1" >>"${STUB_DIR:?}/poll-sleeps.log"
+	exit 0
+fi
+exec "${REAL_SLEEP:?}" "$@"
+SLEEP_STUB
+		chmod +x "$stub_bin/sleep"
+	fi
   digest="sha256:$(printf 'a%.0s' {1..64})"
 
   set +e
@@ -373,6 +421,8 @@ GO_STUB
 		GO_STUB_SUBMIT_SHAPE="$submit_shape" \
 		GO_STUB_RIG_HOLD_MODE="$rig_hold_mode" \
 		GO_STUB_RIG_CLEANUP_MODE="$rig_cleanup_mode" \
+		GO_STUB_VERIFY_MODE="$verify_mode" \
+		REAL_SLEEP="$real_sleep" \
 		FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS="${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}" \
     FREESIDE_REAL_RUN_STATE_ROOT="$CASE_DIR/state" \
     FREESIDE_REAL_RUN_LISTEN=127.0.0.1:8677 \
@@ -995,7 +1045,7 @@ assert_rc 0
 assert_contains "submitted elaboration run=elab-run invocation=elab-inv"
 assert_contains "reserved implementation run=impl-run invocation=impl-inv"
 assert_contains "gated-unattended: waiting for an operator"
-if grep -qx $'impl-run\timpl-inv' "$CASE_DIR/verification-identities.log" &&
+if grep -qx $'impl-run\timpl-inv\telab-run' "$CASE_DIR/verification-identities.log" &&
   ! grep -q 'elab-inv' "$CASE_DIR/verification-identities.log"; then
 	pass=$((pass + 1))
 else
@@ -1026,7 +1076,7 @@ assert_rc 0
 assert_contains "legacy production-only replay: no elaboration approval gate"
 assert_contains "reserved implementation run=impl-run invocation=impl-inv"
 assert_lacks "gated-unattended: waiting for an operator"
-if grep -qx $'impl-run\timpl-inv' "$CASE_DIR/verification-identities.log"; then
+if grep -qx $'impl-run\timpl-inv\t<unset>' "$CASE_DIR/verification-identities.log"; then
 	pass=$((pass + 1))
 else
 	report_failure "legacy replay verification lost the implementation identity"
@@ -1044,7 +1094,40 @@ assert_rc 1
 assert_contains "submit produced no implementation run identity"
 assert_not_exists "$CASE_DIR/daemon.args"
 
-begin_case "49 a competing rig refuses before preflight or submit"
+begin_case "49 durable elaboration failure exits before the polling delay"
+export FREESIDE_REAL_RUN_TIMEOUT_SECONDS=60
+run_real_work lifecycle current ok ok elaboration-failure
+assert_rc 1
+assert_contains "elaboration failed before implementation admission"
+assert_contains "run=elab-run item=execution-failure-inv-elaborate-elab-run-1"
+assert_contains "Driver summary: invalid output"
+assert_not_exists "$CASE_DIR/poll-sleeps.log"
+if grep -q '^daemon-stop$' "$CASE_DIR/lifecycle.log"; then
+	pass=$((pass + 1))
+else
+	report_failure "daemon was not stopped after elaboration failure"
+fi
+
+begin_case "50 pending elaboration keeps polling to implementation admission"
+run_real_work lifecycle current ok ok pending
+assert_rc 0
+assert_contains "verified ready publication"
+assert_exists "$CASE_DIR/poll-sleeps.log"
+
+begin_case "51 approval wait keeps polling to implementation admission"
+run_real_work lifecycle current ok ok approval-wait
+assert_rc 0
+assert_contains "verified ready publication"
+assert_exists "$CASE_DIR/poll-sleeps.log"
+
+begin_case "52 final verification preserves a late elaboration failure"
+export FREESIDE_REAL_RUN_TIMEOUT_SECONDS=0
+run_real_work lifecycle current ok ok elaboration-failure-final
+assert_rc 1
+assert_contains "elaboration failed before implementation admission"
+assert_contains "run=elab-run item=execution-failure-inv-elaborate-elab-run-1"
+
+begin_case "53 a competing rig refuses before preflight or submit"
 run_real_work lifecycle current refuse
 assert_rc 1
 assert_contains "production rig lease is held by other@host"
@@ -1055,24 +1138,24 @@ else
 	report_failure "refused rig still launched the exporter preflight"
 fi
 
-begin_case "50 a failed clean release fails the campaign"
+begin_case "54 a failed clean release fails the campaign"
 run_real_work lifecycle current release-fail
 assert_rc 1
 assert_contains "rig holder failed during release"
 
-begin_case "51 a wedged clean release is killed within its bound"
+begin_case "55 a wedged clean release is killed within its bound"
 export FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS=1
 run_real_work lifecycle current release-hang
 assert_rc 1
 assert_contains "rig holder did not exit within 1s; sending SIGKILL"
 
-begin_case "52 a stopped clean release is killed within its bound"
+begin_case "56 a stopped clean release is killed within its bound"
 export FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS=1
 run_real_work lifecycle current release-stop
 assert_rc 1
 assert_contains "rig holder did not exit within 1s; sending SIGKILL"
 
-begin_case "53 a wedged exact-resource cleanup is cancelled within its bound"
+begin_case "57 a wedged exact-resource cleanup is cancelled within its bound"
 export FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS=1
 run_real_work lifecycle current ok procbound-hang
 assert_rc 1
@@ -1080,7 +1163,7 @@ assert_contains "exact-resource cleanup exceeded 1s; cancelling it"
 assert_contains "exact-resource cleanup failed; preserving the stale rig manifest"
 assert_helper_stopped
 
-begin_case "54 failed cleanup cannot orphan a mutating descendant"
+begin_case "58 failed cleanup cannot orphan a mutating descendant"
 export FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS=1
 run_real_work lifecycle current ok orphan
 assert_rc 1
