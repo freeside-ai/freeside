@@ -459,8 +459,10 @@ func (w *productionPublicationWorkflow) authenticatesTerminal(
 		}
 		return true, nil
 	}
-	if run.ID != task.RunID || run.ProjectID != task.ProjectID ||
-		admission.RunID != task.RunID || admission.StageID != productionStageID(task.RunID) ||
+	if err := validateProductionPublicationCompletion(run, task, terminal); err != nil {
+		return false, err
+	}
+	if admission.RunID != task.RunID || admission.StageID != productionStageID(task.RunID) ||
 		executionExport.AdmissionID != admission.ID ||
 		executionExport.InvocationID != task.ProducingInvocationID ||
 		executionExport.HeadSHA != task.HeadSHA ||
@@ -468,11 +470,7 @@ func (w *productionPublicationWorkflow) authenticatesTerminal(
 		task.Replay.ManifestDigest != executionExport.ManifestDigest ||
 		!sameOptionalDigest(task.Replay.EvidenceManifestDigest, executionExport.EvidenceManifestDigest) ||
 		(task.Replay.CommitPlanDigest != nil) != executionExport.CommitPlanPresent ||
-		!task.Replay.ImportOptions.CommitDate.Equal(executionExport.RecordedAt) ||
-		terminal.Status != exec.StatusCompleted || terminal.InvocationID != task.ProducingInvocationID ||
-		terminal.RunID != task.RunID || terminal.StageID != productionStageID(task.RunID) ||
-		terminal.HeadSHA != task.HeadSHA || !slices.Equal(terminal.Artifacts, task.Artifacts) ||
-		terminal.Summary != task.Summary {
+		!task.Replay.ImportOptions.CommitDate.Equal(executionExport.RecordedAt) {
 		return false, fmt.Errorf("production terminal disagrees with durable publication task: %w",
 			domain.ErrParentKeyMismatch)
 	}
@@ -909,6 +907,68 @@ func decodeProductionPublicationTask(entry store.QueueEntry) (productionPublicat
 			domain.ErrParentKeyMismatch)
 	}
 	return task, nil
+}
+
+// ProductionPublicationCompletion authenticates the selected run's final
+// publication-task and terminal records and returns their exact producing
+// invocation. It is the read-only completion boundary used by supervision:
+// absence or a pending task is ordinary incompletion, while a dispatched task
+// with absent or divergent terminal authority fails closed.
+func ProductionPublicationCompletion(
+	ctx context.Context, tx *store.ReadTx, run domain.Run,
+) (domain.InvocationID, bool, error) {
+	entry, err := tx.GetOutbox(ctx, productionPublicationTaskKey(run.ID))
+	if errors.Is(err, store.ErrNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	task, err := decodeProductionPublicationTask(entry)
+	if err != nil {
+		return "", false, err
+	}
+	if task.RunID != run.ID || task.ProjectID != run.ProjectID {
+		return "", false, fmt.Errorf(
+			"production publication task disagrees with selected run: %w",
+			domain.ErrParentKeyMismatch,
+		)
+	}
+	if !entry.Dispatched() {
+		return task.ProducingInvocationID, false, nil
+	}
+	terminalEntry, err := tx.GetInbox(ctx, string(task.ProducingInvocationID))
+	if errors.Is(err, store.ErrNotFound) {
+		return "", false, fmt.Errorf(
+			"dispatched production publication task has no terminal record: %w",
+			domain.ErrImmutableTransition,
+		)
+	}
+	if err != nil {
+		return "", false, err
+	}
+	terminal, err := decodeProductionTerminal(terminalEntry, run)
+	if err != nil {
+		return "", false, err
+	}
+	if err := validateProductionPublicationCompletion(run, task, terminal); err != nil {
+		return "", false, err
+	}
+	return task.ProducingInvocationID, true, nil
+}
+
+func validateProductionPublicationCompletion(
+	run domain.Run, task productionPublicationTask, terminal productionTerminalRecord,
+) error {
+	if run.ID != task.RunID || run.ProjectID != task.ProjectID ||
+		terminal.Status != exec.StatusCompleted ||
+		terminal.InvocationID != task.ProducingInvocationID || terminal.RunID != task.RunID ||
+		terminal.StageID != productionStageID(task.RunID) || terminal.HeadSHA != task.HeadSHA ||
+		!slices.Equal(terminal.Artifacts, task.Artifacts) || terminal.Summary != task.Summary {
+		return fmt.Errorf("production terminal disagrees with durable publication task: %w",
+			domain.ErrParentKeyMismatch)
+	}
+	return nil
 }
 
 func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (productionPublicationResult, error) {

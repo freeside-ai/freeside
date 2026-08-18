@@ -363,6 +363,29 @@ func (tx *ReadTx) ListOpenAttentionItems(
 func (tx *ReadTx) ListOpenAttentionItemsForRun(
 	ctx context.Context, runID domain.RunID,
 ) ([]domain.AttentionItem, error) {
+	return tx.listOpenAttentionItemsForRun(ctx, runID, func(sc scanner) (domain.AttentionItem, Snapshot, error) {
+		return tx.scanAttentionItemSnapshot(ctx, sc)
+	})
+}
+
+// ListOpenAttentionItemRecordsForRun returns structurally authenticated open
+// item records for one run without applying mutable evidence policy. It is a
+// diagnostic-history primitive: callers must discard non-actionable records
+// and reconstruct every actionable item through GetAttentionItem before using
+// it. The production observer uses it so historical ready-item evidence cannot
+// hide a published outcome while current actionable evidence still fails
+// closed.
+func (tx *ReadTx) ListOpenAttentionItemRecordsForRun(
+	ctx context.Context, runID domain.RunID,
+) ([]domain.AttentionItem, error) {
+	return tx.listOpenAttentionItemsForRun(ctx, runID, scanAttentionItemRecord)
+}
+
+func (tx *ReadTx) listOpenAttentionItemsForRun(
+	ctx context.Context,
+	runID domain.RunID,
+	scan func(scanner) (domain.AttentionItem, Snapshot, error),
+) ([]domain.AttentionItem, error) {
 	var divergent int
 	if err := tx.tx.QueryRowContext(ctx, attentionRunColumnDivergenceSQL, runID).Scan(&divergent); err != nil {
 		return nil, fmt.Errorf("list open items for run %q: column integrity: %w", runID, err)
@@ -381,7 +404,7 @@ func (tx *ReadTx) ListOpenAttentionItemsForRun(
 	defer func() { _ = rows.Close() }()
 	var items []domain.AttentionItem
 	for rows.Next() {
-		item, _, err := tx.scanAttentionItemSnapshot(ctx, rows)
+		item, _, err := scan(rows)
 		if err != nil {
 			return nil, fmt.Errorf("list open items for run %q: %w", runID, err)
 		}

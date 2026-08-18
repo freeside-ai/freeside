@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
 )
 
 const (
@@ -540,6 +541,122 @@ func TestConcludeClassifiesTheTimeline(t *testing.T) {
 				t.Errorf("conclude terminal = %v, want %v", got.Terminal, tc.want.Terminal)
 			}
 		})
+	}
+}
+
+func TestSupervisionStateSeparatesAttentionFromTerminalOutcome(t *testing.T) {
+	approved := domain.Digest("sha256:approved")
+	lineage := &observedb.Lineage{
+		ApprovedSpecDigest: approved, ElaborationRunID: fixtureRun,
+	}
+	for _, tc := range []struct {
+		name       string
+		snapshot   observedb.Snapshot
+		conclusion Conclusion
+		want       SupervisionState
+	}{
+		{
+			name: "specification approval wait",
+			snapshot: observedb.Snapshot{AttentionItems: []observedb.AttentionItem{{
+				Type: domain.AttentionSpecApproval, RequestedDecision: []domain.Action{domain.ActionApprove},
+			}}},
+			conclusion: Conclusion{Outcome: OutcomePending},
+			want:       SupervisionWaitingForSpecApproval,
+		},
+		{
+			name: "parked review is attention not blocked",
+			snapshot: observedb.Snapshot{AttentionItems: []observedb.AttentionItem{{
+				Type:              domain.AttentionReviewConfiguration,
+				RequestedDecision: []domain.Action{domain.ActionAdoptReviewConfiguration},
+			}}},
+			conclusion: Conclusion{Outcome: OutcomePending},
+			want:       SupervisionAttentionRequired,
+		},
+		{
+			name: "approved elaboration binds implementation",
+			snapshot: observedb.Snapshot{
+				Observation: domain.RunObservation{RunID: fixtureRun}, Attempt: lineage,
+			},
+			conclusion: Conclusion{Outcome: OutcomePending},
+			want:       SupervisionImplementationBound,
+		},
+		{
+			name:       "publication ready waits for terminal and task completion",
+			snapshot:   observedb.Snapshot{},
+			conclusion: Conclusion{Outcome: OutcomePublished, Final: true},
+			want:       SupervisionPublicationReady,
+		},
+		{
+			name: "task completion without matching terminal still waits",
+			snapshot: observedb.Snapshot{
+				PublicationInvocationID: fixtureInvocation,
+				Observation: domain.RunObservation{Milestones: []domain.RunMilestone{
+					invocationMilestone(domain.MilestonePublicationReady, 20),
+				}},
+			},
+			conclusion: Conclusion{Outcome: OutcomePublished, Final: true},
+			want:       SupervisionPublicationReady,
+		},
+		{
+			name: "terminal from another invocation still waits",
+			snapshot: observedb.Snapshot{
+				PublicationInvocationID: fixtureInvocation,
+				Observation: domain.RunObservation{Milestones: []domain.RunMilestone{
+					invocationMilestone(domain.MilestonePublicationReady, 20),
+					func() domain.RunMilestone {
+						m := invocationMilestone(domain.MilestoneTerminalRecorded, 21)
+						foreign := domain.InvocationID("inv-foreign")
+						completed := domain.ObservedStatusCompleted
+						m.InvocationID, m.Terminal = &foreign, &completed
+						return m
+					}(),
+				}},
+			},
+			conclusion: Conclusion{Outcome: OutcomePublished, Final: true},
+			want:       SupervisionPublicationReady,
+		},
+		{
+			name: "accepted publication outranks leftover attention",
+			snapshot: observedb.Snapshot{
+				PublicationInvocationID: fixtureInvocation,
+				Observation: domain.RunObservation{Milestones: func() []domain.RunMilestone {
+					ready := invocationMilestone(domain.MilestonePublicationReady, 20)
+					terminal := invocationMilestone(domain.MilestoneTerminalRecorded, 21)
+					completed := domain.ObservedStatusCompleted
+					terminal.Terminal = &completed
+					return []domain.RunMilestone{ready, terminal}
+				}()},
+				AttentionItems: []observedb.AttentionItem{{Type: domain.AttentionReadyForFinalReview}},
+			},
+			conclusion: Conclusion{Outcome: OutcomePublished, Final: true},
+			want:       SupervisionPublished,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := deriveSupervisionState(tc.snapshot, tc.conclusion); got != tc.want {
+				t.Fatalf("deriveSupervisionState = %q, want %q", got, tc.want)
+			} else if !got.valid() {
+				t.Fatalf("deriveSupervisionState returned unregistered state %q", got)
+			}
+		})
+	}
+}
+
+func TestAllSupervisionStatesAreValidAndUnique(t *testing.T) {
+	seen := make(map[SupervisionState]bool, len(AllSupervisionStates))
+	for _, state := range AllSupervisionStates {
+		if !state.valid() {
+			t.Errorf("AllSupervisionStates contains invalid state %q", state)
+		}
+		if seen[state] {
+			t.Errorf("AllSupervisionStates contains duplicate state %q", state)
+		}
+		seen[state] = true
+	}
+	for _, outcome := range domain.AllRunOutcomes {
+		if state := SupervisionState(outcome); !state.valid() {
+			t.Errorf("run outcome %q has no registered supervision state", outcome)
+		}
 	}
 }
 
