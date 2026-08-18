@@ -222,6 +222,9 @@ run_real_work() {
 	rig_hold_mode=${3:-ok}
 	rig_cleanup_mode=${4:-ok}
 	verify_mode=${5:-success}
+	preflight_mode=${6:-ok}
+	seed_mode=${7:-ok}
+	checkout_mode=${8:-clean}
 	input_dir=$CASE_DIR/inputs
   stub_bin=$CASE_DIR/bin
   mkdir -p "$input_dir" "$stub_bin"
@@ -318,8 +321,20 @@ if [ "${1:-}" = rig ]; then
 	esac
 	exit 0
 fi
+if [ "${1:-}" = preflight ]; then
+	printf '%s\n' 'preflight' >>"${STUB_DIR:?}/lifecycle.log"
+	printf '%s\n' "$@" >"${STUB_DIR:?}/preflight.args"
+	: >"${STUB_DIR:?}/preflight.called"
+	if [ "${GO_STUB_PREFLIGHT_MODE:-ok}" = fail ]; then
+		printf '%s\n' '{"version":"freeside-production-composition-v1","status":"failed","checks":[{"name":"reviewer_image","status":"failed","evidence":"reviewer image is stale","remediation":"rebuild and re-pin the reviewer image"}]}'
+		exit 1
+	fi
+	printf '%s\n' '{"version":"freeside-production-composition-v1","status":"passed","identity":{"implementation_run_id":"impl-run","implementation_invocation_id":"impl-inv"},"checks":[{"name":"build_egress_reachability","status":"not_run","evidence":"read-only preflight"}]}'
+	exit 0
+fi
 if [ "${1:-}" = submit ]; then
 	printf '%s\n' 'submit' >>"${STUB_DIR:?}/lifecycle.log"
+	printf '%s\n' "$@" >"${STUB_DIR:?}/submit.args"
 	: >"${STUB_DIR:?}/submit.called"
 	if [ "${GO_STUB_SUBMIT_SHAPE:-current}" = legacy ]; then
 		printf '%s\n' '{"run_id":"impl-run","project_id":"freeside","invocation_id":"impl-inv","stage_id":"impl-stage","implementation_run_id":"impl-run","implementation_invocation_id":"impl-inv","implementation_stage_id":"impl-stage"}'
@@ -376,13 +391,17 @@ FREESIDED_STUB
 	chmod +x "$output"
 	;;
 *" test "*)
-	if [ "${GO_STUB_MODE:-}" != lifecycle ]; then
-		exit 97
-	fi
 	[ -z "${FREESIDE_REAL_RUN_RUN_ID+x}" ]
 	[ -z "${FREESIDE_REAL_RUN_INVOCATION+x}" ]
 	if [ -z "${FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION:-}" ]; then
+		printf '%s\n' 'identity-seed' >>"${STUB_DIR:?}/lifecycle.log"
+		if [ "${GO_STUB_SEED_MODE:-ok}" = fail ]; then
+			exit 97
+		fi
 		exit 0
+	fi
+	if [ "${GO_STUB_MODE:-}" != lifecycle ]; then
+		exit 97
 	fi
 	if [ "${GO_STUB_VERIFY_MODE:-success}" = elaboration-failure-final ] &&
 		[[ " ${*} " == *" -v "* ]]; then
@@ -430,6 +449,26 @@ FREESIDED_STUB
 esac
 GO_STUB
   chmod +x "$stub_bin/go"
+	cat >"$stub_bin/git" <<'GIT_STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+for arg in "$@"; do
+	case "$arg" in
+	status)
+		if [ "${GIT_STUB_CHECKOUT_MODE:-clean}" = dirty ]; then
+			printf '%s\n' ' M scripts/run-real-work.sh'
+		fi
+		exit 0
+		;;
+	rev-parse)
+		printf '%s\n' 0123456789ab
+		exit 0
+		;;
+	esac
+done
+exit 0
+GIT_STUB
+	chmod +x "$stub_bin/git"
 	real_sleep=$(command -v sleep)
 	if [ "$verify_mode" = pending ] || [ "$verify_mode" = approval-wait ]; then
 		cat >"$stub_bin/sleep" <<'SLEEP_STUB'
@@ -453,6 +492,9 @@ SLEEP_STUB
 		GO_STUB_RIG_HOLD_MODE="$rig_hold_mode" \
 		GO_STUB_RIG_CLEANUP_MODE="$rig_cleanup_mode" \
 		GO_STUB_VERIFY_MODE="$verify_mode" \
+		GO_STUB_PREFLIGHT_MODE="$preflight_mode" \
+		GO_STUB_SEED_MODE="$seed_mode" \
+		GIT_STUB_CHECKOUT_MODE="$checkout_mode" \
 		REAL_SLEEP="$real_sleep" \
 		FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS="${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}" \
 		FREESIDE_REAL_RUN_DIAGNOSTIC_DIR="$CASE_DIR" \
@@ -1005,71 +1047,78 @@ else
 fi
 assert_deletes "--force probe-1"
 
-# -------------------------------------- #523: pinned-exporter tool preflight
-begin_case "40 every observer executable is recognized as a required tool"
-for required_tool in \
-  sh git env mkdir rm cat head find xargs sort cmp sha256sum cut readlink stat ls sync; do
-  printf 'freeside-missing-tool:%s\n' "$required_tool"
-done >"$CASE_DIR/run_output"
-printf '127' >"$CASE_DIR/run_status"
+# ------------------------------- #797: immutable-composition preflight
+begin_case "40 the harness forwards the complete composition before submit"
 run_real_work
-assert_rc 2
-assert_contains "example.test/exporter@sha256:"
-assert_contains "missing required observer tools: sh git env mkdir rm cat head find xargs sort cmp sha256sum cut readlink stat ls sync"
+assert_rc 1
+assert_exists "$CASE_DIR/preflight.called"
+assert_exists "$CASE_DIR/preflight.args"
+if grep -q -- '-agent-image' "$CASE_DIR/preflight.args" &&
+	grep -q -- '-exporter-image' "$CASE_DIR/preflight.args" &&
+	grep -q -- '-review-image' "$CASE_DIR/preflight.args" &&
+	grep -q -- '-review-auth-snapshot' "$CASE_DIR/preflight.args" &&
+	grep -q -- '-review-instructions' "$CASE_DIR/preflight.args" &&
+	grep -q -- '-allowed-paths' "$CASE_DIR/preflight.args" &&
+	grep -q -- '-repository-checkout' "$CASE_DIR/preflight.args" &&
+	grep -q -- '-publication-state-dir' "$CASE_DIR/preflight.args" &&
+	grep -q -- '-auth-volume' "$CASE_DIR/preflight.args" &&
+	grep -q -- '-rig-token-file' "$CASE_DIR/preflight.args"; then
+	pass=$((pass + 1))
+else
+	report_failure "composition preflight omitted a required binding"
+fi
 assert_exists "$CASE_DIR/go.log"
 assert_exists "$CASE_DIR/rig-hold.args"
 
-begin_case "41 a current exporter pin passes preflight and reaches the build"
+begin_case "41 composition cannot start before the verifier seed"
+run_real_work test-fail current ok ok success ok fail
+assert_rc 1
+assert_contains "could not record the auth identity binding"
+assert_not_exists "$CASE_DIR/preflight.called"
+assert_not_exists "$CASE_DIR/submit.called"
+
+begin_case "42 a failed composition prevents submission and prints the manifest"
+run_real_work test-fail current ok ok success fail
+assert_rc 2
+assert_contains '"name":"reviewer_image"'
+assert_contains "production composition preflight failed"
+assert_not_exists "$CASE_DIR/submit.called"
+
+begin_case "43 clean composition evidence is saved outside the temporary workdir"
 run_real_work
 assert_rc 1
-assert_contains "building freesided"
-assert_lacks "missing required observer tools"
-assert_exists "$CASE_DIR/go.log"
-assert_contains "could not record the auth identity binding"
+assert_contains "production composition manifest: $CASE_DIR/state/production-evidence/composition/"
+if find "$CASE_DIR/state/production-evidence/composition" -name '*.json' -type f | grep -q .; then
+	pass=$((pass + 1))
+else
+	report_failure "composition evidence was not persisted"
+fi
 
-begin_case "42 an unrecognized missing-tool marker is a generic runtime failure"
-printf '%s\n' 'freeside-missing-tool:not-from-observer-script' \
-  >"$CASE_DIR/run_output"
-printf '127' >"$CASE_DIR/run_status"
+begin_case "44 preflight runs after the identity seed and before submit"
 run_real_work
-assert_rc 2
-assert_contains "could not preflight exporter image"
-assert_lacks "missing required observer tools"
-assert_exists "$CASE_DIR/go.log"
+assert_rc 1
+composition_lifecycle=$(tr '\n' ' ' <"$CASE_DIR/lifecycle.log")
+case "$composition_lifecycle" in
+*"rig-hold identity-seed preflight submit "*) pass=$((pass + 1)) ;;
+*) report_failure "composition lifecycle was out of order: $composition_lifecycle" ;;
+esac
 
-begin_case "43 a non-command-not-found exit cannot convict the image contents"
-printf '%s\n' 'freeside-missing-tool:git' >"$CASE_DIR/run_output"
-printf '1' >"$CASE_DIR/run_status"
+begin_case "45 the persisted composition includes explicit not-run evidence"
 run_real_work
-assert_rc 2
-assert_contains "could not preflight exporter image"
-assert_lacks "missing required observer tools"
-assert_exists "$CASE_DIR/go.log"
+assert_rc 1
+composition_file=$(find "$CASE_DIR/state/production-evidence/composition" -name '*.json' -type f | head -1)
+if grep -q '"status":"not_run"' "$composition_file"; then
+	pass=$((pass + 1))
+else
+	report_failure "persisted composition omitted not-run evidence"
+fi
 
-begin_case "44 oversized exporter preflight output is capped before buffering"
-{
-  printf '%s\n' 'freeside-missing-tool:git'
-  head -c 131072 /dev/zero | tr '\0' 'x'
-} >"$CASE_DIR/run_output"
-printf '127' >"$CASE_DIR/run_status"
-run_real_work
+begin_case "45a a dirty repository checkout refuses before the build"
+run_real_work test-fail current ok ok success ok ok dirty
 assert_rc 2
-assert_contains "exporter preflight output exceeded the 65536-byte cap"
-assert_contains "could not preflight exporter image"
-assert_lacks "missing required observer tools"
-assert_exists "$CASE_DIR/go.log"
-
-begin_case "45 a NUL-bearing marker cannot convict the exporter image"
-{
-  printf '%s' 'freeside-missing-tool:git'
-  printf '\000\n'
-} >"$CASE_DIR/run_output"
-printf '127' >"$CASE_DIR/run_status"
-run_real_work
-assert_rc 2
-assert_contains "could not preflight exporter image"
-assert_lacks "missing required observer tools"
-assert_exists "$CASE_DIR/go.log"
+assert_contains "is dirty; commit or stash before a production run"
+assert_not_exists "$CASE_DIR/rig-hold.args"
+assert_not_exists "$CASE_DIR/preflight.called"
 
 begin_case "46 the gated real-work harness keeps both lane identities distinct"
 run_real_work lifecycle
@@ -1095,9 +1144,15 @@ if grep -q -- '-rig-token-file' "$CASE_DIR/daemon.args" &&
 else
 	report_failure "daemon did not receive dynamic rig binding authority and clean up through the live lease"
 fi
+if grep -qx -- '--require-composition' "$CASE_DIR/submit.args" &&
+	grep -qx -- '--composition-manifest' "$CASE_DIR/submit.args"; then
+	pass=$((pass + 1))
+else
+	report_failure "submit did not bind the composition manifest"
+fi
 rig_lifecycle=$(tr '\n' ' ' <"$CASE_DIR/lifecycle.log")
 case "$rig_lifecycle" in
-*"rig-hold submit daemon-start daemon-stop rig-cleanup rig-release "*)
+*"rig-hold identity-seed preflight submit daemon-start daemon-stop rig-cleanup rig-release "*)
 	pass=$((pass + 1)) ;;
 *) report_failure "rig lifecycle was out of order: $rig_lifecycle" ;;
 esac
@@ -1164,10 +1219,10 @@ run_real_work lifecycle current refuse
 assert_rc 1
 assert_contains "production rig lease is held by other@host"
 assert_not_exists "$CASE_DIR/submit.called"
-if ! grep -q '^run --rm --network none' "$CASE_DIR/calls.log" 2>/dev/null; then
+if [ ! -e "$CASE_DIR/preflight.called" ]; then
 	pass=$((pass + 1))
 else
-	report_failure "refused rig still launched the exporter preflight"
+	report_failure "refused rig still launched the composition preflight"
 fi
 
 begin_case "54 a failed clean release fails the campaign"

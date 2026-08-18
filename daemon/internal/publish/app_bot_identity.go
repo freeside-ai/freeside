@@ -63,6 +63,22 @@ func NewGitHubAppBotIdentityResolver(
 	}, nil
 }
 
+// InspectAppBotIdentity resolves one keystore-validated App registration's
+// public bot account without minting or circulating an installation token.
+// It shares the production resolver's strict response validation and returns
+// only public attribution coordinates.
+func InspectAppBotIdentity(
+	ctx context.Context,
+	app AppCredentials,
+	client *http.Client,
+	baseURL string,
+) (AppBotIdentity, error) {
+	if client == nil || strings.TrimSpace(baseURL) == "" || app.AppID <= 0 || app.Slug == "" {
+		return AppBotIdentity{}, errors.New("inspect App bot identity: invalid dependency or registration")
+	}
+	return lookupAppBotIdentity(ctx, app, noRedirect(client), strings.TrimRight(baseURL, "/"), "")
+}
+
 // Resolve authenticates the current token and registration binding, then
 // reuses the canonical bot observation while that exact token lease remains
 // usable. Invocation-level callers decide when this current-authority check is
@@ -133,7 +149,6 @@ func (r *GitHubAppBotIdentityResolver) revalidateLocked(
 			ErrAppBotIdentityMismatch,
 		)
 	}
-	login := selected.Slug + "[bot]"
 	if cached, ok := r.cache[repo]; ok &&
 		cached.repo == repo && cached.registrationID == token.RegistrationID &&
 		cached.installationID == token.InstallationID &&
@@ -142,40 +157,12 @@ func (r *GitHubAppBotIdentityResolver) revalidateLocked(
 		r.now().Before(cached.tokenExpiresAt.Add(-tokenExpirySkew)) {
 		return cached.identity, nil
 	}
-	path := "/users/" + url.PathEscape(login)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+path, nil)
-	if err != nil {
-		return AppBotIdentity{}, fmt.Errorf("resolve App bot identity: build request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token.Token.Reveal())
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	resp, err := r.client.Do(req)
+	identity, err := lookupAppBotIdentity(
+		ctx, *selected, r.client, r.baseURL, token.Token.Reveal(),
+	)
 	if err != nil {
 		return AppBotIdentity{}, fmt.Errorf("resolve App bot identity: %w", err)
 	}
-	defer drainAndClose(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return AppBotIdentity{}, fmt.Errorf(
-			"resolve App bot identity: %w",
-			&APIError{Status: resp.StatusCode, RequestPath: path},
-		)
-	}
-	var user struct {
-		Login string `json:"login"`
-		ID    int64  `json:"id"`
-		Type  string `json:"type"`
-	}
-	if err := decodeResponse(resp.Body, &user); err != nil {
-		return AppBotIdentity{}, fmt.Errorf("resolve App bot identity: decode response: %w", err)
-	}
-	if user.Login != login || user.ID <= 0 || user.Type != "Bot" {
-		return AppBotIdentity{}, fmt.Errorf(
-			"resolve App bot identity: canonical account disagrees with selected registration: %w",
-			ErrAppBotIdentityMismatch,
-		)
-	}
-	identity := AppBotIdentity{AppSlug: selected.Slug, BotUserID: user.ID}
 	if r.now().Before(token.ExpiresAt.Add(-tokenExpirySkew)) {
 		r.cache[repo] = appBotIdentityCacheEntry{
 			repo: repo, registrationID: token.RegistrationID,
@@ -186,4 +173,46 @@ func (r *GitHubAppBotIdentityResolver) revalidateLocked(
 		delete(r.cache, repo)
 	}
 	return identity, nil
+}
+
+func lookupAppBotIdentity(
+	ctx context.Context,
+	app AppCredentials,
+	client *http.Client,
+	baseURL, token string,
+) (AppBotIdentity, error) {
+	login := app.Slug + "[bot]"
+	path := "/users/" + url.PathEscape(login)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, nil)
+	if err != nil {
+		return AppBotIdentity{}, fmt.Errorf("build request: %w", err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	resp, err := client.Do(req)
+	if err != nil {
+		return AppBotIdentity{}, err
+	}
+	defer drainAndClose(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return AppBotIdentity{}, &APIError{Status: resp.StatusCode, RequestPath: path}
+	}
+	var user struct {
+		Login string `json:"login"`
+		ID    int64  `json:"id"`
+		Type  string `json:"type"`
+	}
+	if err := decodeResponse(resp.Body, &user); err != nil {
+		return AppBotIdentity{}, errors.New("decode response")
+	}
+	if user.Login != login || user.ID <= 0 || user.Type != "Bot" {
+		return AppBotIdentity{}, fmt.Errorf(
+			"canonical account disagrees with selected registration: %w",
+			ErrAppBotIdentityMismatch,
+		)
+	}
+	return AppBotIdentity{AppSlug: app.Slug, BotUserID: user.ID}, nil
 }

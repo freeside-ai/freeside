@@ -86,6 +86,8 @@ type claudeDriverConfig struct {
 	ReviewWorkspaceSizeMB int64
 }
 
+var errBackendConformanceUnavailable = errors.New("exact passing backend conformance proof is unavailable")
+
 func (c claudeDriverConfig) validate() error {
 	switch {
 	case c.AgentImage == "":
@@ -1227,6 +1229,10 @@ func composeClaudeDriver(
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	reviewConfigurationDigest, err := requireApprovedReviewConfiguration(ctx, st, cfg)
+	if err != nil {
+		return nil, err
+	}
 	promptPackage, promptPackageBody, err := ingestPromptPackage(blobs, cfg.PromptPackageFile)
 	if err != nil {
 		return nil, err
@@ -1308,9 +1314,8 @@ func composeClaudeDriver(
 		return nil, fmt.Errorf("compose Codex review lifecycle: %w", lifecycleErr)
 	}
 	var (
-		reviewSource              exec.ReviewSource
-		reviewConfigurationDigest domain.Digest
-		reviewHostInstructions    engine.ReviewHostInstructions
+		reviewSource           exec.ReviewSource
+		reviewHostInstructions engine.ReviewHostInstructions
 	)
 	volumeLeaser, err := ward.NewRuntimeCodexReviewVolumeLeaser(runtime)
 	if err != nil {
@@ -1343,13 +1348,6 @@ func composeClaudeDriver(
 			Now:       func() time.Time { return time.Now().UTC() }, Journal: adapters.Journal,
 			VolumeLifecycleLeaser: volumeLeaser,
 		}
-		reviewConfigurationDigest, err = ward.CodexReviewConfigurationDigest(
-			reviewConfig, cfg.ReviewWorkspaceSizeMB, cfg.ReviewAuthMode,
-			cfg.ReviewAuthIdentityID, cfg.ReviewCostOwner,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("digest Codex review configuration: %w", err)
-		}
 		reviewSource, err = ward.NewCodexReviewSource(ward.CodexReviewSourceConfig{
 			Lifecycle: reviewLifecycle, Review: reviewConfig, Journal: adapters.Journal,
 			WorkspaceSizeMB: cfg.ReviewWorkspaceSizeMB, AuthMode: cfg.ReviewAuthMode,
@@ -1380,12 +1378,10 @@ func composeClaudeDriver(
 		); err != nil {
 			return nil, fmt.Errorf("run ward conformance: %w", err)
 		}
-	} else if haveConformance &&
-		conformance.Outcome == domain.ConformancePassed &&
-		conformance.ConfigurationDigest == backend.ConfigurationDigest() {
-		if err := backend.RestoreConformance(conformance); err != nil {
-			return nil, err
-		}
+	} else if err := restoreClaudeBackendConformance(
+		backend, conformance, haveConformance, cfg.OperatingMode == domain.ModeUnattended,
+	); err != nil {
+		return nil, err
 	}
 
 	driver, driverErr := claude.New(claude.Config{
@@ -1491,6 +1487,83 @@ func composeClaudeDriver(
 		janitor: janitor,
 	}
 	return composition, nil
+}
+
+type backendConformanceRestorer interface {
+	ConfigurationDigest() domain.Digest
+	RestoreConformance(domain.BackendConformance) error
+}
+
+func restoreClaudeBackendConformance(
+	backend backendConformanceRestorer, conformance domain.BackendConformance,
+	found, required bool,
+) error {
+	if !found || conformance.Outcome != domain.ConformancePassed ||
+		conformance.ConfigurationDigest != backend.ConfigurationDigest() {
+		if required {
+			return fmt.Errorf("restore production backend conformance: %w",
+				errBackendConformanceUnavailable)
+		}
+		return nil
+	}
+	return backend.RestoreConformance(conformance)
+}
+
+// requireApprovedReviewConfiguration re-gates the caller-selected review and
+// exporter images before composition can construct a transport or execute the
+// conformance runtime against repository content.
+func requireApprovedReviewConfiguration(
+	ctx context.Context, st *store.Store, cfg claudeDriverConfig,
+) (domain.Digest, error) {
+	if cfg.OperatingMode != domain.ModeUnattended {
+		return "", nil
+	}
+	digest, err := claudeReviewConfigurationDigest(cfg)
+	if err != nil {
+		return "", err
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		profiles, err := tx.InspectLatestTrustProfiles(ctx)
+		if err != nil {
+			return err
+		}
+		matched := false
+		for _, current := range profiles {
+			if current.Repo != cfg.Repo {
+				continue
+			}
+			if current.ReconstructionError != nil || current.Profile.RepositoryID != cfg.RepositoryID {
+				return errors.Join(current.ReconstructionError, domain.ErrRepositoryIdentityMismatch)
+			}
+			matched = true
+		}
+		if !matched {
+			return fmt.Errorf("target repository has no active trust profile: %w",
+				domain.ErrReviewConfigurationUnapproved)
+		}
+		return tx.RequireReviewConfigurationApproved(ctx, digest)
+	}); err != nil {
+		return "", fmt.Errorf("require approved Codex review configuration: %w", err)
+	}
+	return digest, nil
+}
+
+func claudeReviewConfigurationDigest(cfg claudeDriverConfig) (domain.Digest, error) {
+	endpoints := []string{"chatgpt.com:443"}
+	if cfg.ReviewAuthMode == ward.CodexAuthAPIKey {
+		endpoints = []string{"api.openai.com:443"}
+	}
+	digest, err := ward.CodexReviewConfigurationDigest(ward.CodexReviewConfig{
+		InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
+		ProviderEndpoints: endpoints, ApprovedImage: cfg.ReviewImage,
+		ObserverImage: cfg.ExporterImage, Model: cfg.ReviewModel,
+		ReasoningEffort:          cfg.ReviewReasoningEffort,
+		AccessTokenLifetimeFloor: time.Hour, AccessTokenRefreshThreshold: 2 * time.Hour,
+	}, cfg.ReviewWorkspaceSizeMB, cfg.ReviewAuthMode, cfg.ReviewAuthIdentityID, cfg.ReviewCostOwner)
+	if err != nil {
+		return "", fmt.Errorf("digest Codex review configuration: %w", err)
+	}
+	return digest, nil
 }
 
 func bindRigInvocationResources(

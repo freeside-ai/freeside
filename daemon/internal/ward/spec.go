@@ -60,6 +60,17 @@ var (
 	sha256HexPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
+var requiredObserverTools = []string{
+	"sh", "git", "env", "mkdir", "rm", "cat", "head", "find", "xargs", "sort",
+	"cmp", "sha256sum", "cut", "readlink", "stat", "ls", "sync",
+}
+
+// RequiredObserverTools is the single registry of external executables used
+// by ward-generated exporter observer scripts.
+func RequiredObserverTools() []string {
+	return slices.Clone(requiredObserverTools)
+}
+
 // splitImageRef parses an OCI image reference into its name and its pinned
 // @digest, normalizing away an optional tag so the two sides of an image
 // comparison line up regardless of how the tag is spelled. ok is false when no

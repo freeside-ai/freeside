@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -290,6 +293,69 @@ func TestClaudeDriverConfigAttendedModeDoesNotRequireProductionReview(t *testing
 	}
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("attended config without production review rejected: %v", err)
+	}
+}
+
+func TestReviewConfigurationApprovalBindsExporterBeforeComposition(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	cfg := claudeDriverConfig{
+		OperatingMode:   domain.ModeUnattended,
+		Repo:            "example/repo",
+		RepositoryID:    44,
+		ExporterImage:   "ghcr.io/x/exporter@sha256:" + strings.Repeat("b", 64),
+		ReviewImage:     "ghcr.io/x/codex@sha256:" + strings.Repeat("c", 64),
+		ReviewInputRoot: "/var/freeside/review-inputs", ReviewAuthMode: ward.CodexAuthSubscription,
+		ReviewAuthIdentityID: "auth-codex-owner", ReviewModel: "gpt-codex",
+		ReviewReasoningEffort: "high", ReviewCostOwner: "subscription:owner",
+		ReviewWorkspaceSizeMB: 8192,
+	}
+	if _, err := requireApprovedReviewConfiguration(ctx, st, cfg); !errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
+		t.Fatalf("unapproved configuration error = %v, want %v", err, domain.ErrReviewConfigurationUnapproved)
+	}
+	digest, err := claudeReviewConfigurationDigest(cfg)
+	if err != nil {
+		t.Fatalf("derive review configuration: %v", err)
+	}
+	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: "example/repo", RepositoryID: 44,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest:        "sha256:workflow-audit",
+		Review: domain.ReviewSettings{
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: digest,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 17, 19, 0, 0, 0, time.UTC)
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.RecordInactiveTrustProfile(ctx, profile, now); err != nil {
+			return err
+		}
+		return tx.ActivateTrustProfile(ctx, profile.Repo, profile.ProfileDigest, now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	approvedDigest, err := requireApprovedReviewConfiguration(ctx, st, cfg)
+	if err != nil {
+		t.Fatalf("approved exporter rejected: %v", err)
+	}
+	if approvedDigest != digest {
+		t.Fatalf("approved digest = %q, want %q", approvedDigest, digest)
+	}
+	cfg.ExporterImage = "ghcr.io/x/unapproved@sha256:" + strings.Repeat("d", 64)
+	if _, err := requireApprovedReviewConfiguration(ctx, st, cfg); !errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
+		t.Fatalf("unapproved exporter error = %v, want %v", err, domain.ErrReviewConfigurationUnapproved)
 	}
 }
 

@@ -2,6 +2,9 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -161,5 +164,126 @@ func TestOpenPathWithSpecialCharacters(t *testing.T) {
 	}
 	if version == 0 {
 		t.Fatal("reopened database has no applied migrations, want the migrated store")
+	}
+}
+
+func TestOpenReadOnlyRequiresExistingDatabaseAndRejectsWrites(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := tempDBPath(t)
+	if _, err := store.OpenReadOnly(ctx, path, store.Options{}); err == nil {
+		t.Fatal("OpenReadOnly created a missing database")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("stat after missing read-only open = %v, want ErrNotExist", err)
+	}
+
+	writable, err := store.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatalf("Close writable: %v", err)
+	}
+
+	readOnly, err := store.OpenReadOnly(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatalf("OpenReadOnly: %v", err)
+	}
+	defer func() {
+		if err := readOnly.Close(); err != nil {
+			t.Errorf("Close read-only: %v", err)
+		}
+	}()
+	gotVersion, err := readOnly.SchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("SchemaVersion: %v", err)
+	}
+	wantVersion, err := store.CurrentSchemaVersion()
+	if err != nil {
+		t.Fatalf("CurrentSchemaVersion: %v", err)
+	}
+	if gotVersion != wantVersion {
+		t.Fatalf("schema version = %d, want %d", gotVersion, wantVersion)
+	}
+	if err := readOnly.Write(ctx, func(*store.WriteTx) error { return nil }); err == nil {
+		t.Fatal("Write through OpenReadOnly succeeded")
+	}
+}
+
+func TestOpenExistingRequiresCurrentDatabaseAndAllowsAuditWrites(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := tempDBPath(t)
+	if _, err := store.OpenExisting(ctx, path, store.Options{}); err == nil {
+		t.Fatal("OpenExisting created a missing database")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("stat after missing existing open = %v, want ErrNotExist", err)
+	}
+
+	writable, err := store.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatalf("Close writable: %v", err)
+	}
+
+	existing, err := store.OpenExisting(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatalf("OpenExisting: %v", err)
+	}
+	defer func() {
+		if err := existing.Close(); err != nil {
+			t.Errorf("Close existing: %v", err)
+		}
+	}()
+	if err := existing.Write(ctx, func(*store.WriteTx) error { return nil }); err != nil {
+		t.Fatalf("write through OpenExisting: %v", err)
+	}
+}
+
+func TestOpenExistingRejectsStaleSchemaWithoutMigrating(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := tempDBPath(t)
+	writable, err := store.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatalf("Close writable: %v", err)
+	}
+	wantVersion, err := store.CurrentSchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = ?`, wantVersion); err != nil {
+		_ = raw.Close()
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if opened, err := store.OpenExisting(ctx, path, store.Options{}); err == nil {
+		_ = opened.Close()
+		t.Fatal("OpenExisting migrated a stale database")
+	}
+	raw, err = sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close() //nolint:errcheck // test cleanup
+	var gotVersion int
+	if err := raw.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&gotVersion); err != nil {
+		t.Fatal(err)
+	}
+	if gotVersion != wantVersion-1 {
+		t.Fatalf("schema version after refused open = %d, want %d", gotVersion, wantVersion-1)
 	}
 }

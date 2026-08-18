@@ -83,6 +83,16 @@ type appleBackend struct {
 	readEvidence     func(context.Context, string, string, map[string]int64) (ociEvidence, error)
 }
 
+// InspectImageDigest resolves one image through the production Apple runtime
+// inspection path without building, pulling, or changing image state.
+func InspectImageDigest(ctx context.Context, containerPath, ref string) (string, error) {
+	path, err := resolveExecutable(containerPath, "container")
+	if err != nil {
+		return "", err
+	}
+	return (appleBackend{containerPath: path, runner: execRunner{}}).ImageDigest(ctx, ref)
+}
+
 func (a appleBackend) ImageDigest(ctx context.Context, ref string) (string, error) {
 	report, err := a.inspectImage(ctx, ref)
 	if err != nil {

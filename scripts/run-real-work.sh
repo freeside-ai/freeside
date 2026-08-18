@@ -54,6 +54,9 @@
 #                                    bound (default 30)
 #   FREESIDE_REAL_RUN_DIAGNOSTIC_DIR operator-visible diagnostic destination
 #                                    (default current directory)
+#   FREESIDE_REAL_RUN_BUILD_PROXY   supported unauthenticated HTTP proxy used
+#                                    when building the already-pinned images;
+#                                    live reachability is recorded not_run
 #
 # The harness supplies FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID,
 # FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION, and (when present)
@@ -151,6 +154,7 @@ last_supervision_snapshot="$workdir/supervision.json"
 diagnostic_path=""
 rig_acquisition="$workdir/rig-acquisition.json"
 rig_log="$workdir/rig-hold.log"
+composition_evidence_tmp=""
 db_path="$FREESIDE_REAL_RUN_STATE_ROOT/freeside.db"
 listen_address="$FREESIDE_REAL_RUN_LISTEN"
 rig_release_timeout=${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}
@@ -316,6 +320,7 @@ cleanup() {
 			cleanup_failed=true
 		fi
 	fi
+	[[ -z "$composition_evidence_tmp" ]] || rm -f "$composition_evidence_tmp"
 	rm -rf "$workdir"
 	if [[ "$cleanup_failed" == true && "$status" -eq 0 ]]; then
 		exit 1
@@ -324,7 +329,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Stage the operator's submission inputs once, so the composition preflight
+# and the durable submit consume the same bytes even if the original files
+# change between the two steps.
+submission_inputs="$workdir/submission-inputs"
+mkdir -p "$submission_inputs"
+cp "$spec_file" "$submission_inputs/spec.json"
+spec_file="$submission_inputs/spec.json"
+cp "$policy_file" "$submission_inputs/policy.json"
+policy_file="$submission_inputs/policy.json"
+cp "$publication_file" "$submission_inputs/publication.json"
+publication_file="$submission_inputs/publication.json"
+if [[ -n "$work_unit_file" ]]; then
+	cp "$work_unit_file" "$submission_inputs/work-unit.json"
+	work_unit_file="$submission_inputs/work-unit.json"
+fi
+
 echo "building freesided" >&2
+# The composition preflight rejects a daemon whose build identity carries a
+# -dirty stamp, so refuse a dirty checkout here, before the build, where the
+# operator can still see what to commit or stash.
+if [[ -n "$(git -C "$repo_root" status --porcelain)" ]]; then
+	echo "run-real-work: repository checkout $repo_root is dirty; commit or stash before a production run" >&2
+	exit 2
+fi
 build_version="$(git -C "$repo_root" rev-parse --short=12 HEAD)"
 (cd "$repo_root/daemon" && go build -ldflags "-X main.version=$build_version" -o "$workdir/freesided" ./cmd/freesided)
 
@@ -366,81 +394,106 @@ FREESIDE_REAL_RUN_SEED_ROOT="$("$workdir/freesided" rig resource \
 export FREESIDE_REAL_RUN_STATE_ROOT FREESIDE_REAL_RUN_SEED_ROOT
 require_live_rig
 
-# Duplicated from observerScript, observerGitScript, and credObserverScript in
-# daemon/internal/ward/spec.go. Shell syntax and builtins are excluded; every
-# external command any generated observer can execute is listed so an outdated
-# exporter pin fails before build and submit.
-required_exporter_tools=(
-  sh git env mkdir rm cat head find xargs sort cmp sha256sum cut readlink stat ls sync
+# Provision the durable auth-identity binding before the composition
+# preflight inspects the database, and before the daemon can reach
+# admission. The verifier records it and exits without verifying because no
+# invocation id is set yet; this is prerequisite setup, not work submission,
+# and preflight, immutable evidence, submit, and daemon startup all stay
+# ordered after it.
+# Both implementation identity variables are unset for this call on purpose:
+# exported values left over from an earlier run would make the seeding step
+# verify that old invocation instead of skipping, and its failure would surface
+# here as the misleading "could not record the auth identity binding". The
+# legacy generic names are scrubbed from every verifier call too, so stale
+# operator exports cannot trip the verifier's migration guard.
+echo "recording the auth identity binding" >&2
+env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
+  -u FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID \
+  -u FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION \
+  -u FREESIDE_REAL_RUN_ELABORATION_RUN_ID \
+  FREESIDE_REAL_RUN_LIVE_TEST=1 \
+  go test -C "$repo_root/daemon" ./internal/integration/ \
+    -run TestRealWorkItemCompletesProductionPipeline -count=1 > "$workdir/seed.log" 2>&1 || {
+  echo "run-real-work: could not record the auth identity binding" >&2
+  cat "$workdir/seed.log" >&2
+  exit 1
+}
+require_live_rig
+
+echo "validating the immutable production composition" >&2
+composition_manifest="$workdir/composition-manifest.json"
+preflight_args=(
+	-rig-token-file "$rig_acquisition"
+	-server-url "http://$listen_address"
+	-agent-image "$FREESIDE_REAL_RUN_AGENT_IMAGE"
+	-exporter-image "$FREESIDE_WARD_EXPORTER_IMAGE"
+	-review-image "$FREESIDE_REAL_RUN_REVIEW_IMAGE"
+	-repo "$FREESIDE_REAL_RUN_REPO"
+	-repository-checkout "$repo_root"
+	-repository-id "$FREESIDE_REAL_RUN_REPOSITORY_ID"
+	-base-ref "$FREESIDE_REAL_RUN_BASE_REF"
+	-base-sha "$FREESIDE_REAL_RUN_BASE_SHA"
+	-approved-recipe "$FREESIDE_REAL_RUN_APPROVED_RECIPE"
+	-auth-identity "$FREESIDE_REAL_RUN_AUTH_IDENTITY"
+	-auth-volume "$FREESIDE_REAL_RUN_AUTH_VOLUME"
+	-review-input-root "$FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT"
+	-review-auth-mode "$FREESIDE_REAL_RUN_REVIEW_AUTH_MODE"
+	-review-auth-identity "$FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY"
+	-review-auth-snapshot "$FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT"
+	-review-instructions "$FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS"
+	-review-model "$FREESIDE_REAL_RUN_REVIEW_MODEL"
+	-review-reasoning-effort "$FREESIDE_REAL_RUN_REVIEW_REASONING"
+	-review-cost-owner "$FREESIDE_REAL_RUN_REVIEW_COST_OWNER"
+	-publication-state-dir "$FREESIDE_REAL_RUN_APP_STATE"
+	-publication-credentials-dir "$FREESIDE_REAL_RUN_APP_CREDS"
+	-allowed-paths "$FREESIDE_REAL_RUN_ALLOWED_PATHS"
+	-spec "$spec_file"
+	-policy "$policy_file"
+	-publication "$publication_file"
+	-project "$FREESIDE_REAL_RUN_PROJECT"
 )
-# shellcheck disable=SC2016 # The probed container's shell expands this script.
-exporter_probe_script='missing=0
-for tool do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    printf "freeside-missing-tool:%s\n" "$tool"
-    missing=1
-  fi
-done
-if [ "$missing" -ne 0 ]; then exit 127; fi'
-exporter_probe_output_cap=$((64 << 10))
-exporter_probe_output_file="$workdir/exporter-preflight.log"
-exporter_probe_nul_stripped_file="$workdir/exporter-preflight-no-nul.log"
-set +e
-container run --rm --network none -- \
-  "$FREESIDE_WARD_EXPORTER_IMAGE" sh -c "$exporter_probe_script" sh \
-  "${required_exporter_tools[@]}" 2>&1 |
-  head -c "$((exporter_probe_output_cap + 1))" >"$exporter_probe_output_file"
-exporter_probe_pipeline_status=("${PIPESTATUS[@]}")
-set -e
-exporter_probe_status=${exporter_probe_pipeline_status[0]}
-exporter_probe_capture_status=${exporter_probe_pipeline_status[1]}
-exporter_probe_output_size=$(wc -c <"$exporter_probe_output_file")
-if [[ "$exporter_probe_status" -eq 0 && "$exporter_probe_capture_status" -eq 0 &&
-  "$exporter_probe_output_size" -le "$exporter_probe_output_cap" ]]; then
-  :
-else
-  missing_marker_lines=""
-  if [[ "$exporter_probe_capture_status" -eq 0 &&
-    "$exporter_probe_output_size" -le "$exporter_probe_output_cap" ]] &&
-    LC_ALL=C tr -d '\000' <"$exporter_probe_output_file" \
-      >"$exporter_probe_nul_stripped_file" &&
-    cmp -s "$exporter_probe_output_file" "$exporter_probe_nul_stripped_file"; then
-    missing_marker_lines=$(sed -n 's/^freeside-missing-tool://p' \
-      "$exporter_probe_output_file")
-  fi
-  missing_exporter_tools=""
-  exporter_probe_markers_valid=true
-  while IFS= read -r missing_tool; do
-    [[ -n "$missing_tool" ]] || continue
-    missing_tool_known=false
-    for required_tool in "${required_exporter_tools[@]}"; do
-      if [[ "$missing_tool" == "$required_tool" ]]; then
-        missing_tool_known=true
-        break
-      fi
-    done
-    if [[ "$missing_tool_known" != true ||
-      " $missing_exporter_tools " == *" $missing_tool "* ]]; then
-      exporter_probe_markers_valid=false
-      break
-    fi
-    missing_exporter_tools="${missing_exporter_tools:+$missing_exporter_tools }$missing_tool"
-  done <<EOF
-$missing_marker_lines
-EOF
-  if [[ "$exporter_probe_status" -eq 127 &&
-    "$exporter_probe_markers_valid" == true && -n "$missing_exporter_tools" ]]; then
-    echo "run-real-work: exporter image $FREESIDE_WARD_EXPORTER_IMAGE is missing required observer tools: $missing_exporter_tools" >&2
-    exit 2
-  fi
-  if [[ "$exporter_probe_output_size" -gt "$exporter_probe_output_cap" ]]; then
-    echo "run-real-work: exporter preflight output exceeded the ${exporter_probe_output_cap}-byte cap" >&2
-  elif [[ "$exporter_probe_capture_status" -ne 0 ]]; then
-    echo "run-real-work: could not capture exporter preflight output" >&2
-  fi
-  echo "run-real-work: could not preflight exporter image $FREESIDE_WARD_EXPORTER_IMAGE (container exit $exporter_probe_status)" >&2
-  exit 2
+if [[ -n "$work_unit_file" ]]; then
+	preflight_args+=(-work-unit "$work_unit_file")
 fi
+if [[ -n "${FREESIDE_REAL_RUN_BUILD_PROXY:-}" ]]; then
+	preflight_args+=(-build-proxy "$FREESIDE_REAL_RUN_BUILD_PROXY")
+fi
+if ! "$workdir/freesided" preflight "${preflight_args[@]}" >"$composition_manifest"; then
+	echo "run-real-work: production composition preflight failed" >&2
+	cat "$composition_manifest" >&2
+	exit 2
+fi
+
+# The state-root evidence path is content-addressed and no-clobber. An exact
+# replay converges on the same bytes; different resolved inputs cannot replace
+# earlier acceptance evidence.
+composition_digest=$(shasum -a 256 "$composition_manifest" | awk '{print $1}')
+composition_evidence_dir="$FREESIDE_REAL_RUN_STATE_ROOT/production-evidence/composition"
+composition_evidence="$composition_evidence_dir/$composition_digest.json"
+mkdir -p "$composition_evidence_dir"
+if [[ ! -e "$composition_evidence" ]]; then
+	# Publish through a hard link: unlike cp -n, a lost race can neither
+	# clobber the winner nor leave a partially copied file at the final name,
+	# and the collision check below still compares real bytes.
+	composition_evidence_tmp=$(mktemp "$composition_evidence_dir/.composition.XXXXXX")
+	if cp "$composition_manifest" "$composition_evidence_tmp" &&
+		ln "$composition_evidence_tmp" "$composition_evidence"; then
+		rm -f "$composition_evidence_tmp"
+		composition_evidence_tmp=""
+	else
+		rm -f "$composition_evidence_tmp"
+		composition_evidence_tmp=""
+		if [[ ! -e "$composition_evidence" ]]; then
+			echo "run-real-work: could not publish immutable composition evidence" >&2
+			exit 1
+		fi
+	fi
+fi
+if ! cmp -s "$composition_manifest" "$composition_evidence"; then
+	echo "run-real-work: immutable composition evidence collision at $composition_evidence" >&2
+	exit 1
+fi
+echo "production composition manifest: $composition_evidence" >&2
 
 echo "submitting the work item" >&2
 require_live_rig
@@ -451,6 +504,8 @@ submit_args=(
   --policy "$policy_file"
   --publication "$publication_file"
   --project "$FREESIDE_REAL_RUN_PROJECT"
+  --composition-manifest "$composition_manifest"
+  --require-composition
 )
 if [[ -n "$work_unit_file" ]]; then
   submit_args+=(--work-unit "$work_unit_file")
@@ -479,31 +534,6 @@ elaboration_verifier_env=(-u FREESIDE_REAL_RUN_ELABORATION_RUN_ID)
 if [[ -n "$elaboration_run_id" ]]; then
 	elaboration_verifier_env+=(FREESIDE_REAL_RUN_ELABORATION_RUN_ID="$elaboration_run_id")
 fi
-
-# Seed the durable auth-identity binding before the daemon can reach
-# admission. The verifier records it too, but that call happens inside the
-# polling loop, i.e. after the daemon is already dispatching: leaving it there
-# makes the harness race its own precondition. Running the verifier once here
-# is the seeding step; it exits without verifying because no invocation id is
-# set yet.
-# Both implementation identity variables are unset for this call on purpose:
-# exported values left over from an earlier run would make the seeding step
-# verify that old invocation instead of skipping, and its failure would surface
-# here as the misleading "could not record the auth identity binding". The
-# legacy generic names are scrubbed from every verifier call too, so stale
-# operator exports cannot trip the verifier's migration guard.
-echo "recording the auth identity binding" >&2
-env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
-  -u FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID \
-  -u FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION \
-	-u FREESIDE_REAL_RUN_ELABORATION_RUN_ID \
-  FREESIDE_REAL_RUN_LIVE_TEST=1 \
-  go test -C "$repo_root/daemon" ./internal/integration/ \
-    -run TestRealWorkItemCompletesProductionPipeline -count=1 > "$workdir/seed.log" 2>&1 || {
-  echo "run-real-work: could not record the auth identity binding" >&2
-  cat "$workdir/seed.log" >&2
-  exit 1
-}
 
 echo "starting the daemon with the production Claude driver" >&2
 require_live_rig

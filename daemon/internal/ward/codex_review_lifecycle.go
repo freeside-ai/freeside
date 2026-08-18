@@ -774,6 +774,7 @@ func (b *CodexReviewLifecycle) acquireCodexReviewRun(ctx context.Context, runID 
 }
 
 func validateCodexReviewLaunchShape(cfg CodexReviewConfig, launch CodexReviewLaunchSpec) error {
+	modelConfigurationError := ValidateCodexReviewModelConfiguration(cfg.Model, cfg.ReasoningEffort)
 	switch {
 	case cfg.Journal == nil:
 		return fmt.Errorf("%w: Journal is required", ErrInvalidCodexReviewSpec)
@@ -805,9 +806,8 @@ func validateCodexReviewLaunchShape(cfg CodexReviewConfig, launch CodexReviewLau
 		return fmt.Errorf("%w: WorkspaceTarget is invalid", ErrInvalidCodexReviewSpec)
 	case !digestPinnedImagePattern.MatchString(cfg.ObserverImage):
 		return fmt.Errorf("%w: ObserverImage must be digest-pinned", ErrInvalidCodexReviewSpec)
-	case cfg.Model == "" || !cliSafe(cfg.Model) ||
-		cfg.ReasoningEffort == "" || !cliSafe(cfg.ReasoningEffort):
-		return fmt.Errorf("%w: model configuration is invalid", ErrInvalidCodexReviewSpec)
+	case modelConfigurationError != nil:
+		return modelConfigurationError
 	case launch.Prompt == "" || strings.IndexByte(launch.Prompt, 0) >= 0 ||
 		len(launch.Prompt) > maxCodexReviewPromptBytes:
 		return fmt.Errorf("%w: Prompt is invalid", ErrInvalidCodexReviewSpec)
@@ -838,6 +838,15 @@ func validateCodexReviewLaunchShape(cfg CodexReviewConfig, launch CodexReviewLau
 	}
 	if now := cfg.Now(); now.IsZero() || now.Location() != time.UTC {
 		return fmt.Errorf("%w: credential clock is invalid", ErrInvalidCodexReviewSpec)
+	}
+	return nil
+}
+
+// ValidateCodexReviewModelConfiguration applies the production launcher's
+// container-CLI argument shape gate before a model configuration is admitted.
+func ValidateCodexReviewModelConfiguration(model, reasoningEffort string) error {
+	if model == "" || !cliSafe(model) || reasoningEffort == "" || !cliSafe(reasoningEffort) {
+		return fmt.Errorf("%w: model configuration is invalid", ErrInvalidCodexReviewSpec)
 	}
 	return nil
 }

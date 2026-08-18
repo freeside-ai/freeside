@@ -43,7 +43,7 @@ Result JSON fields by lane:
     elaboration_policy_digest, elaboration_policy_artifact_id
   reserved implementation: implementation_run_id, implementation_invocation_id,
     implementation_stage_id, campaign_id, attempt_number
-  shared: project_id
+  shared: project_id, composition_digest
 
 The legacy fields run_id, invocation_id, stage_id, and work_unit_id are
 compatibility aliases bound to the reserved implementation run. The former
@@ -78,6 +78,8 @@ func runSubmitMain(args []string) {
 	specPath := flags.String("spec", "", "source work-item specification file (required)")
 	policyPath := flags.String("policy", "", "resolved per-run policy-key JSON array (required)")
 	publicationPath := flags.String("publication", "", "reviewer-facing pull-request metadata JSON file (required)")
+	compositionPath := flags.String("composition-manifest", "", "passing production-composition manifest bound to the submitted inputs")
+	requireComposition := flags.Bool("require-composition", false, "require trusted production-composition evidence (unattended submission)")
 	workUnitPath := flags.String("work-unit", "", "work-unit declaration JSON file (optional; §5.18 capture)")
 	projectID := flags.String("project", "", "project id the run belongs to (required)")
 	runID := flags.String("run-id", "", "implementation run id (defaults from project, specification, resolved policy, publication metadata, and any work-unit declaration so an exact re-submission converges)")
@@ -89,7 +91,9 @@ func runSubmitMain(args []string) {
 	result, err := runSubmitCommand(ctx, submitCommandConfig{
 		DBPath: *dbPath, SpecPath: *specPath, PolicyPath: *policyPath,
 		PublicationPath: *publicationPath, WorkUnitPath: *workUnitPath,
-		ProjectID: domain.ProjectID(*projectID), RunID: domain.RunID(*runID),
+		CompositionPath:    *compositionPath,
+		RequireComposition: *requireComposition,
+		ProjectID:          domain.ProjectID(*projectID), RunID: domain.RunID(*runID),
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
@@ -102,13 +106,15 @@ func runSubmitMain(args []string) {
 }
 
 type submitCommandConfig struct {
-	DBPath          string
-	SpecPath        string
-	PolicyPath      string
-	PublicationPath string
-	WorkUnitPath    string
-	ProjectID       domain.ProjectID
-	RunID           domain.RunID
+	DBPath             string
+	SpecPath           string
+	PolicyPath         string
+	PublicationPath    string
+	WorkUnitPath       string
+	CompositionPath    string
+	RequireComposition bool
+	ProjectID          domain.ProjectID
+	RunID              domain.RunID
 }
 
 // submittedWorkUnit is the --work-unit file's wire shape: exactly the §5.18
@@ -138,6 +144,7 @@ type submitResult struct {
 	SourceArtifactID            domain.ArtifactID   `json:"source_artifact_id"`
 	ElaborationPolicyArtifactID domain.ArtifactID   `json:"elaboration_policy_artifact_id"`
 	PublicationDigest           domain.Digest       `json:"publication_digest"`
+	CompositionDigest           domain.Digest       `json:"composition_digest,omitempty"`
 	WorkUnitID                  domain.WorkUnitID   `json:"work_unit_id,omitempty"`
 	CampaignID                  domain.CampaignID   `json:"campaign_id,omitempty"`
 	AttemptNumber               int                 `json:"attempt_number,omitempty"`
@@ -183,6 +190,8 @@ func submissionBytes(body []byte) submissionFile {
 
 func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResult, error) {
 	switch {
+	case cfg.CompositionPath != "" && cfg.RunID != "":
+		return submitResult{}, errors.New("submit: --run-id cannot override production composition identity")
 	case cfg.DBPath == "":
 		return submitResult{}, errors.New("submit: -db is required")
 	case cfg.SpecPath == "":
@@ -191,6 +200,8 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, errors.New("submit: --policy is required")
 	case cfg.PublicationPath == "":
 		return submitResult{}, errors.New("submit: --publication is required")
+	case cfg.RequireComposition && cfg.CompositionPath == "":
+		return submitResult{}, errors.New("submit: --composition-manifest is required")
 	case cfg.ProjectID == "":
 		return submitResult{}, errors.New("submit: --project is required")
 	}
@@ -298,6 +309,19 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		implementationRunID = defaultSubmissionRunID(
 			cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest, workUnitDigest)
 	}
+	var composition submissionFile
+	if cfg.CompositionPath != "" {
+		composition, err = readSubmissionFile(cfg.CompositionPath)
+		if err != nil {
+			return submitResult{}, fmt.Errorf("submit: read composition manifest: %w", err)
+		}
+		if err := validateSubmissionComposition(composition.body, implementationRunID, compositionIdentity{
+			SourceDigest: spec.digest, PolicyDigest: policyDigest,
+			PublicationDigest: publicationDigest, WorkUnitDigest: workUnitDigest,
+		}); err != nil {
+			return submitResult{}, fmt.Errorf("submit: composition manifest: %w", err)
+		}
+	}
 	elaborationRunID, err := engine.ElaborationRunIDForImplementation(implementationRunID)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
@@ -404,6 +428,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		SourceArtifactID:            specArtifact.ID,
 		ElaborationPolicyArtifactID: policyArtifact.ID,
 		PublicationDigest:           publicationDigest,
+		CompositionDigest:           composition.digest,
 		CampaignID:                  submitted.Run.CampaignID,
 		AttemptNumber:               submitted.Run.AttemptNumber,
 	}
@@ -411,6 +436,35 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		result.WorkUnitID = domain.WorkUnitIDForRun(submitted.ImplementationRunID)
 	}
 	return result, nil
+}
+
+// validateSubmissionComposition binds a passing preflight manifest to the
+// exact inputs being submitted: a manifest for different inputs, a different
+// derived run identity, or a non-passing status refuses the submission.
+func validateSubmissionComposition(
+	body []byte, runID domain.RunID, identity compositionIdentity,
+) error {
+	if err := ward.RejectDuplicateJSONKeys(body); err != nil {
+		return err
+	}
+	var manifest compositionManifest
+	if err := strictjson.Decode(
+		body, &manifest, strictjson.RejectInvalidUTF8, strictjson.Limit(maxSubmissionFileBytes),
+	); err != nil {
+		return err
+	}
+	wantInvocation := domain.InvocationID("inv-implement-" + string(runID))
+	if manifest.Version != compositionManifestVersion || manifest.Status != compositionPassed ||
+		manifest.Identity.SourceDigest != identity.SourceDigest ||
+		manifest.Identity.PolicyDigest != identity.PolicyDigest ||
+		manifest.Identity.PublicationDigest != identity.PublicationDigest ||
+		manifest.Identity.WorkUnitDigest != identity.WorkUnitDigest ||
+		manifest.Identity.ImplementationRunID != runID ||
+		manifest.Identity.ImplementationInvocationID != wantInvocation {
+		return fmt.Errorf("passing manifest does not bind the submitted inputs, run %q, and invocation %q: %w",
+			runID, wantInvocation, domain.ErrParentKeyMismatch)
+	}
+	return nil
 }
 
 // legacyProductionReplay preserves exact retries from the production-only

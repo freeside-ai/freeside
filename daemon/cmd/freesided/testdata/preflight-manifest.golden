@@ -1,0 +1,168 @@
+{
+  "version": "freeside-production-composition-v1",
+  "status": "passed",
+  "rig": {
+    "version": 3,
+    "owner": {
+      "user": "operator",
+      "host": "studio",
+      "pid": 42
+    },
+    "acquired_at": "2026-08-17T11:00:00Z",
+    "resources": {
+      "state_root": "/var/lib/freeside-test/state",
+      "database_path": "/var/lib/freeside-test/state/freeside.db",
+      "listen_address": "127.0.0.1:8677",
+      "seed_root": "/var/lib/freeside-test/seed",
+      "lease_root": "/var/lib/freeside-test/leases",
+      "containers": null,
+      "volumes": null,
+      "networks": null
+    },
+    "token_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "amendment_ed25519_public_key": "test-public-key"
+  },
+  "daemon_build": "2dce6570ee23",
+  "server_url": "http://127.0.0.1:8677",
+  "repository": "owner/repo",
+  "repository_id": 42,
+  "base_ref": "main",
+  "base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+  "profile_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "review_configuration_digest": "sha256:0a548c45aa62e215dd3e5ffded7fc8f2fdad6232ebded61dc0e4b926c61e8235",
+  "review_instructions_present": true,
+  "review_instructions_digest": "sha256:946939f8aec08ec8199e147028b5dd7e51ee2d07a26a2d5f98282aa652a25d43",
+  "build_egress_configuration_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "allowed_paths": [
+    "daemon/**"
+  ],
+  "claude_auth_identity": "claude-1",
+  "claude_auth_volume": "claude-auth-volume",
+  "codex_auth_identity": "codex-1",
+  "identity": {
+    "source_digest": "sha256:98f7ecbbe8aa0b856e2af4856e0d6ed099ac777be5cada07dc9026a9f37bdb62",
+    "policy_digest": "sha256:a59b2bb91a87bf2067aef7c598aac2660a07b136c4c9d02a83a96346c307b37d",
+    "publication_digest": "sha256:f3c794222955e37bcacd199d0da87ea4f0cb721edd5a2d57b67ce9d86402219a",
+    "implementation_run_id": "run-712d5690150ec0a0162b3d17fff0be6276d50a77d051205997b0121ca8e2da91",
+    "implementation_invocation_id": "inv-implement-run-712d5690150ec0a0162b3d17fff0be6276d50a77d051205997b0121ca8e2da91"
+  },
+  "images": [
+    {
+      "role": "exporter",
+      "requested": "registry.test/exporter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "resolved_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "role": "implementer",
+      "requested": "registry.test/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "resolved_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "role": "reviewer",
+      "requested": "registry.test/reviewer@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "resolved_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "checks": [
+    {
+      "name": "rig_manifest",
+      "status": "passed",
+      "evidence": "rig manifest binds canonical state, database, listener, and seed resources"
+    },
+    {
+      "name": "state_database",
+      "status": "passed",
+      "evidence": "canonical database schema version 81 matches binary schema version 81"
+    },
+    {
+      "name": "topic_key",
+      "status": "passed",
+      "evidence": "private topic key is present and valid"
+    },
+    {
+      "name": "daemon_build",
+      "status": "passed",
+      "evidence": "daemon build identity is 2dce6570ee23"
+    },
+    {
+      "name": "listener_server_url",
+      "status": "passed",
+      "evidence": "operator server URL exactly names the leased listener"
+    },
+    {
+      "name": "daemon_conflict",
+      "status": "passed",
+      "evidence": "database, supervisor, and leased listener are idle"
+    },
+    {
+      "name": "repository_base",
+      "status": "passed",
+      "evidence": "repository, live branch ancestry, exact base commit, and approved recipe are canonical"
+    },
+    {
+      "name": "trust_profile",
+      "status": "passed",
+      "evidence": "active profile sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb binds repository owner/repo (42)"
+    },
+    {
+      "name": "review_configuration",
+      "status": "passed",
+      "evidence": "effective reviewer configuration digest is approved"
+    },
+    {
+      "name": "source_implementation_identity",
+      "status": "passed",
+      "evidence": "source sha256:98f7ecbbe8aa0b856e2af4856e0d6ed099ac777be5cada07dc9026a9f37bdb62 deterministically reserves run run-712d5690150ec0a0162b3d17fff0be6276d50a77d051205997b0121ca8e2da91 and invocation inv-implement-run-712d5690150ec0a0162b3d17fff0be6276d50a77d051205997b0121ca8e2da91"
+    },
+    {
+      "name": "review_instructions",
+      "status": "passed",
+      "evidence": "review host instructions can be snapshotted before submission"
+    },
+    {
+      "name": "seed_root",
+      "status": "passed",
+      "evidence": "canonical seed root is clean"
+    },
+    {
+      "name": "publication_authority",
+      "status": "passed",
+      "evidence": "publication authority and claimed App bot identity match the repository-bound registration"
+    },
+    {
+      "name": "exporter_image",
+      "status": "passed",
+      "evidence": "exporter image resolved exact digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and passed required tool probes"
+    },
+    {
+      "name": "implementer_image",
+      "status": "passed",
+      "evidence": "implementer image resolved exact digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and passed required tool probes"
+    },
+    {
+      "name": "reviewer_image",
+      "status": "passed",
+      "evidence": "reviewer image resolved exact digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and passed required tool probes"
+    },
+    {
+      "name": "claude_credentials",
+      "status": "passed",
+      "evidence": "Claude auth identity and setup-token credential manifest are ready"
+    },
+    {
+      "name": "codex_credentials",
+      "status": "passed",
+      "evidence": "Codex access snapshot is ready until 2026-08-17T14:00:00Z"
+    },
+    {
+      "name": "build_egress_configuration",
+      "status": "passed",
+      "evidence": "direct project-image build egress is selected"
+    },
+    {
+      "name": "build_egress_reachability",
+      "status": "not_run",
+      "evidence": "live build-egress reachability is intentionally not exercised by this read-only preflight"
+    }
+  ]
+}

@@ -106,6 +106,9 @@ func main() {
 		case "doctor":
 			runDoctorMain(os.Args[2:])
 			return
+		case "preflight":
+			runPreflightMain(os.Args[2:])
+			return
 		case "submit":
 			runSubmitMain(os.Args[2:])
 			return

@@ -65,6 +65,25 @@ func LoadOrCreateKey(dbPath string, storePreexisting bool) ([]byte, error) {
 	return loadOrCreateKey(dbPath, storePreexisting, atomicfile.WriteFileNoReplace)
 }
 
+// InspectKey validates an existing topic key without creating or replacing
+// any state. It returns only readiness, never the credential bytes.
+func InspectKey(dbPath string) error {
+	path := dbPath + KeySuffix
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // fixed sibling credential path
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%w: restore %s or deliberately replace the store and re-pair", ErrKeyMissing, path)
+		}
+		if errors.Is(err, syscall.ELOOP) {
+			return fmt.Errorf("topic key %s is a symlink: %w", path, ErrKeyPermissions)
+		}
+		return fmt.Errorf("open topic key %s: %w", path, err)
+	}
+	defer f.Close() //nolint:errcheck // the validation result is the useful signal
+	_, err = readKey(path, f)
+	return err
+}
+
 func loadOrCreateKey(
 	dbPath string, storePreexisting bool, writeKey writeKeyFile,
 ) ([]byte, error) {

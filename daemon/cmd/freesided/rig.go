@@ -457,21 +457,29 @@ func runRigBind(args []string, stdout, stderr io.Writer) error {
 }
 
 func readRigToken(path string) (string, error) {
+	acquisition, err := readRigAcquisition(path)
+	if err != nil {
+		return "", err
+	}
+	return acquisition.Token, nil
+}
+
+func readRigAcquisition(path string) (rigHoldOutput, error) {
 	// #nosec G304 -- the operator supplies the private acquisition file emitted by rig hold.
 	body, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("read rig token file: %w", err)
+		return rigHoldOutput{}, fmt.Errorf("read rig token file: %w", err)
 	}
 	var acquisition rigHoldOutput
 	if err := strictjson.Decode(
 		body, &acquisition, strictjson.RejectInvalidUTF8, strictjson.Limit(128<<10),
 	); err != nil {
-		return "", fmt.Errorf("decode rig token file: %w", err)
+		return rigHoldOutput{}, fmt.Errorf("decode rig token file: %w", err)
 	}
 	if acquisition.Token == "" {
-		return "", errors.New("rig token file has no token")
+		return rigHoldOutput{}, errors.New("rig token file has no token")
 	}
-	return acquisition.Token, nil
+	return acquisition, nil
 }
 
 func runRigResource(args []string, stdout, stderr io.Writer) error {

@@ -278,6 +278,23 @@ same effective review image, model, auth, instruction, and workspace inputs
 that unattended admission enforces. The default mode is `attended_dev`, where
 the review-configuration flag is not required.
 
+`freesided preflight` is the production-composition gate used by
+`scripts/run-real-work.sh` before it submits work. Its deterministic JSON
+manifest binds the exact database schema, daemon build, listener, repository
+and base, active profile, review configuration, source identities, seed,
+image digests and tool capabilities, credential readiness, and build-egress
+posture. Every check reports `passed`, `failed`, or `not_run` with evidence;
+a failure also carries remediation and returns nonzero. The harness refuses
+submission on failure and saves a passing, secret-free manifest by content
+digest under `<state-root>/production-evidence/composition/`. Build-egress
+reachability is explicitly `not_run`: this gate validates that configuration
+without performing a live build-egress probe. Repository observation may mint
+one short-lived, repository-scoped read token and records the required
+credential audit row; every other observation is read-only. `freesided submit
+--composition-manifest <path> --require-composition` then refuses any
+submission whose manifest is not a passing one bound to the exact submitted
+inputs and their deterministically derived run identity.
+
 `freesided follow -db <path> -run <run-id>` follows one run's observed
 timeline: submission, admission or hold, invocation start, terminal
 collection and import, and final outcome. It prints each milestone as the
