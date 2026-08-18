@@ -113,14 +113,15 @@ func snapshotVendorInstructions(
 				cfg.HostPath, before.Size(), domain.MaxVendorInstructionBytes)
 	}
 
-	body, readErr := io.ReadAll(io.LimitReader(file, domain.MaxVendorInstructionBytes+1))
-	_, seekErr := file.Seek(0, io.SeekStart)
+	body, readErr := io.ReadAll(io.NewSectionReader(
+		file, 0, domain.MaxVendorInstructionBytes+1,
+	))
 	verifiedBody, verifyErr := io.ReadAll(
-		io.LimitReader(file, domain.MaxVendorInstructionBytes+1),
+		io.NewSectionReader(file, 0, domain.MaxVendorInstructionBytes+1),
 	)
 	after, statErr := file.Stat()
 	closeErr := file.Close()
-	if err := errors.Join(readErr, seekErr, verifyErr, statErr, closeErr); err != nil {
+	if err := errors.Join(readErr, verifyErr, statErr, closeErr); err != nil {
 		return domain.VendorInstructionSnapshot{}, nil,
 			fmt.Errorf("read vendor instruction path %q: %w", cfg.HostPath, err)
 	}
@@ -147,6 +148,15 @@ func snapshotVendorInstructions(
 	digest := domain.Digest(contentaddr.Format(sum[:]))
 	snapshot.Digest = &digest
 	return snapshot, body, nil
+}
+
+// SnapshotVendorInstructions validates and snapshots an operator-owned
+// instruction source without persisting it, for read-only composition checks.
+func SnapshotVendorInstructions(
+	ctx context.Context, cfg VendorInstructionConfig,
+) (domain.VendorInstructionSnapshot, error) {
+	snapshot, _, err := snapshotVendorInstructions(ctx, cfg)
+	return snapshot, err
 }
 
 func pinForbiddenHostInputs(paths []string) ([]pinnedForbiddenHostInput, error) {

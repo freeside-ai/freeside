@@ -45,6 +45,104 @@ type tokenCacheKey struct {
 	repositoryID   int64
 }
 
+// AuthorityInspectionTokenSource mints one repository-scoped, read-only token
+// from an exact durable installation-authority binding. It exists for
+// preflight observations that must authenticate private repositories while no
+// publication janitor is running. Every token still passes the ordinary grant
+// validation and durable mint recorder before it can reach the git transport.
+type AuthorityInspectionTokenSource struct {
+	minter         *Minter
+	authority      InstallationAuthoritySource
+	registrationID int64
+	repositoryID   int64
+}
+
+var authorityInspectionPermissions = Permissions{Contents: "read", Metadata: "read"}
+
+var authorityInspectionPermissionScopes = map[string]string{
+	"contents": authorityInspectionPermissions.Contents,
+	"metadata": authorityInspectionPermissions.Metadata,
+}
+
+// NewAuthorityInspectionTokenSource wires the narrow preflight token source.
+func NewAuthorityInspectionTokenSource(
+	minter *Minter,
+	authority InstallationAuthoritySource,
+	registrationID, repositoryID int64,
+) *AuthorityInspectionTokenSource {
+	return &AuthorityInspectionTokenSource{
+		minter: minter, authority: authority,
+		registrationID: registrationID, repositoryID: repositoryID,
+	}
+}
+
+// Token revalidates the selected App and durable trusted installation on every
+// call, then mints the minimum repository-read grant. Pending installation
+// envelopes never authorize this source.
+func (s *AuthorityInspectionTokenSource) Token(
+	ctx context.Context,
+	repo string,
+) (InstallationToken, error) {
+	if s == nil || s.minter == nil || s.minter.keystore == nil || s.minter.client == nil ||
+		s.minter.baseURL == "" || s.minter.recorder == nil || s.minter.now == nil ||
+		s.authority == nil || s.registrationID <= 0 || s.repositoryID <= 0 {
+		return InstallationToken{}, errors.New("authority inspection token: nil or invalid dependency")
+	}
+	parsed, err := parseRepo(repo)
+	if err != nil {
+		return InstallationToken{}, fmt.Errorf("authority inspection token: %w", err)
+	}
+	apps, err := s.minter.keystore.ListApps()
+	if err != nil {
+		return InstallationToken{}, fmt.Errorf("authority inspection token: list registrations: %w", err)
+	}
+	var selected *AppCredentials
+	for index := range apps {
+		if apps[index].AppID != s.registrationID {
+			continue
+		}
+		if selected != nil {
+			return InstallationToken{}, errors.New("authority inspection token: selected registration is duplicated")
+		}
+		selected = &apps[index]
+	}
+	if selected == nil {
+		return InstallationToken{}, errors.New("authority inspection token: selected registration is unavailable")
+	}
+	snapshot, err := s.authority.InstallationAuthority(ctx, s.registrationID)
+	if err != nil {
+		return InstallationToken{}, fmt.Errorf("authority inspection token: read authority: %w", err)
+	}
+	validated, err := validateInstallationAuthority(*selected, snapshot, s.minter.now().UTC())
+	if err != nil {
+		return InstallationToken{}, fmt.Errorf("authority inspection token: validate authority: %w", err)
+	}
+	var binding *InstallationBinding
+	for installationID, candidate := range validated.trusted {
+		if !slices.Contains(candidate.repositoryIDs, s.repositoryID) {
+			continue
+		}
+		if candidate.account != strings.ToLower(parsed.owner) {
+			return InstallationToken{}, errors.New("authority inspection token: repository owner differs from trusted installation")
+		}
+		if binding != nil {
+			return InstallationToken{}, errors.New("authority inspection token: repository authority is ambiguous")
+		}
+		binding = &InstallationBinding{
+			RegistrationID: s.registrationID, RegistrationOwner: selected.Owner,
+			RegistrationOwnerID: selected.OwnerID, InstallationID: installationID,
+			Account: candidate.account, AccountID: candidate.accountID,
+		}
+	}
+	if binding == nil {
+		return InstallationToken{}, errors.New("authority inspection token: repository has no durable trusted installation")
+	}
+	return s.minter.mintResolved(
+		ctx, *binding, parsed, s.repositoryID,
+		authorityInspectionPermissions, authorityInspectionPermissionScopes,
+	)
+}
+
 // NewCachedTokenSource wires a CachedTokenSource over a resolving minter.
 func NewCachedTokenSource(m *Minter, now func() time.Time) *CachedTokenSource {
 	return &CachedTokenSource{

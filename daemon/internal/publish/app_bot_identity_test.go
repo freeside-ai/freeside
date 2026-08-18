@@ -99,6 +99,27 @@ func TestGitHubAppBotIdentityResolverBindsSelectedRegistration(t *testing.T) {
 	}
 }
 
+func TestInspectAppBotIdentityUsesPublicRegistrationLookup(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/users/freeside-publish%5Bbot%5D" {
+			t.Errorf("request = %s %s", r.Method, r.URL.EscapedPath())
+		}
+		if r.Header.Get("Authorization") != "" {
+			t.Error("public App identity lookup unexpectedly carried authorization")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"login":"freeside-publish[bot]","id":308829240,"type":"Bot"}`))
+	}))
+	t.Cleanup(server.Close)
+	identity, err := publish.InspectAppBotIdentity(
+		t.Context(), testCredentials(), server.Client(), server.URL,
+	)
+	if err != nil || identity.AppSlug != "freeside-publish" || identity.BotUserID != 308829240 {
+		t.Fatalf("identity = %+v, error = %v", identity, err)
+	}
+}
+
 func TestGitHubAppBotIdentityResolverCachesOneTokenBinding(t *testing.T) {
 	t.Parallel()
 	var requests atomic.Int64

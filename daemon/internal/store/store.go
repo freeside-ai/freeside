@@ -135,6 +135,97 @@ func Open(ctx context.Context, path string, opts Options) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	return newStore(db, opts, verificationGeneration, requirementSets), nil
+}
+
+// OpenReadOnly opens an existing database without creating, migrating, or
+// seeding it. It requires the exact embedded migration history at head so a
+// caller never interprets rows through a schema other than this binary's.
+func OpenReadOnly(ctx context.Context, path string, opts Options) (*Store, error) {
+	verificationGeneration, err := resolveVerificationFloorRegistryGeneration(
+		opts.VerificationFloorRegistryGeneration,
+		domain.CurrentVerificationFloorRegistryGeneration,
+	)
+	if err != nil {
+		return nil, err
+	}
+	requirementSets, err := resolveTrustedRequirementSets(verificationGeneration, opts.TrustedRequirementSets)
+	if err != nil {
+		return nil, err
+	}
+	db, err := openReadOnlyDB(path, opts)
+	if err != nil {
+		return nil, err
+	}
+	names, err := migrationFiles(migrations.FS)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	applied, err := appliedMigrations(ctx, db)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := validateAppliedMigrations(migrations.FS, names, applied); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if len(applied) != len(names) {
+		_ = db.Close()
+		return nil, fmt.Errorf("database schema version %d is not binary schema version %d", len(applied), len(names))
+	}
+	return newStore(db, opts, verificationGeneration, requirementSets), nil
+}
+
+// OpenExisting opens an existing database for writes without creating,
+// migrating, or seeding it. It requires the exact embedded migration history
+// at head before returning a write-capable Store. This is the narrow path for
+// operational audit writes whose caller must not repair production state as a
+// side effect.
+func OpenExisting(ctx context.Context, path string, opts Options) (*Store, error) {
+	verificationGeneration, err := resolveVerificationFloorRegistryGeneration(
+		opts.VerificationFloorRegistryGeneration,
+		domain.CurrentVerificationFloorRegistryGeneration,
+	)
+	if err != nil {
+		return nil, err
+	}
+	requirementSets, err := resolveTrustedRequirementSets(verificationGeneration, opts.TrustedRequirementSets)
+	if err != nil {
+		return nil, err
+	}
+	db, err := openExistingDB(path, opts)
+	if err != nil {
+		return nil, err
+	}
+	names, err := migrationFiles(migrations.FS)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	applied, err := appliedMigrations(ctx, db)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := validateAppliedMigrations(migrations.FS, names, applied); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if len(applied) != len(names) {
+		_ = db.Close()
+		return nil, fmt.Errorf("database schema version %d is not binary schema version %d", len(applied), len(names))
+	}
+	return newStore(db, opts, verificationGeneration, requirementSets), nil
+}
+
+func newStore(
+	db *sql.DB,
+	opts Options,
+	verificationGeneration uint64,
+	requirementSets map[domain.Digest]map[domain.RequirementKey]domain.RequirementDefinition,
+) *Store {
 	// Snapshot the boundary policy so a caller mutating its maps or slices
 	// after Open cannot change it under a live store.
 	approvedRecipes := maps.Clone(opts.ApprovedRecipes)
@@ -155,7 +246,7 @@ func Open(ctx context.Context, path string, opts Options) (*Store, error) {
 		verificationFloorRegistryGeneration: verificationGeneration,
 		waiverGrantApprovals:                cloneWaiverGrantApprovals(opts.WaiverGrantApprovals),
 		requirementSets:                     requirementSets,
-	}, nil
+	}
 }
 
 // resolveTrustedRequirementSets builds the daemon-owned requirement registry:
@@ -241,6 +332,14 @@ func cloneAdmissionPolicy(opts Options) domain.AdmissionPolicy {
 // a PRAGMA issued through the pool would configure one connection and leave
 // every later one at the defaults.
 func openDB(path string, opts Options) (*sql.DB, error) {
+	return openWritableDB(path, opts, false)
+}
+
+func openExistingDB(path string, opts Options) (*sql.DB, error) {
+	return openWritableDB(path, opts, true)
+}
+
+func openWritableDB(path string, opts Options, requireExisting bool) (*sql.DB, error) {
 	busyTimeout := opts.BusyTimeout
 	switch {
 	case busyTimeout == 0:
@@ -253,10 +352,14 @@ func openDB(path string, opts Options) (*sql.DB, error) {
 		return nil, fmt.Errorf("open %s: BusyTimeout %v is below the 1ms pragma resolution", path, busyTimeout)
 	}
 	q := url.Values{}
+	if requireExisting {
+		q.Add("mode", "rw")
+	} else {
+		q.Add("_pragma", "journal_mode(WAL)")
+	}
 	// Writes take the write lock at BEGIN instead of on first write,
 	// converting upgrade deadlocks into busy_timeout waits.
 	q.Add("_txlock", "immediate")
-	q.Add("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "synchronous(FULL)")
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeout.Milliseconds()))
@@ -273,6 +376,37 @@ func openDB(path string, opts Options) (*sql.DB, error) {
 	// package documentation).
 	db.SetMaxOpenConns(1)
 	return db, nil
+}
+
+func openReadOnlyDB(path string, opts Options) (*sql.DB, error) {
+	busyTimeout := opts.BusyTimeout
+	switch {
+	case busyTimeout == 0:
+		busyTimeout = DefaultBusyTimeout
+	case busyTimeout < 0:
+		return nil, fmt.Errorf("open %s read-only: negative BusyTimeout %v", path, busyTimeout)
+	case busyTimeout < time.Millisecond:
+		return nil, fmt.Errorf("open %s read-only: BusyTimeout %v is below the 1ms pragma resolution", path, busyTimeout)
+	}
+	q := url.Values{}
+	q.Add("mode", "ro")
+	q.Add("_pragma", "query_only(1)")
+	q.Add("_pragma", "foreign_keys(1)")
+	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeout.Milliseconds()))
+	escaped := (&url.URL{Path: path}).EscapedPath()
+	db, err := sql.Open("sqlite", "file:"+escaped+"?"+q.Encode())
+	if err != nil {
+		return nil, fmt.Errorf("open %s read-only: %w", path, err)
+	}
+	db.SetMaxOpenConns(1)
+	return db, nil
+}
+
+// CurrentSchemaVersion reports the embedded schema version this binary
+// requires. Migration filenames are the single registration point.
+func CurrentSchemaVersion() (int, error) {
+	names, err := migrationFiles(migrations.FS)
+	return len(names), err
 }
 
 // Close closes the underlying database.

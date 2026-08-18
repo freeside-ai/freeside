@@ -363,6 +363,12 @@ func checkCanonicalSeedWorkspaceClean(ctx context.Context, dir string, maxEntrie
 	return nil
 }
 
+// CheckCanonicalSeedWorkspaceClean exposes the ward's exact host-side seed
+// cleanliness gate to read-only composition preflights.
+func CheckCanonicalSeedWorkspaceClean(ctx context.Context, dir string, maxEntries int) error {
+	return checkCanonicalSeedWorkspaceClean(ctx, dir, maxEntries)
+}
+
 const maxWorkspaceStatusRecordBytes = 1 << 20
 
 var (

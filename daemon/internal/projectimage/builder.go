@@ -558,16 +558,25 @@ func validateRequest(request Request) (Request, verify.Recipe, domain.Digest, er
 			return Request{}, verify.Recipe{}, "", fmt.Errorf("DNS server %q: %w", dns, ErrInvalidRequest)
 		}
 	}
-	if request.BuildProxy != "" {
-		proxy, err := url.Parse(request.BuildProxy)
-		if err != nil || proxy.Scheme != "http" || proxy.Host == "" ||
-			proxy.User != nil || (proxy.Path != "" && proxy.Path != "/") ||
-			proxy.RawQuery != "" || proxy.Fragment != "" {
-			return Request{}, verify.Recipe{}, "", fmt.Errorf("build proxy %q: %w",
-				request.BuildProxy, ErrInvalidRequest)
-		}
+	if err := ValidateBuildProxy(request.BuildProxy); err != nil {
+		return Request{}, verify.Recipe{}, "", err
 	}
 	return request, recipe, verify.RecipeDigest(request.Recipe), nil
+}
+
+// ValidateBuildProxy validates the supported project-image egress proxy
+// shape without attempting a connection or changing runtime state.
+func ValidateBuildProxy(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	proxy, err := url.Parse(raw)
+	if err != nil || proxy.Scheme != "http" || proxy.Host == "" ||
+		proxy.User != nil || (proxy.Path != "" && proxy.Path != "/") ||
+		proxy.RawQuery != "" || proxy.Fragment != "" {
+		return fmt.Errorf("build proxy %q: %w", raw, ErrInvalidRequest)
+	}
+	return nil
 }
 
 func createBuildContext(

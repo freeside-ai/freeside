@@ -37,3 +37,13 @@ func TestOpenRetriesAfterTopicKeyPublicationFailure(t *testing.T) {
 		t.Fatal("retry returned an empty topic key")
 	}
 }
+
+func TestInspectKeyNeverCreatesMissingKey(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	if err := InspectKey(dbPath); !errors.Is(err, ErrKeyMissing) {
+		t.Fatalf("InspectKey error = %v, want ErrKeyMissing", err)
+	}
+	if _, err := os.Stat(dbPath + KeySuffix); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("stat key after inspection = %v, want ErrNotExist", err)
+	}
+}

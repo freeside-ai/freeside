@@ -1370,6 +1370,51 @@ func inspectCodexAuthSnapshot(mode CodexAuthMode, body []byte) (*time.Time, erro
 	return expires, nil
 }
 
+// InspectCodexAuthReadiness validates the configured host credential through
+// the same access-only snapshot derivation, lifetime floor, and proactive
+// refresh gate used by review. It returns the canonical host-store path and
+// expiry; credential bytes and token values never leave this function.
+func InspectCodexAuthReadiness(
+	inputRoot, snapshotPath string,
+	mode CodexAuthMode,
+	identityID domain.AuthIdentityID,
+	now time.Time,
+	lifetimeFloor, refreshThreshold time.Duration,
+	refreshOnDemand bool,
+) (string, *time.Time, error) {
+	resolvedPath, hostBody, err := readCodexReviewInput(inputRoot, snapshotPath, maxCodexAuthSnapshotBytes)
+	if err != nil {
+		return "", nil, err
+	}
+	if mode == CodexAuthSubscription && identityID == "" {
+		return resolvedPath, nil, errors.New("codex auth identity is empty")
+	}
+	hostAuth, hostExpiresAt, err := inspectCodexHostAuth(mode, hostBody)
+	if err != nil {
+		return "", nil, err
+	}
+	agentBody, _, err := codexReviewAgentAuthSnapshot(mode, hostBody)
+	if err != nil {
+		return "", nil, err
+	}
+	expiresAt, err := inspectCodexAuthSnapshot(mode, agentBody)
+	if err != nil {
+		return "", nil, err
+	}
+	if mode == CodexAuthSubscription &&
+		(expiresAt == nil || expiresAt.Sub(now.UTC()) < lifetimeFloor) {
+		return resolvedPath, expiresAt, errors.New("codex access token does not meet the configured lifetime floor")
+	}
+	if mode == CodexAuthSubscription && refreshOnDemand &&
+		(hostExpiresAt == nil || hostExpiresAt.Sub(now.UTC()) < refreshThreshold) {
+		if hostAuth.Tokens == nil || hostAuth.Tokens.RefreshToken == nil ||
+			*hostAuth.Tokens.RefreshToken == "" {
+			return resolvedPath, expiresAt, errors.New("codex host auth store carries no refresh token below the refresh threshold")
+		}
+	}
+	return resolvedPath, expiresAt, nil
+}
+
 func inspectCodexHostAuth(
 	mode CodexAuthMode, body []byte,
 ) (codexAuthFile, *time.Time, error) {

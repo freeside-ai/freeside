@@ -495,6 +495,41 @@ func writeCodexReviewFile(t *testing.T, root, name string, body []byte) string {
 	return file
 }
 
+func TestInspectCodexAuthReadinessRequiresRefreshMaterialBelowThreshold(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil { //nolint:gosec // private test input directory requires owner traversal
+		t.Fatal(err)
+	}
+	now := codexReviewEpoch
+	expires := now.Add(90 * time.Minute)
+	writeAuth := func(refresh string) string {
+		t.Helper()
+		return writeCodexReviewFile(t, root, "auth.json", []byte(fmt.Sprintf(
+			`{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"fixture-id","access_token":%q,"refresh_token":%q}}`,
+			codexReviewJWT(t, expires), refresh,
+		)))
+	}
+	path := writeAuth("")
+	if _, _, err := InspectCodexAuthReadiness(
+		root, path, CodexAuthSubscription, "codex-readiness", now, time.Hour, 2*time.Hour, true,
+	); err == nil {
+		t.Fatal("on-demand refresh without refresh material unexpectedly passed")
+	}
+	if _, _, err := InspectCodexAuthReadiness(
+		root, path, CodexAuthSubscription, "codex-readiness", now, time.Hour, 2*time.Hour, false,
+	); err != nil {
+		t.Fatalf("externally refreshed identity readiness: %v", err)
+	}
+	path = writeAuth("fixture-refresh")
+	resolved, gotExpiry, err := InspectCodexAuthReadiness(
+		root, path, CodexAuthSubscription, "codex-readiness", now, time.Hour, 2*time.Hour, true,
+	)
+	wantResolved, resolveErr := filepath.EvalSymlinks(path)
+	if err != nil || resolveErr != nil || resolved != wantResolved || gotExpiry == nil || !gotExpiry.Equal(expires) {
+		t.Fatalf("readiness = (%q, %v, %v), want (%q, %v, nil)", resolved, gotExpiry, err, wantResolved, expires)
+	}
+}
+
 func testCodexReviewShadow(
 	t *testing.T,
 	cfg CodexReviewConfig,
@@ -3741,6 +3776,26 @@ func TestCodexReviewIntentStateValidEquivalence(t *testing.T) {
 		if got, want := s.valid(), oldMembership(s); got != want {
 			t.Errorf("valid(%q) = %v, inline membership = %v", string(s), got, want)
 		}
+	}
+}
+
+func TestValidateCodexReviewModelConfiguration(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		model     string
+		reasoning string
+		wantError bool
+	}{
+		{"valid", "gpt-5.6-codex", "high", false},
+		{"model comma", "gpt-5.6-codex,readonly", "high", true},
+		{"reasoning control", "gpt-5.6-codex", "high\nlow", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateCodexReviewModelConfiguration(tt.model, tt.reasoning)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("ValidateCodexReviewModelConfiguration() error = %v, wantError %t", err, tt.wantError)
+			}
+		})
 	}
 }
 

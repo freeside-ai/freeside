@@ -88,6 +88,31 @@ type validatedInstallationAuthority struct {
 	pending       *authorityCandidate
 }
 
+// InstallationAuthorityAllowsRepository re-runs the credential-bound
+// authority gate and reports whether a durable trusted installation currently
+// names repositoryID. Callers must not infer repository authority by reading
+// the exported snapshot fields directly.
+func InstallationAuthorityAllowsRepository(
+	app AppCredentials,
+	snapshot InstallationAuthority,
+	repositoryID int64,
+	now time.Time,
+) (bool, error) {
+	if repositoryID <= 0 {
+		return false, errors.New("repository id is not positive")
+	}
+	validated, err := validateInstallationAuthority(app, snapshot, now.UTC())
+	if err != nil {
+		return false, err
+	}
+	for _, binding := range validated.trusted {
+		if slices.Contains(binding.repositoryIDs, repositoryID) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func validateInstallationAuthority(
 	app AppCredentials,
 	snapshot InstallationAuthority,

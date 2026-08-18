@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -54,6 +55,37 @@ func TestSnapshotVendorInstructionsRecordsExactBytesOrExplicitAbsence(t *testing
 	}
 	if replayed.Digest == nil || *replayed.Digest != *present.Digest {
 		t.Fatal("caller mutation changed the source or its content identity")
+	}
+}
+
+func TestSnapshotVendorInstructionsUsesPositionedReadsFromUnlinkedDescriptor(t *testing.T) {
+	want := []byte("# Immutable host instructions\n")
+	path := filepath.Join(t.TempDir(), "CLAUDE.md")
+	if err := os.WriteFile(path, want, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path) //nolint:gosec // test-owned descriptor fixture
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close() //nolint:errcheck // test descriptor cleanup
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Seek(0, 2); err != nil {
+		t.Fatal(err)
+	}
+	descriptorPath := fmt.Sprintf("/dev/fd/%d", file.Fd())
+	for range 2 {
+		_, got, err := snapshotVendorInstructions(
+			t.Context(), claudeInstructions(descriptorPath),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("instruction bytes = %q, want %q", got, want)
+		}
 	}
 }
 

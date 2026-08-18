@@ -44,6 +44,18 @@ func migrate(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 	if err != nil {
 		return err
 	}
+	if err := validateAppliedMigrations(fsys, names, applied); err != nil {
+		return err
+	}
+	for i := len(applied); i < len(names); i++ {
+		if err := applyMigration(ctx, db, fsys, i+1, names[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateAppliedMigrations(fsys fs.FS, names []string, applied []appliedMigration) error {
 	if len(applied) > len(names) {
 		return fmt.Errorf("database at schema version %d but only %d migrations known: binary older than database", len(applied), len(names))
 	}
@@ -57,11 +69,6 @@ func migrate(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 		}
 		if digest != a.digest {
 			return fmt.Errorf("applied migration %q has digest %s but the embedded file has %s: migration content rewritten", a.name, a.digest, digest)
-		}
-	}
-	for i := len(applied); i < len(names); i++ {
-		if err := applyMigration(ctx, db, fsys, i+1, names[i]); err != nil {
-			return err
 		}
 	}
 	return nil
