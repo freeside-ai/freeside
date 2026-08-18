@@ -417,6 +417,49 @@ func TestStoreConformanceRecorderPersistsConfigurationBoundPass(t *testing.T) {
 	}
 }
 
+type fakeConformanceRestorer struct {
+	digest   domain.Digest
+	restored int
+}
+
+func (f *fakeConformanceRestorer) ConfigurationDigest() domain.Digest { return f.digest }
+
+func (f *fakeConformanceRestorer) RestoreConformance(domain.BackendConformance) error {
+	f.restored++
+	return nil
+}
+
+func TestUnattendedStartupRequiresExactPassingConformance(t *testing.T) {
+	t.Parallel()
+	backend := &fakeConformanceRestorer{digest: "sha256:active"}
+	passing := domain.BackendConformance{
+		Outcome: domain.ConformancePassed, ConfigurationDigest: backend.digest,
+	}
+	for name, tc := range map[string]struct {
+		record domain.BackendConformance
+		found  bool
+	}{
+		"missing":    {},
+		"failed":     {record: domain.BackendConformance{Outcome: domain.ConformanceFailed, ConfigurationDigest: backend.digest}, found: true},
+		"mismatched": {record: domain.BackendConformance{Outcome: domain.ConformancePassed, ConfigurationDigest: "sha256:other"}, found: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := restoreClaudeBackendConformance(backend, tc.record, tc.found, true); !errors.Is(err, errBackendConformanceUnavailable) {
+				t.Fatalf("restore error = %v, want %v", err, errBackendConformanceUnavailable)
+			}
+		})
+	}
+	if err := restoreClaudeBackendConformance(backend, domain.BackendConformance{}, false, false); err != nil {
+		t.Fatalf("attended startup without proof: %v", err)
+	}
+	if err := restoreClaudeBackendConformance(backend, passing, true, true); err != nil {
+		t.Fatalf("restore exact passing proof: %v", err)
+	}
+	if backend.restored != 1 {
+		t.Fatalf("restore calls = %d, want 1", backend.restored)
+	}
+}
+
 func TestResolvedPathAllowlistBindsTheAdmittedPolicy(t *testing.T) {
 	t.Parallel()
 	newPolicy := func(t *testing.T, key, value string) domain.ResolvedPolicy {
