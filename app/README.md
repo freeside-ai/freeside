@@ -45,6 +45,29 @@ Re-run it after a source change and it updates the installed app in place. The s
 
 Signing needs an `Apple Development` identity, which Xcode mints from the free personal team once an Apple ID is added under Settings > Accounts. `FREESIDE_MAC_SIGNING_IDENTITY` overrides the choice; `-` selects ad-hoc signing, whose designated requirement is the code directory hash and therefore changes on every build. Ad-hoc is opt-in for that reason, not a silent fallback. `FREESIDE_MAC_INSTALL_DIR` and `FREESIDE_MAC_BUILD_DIR` move the install root and derived-data path. The supervised daemon state directory is fixed at `~/Library/Application Support/Freeside/daemon`, matching the app's readiness reader; launchd captures its structured stderr at `freesided.log` in that protected directory.
 
+## Installing on an iOS Device
+
+`scripts/install-ios-app.sh` builds, signs, and installs FreesideIOS on the operator's physical iPhone under free provisioning (plan §10). It uses the same free personal team as the Mac client, so no paid Apple Developer Program membership is required; APNs and push delivery stay deferred to Phase 2, and client correctness never depends on them.
+
+```sh
+./scripts/install-ios-app.sh \
+  --device 'My iPhone' \
+  --server-url http://100.64.0.1:7331 \
+  --launch
+```
+
+`--device` accepts a device name, UDID, ECID, or serial; list the connected devices with `xcrun devicectl list devices`. The script resolves that selector to the connected device's UDID and builds for that concrete destination (`platform=iOS,id=<udid>`), reusing the one UDID for the build, install, and launch. (`devicectl` also takes a DNS name, but this script resolves only the four forms above, so pass one of them rather than a hostname.) The build uses automatic signing with `-allowProvisioningUpdates` and `-allowProvisioningDeviceRegistration` so Xcode mints or renews the free-provisioning profile and registers this device without the paid program; because registration targets the concrete build destination rather than a generic one, that a first-seen phone is actually added to the profile is confirmed on the operator's on-device run, not by this repo's command stand-in tests. The Team ID is read from the sole `Apple Development` certificate's organizational unit; `FREESIDE_IOS_TEAM_ID` overrides it for a multi-team login, and `FREESIDE_IOS_BUILD_DIR` moves the derived-data path.
+
+**Free-provisioning cadence.** A personal-team provisioning profile expires seven days after it is minted, so the installed app stops launching after a week until you re-run the script to re-sign and reinstall. A personal team is also capped at a small number of distinct app IDs registered per week; reinstalling the same `ai.freeside.app.ios` bundle does not consume that quota, but experimenting with new bundle IDs can exhaust it. The bundle identifier and team stay fixed across runs, so the on-device Keychain credential still names the same application and a reinstall (or a weekly re-sign) does not force a re-pair, the same stability the Mac installer holds.
+
+**Device preconditions.** The iPhone must run iOS 17 or later with Developer Mode enabled (Settings > Privacy & Security > Developer Mode), be connected and unlocked, and trust this Mac. On the first install of a personal-team build you must also trust the developer certificate on the device (Settings > General > VPN & Device Management), which is a manual step Apple does not let the host script automate.
+
+**Daemon reachability.** The daemon listens only on loopback or a Tailscale-owned address, so the phone reaches it over the operator's tailnet: install the Tailscale app on the iPhone, join the same tailnet, and point `--server-url` at the Mac's Tailscale IP (the `100.64.0.0/10` range) and the daemon's port. The iOS target permits cleartext HTTP only for that tailnet CIDR through its committed Info.plist; App Transport Security continues to protect every other destination. Prefer HTTPS once the daemon has a first-class HTTPS endpoint, but do not substitute a MagicDNS hostname today: the scoped exception deliberately covers only the numeric tailnet range.
+
+**Pairing.** `--server-url` cannot be written to an iOS app's preferences from the host, so it is passed after `devicectl`'s `--` application-argument separator as `-FreesideServerURL` on the first launch; that is why it requires `--launch` or `--launch-only`. If a first personal-team launch is rejected before the certificate trust step, trust the certificate, then retry only the launch, without another build, as `./scripts/install-ios-app.sh --device '<name>' --server-url '<url>' --launch-only`. The launch enters live mode and shows the pairing screen: run the pairing command on the daemon host and enter the code it displays. The app persists the deployment URL on-device when pairing succeeds, so later launches from the home screen (which forward no arguments) reach the same daemon with no `--server-url`. Routine updates are therefore just `./scripts/install-ios-app.sh --device '<name>'`.
+
+**Sync-contract churn.** When a sync-contract change lands (the app's generated API client changes shape), the installed build is stale against the daemon and must be reinstalled; the weekly re-sign cadence makes that reinstall routine rather than a special step.
+
 ## Capturing screenshots
 
 The launch inputs above make a capture run deterministic end to end: no System Settings mutation, no accessibility scripting, no clicking. The only host permission involved is Screen Recording for the invoking terminal (a one-time grant `screencapture` prompts for). `-ApplePersistenceIgnoreState YES` skips AppKit saved-state restoration so the window opens at the scene default (960×640) regardless of how it was last resized.
