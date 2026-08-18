@@ -192,7 +192,7 @@ type preflightEnvironment interface {
 	CheckTopicKey(string) error
 	CheckSeed(context.Context, string) error
 	InspectRepositoryAuthority(context.Context, preflightConfig, time.Time) repositoryAuthorityInspection
-	CheckAuthVolume(context.Context, string, string, string) error
+	CheckAuthVolume(context.Context, string, string, string, ward.RuntimeResourceAuthorizer) error
 	DatabaseIdle(string) error
 	SupervisedDaemon(context.Context, string) (bool, error)
 	ProbeDaemon(context.Context, string) (string, bool, error)
@@ -536,6 +536,11 @@ func evaluateComposition(
 		notRunCheck(manifest, "claude_credentials", "database inspection did not complete")
 	} else if database.CredentialError != nil || environment.CheckAuthVolume(
 		ctx, cfg.ContainerBin, cfg.AuthVolume, cfg.ExporterImage,
+		// Reached only after rig authentication succeeded (a failed rig leaves
+		// cfg.DBPath empty and lands on not_run above), so the manifest resources
+		// and token file authorize the observer name into the held rig manifest
+		// before it is created.
+		productionRigRuntimeAuthorizer(manifest.Rig.Resources.StateRoot, cfg.RigTokenFile),
 	) != nil {
 		failCheck(manifest, "claude_credentials", "Claude auth identity or setup-token credential manifest is absent or invalid", "record a lease-enabled Claude identity and restore its setup-token volume before production submission")
 	} else {
@@ -1055,6 +1060,7 @@ func githubHost(host string) bool {
 
 func (productionPreflightEnvironment) CheckAuthVolume(
 	ctx context.Context, containerBin, name, exporterImage string,
+	authorize ward.RuntimeResourceAuthorizer,
 ) error {
 	runtime := ward.NewCLIRuntime(containerBin)
 	volumes, err := runtime.ListVolumes(ctx)
@@ -1064,7 +1070,7 @@ func (productionPreflightEnvironment) CheckAuthVolume(
 	for _, volume := range volumes {
 		if volume.Name == name {
 			return ward.InspectCredentialVolumeManifest(
-				ctx, runtime, exporterImage, name, ward.CredentialManifestSetupToken,
+				ctx, runtime, exporterImage, name, ward.CredentialManifestSetupToken, authorize,
 			)
 		}
 	}

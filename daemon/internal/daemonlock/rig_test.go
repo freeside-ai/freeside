@@ -633,6 +633,51 @@ func TestRigBindRejectsContainerOutsideOwnedNamespace(t *testing.T) {
 	}
 }
 
+// TestRigBindAdmitsPreflightCredentialNamespace proves the preflight
+// credential-observer name (ward's networkless setup-token probe, named from a
+// 12-hex slice of its ownership label) is inside the owned namespace, so an
+// interrupted preflight that bound the name leaves a container rig cleanup can
+// enumerate. Near-misses stay rejected so the admission does not widen past the
+// exact probe name.
+func TestRigBindAdmitsPreflightCredentialNamespace(t *testing.T) {
+	root := t.TempDir()
+	cfg := rigTestConfig(t, filepath.Join(root, "state"), filepath.Join(root, "seed"))
+	lease, err := AcquireRig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Close() })
+
+	accepted := "freeside-preflight-credential-" + strings.Repeat("a", 12)
+	manifest, err := BindRigRuntimeResources(cfg.StateRoot, lease.Token(), []string{accepted}, nil, nil)
+	if err != nil {
+		t.Fatalf("bind exact preflight credential name: %v", err)
+	}
+	if !slices.Equal(manifest.Resources.Containers, []string{accepted}) {
+		t.Fatalf("bound containers = %v, want %q", manifest.Resources.Containers, accepted)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		container string
+	}{
+		{name: "short slice", container: "freeside-preflight-credential-" + strings.Repeat("a", 11)},
+		{name: "long slice", container: "freeside-preflight-credential-" + strings.Repeat("a", 13)},
+		{name: "uppercase slice", container: "freeside-preflight-credential-" + strings.Repeat("A", 12)},
+		{name: "non-hex slice", container: "freeside-preflight-credential-" + strings.Repeat("g", 12)},
+		{name: "missing slice", container: "freeside-preflight-credential-"},
+		{name: "trailing suffix", container: "freeside-preflight-credential-" + strings.Repeat("a", 12) + "-obs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := BindRigRuntimeResources(
+				cfg.StateRoot, lease.Token(), []string{tc.container}, nil, nil,
+			); err == nil || !strings.Contains(err.Error(), "outside the owned namespace") {
+				t.Fatalf("bind %q = %v, want outside-namespace refusal", tc.container, err)
+			}
+		})
+	}
+}
+
 func TestRigManifestRejectsNoncanonicalEncoding(t *testing.T) {
 	root := t.TempDir()
 	cfg := rigTestConfig(t, filepath.Join(root, "state"), filepath.Join(root, "seed"))

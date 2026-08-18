@@ -548,6 +548,102 @@ func TestRigCleanupTouchesOnlyManifestContainers(t *testing.T) {
 	}
 }
 
+// TestRigCleanupReapsPreflightCredentialObserver is acceptance 1 for #832: once
+// the preflight binds its credential-observer name into the held rig manifest,
+// rig cleanup enumerates and deletes it and the absence proof reports it while
+// present, so a preflight interrupted after creating the observer strands
+// nothing rig cleanup cannot see.
+func TestRigCleanupReapsPreflightCredentialObserver(t *testing.T) {
+	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
+	lease, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
+		Owner:     daemonlock.RigOwner{User: "operator", Host: "host", PID: os.Getpid()},
+		StateRoot: stateRoot, DatabasePath: databasePath,
+		ListenAddress: "127.0.0.1:8677", SeedRoot: seedRoot,
+		LeaseRoot: filepath.Join(filepath.Dir(stateRoot), "rig-locks"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Close() })
+
+	observer := "freeside-preflight-credential-" + strings.Repeat("a", 12)
+	manifest, err := daemonlock.BindRigRuntimeResources(
+		stateRoot, lease.Token(), []string{observer}, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("bind preflight credential observer: %v", err)
+	}
+	tokenFile := filepath.Join(t.TempDir(), "rig.json")
+	body, err := json.Marshal(rigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tokenFile, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	host := &fakeRigHost{containers: map[string]bool{observer: true}}
+	if err := runRigCleanup(context.Background(), []string{
+		"-state-root", stateRoot, "-token-file", tokenFile, "-container-bin", "container-test",
+	}, ioDiscard{}, ioDiscard{}, host); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(host.deleted, []string{observer}) {
+		t.Fatalf("deleted = %v, want the preflight credential observer %q", host.deleted, observer)
+	}
+
+	stranded := &fakeRigHost{containers: map[string]bool{observer: true}}
+	if err := requireRigResourcesAbsent(
+		context.Background(), stranded, "container-test", manifest.Resources,
+	); err == nil || !strings.Contains(err.Error(), observer) {
+		t.Fatalf("absence proof error = %v, want it to name the stranded observer %q", err, observer)
+	}
+}
+
+// TestProductionRigRuntimeAuthorizerBindsCredentialObserver proves the exact
+// authorizer the preflight credential check builds records the observer name in
+// the held rig manifest, closing the wiring from InspectCredentialVolumeManifest
+// to rig cleanup.
+func TestProductionRigRuntimeAuthorizerBindsCredentialObserver(t *testing.T) {
+	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
+	lease, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
+		Owner:     daemonlock.RigOwner{User: "operator", Host: "host", PID: os.Getpid()},
+		StateRoot: stateRoot, DatabasePath: databasePath,
+		ListenAddress: "127.0.0.1:8677", SeedRoot: seedRoot,
+		LeaseRoot: filepath.Join(filepath.Dir(stateRoot), "rig-locks"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Close() })
+	tokenFile := filepath.Join(t.TempDir(), "rig.json")
+	body, err := json.Marshal(rigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tokenFile, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	authorize := productionRigRuntimeAuthorizer(stateRoot, tokenFile)
+	if authorize == nil {
+		t.Fatal("authorizer is nil for a configured rig token file")
+	}
+	observer := "freeside-preflight-credential-" + strings.Repeat("b", 12)
+	if err := authorize(
+		context.Background(), ward.RuntimeResourceNames{Containers: []string{observer}},
+	); err != nil {
+		t.Fatalf("authorize credential observer: %v", err)
+	}
+	manifest, err := daemonlock.ReadRigManifest(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(manifest.Resources.Containers, observer) {
+		t.Fatalf("bound containers = %v, want the credential observer %q", manifest.Resources.Containers, observer)
+	}
+}
+
 func TestRigRecoverRequiresDeadListenerAndExplicitConfirmation(t *testing.T) {
 	stateRoot, lease, _, names := acquireBoundRig(t, "inv-implement")
 	if err := lease.Abandon(); err != nil {

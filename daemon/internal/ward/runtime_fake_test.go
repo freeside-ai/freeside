@@ -432,6 +432,13 @@ func (f *fakeRuntime) record(format string, args ...any) {
 	f.calls = append(f.calls, fmt.Sprintf(format, args...))
 }
 
+// callCount returns how many runtime calls the fake has recorded so far.
+func (f *fakeRuntime) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
 // callIndex returns the position of the first recorded call equal to s, or
 // -1 when it never happened.
 func (f *fakeRuntime) callIndex(s string) int {
