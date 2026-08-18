@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 33
+revision: 34
 status: active
 updated: 2026-08-17
 ---
@@ -2737,7 +2737,7 @@ Exit requires:
 - a low exceptional-interruption rate; and
 - false-ready performance within Section 12.
 
-### Implementation coordination (building Freeside with agents)
+### Implementation Coordination (Building Freeside with Agents)
 
 Contracts and fakes coordinate implementation. CI keeps lanes honest.
 
@@ -2757,14 +2757,41 @@ Review bandwidth limits parallel width. Every wave ends with a fresh-context
 adversarial review by an agent given only the repository and its documents,
 never this design history. `AGENTS.md` defines the issue protocol; each
 wave's unit list lives in its pinned tracking issue, while this table records
-shape and sequencing. The single source for resolving the current phase,
-current wave, and active implementation front is the single open pinned issue
-whose title matches `^Wave [0-9]+ \([^)]*\) tracking$`. Its title gives the
-wave and internal exit, this table's row gives the phase and shape, and its
-Implementation order digest gives the active front. Pinning alone is
-insufficient because other tracker types may also be pinned; a zero- or
-multiple-match state is a spine-repair error that must be escalated to the
-human, never guessed through.
+shape and sequencing. The single source for resolving live wave status is a
+deterministic three-state resolver over every pinned issue whose title matches
+`^Wave [0-9]+ \([^)]*\) tracking$`, evaluated on the set of title matches
+before filtering by issue state:
+
+1. **Active-wave** — exactly one matching tracker, open. It resolves the
+   current phase, wave, and active implementation front: its title gives the
+   wave and internal exit, this table's row gives the phase and shape, and its
+   Implementation order digest gives the active front. The scheduling door is
+   open.
+2. **Inter-wave** — exactly one matching tracker, closed. The closed tracker
+   records the just-completed wave; there is no active implementation front and
+   the scheduling door is closed. It is a legitimate observed state between a
+   wave's close and the next wave's planning, not a defect. Explicit `Plan #N`
+   and `Handle #N` fiat still proceed, because fiat is independent of wave
+   state; scheduled self-selection does not, because it needs an open current
+   tracker.
+3. **Invalid** — zero or multiple matching trackers. This is a spine-repair
+   error that must be escalated to the human, never guessed through: pinning
+   alone is insufficient because other tracker types may also be pinned, and
+   the resolver cannot choose among absent or competing authorities.
+
+A wave-boundary procedure keeps exactly one wave-title-matching issue pinned;
+unrelated trackers (for example the standing audit and reliability trackers)
+stay pinned for their own purposes and never count toward wave state. Closing a
+wave leaves its closed tracker pinned as the inter-wave marker, and the next
+wave-planning operation moves that wave-title match to the new populated
+tracker. Because those standing pins occupy slots under GitHub's three-pin cap,
+the wave tracker holds a single swappable slot and the outgoing and incoming
+trackers cannot both be pinned at once; with no atomic pin swap the transition
+is non-atomic. The spine's wave-planning operation performs it idempotently and
+recovery-safely, discovering and reusing any orphaned open-unpinned tracker
+rather than creating a second, and an invalid wave-title cardinality is what the
+resolver escalates on. The detailed interruption-safe procedure is owned by that
+executor; see docs/coordination.md and #828.
 
 The digest remains a derived view of the authoritative Dependencies fields in
 the tracked unit issues. If they diverge, the unit issue wins and the tracker
@@ -2856,17 +2883,23 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 33 ("Production acceptance identity"):
+Revision 34 ("Inter-wave tracker state"):
 
-1. **Production acceptance identity is an explicit campaign contract**
-   (Section 5.12): an idempotent initial submit reserves campaign attempt 1;
-   specification approval binds its accepted digest; and a terminal retry
-   allocates exactly the next attempt while preserving the original source,
-   raw publication-byte digest, elaboration root, and approved specification.
-   Resume targets one live run and never mints an attempt. This keeps
-   operational retry intent separate from specification bytes and makes every
-   implementation attempt auditable to its exact parent.
-   (User; devlog 2026-08-16-2238-production-attempt-identity.md; #794.)
+1. **Wave-tracker authority resolves through a three-state resolver**
+   (Section 11): over every pinned issue whose title matches the canonical
+   wave-tracker pattern, evaluated before filtering by issue state, exactly one
+   open match is active-wave, exactly one closed match is inter-wave, and zero
+   or multiple matches are an invalid authority state for spine repair. This
+   supersedes revision 32's single-open-match rule, which had no model for the
+   legitimate gap between a wave's close and the next wave's planning and so
+   treated that gap as broken authority: it let an explicitly authorized
+   `Handle #N` session stop and made merge cleanup report reconciliation
+   incomplete when there was simply no wave tracker to mutate. Fiat stays
+   independent of wave state; only scheduled self-selection needs an open
+   current tracker. The wave-boundary procedure keeps exactly one
+   wave-title-matching tracker pinned (unrelated standing trackers coexist and
+   never count), with the interruption-safe pin choreography deferred to #828.
+   (User; devlog 2026-08-17-2108-inter-wave-state.md; #826.)
 
 ## 14. Risks
 

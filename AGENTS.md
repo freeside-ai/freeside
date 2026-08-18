@@ -127,10 +127,14 @@ relationship, review, or merge gates elsewhere in this file.
 ### Post-merge obligations
 
 - **Containing trackers:** For an issue-backed merged unit, identify every
-  open tracker that lists its verified closing issue, including the wave
-  tracker resolved as the single open pinned issue whose title matches
-  `^Wave [0-9]+ \([^)]*\) tracking$` when it lists the unit. A direct,
-  session-contained unit has no containing tracker.
+  open tracker that lists its verified closing issue. Resolve the wave tracker
+  per the §11 three-state resolver: in active-wave state it is the single open
+  pinned title match and is a containing tracker when it lists the unit; in
+  inter-wave state the only title match is the closed prior-wave tracker, which
+  is never mutated, so no wave tracker is refreshed. Zero open containing
+  trackers is a valid zero-work reconciliation result, not an
+  incomplete-reconciliation error. A direct, session-contained unit has no
+  containing tracker.
 - **Refresh:** In each containing tracker's Implementation order, recompute
   **Startable now** and **Mergeable next** as separate projections.
 - **Detailed mechanics:** `docs/coordination.md`.
@@ -896,7 +900,7 @@ unit, filing a deferral, starting an issue-backed session, creating or
 updating a tracking issue, or starting any work that carries dependencies
 or blockers.
 
-### Work units
+### Work Units
 
 Every work unit carries the lightweight work contract the finish line
 defines (objective, testable acceptance criteria, scope, dependencies and
@@ -926,6 +930,15 @@ spine role maintains it. Any issue that tracks other issues (a wave tracker
 or an ad hoc tracker over a set of units) records their implementation
 order per the tracking-issue format in docs/coordination.md.
 
+Wave state resolves per the §11 three-state resolver over every pinned issue
+whose title matches the canonical wave-tracker pattern: exactly one open match
+is active-wave state, exactly one closed match is inter-wave state, and zero or
+multiple matches are an invalid authority state for spine repair. The
+scheduling door exists only in active-wave state, because it needs an open
+current tracker to list the unit; fiat (`Plan #N`, `Handle #N`) is independent
+of wave state and may proceed in either active-wave or inter-wave state after
+all ordinary gates pass.
+
 Here and below, **scheduled** means both a milestone and a listing on the
 current tracking issue. The spine changes those fields as one planning
 operation; either field alone is a spine-repair error and does not open the
@@ -938,7 +951,7 @@ identifiers, package names, or API vocabulary, which stay functional (the
 attention type is AttentionItem, not SignetItem). The canonical lane table,
 with each lane's owned paths, is in docs/coordination.md.
 
-### Coordination gates
+### Coordination Gates
 
 These bind every session. The protocol that implements them, including how
 to verify each one, is in docs/coordination.md. Each gate states what to
@@ -947,9 +960,10 @@ names only a condition is inert until something else tells you to go look.
 
 - **Labels never authorize work.** An issue becomes agent-actionable through
   exactly two doors: scheduling (a spine sweep assigns its milestone and
-  lists it on the current tracking issue) or fiat (the human hands its number
-  to a work-unit session). A session must never select work directly by label
-  or by browsing open issues.
+  lists it on the current tracking issue, so this door is open only in
+  active-wave state per the §11 resolver) or fiat (the human hands its number
+  to a work-unit session, independent of wave state). A session must never
+  select work directly by label or by browsing open issues.
 - **`needs-human` is never agent-selected.** It stays unmilestoned and
   fiat-only, and returns to a session by fiat after the maintainer acts.
 - **One claim per unit, with exclusivity arbitration.** Check the current unit

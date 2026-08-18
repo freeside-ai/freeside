@@ -1029,3 +1029,20 @@ status. Held from revision 31: everything.
    boundary that already replaces the tracker, without adding a local ledger
    or deriving intent from git history.
    (User; devlog 2026-08-15-1016-status-authority.md; #792.)
+
+---
+
+## Revision 33
+
+Revision 33 records production acceptance identity as an explicit campaign
+contract. Held from revision 32: everything.
+
+1. **Production acceptance identity is an explicit campaign contract**
+   (Section 5.12): an idempotent initial submit reserves campaign attempt 1;
+   specification approval binds its accepted digest; and a terminal retry
+   allocates exactly the next attempt while preserving the original source,
+   raw publication-byte digest, elaboration root, and approved specification.
+   Resume targets one live run and never mints an attempt. This keeps
+   operational retry intent separate from specification bytes and makes every
+   implementation attempt auditable to its exact parent.
+   (User; devlog 2026-08-16-2238-production-attempt-identity.md; #794.)

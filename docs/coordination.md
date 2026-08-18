@@ -127,9 +127,14 @@ the outcome hits a Decision notes trigger or the mandatory-note list.
 
 ## Session Start
 
-1. Read docs/plan.md front matter (revision), the current wave's pinned
-   tracking issue (phase, wave, and active front), and the plan sections your
-   unit's Affected interfaces/contracts field cites.
+1. Read docs/plan.md front matter (revision), resolve wave state through the
+   §11 three-state resolver over every pinned issue whose title matches the
+   canonical wave-tracker pattern, and read the plan sections your unit's
+   Affected interfaces/contracts field cites. In active-wave state (exactly one
+   open match) read that tracker for phase, wave, and active front; inter-wave
+   state (exactly one closed match) is a valid observed result with no active
+   front, recorded rather than treated as a blocker; zero or multiple matches
+   stop and escalate to the human as an invalid authority state.
 2. When resuming an existing unit, read its issue or PR and any decision
    note it links (Decision notes section).
 3. Status queries:
@@ -143,7 +148,9 @@ the outcome hits a Decision notes trigger or the mandatory-note list.
      reservation; a
      declaration on either unit applies symmetrically, so checking only the
      current unit's Dependencies field is insufficient;
-   - the current wave's pinned tracking issue;
+   - wave state per the §11 resolver above: in active-wave state, the open
+     current tracker; in inter-wave state, no current tracker (fiat may still
+     proceed; scheduled self-selection may not);
    - open `kind:contract` issues, ignoring a `deferral` issue until it is
      scheduled or has an active claim, then excluding the unit you are claiming
      and any unit whose `starts-after` chain includes it (a
@@ -273,10 +280,13 @@ reports the post-merge results required by AGENTS.md.
 Write or update the unit's decision note only when a Decision notes
 trigger or the mandatory-note list applies. Additionally: deferrals
 discovered mid-unit follow Deferral escalation below; when your PR
-merges, tick your unit on the wave tracking issue and on any other open
-tracker that lists it, refreshing the **Startable now** and **Mergeable next**
-projections in each tracker's Implementation order in the same edit (Tracking
-Issues below), or note partial state on the issue.
+merges, tick your unit on every open tracker that lists it, refreshing the
+**Startable now** and **Mergeable next** projections in each tracker's
+Implementation order in the same edit (Tracking Issues below), or note partial
+state on the issue. Resolve the wave tracker through the §11 resolver: tick it
+only in active-wave state when it lists the unit; in inter-wave state the sole
+title match is the closed prior-wave tracker, which is never reopened or
+mutated. No open containing tracker is a valid zero-work result, not an error.
 
 Before final handoff and again immediately before integration, verify every
 `merges-after` prerequisite is merged. A stacked child also remains
@@ -316,8 +326,10 @@ rules:
 finding, or anything else except `needs-human`) becomes agent-actionable
 through exactly two doors: **scheduling** (a spine sweep assigns its
 milestone and lists it on the current tracking issue, from which sessions
-self-select) or **fiat** (the human hands its number to a work-unit session,
-which covers urgent items). A `needs-human` issue uses only fiat after the
+self-select; this door is open only in active-wave state per the §11 resolver,
+since it needs an open current tracker) or **fiat** (the human hands its number
+to a work-unit session, which covers urgent items and is independent of wave
+state). A `needs-human` issue uses only fiat after the
 maintainer acts, as Claiming defines. A session must never select work
 directly by label or by browsing open issues. Sweep cadence: at every
 planning session while waves exist; at phase boundaries after; ad hoc
@@ -428,3 +440,28 @@ answer it at a glance. Wave 5's tracker (#651) is the reference example.
   that tracker's **Startable now** and **Mergeable next** projections in the
   same edit, so routine progress never strands a digest at its publication
   state. A stale diagram misleads where no diagram merely omits.
+- **Wave-boundary pinning keeps exactly one wave-title match pinned, executed
+  recovery-safely by the spine.** The §11 resolver counts only pinned issues
+  whose titles match the canonical wave-tracker pattern; unrelated trackers (for
+  example the standing ad hoc audit and reliability trackers, currently #799 and
+  #578) stay pinned for their own purposes and never count toward wave state.
+  Among the wave-title matches the settled count is exactly one open in
+  active-wave state, or exactly one closed, the inter-wave marker, between a
+  wave's close and the next wave's planning; closing a wave leaves its closed
+  tracker pinned as that sole marker until the next wave is planned. Moving the
+  wave-title match from the closed marker to the new open tracker is the spine's
+  wave-tracker maintenance (the spine role maintains the pinned tracking issue
+  per Work Units in AGENTS.md), a wave-planning action distinct from the
+  per-issue `Plan #N` Planning stage, so it is authorized outside that stage's
+  allowed-mutation surface. GitHub caps pins at three per repository and those
+  standing non-wave trackers occupy slots, so the wave tracker effectively holds
+  a single swappable pin slot: GitHub will not pin a fourth issue, so the
+  outgoing and incoming wave trackers cannot both be pinned at once, and with no
+  atomic pin swap the transition is necessarily non-atomic and multi-step. The
+  spine's wave-planning operation therefore performs it idempotently and
+  recovery-safely, in particular discovering and reusing any orphaned
+  open-unpinned wave-title tracker left by an interrupted prior transition rather
+  than creating a second. An invalid wave-title cardinality (zero or multiple
+  wave-title matches) is what the resolver escalates on, never guesses through.
+  The detailed interruption-safe procedure is owned and hardened by its executor,
+  the spine's wave-planning operation; see #828.
