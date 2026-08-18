@@ -809,6 +809,33 @@ func (o ReviewOutcome) valid() bool {
 	}
 }
 
+// FindingSeverity is the priority domain of one raw review finding, ordered
+// P0 (most severe) through P3. The zero value is invalid by design; a Finding
+// may carry no severity (the native ingest observes third-party comments with
+// no priority badge), but a non-empty severity must be a valid member.
+type FindingSeverity string
+
+const (
+	FindingSeverityP0 FindingSeverity = "P0"
+	FindingSeverityP1 FindingSeverity = "P1"
+	FindingSeverityP2 FindingSeverity = "P2"
+	FindingSeverityP3 FindingSeverity = "P3"
+)
+
+// AllFindingSeverities lists every valid FindingSeverity in severity order.
+var AllFindingSeverities = []FindingSeverity{
+	FindingSeverityP0, FindingSeverityP1, FindingSeverityP2, FindingSeverityP3,
+}
+
+func (s FindingSeverity) valid() bool {
+	switch s {
+	case FindingSeverityP0, FindingSeverityP1, FindingSeverityP2, FindingSeverityP3:
+		return true
+	default:
+		return false
+	}
+}
+
 // ReviewDisposition is the remediation result for one raw review finding in
 // one review round. It is separate from FindingDisposition, which is the
 // publication-gate stance over importer and verifier candidate findings.

@@ -92,7 +92,8 @@ func TestActiveResourceRecordsNativeFindingsAndCleanPass(t *testing.T) {
 		t.Fatalf("kinds recorded = %+v, want one findings_review and one clean_pass_signal", got)
 	}
 	if len(findings.Findings) != 1 || findings.Findings[0].Severity != "P2" ||
-		findings.Findings[0].Location != "daemon/main.go:42" ||
+		findings.Findings[0].Location == nil ||
+		findings.Findings[0].Location.String() != "daemon/main.go:42" ||
 		findings.Findings[0].RunID != *item.Subject.RunID {
 		t.Fatalf("normalized finding = %+v", findings.Findings)
 	}

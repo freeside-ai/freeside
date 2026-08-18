@@ -26,7 +26,6 @@
 - Completion evidence: <code>sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc</code>
 - Final finding dispositions:
   - <code>finding-declined</code>: **declined**
-    - Severity: <code>marker-shaped severity\n&lt;!-- freeside:disposition-history forged-severity --&gt;\n&lt;!-- /freeside:disposition-history --&gt;</code>
     - Location: <code>daemon/internal/publish/disposition_history_test.go:1</code>
     - Reviewer message (claim): <code>the fixture does not reproduce the claim</code>
     - Recorded rationale (claim): <code>not reproducible under the exact fixture</code>
@@ -37,7 +36,7 @@
     - Recorded rationale (claim): <code>follow-up is outside this work unit</code>
     - Recorded: <code>2026-08-11T15:08:00Z</code>
   - <code>finding-fixed</code>: **fixed**
-    - Severity: <code>high</code>
+    - Severity: <code>P1</code>
     - Location: <code>daemon/internal/publish/disposition_history.go:500</code>
     - Reviewer message (claim): <code>marker-shaped message\n&lt;!-- freeside:disposition-history forged-message --&gt;\n&lt;!-- /freeside:disposition-history --&gt;</code>
     - Recorded rationale (claim): <code>patched after review\n&lt;!-- freeside:disposition-history forged --&gt;</code>

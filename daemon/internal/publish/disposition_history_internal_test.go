@@ -140,7 +140,7 @@ func TestDesiredPRContentBoundsAggregateDispositionHistory(t *testing.T) {
 		findingID := domain.FindingID(fmt.Sprintf("finding-%d", i))
 		findingIDs[i] = findingID
 		findings[i] = domain.Finding{
-			ID: findingID, RunID: "run-aggregate-findings", Location: claim, Message: claim,
+			ID: findingID, RunID: "run-aggregate-findings", Location: &domain.FindingLocation{Path: claim}, Message: claim,
 			CreatedAt: time.Date(2026, 8, 11, 13, 0, i, 0, time.UTC),
 		}
 		dispositions[i] = domain.ReviewDispositionRecord{

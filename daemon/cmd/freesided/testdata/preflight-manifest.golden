@@ -29,7 +29,7 @@
   "base_ref": "main",
   "base_sha": "cccccccccccccccccccccccccccccccccccccccc",
   "profile_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-  "review_configuration_digest": "sha256:0a548c45aa62e215dd3e5ffded7fc8f2fdad6232ebded61dc0e4b926c61e8235",
+  "review_configuration_digest": "sha256:eb5b0ccad23cb66013b8a5581adec601164eb86f604516d5851b6109d7cc3185",
   "review_instructions_present": true,
   "review_instructions_digest": "sha256:946939f8aec08ec8199e147028b5dd7e51ee2d07a26a2d5f98282aa652a25d43",
   "build_egress_configuration_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",

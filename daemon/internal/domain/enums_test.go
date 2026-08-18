@@ -286,6 +286,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["ReviewDisposition"] = append(valids["ReviewDisposition"], v.valid)
 	}
 	invalids["ReviewDisposition"] = ReviewDisposition("").valid
+	for _, v := range AllFindingSeverities {
+		valids["FindingSeverity"] = append(valids["FindingSeverity"], v.valid)
+	}
+	invalids["FindingSeverity"] = FindingSeverity("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

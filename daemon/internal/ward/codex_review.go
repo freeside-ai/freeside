@@ -1537,7 +1537,7 @@ func jwtExpiry(token string) (time.Time, error) {
 }
 
 func codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt string) []string {
-	schema := `{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["P1","P2","P3"]},"location":{"type":"string"},"explanation":{"type":"string"}},"required":["severity","location","explanation"],"additionalProperties":false}}},"required":["findings"],"additionalProperties":false}`
+	schema := `{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["P0","P1","P2","P3"]},"location":{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1}},"required":["path","start_line","end_line"],"additionalProperties":false},"explanation":{"type":"string"}},"required":["severity","location","explanation"],"additionalProperties":false}}},"required":["findings"],"additionalProperties":false}`
 	// CODEX_HOME lives on the fresh, writable container rootfs; auth.json and
 	// AGENTS.md are symlinks into the read-only snapshot volume, so the credential
 	// bytes stay immutable while CODEX_HOME itself remains writable for the CLI's

@@ -253,8 +253,12 @@ func (r ReviewResult) Validate() error {
 		if err := f.Validate(); err != nil {
 			return fmt.Errorf("review result findings[%d]: %w", i, err)
 		}
-		if f.Source == "" || f.Severity == "" || f.Message == "" {
+		if f.Source == "" || f.Message == "" {
 			return fmt.Errorf("review result findings[%d] attribution: %w", i, domain.ErrEmptyField)
+		}
+		if !slices.Contains(domain.AllFindingSeverities, f.Severity) {
+			return fmt.Errorf("review result findings[%d] severity %q: %w",
+				i, f.Severity, domain.ErrInvalidFindingSeverity)
 		}
 		if _, duplicate := seen[f.ID]; duplicate {
 			return fmt.Errorf("review result findings[%d] duplicates %q: %w",

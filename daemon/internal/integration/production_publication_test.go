@@ -994,7 +994,7 @@ func TestProductionFindingsDoNotSurviveInstructionAuthorityChange(t *testing.T) 
 	}
 	oldFinding := domain.Finding{
 		ID: "old-finding", RunID: p.runID, Source: "codex_local", Severity: "P1",
-		Location: "daemon/main.go:12", Message: "stale finding", RawText: "stale finding",
+		Location: &domain.FindingLocation{Path: "daemon/main.go", StartLine: 12, EndLine: 12}, Message: "stale finding", RawText: "stale finding",
 		CreatedAt: p.now,
 	}
 	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
@@ -1358,7 +1358,7 @@ func TestProductionReviewFindingsEscalateWithoutReady(t *testing.T) {
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review findings")),
 			Findings: []domain.Finding{{
 				ID: "review-finding-1", RunID: p.runID, Source: "codex_local", Severity: "P1",
-				Location: "daemon/main.go:12", Message: "unsafe transition", RawText: "unsafe transition",
+				Location: &domain.FindingLocation{Path: "daemon/main.go", StartLine: 12, EndLine: 12}, Message: "unsafe transition", RawText: "unsafe transition",
 				CreatedAt: p.now,
 			}},
 		},
@@ -1428,7 +1428,7 @@ func TestProductionClassifierPersistsAnnotationAndEscalatesLowConfidenceP1(t *te
 		CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("classified findings")),
 		Findings: []domain.Finding{{
 			ID: "review-finding-classified", RunID: p.runID, Source: "codex_local", Severity: "P1",
-			Location: "daemon/main.go:12", Message: "ambiguous", RawText: "ambiguous", CreatedAt: p.now,
+			Location: &domain.FindingLocation{Path: "daemon/main.go", StartLine: 12, EndLine: 12}, Message: "ambiguous", RawText: "ambiguous", CreatedAt: p.now,
 		}},
 	}})
 	p.startAndRecordExport(t)

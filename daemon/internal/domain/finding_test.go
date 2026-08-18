@@ -94,4 +94,72 @@ func TestFindingValidate(t *testing.T) {
 	if err := (domain.Finding{ID: "f1", RunID: "run-1"}).Validate(); err == nil {
 		t.Error("finding without created_at accepted")
 	}
+	// Severity is optional but validated when present.
+	valid := domain.Finding{ID: "f1", RunID: "run-1", Severity: "P0", Message: "x", CreatedAt: time.Now()}
+	if err := valid.Validate(); err != nil {
+		t.Errorf("finding with valid severity rejected: %v", err)
+	}
+	bad := domain.Finding{ID: "f1", RunID: "run-1", Severity: "high", Message: "x", CreatedAt: time.Now()}
+	if err := bad.Validate(); !errors.Is(err, domain.ErrInvalidFindingSeverity) {
+		t.Errorf("finding with invalid severity accepted: %v", err)
+	}
+	// A present location is validated; a nil location stays representable.
+	located := domain.Finding{
+		ID: "f1", RunID: "run-1", Message: "x", CreatedAt: time.Now(),
+		Location: &domain.FindingLocation{Path: "a.go", StartLine: 3, EndLine: 5},
+	}
+	if err := located.Validate(); err != nil {
+		t.Errorf("finding with valid location rejected: %v", err)
+	}
+	badLoc := domain.Finding{
+		ID: "f1", RunID: "run-1", Message: "x", CreatedAt: time.Now(),
+		Location: &domain.FindingLocation{Path: "", StartLine: 1, EndLine: 1},
+	}
+	if err := badLoc.Validate(); !errors.Is(err, domain.ErrEmptyField) {
+		t.Errorf("finding with a pathless location accepted: %v", err)
+	}
+}
+
+func TestFindingLocationValidate(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		loc  domain.FindingLocation
+		want error
+	}{
+		{"line range", domain.FindingLocation{Path: "a.go", StartLine: 3, EndLine: 7}, nil},
+		{"single line", domain.FindingLocation{Path: "a.go", StartLine: 4, EndLine: 4}, nil},
+		{"whole file", domain.FindingLocation{Path: "a.go"}, nil},
+		{"empty path", domain.FindingLocation{StartLine: 1, EndLine: 1}, domain.ErrEmptyField},
+		{"partial range", domain.FindingLocation{Path: "a.go", StartLine: 5, EndLine: 0}, domain.ErrNonPositive},
+		{"negative endpoint", domain.FindingLocation{Path: "a.go", StartLine: -1, EndLine: 3}, domain.ErrNonPositive},
+		{"inverted range", domain.FindingLocation{Path: "a.go", StartLine: 9, EndLine: 4}, domain.ErrInvertedRange},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.loc.Validate()
+			if tc.want == nil {
+				if err != nil {
+					t.Errorf("Validate(%+v) = %v, want nil", tc.loc, err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.want) {
+				t.Errorf("Validate(%+v) = %v, want %v", tc.loc, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestFindingLocationString(t *testing.T) {
+	for _, tc := range []struct {
+		loc  domain.FindingLocation
+		want string
+	}{
+		{domain.FindingLocation{Path: "a.go", StartLine: 3, EndLine: 7}, "a.go:3-7"},
+		{domain.FindingLocation{Path: "a.go", StartLine: 4, EndLine: 4}, "a.go:4"},
+		{domain.FindingLocation{Path: "a.go"}, "a.go"},
+	} {
+		if got := tc.loc.String(); got != tc.want {
+			t.Errorf("String(%+v) = %q, want %q", tc.loc, got, tc.want)
+		}
+	}
 }

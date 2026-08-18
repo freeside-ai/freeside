@@ -17,7 +17,11 @@
       "run_id": "run-1",
       "source": "codex_github",
       "severity": "P2",
-      "location": "daemon/main.go:42",
+      "location": {
+        "path": "daemon/main.go",
+        "start_line": 42,
+        "end_line": 42
+      },
       "message": "unchecked error",
       "raw_text": "P2: the error return is dropped",
       "created_at": "2026-01-02T05:04:05Z"

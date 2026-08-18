@@ -2,7 +2,6 @@ package domain
 
 import (
 	"fmt"
-	"slices"
 	"time"
 	"unicode/utf8"
 )
@@ -177,14 +176,22 @@ func (o NativeReviewObservation) Validate() error {
 			return fmt.Errorf("native review observation finding %s source %q: %w",
 				f.ID, f.Source, ErrNativeReviewInconsistent)
 		}
-		// message, raw_text, and location are all third-party strings that reach
-		// the store and take part in the material-change comparison (Finding.Validate
-		// does not check location), so each carries the UTF-8 and size boundary.
+		// message and raw_text are third-party strings that reach the store and
+		// take part in the material-change comparison, so each carries the UTF-8
+		// and size boundary. A present location's path is likewise third-party
+		// text (git stores paths as raw bytes); Finding.Validate checks the
+		// location's structure but not its text bounds, so the path is bounded
+		// here on the same trust boundary.
 		for _, tv := range []struct{ name, value string }{
-			{"message", f.Message}, {"raw_text", f.RawText}, {"location", f.Location},
+			{"message", f.Message}, {"raw_text", f.RawText},
 		} {
 			if err := nativeTextBounded(tv.value); err != nil {
 				return fmt.Errorf("native review observation finding %s %s: %w", f.ID, tv.name, err)
+			}
+		}
+		if f.Location != nil {
+			if err := nativeTextBounded(f.Location.Path); err != nil {
+				return fmt.Errorf("native review observation finding %s location path: %w", f.ID, err)
 			}
 		}
 	}
@@ -251,5 +258,5 @@ func (o NativeReviewObservation) MaterialChangeFrom(prev NativeReviewObservation
 		o.BindingHeadSHA != prev.BindingHeadSHA || !o.SubmittedAt.Equal(prev.SubmittedAt) {
 		return true
 	}
-	return !slices.Equal(o.Findings, prev.Findings)
+	return !findingsEqual(o.Findings, prev.Findings)
 }

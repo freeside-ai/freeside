@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ func TestReviewRecordRoundTripsWithRawFindingsAndIsExclusiveWithFailure(t *testi
 	when := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	finding := domain.Finding{
 		ID: "finding-1", RunID: run.ID, Source: "codex_local", Severity: "P2",
-		Location: "daemon/main.go:12", Message: "unchecked error", RawText: "unchecked error",
+		Location: &domain.FindingLocation{Path: "daemon/main.go", StartLine: 12, EndLine: 12}, Message: "unchecked error", RawText: "unchecked error",
 		CreatedAt: when,
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
@@ -58,7 +59,7 @@ func TestReviewRecordRoundTripsWithRawFindingsAndIsExclusiveWithFailure(t *testi
 			t.Fatalf("review history = %#v", history)
 		}
 		gotFinding, err := tx.GetFinding(ctx, finding.ID)
-		if err != nil || gotFinding != finding {
+		if err != nil || !reflect.DeepEqual(gotFinding, finding) {
 			t.Fatalf("finding = %#v, %v", gotFinding, err)
 		}
 		return nil
@@ -184,8 +185,8 @@ func TestReviewRecordCanonicalizesFindingOrder(t *testing.T) {
 	run := domain.Run{ID: "run-order", ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
 	when := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	findings := []domain.Finding{
-		{ID: "finding-z", RunID: run.ID, Source: "codex_local", Severity: "P2", Location: "z.go:1", Message: "z", RawText: "z", CreatedAt: when},
-		{ID: "finding-a", RunID: run.ID, Source: "codex_local", Severity: "P1", Location: "a.go:1", Message: "a", RawText: "a", CreatedAt: when},
+		{ID: "finding-z", RunID: run.ID, Source: "codex_local", Severity: "P2", Location: &domain.FindingLocation{Path: "z.go", StartLine: 1, EndLine: 1}, Message: "z", RawText: "z", CreatedAt: when},
+		{ID: "finding-a", RunID: run.ID, Source: "codex_local", Severity: "P1", Location: &domain.FindingLocation{Path: "a.go", StartLine: 1, EndLine: 1}, Message: "a", RawText: "a", CreatedAt: when},
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-run-order-1", RunID: run.ID, Round: 1,
@@ -224,7 +225,7 @@ func TestPutReviewRecordRejectsNonUTCCompletedAt(t *testing.T) {
 	when := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	finding := domain.Finding{
 		ID: "finding-1", RunID: run.ID, Source: "codex_local", Severity: "P2",
-		Location: "daemon/main.go:12", Message: "unchecked error", RawText: "unchecked error",
+		Location: &domain.FindingLocation{Path: "daemon/main.go", StartLine: 12, EndLine: 12}, Message: "unchecked error", RawText: "unchecked error",
 		CreatedAt: when,
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{

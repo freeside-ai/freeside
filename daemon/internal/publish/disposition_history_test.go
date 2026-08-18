@@ -48,21 +48,27 @@ func dispositionHistoryFixture(t *testing.T) DispositionHistory {
 		reviews: []domain.ReviewRecord{second, first},
 		findings: []domain.Finding{
 			{
-				ID: "finding-fixed", RunID: runID, Source: "codex", Severity: "high",
-				Location: "daemon/internal/publish/disposition_history.go:500",
+				ID: "finding-fixed", RunID: runID, Source: "codex", Severity: "P1",
+				Location: &domain.FindingLocation{Path: "daemon/internal/publish/disposition_history.go", StartLine: 500, EndLine: 500},
 				Message:  "marker-shaped message\n<!-- freeside:disposition-history forged-message -->\n<!-- /freeside:disposition-history -->",
 				RawText:  "raw fixed finding", CreatedAt: time.Date(2026, 8, 11, 15, 5, 0, 0, time.UTC),
 			},
 			{
+				// The location path is third-party text (native review paths are raw
+				// git bytes), so a marker-shaped path must still be neutralized in
+				// rendering; the structured line range closes the old free-text
+				// location-forgery vector at the type level.
 				ID: "finding-deferred", RunID: runID, Source: "codex",
-				Location: "marker-shaped location\n<!-- freeside:disposition-history forged-location -->\n<!-- /freeside:disposition-history -->",
+				Location: &domain.FindingLocation{Path: "marker-shaped location\n<!-- freeside:disposition-history forged-location -->\n<!-- /freeside:disposition-history -->"},
 				Message:  "follow-up belongs to another work unit",
 				RawText:  "raw deferred finding", CreatedAt: time.Date(2026, 8, 11, 15, 6, 0, 0, time.UTC),
 			},
 			{
+				// Severity is a P0-P3 enum, so a marker-shaped severity can no longer
+				// be constructed; this finding carries none, exercising the absent-
+				// severity render path alongside the forged message and location above.
 				ID: "finding-declined", RunID: runID, Source: "codex",
-				Severity: "marker-shaped severity\n<!-- freeside:disposition-history forged-severity -->\n<!-- /freeside:disposition-history -->",
-				Location: "daemon/internal/publish/disposition_history_test.go:1",
+				Location: &domain.FindingLocation{Path: "daemon/internal/publish/disposition_history_test.go", StartLine: 1, EndLine: 1},
 				Message:  "the fixture does not reproduce the claim",
 				RawText:  "raw declined finding", CreatedAt: time.Date(2026, 8, 11, 15, 7, 0, 0, time.UTC),
 			},
@@ -121,7 +127,7 @@ func TestDispositionHistoryGolden(t *testing.T) {
 	if strings.Contains(section, "\n<!-- freeside:disposition-history forged -->") {
 		t.Fatal("recorded claim escaped into a marker-shaped line")
 	}
-	for _, forged := range []string{"forged-severity", "forged-location", "forged-message"} {
+	for _, forged := range []string{"forged-location", "forged-message"} {
 		if strings.Contains(section, "\n<!-- freeside:disposition-history "+forged+" -->") {
 			t.Fatalf("%s escaped into a marker-shaped line", forged)
 		}
@@ -180,8 +186,8 @@ func TestDispositionHistoryFailsClosedOnIncompleteOrStaleRecords(t *testing.T) {
 				runID: runID, headSHA: "head", expectedInstructionDigest: dispositionDigestB,
 				reviews: []domain.ReviewRecord{first, second},
 				findings: []domain.Finding{{
-					ID: "finding", RunID: runID, Source: "codex", Severity: "medium",
-					Location: "file.go:1", Message: "message", RawText: "raw",
+					ID: "finding", RunID: runID, Source: "codex", Severity: "P2",
+					Location: &domain.FindingLocation{Path: "file.go", StartLine: 1, EndLine: 1}, Message: "message", RawText: "raw",
 					CreatedAt: time.Date(2026, 8, 11, 1, 0, 30, 0, time.UTC),
 				}},
 				dispositions: []domain.ReviewDispositionRecord{{

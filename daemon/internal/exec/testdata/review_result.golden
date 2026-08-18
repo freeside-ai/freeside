@@ -14,8 +14,12 @@
       "id": "finding-1",
       "run_id": "run-1",
       "source": "codex",
-      "severity": "medium",
-      "location": "daemon/internal/exec/driver.go:12",
+      "severity": "P2",
+      "location": {
+        "path": "daemon/internal/exec/driver.go",
+        "start_line": 12,
+        "end_line": 12
+      },
       "message": "possible off-by-one in retry ordinal",
       "raw_text": "P2: possible off-by-one in retry ordinal",
       "created_at": "2026-01-02T03:04:05Z"

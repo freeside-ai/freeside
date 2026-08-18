@@ -732,8 +732,12 @@ func (s *CodexReviewSource) normalizeCollection(
 	}
 	var raw struct {
 		Findings *[]struct {
-			Severity    string `json:"severity"`
-			Location    string `json:"location"`
+			Severity string `json:"severity"`
+			Location *struct {
+				Path      string `json:"path"`
+				StartLine int    `json:"start_line"`
+				EndLine   int    `json:"end_line"`
+			} `json:"location"`
 			Explanation string `json:"explanation"`
 		} `json:"findings"`
 	}
@@ -767,15 +771,38 @@ func (s *CodexReviewSource) normalizeCollection(
 			Failure:      "Codex review omitted the required findings array",
 		}
 	}
+	contradiction := func(failure string) CodexReviewSourceOutcome {
+		return CodexReviewSourceOutcome{
+			InvocationID: id, FailureClass: domain.ReviewFailureContradiction, Failure: failure,
+		}
+	}
 	completedAt := s.cfg.Now().UTC()
 	findings := make([]domain.Finding, len(*raw.Findings))
 	for i, item := range *raw.Findings {
-		identity := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s",
-			id, req.BaseSHA, req.HeadSHA, item.Severity, item.Location, item.Explanation)
+		severity := domain.FindingSeverity(item.Severity)
+		if !slices.Contains(domain.AllFindingSeverities, severity) {
+			return contradiction("Codex review returned an out-of-domain finding severity")
+		}
+		if item.Location == nil {
+			return contradiction("Codex review omitted a required finding location")
+		}
+		location := domain.FindingLocation{
+			Path: item.Location.Path, StartLine: item.Location.StartLine, EndLine: item.Location.EndLine,
+		}
+		// The ward schema requires a concrete line range (start_line, end_line ≥ 1).
+		// The whole-file location (0,0) is a native-ingest shape a codex review
+		// never emits, so reject it alongside a partial, non-positive, or inverted
+		// range as a contradiction rather than admitting a schema-escaping location.
+		if err := location.Validate(); err != nil || location.StartLine < 1 {
+			return contradiction("Codex review returned an invalid finding location")
+		}
+		identity := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%d\x00%d\x00%s",
+			id, req.BaseSHA, req.HeadSHA, severity,
+			location.Path, location.StartLine, location.EndLine, item.Explanation)
 		sum := sha256.Sum256([]byte(identity))
 		findings[i] = domain.Finding{
 			ID: domain.FindingID(fmt.Sprintf("review-%x", sum[:12])), RunID: req.RunID,
-			Source: "codex_local", Severity: item.Severity, Location: item.Location,
+			Source: "codex_local", Severity: severity, Location: &location,
 			Message: item.Explanation, RawText: item.Explanation, CreatedAt: completedAt,
 		}
 	}
@@ -803,7 +830,7 @@ func CodexReviewResultEvidence(
 		Version            string            `json:"version"`
 		CollectionEvidence domain.Digest     `json:"collection_evidence"`
 		Result             exec.ReviewResult `json:"result"`
-	}{"codex-review-result-v2", collectionEvidence, result})
+	}{"codex-review-result-v3", collectionEvidence, result})
 	if err != nil {
 		return "", err
 	}

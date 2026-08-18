@@ -585,9 +585,11 @@ func RenderDispositionHistory(h DispositionHistory) (string, error) {
 			disposition := byRound[review.Round][findingID]
 			fmt.Fprintf(&out, "  - %s: **%s**\n", dispositionCode(string(findingID)), dispositionLabel(string(disposition.Disposition)))
 			if finding.Severity != "" {
-				fmt.Fprintf(&out, "    - Severity: %s\n", boundedDispositionClaim(finding.Severity))
+				fmt.Fprintf(&out, "    - Severity: %s\n", boundedDispositionClaim(string(finding.Severity)))
 			}
-			fmt.Fprintf(&out, "    - Location: %s\n", boundedDispositionClaim(finding.Location))
+			if finding.Location != nil {
+				fmt.Fprintf(&out, "    - Location: %s\n", boundedDispositionClaim(finding.Location.String()))
+			}
 			fmt.Fprintf(&out, "    - Reviewer message (claim): %s\n", boundedDispositionClaim(finding.Message))
 			fmt.Fprintf(&out, "    - Recorded rationale (claim): %s\n", boundedDispositionClaim(disposition.Reason))
 			fmt.Fprintf(&out, "    - Recorded: %s\n", dispositionCode(disposition.CreatedAt.UTC().Format(time.RFC3339Nano)))

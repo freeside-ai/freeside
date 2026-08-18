@@ -1164,8 +1164,8 @@ func TestCodexReviewSourcePersistsInvalidCollectedResultAndCleans(t *testing.T) 
 	// contradiction must still persist durably and finish authenticated
 	// cleanup instead of terminalizing around a leaked topology.
 	duplicated := `{"findings":[` +
-		`{"severity":"P1","location":"daemon/main.go:12","explanation":"unsafe transition"},` +
-		`{"severity":"P1","location":"daemon/main.go:12","explanation":"unsafe transition"}]}`
+		`{"severity":"P1","location":{"path":"daemon/main.go","start_line":12,"end_line":12},"explanation":"unsafe transition"},` +
+		`{"severity":"P1","location":{"path":"daemon/main.go","start_line":12,"end_line":12},"explanation":"unsafe transition"}]}`
 	resultArchive := buildTar(t, []tarEntry{
 		{name: strings.TrimPrefix(codexReviewStatusPath, "/"), body: []byte("0\n")},
 		{name: strings.TrimPrefix(codexReviewEventsPath, "/"), body: []byte("terminal\n")},
@@ -2318,7 +2318,7 @@ func TestCodexReviewSourceNormalizesStructuredFindings(t *testing.T) {
 		RequestedAt: now.Add(-time.Minute),
 	}
 	collection := CodexReviewCollection{
-		Result: []byte(`{"findings":[{"severity":"P2","location":"daemon/main.go:12","explanation":"unchecked error"}]}`),
+		Result: []byte(`{"findings":[{"severity":"P2","location":{"path":"daemon/main.go","start_line":12,"end_line":12},"explanation":"unchecked error"}]}`),
 		Events: []byte("terminal event\n"),
 	}
 	first := source.normalizeCollection("review-run-1-1", request, collection)
@@ -2336,6 +2336,10 @@ func TestCodexReviewSourceNormalizesStructuredFindings(t *testing.T) {
 		first.Result.Provider != "openai" || first.Result.ModelConfiguration != "gpt-codex/high" ||
 		first.Result.CompletionEvidence == "" {
 		t.Fatalf("normalized result = %#v", first.Result)
+	}
+	if finding.Location == nil || finding.Location.Path != "daemon/main.go" ||
+		finding.Location.StartLine != 12 || finding.Location.EndLine != 12 {
+		t.Fatalf("normalized location = %#v", finding.Location)
 	}
 }
 
@@ -2359,8 +2363,48 @@ func TestCodexReviewSourceRejectsInvalidFindingsEnvelope(t *testing.T) {
 		{"null", `{"findings":null}`, "required findings array"},
 		{
 			"duplicate",
-			`{"findings":[{"severity":"P1","location":"main.go:1","explanation":"unsafe"}],"findings":[]}`,
+			`{"findings":[{"severity":"P1","location":{"path":"main.go","start_line":1,"end_line":1},"explanation":"unsafe"}],"findings":[]}`,
 			"malformed structured output",
+		},
+		{
+			"out-of-domain severity",
+			`{"findings":[{"severity":"P9","location":{"path":"main.go","start_line":1,"end_line":1},"explanation":"x"}]}`,
+			"out-of-domain finding severity",
+		},
+		{
+			"string location (schema escape)",
+			`{"findings":[{"severity":"P1","location":"main.go:1","explanation":"x"}]}`,
+			"malformed structured output",
+		},
+		{
+			"omitted location",
+			`{"findings":[{"severity":"P1","explanation":"x"}]}`,
+			"omitted a required finding location",
+		},
+		{
+			"null location",
+			`{"findings":[{"severity":"P1","location":null,"explanation":"x"}]}`,
+			"omitted a required finding location",
+		},
+		{
+			"empty location path",
+			`{"findings":[{"severity":"P1","location":{"path":"","start_line":1,"end_line":1},"explanation":"x"}]}`,
+			"invalid finding location",
+		},
+		{
+			"non-positive line",
+			`{"findings":[{"severity":"P1","location":{"path":"main.go","start_line":0,"end_line":1},"explanation":"x"}]}`,
+			"invalid finding location",
+		},
+		{
+			"whole-file location rejected for a review",
+			`{"findings":[{"severity":"P1","location":{"path":"main.go","start_line":0,"end_line":0},"explanation":"x"}]}`,
+			"invalid finding location",
+		},
+		{
+			"inverted range",
+			`{"findings":[{"severity":"P1","location":{"path":"main.go","start_line":5,"end_line":2},"explanation":"x"}]}`,
+			"invalid finding location",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2394,7 +2438,7 @@ func TestCodexReviewSourceFindingIdentityIsInvocationScoped(t *testing.T) {
 		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: now,
 	}
 	collection := CodexReviewCollection{Result: []byte(
-		`{"findings":[{"severity":"P2","location":"daemon/main.go:12","explanation":"unchecked error"}]}`,
+		`{"findings":[{"severity":"P2","location":{"path":"daemon/main.go","start_line":12,"end_line":12},"explanation":"unchecked error"}]}`,
 	)}
 	first := source.normalizeCollection("review-invocation-1", request, collection)
 	request.RunID = "run-2"
@@ -3077,7 +3121,7 @@ func TestCodexReviewSourceOutcomeRejectsFindingCorruption(t *testing.T) {
 		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: now,
 	}
 	outcome := source.normalizeCollection("review-invocation-1", request, CodexReviewCollection{
-		Result: []byte(`{"findings":[{"severity":"P1","location":"main.go:1","explanation":"unsafe"}]}`),
+		Result: []byte(`{"findings":[{"severity":"P1","location":{"path":"main.go","start_line":1,"end_line":1},"explanation":"unsafe"}]}`),
 	})
 	if err := outcome.Validate(); err != nil {
 		t.Fatal(err)
