@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
@@ -21,6 +22,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 type fixedProductionCommitAuthorResolver struct {
@@ -129,6 +131,7 @@ func TestSubmitResultGolden(t *testing.T) {
 		ElaborationPolicyDigest: "sha256:" + domain.Digest(strings.Repeat("b", 64)),
 		SourceArtifactID:        "source-artifact", ElaborationPolicyArtifactID: "elaboration-policy-artifact",
 		PublicationDigest: "sha256:" + domain.Digest(strings.Repeat("c", 64)),
+		CompositionDigest: "sha256:" + domain.Digest(strings.Repeat("e", 64)),
 		WorkUnitID:        "work-unit-implementation",
 		CampaignID:        "campaign-golden", AttemptNumber: 2,
 		AttemptReason: "Retry after repairing the acceptance rig", ParentRunID: "run-parent",
@@ -139,6 +142,130 @@ func TestSubmitResultGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	golden.Assert(t, "submit-result", append(body, '\n'))
+}
+
+func TestSubmitCommandBindsCompositionManifest(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	root := t.TempDir()
+	specPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	manifest, identity := submissionCompositionManifest(t, "proj-submit", specPath, policyPath, publicationPath)
+	manifestPath := filepath.Join(root, "composition.json")
+	if err := os.WriteFile(manifestPath, manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := submitCommandConfig{
+		DBPath: filepath.Join(root, "freeside.db"), SpecPath: specPath,
+		PolicyPath: policyPath, PublicationPath: publicationPath,
+		CompositionPath: manifestPath, RequireComposition: true,
+		ProjectID: "proj-submit",
+	}
+	result, err := runSubmitCommand(ctx, cfg)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if wantDigest := domain.Digest(contentaddr.Sum(manifest)); result.CompositionDigest != wantDigest {
+		t.Fatalf("composition digest = %q, want %q", result.CompositionDigest, wantDigest)
+	}
+
+	var changedManifest compositionManifest
+	if err := json.Unmarshal(manifest, &changedManifest); err != nil {
+		t.Fatal(err)
+	}
+	changedManifest.Identity.ImplementationRunID = "run-composition-other"
+	changed, err := json.Marshal(changedManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, changed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runSubmitCommand(ctx, cfg); err == nil || !strings.Contains(err.Error(), "passing manifest does not bind") {
+		t.Fatalf("mismatched composition error = %v, want refusal", err)
+	}
+	changedManifest.Identity = identity
+	changedManifest.Identity.SourceDigest = "sha256:" + domain.Digest(strings.Repeat("f", 64))
+	changed, err = json.Marshal(changedManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, changed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runSubmitCommand(ctx, cfg); err == nil || !strings.Contains(err.Error(), "passing manifest does not bind") {
+		t.Fatalf("mismatched input digest error = %v, want refusal", err)
+	}
+	changed = bytes.Replace(manifest, []byte(`"status":"passed"`), []byte(`"status":"failed"`), 1)
+	if err := os.WriteFile(manifestPath, changed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runSubmitCommand(ctx, cfg); err == nil || !strings.Contains(err.Error(), "passing manifest does not bind") {
+		t.Fatalf("failed composition error = %v, want refusal", err)
+	}
+}
+
+func TestSubmitCommandRejectsCompositionRunOverride(t *testing.T) {
+	_, err := runSubmitCommand(t.Context(), submitCommandConfig{
+		CompositionPath: "previously-attested.json", RunID: "override",
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot override production composition identity") {
+		t.Fatalf("composition run override error = %v, want override refusal", err)
+	}
+}
+
+func submissionCompositionManifest(
+	t *testing.T, projectID domain.ProjectID, specPath, policyPath, publicationPath string,
+) ([]byte, compositionIdentity) {
+	t.Helper()
+	spec, err := readSubmissionFile(specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := readSubmissionFile(policyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []domain.PolicyKey
+	if err := strictjson.Decode(
+		policy.body, &keys, strictjson.TolerateInvalidUTF8, strictjson.Limit(maxSubmissionFileBytes),
+	); err != nil {
+		t.Fatal(err)
+	}
+	policyDigest, err := (domain.ResolvedPolicy{Keys: keys}).ComputeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, err := readSubmissionFile(publicationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var publicationValue engine.ProductionPublication
+	if err := strictjson.Decode(
+		publication.body, &publicationValue,
+		strictjson.TolerateInvalidUTF8, strictjson.Limit(maxSubmissionFileBytes),
+	); err != nil {
+		t.Fatal(err)
+	}
+	publicationBody, err := json.Marshal(publicationValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := compositionIdentity{
+		SourceDigest: spec.digest, PolicyDigest: policyDigest, PublicationDigest: publication.digest,
+	}
+	identity.ImplementationRunID = defaultSubmissionRunID(
+		projectID, spec.digest, policyDigest, submissionBytes(publicationBody).digest, "",
+	)
+	identity.ImplementationInvocationID = domain.InvocationID(
+		"inv-implement-" + string(identity.ImplementationRunID),
+	)
+	body, err := json.Marshal(compositionManifest{
+		Version: compositionManifestVersion, Status: compositionPassed, Identity: identity,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body, identity
 }
 
 func TestSubmitCommandRegistersAndConverges(t *testing.T) {

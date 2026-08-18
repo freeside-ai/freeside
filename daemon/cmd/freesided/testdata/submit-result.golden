@@ -14,6 +14,7 @@
   "source_artifact_id": "source-artifact",
   "elaboration_policy_artifact_id": "elaboration-policy-artifact",
   "publication_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "composition_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
   "work_unit_id": "work-unit-implementation",
   "campaign_id": "campaign-golden",
   "attempt_number": 2,
