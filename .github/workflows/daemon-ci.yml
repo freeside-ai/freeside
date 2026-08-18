@@ -127,7 +127,11 @@ jobs:
           restore-keys: |
             go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
             go-build-${{ runner.os }}-${{ github.job }}-
-      - run: go test ./... -race
+      # Per-package timeout raised from the 10m default: cmd/freesided's
+      # race-instrumented suite runs ~9m and was crossing 10m under runner
+      # load (incident #841). This is a runtime-vs-budget margin, not a hang.
+      # Trimming the suite so this ceiling can come back down is deferred.
+      - run: go test ./... -race -timeout=20m
 
   macos:
     name: macos (build, test)
