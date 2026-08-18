@@ -45,7 +45,8 @@ func migrationsBeforeReadyResource(t *testing.T) fs.FS {
 			entry.Name() == "0046_export_rejections.sql" ||
 			entry.Name() == "0047_current_import_starts.sql" ||
 			entry.Name() == "0048_production_attempts.sql" ||
-			entry.Name() == "0049_production_attempt_publication_digest.sql" || entry.IsDir() {
+			entry.Name() == "0049_production_attempt_publication_digest.sql" ||
+			entry.Name() == "0050_attention_subject_run_binding.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())
@@ -125,11 +126,11 @@ func TestAttentionPRReferenceMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 49 {
-		t.Fatalf("schema version = %d, want 49", got)
+	if got := rawVersion(t, db); got != 50 {
+		t.Fatalf("schema version = %d, want 50", got)
 	}
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture,
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id,
 		        entity_version, as_of_revision, body
 		 FROM attention_items WHERE id = ?`, item.ID))
 	if err != nil {
@@ -316,7 +317,7 @@ func TestAttentionPRReferenceMigrationBackfillsLegacyFakePublication(t *testing.
 		t.Fatalf("migrate to head: %v", err)
 	}
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture,
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id,
 		        entity_version, as_of_revision, body
 		 FROM attention_items WHERE id = ?`, item.ID))
 	if err != nil {

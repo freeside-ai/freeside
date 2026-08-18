@@ -658,8 +658,8 @@ func TestListRejectsForgedMetadata(t *testing.T) {
 			{`INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body) VALUES ('run-b', 'proj-1', 'sha256:policy', 1, 1, ?)`, []any{bodies["run-b"]}},
 			{`INSERT INTO conversations (id, entity_version, as_of_revision, body) VALUES ('conv-a', ?, ?, ?)`, []any{ev, rev, bodies["conv-a"]}},
 			{`INSERT INTO conversations (id, entity_version, as_of_revision, body) VALUES ('conv-b', 1, 1, ?)`, []any{bodies["conv-b"]}},
-			{`INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body) VALUES ('item-a', 'proj-1', NULL, ?, ?, ?, ?, ?)`, []any{item.Type, item.Status, ev, rev, bodies["item-a"]}},
-			{`INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body) VALUES ('item-b', 'proj-1', NULL, ?, ?, 1, 1, ?)`, []any{item.Type, item.Status, bodies["item-b"]}},
+			{`INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, subject_run_id, entity_version, as_of_revision, body) VALUES ('item-a', 'proj-1', NULL, ?, ?, 'run-a', ?, ?, ?)`, []any{item.Type, item.Status, ev, rev, bodies["item-a"]}},
+			{`INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, subject_run_id, entity_version, as_of_revision, body) VALUES ('item-b', 'proj-1', NULL, ?, ?, 'run-b', 1, 1, ?)`, []any{item.Type, item.Status, bodies["item-b"]}},
 			{`INSERT INTO attention_item_pr_references (item_id, repo, pr_number, body) VALUES ('item-a', 'owner/repo', 123, ?)`, []any{prReferenceBody}},
 			{`INSERT INTO attention_item_pr_references (item_id, repo, pr_number, body) VALUES ('item-b', 'owner/repo', 123, ?)`, []any{prReferenceBody}},
 			{`INSERT INTO attention_deliveries (item_id, device_id, channel, attempt, entity_version, as_of_revision, body) VALUES ('item-b', 'device-1', 'ntfy', 1, ?, ?, ?)`, []any{ev, rev, bodies["delivery-a"]}},
@@ -973,7 +973,7 @@ func TestSnapshotRejectsForgedMetadata(t *testing.T) {
 			t.Fatalf("reset items: %v", err)
 		}
 		if _, err := db.ExecContext(ctx,
-			`INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body) VALUES ('item-1', 'proj-1', NULL, ?, ?, ?, ?, ?)`,
+			`INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, subject_run_id, entity_version, as_of_revision, body) VALUES ('item-1', 'proj-1', NULL, ?, ?, 'run-1', ?, ?, ?)`,
 			item.Type, item.Status, entityVersion, asOfRevision, itemBody); err != nil {
 			t.Fatalf("insert item: %v", err)
 		}
