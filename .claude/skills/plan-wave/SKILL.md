@@ -106,6 +106,15 @@ only what this wave genuinely needs.
 - Shape and sequencing come from the table row; encode required
   serialization, integration order, and intentional stacks in each unit's
   Dependencies field.
+- Size each unit against the budget, amplifier list, and split seams in
+  docs/coordination.md (Unit Sizing): estimate the expected PR
+  including migrations, goldens, generated clients, and mock parity;
+  split a unit that materially exceeds the budget along a listed seam,
+  encoding the resulting order in Dependencies: `starts-after` by
+  default, and always for a contract-first split, since shared-package
+  changes merge before dependents start; `stacked-on` only for an
+  intentionally declared stack on a non-contract base. A unit kept
+  deliberately larger records its reason on its issue.
 - Labels: `lane:*` per the row's ownership where the row names lanes,
   otherwise derived from the unit's declared paths via the canonical
   lane table (docs/coordination.md). Where that table maps none of the
