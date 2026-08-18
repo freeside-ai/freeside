@@ -16,27 +16,29 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 type fakePreflightEnvironment struct {
-	rig                 daemonlock.RigManifest
-	database            databaseInspection
-	imageErrors         map[string]error
-	imageCalls          map[string]int
-	topicError          error
-	seedError           error
-	authVolumeError     error
-	authVolumeCalls     int
-	repositoryBaseError error
-	authorityError      error
-	repositoryCalls     int
-	idleError           error
-	supervised          bool
-	live                bool
-	codexError          error
-	codexExpiresAt      *time.Time
-	codexCalls          int
-	publicationAuthor   engine.ProductionCommitAuthor
+	rig                  daemonlock.RigManifest
+	database             databaseInspection
+	imageErrors          map[string]error
+	imageCalls           map[string]int
+	topicError           error
+	seedError            error
+	authVolumeError      error
+	authVolumeCalls      int
+	authVolumeAuthorizer ward.RuntimeResourceAuthorizer
+	repositoryBaseError  error
+	authorityError       error
+	repositoryCalls      int
+	idleError            error
+	supervised           bool
+	live                 bool
+	codexError           error
+	codexExpiresAt       *time.Time
+	codexCalls           int
+	publicationAuthor    engine.ProductionCommitAuthor
 }
 
 func (e *fakePreflightEnvironment) AuthenticateRig(string, string) (daemonlock.RigManifest, error) {
@@ -85,8 +87,11 @@ func (e *fakePreflightEnvironment) InspectRepositoryAuthority(
 	}
 }
 
-func (e *fakePreflightEnvironment) CheckAuthVolume(context.Context, string, string, string) error {
+func (e *fakePreflightEnvironment) CheckAuthVolume(
+	_ context.Context, _, _, _ string, authorize ward.RuntimeResourceAuthorizer,
+) error {
 	e.authVolumeCalls++
+	e.authVolumeAuthorizer = authorize
 	return e.authVolumeError
 }
 
@@ -115,6 +120,27 @@ func TestPreflightManifestGolden(t *testing.T) {
 	if environment.publicationAuthor.AppSlug != "freeside-test" ||
 		environment.publicationAuthor.BotUserID != 12345 {
 		t.Fatalf("publication author = %+v", environment.publicationAuthor)
+	}
+}
+
+// TestPreflightCredentialCheckReceivesRigAuthorizer proves the credential check
+// is handed a real rig authorizer (not nil), so the observer name is bound into
+// the held manifest before creation. The authorizer's binding behavior is
+// proven in TestProductionRigRuntimeAuthorizerBindsCredentialObserver.
+func TestPreflightCredentialCheckReceivesRigAuthorizer(t *testing.T) {
+	args, environment := preflightFixture(t)
+	var stdout, stderr bytes.Buffer
+	if err := runPreflightCommandWithEnvironment(
+		t.Context(), args, &stdout, &stderr, environment,
+		time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC), "2dce6570ee23",
+	); err != nil {
+		t.Fatalf("preflight: %v; stderr=%s", err, stderr.String())
+	}
+	if environment.authVolumeCalls != 1 {
+		t.Fatalf("credential check ran %d times, want 1", environment.authVolumeCalls)
+	}
+	if environment.authVolumeAuthorizer == nil {
+		t.Fatal("credential check received a nil rig authorizer")
 	}
 }
 
