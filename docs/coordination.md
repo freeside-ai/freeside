@@ -275,6 +275,55 @@ records a verified merge applies the tracker transition and projection refresh
 under [Session End](#session-end) and [Tracking Issues](#tracking-issues), then
 reports the post-merge results required by AGENTS.md.
 
+## Unit Sizing
+
+A work unit's expected pull request stays around or under 1,000 changed
+lines. The budget is soft, not a gate: merged-PR review history shows
+automated-review convergence flat below roughly that size and
+multiplying above it (devlog 2026-08-18-0818-unit-size-budget.md), so a
+unit kept deliberately larger records its reason on the issue and
+proceeds.
+
+Estimate against the repository's known size amplifiers, not the core
+change alone; a unit touching two or more is presumed over budget:
+
+- a new migration, which also joins every migration-subset exclusion
+  list;
+- store plus domain golden regeneration;
+- a sync-carried contract field, which is `kind:contract` and drags the
+  API schema plus the generated app client;
+- new mock state, whose MockServer daemon parity lands in the first
+  push.
+
+Split along seams that keep each part a logical, independently passing
+unit:
+
+- persistence first: migration, store accessors, and goldens as one
+  unit, with the behavior consuming them following;
+- contract first: a new field and the behavior using it are two units
+  even when the field alone looks trivial;
+- happy path, then hardening: the working skeleton with its tests lands
+  first; failure, recovery, and drift-tolerance behaviors follow as
+  their own units;
+- daemon projection versus app presentation;
+- in-wave sequential dependency recorded as `starts-after` by default,
+  or as an intentionally declared `stacked-on` pull request on a
+  non-contract base; a contract-first split's dependent always waits
+  for the contract unit to merge.
+
+The budget applies at three checkpoints. Wave decomposition estimates
+coarsely and splits the obvious cases. The planning stage refines the
+estimate against real code and, over budget, proposes a concrete split
+in the plan comment; executing the split remains a spine or owner
+action. Once a plan proposes a split, the unit is not picked up
+through the scheduling door until the spine applies the split or
+records the deliberately-larger reason on the issue; fiat remains
+independent. An implementation whose actual diff blows well past its
+estimate stops growing the pull request: remainder work outside the
+issue's acceptance criteria defers as a tracked issue, while deferring
+acceptance-required work first needs the owner or spine to rescope the
+unit's contract.
+
 ## Session End
 
 Write or update the unit's decision note only when a Decision notes
