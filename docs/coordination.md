@@ -329,10 +329,11 @@ unit's contract.
 Write or update the unit's decision note only when a Decision notes
 trigger or the mandatory-note list applies. Additionally: deferrals
 discovered mid-unit follow Deferral escalation below; when your PR
-merges, tick your unit on every open tracker that lists it, refreshing the
-**Startable now** and **Mergeable next** projections in each tracker's
-Implementation order in the same edit (Tracking Issues below), or note partial
-state on the issue. Resolve the wave tracker through the §11 resolver: tick it
+merges, tick your unit on every open tracker that lists it, re-marking its
+diagram node with the merged double border when the tracker has a diagram
+and refreshing the **Startable now** and **Mergeable next** projections in
+each tracker's Implementation order in the same edit (Tracking Issues
+below), or note partial state on the issue. Resolve the wave tracker through the §11 resolver: tick it
 only in active-wave state when it lists the unit; in inter-wave state the sole
 title match is the closed prior-wave tracker, which is never reopened or
 mutated. No open containing tracker is a valid zero-work result, not an error.
@@ -466,6 +467,12 @@ answer it at a glance. Wave 5's tracker (#651) is the reference example.
   meanings, including unused styles so readers never infer semantics from
   appearance. A `classDef` may highlight a category such as contract units,
   but never encodes a relationship.
+- **Merged units carry a double border.** A tracked unit whose closing PR
+  has merged renders as a double-bordered node (Mermaid's subroutine
+  shape: `679[["#679"]]`); an unfinished unit stays a plain node. The
+  legend states the marking alongside the edge meanings. Like a
+  `classDef` highlight, the border encodes unit state, never a
+  relationship.
 - **Transitive reduction.** Draw only direct edges; an ordering already
   implied through drawn paths is not repeated as its own arrow.
 - **Authority disclaimer.** The digest and diagram are a derived view;
@@ -485,10 +492,13 @@ answer it at a glance. Wave 5's tracker (#651) is the reference example.
   partial tracker state; the child session refreshes when it later verifies the
   retarget.
   Merges advance the order the same way: the session recording a merged
-  unit on a tracker, wave or ad hoc (the Session End tick), refreshes
-  that tracker's **Startable now** and **Mergeable next** projections in the
-  same edit, so routine progress never strands a digest at its publication
-  state. A stale diagram misleads where no diagram merely omits.
+  unit on a tracker, wave or ad hoc (the Session End tick), ticks the
+  unit in the tracker's unit list, re-marks its diagram node with the
+  merged double border when the tracker has a diagram, and refreshes
+  that tracker's **Startable now** and **Mergeable next** projections,
+  all in the same edit, so routine
+  progress never strands a digest or diagram at its publication state.
+  A stale diagram misleads where no diagram merely omits.
 - **Wave-boundary pinning keeps exactly one wave-title match pinned, executed
   recovery-safely by the spine.** The §11 resolver counts only pinned issues
   whose titles match the canonical wave-tracker pattern; unrelated trackers (for

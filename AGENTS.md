@@ -135,8 +135,10 @@ relationship, review, or merge gates elsewhere in this file.
   trackers is a valid zero-work reconciliation result, not an
   incomplete-reconciliation error. A direct, session-contained unit has no
   containing tracker.
-- **Refresh:** In each containing tracker's Implementation order, recompute
-  **Startable now** and **Mergeable next** as separate projections.
+- **Refresh:** In each containing tracker, as one edit: tick the unit in the
+  unit list, re-mark its diagram node with the merged double border when the
+  tracker has a diagram, and recompute **Startable now** and **Mergeable
+  next** as separate projections in the Implementation order.
 - **Detailed mechanics:** `docs/coordination.md`.
 - **Report:** Surface newly unblocked units without claiming or starting them,
   and identify integration evidence invalidated by the base advance.
