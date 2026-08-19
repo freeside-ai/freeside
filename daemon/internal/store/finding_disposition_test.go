@@ -58,11 +58,11 @@ func TestFindingDispositionsPersistAcrossRestart(t *testing.T) {
 	}
 	at := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	findingA := domain.Finding{
-		ID: "finding-a", RunID: run.ID, Source: "codex_local", Location: "a.go:1",
+		ID: "finding-a", RunID: run.ID, Source: "codex_local", Location: &domain.FindingLocation{Path: "a.go", StartLine: 1, EndLine: 1},
 		Message: "first", RawText: "first", CreatedAt: at,
 	}
 	findingB := domain.Finding{
-		ID: "finding-b", RunID: run.ID, Source: "codex_local", Location: "b.go:2",
+		ID: "finding-b", RunID: run.ID, Source: "codex_local", Location: &domain.FindingLocation{Path: "b.go", StartLine: 2, EndLine: 2},
 		Message: "second", RawText: "second", CreatedAt: at,
 	}
 	firstReview := dispositionReviewRecord(

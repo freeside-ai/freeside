@@ -1,6 +1,7 @@
 package fake_test
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 
@@ -86,8 +87,8 @@ func reviewFindings() []domain.Finding {
 		ID:        "finding-1",
 		RunID:     "run-1",
 		Source:    "codex",
-		Severity:  "medium",
-		Location:  "daemon/internal/exec/driver.go:12",
+		Severity:  "P2",
+		Location:  &domain.FindingLocation{Path: "daemon/internal/exec/driver.go", StartLine: 12, EndLine: 12},
 		Message:   "possible off-by-one",
 		CreatedAt: fixedTime,
 	}}
@@ -113,12 +114,15 @@ func TestReviewDeliveredResultIsImmutable(t *testing.T) {
 
 	first := driveReviewToResult(t, s, "inv-1")
 	first.Findings[0].Message = "TAMPERED"
+	// The location is a *FindingLocation, so a shallow redelivery would let this
+	// mutation reach the committed snapshot; cloneReviewResult deep-copies it.
+	first.Findings[0].Location.StartLine = 9999
 
 	second, err := s.Poll(t.Context(), "inv-1")
 	if err != nil {
 		t.Fatalf("poll: %v", err)
 	}
-	if !slices.Equal(second.Findings, reviewFindings()) {
+	if !reflect.DeepEqual(second.Findings, reviewFindings()) {
 		t.Errorf("redelivered findings = %v, want unchanged %v", second.Findings, reviewFindings())
 	}
 }
@@ -133,9 +137,10 @@ func TestReviewScriptInputIsImmutable(t *testing.T) {
 		Result:  exec.ReviewResult{HeadSHA: "cafebabe", Findings: findings},
 	})
 	findings[0].Message = "TAMPERED"
+	findings[0].Location.StartLine = 9999
 
 	result := driveReviewToResult(t, s, "inv-1")
-	if !slices.Equal(result.Findings, reviewFindings()) {
+	if !reflect.DeepEqual(result.Findings, reviewFindings()) {
 		t.Errorf("delivered findings = %v, want scripted %v", result.Findings, reviewFindings())
 	}
 }

@@ -44,10 +44,13 @@ type PullReviewComment struct {
 	ReviewID    int64
 	AuthorLogin string
 	Path        string
-	Line        int
-	Body        string
-	CommitID    string
-	CreatedAt   time.Time
+	// StartLine is the first line of a multi-line inline comment; 0 for a
+	// single-line comment (the range is then just Line). Line is the last line.
+	StartLine int
+	Line      int
+	Body      string
+	CommitID  string
+	CreatedAt time.Time
 }
 
 // PullDescriptionReaction is one reaction on a pull request's description (the
@@ -77,6 +80,7 @@ type reviewCommentResponse struct {
 	} `json:"user"`
 	ReviewID  int64  `json:"pull_request_review_id"`
 	Path      string `json:"path"`
+	StartLine *int   `json:"start_line"`
 	Line      *int   `json:"line"`
 	Body      string `json:"body"`
 	CommitID  string `json:"commit_id"`
@@ -145,9 +149,13 @@ func (f *forge) getPullReviewComments(ctx context.Context, repo repoRef, number 
 		if c.Line != nil {
 			line = *c.Line
 		}
+		startLine := 0
+		if c.StartLine != nil {
+			startLine = *c.StartLine
+		}
 		comments = append(comments, PullReviewComment{
 			ID: c.ID, ReviewID: c.ReviewID, AuthorLogin: c.User.Login,
-			Path: c.Path, Line: line, Body: c.Body, CommitID: c.CommitID,
+			Path: c.Path, StartLine: startLine, Line: line, Body: c.Body, CommitID: c.CommitID,
 			CreatedAt: created.UTC(),
 		})
 	}

@@ -14,10 +14,13 @@ import (
 // result is scripted, committed, and returned keeps every redelivery a
 // value-identical immutable snapshot regardless of caller behavior.
 //
-// domain.Digest is a string and domain.Finding is all scalars and time.Time,
-// so a one-level slices.Clone fully detaches the result; there are no nested
-// reference fields to deep-copy. slices.Clone preserves nil, so the
-// serialized form (and the acceptor's byte comparison) is unchanged.
+// domain.Digest is a string, so a StageResult's slice-backed fields fully
+// detach with a one-level slices.Clone. A domain.Finding is otherwise scalar
+// but carries an optional *FindingLocation, a nested reference field: a
+// one-level clone would alias it, so a caller mutating a delivered finding's
+// location would reach the committed snapshot. cloneReviewResult deep-copies
+// each present location. slices.Clone preserves nil, so the serialized form
+// (and the acceptor's byte comparison) is unchanged.
 
 func cloneStageResult(r exec.StageResult) exec.StageResult {
 	r.Artifacts = slices.Clone(r.Artifacts)
@@ -26,6 +29,12 @@ func cloneStageResult(r exec.StageResult) exec.StageResult {
 
 func cloneReviewResult(r exec.ReviewResult) exec.ReviewResult {
 	r.Findings = slices.Clone(r.Findings)
+	for i := range r.Findings {
+		if loc := r.Findings[i].Location; loc != nil {
+			clone := *loc
+			r.Findings[i].Location = &clone
+		}
+	}
 	return r
 }
 

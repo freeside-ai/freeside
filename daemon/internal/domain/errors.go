@@ -78,6 +78,7 @@ var (
 	ErrInvalidIntakeSupersessionReason  = errors.New("invalid intake supersession reason")
 	ErrInvalidElaborationSourceKind     = errors.New("invalid elaboration source kind")
 	ErrInvalidProductionAttemptKind     = errors.New("invalid production attempt kind")
+	ErrInvalidFindingSeverity           = errors.New("invalid finding severity")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -88,6 +89,7 @@ var (
 	ErrNoActions                    = errors.New("attention item offers no requested decision")
 	ErrNonPositiveSeq               = errors.New("message sequence must be positive")
 	ErrNonPositive                  = errors.New("value must be positive")
+	ErrInvertedRange                = errors.New("line range start is greater than end")
 	ErrParentKeyMismatch            = errors.New("child record's parent key does not match its enclosing record")
 	ErrStatusMissingTimestamp       = errors.New("status lacks its corresponding timestamp")
 	ErrStatusTimestampTooStrong     = errors.New("record carries a timestamp stronger than its status")

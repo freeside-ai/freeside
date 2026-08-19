@@ -330,7 +330,7 @@ func TestCodexReviewJournalRejectsRewrittenOutcomeAuthority(t *testing.T) {
 			CompletedAt: when,
 			Findings: []domain.Finding{{
 				ID: "finding-1", RunID: request.RunID, Source: "codex_local", Severity: "P1",
-				Location: "main.go:1", Message: "unsafe", RawText: "unsafe", CreatedAt: when,
+				Location: &domain.FindingLocation{Path: "main.go", StartLine: 1, EndLine: 1}, Message: "unsafe", RawText: "unsafe", CreatedAt: when,
 			}},
 		}
 		result.CompletionEvidence, err = ward.CodexReviewResultEvidence(result, collectionEvidence)

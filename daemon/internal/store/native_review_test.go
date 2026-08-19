@@ -19,7 +19,7 @@ func nativeReviewFixtures(ts time.Time) (findings, clean domain.NativeReviewObse
 		SubmittedAt: ts, ObservedAt: ts.Add(time.Minute),
 		Findings: []domain.Finding{{
 			ID: "native-comment-800200", RunID: "run-1", Source: "codex_github",
-			Severity: "P2", Location: "daemon/main.go:42",
+			Severity: "P2", Location: &domain.FindingLocation{Path: "daemon/main.go", StartLine: 42, EndLine: 42},
 			Message: "unchecked error", RawText: "P2: the error return is dropped",
 			CreatedAt: ts,
 		}},
@@ -71,7 +71,7 @@ func TestNativeReviewObservationAppendOnMaterialChange(t *testing.T) {
 	edited.ObservedAt = findings.ObservedAt.Add(30 * time.Minute)
 	edited.Findings = []domain.Finding{{
 		ID: "native-comment-800200", RunID: "run-1", Source: "codex_github",
-		Severity: "P1", Location: "daemon/main.go:42",
+		Severity: "P1", Location: &domain.FindingLocation{Path: "daemon/main.go", StartLine: 42, EndLine: 42},
 		Message: "unchecked error, now escalated", RawText: "P1: the error return is dropped",
 		CreatedAt: ts,
 	}}

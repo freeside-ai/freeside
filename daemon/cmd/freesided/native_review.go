@@ -116,15 +116,28 @@ func nativeFinding(c publish.PullReviewComment, runID domain.RunID) domain.Findi
 	// so a legacy filename can carry invalid UTF-8 with no adversary); sanitize
 	// it on the same trust boundary as the body before it reaches the store.
 	path := boundedNativeText(c.Path)
-	location := path
-	if path != "" && c.Line > 0 {
-		location = fmt.Sprintf("%s:%d", path, c.Line)
+	// A pathed comment maps to a structured location: a line-bearing comment to
+	// the range [start, line] (a multi-line comment supplies StartLine; a
+	// single-line one collapses to [line, line]), a file-level comment (no line)
+	// to the whole-file location (0,0). A comment with no path is a review-level
+	// observation and carries a nil location (§7 fails closed on it downstream).
+	var location *domain.FindingLocation
+	if path != "" {
+		loc := domain.FindingLocation{Path: path}
+		if c.Line > 0 {
+			start := c.Line
+			if c.StartLine > 0 {
+				start = c.StartLine
+			}
+			loc.StartLine, loc.EndLine = start, c.Line
+		}
+		location = &loc
 	}
 	return domain.Finding{
 		ID:        domain.FindingID(fmt.Sprintf("native-comment-%d", c.ID)),
 		RunID:     runID,
 		Source:    string(domain.NativeReviewCodexGitHub),
-		Severity:  nativeReviewBadge(body),
+		Severity:  domain.FindingSeverity(nativeReviewBadge(body)),
 		Location:  location,
 		Message:   body,
 		RawText:   body,
@@ -136,8 +149,8 @@ func nativeFinding(c publish.PullReviewComment, runID domain.RunID) domain.Findi
 // shield-badge scan reads, so a runaway body cannot drive an unbounded scan.
 const nativeReviewBadgePrefixBytes = 512
 
-// nativeReviewBadge lifts a P1/P2/P3 priority badge from a native review comment
-// body, or "" when none is present. Real Codex comments open with a shields.io
+// nativeReviewBadge lifts a P0/P1/P2/P3 priority badge from a native review
+// comment body, or "" when none is present. Real Codex comments open with a shields.io
 // badge image (`**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-...)`),
 // so the badge sits behind markdown the plain-text scan never reaches: the
 // shield-image form is parsed first, then a plain leading-`Pn`-token form (a
@@ -149,7 +162,7 @@ func nativeReviewBadge(body string) string {
 	return leadingBadgeSeverity(body)
 }
 
-// shieldBadgeSeverity extracts P1/P2/P3 from a shields.io badge image's alt text
+// shieldBadgeSeverity extracts P0/P1/P2/P3 from a shields.io badge image's alt text
 // (`![Pn Badge]`) within a bounded prefix of the body, or "" when no badge image
 // is present. It tolerates framing whitespace between the image marker and the
 // badge letter and skips a non-badge image to a later one.
@@ -170,21 +183,21 @@ func shieldBadgeSeverity(body string) string {
 	}
 }
 
-// leadingBadgeSeverity extracts P1/P2/P3 from a plain-text badge at the front of
+// leadingBadgeSeverity extracts P0/P1/P2/P3 from a plain-text badge at the front of
 // the body (`P2: ...`, `[P3] ...`), tolerating framing punctuation before it.
 func leadingBadgeSeverity(body string) string {
 	return badgeToken(strings.TrimLeft(body, " \t\n\r*[("))
 }
 
-// badgeToken returns "P1"/"P2"/"P3" when s opens with that exact badge token
-// followed by a boundary (punctuation, space, or end), else "". It rejects a
-// longer token like "Priority" or an out-of-range "P4".
+// badgeToken returns "P0"/"P1"/"P2"/"P3" when s opens with that exact badge
+// token followed by a boundary (punctuation, space, or end), else "". It
+// rejects a longer token like "Priority" or an out-of-range "P4".
 func badgeToken(s string) string {
 	if len(s) < 2 || s[0] != 'P' {
 		return ""
 	}
 	switch s[1] {
-	case '1', '2', '3':
+	case '0', '1', '2', '3':
 	default:
 		return ""
 	}

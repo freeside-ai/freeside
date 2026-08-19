@@ -90,8 +90,8 @@ func TestReviewSourceRestartAfterResultBeforeAcceptance(t *testing.T) {
 		Result: exec.ReviewResult{
 			HeadSHA: "cafebabe",
 			Findings: []domain.Finding{{
-				ID: "finding-1", RunID: "run-1", Source: "codex", Severity: "medium",
-				Location: "daemon/internal/exec/review.go:20", Message: "x", CreatedAt: fixedTime,
+				ID: "finding-1", RunID: "run-1", Source: "codex", Severity: "P2",
+				Location: &domain.FindingLocation{Path: "daemon/internal/exec/review.go", StartLine: 20, EndLine: 20}, Message: "x", CreatedAt: fixedTime,
 			}},
 		},
 	})

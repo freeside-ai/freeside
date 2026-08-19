@@ -110,8 +110,8 @@ func (c *Client) ClassifyFinding(
 	result, err := c.Call(ctx, ClassifierSiteID, project, root, map[string]InputField{
 		"finding_id": {Value: string(finding.ID), Sensitivity: SensitivityOperational},
 		"source":     {Value: finding.Source, Sensitivity: SensitivityOperational},
-		"severity":   {Value: finding.Severity, Sensitivity: SensitivityOperational},
-		"location":   {Value: finding.Location, Sensitivity: SensitivityRepository},
+		"severity":   {Value: string(finding.Severity), Sensitivity: SensitivityOperational},
+		"location":   {Value: findingLocationText(finding.Location), Sensitivity: SensitivityRepository},
 		"message":    {Value: finding.Message, Sensitivity: SensitivityRepository},
 		"raw_text":   {Value: finding.RawText, Sensitivity: SensitivityRepository},
 	})
@@ -123,7 +123,7 @@ func (c *Client) ClassifyFinding(
 		return ClassificationDecision{}, fmt.Errorf("decode validated classifier output: %w", err)
 	}
 	contract := c.sites[ClassifierSiteID].Annotation
-	severity := contract.normalizedSeverity(finding.Source, finding.Severity)
+	severity := contract.normalizedSeverity(finding.Source, string(finding.Severity))
 	requiresAttention := contract.requiresSecondAdjudication(severity, string(output.Confidence))
 	classification := domain.Classification{
 		FindingID: finding.ID, Version: version,
@@ -153,8 +153,18 @@ func (c *Client) EvaluateClassification(
 	}
 	contract := c.sites[ClassifierSiteID].Annotation
 	return contract.requiresSecondAdjudication(
-		contract.normalizedSeverity(finding.Source, finding.Severity), classification.Confidence,
+		contract.normalizedSeverity(finding.Source, string(finding.Severity)), classification.Confidence,
 	), nil
+}
+
+// findingLocationText renders a finding's optional location as the annotation
+// input string: empty for a nil (review-level) location, otherwise its
+// canonical textual form.
+func findingLocationText(loc *domain.FindingLocation) string {
+	if loc == nil {
+		return ""
+	}
+	return loc.String()
 }
 
 func (c *AnnotationContract) reducesWork(materiality, confidence string) bool {

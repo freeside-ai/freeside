@@ -161,7 +161,7 @@ func newFixtures(t *testing.T) fixtures {
 		delivery:   delivery,
 		finding: domain.Finding{
 			ID: "find-1", RunID: "run-1", Source: "codex_github",
-			Location: "daemon/main.go:42", Message: "unchecked error",
+			Location: &domain.FindingLocation{Path: "daemon/main.go", StartLine: 42, EndLine: 42}, Message: "unchecked error",
 			RawText: "err not handled", CreatedAt: ts,
 		},
 		class: domain.Classification{

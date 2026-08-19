@@ -53,8 +53,8 @@ func testClient(t *testing.T, driver inference.Driver, calls int64) (*inference.
 
 func finding(severity string) domain.Finding {
 	return domain.Finding{
-		ID: "finding-1", RunID: "run-1", Source: "codex_local", Severity: severity,
-		Location: "main.go:1", Message: "token-value should never leave", RawText: "P1 detail", CreatedAt: time.Unix(1, 0).UTC(),
+		ID: "finding-1", RunID: "run-1", Source: "codex_local", Severity: domain.FindingSeverity(severity),
+		Location: &domain.FindingLocation{Path: "main.go", StartLine: 1, EndLine: 1}, Message: "token-value should never leave", RawText: "P1 detail", CreatedAt: time.Unix(1, 0).UTC(),
 	}
 }
 
