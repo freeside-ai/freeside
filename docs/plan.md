@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 34
+revision: 35
 status: active
-updated: 2026-08-17
+updated: 2026-08-19
 ---
 
 # Freeside
@@ -146,6 +146,14 @@ decide whether passing them yields a positive return.
    auditor.
 7. It is not a general-purpose synchronization platform. Server-authoritative
    snapshots are enough; there is no client-facing event log and no CRDT.
+8. It never requires a Freeside-operated service. Phase 1 depends on no such
+   service, and the fully unmanaged deployment remains first-class
+   permanently. Future managed infrastructure (Section 5.1) may remove
+   operational friction; it is optional convenience, never control-plane
+   authority, and its loss may cost convenience (reachability, delivery, or
+   portable operation) but never local state or standalone workflow
+   authority. Portable-mode replica storage carries the one scoped head
+   trust, activation fencing and recovery frontier (Section 5.1).
 
 ## 3. Operating principles
 
@@ -310,6 +318,35 @@ GitHub  <── reconciliation and publication ──>  freesided
 | **Sync API** | Serves atomic snapshots with revision, epoch, and invalidation semantics. |
 | **Freeside app** | Provides the SwiftUI macOS and iOS inbox, decision detail, and run timeline using platform-protected caches. |
 
+**Core authority and replaceable infrastructure.** The daemon and clients own
+application semantics and authentication; remote reachability (Section 5.2),
+notification delivery, replica storage (Section 5.10), and external health
+monitoring are replaceable infrastructure boundaries, each with an
+operator-selected reference implementation and, possibly, a future
+Freeside-operated managed implementation. The Section 5.10 replica-store
+contract is the template: a capability-based requirement set with a named
+first reference backend that is never an architectural assumption. The rule
+that governs every such boundary: managed infrastructure may improve
+reachability, availability, storage, and delivery, but never becomes
+necessary for workflow authority or local operation, and never increases
+Freeside's authority. One scoped exception is explicit rather than implied
+away: in portable mode the Section 5.10 replica store is the oracle for
+both activation fencing and the recovery frontier by design, so every
+replica backend, operator-selected or Freeside-managed, sits inside the
+authority trust boundary for host activation and for the currency of the
+restored frontier; the unconditional rule covers reachability,
+notification delivery, and monitoring, and a managed replica backend is
+admissible only under the Section 5.10 contract with that fencing trust
+acknowledged. Notification delivery follows the same pattern: ntfy
+(hosted or self-hosted) is the Phase 1 reference channel, a Freeside-operated
+push service is a possible later channel, and Section 4's AttentionDelivery
+semantics stay channel-neutral (no channel implementation type enters the
+contract; provider acceptance stays distinct from delivery evidence;
+notifications remain non-authoritative hints). This boundary is deliberately
+narrow: authoritative components (SQLite workflow state, conversations,
+AttentionItems, scheduling, approvals, agent execution, verification, GitHub
+and provider credentials, artifact authority) get no cloud seam.
+
 ### 5.2 The Daemon and Its Supervisor
 
 `freesided` is a single static Go binary. A supervisor keeps it running; the
@@ -387,6 +424,19 @@ recreates SIGKILL-mid-lease, and a bounded credential-safe teardown is
 deferred hardening, not a tunable). SIGKILL and power loss remain
 crash-equivalent, covered by kill-recovery.
 
+**Reachability.** Signet's authenticated HTTP and WebSocket API is one
+application protocol exposed unchanged over every reachability mode: direct
+loopback, Tailscale, and a possible future managed relay (Section 5.19).
+Tailscale is the Phase 1 reference remote-reachability mechanism, not an
+architectural property of Signet; neither Tailscale nor its address model is
+an architectural assumption. The Phase 1 security gate is unchanged: the
+production API binds only to loopback or an exact verified Tailscale-owned
+address. Reachability restricts who can contact Signet; it never
+authenticates anyone to it, because every mode presents the same Freeside
+device credential (Section 5.14). The seam stays architectural prose: no
+reachability abstraction enters the daemon until a second real
+implementation exists.
+
 **Liveness and address.**
 
 - Unauthenticated `GET /health` returns exactly `{status, version,
@@ -406,7 +456,12 @@ crash-equivalent, covered by kill-recovery.
   keeps process heartbeats as plain tickers): an external probe polls
   `/health` and notifies over ntfy on unreachability or crash-loop, landing
   in 1B.1. The local surface is the Mac app's menu bar presence (Section
-  10).
+  10). The probe is replaceable monitoring infrastructure (Section 5.1): the
+  Phase 1 reference is operator-controlled; a future managed monitor may
+  observe relay-connector presence, but reports only what it can prove:
+  connector presence is not daemon health, and managed-service uncertainty
+  is never reported as host failure. Monitoring stays observational and
+  never becomes workflow authority.
 
 Storage and CI invariants:
 
@@ -1055,6 +1110,19 @@ verify replica and takeover readiness but serves no authoritative work. It does
 not process inbox or restored outbox work, run agents, mutate workflow state,
 or execute external effects.
 
+**Enrolled host identity is cryptographically backed.** Reviewed at revision
+35: no host identity is persisted yet, so this is a forward requirement on
+the #265 domain contract, not a migration. An enrolled host record carries a
+stable identifier and a host public key whose private key stays in platform
+protected storage; the host proves possession when authenticating to
+infrastructure services (a future relay connector, portable-store
+provisioning, health attestation). Purpose-specific credentials derive from
+or sit beside that identity; no single omnipotent machine key exists, and
+the host key never becomes application authority: device pairing
+(Section 5.14) and GitHub App keys remain their own credentials. This is
+recorded now because a second notion of "machine" invented after
+installations exist is the expensive retrofit.
+
 Freeside has two operating modes:
 
 - **`standalone` is the default, zero-configuration mode.** Local SQLite and
@@ -1188,7 +1256,18 @@ always valid for standalone backup and testing. It is portable only after the
 full suite passes for the exact filesystem and mount configuration. Consumer
 sync folders such as iCloud Drive and Dropbox are categorically ineligible.
 The availability trade is deliberate: portable external effects stop while
-the replica store is unavailable rather than risk an unfenced effect.
+the replica store is unavailable rather than risk an unfenced effect. The
+integrity trust is equally explicit: the head arbitrates which host
+activates and names the frontier a takeover restores, so the replica
+backend sits inside the authority trust boundary for host activation and
+for frontier currency (the Section 5.1 scoped exception). A backend that
+equivocates over heads can misdirect activation or serve an older,
+internally consistent head that rolls back the restored frontier, losing
+or repeating already-committed work including effect intents; the
+conformance suite probes this trust but cannot eliminate it, checkpoint
+encryption keeps workflow content unreadable to the backend, and
+content-addressing binds what a named frontier contains, never which head
+is current.
 
 Takeover restores a complete frontier; there is no partial mode:
 
@@ -1474,6 +1553,18 @@ databases are disposable read caches. The synchronization contract guarantees:
 Pairing uses a short-lived code shown or printed on the daemon host; no display
 is assumed. The daemon stores only a credential hash or device public key, never
 reusable plaintext. Devices can be revoked.
+
+Device identity is independent of network identity. Tailscale identity is
+never Freeside device identity or authorization: every supported reachability
+mode (Section 5.2) presents the same Freeside device credential to Signet, so
+a device moving between reachability modes keeps its identity with no
+authorization migration. Pairing and revocation are daemon-owned under every
+mode. A managed service may transport pairing, discovery, or rendezvous
+traffic (end-to-end protected and unreadable by the transport; Section
+5.19), but can never independently enroll an authorized device: a hosted
+account identity may prove eligibility to reach a pairing endpoint, never
+confer application authority. The daemon alone turns a pairing ceremony into
+a device.
 
 Every judgment-bearing mutation is:
 
@@ -1773,6 +1864,59 @@ gauntlet, verification, and the adversarial pass itself. Distinct from the
 Section 7 review requirement, which itself anchors pre-publication
 (revision 28): the Section 7 pass is required; this pass is optional and
 deferred.
+
+**Managed reachability relay (deferred, unscheduled).** A future managed
+relay may provide authenticated bidirectional byte transport between an
+enrolled host and its paired clients: `freesided` stays loopback-bound and
+holds an outbound connector authenticated by the Section 5.9 host identity;
+clients use ordinary HTTPS/WSS; the transported protocol is Signet,
+unchanged (Section 5.2). The Signet channel is end-to-end protected and
+daemon-anchored: a relay that terminates edge transport TLS carries only an
+opaque inner channel, and the client authenticates that channel against a
+Freeside-owned control-plane identity that is independent of
+relay-controlled hostnames or PKI and stable across enrolled-host takeover
+(Sections 5.9 and 5.10), so a paired client survives a graceful or crash
+takeover without re-pairing; the per-host Section 5.9 key authenticates the
+host to the relay, never the daemon to clients. Anchor succession is a
+control-plane ceremony: only the control plane's own existing anchor
+authority may admit a successor, never the relay or any hosted service, and
+stability across legitimate takeover never licenses one copied,
+unrevocable private key (the Section 5.9 no-omnipotent-key rule applies);
+compromise recovery may rotate the anchor and force re-pairing rather than
+leave a compromised anchor trusted. Connector admission and continued
+routing bind to the current Section 5.9 active host and epoch: an enrolled
+standby or returning stale host holds a valid host identity but never
+presents as the serving daemon, and a host that is not active refuses
+authoritative Signet service regardless of routing (the Sections 5.9 and
+5.10 fencing stays the authority backstop), so relay misrouting degrades
+to reachability loss, never stale state or premature command acceptance.
+Pairing bootstraps from the pairing
+secret itself, not from any certificate the relay could present, and must
+resist a relay-positioned attacker guessing or multiplying attempts
+against a short code. Signet authentication material (device credentials,
+pairing codes and grants) is therefore never readable or replayable by the
+relay, and a relay presenting a valid edge certificate cannot impersonate
+the daemon to collect it. The concrete mechanism (key-succession chains,
+device-pinned bindings, secret-authenticated bootstrap) is
+implementation-time design under this contract's re-review, which must
+refute the credential-replay, pairing-race, pairing-secret-guessing,
+daemon-impersonation (including unauthorized anchor succession), stale-
+or passive-host routing, takeover-stranding, and
+compromised-anchor-revocation paths before any relay is accepted. The
+relay must not: become workflow authority; interpret or independently
+execute AttentionItem or ClientCommand semantics; read, retain, or replay
+Signet authentication material; possess provider or GitHub credentials;
+persist authoritative workflow state; grant any action unavailable through
+Signet; or make Freeside-operated infrastructure necessary for standalone
+operation. Relay loss is reachability loss, never control-plane state loss.
+A hibernating per-host rendezvous (for example a Cloudflare Worker with a
+per-host Durable Object) is a plausible first implementation; neither
+Durable Objects nor any provider enters the application architecture or
+protocol contract, and the relay protocol must remain implementable by a
+self-hosted or third-party service. Artifact bytes stay daemon-served over the relay by default; a
+delivery cache for large artifacts is a separate deferred concern, taken up
+only if measured payloads demand it, and artifact authority stays local and
+digest-addressed regardless.
 
 **Readiness registry (deferred).** When built, a projection over current
 typed proofs recomputed on read, never a stored ready bit; the Section 10
@@ -2512,6 +2656,18 @@ or token-mint checks.
 Defaults are hosted ntfy, embedded SQLite, one configuration directory, and
 `attended_dev` with honest isolation-class reporting.
 
+The Phase 1 reference deployment is fully unmanaged (Section 5.1): Tailscale
+for remote reachability, ntfy for notification delivery, `freesided` as
+workflow authority with local state and artifacts, an operator-selected
+conforming replica backend when portable mode is enabled, and an
+operator-controlled external probe for away-from-host monitoring. Future
+managed implementations (relay, push, storage, monitoring) may substitute
+convenience infrastructure without changing the authority model, a managed
+replica backend carrying Section 5.10's head trust (activation fencing and
+recovery frontier) as the one scoped exception; every one is deferred,
+none is scheduled in Phase 1,
+and the unmanaged deployment remains supported permanently.
+
 Phase 1A exit targets, verified on a clean VM or spare machine:
 
 - fresh machine to first run in under one hour; and
@@ -2883,23 +3039,40 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 34 ("Inter-wave tracker state"):
+Revision 35 ("Managed infrastructure never exceeds convenience"):
 
-1. **Wave-tracker authority resolves through a three-state resolver**
-   (Section 11): over every pinned issue whose title matches the canonical
-   wave-tracker pattern, evaluated before filtering by issue state, exactly one
-   open match is active-wave, exactly one closed match is inter-wave, and zero
-   or multiple matches are an invalid authority state for spine repair. This
-   supersedes revision 32's single-open-match rule, which had no model for the
-   legitimate gap between a wave's close and the next wave's planning and so
-   treated that gap as broken authority: it let an explicitly authorized
-   `Handle #N` session stop and made merge cleanup report reconciliation
-   incomplete when there was simply no wave tracker to mutate. Fiat stays
-   independent of wave state; only scheduled self-selection needs an open
-   current tracker. The wave-boundary procedure keeps exactly one
-   wave-title-matching tracker pinned (unrelated standing trackers coexist and
-   never count), with the interruption-safe pin choreography deferred to #828.
-   (User; devlog 2026-08-17-2108-inter-wave-state.md; #826.)
+1. **Core authority and replaceable infrastructure are an explicit boundary**
+   (Sections 2, 5.1): remote reachability, notification delivery, replica
+   storage, and external health monitoring are replaceable infrastructure with
+   operator-selected reference implementations and possible future
+   Freeside-operated managed implementations; managed infrastructure may
+   improve reachability, availability, storage, and delivery, but never
+   becomes necessary for workflow authority or local operation, and its loss
+   never invalidates local state. The one scoped exception is explicit:
+   portable-mode replica storage is the oracle for activation fencing and
+   the recovery frontier and sits inside the authority trust boundary,
+   whoever operates it (Sections 5.1, 5.10). The Section 5.10
+   capability-based replica-store contract is the template. The fully
+   unmanaged deployment
+   (Tailscale, ntfy, local state, operator probe; Section 10) stays
+   first-class permanently, and authoritative components get no cloud seam.
+   (User; devlog 2026-08-19-2138-managed-infrastructure-seams.md; #858.)
+2. **Reachability is not identity** (Sections 5.2, 5.14): Signet is one
+   authenticated protocol over loopback, Tailscale (the Phase 1 reference
+   mechanism, not an architectural assumption), or a future managed relay;
+   every mode presents the same daemon-owned Freeside device credential, and
+   a managed service may transport pairing but never enroll a device. The
+   deferred relay contract (Section 5.19) bounds any future relay to byte
+   transport: no workflow authority, no credential possession or visibility
+   (the Signet channel stays end-to-end protected through the relay and
+   authenticates the daemon by a control-plane-stable Freeside identity
+   independent of relay-controlled PKI), no
+   authoritative state, and no Signet bypass; relay loss is reachability
+   loss, never state loss. Enrolled
+   host identity becomes cryptographically backed, recorded now as a forward
+   requirement on the #265 domain contract before any host identity is
+   persisted (Section 5.9).
+   (User; devlog 2026-08-19-2138-managed-infrastructure-seams.md; #858.)
 
 ## 14. Risks
 
