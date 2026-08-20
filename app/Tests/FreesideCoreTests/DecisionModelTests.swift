@@ -912,6 +912,27 @@ import Testing
         #expect(model.appliedRecord == nil)
     }
 
+    @Test func canceledValidationDoesNotSurfaceAsFailure() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-spec_approval")
+        let reached = AsyncGate()
+        await server.setBeforeRespond { operationID in
+            if operationID == "getAttentionItem" {
+                await reached.open()
+                try await Task.sleep(for: .seconds(30))
+            }
+        }
+
+        let validation = Task { await model.validate() }
+        await reached.wait()
+        validation.cancel()
+        await validation.value
+
+        #expect(model.validation == .pending)
+        #expect(!model.actionsEnabled)
+    }
+
     @Test func staleValidationFailureNeverClobbersANewerSuccess() async {
         // An older validate() that fails late must not overwrite the
         // outcome of a newer one that already succeeded; only the newest

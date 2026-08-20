@@ -334,6 +334,7 @@ struct DecisionDetailView: View {
     private func bannerLabel(_ text: String, systemImage: String, tint: Color) -> some View {
         Label(text, systemImage: systemImage)
             .font(.callout)
+            .textSelection(.enabled)
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
