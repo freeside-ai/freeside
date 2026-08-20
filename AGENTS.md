@@ -45,6 +45,8 @@ work needs no note.
 
 <!-- /agents-md:managed:devlog -->
 
+## Agent Setup
+
 Agent-setup profile: High-assurance. A decision note is mandatory for:
 
 - contract and safety-policy changes;
@@ -56,6 +58,23 @@ Agent-setup profile: High-assurance. A decision note is mandatory for:
 Routine implementation and coordination require no note. GitHub issues
 and git remain the only sources of active work state; a note records
 why, never status.
+
+### Coordination model
+
+- **Current shape:** Shapes 2–5 combined: path-and-dependency units, typed
+  relations, stable named work streams, and an integration
+  spine/shared-contract domain. Current demonstrated width is four fronts,
+  further bounded by each wave tracker, live claims, path overlap, review
+  bandwidth, and spine integration capacity.
+- **Evidence basis:** Waves 3–6 and issue/PR history show recurring
+  lane-scoped fronts; PR #801 established the typed relations; Wave 6 tracker
+  #835 runs a repo-wide-exclusive contract chain alongside independent
+  fronts and identifies review bandwidth as the binding constraint.
+- **Detailed mechanics:** [`docs/coordination.md`](docs/coordination.md).
+- **Reassess when:** A planned wave needs more than four fronts;
+  review or integration queueing persists at four or fewer; work repeatedly
+  crosses lane boundaries; or shared-contract serialization or the spine role
+  materially changes.
 
 ## Work-Unit Stages
 
