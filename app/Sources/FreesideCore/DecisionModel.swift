@@ -255,6 +255,13 @@ public final class DecisionModel {
             validation = .failed(Self.shadowedByStaleCache)
         } catch {
             guard generation == validationGeneration else { return }
+            // SwiftUI cancels this view-owned task when a resolved item
+            // leaves the open inbox. URLSessionTransport wraps that
+            // cancellation in ClientError, so recognize the task flag as
+            // well as a bare CancellationError. Cancellation is lifecycle,
+            // not evidence that the daemon failed; keep validation pending
+            // (and actions disabled) until a later task certifies state.
+            if error is CancellationError || Task.isCancelled { return }
             proposalFacts = nil
             validation = .failed(String(describing: error))
         }

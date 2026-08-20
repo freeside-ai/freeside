@@ -487,6 +487,71 @@ private struct FailingCredentialStore: DeviceCredentialStore {
                 != AppSession.cacheDirectory(for: slashPath))
     }
 
+    @Test func completePairingPersistsTheLiveDeploymentURLForRelaunch() async throws {
+        // On iOS an unadorned home-screen relaunch passes no launch
+        // arguments and reads no daemon-host readiness file, so the paired
+        // deployment URL must persist for `fromEnvironment()` to re-enter
+        // live mode instead of the mock. A live session (deploymentURL set)
+        // records it at pairing; the recorded value round-trips through
+        // launchMode's persisted-URL branch back to the same deployment.
+        let deploymentURL = URL(string: "http://100.64.0.1:7331")!
+        let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])
+        let credentials = InMemoryCredentialStore()
+        var persisted: [URL] = []
+        let session = AppSession(
+            client: APIClientFactory.mock(server: server) { (try? credentials.load())?.token },
+            credentials: credentials,
+            cache: InMemoryCacheStore(),
+            deploymentURL: deploymentURL,
+            persistServerURL: { persisted.append($0) }
+        )
+        guard case .needsPairing(let model) = session.phase else {
+            Issue.record("expected the pairing gate, got \(session.phase)")
+            return
+        }
+        model.pairingCode = "483911"
+        model.displayName = "Ben's iPhone"
+        let credential = try #require(await model.pair())
+        session.completePairing(credential)
+
+        #expect(persisted == [deploymentURL])
+        #expect(
+            AppSession.launchMode(
+                argumentServerURL: nil,
+                pairingDemo: false,
+                mockMode: false,
+                readiness: nil,
+                persistedServerURL: persisted.first?.absoluteString,
+                localDaemonURL: nil,
+                hasCredential: { _ in true })
+                == .live(deploymentURL, pairingCode: ""))
+    }
+
+    @Test func completePairingPersistsNothingWithoutALiveDeployment() async throws {
+        // Mock and pairing-demo sessions carry no deploymentURL; pairing
+        // them must not write a persisted URL that would strand a later
+        // launch on a bogus deployment.
+        let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])
+        let credentials = InMemoryCredentialStore()
+        var persisted: [URL] = []
+        let session = AppSession(
+            client: APIClientFactory.mock(server: server) { (try? credentials.load())?.token },
+            credentials: credentials,
+            cache: InMemoryCacheStore(),
+            persistServerURL: { persisted.append($0) }
+        )
+        guard case .needsPairing(let model) = session.phase else {
+            Issue.record("expected the pairing gate, got \(session.phase)")
+            return
+        }
+        model.pairingCode = "483911"
+        model.displayName = "Ben's iPhone"
+        let credential = try #require(await model.pair())
+        session.completePairing(credential)
+
+        #expect(persisted.isEmpty)
+    }
+
     @Test func aSessionWithACredentialIsReadyImmediately() async throws {
         let credentials = InMemoryCredentialStore(
             credential: DeviceCredential(
@@ -502,5 +567,64 @@ private struct FailingCredentialStore: DeviceCredentialStore {
             return
         }
         #expect(coordinator.store.device.deviceID == "device-7")
+    }
+
+    @Test func aCredentialReadyLiveSessionPersistsItsDeploymentURL() async throws {
+        // A live launch whose Keychain already holds a credential enters
+        // `.ready` in init without pairing, so init is the only persistence
+        // write; `completePairing` never runs. Skipping it strands the next
+        // unadorned relaunch on the mock or a previously persisted server
+        // (reinstall with preserved Keychain and cleared preferences, or
+        // switching back to a previously paired daemon).
+        let deploymentURL = URL(string: "http://100.64.0.1:7331")!
+        let credentials = InMemoryCredentialStore(
+            credential: DeviceCredential(
+                deviceID: "device-8", token: testDeviceToken(for: "device-8"),
+                ntfySubscription: .mock)!)
+        var persisted: [URL] = []
+        let session = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: credentials,
+            cache: InMemoryCacheStore(),
+            deploymentURL: deploymentURL,
+            persistServerURL: { persisted.append($0) }
+        )
+        guard case .ready = session.phase else {
+            Issue.record("expected a ready session, got \(session.phase)")
+            return
+        }
+        #expect(persisted == [deploymentURL])
+        #expect(
+            AppSession.launchMode(
+                argumentServerURL: nil,
+                pairingDemo: false,
+                mockMode: false,
+                readiness: nil,
+                persistedServerURL: persisted.first?.absoluteString,
+                localDaemonURL: nil,
+                hasCredential: { _ in true })
+                == .live(deploymentURL, pairingCode: ""))
+    }
+
+    @Test func aCredentialReadySessionWithoutALiveDeploymentPersistsNothing() async throws {
+        // Mock and pairing-demo sessions carry no deploymentURL even when a
+        // credential is already present, so the immediate-ready init path
+        // must not write a persisted URL that would strand a later launch.
+        let credentials = InMemoryCredentialStore(
+            credential: DeviceCredential(
+                deviceID: "device-9", token: testDeviceToken(for: "device-9"),
+                ntfySubscription: .mock)!)
+        var persisted: [URL] = []
+        let session = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: credentials,
+            cache: InMemoryCacheStore(),
+            persistServerURL: { persisted.append($0) }
+        )
+        guard case .ready = session.phase else {
+            Issue.record("expected a ready session, got \(session.phase)")
+            return
+        }
+        #expect(persisted.isEmpty)
     }
 }

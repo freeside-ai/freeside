@@ -21,22 +21,36 @@ public final class AppSession {
     private let client: any APIProtocol
     private let cache: any CacheStore
     private let deploymentURL: URL?
+    private let persistServerURL: (URL) -> Void
 
     public init(
         client: any APIProtocol,
         credentials: any DeviceCredentialStore,
         cache: any CacheStore,
         pairingCode: String = "",
-        deploymentURL: URL? = nil
+        deploymentURL: URL? = nil,
+        persistServerURL: @escaping (URL) -> Void = AppSession.persistServerURLToDefaults
     ) {
         self.client = client
         self.cache = cache
         self.deploymentURL = deploymentURL
+        self.persistServerURL = persistServerURL
         // An unreadable credential is indistinguishable from an absent
         // one here, and the recovery is the same either way: pairing
         // mints a new device (#64; a lost token is revoke-and-repair).
         if let credential = try? credentials.load() {
             phase = .ready(Self.coordinator(client: client, cache: cache, credential: credential))
+            // A live session already holding a credential enters `.ready`
+            // here without pairing, so this is its only chance to record the
+            // deployment URL for a later unadorned relaunch: `completePairing`
+            // never runs. This is the reinstall-with-preserved-Keychain (and
+            // cleared preferences) case, and the switch back to a previously
+            // paired daemon. Mirror `completePairing`'s write; mock and
+            // pairing-demo sessions carry no `deploymentURL` and persist
+            // nothing.
+            if let deploymentURL {
+                persistServerURL(deploymentURL)
+            }
         } else {
             phase = .needsPairing(
                 PairingModel(
@@ -45,8 +59,16 @@ public final class AppSession {
     }
 
     /// Hands the freshly paired identity to the synced surface; the
-    /// pairing model already stored the credential.
+    /// pairing model already stored the credential. A live session also
+    /// records its deployment URL so a later unadorned relaunch (the iOS
+    /// home-screen case, which passes no launch arguments) re-enters live
+    /// mode through `fromEnvironment()`'s persisted-URL branch instead of
+    /// falling back to the mock. Mock and pairing-demo sessions carry no
+    /// `deploymentURL` and persist nothing.
     public func completePairing(_ credential: DeviceCredential) {
+        if let deploymentURL {
+            persistServerURL(deploymentURL)
+        }
         phase = .ready(Self.coordinator(client: client, cache: cache, credential: credential))
     }
 
@@ -180,6 +202,22 @@ public final class AppSession {
         case .mock:
             return mock()
         }
+    }
+
+    /// Writes the live deployment URL into the app's persistent domain
+    /// under the same `FreesideServerURL` key the Mac installer seeds
+    /// externally (`install-mac-app.sh`) and `fromEnvironment()` reads, so
+    /// an unadorned relaunch resolves back to this deployment. The write
+    /// mirrors that read: keyed on `Bundle.main.bundleIdentifier`, storing
+    /// `url.absoluteString`. `nonisolated` so it satisfies the plain
+    /// closure default without a main-actor hop; `Bundle`/`UserDefaults`
+    /// are their own synchronization.
+    public nonisolated static func persistServerURLToDefaults(_ url: URL) {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return }
+        let defaults = UserDefaults.standard
+        var domain = defaults.persistentDomain(forName: bundleID) ?? [:]
+        domain["FreesideServerURL"] = url.absoluteString
+        defaults.setPersistentDomain(domain, forName: bundleID)
     }
 
     /// A real daemon: the credential lives in the Keychain and nowhere
