@@ -1046,3 +1046,24 @@ contract. Held from revision 32: everything.
    operational retry intent separate from specification bytes and makes every
    implementation attempt auditable to its exact parent.
    (User; devlog 2026-08-16-2238-production-attempt-identity.md; #794.)
+
+## Revision 34
+
+Revision 34 gives wave-tracker authority a three-state model. Held from
+revision 33: everything.
+
+1. **Wave-tracker authority resolves through a three-state resolver**
+   (Section 11): over every pinned issue whose title matches the canonical
+   wave-tracker pattern, evaluated before filtering by issue state, exactly one
+   open match is active-wave, exactly one closed match is inter-wave, and zero
+   or multiple matches are an invalid authority state for spine repair. This
+   supersedes revision 32's single-open-match rule, which had no model for the
+   legitimate gap between a wave's close and the next wave's planning and so
+   treated that gap as broken authority: it let an explicitly authorized
+   `Handle #N` session stop and made merge cleanup report reconciliation
+   incomplete when there was simply no wave tracker to mutate. Fiat stays
+   independent of wave state; only scheduled self-selection needs an open
+   current tracker. The wave-boundary procedure keeps exactly one
+   wave-title-matching tracker pinned (unrelated standing trackers coexist and
+   never count), with the interruption-safe pin choreography deferred to #828.
+   (User; devlog 2026-08-17-2108-inter-wave-state.md; #826.)
