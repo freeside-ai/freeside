@@ -7,10 +7,11 @@ import Foundation
 /// verdict predicate the actor calls during reconstruction and submission
 /// (domain.AttentionItem.Validate, TimingSummary.Validate,
 /// AttentionDelivery.Validate, signet's per-type action policy, and the
-/// command well-formedness the signet boundary enforces ahead of any
-/// lookup). Nothing here reads actor state: `snapshotBreach` takes the
-/// approved-recipe set as a parameter so the actor's bridge can pass its
-/// own policy set. `MockContractValidationTests` pins each in isolation.
+/// command structure Signet checks before lookup plus the action input it
+/// checks after command-id replay). Nothing here reads actor state.
+/// `snapshotBreach` takes the approved-recipe set as a parameter so the
+/// actor's bridge can pass its own policy set. `MockContractValidationTests`
+/// pins each in isolation.
 enum MockContractValidation {
     static func runSnapshotBreach(
         _ snapshot: Components.Schemas.RunSnapshot, serverRevision: Int64
@@ -207,30 +208,67 @@ enum MockContractValidation {
             }
             if binding.proposals.isEmpty { return "finding_adjudication has no proposals" }
             var findingIDs = Set<String>()
+            var hasOfferedAlternative = false
             for proposal in binding.proposals {
-                if proposal.finding_id.isEmpty || proposal.rationale.isEmpty {
+                if proposal.finding_id.isEmpty
+                    || proposal.rationale.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                {
                     return "finding_adjudication proposal has an empty required field"
                 }
                 if !findingIDs.insert(proposal.finding_id).inserted {
                     return "finding_adjudication has duplicate finding ids"
                 }
-                if proposal.cited_rules.contains("") || proposal.assumptions.contains("")
-                    || proposal.open_questions.contains("")
-                {
-                    return "finding_adjudication proposal has an empty explanation"
+                if !validAdjudicationRoute(
+                    goal: proposal.goal_relationship,
+                    compatibility: proposal.compatibility?.value1,
+                    route: proposal.route
+                ) {
+                    return "finding_adjudication proposal has incompatible axes and route"
+                }
+                switch proposal.producer {
+                case .model:
+                    if proposal.confidence == nil {
+                        return "finding_adjudication model proposal lacks confidence"
+                    }
+                    if proposal.compatibility?.value1 == .allowed {
+                        return "finding_adjudication model proposal mints allowed"
+                    }
+                case .engine:
+                    if proposal.confidence != nil {
+                        return "finding_adjudication engine proposal carries confidence"
+                    }
+                    if proposal.goal_relationship != .required
+                        || proposal.compatibility?.value1 != .allowed
+                        || proposal.route != .remediate
+                    {
+                        return "finding_adjudication engine proposal is not the deterministic fast path"
+                    }
                 }
                 var alternativeRoutes = Set<Components.Schemas.AdjudicationRoute>()
                 for alternative in proposal.offered_alternatives {
+                    hasOfferedAlternative = true
                     if alternative.route == proposal.route {
                         return "finding_adjudication alternative repeats the recommended route"
                     }
-                    if alternative.consequence.isEmpty {
+                    if isBlank(alternative.consequence) {
                         return "finding_adjudication alternative has an empty consequence"
+                    }
+                    if !validAdjudicationRoute(
+                        goal: proposal.goal_relationship,
+                        compatibility: proposal.compatibility?.value1,
+                        route: alternative.route
+                    ) {
+                        return "finding_adjudication alternative is incompatible with proposal axes"
                     }
                     if !alternativeRoutes.insert(alternative.route).inserted {
                         return "finding_adjudication has duplicate alternative routes"
                     }
                 }
+            }
+            if item.requested_decision.contains(.choose_alternative_route)
+                && !hasOfferedAlternative
+            {
+                return "finding_adjudication has no offered alternatives"
             }
         } else if item._type == .finding_adjudication {
             return "finding_adjudication item lacks its binding"
@@ -340,6 +378,10 @@ enum MockContractValidation {
         return nil
     }
 
+    private static func isBlank(_ value: String) -> Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// Mirrors signet's validateRequestedActions over the authoritative
     /// per-type table (phase1ActionSets matches the merged policy):
     /// blocked is read-only and must offer the empty set (#96); every
@@ -363,6 +405,11 @@ enum MockContractValidation {
     }
 
     static func validate(_ command: Components.Schemas.ClientCommand) throws {
+        try validateStructure(command)
+        try validateActionInput(command)
+    }
+
+    static func validateStructure(_ command: Components.Schemas.ClientCommand) throws {
         func malformed(_ reason: String) -> MockServer.MalformedCommandError {
             MockServer.MalformedCommandError(commandID: command.command_id, reason: reason)
         }
@@ -390,12 +437,19 @@ enum MockContractValidation {
                 throw malformed("duplicate attachment digest")
             }
         }
+    }
+
+    static func validateActionInput(_ command: Components.Schemas.ClientCommand) throws {
+        func malformed(_ reason: String) -> MockServer.MalformedCommandError {
+            MockServer.MalformedCommandError(commandID: command.command_id, reason: reason)
+        }
         switch command.payload.action {
         case .start_with_changes:
             guard let revision = command.payload.run_proposal_revision?.value1,
                 command.payload.snooze_until == nil,
-                command.payload.message == nil,
-                command.payload.attachments == nil,
+                (command.payload.message ?? "").isEmpty,
+                (command.payload.attachments ?? []).isEmpty,
+                command.payload.alternative_choices == nil,
                 revision.expected_cost_units >= 1,
                 revision.expected_cost_units <= 1_000_000,
                 revision.scope.component_count >= 1,
@@ -406,22 +460,23 @@ enum MockContractValidation {
         case .snooze:
             guard command.payload.snooze_until != nil,
                 command.payload.run_proposal_revision == nil,
-                command.payload.message == nil,
-                command.payload.attachments == nil
+                (command.payload.message ?? "").isEmpty,
+                (command.payload.attachments ?? []).isEmpty,
+                command.payload.alternative_choices == nil
             else { throw malformed("invalid snooze_until") }
         case .choose_alternative_route:
             guard let choices = command.payload.alternative_choices, !choices.isEmpty,
                 choices.allSatisfy({ !$0.finding_id.isEmpty }),
                 Set(choices.map(\.finding_id)).count == choices.count,
-                command.payload.message == nil,
-                command.payload.attachments == nil,
+                (command.payload.message ?? "").isEmpty,
+                (command.payload.attachments ?? []).isEmpty,
                 command.payload.run_proposal_revision == nil,
                 command.payload.snooze_until == nil
             else { throw malformed("invalid alternative_choices") }
         case .accept_recommended_route:
             guard command.payload.alternative_choices == nil,
-                command.payload.message == nil,
-                command.payload.attachments == nil,
+                (command.payload.message ?? "").isEmpty,
+                (command.payload.attachments ?? []).isEmpty,
                 command.payload.run_proposal_revision == nil,
                 command.payload.snooze_until == nil
             else { throw malformed("finding adjudication input on accept") }
@@ -588,6 +643,30 @@ enum MockContractValidation {
         calendar.timeZone = TimeZone(identifier: "UTC")!
         return calendar.date(from: components)!
     }()
+
+    private static func validAdjudicationRoute(
+        goal: Components.Schemas.GoalRelationship,
+        compatibility: Components.Schemas.WorkUnitCompatibility?,
+        route: Components.Schemas.AdjudicationRoute
+    ) -> Bool {
+        switch goal {
+        case .required:
+            guard let compatibility else { return false }
+            switch compatibility {
+            case .allowed: return route == .remediate
+            case .work_unit_revision_required: return route == .park_revision
+            case .separate_work_required: return route == .park_separate_work
+            case .human_decision_required: return route == .attention_human_decision
+            case .unknown: return route == .park_unknown
+            }
+        case .adjacent:
+            return compatibility == nil && route == ._defer
+        case .contradictory:
+            return compatibility == nil && (route == .decline || route == .dispute)
+        case .unclear:
+            return compatibility == nil && route == .attention_unclear
+        }
+    }
 
     /// The content address of a text claim's UTF-8 bytes, in the
     /// repository-wide "sha256:<hex>" form; the Swift twin of
