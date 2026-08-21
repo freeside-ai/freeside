@@ -1105,3 +1105,27 @@ Revision 35 ("Managed infrastructure never exceeds convenience"):
    persisted (Section 5.9).
    (User; devlog 2026-08-19-2138-managed-infrastructure-seams.md; #858.)
 
+## Revision 36
+
+Revision 36 ("Cross-round finding identity"):
+
+Revision 36 lands the cross-round semantic finding identity the Section 7
+fixed-disposition safety proof was conditioned on. Held from revision 35:
+everything.
+
+1. **The fixed-disposition absence proof keys on a deterministic finding
+   fingerprint** (Section 7): the identity is `domain.Finding.Fingerprint()`
+   over the review source, location path, and whitespace-normalized
+   explanation, excluding the invocation, candidate head, run, severity, and
+   line range that legitimately change across a work unit's same-base,
+   different-head remediation rounds. It is a pure recompute-on-demand
+   derivation, never stored, so both rounds compare under one version with no
+   migration or schema change. It fails closed when a finding carries no such
+   identity, so a finding whose fingerprint cannot be computed is never
+   declared fixed; `codex_local` structurally never emits one, because
+   `exec.ReviewResult.Validate` rejects an empty-message finding at the source
+   boundary. Recorded fail-safe limitations: a reworded re-emission
+   under-matches (enters as a new finding), and two distinct same-path,
+   same-explanation findings conflate; both directions over-report
+   not-fixed and never declare a persisting defect fixed.
+   (User; devlog 2026-08-20-2311-cross-round-finding-fingerprint.md; #702.)

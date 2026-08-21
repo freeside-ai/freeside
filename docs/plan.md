@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 36
+revision: 37
 status: active
-updated: 2026-08-20
+updated: 2026-08-21
 ---
 
 # Freeside
@@ -262,7 +262,7 @@ Approval is not a universal action.
 | `finding_adjudication` | Accept the recommended route, choose an offered alternative, discuss, or stop (added with the Section 7 adjudication routing, 1B). Acceptance binds to the adjudication artifact digest and the item version; a Discuss response re-invokes adjudication against the same version bindings, and the new artifact supersedes the item. Stop leaves the run parked. |
 | `review_contradiction` | Recover only the exact persisted contradiction named by the card, or leave it parked. The card renders the bound run, invocation, round, base SHA, head SHA, and immutable failure-body digest; recovery preserves the original failure evidence. |
 | `review_configuration` | Adopt the review configuration (`adopt_review_configuration`), discuss, or stop. The run is parked, not terminal: adoption authorizes an operator-approved, review-configuration-only profile supersession of exactly the parked failure named by the card's binding, resolved at decision time as the repository's currently activated revision and re-gated on every read; stop concludes the run as a configuration failure always did. The card renders the same bound coordinates as `review_contradiction` plus the superseded profile digest. |
-| `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. |
+| `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. When the failure is classified as provider quota, credential expiry, or capacity, the card additionally offers retry under a qualified alternate provider profile or wait (the explicit alternate-provider retry below). |
 | `agent_question` | Answer and retry, answer without retry, or stop. |
 | `publish_blocked` | Rerun trust evaluation, choose an approved alternate publication profile, inspect the trust failure, or stop. |
 | `ready_for_final_review` | View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. |
@@ -273,6 +273,24 @@ Approval is not a universal action.
 
 Section 9 governs each type's presentation: what its card leads with and what
 layers below.
+
+**Explicit alternate-provider retry.** A provider quota, credential expiry,
+or capacity failure offers three resolutions beyond discuss: retry under a
+qualified alternate provider profile, wait, or stop. Qualified means a
+profile that is enabled, eligible for the failed role, and compatible with
+the run's credential mode and egress profile (Section 5.4); wait leaves the
+run parked with the same card until the operator returns to it. The offer
+is stated once here and applies on whichever card surfaces such a failure,
+including a review-side quota or expiry failure; it never widens a card's
+other actions. Each switch is a new recorded attempt that preserves the
+original failure and its evidence, re-evaluates cost owner and the Section
+7 review-independence check against the new selection, and continues
+provider state only where compatibility is proven (Section 5.8; a
+cross-profile switch defaults to a fresh invocation). A recurring choice
+becomes a project-policy proposal PR in the `review_diminishing_returns`
+shape, never a remembered default: Freeside does not learn a preferred
+profile from past switches. Automatic fallback stays out of scope (Section
+2 item 5; Section 14, single-provider execution capacity).
 
 ### Lifecycle Rules
 
@@ -586,6 +604,184 @@ max_parallel_executions, refresh_strategy, supports_read_only_auth_snapshot}`
 If only one execution is safe, scheduling shows that constraint instead of
 hiding it in a lock. API-key fallback is always available. Vendor tooling stays
 native and unmodified.
+
+**Provider profiles.** A `ProviderProfile` is the operator-facing object
+over an `AuthIdentity`:
+
+`ProviderProfile {id, name, provider, auth_identity_id, credential_mode,
+approved_model_configuration, role_eligibility, cost_owner, enabled,
+version}`
+
+The `id` is daemon-issued and immutable, never reused after deletion, and
+is what selections, composition manifests, and run records bind together
+with the version; the name is operator-chosen (`work`, `personal`),
+unique among the operator's profiles, and resolved to the `id` once, when
+a request or a per-project policy is authored; requests, policies, and
+records persist the `id`, so a later rename or name reuse can never
+redirect an existing policy; the provider is the
+vendor; `auth_identity_id` names exactly one identity, is immutable after
+creation (binding another identity means a new profile with a new `id`,
+so a persisted `id` can never be redirected to another account), and at
+most one profile
+names each identity (an identity enrolled through the interim surface has
+none until `auth add` adopts it; once adopted, a re-enrollment versions
+the one profile it backs); the credential mode is one of the modes above and is
+an enrollment fact the profile mirrors, never an editable selection: its
+trusted source is an identity-bound enrollment record that #406 introduces
+and the daemon-owned enrollment transaction writes, carrying the enrolled
+mode and the authoritative account binding (Codex: the account identity the
+transaction reads; Claude: the recorded operator attestation); no such
+record exists today (the Codex re-enrollment journal carries only operation
+coordinates, store digest, and expiry, and Claude has none), so #867
+migrates identities enrolled through the interim surface by writing the
+record at adoption (an adoption that cannot write it fails, and an
+identity without a record is never selectable); the record's `(provider, account binding)` is unique across
+identities, rejected as a duplicate at enrollment, adoption, and
+reconstruction, so one subscription never holds two mutation leases or two
+execution budgets and never passes the Section 7 independence check
+against itself (for Claude the key is the recorded attestation, so that
+uniqueness is operator-asserted, like the attestation itself); the
+existing re-enrollment journal and revoked-identity marker
+bind to that record rather than standing in for it, `AuthIdentity` itself
+stays unchanged, and the record, not the profile, is the trusted source at
+reconstruction; the approved model configuration is the model
+and reasoning settings a run may resolve against this profile; role
+eligibility is the set of roles (implementation, review, elaboration) the
+profile may be selected for; `cost_owner` is the operator-authored
+attribution label the interim `-review-cost-owner` flag carries today,
+required at enrollment, versioned like every other edit, and the only
+source the review configuration digest and run records draw cost owner
+from once the flag is removed, never derived from the name or `id`;
+`enabled` is an explicit operator switch; the
+version increments on every edit, so a selection and the records it
+produces bind to an exact profile version. The governing principle:
+
+> Provider accounts become first-class, versioned operator objects.
+> Credential authority stays in `AuthIdentity`; resolved facts and digests
+> stay in the composition manifest and run records. Probe output is
+> observation, never configuration authority. Switching account or provider
+> is always an explicit, recorded operator choice, never fallback.
+
+`AuthIdentity` is unchanged: it keeps the credential store, lease, refresh,
+snapshot, and execution-limit facts, and every credential rule in this
+section still binds to it. The profile repeats exactly two identity
+facts, `provider` and `credential_mode`, and the invariants binding it to
+the identity are re-checked at reconstruction and at every selection,
+failing closed: the referenced identity exists, no other profile names
+it, `provider` equals the identity's immutable provider, and
+`credential_mode` equals the mode the enrollment record carries, so
+selection, driver dispatch, the containment record, and the Section 7
+independence check can never name one vendor or mode while lease and
+credential-mount resolution follow another. The profile is a separate object because
+credential identity and runtime configuration change for different reasons:
+a token rotates or a store is re-enrolled without the operator's model
+choice or role eligibility changing, and a model-configuration or
+eligibility edit must never enter the credential transaction. Role
+*eligibility* lives on the profile; role *binding* is made per run or by
+per-project selection and recorded in the composition manifest and run
+records, never on the profile. The Section 7 independence check therefore
+compares provider and `auth_identity_id` across the implementation
+selection and the review selection; it never reads a role label off a
+profile. The profile is a sync-carried domain type landing through its own
+`kind:contract` unit (Section 11, Wave 7); the per-run preflight identity,
+volume, review, and image flag tuple and `enroll-codex`'s required-flag
+set are the interim surface it replaces, not a second surface beside it.
+The cutover is ordered so no enrolled identity goes dark: #406 lands the
+profile and enrollment-record types and their invariants without changing
+selection, the interim flags remain the only selection path until #867
+merges, and #867 carries adoption, the migration of every interim
+identity, and the switch to profile-only selection in one unit, so the
+"no record, never selectable" gate takes effect only once adoption can
+satisfy it; the interim path is removed in that same unit, never retained
+beside profiles. The same cutover covers every persisted pre-profile
+binding, split by whether it records a past selection or feeds a future
+one. A nonterminal run or admission that carries an `auth_identity_id`
+but no profile `id` and version is a record: it is read under an explicit
+legacy rule that keeps its admitted identity and credential mode, never
+resolved against a current profile revision; the rule is permanent, not a
+transition, because terminal pre-profile runs stay immutable history that
+timelines, export, and audit reconstruction must keep reading.
+A persisted request or per-project policy is an input, and today it
+carries no identity of its own: the pre-profile selection is the daemon's
+startup flag pair, `-auth-identity` for the implementation and
+elaboration roles (it is the shared admission environment today) and
+`-review-auth-identity` for the review role, shared by every queued input.
+The cutover therefore consumes those flags as the installation's one
+pre-profile selection: the adoption transaction adopts each flag identity
+(two adoptions when they differ, one when they coincide; the
+implementation-flag profile is eligible for both roles it replaces; the
+cutover is the operator's `auth add` adoption, so the review-flag profile
+takes its `cost_owner` from `-review-cost-owner` and the operator supplies
+the implementation-flag profile's `cost_owner` in that command, the
+adoption refusing to proceed without it rather than inventing one), then
+rewrites every input that carries no binding to the `id` of the profile
+adopted for its role, per input and durably, persisting the `id` alone as
+every input does, so each later selection from it resolves the profile's
+current version and passes the full profile gates (enabled, role
+eligibility, approved model configuration) at that moment, and the run
+record binds the version actually selected; a flag
+identity that cannot be adopted is retired as below and the inputs it
+would have bound stay unbound; the flags are removed only once that
+mapping is recorded, and no legacy selection path exists. An interim identity that cannot be adopted
+(its store is expired or corrupt, so Section 10 enrolls a new identity
+instead) is retired at the cutover: it is recorded as retired and holds
+nothing live. The cutover records `CancellationIntent` for each of its
+nonterminal runs and drives them through the Section 5.7 cancellation
+contract (stop, proven quiescence, ward teardown, `canceled`), raising an
+AttentionItem naming the retired identity; profile-only selection, and
+with it any same-account replacement profile, activates only after every
+such run has closed, because a retired identity has no enrollment record
+and so no lease or execution budget could fence a still-live writer
+against the replacement (the record-only legacy reader still covers a
+retired identity's terminal runs as history; retirement forbids selection
+and credential use, never reading), and its requests and
+policies are left unbound, so a selection from them fails closed with the
+same AttentionItem until the operator explicitly remaps each one to a
+profile and re-requests the stopped work, a recorded choice like any other
+account switch; the cutover never remaps on the operator's behalf. #867 ships
+these rules with the cutover, and a binding it cannot classify, rewrite,
+or retire fails closed.
+This section fixes the principle, the field list, and the trusted sources;
+the field-level schema, validation, the migration of pre-profile
+identities, and the complete lifecycle command set are settled by the
+#406 contract unit and the enrollment unit (#867), not enumerated here.
+
+**Multi-subscription per provider.** Two identities of one provider, each
+behind its own profile (a work and a personal subscription), are a
+supported shape. Selection among same-provider profiles is explicit (named
+in the run or reattempt request) or per-project policy, never silent: no
+default profile is inferred from enrollment order, recency, or
+availability. Cost owner is read from the selected profile version on
+every selection and recorded
+with it, so one project can attribute a review to one subscription and an
+implementation to another. The operator owns compliance with each
+provider's terms for multi-account use; Freeside attributes usage to a
+named profile and neither endorses nor polices the arrangement (Section 14,
+subscription-terms drift).
+
+**Observation, never authority.** A credential-bounded account probe may
+record, per profile: a stable account fingerprint; a masked label for
+operator display only, never written to evidence, composition manifests,
+run records, or export; auth type; plan type; expiry and revocation state;
+CLI version; a model and capability snapshot; the last probe time; and the
+last execution time. Probe output feeds `system_health` items, proposals, and the
+operator-facing profile projection (`freesided auth list` and the
+clients' profile display, which show the masked label) only, and every
+probe-derived item carries the `advisory` posture, so an
+observed expiry, revocation, or plan change informs the operator without
+closing the unattended admission gate; the operator's explicit stop action
+and the existing credential-integrity and revoked-identity markers keep
+their own postures. The gate is an exclusion list: no probe value is read by preflight,
+by scheduling, by the `max_parallel_executions` limit, or by any driver;
+those consumers read only the operator's explicit profile and identity
+records and the resolved policy. A probe that observes a newer model, a
+lapsed plan, or spare capacity produces a card or a proposal PR, never a
+changed selection. What a probe can report is a pinned-CLI empirical
+contract: the Codex app-server probe is expected to report account and plan
+facts, subject to the refresh-safety spike Section 10 gates it on; the
+pinned Claude CLI offers a token digest plus an auth check, and plan,
+quota, and expiry are not observable through it, so the Claude probe's
+realistic floor is integrity plus authentication, not account state.
 
 ### 5.5 The CI Trust Boundary
 
@@ -1064,6 +1260,17 @@ while the predecessor may exist are forbidden. Forking is load-bearing: the
 pinned CLI retained the predecessor's system prompt on an ordinary resume,
 whereas a fork accepted the fresh explicit bundle while preserving
 conversation continuity.
+
+Resume is bound to one provider profile as well as one invocation. A
+Section 4 alternate-provider retry that switches profile, whether to
+another identity of the same provider or to another provider, defaults to
+a fresh invocation with no continuity remount; the Section 5.7 operating
+modes do not relax this. Revisit when: before #408 merges, design a
+continuation compatibility digest that states when a successor under a
+different profile may remount a predecessor's continuity volume, so that
+cross-profile continuation becomes a proven property instead of a default
+refusal. That design is its own tracked unit (#873), and #408 merges after
+it; this revision names the marker and does not design the digest.
 
 A replay of an already-journalled launch adopts or reaps that exact process;
 it never substitutes a resume or starts a duplicate. A resume generation
@@ -2513,7 +2720,8 @@ Build the installer only after the underlying interfaces survive real use. The
 | --- | --- |
 | `freesided setup` | Performs installation. On the Mac-first path the operator app registers the daemon LaunchAgent (Section 5.2) and no step is privileged; when a hardened deployment needs privileged steps (user creation, LaunchDaemon installation), they run through a narrow elevation helper; the daemon never retains root. |
 | `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls; a callback or `--resume` reopens the same review after approval. |
-| `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe). It runs on a schedule and files `system_health` items. |
+| `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe). The integrity probe extends to the Section 5.4 account probe only after an empirical spike proves the Codex app-server probe runs against the access-only read snapshot and never triggers a refresh outside the mutation lease; until that spike passes, doctor reports integrity alone. Probe results are observation (Section 5.4): they file `advisory` `system_health` items and proposals, feed the operator-facing profile projection's display fields, and are read by nothing else. It runs on a schedule and files `system_health` items. |
+| `freesided auth add`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided provider-profile enrollment and lifecycle (Section 5.4); `auth doctor` ships with the account-probe unit (#868), gated on the #866 spike like the probe itself, never with the enrollment unit. `add` creates a profile over a new `AuthIdentity`, or adopts an existing identity that no profile names yet; adoption writes the identity-bound enrollment record (Section 5.4) that carries the enrolled mode and the enrolled-account binding `re-enroll` later compares against, transactionally and under the identity's lease (Codex: read from the adopted store through the same check the enrollment transaction uses; Claude: the operator's recorded attestation), and refuses when the adopted store cannot yield it, so an expired or corrupt legacy store is re-enrolled as a new identity rather than adopted: for Codex it packages the import, rotate, and snapshot sequence that `enroll-codex` exposes as separate required flags; for Claude it captures a setup token interactively, validates its length and performs an auth check before storing it (the truncation class the 1B.1 integrity probe detects), and keeps the token out of argv, shell history, logs, and client responses. `list` shows profiles with the masked label; `doctor` runs the account probe for one profile on demand once #868 lands; `re-enroll` replaces the credential through the daemon-owned enrollment transaction while no execution can use the identity, for the same account only: where the provider exposes an account identity (Codex), the transaction itself compares the incoming credential's account against the one recorded at enrollment, authoritatively and independent of the probe, and refuses a mismatch; where it does not (the Claude floor), the operator attests same-account in the transaction and the attestation is recorded; every re-enrollment increments the profile version and binds the enrollment operation, so later records show the credential changed. A different account is a new identity and a new profile, never a re-enrollment; `disable` withdraws a profile from selection without touching its credential, and `enable` reverses it; both version the profile. |
 | `freesided submit` | Registers a manually initiated source work item, starts elaboration, and reserves its future implementation run. |
 | `freesided reattempt --parent-run <run>` or `--campaign <campaign>` | Requires an operator reason and allocates the campaign's next attempt from an already approved specification; a live parent is refused. |
 | `freesided resume --run <run>` | Reattaches observation to one exact non-terminal run without creating a replacement; terminal runs are refused and point to `reattempt`. |
@@ -2911,7 +3119,7 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **4 (1B.0): the review stage** | Serial | The spine rescopes #406/#407 into review cores and execution remainders, then lands the review-selection contract core, the review ward-topology slice, #405 only if review needs a project-derived image, and #427 — landed PR-anchored under the then-open Section 7 fork (resolved pre-publication in revision 28; the implementation re-anchor is #527, unscheduled). Its close stands the minimal loop; real-backlog use begins. |
 | **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section 5.13 classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section 7 disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section 6 state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section 5.2 contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section 7 finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section 10). 1B.0 exit. |
-| **7 (1B.1): operational closure** | Parallel lanes | Human-gated follow-up filing with the `effect_proposal` card; the doctor credential-integrity probe; the stall heartbeat; the external daemon-liveness probe (Section 5.2); the deferral drain (sweep-eligible open deferrals enumerated at this wave's planning; dormant contract units excluded unless the spine assigns chain positions). The execution tail closes in order: #401 gate 3, the #406/#407 execution remainders, #405 if outstanding, #397 by explicit owner decision on shadow evidence, then #408. |
+| **7 (1B.1): operational closure** | Parallel lanes | Human-gated follow-up filing with the `effect_proposal` card; the doctor credential-integrity probe; the stall heartbeat; the external daemon-liveness probe (Section 5.2); the deferral drain (sweep-eligible open deferrals enumerated at this wave's planning; dormant contract units excluded unless the spine assigns chain positions). The execution tail closes in order: #401 gate 3, the #406/#407 execution remainders, #405 if outstanding, #397 by explicit owner decision on shadow evidence, then #408. Provider profiles (Section 5.4) add the Codex probe refresh-safety spike (#866) as an independent unit; `ProviderProfile` is the core type of the #406 driver-selection contract, so guided enrollment (`freesided auth`, Section 10; #867) `starts-after` #406, the doctor account probe (#868) `starts-after` both #406 and #866, the explicit alternate-provider retry card (#869, one unit covering the implementation, review, and elaboration roles, every role a profile is eligible for) `starts-after` both #406 and #408, and #408 `merges-after` the continuation compatibility digest (#873; Section 5.8). |
 | **8 (1B.2): the initiative view** | Integrated | The Section 5.18 frontier projection and the deterministic initiative view. 1B exit evaluation. |
 
 Review bandwidth limits parallel width. Every wave ends with a fresh-context
@@ -3044,28 +3252,71 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 36 ("Cross-round finding identity"):
+Revision 37 ("Provider accounts are first-class operator objects"):
 
-Revision 36 lands the cross-round semantic finding identity the Section 7
-fixed-disposition safety proof was conditioned on. Held from revision 35:
-everything.
-
-1. **The fixed-disposition absence proof keys on a deterministic finding
-   fingerprint** (Section 7): the identity is `domain.Finding.Fingerprint()`
-   over the review source, location path, and whitespace-normalized
-   explanation, excluding the invocation, candidate head, run, severity, and
-   line range that legitimately change across a work unit's same-base,
-   different-head remediation rounds. It is a pure recompute-on-demand
-   derivation, never stored, so both rounds compare under one version with no
-   migration or schema change. It fails closed when a finding carries no such
-   identity, so a finding whose fingerprint cannot be computed is never
-   declared fixed; `codex_local` structurally never emits one, because
-   `exec.ReviewResult.Validate` rejects an empty-message finding at the source
-   boundary. Recorded fail-safe limitations: a reworded re-emission
-   under-matches (enters as a new finding), and two distinct same-path,
-   same-explanation findings conflate; both directions over-report
-   not-fixed and never declare a persisting defect fixed.
-   (User; devlog 2026-08-20-2311-cross-round-finding-fingerprint.md; #702.)
+1. **Provider profiles sit over an unchanged `AuthIdentity`** (Section
+   5.4): `ProviderProfile {id, name, provider, auth_identity_id,
+   credential_mode, approved_model_configuration, role_eligibility,
+   cost_owner, enabled, version}` is the operator-facing, versioned object, bound
+   into records by immutable `id` plus version, never by name; credential
+   authority stays in `AuthIdentity`, and resolved facts and digests stay
+   in the composition manifest and run records. Role eligibility is on the
+   profile; role binding is per run or per-project selection, so the
+   Section 7 independence check compares provider and identity across two
+   selections. Rejected: expanding `AuthIdentity` with configuration
+   fields (credential identity and runtime configuration change for
+   different reasons); binding a role on the profile (the independence
+   check would read a label instead of comparing selections); the name
+   `ProviderAccount` (the object does not own the credential).
+   (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
+2. **Multi-subscription per provider is supported and selected
+   explicitly** (Section 5.4): two identities of one provider are a
+   supported shape; selection among them is explicit or per-project
+   policy, never silent; cost owner is re-evaluated on every selection;
+   the operator owns provider-terms compliance and Freeside attributes
+   without endorsing. Rejected: an inferred default profile.
+   (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
+3. **Probe output is observation, never authority** (Sections 5.4, 10):
+   a credential-bounded account probe records fingerprint, masked label
+   (display only), auth and plan type, expiry and revocation, CLI version,
+   model snapshot, and last probe and execution; it feeds `system_health`
+   items (always `advisory`), proposals, and the operator-facing profile
+   projection's display fields only, and preflight, scheduling,
+   `max_parallel_executions`, and drivers never read it; the
+   profile is one-to-one with its identity and mirrors only its
+   provider and enrolled credential mode, both checked at reconstruction
+   and selection. The Claude
+   pinned-CLI floor is a token digest plus an auth check. Rejected:
+   running against operator provider homes; T3 Code's shared Codex
+   shadow-home overlay; arbitrary provider environment variables (each
+   makes credential state or configuration ambient and unrecorded).
+   (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
+4. **Switching is an explicit recorded attempt, never fallback**
+   (Sections 4, 5.8): a quota, expiry, or capacity card offers retry under
+   a qualified profile, wait, or stop; each switch is a new attempt that
+   preserves the original failure and re-evaluates cost owner and review
+   independence; preferences become project-policy proposal PRs, never
+   remembered defaults; cross-profile continuation defaults to a fresh
+   invocation, with a continuation compatibility digest designed as its
+   own unit (#873) before #408 merges. Rejected: automatic fallback (Sections 2, 14) and
+   learned defaults.
+   (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
+5. **Guided enrollment and the gated account probe** (Sections 10, 11):
+   `freesided auth add|list|re-enroll|disable|enable` packages the Codex
+   import-rotate-snapshot sequence and a guided Claude setup-token capture
+   that keeps the token out of argv, history, logs, and client responses;
+   re-enrollment is same-account only (checked in the transaction where
+   the provider exposes account identity, operator-attested otherwise)
+   and always versions the profile, so a different account is a new
+   identity and profile;
+   the doctor account probe, and `auth doctor` with it, waits on a spike proving the Codex app-server
+   probe never refreshes outside the lease. Wave 7 gains the spike as an
+   independent unit; `ProviderProfile` is the core type of #406, so
+   enrollment, the probe, and the retry card `starts-after` #406, the
+   probe also `starts-after` the spike, and the retry card, one unit for
+   the implementation, review, and elaboration roles, also `starts-after`
+   #408.
+   (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
 
 ## 14. Risks
 
