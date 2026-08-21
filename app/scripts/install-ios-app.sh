@@ -44,6 +44,12 @@
 #                         (Xcode's free personal team mints one once an
 #                         Apple ID is added under Settings > Accounts)
 #
+# With more than one identity there is no sole certificate to read, so
+# FREESIDE_IOS_TEAM_ID is required. Its value is the certificate's OU, NOT
+# the 10-character tag `security find-identity` prints in the identity name;
+# that parenthetical looks like a Team ID but is a different identifier. The
+# multi-identity error below lists each identity's real Team ID to copy.
+#
 # Environment:
 #   FREESIDE_IOS_BUILD_DIR  derived data (default: app/DerivedData/ios-install)
 #
@@ -151,39 +157,81 @@ if afterHost.hasPrefix(":") {
     die "--server-url is not an http(s) URL with a host: $server_url"
 fi
 
+# The Team ID is the certificate's organizational unit, read off the
+# certificate rather than parsed from the identity name (whose parenthetical
+# is a different 10-character identifier, not the Team ID).
+team_id_of_identity() {
+    security find-certificate -c "$1" -p 2>/dev/null |
+        openssl x509 -noout -subject -nameopt multiline 2>/dev/null |
+        sed -n 's/^[[:space:]]*organizationalUnitName[[:space:]]*=[[:space:]]*//p' |
+        head -1
+}
+
+# Team ID (certificate OU) for the certificate with the given SHA-1
+# fingerprint. The multi-identity listing must key on the fingerprint, not the
+# common name: one Apple ID signed into several teams prints the same name for
+# each, so a `-c <name>` lookup would return the first certificate's OU for
+# every row and mislabel every team but one. `-a -Z` enumerates every
+# certificate with its SHA-1 hash; select the PEM block whose hash matches this
+# fingerprint (unique per certificate) and read its OU.
+team_id_of_fingerprint() {
+    security find-certificate -a -Z -p 2>/dev/null |
+        awk -v want="$1" '
+            /^SHA-1 hash:/ { sel = (toupper($NF) == toupper(want)); next }
+            /^SHA-256 hash:/ { next }
+            sel
+        ' |
+        openssl x509 -noout -subject -nameopt multiline 2>/dev/null |
+        sed -n 's/^[[:space:]]*organizationalUnitName[[:space:]]*=[[:space:]]*//p' |
+        head -1
+}
+
 # The sole "Apple Development" identity, resolved exactly as the Mac
 # installer does. Xcode's free personal team mints one once an Apple ID is
 # added under Settings > Accounts.
 resolve_identity() {
     local candidates
+    # "<SHA-1 fingerprint> <common name>" per Apple Development identity. The
+    # fingerprint (unique per certificate) is kept so the multi-identity
+    # listing can resolve each identity's own team even when several share a
+    # common name; the single-identity path uses only the name.
     candidates="$(security find-identity -v -p codesigning 2>/dev/null |
-        sed -n 's/.*"\(Apple Development: .*\)"$/\1/p')"
+        sed -n 's/^[[:space:]]*[0-9][0-9]*)[[:space:]]*\([0-9A-Fa-f][0-9A-Fa-f]*\)[[:space:]]*"\(Apple Development: .*\)"$/\1 \2/p')"
     local count=0
     if [[ -n "$candidates" ]]; then
         count="$(printf '%s\n' "$candidates" | wc -l | tr -d ' ')"
     fi
     case "$count" in
-    1) printf '%s' "$candidates" ;;
+    1) printf '%s' "${candidates#* }" ;;
     0)
         die "no 'Apple Development' signing identity found. Add an Apple ID in
   Xcode > Settings > Accounts to mint one from the free personal team, or set
   FREESIDE_IOS_TEAM_ID to a Team ID whose signing assets Xcode already holds."
         ;;
     *)
+        # List each identity's real Team ID (its certificate OU), the value
+        # FREESIDE_IOS_TEAM_ID wants, not the tag shown in the identity name.
+        # Resolve by fingerprint, not name, so identities that share a name
+        # (one Apple ID, several teams) each show their own team.
+        local listing="" fp cn tid
+        while read -r fp cn; do
+            [[ -n "$fp" ]] || continue
+            tid="$(team_id_of_fingerprint "$fp")" || tid=""
+            listing+="    ${tid:-??????????}  $cn"$'\n'
+        done <<<"$candidates"
         die "several 'Apple Development' identities found; set FREESIDE_IOS_TEAM_ID
-  to the Team ID to build against:
-$(printf '%s\n' "$candidates" | sed 's/^/    /')"
+  to one of these Team IDs (the leading value, not the name's parenthetical):
+${listing%$'\n'}"
         ;;
     esac
 }
 
-# Automatic signing needs the 10-character Team ID, which is the
-# organizational unit of the Apple Development certificate. Read it off the
-# certificate rather than parsing the identity name, whose parenthetical is
-# not the Team ID. FREESIDE_IOS_TEAM_ID overrides for a multi-team login.
-# resolve_identity runs at top level with an explicit `|| exit 1`: its `die`
-# runs inside the command-substitution subshell, so only that propagation
-# carries the failure out (a bare assignment under `set -e` would not).
+# Automatic signing needs the 10-character Team ID. FREESIDE_IOS_TEAM_ID
+# overrides for a multi-team login; otherwise it is the sole identity's
+# certificate OU (see team_id_of_identity). resolve_identity runs at top
+# level with an explicit `|| exit 1`: its `die` runs inside the
+# command-substitution subshell, so only that propagation carries the failure
+# out (a bare assignment under `set -e` would not).
 mkdir -p "$build_dir"
 
 if [[ "$launch_only" != true ]]; then
@@ -191,10 +239,7 @@ if [[ "$launch_only" != true ]]; then
         team_id="$FREESIDE_IOS_TEAM_ID"
     else
         identity=$(resolve_identity) || exit 1
-        team_id=$(security find-certificate -c "$identity" -p 2>/dev/null |
-            openssl x509 -noout -subject -nameopt multiline 2>/dev/null |
-            sed -n 's/^[[:space:]]*organizationalUnitName[[:space:]]*=[[:space:]]*//p' |
-            head -1)
+        team_id=$(team_id_of_identity "$identity")
         [[ "$team_id" =~ ^[A-Z0-9]{10}$ ]] ||
             die "could not derive a 10-character Team ID from the '$identity'
   certificate; set FREESIDE_IOS_TEAM_ID explicitly."

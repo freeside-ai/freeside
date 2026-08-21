@@ -45,13 +45,27 @@ cat >"$STUB_BIN/security" <<'STUB'
 #!/usr/bin/env bash
 case "${1:-}" in
 find-identity)
-    if [[ -n "${STUB_HAS_IDENTITY:-}" ]]; then
+    if [[ -n "${STUB_TWO_IDENTITIES:-}" ]]; then
+        printf '  1) AAAAAAAAAAAAAAAA "Apple Development: Operator One (TAGONE0001)"\n'
+        printf '  2) BBBBBBBBBBBBBBBB "Apple Development: Operator Two (TAGTWO0002)"\n'
+    elif [[ -n "${STUB_HAS_IDENTITY:-}" ]]; then
         printf '  1) DEADBEEFDEADBEEF "Apple Development: Operator (PERSONALXY)"\n'
     fi
     exit 0
     ;;
 find-certificate)
-    printf -- '-----BEGIN CERTIFICATE-----\nSTUBCERT\n-----END CERTIFICATE-----\n'
+    # `-a -Z` (multi-identity listing) enumerates every certificate with its
+    # SHA-1 hash; tag each block's PEM with its fingerprint so the openssl
+    # stand-in can map it to a distinct team OU. A plain `-c <name>` lookup
+    # (single-identity path) prints one untagged PEM.
+    if printf '%s\n' "$@" | grep -q -- '-Z'; then
+        printf 'SHA-1 hash: AAAAAAAAAAAAAAAA\n'
+        printf -- '-----BEGIN CERTIFICATE-----\nSTUBCERT AAAAAAAAAAAAAAAA\n-----END CERTIFICATE-----\n'
+        printf 'SHA-1 hash: BBBBBBBBBBBBBBBB\n'
+        printf -- '-----BEGIN CERTIFICATE-----\nSTUBCERT BBBBBBBBBBBBBBBB\n-----END CERTIFICATE-----\n'
+    else
+        printf -- '-----BEGIN CERTIFICATE-----\nSTUBCERT\n-----END CERTIFICATE-----\n'
+    fi
     exit 0
     ;;
 esac
@@ -62,12 +76,20 @@ STUB
 # with the organizationalUnitName line resolve_team_id reads the Team ID from.
 cat >"$STUB_BIN/openssl" <<'STUB'
 #!/usr/bin/env bash
-# Drain the PEM piped in from the `security` stand-in before printing. The
+# Read the PEM piped in from the `security` stand-in before printing. The
 # real `openssl x509` reads its stdin; a stand-in that exits without
 # consuming it lets the upstream `security` stub take SIGPIPE under the
 # installer's `pipefail`, which flaked the Team-ID pipeline with exit 141.
-cat >/dev/null 2>&1
-printf '    organizationalUnitName    = %s\n' "${STUB_TEAM_OU:-ABCDE12345}"
+# A fingerprint-tagged PEM (the `-a -Z` multi-identity listing) maps to that
+# identity's own team via STUB_TEAM_OU_A/_B, so the test can assert each row
+# shows a distinct OU; an untagged PEM (single-identity path) uses STUB_TEAM_OU.
+pem="$(cat)"
+ou="${STUB_TEAM_OU:-ABCDE12345}"
+case "$pem" in
+*"STUBCERT AAAAAAAAAAAAAAAA"*) ou="${STUB_TEAM_OU_A:-$ou}" ;;
+*"STUBCERT BBBBBBBBBBBBBBBB"*) ou="${STUB_TEAM_OU_B:-$ou}" ;;
+esac
+printf '    organizationalUnitName    = %s\n' "$ou"
 exit 0
 STUB
 
@@ -188,7 +210,10 @@ begin_case() {
     mkdir -p "$CASE_DIR/Build" "$CASE_DIR/home"
     export STUB_CASE_DIR=$CASE_DIR
     unset STUB_HAS_IDENTITY
+    unset STUB_TWO_IDENTITIES
     unset STUB_TEAM_OU
+    unset STUB_TEAM_OU_A
+    unset STUB_TEAM_OU_B
     unset STUB_BUILD_FAILS
     unset STUB_INSTALL_FAILS
     unset STUB_LAUNCH_FAILS
@@ -297,6 +322,22 @@ run_installer --device Ashpool
 assert_rc 0
 assert_contains "signing team: PERSONALXY"
 assert_file_contains "$CASE_DIR/xcodebuild-args" "DEVELOPMENT_TEAM=PERSONALXY"
+
+begin_case "several identities list each identity's own Team ID" team-multi
+export STUB_TWO_IDENTITIES=1
+# Distinct OUs keyed by fingerprint: the two identities share a resolution
+# path but must each surface their own team, which a common-name lookup
+# (both names differ here, but one Apple ID across teams prints the same
+# name) could not guarantee. Keying on the fingerprint does.
+export STUB_TEAM_OU_A=TEAMONE0001
+export STUB_TEAM_OU_B=TEAMTWO0002
+run_installer --device Ashpool
+assert_rc 1
+assert_contains "several 'Apple Development' identities found"
+assert_contains "not the name's parenthetical"
+assert_contains "TEAMONE0001  Apple Development: Operator One (TAGONE0001)"
+assert_contains "TEAMTWO0002  Apple Development: Operator Two (TAGTWO0002)"
+assert_absent "$CASE_DIR/xcodebuild-args"
 
 begin_case "FREESIDE_IOS_TEAM_ID overrides certificate discovery" team-override
 export FREESIDE_IOS_TEAM_ID=OVERRIDE12
