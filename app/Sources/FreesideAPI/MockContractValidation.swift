@@ -192,6 +192,49 @@ enum MockContractValidation {
         } else if item._type == .review_configuration {
             return "review_configuration item lacks review_configuration_recovery"
         }
+        if let binding = item.finding_adjudication?.value1 {
+            if item._type != .finding_adjudication {
+                return "finding_adjudication binding on a different item type"
+            }
+            if binding.run_id.isEmpty || binding.round < 1 || binding.adjudication_digest.isEmpty {
+                return "invalid finding_adjudication binding coordinates"
+            }
+            guard case .run(let subject) = item.subject,
+                subject.subject_id == binding.run_id,
+                subject.run_id == binding.run_id
+            else {
+                return "finding_adjudication binding disagrees with item subject"
+            }
+            if binding.proposals.isEmpty { return "finding_adjudication has no proposals" }
+            var findingIDs = Set<String>()
+            for proposal in binding.proposals {
+                if proposal.finding_id.isEmpty || proposal.rationale.isEmpty {
+                    return "finding_adjudication proposal has an empty required field"
+                }
+                if !findingIDs.insert(proposal.finding_id).inserted {
+                    return "finding_adjudication has duplicate finding ids"
+                }
+                if proposal.cited_rules.contains("") || proposal.assumptions.contains("")
+                    || proposal.open_questions.contains("")
+                {
+                    return "finding_adjudication proposal has an empty explanation"
+                }
+                var alternativeRoutes = Set<Components.Schemas.AdjudicationRoute>()
+                for alternative in proposal.offered_alternatives {
+                    if alternative.route == proposal.route {
+                        return "finding_adjudication alternative repeats the recommended route"
+                    }
+                    if alternative.consequence.isEmpty {
+                        return "finding_adjudication alternative has an empty consequence"
+                    }
+                    if !alternativeRoutes.insert(alternative.route).inserted {
+                        return "finding_adjudication has duplicate alternative routes"
+                    }
+                }
+            }
+        } else if item._type == .finding_adjudication {
+            return "finding_adjudication item lacks its binding"
+        }
         // An empty requested_decision is structurally valid (#96): which
         // types must offer an action is signet policy (itemPolicyBreach).
         if let breach = timingBreach(item.timing) { return breach }
@@ -287,8 +330,9 @@ enum MockContractValidation {
             }
             claimDigests[claim.artifact_id] = claim.digest
         }
+        let bindingDigests = item.finding_adjudication.map { [$0.value1.adjudication_digest] } ?? []
         let union = Array(
-            Set(item.evidence_snapshot.map(\.digest) + item.agent_claims.map(\.digest))
+            Set(item.evidence_snapshot.map(\.digest) + item.agent_claims.map(\.digest) + bindingDigests)
         ).sorted()
         if item.artifact_digests != union {
             return "artifact_digests is not the canonical union of rendered digests"
@@ -365,9 +409,26 @@ enum MockContractValidation {
                 command.payload.message == nil,
                 command.payload.attachments == nil
             else { throw malformed("invalid snooze_until") }
+        case .choose_alternative_route:
+            guard let choices = command.payload.alternative_choices, !choices.isEmpty,
+                choices.allSatisfy({ !$0.finding_id.isEmpty }),
+                Set(choices.map(\.finding_id)).count == choices.count,
+                command.payload.message == nil,
+                command.payload.attachments == nil,
+                command.payload.run_proposal_revision == nil,
+                command.payload.snooze_until == nil
+            else { throw malformed("invalid alternative_choices") }
+        case .accept_recommended_route:
+            guard command.payload.alternative_choices == nil,
+                command.payload.message == nil,
+                command.payload.attachments == nil,
+                command.payload.run_proposal_revision == nil,
+                command.payload.snooze_until == nil
+            else { throw malformed("finding adjudication input on accept") }
         default:
             guard command.payload.run_proposal_revision == nil,
-                command.payload.snooze_until == nil
+                command.payload.snooze_until == nil,
+                command.payload.alternative_choices == nil
             else { throw malformed("proposal input on unrelated action") }
         }
     }

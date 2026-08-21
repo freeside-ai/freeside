@@ -248,6 +248,43 @@ import Testing
                 == "resolve_reenrollment lacks codex re-enrollment binding")
     }
 
+    @Test func findingAdjudicationBindingIsExactAndTypeScoped() {
+        let fixture = AttentionFixtures.fixture(type: .finding_adjudication).item
+        #expect(MockContractValidation.itemValidityBreach(fixture) == nil)
+
+        var missing = fixture
+        missing.finding_adjudication = nil
+        #expect(
+            MockContractValidation.itemValidityBreach(missing)
+                == "finding_adjudication item lacks its binding")
+
+        var wrongType = AttentionFixtures.fixture(type: .spec_approval).item
+        wrongType.finding_adjudication = fixture.finding_adjudication
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "finding_adjudication binding on a different item type")
+
+        var noProposals = fixture
+        noProposals.finding_adjudication?.value1.proposals = []
+        #expect(
+            MockContractValidation.itemValidityBreach(noProposals)
+                == "finding_adjudication has no proposals")
+
+        var repeatedRoute = fixture
+        repeatedRoute.finding_adjudication?.value1.proposals[0].offered_alternatives[0].route =
+            .remediate
+        #expect(
+            MockContractValidation.itemValidityBreach(repeatedRoute)
+                == "finding_adjudication alternative repeats the recommended route")
+
+        var emptyConsequence = fixture
+        emptyConsequence.finding_adjudication?.value1.proposals[0]
+            .offered_alternatives[0].consequence = ""
+        #expect(
+            MockContractValidation.itemValidityBreach(emptyConsequence)
+                == "finding_adjudication alternative has an empty consequence")
+    }
+
     // The text-claim carrier (#217): the daemon recomputes the claim digest
     // over the content bytes, so the mirrored checks here are the empty
     // content, the byte cap, and the binding rule. The invalid-media-type
@@ -404,6 +441,21 @@ import Testing
         expectMalformed(reason: "duplicate attachment digest") {
             var c = command(against: snapshot)
             c.payload.attachments = ["sha256:a", "sha256:a"]
+            return c
+        }
+
+        let adjudication = AttentionFixtures.fixture(type: .finding_adjudication)
+        expectMalformed(reason: "invalid alternative_choices") {
+            var c = command(against: adjudication)
+            c.payload.action = .choose_alternative_route
+            return c
+        }
+        expectMalformed(reason: "finding adjudication input on accept") {
+            var c = command(against: adjudication)
+            c.payload.action = .accept_recommended_route
+            c.payload.alternative_choices = [
+                .init(finding_id: "review-finding-17", route: ._defer)
+            ]
             return c
         }
     }

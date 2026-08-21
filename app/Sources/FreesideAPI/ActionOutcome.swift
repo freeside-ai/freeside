@@ -31,6 +31,7 @@ public enum ActionOutcome: Equatable {
         case .dismiss, .decline:
             return .concludes(.dismissed)
         case .approve, .stop, .finish_now, .apply_then_finish, .retry,
+            .accept_recommended_route, .choose_alternative_route,
             .rerun_trust_evaluation, .start:
             return .concludes(.resolved)
         case .stop_unattended:

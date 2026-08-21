@@ -23,6 +23,7 @@ public enum AttentionFixtures {
         .review_dispute,
         .review_contradiction,
         .review_configuration,
+        .finding_adjudication,
         .ready_for_final_review,
         .publish_blocked,
         .run_proposal,
@@ -44,6 +45,9 @@ public enum AttentionFixtures {
         .review_dispute: [.adjudicate, .discuss, .stop],
         .review_contradiction: [.recover_review],
         .review_configuration: [.adopt_review_configuration, .discuss, .stop],
+        .finding_adjudication: [
+            .accept_recommended_route, .choose_alternative_route, .discuss, .stop,
+        ],
         .ready_for_final_review: [.open_pr, .return_to_agent, .mark_seen, .dismiss, .stop],
         .publish_blocked: [
             .rerun_trust_evaluation, .choose_alternate_profile, .inspect_trust_failure, .stop,
@@ -73,6 +77,7 @@ public enum AttentionFixtures {
         .acknowledge, .run_doctor, .stop_unattended,
         .resume_unattended, .recover_review, .adopt_review_configuration,
         .resolve_reenrollment,
+        .accept_recommended_route, .choose_alternative_route,
     ]
 
     /// The default mock inbox: one open item per Phase 1 type.
@@ -169,7 +174,8 @@ public enum AttentionFixtures {
         let priority: Components.Schemas.Priority
         let interruption: Components.Schemas.InterruptionClass
         switch type {
-        case .spec_approval, .ready_for_final_review, .run_proposal, .review_diminishing_returns:
+        case .spec_approval, .ready_for_final_review, .run_proposal,
+            .review_diminishing_returns, .finding_adjudication:
             priority = type == .spec_approval ? .high : .normal
             interruption = .planned_gate
         case .review_contradiction:
@@ -267,6 +273,42 @@ public enum AttentionFixtures {
                     access_token_expires_at: Date(timeIntervalSince1970: 1_786_502_645)
                 ))
             : nil
+        let findingAdjudication: Components.Schemas.AttentionItem.finding_adjudicationPayload? =
+            type == .finding_adjudication
+            ? .init(
+                value1: .init(
+                    run_id: "run-\(key)",
+                    round: 3,
+                    adjudication_digest: "sha256:adjudication-\(key)",
+                    proposals: [
+                        .init(
+                            finding_id: "review-finding-17",
+                            producer: .model,
+                            goal_relationship: .contradictory,
+                            route: .decline,
+                            rationale:
+                                "The finding assumes a retry guarantee the approved work-unit contract explicitly rejects.",
+                            cited_rules: [
+                                "AGENTS.md: fail correctly",
+                                "Issue contract: preserve write-once command identity",
+                            ],
+                            assumptions: [
+                                "The caller can retry after losing the first response."
+                            ],
+                            open_questions: [
+                                "Should the follow-up also add a durability metric?"
+                            ],
+                            confidence: .init(value1: .high),
+                            offered_alternatives: [
+                                .init(
+                                    route: .dispute,
+                                    consequence:
+                                        "Escalate the contract conflict to a human before routing the finding.")
+                            ]
+                        )
+                    ]
+                ))
+            : nil
 
         let item = Components.Schemas.AttentionItem(
             id: "item-\(key)",
@@ -286,13 +328,15 @@ public enum AttentionFixtures {
                 )
             ],
             agent_claims: agentClaims,
-            artifact_digests: (agentClaims.map(\.digest) + [evidenceDigest]).sorted(),
+            artifact_digests: (agentClaims.map(\.digest) + [evidenceDigest]
+                + (findingAdjudication.map { [$0.value1.adjudication_digest] } ?? [])).sorted(),
             pr_head_sha: prHeadSHA,
             pr_reference: prReference,
             commit_plan_notice: commitPlanNotice,
             review_recovery_binding: reviewRecoveryBinding,
             codex_reenrollment_recovery_binding: codexReenrollmentRecovery,
             review_configuration_recovery: reviewConfigurationRecovery,
+            finding_adjudication: findingAdjudication,
             item_version: 1,
             interruption_class: interruption,
             conversation_id: nil,
@@ -354,6 +398,8 @@ public enum AttentionFixtures {
             return "review contradicted its execution contract"
         case .review_configuration:
             return "the trust profile no longer approves the reviewer configuration"
+        case .finding_adjudication:
+            return "a review finding needs an operator-selected disposition"
         case .ready_for_final_review:
             return "checks are green and the diff is ready"
         case .publish_blocked:
