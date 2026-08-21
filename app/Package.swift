@@ -39,7 +39,11 @@ var targets: [Target] = [
                 // decode failure (the daemon answered) from a transport
                 // outage (it did not).
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
-            ]
+            ],
+            // The §15 faces (see Sources/FreesideCore/Fonts/README.md),
+            // registered at runtime by FreesideFont so neither app target
+            // needs an Info.plist font list.
+            resources: [.copy("Fonts")]
         )
     )
     targets.append(
