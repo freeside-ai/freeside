@@ -1067,3 +1067,41 @@ revision 33: everything.
    wave-title-matching tracker pinned (unrelated standing trackers coexist and
    never count), with the interruption-safe pin choreography deferred to #828.
    (User; devlog 2026-08-17-2108-inter-wave-state.md; #826.)
+
+## Revision 35
+
+Revision 35 ("Managed infrastructure never exceeds convenience"):
+
+1. **Core authority and replaceable infrastructure are an explicit boundary**
+   (Sections 2, 5.1): remote reachability, notification delivery, replica
+   storage, and external health monitoring are replaceable infrastructure with
+   operator-selected reference implementations and possible future
+   Freeside-operated managed implementations; managed infrastructure may
+   improve reachability, availability, storage, and delivery, but never
+   becomes necessary for workflow authority or local operation, and its loss
+   never invalidates local state. The one scoped exception is explicit:
+   portable-mode replica storage is the oracle for activation fencing and
+   the recovery frontier and sits inside the authority trust boundary,
+   whoever operates it (Sections 5.1, 5.10). The Section 5.10
+   capability-based replica-store contract is the template. The fully
+   unmanaged deployment
+   (Tailscale, ntfy, local state, operator probe; Section 10) stays
+   first-class permanently, and authoritative components get no cloud seam.
+   (User; devlog 2026-08-19-2138-managed-infrastructure-seams.md; #858.)
+2. **Reachability is not identity** (Sections 5.2, 5.14): Signet is one
+   authenticated protocol over loopback, Tailscale (the Phase 1 reference
+   mechanism, not an architectural assumption), or a future managed relay;
+   every mode presents the same daemon-owned Freeside device credential, and
+   a managed service may transport pairing but never enroll a device. The
+   deferred relay contract (Section 5.19) bounds any future relay to byte
+   transport: no workflow authority, no credential possession or visibility
+   (the Signet channel stays end-to-end protected through the relay and
+   authenticates the daemon by a control-plane-stable Freeside identity
+   independent of relay-controlled PKI), no
+   authoritative state, and no Signet bypass; relay loss is reachability
+   loss, never state loss. Enrolled
+   host identity becomes cryptographically backed, recorded now as a forward
+   requirement on the #265 domain contract before any host identity is
+   persisted (Section 5.9).
+   (User; devlog 2026-08-19-2138-managed-infrastructure-seams.md; #858.)
+
