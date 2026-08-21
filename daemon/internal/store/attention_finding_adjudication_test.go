@@ -136,7 +136,7 @@ func TestPutAttentionItemRegatesFindingAdjudicationBinding(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			binding := bindingFromAdjudication(artifact)
 			test.mutate(&binding)
-			item := adjudicationItem(t, domain.ItemID("item-mismatch-"+string(rune('a'+index))), binding)
+			item := adjudicationItem(t, domain.ItemID(fmt.Sprintf("item-mismatch-%d", index)), binding)
 			err := st.Write(ctx, func(tx *store.WriteTx) error {
 				return tx.PutAttentionItem(ctx, item)
 			})
