@@ -17,6 +17,7 @@ package ward
 // every other FREESIDE_WARD_LIVE_TEST suite.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -164,6 +165,63 @@ func TestLiveClaudeReviewLifecycleCrossesReconstructionStartBoundary(t *testing.
 	}
 	if err := launch.Close(); err != nil {
 		t.Fatalf("close review proxy: %v", err)
+	}
+
+	pollCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		state, inspectErr := backend.InspectCodexReview(pollCtx, reviewConfig, runID)
+		if inspectErr != nil {
+			t.Fatalf("InspectCodexReview: %v", inspectErr)
+		}
+		if state == StateStopped {
+			break
+		}
+		if state != StateRunning {
+			t.Fatalf("Claude review state = %q, want running or stopped", state)
+		}
+		select {
+		case <-pollCtx.Done():
+			t.Fatalf("Claude review did not stop within five minutes: %v", pollCtx.Err())
+		case <-ticker.C:
+		}
+	}
+	collection, err := backend.CollectCodexReview(ctx, reviewConfig, runID)
+	if err != nil {
+		t.Fatalf("CollectCodexReview: %v", err)
+	}
+	if collection.ExitStatus != 0 {
+		t.Fatalf(
+			"Claude review exited with status %d; collected %d event bytes",
+			collection.ExitStatus, len(collection.Events),
+		)
+	}
+	if len(bytes.TrimSpace(collection.Result)) == 0 {
+		t.Fatal("Claude review returned an empty structured-output result")
+	}
+	outcome := testClaudeReviewSourceForCollection().normalizeCollection(
+		domain.InvocationID(runID),
+		exec.ReviewRequest{
+			RunID: domain.RunID(runID), BaseSHA: candidate.BaseSHA, HeadSHA: candidate.BaseSHA,
+			Instructions: instructionBinding,
+		},
+		collection,
+	)
+	if outcome.Result == nil {
+		t.Fatalf("Claude structured-output envelope did not normalize: %+v", outcome)
+	}
+	if err := outcome.Validate(); err != nil {
+		t.Fatalf("Claude structured-output envelope failed production validation: %v", err)
+	}
+	if err := outcome.verifyCompletionEvidence(claudeReviewProvider{}); err != nil {
+		t.Fatalf("Claude structured-output envelope failed provider evidence validation: %v", err)
+	}
+	for _, finding := range outcome.Result.Findings {
+		if finding.Source != "claude_local" || !slices.Contains(domain.AllFindingSeverities, finding.Severity) {
+			t.Errorf("normalized finding = %+v, want claude_local severity in P0-P3", finding)
+		}
 	}
 
 	if err := backend.AbortCodexReview(ctx, reviewConfig, runID); err != nil {

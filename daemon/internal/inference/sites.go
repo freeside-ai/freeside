@@ -78,6 +78,9 @@ func ClassifierSite(budget Budget) Site {
 				{Source: "codex_local", Native: "p1", Normalized: "high"},
 				{Source: "codex_local", Native: "p2", Normalized: "medium"},
 				{Source: "codex_local", Native: "p3", Normalized: "low"},
+				{Source: "claude_local", Native: "p1", Normalized: "high"},
+				{Source: "claude_local", Native: "p2", Normalized: "medium"},
+				{Source: "claude_local", Native: "p3", Normalized: "low"},
 			},
 			UnknownSeverityFallback: "high",
 			NormalizedSeverityCeilings: []SeverityCeiling{

@@ -747,6 +747,16 @@ func testCodexReviewLifecycle(
 ) (*CodexReviewLifecycle, *fakeRuntime, CodexReviewConfig, CodexReviewLaunchSpec, *fakeCodexReviewJournal) {
 	t.Helper()
 	cfg, req := testCodexReview(t)
+	return testReviewLifecycle(t, codexReviewProvider{}, cfg, req)
+}
+
+func testReviewLifecycle(
+	t *testing.T,
+	provider reviewProvider,
+	cfg CodexReviewConfig,
+	req CodexReviewSpec,
+) (*CodexReviewLifecycle, *fakeRuntime, CodexReviewConfig, CodexReviewLaunchSpec, *fakeCodexReviewJournal) {
+	t.Helper()
 	journal := &fakeCodexReviewJournal{}
 	cfg.Journal = journal
 	cfg.ProxyURL = ""
@@ -774,7 +784,11 @@ func testCodexReviewLifecycle(
 	}
 	fx.rt.volBase[launch.WorkspaceVolume] = testCodexReviewHead
 	fx.rt.volTree[launch.WorkspaceVolume] = testCodexReviewTreeDigest
-	return fx.codexReviewLifecycle(t), fx.rt, cfg, launch, journal
+	lifecycle, err := newReviewLifecycle(provider, fx.rt, fx.cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return lifecycle, fx.rt, cfg, launch, journal
 }
 
 func retargetCodexReviewLifecycle(

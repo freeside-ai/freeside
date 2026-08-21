@@ -5,17 +5,28 @@ import (
 	"time"
 )
 
-// TestNormalizedSeverityMapsUnmappedP0ToFallback pins a consequence of the
-// P0-P3 review finding severity domain (#679): the classifier's native mapping
-// table covers only p1-p3, so a P0 finding is unmapped and normalizes to the
-// UnknownSeverityFallback ceiling rather than silently dropping below it.
-func TestNormalizedSeverityMapsUnmappedP0ToFallback(t *testing.T) {
+// TestNormalizedSeverityMappings pins the shared P0-P3 normalization used to
+// compare the production and shadow review arms. P0 is deliberately unmapped
+// and therefore fails protective to the UnknownSeverityFallback ceiling.
+func TestNormalizedSeverityMappings(t *testing.T) {
 	contract := ClassifierSite(Budget{Window: time.Hour}).Annotation
-	if got := contract.normalizedSeverity("codex_local", "P0"); got != contract.UnknownSeverityFallback {
-		t.Fatalf("normalizedSeverity(P0) = %q, want fallback %q", got, contract.UnknownSeverityFallback)
+	tests := []struct {
+		source, native, want string
+	}{
+		{"codex_local", "P1", "high"},
+		{"codex_local", "P2", "medium"},
+		{"codex_local", "P3", "low"},
+		{"codex_local", "P0", contract.UnknownSeverityFallback},
+		{"claude_local", "P1", "high"},
+		{"claude_local", "P2", "medium"},
+		{"claude_local", "P3", "low"},
+		{"claude_local", "P0", contract.UnknownSeverityFallback},
 	}
-	// Control: a mapped severity resolves through the table, not the fallback.
-	if got := contract.normalizedSeverity("codex_local", "P1"); got != "high" {
-		t.Fatalf("normalizedSeverity(P1) = %q, want high", got)
+	for _, test := range tests {
+		t.Run(test.source+"/"+test.native, func(t *testing.T) {
+			if got := contract.normalizedSeverity(test.source, test.native); got != test.want {
+				t.Fatalf("normalizedSeverity(%q, %q) = %q, want %q", test.source, test.native, got, test.want)
+			}
+		})
 	}
 }
