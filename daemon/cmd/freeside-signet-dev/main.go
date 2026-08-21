@@ -15,7 +15,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -31,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -596,8 +596,7 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func convergenceDigest(value string) domain.Digest {
-	sum := sha256.Sum256([]byte(value))
-	return domain.Digest(fmt.Sprintf("sha256:%x", sum))
+	return domain.Digest(contentaddr.Sum([]byte(value)))
 }
 
 func (c controlHandler) seedFindingAdjudicationAuthority(
