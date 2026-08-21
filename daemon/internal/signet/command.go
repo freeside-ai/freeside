@@ -49,6 +49,14 @@ type DecisionPayload struct {
 	// retain the existing write-once command identity.
 	RunProposalRevision *RunProposalRevisionInput
 	SnoozeUntil         *time.Time
+	AlternativeChoices  []AlternativeChoice
+}
+
+// AlternativeChoice replaces one finding's recommended route with an offered
+// route. Findings omitted from the list retain their recommendations.
+type AlternativeChoice struct {
+	FindingID domain.FindingID         `json:"finding_id"`
+	Route     domain.AdjudicationRoute `json:"route"`
 }
 
 // RunProposalRevisionInput deliberately omits SubjectHandle. The store keeps
@@ -71,7 +79,8 @@ func (in RunProposalRevisionInput) validate() error {
 func decisionMessage(payload DecisionPayload) (string, error) {
 	switch payload.Action {
 	case domain.ActionStartWithChanges:
-		if payload.RunProposalRevision == nil || payload.SnoozeUntil != nil || payload.Message != "" {
+		if payload.RunProposalRevision == nil || payload.SnoozeUntil != nil || payload.Message != "" ||
+			payload.AlternativeChoices != nil {
 			return "", ErrInvalidProposalDecisionPayload
 		}
 		if err := payload.RunProposalRevision.validate(); err != nil {
@@ -84,12 +93,24 @@ func decisionMessage(payload DecisionPayload) (string, error) {
 		return string(body), nil
 	case domain.ActionSnooze:
 		if payload.SnoozeUntil == nil || payload.RunProposalRevision != nil || payload.Message != "" ||
-			payload.SnoozeUntil.Location() != time.UTC {
+			payload.SnoozeUntil.Location() != time.UTC || payload.AlternativeChoices != nil {
 			return "", ErrInvalidProposalDecisionPayload
 		}
 		return payload.SnoozeUntil.Format(time.RFC3339Nano), nil
+	case domain.ActionChooseAlternativeRoute:
+		if payload.RunProposalRevision != nil || payload.SnoozeUntil != nil ||
+			payload.Message != "" || len(payload.AlternativeChoices) == 0 {
+			return "", ErrInvalidFindingAdjudicationDecisionPayload
+		}
+		return canonicalAlternativeChoices(payload.AlternativeChoices)
+	case domain.ActionAcceptRecommendedRoute:
+		if payload.RunProposalRevision != nil || payload.SnoozeUntil != nil ||
+			payload.Message != "" || payload.AlternativeChoices != nil {
+			return "", ErrInvalidFindingAdjudicationDecisionPayload
+		}
+		return "", nil
 	default:
-		if payload.RunProposalRevision != nil || payload.SnoozeUntil != nil {
+		if payload.RunProposalRevision != nil || payload.SnoozeUntil != nil || payload.AlternativeChoices != nil {
 			return "", ErrInvalidProposalDecisionPayload
 		}
 		return payload.Message, nil

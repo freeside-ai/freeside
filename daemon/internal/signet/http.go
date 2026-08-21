@@ -317,6 +317,7 @@ type decisionPayloadRequest struct {
 	Attachments         *[]domain.Digest          `json:"attachments"`
 	RunProposalRevision *RunProposalRevisionInput `json:"run_proposal_revision"`
 	SnoozeUntil         *time.Time                `json:"snooze_until"`
+	AlternativeChoices  []AlternativeChoice       `json:"alternative_choices"`
 }
 
 func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authenticatedDevice domain.DeviceID) {
@@ -358,6 +359,7 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 		ArtifactDigests:     *request.Payload.ArtifactDigests,
 		RunProposalRevision: request.Payload.RunProposalRevision,
 		SnoozeUntil:         request.Payload.SnoozeUntil,
+		AlternativeChoices:  request.Payload.AlternativeChoices,
 	}
 	if request.Payload.Message != nil {
 		payload.Message = *request.Payload.Message
@@ -492,7 +494,8 @@ func writeCommandError(w http.ResponseWriter, err error) {
 func isCommandRequestError(err error) bool {
 	for _, target := range []error{
 		ErrActionNotAllowedForType, ErrUnsupportedAction,
-		ErrInvalidProposalDecisionPayload,
+		ErrInvalidProposalDecisionPayload, ErrInvalidFindingAdjudicationDecisionPayload,
+		ErrAlternativeNotOffered,
 		ErrMessageRequired, ErrContentNotAllowed, ErrAttachmentNotStored,
 		// An over-limit request_changes message is deterministic invalid
 		// client input, rejected by validateCommandContent before the write,

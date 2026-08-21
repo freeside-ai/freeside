@@ -41,9 +41,11 @@ var ErrCallerSetDecidedAt = errors.New("decided_at is stamped by the accepting t
 var ErrUnsupportedAction = errors.New("action's transaction is not yet available at this boundary")
 
 var (
-	ErrInvalidProposalDecisionPayload = errors.New("proposal decision payload is invalid")
-	ErrProposalAdmissionRequired      = errors.New("run proposal requires atomic proposal admission")
-	ErrProposalSnoozed                = errors.New("proposal is snoozed")
+	ErrInvalidProposalDecisionPayload            = errors.New("proposal decision payload is invalid")
+	ErrInvalidFindingAdjudicationDecisionPayload = errors.New("finding adjudication decision payload is invalid")
+	ErrAlternativeNotOffered                     = errors.New("finding adjudication alternative was not offered")
+	ErrProposalAdmissionRequired                 = errors.New("run proposal requires atomic proposal admission")
+	ErrProposalSnoozed                           = errors.New("proposal is snoozed")
 )
 
 // ErrMessageRequired is returned for a discuss command with an empty message:

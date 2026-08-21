@@ -284,6 +284,10 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 				if err := s.applyCodexReenrollmentRecovery(ctx, tx, command, item, status); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
+			case outcomeAcceptsRecommendedRoute, outcomeChoosesAlternativeRoute:
+				if err := s.applyFindingAdjudicationDecision(ctx, tx, command, item, status); err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
 			case outcomeStartsProposal:
 				if err := s.applyStartProposal(ctx, tx, command, item, s.now().UTC()); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
@@ -378,6 +382,10 @@ const (
 	// outcomeResolvesReenrollment: conclude the revoked-identity marker and
 	// append its latest-verified-operation-bound recovery transition.
 	outcomeResolvesReenrollment
+	// Finding-adjudication outcomes validate the typed choice against the
+	// displayed binding before concluding the item.
+	outcomeAcceptsRecommendedRoute
+	outcomeChoosesAlternativeRoute
 	// Proposal outcomes own the instance ledger and exact proposal digest.
 	outcomeStartsProposal
 	outcomeRevisesAndStartsProposal
@@ -430,6 +438,10 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		return domain.StatusResolved, outcomeAdoptsReviewConfiguration
 	case domain.ActionResolveReenrollment:
 		return domain.StatusResolved, outcomeResolvesReenrollment
+	case domain.ActionAcceptRecommendedRoute:
+		return domain.StatusResolved, outcomeAcceptsRecommendedRoute
+	case domain.ActionChooseAlternativeRoute:
+		return domain.StatusResolved, outcomeChoosesAlternativeRoute
 	case domain.ActionStart:
 		return domain.StatusResolved, outcomeStartsProposal
 	case domain.ActionStartWithChanges:
