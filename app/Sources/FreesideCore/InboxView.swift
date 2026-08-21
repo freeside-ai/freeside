@@ -41,15 +41,27 @@ struct InboxView: View {
                     .padding(.bottom, 8)
 
                     if store.rows.isEmpty {
-                        ContentUnavailableView(
-                            "No \(store.scope.label.lowercased()) items",
-                            systemImage: "checklist",
-                            description: Text("Attention items in this scope will appear here.")
-                        )
+                        ContentUnavailableView {
+                            Label {
+                                Text("No \(store.scope.label.lowercased()) items")
+                                    .font(FreesideFont.title)
+                            } icon: {
+                                Image(systemName: "checklist")
+                            }
+                        } description: {
+                            Text("Attention items in this scope will appear here.")
+                                .font(FreesideFont.callout)
+                        }
+                        .foregroundStyle(Color.inkDim)
                     } else {
                         List(store.rows, id: \.item.id, selection: $selection) { snapshot in
-                            InboxRowView(item: snapshot.item)
+                            InboxRowView(item: snapshot.item, isSelected: selection == snapshot.item.id)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
                         }
+                        .listStyle(.plain)
+                        .scrollContentBackground(.hidden)
                     }
                 }
             }
@@ -102,30 +114,34 @@ struct InboxView: View {
     }
 }
 
+/// One inbox row as a ground-2 card; the selected row's border turns
+/// accent-dim in place of the platform selection highlight.
 struct InboxRowView: View {
     let item: Components.Schemas.AttentionItem
+    var isSelected = false
 
     var body: some View {
         let subject = AttentionDisplay.subject(item)
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
                 Text(AttentionDisplay.title(item._type))
-                    .font(.headline)
+                    .font(FreesideFont.itemTitle)
+                    .foregroundStyle(Color.ink)
                 Spacer()
                 PriorityBadge(priority: item.priority)
             }
             Text(item.reason)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(FreesideFont.subheadline)
+                .foregroundStyle(Color.inkDim)
                 .lineLimit(2)
             HStack(spacing: 8) {
                 Text(subject.lead)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(FreesideFont.caption)
+                    .foregroundStyle(Color.inkDim)
                 if let identifier = subject.identifier {
                     Text(identifier)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.tertiary)
+                        .font(FreesideFont.monoCaption)
+                        .foregroundStyle(Color.inkFaint)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -134,28 +150,26 @@ struct InboxRowView: View {
                 }
             }
         }
-        .padding(.vertical, 2)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .freesideCard(border: isSelected ? .accentDim : .rule)
     }
 }
 
+/// Urgent is wax, high is the accent, normal is water, low is faint.
 struct PriorityBadge: View {
     let priority: Components.Schemas.Priority
 
     var body: some View {
-        Text(AttentionDisplay.label(priority))
-            .font(.caption2.weight(.medium))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.15), in: Capsule())
-            .foregroundStyle(color)
+        StateChip(label: AttentionDisplay.label(priority), color: color)
     }
 
     private var color: Color {
         switch priority {
-        case .urgent: return .red
-        case .high: return .orange
-        case .normal: return .blue
-        case .low: return .gray
+        case .urgent: return .wax
+        case .high: return .accent
+        case .normal: return .water
+        case .low: return .inkFaint
         }
     }
 }
@@ -164,11 +178,6 @@ struct StatusBadge: View {
     let status: Components.Schemas.ItemStatus
 
     var body: some View {
-        Text(AttentionDisplay.label(status))
-            .font(.caption2.weight(.medium))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(.quaternary, in: Capsule())
-            .foregroundStyle(.secondary)
+        StateChip(label: AttentionDisplay.label(status), color: .inkDim)
     }
 }
