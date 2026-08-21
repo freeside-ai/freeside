@@ -11,33 +11,51 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/contract"
 )
 
-type codexReviewContractHarness struct {
-	runtime  *fakeRuntime
-	journal  *fakeCodexReviewJournal
-	config   CodexReviewSourceConfig
-	source   *CodexReviewSource
-	scenario contract.Scenario
+type reviewSourceContractHarness struct {
+	runtime   *fakeRuntime
+	journal   *fakeCodexReviewJournal
+	config    CodexReviewSourceConfig
+	source    *CodexReviewSource
+	scenario  contract.Scenario
+	provider  reviewProvider
+	fixture   func(*testing.T) (CodexReviewConfig, CodexReviewSpec)
+	configure func(
+		*testing.T, *CodexReviewLifecycle, CodexReviewConfig, CodexReviewSpec, CodexReviewJournal,
+	) CodexReviewSourceConfig
+	construct func(CodexReviewSourceConfig) (*CodexReviewSource, error)
 }
 
 func newCodexReviewContractHarness(t *testing.T) contract.ReviewSourceHarness {
 	t.Helper()
-	return &codexReviewContractHarness{}
+	return &reviewSourceContractHarness{
+		provider: codexReviewProvider{}, fixture: testCodexReview,
+		configure: codexReviewSourceConfigForTest, construct: NewCodexReviewSource,
+	}
 }
 
-func (h *codexReviewContractHarness) Prepare(
+func newClaudeReviewContractHarness(t *testing.T) contract.ReviewSourceHarness {
+	t.Helper()
+	return &reviewSourceContractHarness{
+		provider: claudeReviewProvider{}, fixture: testClaudeReview,
+		configure: claudeReviewSourceConfigForTest, construct: NewClaudeReviewSource,
+	}
+}
+
+func (h *reviewSourceContractHarness) Prepare(
 	t *testing.T, id domain.InvocationID, scenario contract.Scenario,
 ) exec.ReviewRequest {
 	t.Helper()
 	h.scenario = scenario
-	lifecycle, runtime, cfg, launch, journal := testCodexReviewLifecycle(t)
+	cfg, request := h.fixture(t)
+	lifecycle, runtime, cfg, launch, journal := testReviewLifecycle(t, h.provider, cfg, request)
 	retargetCodexReviewLifecycle(t, runtime, &launch, journal, string(id))
 	requestSpec := CodexReviewSpec{
 		AuthMode: launch.AuthMode, AuthIdentityID: launch.AuthIdentityID,
 		AuthSnapshot: launch.AuthSnapshot, Instructions: launch.Instructions,
 		InstructionBinding: launch.InstructionBinding,
 	}
-	sourceConfig := codexReviewSourceConfigForTest(t, lifecycle, cfg, requestSpec, journal)
-	source, err := NewCodexReviewSource(sourceConfig)
+	sourceConfig := h.configure(t, lifecycle, cfg, requestSpec, journal)
+	source, err := h.construct(sourceConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +72,7 @@ func (h *codexReviewContractHarness) Prepare(
 	}
 }
 
-func (h *codexReviewContractHarness) AuthorityRejectionComplete(
+func (h *reviewSourceContractHarness) AuthorityRejectionComplete(
 	t *testing.T, id domain.InvocationID,
 ) error {
 	t.Helper()
@@ -83,11 +101,11 @@ func (h *codexReviewContractHarness) AuthorityRejectionComplete(
 	return nil
 }
 
-func (h *codexReviewContractHarness) Source() exec.ReviewSource { return h.source }
+func (h *reviewSourceContractHarness) Source() exec.ReviewSource { return h.source }
 
-func (*codexReviewContractHarness) AwaitReady(*testing.T, domain.InvocationID) {}
+func (*reviewSourceContractHarness) AwaitReady(*testing.T, domain.InvocationID) {}
 
-func (h *codexReviewContractHarness) Finish(t *testing.T, id domain.InvocationID) {
+func (h *reviewSourceContractHarness) Finish(t *testing.T, id domain.InvocationID) {
 	t.Helper()
 	if h.scenario.Outcome == contract.OutcomeCrashBeforeResult {
 		return
@@ -113,12 +131,12 @@ func (h *codexReviewContractHarness) Finish(t *testing.T, id domain.InvocationID
 			return
 		}
 	}
-	t.Fatal("Codex review contract scenario did not finish")
+	t.Fatal("review source contract scenario did not finish")
 }
 
-func (h *codexReviewContractHarness) Restart(t *testing.T) exec.ReviewSource {
+func (h *reviewSourceContractHarness) Restart(t *testing.T) exec.ReviewSource {
 	t.Helper()
-	source, err := NewCodexReviewSource(h.config)
+	source, err := h.construct(h.config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,12 +146,23 @@ func (h *codexReviewContractHarness) Restart(t *testing.T) exec.ReviewSource {
 
 func TestCodexReviewSourceContract(t *testing.T) {
 	contract.RunReviewSourceContract(t, contract.ReviewSourceFactory{
-		New: newCodexReviewContractHarness,
-		KnownDivergences: []contract.KnownDivergence{
-			{Case: contract.ReviewCaseCrashBeforeResult, Issue: 663, Failure: "Inspect after crash-before-result = \"failed\", want StatusGone"},
-			{Case: contract.ReviewCaseCrashAfterResult, Issue: 664, Failure: "Inspect after crash-after-result = \"completed\", want StatusGone"},
-		},
+		New:              newCodexReviewContractHarness,
+		KnownDivergences: reviewSourceKnownDivergences(),
 	})
 }
 
-var _ contract.ReviewSourceHarness = (*codexReviewContractHarness)(nil)
+func TestClaudeReviewSourceContract(t *testing.T) {
+	contract.RunReviewSourceContract(t, contract.ReviewSourceFactory{
+		New:              newClaudeReviewContractHarness,
+		KnownDivergences: reviewSourceKnownDivergences(),
+	})
+}
+
+func reviewSourceKnownDivergences() []contract.KnownDivergence {
+	return []contract.KnownDivergence{
+		{Case: contract.ReviewCaseCrashBeforeResult, Issue: 663, Failure: "Inspect after crash-before-result = \"failed\", want StatusGone"},
+		{Case: contract.ReviewCaseCrashAfterResult, Issue: 664, Failure: "Inspect after crash-after-result = \"completed\", want StatusGone"},
+	}
+}
+
+var _ contract.ReviewSourceHarness = (*reviewSourceContractHarness)(nil)
