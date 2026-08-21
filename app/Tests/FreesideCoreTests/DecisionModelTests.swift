@@ -294,6 +294,54 @@ import Testing
         #expect(model.snapshot?.item.status == .superseded)
     }
 
+    @Test func findingAlternativeControlSubmitsTypedChoice() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-finding_adjudication")
+        await model.validate()
+
+        await model.submitFindingAlternatives([
+            .init(finding_id: "review-finding-17", route: .dispute)
+        ])
+
+        #expect(model.appliedRecord?.action == .choose_alternative_route)
+        #expect(model.snapshot?.item.status == .resolved)
+    }
+
+    @Test func findingAlternativeChoiceOmitsUntouchedRecommendations() {
+        let binding = AttentionFixtures.fixture(type: .finding_adjudication).item
+            .finding_adjudication!.value1
+        var proposals = binding.proposals
+        var untouched = proposals[0]
+        untouched.finding_id = "review-finding-18"
+        proposals.append(untouched)
+        let multiFinding = Components.Schemas.FindingAdjudicationBinding(
+            run_id: binding.run_id,
+            round: binding.round,
+            adjudication_digest: binding.adjudication_digest,
+            proposals: proposals
+        )
+
+        #expect(DecisionDetailView.selectedAlternatives(multiFinding, selections: [:]).isEmpty)
+        #expect(
+            DecisionDetailView.selectedAlternatives(
+                multiFinding,
+                selections: ["review-finding-17": .dispute]
+            ) == [.init(finding_id: "review-finding-17", route: .dispute)])
+    }
+
+    @Test func findingAlternativeCannotUseUntypedSubmitPath() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-finding_adjudication")
+        await model.validate()
+
+        await model.submit(.choose_alternative_route)
+
+        #expect(model.appliedRecord == nil)
+        #expect(model.snapshot?.item.status == .open)
+    }
+
     @Test func parameterizedRunProposalActionsCannotUseTheUntypedSubmitPath() async {
         let server = MockServer()
         let store = await makeStore(server: server)
