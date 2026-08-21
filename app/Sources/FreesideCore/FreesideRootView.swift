@@ -13,6 +13,8 @@ public struct FreesideRootView: View {
 
     @MainActor
     public init(session: AppSession, launchInputs: LaunchInputs = .standard()) {
+        FreesideFont.registration
+        FreesideNavigationChrome.apply()
         _session = State(initialValue: session)
         _screen = State(initialValue: launchInputs.screen)
         _attentionSelection = State(
@@ -45,6 +47,8 @@ public struct FreesideRootView: View {
             }
         }
         .preferredColorScheme(launchColorScheme)
+        .background(Color.ground)
+        .tint(.accent)
     }
 
     private func synced(_ coordinator: SyncCoordinator) -> some View {
@@ -74,39 +78,56 @@ public struct FreesideRootView: View {
                             selection: $runSelection)
                     }
                 }
+                .background(Color.sidebarGround)
                 .navigationSplitViewColumnWidth(min: 280, ideal: 320)
             } detail: {
-                switch screen {
-                case .inbox:
-                    if let attentionSelection {
-                        DecisionDetailView(
-                            store: coordinator.store, itemID: attentionSelection,
-                            detailsExpanded: launchDetailsExpanded
-                        )
-                        .id(attentionSelection)
-                    } else {
-                        ContentUnavailableView(
-                            "Freeside",
-                            systemImage: "checklist",
-                            description: Text("Select an attention item to decide."))
-                    }
-                case .runs:
-                    if let runSelection,
-                        let run = coordinator.runs.first(where: { $0.run.id == runSelection })
-                    {
-                        RunTimelineView(coordinator: coordinator, snapshot: run)
-                            .id(runSelection)
-                    } else {
-                        ContentUnavailableView(
-                            "Runs",
-                            systemImage: "point.3.connected.trianglepath.dotted",
-                            description: Text("Select a run to inspect its timeline."))
-                    }
-                }
+                detail(coordinator)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.ground)
             }
         }
         // The heartbeat is the loss detector (plan §5.14); its first
         // round trip also bootstraps a session with no cursors yet.
         .task { await coordinator.heartbeatLoop(every: .seconds(15)) }
+    }
+
+    @ViewBuilder
+    private func detail(_ coordinator: SyncCoordinator) -> some View {
+        switch screen {
+        case .inbox:
+            if let attentionSelection {
+                DecisionDetailView(
+                    store: coordinator.store, itemID: attentionSelection,
+                    detailsExpanded: launchDetailsExpanded
+                )
+                .id(attentionSelection)
+            } else {
+                emptyDetail("Freeside", systemImage: "checklist", description: "Select an attention item to decide.")
+            }
+        case .runs:
+            if let runSelection,
+                let run = coordinator.runs.first(where: { $0.run.id == runSelection })
+            {
+                RunTimelineView(coordinator: coordinator, snapshot: run)
+                    .id(runSelection)
+            } else {
+                emptyDetail(
+                    "Runs", systemImage: "point.3.connected.trianglepath.dotted",
+                    description: "Select a run to inspect its timeline.")
+            }
+        }
+    }
+
+    private func emptyDetail(_ title: String, systemImage: String, description: String) -> some View {
+        ContentUnavailableView {
+            Label {
+                Text(title).font(FreesideFont.title)
+            } icon: {
+                Image(systemName: systemImage)
+            }
+        } description: {
+            Text(description).font(FreesideFont.callout)
+        }
+        .foregroundStyle(Color.inkDim)
     }
 }
