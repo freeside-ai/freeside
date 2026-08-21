@@ -587,6 +587,184 @@ If only one execution is safe, scheduling shows that constraint instead of
 hiding it in a lock. API-key fallback is always available. Vendor tooling stays
 native and unmodified.
 
+**Provider profiles.** A `ProviderProfile` is the operator-facing object
+over an `AuthIdentity`:
+
+`ProviderProfile {id, name, provider, auth_identity_id, credential_mode,
+approved_model_configuration, role_eligibility, cost_owner, enabled,
+version}`
+
+The `id` is daemon-issued and immutable, never reused after deletion, and
+is what selections, composition manifests, and run records bind together
+with the version; the name is operator-chosen (`work`, `personal`),
+unique among the operator's profiles, and resolved to the `id` once, when
+a request or a per-project policy is authored; requests, policies, and
+records persist the `id`, so a later rename or name reuse can never
+redirect an existing policy; the provider is the
+vendor; `auth_identity_id` names exactly one identity, is immutable after
+creation (binding another identity means a new profile with a new `id`,
+so a persisted `id` can never be redirected to another account), and at
+most one profile
+names each identity (an identity enrolled through the interim surface has
+none until `auth add` adopts it; once adopted, a re-enrollment versions
+the one profile it backs); the credential mode is one of the modes above and is
+an enrollment fact the profile mirrors, never an editable selection: its
+trusted source is an identity-bound enrollment record that #406 introduces
+and the daemon-owned enrollment transaction writes, carrying the enrolled
+mode and the authoritative account binding (Codex: the account identity the
+transaction reads; Claude: the recorded operator attestation); no such
+record exists today (the Codex re-enrollment journal carries only operation
+coordinates, store digest, and expiry, and Claude has none), so #867
+migrates identities enrolled through the interim surface by writing the
+record at adoption (an adoption that cannot write it fails, and an
+identity without a record is never selectable); the record's `(provider, account binding)` is unique across
+identities, rejected as a duplicate at enrollment, adoption, and
+reconstruction, so one subscription never holds two mutation leases or two
+execution budgets and never passes the Section 7 independence check
+against itself (for Claude the key is the recorded attestation, so that
+uniqueness is operator-asserted, like the attestation itself); the
+existing re-enrollment journal and revoked-identity marker
+bind to that record rather than standing in for it, `AuthIdentity` itself
+stays unchanged, and the record, not the profile, is the trusted source at
+reconstruction; the approved model configuration is the model
+and reasoning settings a run may resolve against this profile; role
+eligibility is the set of roles (implementation, review, elaboration) the
+profile may be selected for; `cost_owner` is the operator-authored
+attribution label the interim `-review-cost-owner` flag carries today,
+required at enrollment, versioned like every other edit, and the only
+source the review configuration digest and run records draw cost owner
+from once the flag is removed, never derived from the name or `id`;
+`enabled` is an explicit operator switch; the
+version increments on every edit, so a selection and the records it
+produces bind to an exact profile version. The governing principle:
+
+> Provider accounts become first-class, versioned operator objects.
+> Credential authority stays in `AuthIdentity`; resolved facts and digests
+> stay in the composition manifest and run records. Probe output is
+> observation, never configuration authority. Switching account or provider
+> is always an explicit, recorded operator choice, never fallback.
+
+`AuthIdentity` is unchanged: it keeps the credential store, lease, refresh,
+snapshot, and execution-limit facts, and every credential rule in this
+section still binds to it. The profile repeats exactly two identity
+facts, `provider` and `credential_mode`, and the invariants binding it to
+the identity are re-checked at reconstruction and at every selection,
+failing closed: the referenced identity exists, no other profile names
+it, `provider` equals the identity's immutable provider, and
+`credential_mode` equals the mode the enrollment record carries, so
+selection, driver dispatch, the containment record, and the Section 7
+independence check can never name one vendor or mode while lease and
+credential-mount resolution follow another. The profile is a separate object because
+credential identity and runtime configuration change for different reasons:
+a token rotates or a store is re-enrolled without the operator's model
+choice or role eligibility changing, and a model-configuration or
+eligibility edit must never enter the credential transaction. Role
+*eligibility* lives on the profile; role *binding* is made per run or by
+per-project selection and recorded in the composition manifest and run
+records, never on the profile. The Section 7 independence check therefore
+compares provider and `auth_identity_id` across the implementation
+selection and the review selection; it never reads a role label off a
+profile. The profile is a sync-carried domain type landing through its own
+`kind:contract` unit (Section 11, Wave 7); the per-run preflight identity,
+volume, review, and image flag tuple and `enroll-codex`'s required-flag
+set are the interim surface it replaces, not a second surface beside it.
+The cutover is ordered so no enrolled identity goes dark: #406 lands the
+profile and enrollment-record types and their invariants without changing
+selection, the interim flags remain the only selection path until #867
+merges, and #867 carries adoption, the migration of every interim
+identity, and the switch to profile-only selection in one unit, so the
+"no record, never selectable" gate takes effect only once adoption can
+satisfy it; the interim path is removed in that same unit, never retained
+beside profiles. The same cutover covers every persisted pre-profile
+binding, split by whether it records a past selection or feeds a future
+one. A nonterminal run or admission that carries an `auth_identity_id`
+but no profile `id` and version is a record: it is read under an explicit
+legacy rule that keeps its admitted identity and credential mode, never
+resolved against a current profile revision; the rule is permanent, not a
+transition, because terminal pre-profile runs stay immutable history that
+timelines, export, and audit reconstruction must keep reading.
+A persisted request or per-project policy is an input, and today it
+carries no identity of its own: the pre-profile selection is the daemon's
+startup flag pair, `-auth-identity` for the implementation and
+elaboration roles (it is the shared admission environment today) and
+`-review-auth-identity` for the review role, shared by every queued input.
+The cutover therefore consumes those flags as the installation's one
+pre-profile selection: the adoption transaction adopts each flag identity
+(two adoptions when they differ, one when they coincide; the
+implementation-flag profile is eligible for both roles it replaces; the
+cutover is the operator's `auth add` adoption, so the review-flag profile
+takes its `cost_owner` from `-review-cost-owner` and the operator supplies
+the implementation-flag profile's `cost_owner` in that command, the
+adoption refusing to proceed without it rather than inventing one), then
+rewrites every input that carries no binding to the `id` of the profile
+adopted for its role, per input and durably, persisting the `id` alone as
+every input does, so each later selection from it resolves the profile's
+current version and passes the full profile gates (enabled, role
+eligibility, approved model configuration) at that moment, and the run
+record binds the version actually selected; a flag
+identity that cannot be adopted is retired as below and the inputs it
+would have bound stay unbound; the flags are removed only once that
+mapping is recorded, and no legacy selection path exists. An interim identity that cannot be adopted
+(its store is expired or corrupt, so Section 10 enrolls a new identity
+instead) is retired at the cutover: it is recorded as retired and holds
+nothing live. The cutover records `CancellationIntent` for each of its
+nonterminal runs and drives them through the Section 5.7 cancellation
+contract (stop, proven quiescence, ward teardown, `canceled`), raising an
+AttentionItem naming the retired identity; profile-only selection, and
+with it any same-account replacement profile, activates only after every
+such run has closed, because a retired identity has no enrollment record
+and so no lease or execution budget could fence a still-live writer
+against the replacement (the record-only legacy reader still covers a
+retired identity's terminal runs as history; retirement forbids selection
+and credential use, never reading), and its requests and
+policies are left unbound, so a selection from them fails closed with the
+same AttentionItem until the operator explicitly remaps each one to a
+profile and re-requests the stopped work, a recorded choice like any other
+account switch; the cutover never remaps on the operator's behalf. #867 ships
+these rules with the cutover, and a binding it cannot classify, rewrite,
+or retire fails closed.
+This section fixes the principle, the field list, and the trusted sources;
+the field-level schema, validation, the migration of pre-profile
+identities, and the complete lifecycle command set are settled by the
+#406 contract unit and the enrollment unit (#867), not enumerated here.
+
+**Multi-subscription per provider.** Two identities of one provider, each
+behind its own profile (a work and a personal subscription), are a
+supported shape. Selection among same-provider profiles is explicit (named
+in the run or reattempt request) or per-project policy, never silent: no
+default profile is inferred from enrollment order, recency, or
+availability. Cost owner is read from the selected profile version on
+every selection and recorded
+with it, so one project can attribute a review to one subscription and an
+implementation to another. The operator owns compliance with each
+provider's terms for multi-account use; Freeside attributes usage to a
+named profile and neither endorses nor polices the arrangement (Section 14,
+subscription-terms drift).
+
+**Observation, never authority.** A credential-bounded account probe may
+record, per profile: a stable account fingerprint; a masked label for
+operator display only, never written to evidence, composition manifests,
+run records, or export; auth type; plan type; expiry and revocation state;
+CLI version; a model and capability snapshot; the last probe time; and the
+last execution time. Probe output feeds `system_health` items, proposals, and the
+operator-facing profile projection (`freesided auth list` and the
+clients' profile display, which show the masked label) only, and every
+probe-derived item carries the `advisory` posture, so an
+observed expiry, revocation, or plan change informs the operator without
+closing the unattended admission gate; the operator's explicit stop action
+and the existing credential-integrity and revoked-identity markers keep
+their own postures. The gate is an exclusion list: no probe value is read by preflight,
+by scheduling, by the `max_parallel_executions` limit, or by any driver;
+those consumers read only the operator's explicit profile and identity
+records and the resolved policy. A probe that observes a newer model, a
+lapsed plan, or spare capacity produces a card or a proposal PR, never a
+changed selection. What a probe can report is a pinned-CLI empirical
+contract: the Codex app-server probe is expected to report account and plan
+facts, subject to the refresh-safety spike Section 10 gates it on; the
+pinned Claude CLI offers a token digest plus an auth check, and plan,
+quota, and expiry are not observable through it, so the Claude probe's
+realistic floor is integrity plus authentication, not account state.
+
 ### 5.5 The CI Trust Boundary
 
 An agent branch can modify scripts that a privileged GitHub Actions job later
