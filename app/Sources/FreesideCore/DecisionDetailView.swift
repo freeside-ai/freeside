@@ -15,6 +15,7 @@ struct DecisionDetailView: View {
     @State private var model: DecisionModel
     @State private var proposalEditor: ProposalEditor?
     @State private var detailsExpanded: Bool
+    @State private var alternativeSelections: [String: Components.Schemas.AdjudicationRoute] = [:]
     private let attachments: AttachmentLoader
 
     @MainActor
@@ -72,7 +73,13 @@ struct DecisionDetailView: View {
             Text(item.reason)
                 .font(FreesideFont.body)
                 .foregroundStyle(Color.ink)
-            actions(item)
+
+            if let adjudication = item.finding_adjudication?.value1 {
+                findingAdjudication(adjudication)
+                actions(item)
+            } else {
+                actions(item)
+            }
 
             // Daemon-derived commit-plan notice (plan §5.6): the reserved
             // plan channel was consumed without structuring the import, and
@@ -142,6 +149,120 @@ struct DecisionDetailView: View {
             .foregroundStyle(Color.inkDim)
             .textSelection(.enabled)
         }
+    }
+
+    @ViewBuilder
+    private func findingAdjudication(
+        _ binding: Components.Schemas.FindingAdjudicationBinding
+    ) -> some View {
+        ForEach(binding.proposals, id: \.finding_id) { proposal in
+            cardSection(
+                proposal.producer == .model
+                    ? "Model proposal (unverified)" : "Daemon recommendation",
+                dashed: proposal.producer == .model
+            ) {
+                LabeledContent("Finding", value: proposal.finding_id)
+                LabeledContent("Recommended route", value: AttentionDisplay.label(proposal.route))
+                LabeledContent(
+                    "Goal relationship", value: AttentionDisplay.label(proposal.goal_relationship))
+                LabeledContent(
+                    "Work-unit compatibility",
+                    value: AttentionDisplay.label(proposal.compatibility?.value1))
+                if let confidence = proposal.confidence?.value1 {
+                    LabeledContent("Proposal confidence", value: AttentionDisplay.label(confidence))
+                }
+                Text(proposal.rationale)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            cardSection("Daemon facts") {
+                LabeledContent("Binding digest", value: binding.adjudication_digest)
+                LabeledContent("Run", value: binding.run_id)
+                LabeledContent("Round", value: "\(binding.round)")
+            }
+
+            if !proposal.assumptions.isEmpty {
+                findingList("Assumptions", values: proposal.assumptions)
+            }
+            if !proposal.cited_rules.isEmpty {
+                findingList("Cited repository rules", values: proposal.cited_rules)
+            }
+            if !proposal.offered_alternatives.isEmpty {
+                cardSection("Viable alternatives") {
+                    ForEach(proposal.offered_alternatives, id: \.route) { alternative in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(AttentionDisplay.label(alternative.route))
+                                .font(FreesideFont.sans(.callout, weight: .semibold))
+                            Text(alternative.consequence)
+                        }
+                    }
+                    Picker(
+                        "Selected route",
+                        selection: alternativeSelection(for: proposal)
+                    ) {
+                        Text("Keep recommendation")
+                            .tag(Optional<Components.Schemas.AdjudicationRoute>.none)
+                        ForEach(proposal.offered_alternatives, id: \.route) { alternative in
+                            Text(AttentionDisplay.label(alternative.route))
+                                .tag(Optional(alternative.route))
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+            }
+            if !proposal.open_questions.isEmpty {
+                findingList("Gating questions", values: proposal.open_questions)
+            }
+        }
+    }
+
+    private func findingList(_ title: String, values: [String]) -> some View {
+        cardSection(title) {
+            ForEach(Array(values.enumerated()), id: \.offset) { _, value in
+                Label(value, systemImage: "circle.fill")
+                    .labelStyle(FindingListLabelStyle())
+            }
+        }
+    }
+
+    private func alternativeSelection(
+        for proposal: Components.Schemas.FindingAdjudicationProposal
+    ) -> Binding<Components.Schemas.AdjudicationRoute?> {
+        Binding(
+            get: { alternativeSelections[proposal.finding_id] },
+            set: { route in
+                if let route {
+                    alternativeSelections[proposal.finding_id] = route
+                } else {
+                    alternativeSelections.removeValue(forKey: proposal.finding_id)
+                }
+            }
+        )
+    }
+
+    private func selectedAlternatives(
+        _ binding: Components.Schemas.FindingAdjudicationBinding
+    ) -> [Components.Schemas.AlternativeChoice] {
+        Self.selectedAlternatives(binding, selections: alternativeSelections)
+    }
+
+    static func selectedAlternatives(
+        _ binding: Components.Schemas.FindingAdjudicationBinding,
+        selections: [String: Components.Schemas.AdjudicationRoute]
+    ) -> [Components.Schemas.AlternativeChoice] {
+        binding.proposals.compactMap { proposal in
+            guard let route = selections[proposal.finding_id] else { return nil }
+            return .init(finding_id: proposal.finding_id, route: route)
+        }
+    }
+
+    private func actionInputReady(
+        _ action: Components.Schemas.Action,
+        item: Components.Schemas.AttentionItem
+    ) -> Bool {
+        guard action == .choose_alternative_route else { return true }
+        guard let binding = item.finding_adjudication?.value1 else { return false }
+        return !selectedAlternatives(binding).isEmpty
     }
 
     private func detailRows(
@@ -378,6 +499,9 @@ struct DecisionDetailView: View {
                         proposalEditor = .revision
                     case .snooze:
                         proposalEditor = .snooze
+                    case .choose_alternative_route:
+                        guard let binding = item.finding_adjudication?.value1 else { return }
+                        Task { await model.submitFindingAlternatives(selectedAlternatives(binding)) }
                     default:
                         Task { await model.submit(action) }
                     }
@@ -391,7 +515,9 @@ struct DecisionDetailView: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(FreesideActionButtonStyle(tone: Self.tone(for: action, leading: offset == 0)))
-                .disabled(!model.actionsEnabled || !model.isSubmittable(action))
+                .disabled(
+                    !model.actionsEnabled || !model.isSubmittable(action)
+                        || !actionInputReady(action, item: item))
             }
             if item._type == .blocked {
                 Text("A blocked item is informational; it resolves when the external wait clears.")
@@ -415,6 +541,17 @@ struct DecisionDetailView: View {
             return .destructive
         default:
             return leading ? .primary : .neutral
+        }
+    }
+}
+
+private struct FindingListLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            configuration.icon
+                .font(.system(size: 4))
+                .foregroundStyle(Color.inkFaint)
+            configuration.title
         }
     }
 }

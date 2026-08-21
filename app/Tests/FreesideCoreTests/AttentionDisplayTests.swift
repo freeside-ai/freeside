@@ -13,6 +13,12 @@ import Testing
         #expect(AttentionDisplay.label(Components.Schemas.HealthPosture.advisory) == "Advisory")
     }
 
+    @Test func adjudicationConfidenceLabelsAreExplicit() {
+        #expect(AttentionDisplay.label(Components.Schemas.AdjudicationConfidence.low) == "Low")
+        #expect(AttentionDisplay.label(Components.Schemas.AdjudicationConfidence.medium) == "Medium")
+        #expect(AttentionDisplay.label(Components.Schemas.AdjudicationConfidence.high) == "High")
+    }
+
     @Test func attachmentDigestsKeepTheirEvidenceAndClaimContext() {
         let item = AttentionFixtures.fixture(type: .spec_approval).item
 
@@ -136,5 +142,18 @@ import Testing
         let item = AttentionFixtures.fixture(type: .review_contradiction).item
 
         #expect(AttentionDisplay.codexReenrollmentRecoveryRows(item).isEmpty)
+    }
+
+    @Test func findingAdjudicationRowsExposeAuthorityCoordinates() {
+        let item = AttentionFixtures.fixture(type: .finding_adjudication).item
+
+        #expect(
+            AttentionDisplay.findingAdjudicationRows(item) == [
+                .init(
+                    label: "Adjudication digest",
+                    value: "sha256:adjudication-finding_adjudication"),
+                .init(label: "Adjudication run", value: "run-finding_adjudication"),
+                .init(label: "Adjudication round", value: "3"),
+            ])
     }
 }
