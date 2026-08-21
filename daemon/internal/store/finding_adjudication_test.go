@@ -98,8 +98,15 @@ func seedReviewRound(
 	t *testing.T, runID domain.RunID, round int, findings []domain.Finding, at time.Time,
 ) *store.Store {
 	t.Helper()
+	return seedReviewRoundAt(t, filepath.Join(t.TempDir(), "store.db"), runID, round, findings, at)
+}
+
+func seedReviewRoundAt(
+	t *testing.T, path string, runID domain.RunID, round int, findings []domain.Finding, at time.Time,
+) *store.Store {
+	t.Helper()
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "store.db"), store.Options{})
+	st, err := store.Open(ctx, path, store.Options{})
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
