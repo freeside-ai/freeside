@@ -26,19 +26,29 @@ struct RunTimelineView: View {
                     timelineSection(timeline)
                     invocationSection(timeline)
                 } else if coordinator.timelineLoadStates[snapshot.run.id] == .unavailable {
-                    ContentUnavailableView(
-                        "Timeline unavailable",
-                        systemImage: "exclamationmark.triangle",
-                        description: Text("Freeside could not load daemon observations for this run.")
-                    )
+                    ContentUnavailableView {
+                        Label {
+                            Text("Timeline unavailable").font(FreesideFont.title)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle")
+                        }
+                    } description: {
+                        Text("Freeside could not load daemon observations for this run.")
+                            .font(FreesideFont.callout)
+                    }
+                    .foregroundStyle(Color.inkDim)
                     .frame(maxWidth: .infinity, minHeight: 180)
                 } else {
                     ProgressView("Loading timeline…")
+                        .tint(.water)
+                        .font(FreesideFont.callout)
+                        .foregroundStyle(Color.inkDim)
                         .frame(maxWidth: .infinity, minHeight: 180)
                 }
             }
             .padding(24)
             .frame(maxWidth: 820, alignment: .leading)
+            .foregroundStyle(Color.ink)
         }
         .navigationTitle(snapshot.run.project_id)
         // Every canonical replacement clears cached timelines because they
@@ -59,10 +69,10 @@ struct RunTimelineView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Run timeline")
-                        .font(.largeTitle.bold())
+                        .font(FreesideFont.largeTitle)
                     Text(snapshot.run.id)
-                        .font(.callout.monospaced())
-                        .foregroundStyle(.secondary)
+                        .font(FreesideFont.monoCallout)
+                        .foregroundStyle(Color.inkFaint)
                 }
                 Spacer()
                 RunOutcomeBadge(outcome: snapshot.run.outcome)
@@ -78,78 +88,88 @@ struct RunTimelineView: View {
                     Label(RunDisplay.label(milestone), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                 }
             }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .font(FreesideFont.subheadline)
+            .foregroundStyle(Color.inkDim)
             if let campaign = RunDisplay.campaign(snapshot.run) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(campaign)
-                        .font(.callout.monospaced().weight(.semibold))
+                        .font(FreesideFont.mono(.callout, weight: .semibold))
                     if let reason = snapshot.run.attempt_reason {
                         Text("Reason: \(reason)")
+                            .font(FreesideFont.callout)
                     }
                     if let parent = snapshot.run.parent_run_id {
                         Text("Parent run: \(parent)")
-                            .font(.caption.monospaced())
+                            .font(FreesideFont.monoCaption)
                     }
                     Text("\(RunDisplay.specificationLabel(snapshot.run)): \(snapshot.run.spec_digest)")
-                        .font(.caption.monospaced())
+                        .font(FreesideFont.monoCaption)
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.inkDim)
             }
-            Label("Daemon observations", systemImage: "eye")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
+            KeywordLabel(text: "Daemon observations")
+        }
+    }
+
+    /// Mirrors the run list: a hold is attention, but on a failed or
+    /// lost run it reads as part of the failure and keeps wax.
+    private var holdIsFailure: Bool {
+        switch snapshot.run.outcome {
+        case .failed, .lost: true
+        case .unobserved, .pending, .published, .blocked: false
         }
     }
 
     private func holdCard(_ hold: Components.Schemas.RunHold) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Current hold", systemImage: "pause.circle.fill")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 6) {
+            KeywordLabel(text: "Current hold", color: holdIsFailure ? .wax : .accent)
             Text(RunDisplay.label(hold.reason))
-                .font(.title3.weight(.semibold))
+                .font(FreesideFont.sectionTitle)
             Text(
                 "Observed \(hold.first_observed_at.formatted(date: .abbreviated, time: .shortened)) to \(hold.last_observed_at.formatted(date: .omitted, time: .shortened))"
             )
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .font(FreesideFont.monoCaption)
+            .foregroundStyle(Color.inkFaint)
         }
-        .padding()
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        .background(RoundedRectangle(cornerRadius: 8).fill(holdIsFailure ? Color.waxWash : Color.accentWash))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8).strokeBorder(holdIsFailure ? Color.wax : Color.accentDim, lineWidth: 1)
+        )
     }
 
     private func timelineSection(_ timeline: Components.Schemas.RunTimeline) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Stage, Round & Decision History")
-                .font(.title2.bold())
+                .font(FreesideFont.title)
             ForEach(Array(timeline.milestones.enumerated()), id: \.offset) { index, milestone in
                 HStack(alignment: .top, spacing: 12) {
                     VStack(spacing: 0) {
                         Circle()
-                            .fill(index == timeline.milestones.count - 1 ? Color.accentColor : .secondary)
+                            .fill(index == timeline.milestones.count - 1 ? Color.accent : Color.milestonePrior)
                             .frame(width: 10, height: 10)
                         if index < timeline.milestones.count - 1 {
                             Rectangle()
-                                .fill(.quaternary)
+                                .fill(Color.milestoneConnector)
                                 .frame(width: 2, height: 44)
                         }
                     }
                     VStack(alignment: .leading, spacing: 4) {
                         Text(RunDisplay.label(milestone.kind))
-                            .font(.headline)
+                            .font(FreesideFont.sans(.headline, weight: .semibold))
                         if let detail = milestoneDetail(milestone) {
                             Text(detail)
-                                .font(.subheadline.weight(.medium))
+                                .font(FreesideFont.sans(.subheadline, weight: .medium))
                         }
                         if let context = attemptContext(invocationID: milestone.invocation_id) {
                             Text(context)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                                .font(FreesideFont.subheadline)
+                                .foregroundStyle(Color.inkDim)
                         }
                         Text(milestone.recorded_at.formatted(date: .abbreviated, time: .shortened))
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .font(FreesideFont.monoCaption)
+                            .foregroundStyle(Color.inkFaint)
                     }
                 }
             }
@@ -159,23 +179,22 @@ struct RunTimelineView: View {
     private func invocationSection(_ timeline: Components.Schemas.RunTimeline) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Latest Invocation Observations")
-                .font(.title2.bold())
-            ForEach(timeline.invocations, id: \.invocation_id) { invocation in
+                .font(FreesideFont.title)
+            ForEach(Array(timeline.invocations.enumerated()), id: \.element.invocation_id) { index, invocation in
+                if index > 0 {
+                    Divider().overlay(Color.rule)
+                }
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(attemptContext(invocationID: invocation.invocation_id) ?? invocation.invocation_id)
-                            .font(.headline)
+                            .font(FreesideFont.sans(.headline, weight: .semibold))
                         Text(invocation.observed_at.formatted(date: .abbreviated, time: .shortened))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(FreesideFont.monoCaption)
+                            .foregroundStyle(Color.inkFaint)
                     }
                     Spacer()
                     let presentation = InvocationPresentation(invocation, asOf: timeline.as_of)
-                    Label(
-                        presentation.label,
-                        systemImage: presentation.symbol
-                    )
-                    .font(.subheadline.weight(.medium))
+                    StateChip(label: presentation.label, color: presentation.color, glyph: presentation.glyph)
                 }
                 .padding(.vertical, 6)
             }
@@ -209,6 +228,13 @@ struct RunTimelineView: View {
 struct InvocationPresentation {
     let label: String
     let symbol: String
+    /// Running is water, completed is a quiet tick, an observation gap is
+    /// the accent, failed and canceled are wax.
+    let color: Color
+    /// The chip's leading glyph: a tick when completed, and for a
+    /// nonterminal status the live bit the symbol also carries (a filled
+    /// dot when live, an open one when not).
+    let glyph: String?
 
     init(_ invocation: Components.Schemas.InvocationObservation, asOf: Date) {
         let isTerminal: Bool
@@ -222,9 +248,25 @@ struct InvocationPresentation {
         if !isTerminal && stale {
             label = "Observation gap"
             symbol = "exclamationmark.triangle"
+            color = .accent
+            glyph = nil
         } else {
             label = invocation.status.rawValue.capitalized
             symbol = invocation.live ? "wave.3.right.circle.fill" : "circle"
+            switch invocation.status {
+            case .running:
+                color = .water
+                glyph = invocation.live ? "●" : "○"
+            case .completed:
+                color = .ink
+                glyph = "✓"
+            case .failed, .canceled:
+                color = .wax
+                glyph = nil
+            case .pending, .gone:
+                color = .inkFaint
+                glyph = invocation.live ? "●" : "○"
+            }
         }
     }
 }

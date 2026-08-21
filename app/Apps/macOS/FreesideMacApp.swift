@@ -77,43 +77,70 @@ struct FreesideMacApp: App {
     }
 }
 
+/// Standard menu items, arranged per the §15 menu-bar spec: a bold state
+/// line, its explanation and facts directly under it, the last action's
+/// error under a section header, and the actions grouped at the bottom
+/// with Quit. The bar and menu stay system chrome.
 private struct DaemonMenu: View {
     let model: DaemonMenuModel
 
     var body: some View {
         switch model.state {
         case .checking:
-            Text("Checking daemon…")
+            Text("Checking daemon…").bold()
+            lastAction
+            Divider()
+            Button("Quit Freeside") { NSApplication.shared.terminate(nil) }
         case .stopped:
-            Label("Daemon stopped", systemImage: "stop.circle")
+            Label("Daemon stopped", systemImage: "stop.circle").bold()
+            lastAction
+            Divider()
             Button("Start") { Task { await model.start() } }
+            Button("Quit Freeside") { NSApplication.shared.terminate(nil) }
         case .needsApproval:
-            Label("Approval needed", systemImage: "exclamationmark.triangle.fill")
+            Label("Approval needed", systemImage: "exclamationmark.triangle.fill").bold()
             Text("Allow Freeside in Login Items to start the daemon.")
-            Button("Open Login Items") { model.openApprovalSettings() }
+            Button("Open Login Items…") { model.openApprovalSettings() }
+            lastAction
+            Divider()
             Button("Stop") { Task { await model.stop() } }
+            Button("Quit Freeside") { NSApplication.shared.terminate(nil) }
         case .unavailable:
-            Label("LaunchAgent unavailable", systemImage: "xmark.circle.fill")
+            Label("LaunchAgent unavailable", systemImage: "xmark.circle.fill").bold()
+            lastAction
+            Divider()
             Button("Start") { Task { await model.start() } }
+            Button("Quit Freeside") { NSApplication.shared.terminate(nil) }
         case .unreachable:
-            Label("Daemon unreachable", systemImage: "xmark.circle.fill")
+            Label("Daemon unreachable", systemImage: "xmark.circle.fill").bold()
             Text("launchd is keeping the service enabled, but health is not answering.")
+            lastAction
+            Divider()
             Button("Stop") { Task { await model.stop() } }
+            Button("Quit Freeside") { NSApplication.shared.terminate(nil) }
         case .running(let health, let restartObserved):
-            Label("Daemon running", systemImage: "checkmark.circle.fill")
+            Label("Daemon running", systemImage: "checkmark.circle.fill").bold()
             Text("Version \(health.version)")
             Text("Started \(health.startedAt.formatted(date: .abbreviated, time: .standard))")
             if restartObserved {
                 Label("Restart observed", systemImage: "arrow.clockwise")
             }
+            lastAction
+            Divider()
             Button("Stop") { Task { await model.stop() } }
+            Divider()
+            Button("Quit Freeside") { NSApplication.shared.terminate(nil) }
         }
+    }
+
+    @ViewBuilder
+    private var lastAction: some View {
         if let error = model.actionError {
             Divider()
-            Text(error)
+            Section("Last action") {
+                Text(error)
+            }
         }
-        Divider()
-        Button("Quit Freeside") { NSApplication.shared.terminate(nil) }
     }
 }
 
@@ -165,8 +192,10 @@ private enum FreesideMenuIcon {
             NSBezierPath(rect: rect).fill()
             context.restoreGraphicsState()
             if let badgeColor {
+                // Top-right, over the key's bar; the dot is the status
+                // channel at this size, where the key's own dot is retired.
                 badgeColor.setFill()
-                NSBezierPath(ovalIn: NSRect(x: 13, y: 0, width: 7, height: 7)).fill()
+                NSBezierPath(ovalIn: NSRect(x: 13, y: 13, width: 7, height: 7)).fill()
             }
             return true
         }

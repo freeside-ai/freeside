@@ -13,17 +13,22 @@ struct PairingView: View {
                 Section {
                     TextField("Pairing code", text: $model.pairingCode)
                         .autocorrectionDisabled()
+                        .font(FreesideFont.monoCallout)
                     TextField("Device name", text: $model.displayName)
                 } footer: {
                     Text(
                         "Run the pairing command on the daemon host and enter the code it displays. The code works once and expires quickly."
                     )
+                    .font(FreesideFont.caption)
+                    .foregroundStyle(Color.inkDim)
                 }
+                .listRowBackground(Color.ground2)
                 if case .failed(let message) = model.phase {
                     Section {
                         Label(message, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Color.wax)
                     }
+                    .listRowBackground(Color.ground2)
                 }
                 Section {
                     Button {
@@ -41,8 +46,14 @@ struct PairingView: View {
                     }
                     .disabled(!model.canSubmit)
                 }
+                .listRowBackground(Color.ground2)
             }
             .formStyle(.grouped)
+            .font(FreesideFont.body)
+            .foregroundStyle(Color.ink)
+            .tint(.accent)
+            .scrollContentBackground(.hidden)
+            .background(Color.ground)
             .navigationTitle("Pair with Freeside")
         }
     }
