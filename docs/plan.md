@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 37
+revision: 38
 status: active
 updated: 2026-08-21
 ---
@@ -580,6 +580,7 @@ sit above the credential-mode floor and represent different risk classes:
 | Profile | Access and risk |
 | --- | --- |
 | `provider_only` | Default. The writer has one host-only network: direct external and guest-DNS paths are absent, and the provider API is reachable only through the daemon's allowlisting proxy. The host gateway remains a network neighbor. The production API is isolated by its loopback-or-Tailscale-owned listener gate; every other host service needs its own declared binding policy, and the ward proxy is the intentional agent-reachable exception. |
+| `provider_registry` | Opt-in per project policy; `provider_only` stays the default. The writer keeps the same single host-only network and the same daemon CONNECT proxy; the proxy additionally admits the project policy's short, declared set of package-registry authorities, consumed read-only (initially `proxy.golang.org`, `sum.golang.org`, `registry.npmjs.org`, `pypi.org`, and `files.pythonhosted.org`). The set is control-plane policy: a writer change to it is publish-blocked like any other control-plane path, and a per-project addition is a reviewed operator change admitting only a public package registry that the project's dependency manifests resolve against. Any other authority is not a registry entry; admitting it is a `provider_web_read` decision with that profile's explicit wider-exposure record, because an arbitrary tunnel endpoint the operator does not vet is exactly the attacker-observable host this class excludes. Under that criterion the risk class on its merits: no DNS, no direct egress, no attacker-operated host, and exfiltration bounded to what those registries' own endpoints accept from a client the attacker does not control. The proxy allowlist is per authority with the TLS server name pinned to the CONNECT authority, so a registry entry cannot reach a shared-CDN neighbor. The tunnel cannot constrain HTTP method or path, so a registry that co-hosts a write endpoint (npm publish) leaves a residual: an injected writer holding an attacker-supplied registry credential could publish workspace content there. The residual is recorded in Section 14; a project policy may exclude such hosts. This is a materially narrower exposure than `provider_web_read` and is priced separately from it, never folded into that record. |
 | `provider_web_read` | Materially wider credential-exfiltration exposure. Read-only HTTP can still exfiltrate through URLs, headers, bodies, redirects, and DNS while the provider credential shares the trust domain. It requires an explicit record of the wider exposure and a small trusted-domain allowlist. |
 | Clean verification | No network access. |
 
@@ -981,10 +982,13 @@ silently downgrades. Named capabilities are:
 - `supports_workspace_snapshot`;
 - `supports_networkless_export`; and
 - `supports_enforced_provider_egress` — the proven writer-egress boundary:
-  the agent workspace reaches only the declared provider authorities through
-  the daemon's CONNECT proxy on a host-only network, with DNS and direct
-  connections refuted by live in-writer probes. It attests the enforcement
-  mechanism, distinct from the *requested* egress profile (Section 5.4).
+  the agent workspace reaches only the declared provider authorities and,
+  under `provider_registry`, the declared registry authorities through the
+  daemon's CONNECT proxy on a host-only network, with DNS and direct
+  connections refuted by live in-writer probes. The realized proxy allowlist
+  is conformance-checked against the requested profile, never trusted from
+  configuration. It attests the enforcement mechanism, distinct from the
+  *requested* egress profile (Section 5.4).
 
 #### The first ward gate
 
@@ -1114,8 +1118,26 @@ builder proves both that this clean run passes and that the baked dependency
 material is load-bearing: a negative probe masks that material and must fail by
 attempting the registry or network access the positive run did not need. A
 candidate that changes the dependency closure beyond the baked inputs fails
-loudly and requires a new reviewed project image; verification never fetches a
-missing dependency.
+loudly and requires a new reviewed project image, unless the policy-gated
+rebuild below applies; verification never fetches a missing dependency.
+
+**Policy-gated rebuild.** A dependency change stops costing a human round trip
+when it stays inside the project's declared policy. The gate holds when the
+candidate's dependency-manifest delta is lockfile-consistent, every added or
+changed package resolves from an authority in the project policy's declared
+registry set (the same set `provider_registry` exposes to the writer, Section
+5.4; the builder reads it whatever the writer's profile, since builder fetch
+authorization and writer egress are different concerns), and the verification
+recipe is unchanged. Under those
+conditions the reusable builder rebuilds the project image from the trusted
+recipe, reruns the networkless positive run and the negative probe, records the
+new provenance, and the run resumes against the new digest-pinned reference
+without an AttentionItem. Any other delta (a new authority, an unpinned or VCS
+source, a recipe change, a failed positive run or probe) keeps the fail-loud
+path above. The gate is a machine check, never a widening of the writer's
+network: the writer still never fetches during verification, and the human
+still sees every dependency change in the PR diff and in the image provenance
+record.
 
 Every runnable agent-base and project-image reference is
 registry-resolvable `name@sha256:<digest>` and is admitted by digest, never by
@@ -3119,7 +3141,7 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **4 (1B.0): the review stage** | Serial | The spine rescopes #406/#407 into review cores and execution remainders, then lands the review-selection contract core, the review ward-topology slice, #405 only if review needs a project-derived image, and #427 — landed PR-anchored under the then-open Section 7 fork (resolved pre-publication in revision 28; the implementation re-anchor is #527, unscheduled). Its close stands the minimal loop; real-backlog use begins. |
 | **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section 5.13 classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section 7 disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section 6 state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section 5.2 contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section 7 finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section 10). 1B.0 exit. |
-| **7 (1B.1): operational closure** | Parallel lanes | Human-gated follow-up filing with the `effect_proposal` card; the doctor credential-integrity probe; the stall heartbeat; the external daemon-liveness probe (Section 5.2); the deferral drain (sweep-eligible open deferrals enumerated at this wave's planning; dormant contract units excluded unless the spine assigns chain positions). The execution tail closes in order: #401 gate 3, the #406/#407 execution remainders, #405 if outstanding, #397 by explicit owner decision on shadow evidence, then #408. Provider profiles (Section 5.4) add the Codex probe refresh-safety spike (#866) as an independent unit; `ProviderProfile` is the core type of the #406 driver-selection contract, so guided enrollment (`freesided auth`, Section 10; #867) `starts-after` #406, the doctor account probe (#868) `starts-after` both #406 and #866, the explicit alternate-provider retry card (#869, one unit covering the implementation, review, and elaboration roles, every role a profile is eligible for) `starts-after` both #406 and #408, and #408 `merges-after` the continuation compatibility digest (#873; Section 5.8). |
+| **7 (1B.1): operational closure** | Parallel lanes | Human-gated follow-up filing with the `effect_proposal` card; the doctor credential-integrity probe; the stall heartbeat; the external daemon-liveness probe (Section 5.2); the deferral drain (sweep-eligible open deferrals enumerated at this wave's planning; dormant contract units excluded unless the spine assigns chain positions). The execution tail closes in order: #401 gate 3, the #406/#407 execution remainders, #405 if outstanding, #397 by explicit owner decision on shadow evidence, then #408. Provider profiles (Section 5.4) add the Codex probe refresh-safety spike (#866) as an independent unit; `ProviderProfile` is the core type of the #406 driver-selection contract, so guided enrollment (`freesided auth`, Section 10; #867) `starts-after` #406, the doctor account probe (#868) `starts-after` both #406 and #866, the explicit alternate-provider retry card (#869, one unit covering the implementation, review, and elaboration roles, every role a profile is eligible for) `starts-after` both #406 and #408, and #408 `merges-after` the continuation compatibility digest (#873; Section 5.8). The deferral drain also carries two sweep-eligible units for the egress floor's first capabilities above it (Sections 5.4, 5.7, Golden Agent and Project Images): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, a `kind:contract` unit because `EgressProfile` is a domain enum carried in the admission record, so the spine assigns its contract-chain position at this wave's planning; and (b) the policy-gated project-image rebuild in the reusable builder, whose gate reads the registry set from the policy field unit (a) declares, so (b) `starts-after` (a). Both build on merged work (#302 proxy enforcement, #334 builder); (a) has no open prerequisite. |
 | **8 (1B.2): the initiative view** | Integrated | The Section 5.18 frontier projection and the deterministic initiative view. 1B exit evaluation. |
 
 Review bandwidth limits parallel width. Every wave ends with a fresh-context
@@ -3191,7 +3213,6 @@ Expand beyond the first constrained path:
 - richer classification and risk-classified cards;
 - webhooks if latency hurts;
 - APNs;
-- registry-capable egress profiles;
 - `provider_web_read` where explicitly accepted;
 - OCR image scanning if warranted; and
 - the Linux deployment matrix if wanted.
@@ -3252,77 +3273,47 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 37 ("Provider accounts are first-class operator objects"):
+Revision 38 ("The egress floor does not move"):
 
-1. **Provider profiles sit over an unchanged `AuthIdentity`** (Section
-   5.4): `ProviderProfile {id, name, provider, auth_identity_id,
-   credential_mode, approved_model_configuration, role_eligibility,
-   cost_owner, enabled, version}` is the operator-facing, versioned object, bound
-   into records by immutable `id` plus version, never by name; credential
-   authority stays in `AuthIdentity`, and resolved facts and digests stay
-   in the composition manifest and run records. Role eligibility is on the
-   profile; role binding is per run or per-project selection, so the
-   Section 7 independence check compares provider and identity across two
-   selections. Rejected: expanding `AuthIdentity` with configuration
-   fields (credential identity and runtime configuration change for
-   different reasons); binding a role on the profile (the independence
-   check would read a label instead of comparing selections); the name
-   `ProviderAccount` (the object does not own the credential).
-   (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
-2. **Multi-subscription per provider is supported and selected
-   explicitly** (Section 5.4): two identities of one provider are a
-   supported shape; selection among them is explicit or per-project
-   policy, never silent; cost owner is re-evaluated on every selection;
-   the operator owns provider-terms compliance and Freeside attributes
-   without endorsing. Rejected: an inferred default profile.
-   (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
-3. **Probe output is observation, never authority** (Sections 5.4, 10):
-   a credential-bounded account probe records fingerprint, masked label
-   (display only), auth and plan type, expiry and revocation, CLI version,
-   model snapshot, and last probe and execution; it feeds `system_health`
-   items (always `advisory`), proposals, and the operator-facing profile
-   projection's display fields only, and preflight, scheduling,
-   `max_parallel_executions`, and drivers never read it; the
-   profile is one-to-one with its identity and mirrors only its
-   provider and enrolled credential mode, both checked at reconstruction
-   and selection. The Claude
-   pinned-CLI floor is a token digest plus an auth check. Rejected:
-   running against operator provider homes; T3 Code's shared Codex
-   shadow-home overlay; arbitrary provider environment variables (each
-   makes credential state or configuration ambient and unrecorded).
-   (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
-4. **Switching is an explicit recorded attempt, never fallback**
-   (Sections 4, 5.8): a quota, expiry, or capacity card offers retry under
-   a qualified profile, wait, or stop; each switch is a new attempt that
-   preserves the original failure and re-evaluates cost owner and review
-   independence; preferences become project-policy proposal PRs, never
-   remembered defaults; cross-profile continuation defaults to a fresh
-   invocation, with a continuation compatibility digest designed as its
-   own unit (#873) before #408 merges. Rejected: automatic fallback (Sections 2, 14) and
-   learned defaults.
-   (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
-5. **Guided enrollment and the gated account probe** (Sections 10, 11):
-   `freesided auth add|list|re-enroll|disable|enable` packages the Codex
-   import-rotate-snapshot sequence and a guided Claude setup-token capture
-   that keeps the token out of argv, history, logs, and client responses;
-   re-enrollment is same-account only (checked in the transaction where
-   the provider exposes account identity, operator-attested otherwise)
-   and always versions the profile, so a different account is a new
-   identity and profile;
-   the doctor account probe, and `auth doctor` with it, waits on a spike proving the Codex app-server
-   probe never refreshes outside the lease. Wave 7 gains the spike as an
-   independent unit; `ProviderProfile` is the core type of #406, so
-   enrollment, the probe, and the retry card `starts-after` #406, the
-   probe also `starts-after` the spike, and the retry card, one unit for
-   the implementation, review, and elaboration roles, also `starts-after`
-   #408.
-   (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
+1. **The `provider_only` floor is a credential-containment boundary and does
+   not move** (Sections 5.4, 5.7, 14). Capability above it is added as
+   narrower, separately priced risk classes and as machine gates, never by
+   widening the writer toward general web under `subscription_contained`.
+   `provider_registry` (Section 5.4) admits a policy-declared set of
+   read-only package-registry authorities through the same CONNECT proxy,
+   with no DNS, no attacker-operated host, and exfiltration bounded to what
+   the registries' own endpoints accept (the tunnel cannot constrain method
+   or path, so a co-hosted write endpoint is a recorded residual); it is
+   opt-in per project and its proven allowlist joins
+   `supports_enforced_provider_egress`. The hosted agents' default shape
+   (egress off or proxy-allowlisted) motivated keeping the floor; Freeside
+   stays stricter only where the strictness was buying a human round trip
+   rather than containment. Rejected: widening the writer to general web;
+   making `provider_web_read` the default; folding the registry class into
+   the `provider_web_read` exposure record.
+   (User; devlog 2026-08-21-1510-registry-egress-profile.md; #871.)
+2. **Dependency changes inside policy rebuild the project image without an
+   AttentionItem** (Golden Agent and Project Images, Section 11): when the
+   manifest delta is lockfile-consistent, every changed package resolves
+   from the project policy's declared registry set (read by the builder
+   whatever the writer's profile), and the recipe is unchanged,
+   the reusable builder rebuilds from the trusted recipe, reruns the
+   networkless positive run and the negative probe, and the run resumes
+   against the new digest. Everything else keeps the fail-loud path, and the
+   human still reviews the change in the PR diff and provenance record. The
+   two follow-on units leave the Phase 2 list and drain in Wave 7, with the
+   profile unit `kind:contract`. Rejected: leaving every dependency change a
+   human gate; a setup-script phase with open internet as the hosted agents
+   run, because the bake step already provides it without a
+   credential-holding network phase.
+   (User; devlog 2026-08-21-1510-registry-egress-profile.md; #871.)
 
 ## 14. Risks
 
 | Risk | Current response |
 | --- | --- |
 | Provider credentials in `subscription_contained` | Document the residual; enforce egress floors; let the daemon fetch research for the most exposed stage; provide `api_key_isolated` as the escape. |
+| Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed; admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record; conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path, so a registry that co-hosts a write endpoint accepts an attacker-credentialed publish; exclude such hosts per project where the residual is not acceptable, and provide `api_key_isolated` as the escape for anything wider. |
 | CI privilege crossing | Attest effective authority; block candidate automation changes; fail closed on drift; prohibit the daemon host as a runner. |
 | Reviewer-instruction poisoning | Treat instruction paths as control-plane content and block candidate changes in the ordinary publication path. |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section 5.7); the same-VM fallback is refuted by execution, never implemented or declared. |

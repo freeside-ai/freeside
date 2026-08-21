@@ -1129,3 +1129,71 @@ everything.
    same-explanation findings conflate; both directions over-report
    not-fixed and never declare a persisting defect fixed.
    (User; devlog 2026-08-20-2311-cross-round-finding-fingerprint.md; #702.)
+
+## Revision 37
+
+Revision 37 ("Provider accounts are first-class operator objects"):
+
+1. **Provider profiles sit over an unchanged `AuthIdentity`** (Section
+   5.4): `ProviderProfile {id, name, provider, auth_identity_id,
+   credential_mode, approved_model_configuration, role_eligibility,
+   cost_owner, enabled, version}` is the operator-facing, versioned object, bound
+   into records by immutable `id` plus version, never by name; credential
+   authority stays in `AuthIdentity`, and resolved facts and digests stay
+   in the composition manifest and run records. Role eligibility is on the
+   profile; role binding is per run or per-project selection, so the
+   Section 7 independence check compares provider and identity across two
+   selections. Rejected: expanding `AuthIdentity` with configuration
+   fields (credential identity and runtime configuration change for
+   different reasons); binding a role on the profile (the independence
+   check would read a label instead of comparing selections); the name
+   `ProviderAccount` (the object does not own the credential).
+   (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
+2. **Multi-subscription per provider is supported and selected
+   explicitly** (Section 5.4): two identities of one provider are a
+   supported shape; selection among them is explicit or per-project
+   policy, never silent; cost owner is re-evaluated on every selection;
+   the operator owns provider-terms compliance and Freeside attributes
+   without endorsing. Rejected: an inferred default profile.
+   (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
+3. **Probe output is observation, never authority** (Sections 5.4, 10):
+   a credential-bounded account probe records fingerprint, masked label
+   (display only), auth and plan type, expiry and revocation, CLI version,
+   model snapshot, and last probe and execution; it feeds `system_health`
+   items (always `advisory`), proposals, and the operator-facing profile
+   projection's display fields only, and preflight, scheduling,
+   `max_parallel_executions`, and drivers never read it; the
+   profile is one-to-one with its identity and mirrors only its
+   provider and enrolled credential mode, both checked at reconstruction
+   and selection. The Claude
+   pinned-CLI floor is a token digest plus an auth check. Rejected:
+   running against operator provider homes; T3 Code's shared Codex
+   shadow-home overlay; arbitrary provider environment variables (each
+   makes credential state or configuration ambient and unrecorded).
+   (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
+4. **Switching is an explicit recorded attempt, never fallback**
+   (Sections 4, 5.8): a quota, expiry, or capacity card offers retry under
+   a qualified profile, wait, or stop; each switch is a new attempt that
+   preserves the original failure and re-evaluates cost owner and review
+   independence; preferences become project-policy proposal PRs, never
+   remembered defaults; cross-profile continuation defaults to a fresh
+   invocation, with a continuation compatibility digest designed as its
+   own unit (#873) before #408 merges. Rejected: automatic fallback (Sections 2, 14) and
+   learned defaults.
+   (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
+5. **Guided enrollment and the gated account probe** (Sections 10, 11):
+   `freesided auth add|list|re-enroll|disable|enable` packages the Codex
+   import-rotate-snapshot sequence and a guided Claude setup-token capture
+   that keeps the token out of argv, history, logs, and client responses;
+   re-enrollment is same-account only (checked in the transaction where
+   the provider exposes account identity, operator-attested otherwise)
+   and always versions the profile, so a different account is a new
+   identity and profile;
+   the doctor account probe, and `auth doctor` with it, waits on a spike proving the Codex app-server
+   probe never refreshes outside the lease. Wave 7 gains the spike as an
+   independent unit; `ProviderProfile` is the core type of #406, so
+   enrollment, the probe, and the retry card `starts-after` #406, the
+   probe also `starts-after` the spike, and the retry card, one unit for
+   the implementation, review, and elaboration roles, also `starts-after`
+   #408.
+   (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
