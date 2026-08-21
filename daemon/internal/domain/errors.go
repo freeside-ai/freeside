@@ -162,6 +162,21 @@ var (
 	ErrProjectInvalid                     = errors.New("project record is invalid")
 	ErrProductionAttemptInconsistent      = errors.New("production attempt lineage is inconsistent")
 
+	// Finding-adjudication failures (plan §7).
+	ErrInvalidGoalRelationship           = errors.New("invalid finding-adjudication goal relationship")
+	ErrInvalidWorkUnitCompatibility      = errors.New("invalid finding-adjudication work-unit compatibility")
+	ErrInvalidProposedCompatibility      = errors.New("invalid finding-adjudication proposed compatibility")
+	ErrInvalidAdjudicationRoute          = errors.New("invalid finding-adjudication route")
+	ErrInvalidAdjudicationProducer       = errors.New("invalid finding-adjudication producer")
+	ErrInvalidAdjudicationConfidence     = errors.New("invalid finding-adjudication confidence")
+	ErrInvalidDispatchThreshold          = errors.New("invalid finding-adjudication dispatch threshold")
+	ErrAdjudicationAxisMismatch          = errors.New("finding-adjudication axes and route do not form a valid §7 row")
+	ErrModelEntryMintsAllowed            = errors.New("model-residue adjudication entry cannot mint allowed compatibility")
+	ErrEngineEntryNonDeterministicRow    = errors.New("engine fast-path adjudication entry must carry the required/allowed remediation row")
+	ErrAdjudicationConfidenceMisplaced   = errors.New("proposal confidence must be present exactly on model-residue adjudication entries")
+	ErrFindingAdjudicationInconsistent   = errors.New("finding adjudication fields are internally inconsistent")
+	ErrFindingAdjudicationDigestMismatch = errors.New("finding adjudication digest does not match its canonical content")
+
 	// Trust-boundary failures.
 	ErrPlaintextCredential               = errors.New("credential material must be a sha256 digest, never plaintext")
 	ErrAgentArtifactInEvidence           = errors.New("agent-produced artifact cannot enter evidence snapshot")

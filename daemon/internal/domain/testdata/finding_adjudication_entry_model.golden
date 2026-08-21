@@ -1,0 +1,24 @@
+{
+  "finding_id": "finding-0002",
+  "producer": "model",
+  "goal_relationship": "contradictory",
+  "compatibility": null,
+  "route": "decline",
+  "rationale": "contradicts the approved spec",
+  "evidence": [
+    "spec §2"
+  ],
+  "cited_rules": [
+    "AGENTS.md scope discipline"
+  ],
+  "assumptions": [
+    "spec is authoritative"
+  ],
+  "alternatives": [
+    "defer to a separate work unit"
+  ],
+  "open_questions": [
+    "which spec clause governs?"
+  ],
+  "confidence": "high"
+}
