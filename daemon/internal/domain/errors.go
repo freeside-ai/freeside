@@ -90,6 +90,7 @@ var (
 	ErrNonPositiveSeq               = errors.New("message sequence must be positive")
 	ErrNonPositive                  = errors.New("value must be positive")
 	ErrInvertedRange                = errors.New("line range start is greater than end")
+	ErrUnfingerprintableFinding     = errors.New("finding lacks the fields required for a cross-round fingerprint")
 	ErrParentKeyMismatch            = errors.New("child record's parent key does not match its enclosing record")
 	ErrStatusMissingTimestamp       = errors.New("status lacks its corresponding timestamp")
 	ErrStatusTimestampTooStrong     = errors.New("record carries a timestamp stronger than its status")

@@ -1,8 +1,10 @@
 package domain
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -111,6 +113,86 @@ func findingsEqual(a, b []Finding) bool {
 		x.Location, y.Location = nil, nil
 		return x == y
 	})
+}
+
+// FindingFingerprint is a deterministic cross-round semantic identity for a
+// raw Finding: stable across the same-base, different-head remediation rounds
+// of one work unit, and independent of the invocation and candidate head. It
+// is the identity the §7 fixed-disposition absence proof keys on — a finding
+// counts as fixed only when its fingerprint no longer appears in the
+// remediation review — so it must not carry any field that legitimately
+// changes between those rounds. It is a pure derivation, never stored and
+// never source-supplied: both rounds always recompute under one derivation
+// version, which is why no migration or persisted field is needed.
+type FindingFingerprint string
+
+// findingFingerprintVersion tags the derivation. It is embedded in the hashed
+// input and rendered as the fingerprint's prefix, so a derivation change bumps
+// the version and every fingerprint visibly changes rather than silently
+// colliding across versions.
+const findingFingerprintVersion = "fpv1"
+
+// Fingerprint derives the finding's cross-round semantic identity over the
+// immutable persisted fields that survive remediation: the review Source, the
+// location Path, and the whitespace-normalized Message. Everything that
+// legitimately differs across the remediation rounds of one unit is excluded
+// by design:
+//
+//   - ID, RunID: the ID hashes the invocation and candidate head, and RunID is
+//     per-run; both change for the required same-base, different-head review.
+//   - Severity: a round may re-tag the same defect.
+//   - Location line range: remediation edits shift the lines a finding points
+//     at, so only the Path is identity-bearing.
+//   - CreatedAt: per-emission.
+//
+// It fails closed with ErrUnfingerprintableFinding when the finding carries no
+// location, an empty path, or a Message that is empty after normalization: a
+// finding with no computable fingerprint can never satisfy the absence proof,
+// so the safe direction is to refuse an identity rather than invent one. The
+// Message is normalized by trimming and collapsing every internal whitespace
+// run to a single space (no case folding), so cosmetic reflowing of the same
+// explanation compares equal while a genuinely reworded finding does not.
+func (f Finding) Fingerprint() (FindingFingerprint, error) {
+	if f.Location == nil || f.Location.Path == "" {
+		return "", fmt.Errorf("finding fingerprint: %w", ErrUnfingerprintableFinding)
+	}
+	message := strings.Join(strings.Fields(f.Message), " ")
+	if message == "" {
+		return "", fmt.Errorf("finding fingerprint: %w", ErrUnfingerprintableFinding)
+	}
+	identity := fmt.Sprintf("%s\x00%s\x00%s\x00%s",
+		findingFingerprintVersion, f.Source, f.Location.Path, message)
+	sum := sha256.Sum256([]byte(identity))
+	return FindingFingerprint(fmt.Sprintf("%s-%x", findingFingerprintVersion, sum[:12])), nil
+}
+
+// FindingIdentityAbsent reports whether a prior finding's cross-round identity
+// is absent from the current review's findings — the §7 fixed-disposition
+// primitive: a finding is a candidate for `fixed` only when it is absent here.
+// It fails closed (ErrUnfingerprintableFinding) when the prior finding or any
+// current finding has no computable fingerprint: an unfingerprintable current
+// finding could be the re-emission the proof must not miss, so absence cannot
+// be asserted while any identity is undecidable. When every fingerprint is
+// computable, it returns true iff no current fingerprint equals the prior's.
+func FindingIdentityAbsent(prior Finding, current []Finding) (bool, error) {
+	priorFP, err := prior.Fingerprint()
+	if err != nil {
+		return false, fmt.Errorf("prior finding: %w", err)
+	}
+	// Validate every current finding before deciding: an unfingerprintable
+	// current finding fails the whole comparison closed regardless of where it
+	// sits, so a match found before it can never mask it.
+	found := false
+	for i, c := range current {
+		currentFP, err := c.Fingerprint()
+		if err != nil {
+			return false, fmt.Errorf("current finding %d: %w", i, err)
+		}
+		if currentFP == priorFP {
+			found = true
+		}
+	}
+	return !found, nil
 }
 
 // Classification is a versioned annotation over a raw Finding (plan §5.12). It
