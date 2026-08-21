@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 35
+revision: 36
 status: active
-updated: 2026-08-19
+updated: 2026-08-20
 ---
 
 # Freeside
@@ -2022,7 +2022,8 @@ state is restored. The pass runs with fresh context independent of the
 implementing invocation, a read-only workspace, and no publication
 credentials; it receives repository instructions and verification evidence,
 never the implementer's reasoning history; it returns normalized findings
-with severity, location, explanation, and stable identity; and it records
+with severity, location, and explanation, from which a stable cross-round
+identity is derived (#702); and it records
 provider, model configuration, invocation, cost owner, and completion
 evidence. The findings → adjudication → remediation → reverify → re-review
 loop is bounded by resolved policy; exhaustion or ambiguity produces a
@@ -2283,9 +2284,13 @@ requires the later same-base, different-head remediation review, one in
 which the finding's stable identity no longer appears — a re-emitted
 identity re-enters adjudication as the prior fix having failed, never as
 a fresh finding whose disposition can strand the original. That absence
-proof is valid only under a finding identity stable across the
-remediation rounds of one work unit; defining that cross-round identity
-is an acceptance requirement of the wave 6 `kind:contract` unit (#702).
+proof keys on a finding identity stable across the remediation rounds of
+one work unit: the deterministic `domain.Finding` fingerprint (#702) over
+the finding's review source, location path, and whitespace-normalized
+explanation — excluding the invocation, candidate head, severity, and
+line range that legitimately change between rounds — failing closed when
+a finding carries no such identity, so a finding whose fingerprint cannot
+be computed is never declared fixed.
 Adjudicated
 declines and deferrals cite the adjudication artifact digest in their
 recorded reason; and parked runs never publish, so the publication-time
@@ -3039,40 +3044,28 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 35 ("Managed infrastructure never exceeds convenience"):
+Revision 36 ("Cross-round finding identity"):
 
-1. **Core authority and replaceable infrastructure are an explicit boundary**
-   (Sections 2, 5.1): remote reachability, notification delivery, replica
-   storage, and external health monitoring are replaceable infrastructure with
-   operator-selected reference implementations and possible future
-   Freeside-operated managed implementations; managed infrastructure may
-   improve reachability, availability, storage, and delivery, but never
-   becomes necessary for workflow authority or local operation, and its loss
-   never invalidates local state. The one scoped exception is explicit:
-   portable-mode replica storage is the oracle for activation fencing and
-   the recovery frontier and sits inside the authority trust boundary,
-   whoever operates it (Sections 5.1, 5.10). The Section 5.10
-   capability-based replica-store contract is the template. The fully
-   unmanaged deployment
-   (Tailscale, ntfy, local state, operator probe; Section 10) stays
-   first-class permanently, and authoritative components get no cloud seam.
-   (User; devlog 2026-08-19-2138-managed-infrastructure-seams.md; #858.)
-2. **Reachability is not identity** (Sections 5.2, 5.14): Signet is one
-   authenticated protocol over loopback, Tailscale (the Phase 1 reference
-   mechanism, not an architectural assumption), or a future managed relay;
-   every mode presents the same daemon-owned Freeside device credential, and
-   a managed service may transport pairing but never enroll a device. The
-   deferred relay contract (Section 5.19) bounds any future relay to byte
-   transport: no workflow authority, no credential possession or visibility
-   (the Signet channel stays end-to-end protected through the relay and
-   authenticates the daemon by a control-plane-stable Freeside identity
-   independent of relay-controlled PKI), no
-   authoritative state, and no Signet bypass; relay loss is reachability
-   loss, never state loss. Enrolled
-   host identity becomes cryptographically backed, recorded now as a forward
-   requirement on the #265 domain contract before any host identity is
-   persisted (Section 5.9).
-   (User; devlog 2026-08-19-2138-managed-infrastructure-seams.md; #858.)
+Revision 36 lands the cross-round semantic finding identity the Section 7
+fixed-disposition safety proof was conditioned on. Held from revision 35:
+everything.
+
+1. **The fixed-disposition absence proof keys on a deterministic finding
+   fingerprint** (Section 7): the identity is `domain.Finding.Fingerprint()`
+   over the review source, location path, and whitespace-normalized
+   explanation, excluding the invocation, candidate head, run, severity, and
+   line range that legitimately change across a work unit's same-base,
+   different-head remediation rounds. It is a pure recompute-on-demand
+   derivation, never stored, so both rounds compare under one version with no
+   migration or schema change. It fails closed when a finding carries no such
+   identity, so a finding whose fingerprint cannot be computed is never
+   declared fixed; `codex_local` structurally never emits one, because
+   `exec.ReviewResult.Validate` rejects an empty-message finding at the source
+   boundary. Recorded fail-safe limitations: a reworded re-emission
+   under-matches (enters as a new finding), and two distinct same-path,
+   same-explanation findings conflate; both directions over-report
+   not-fixed and never declare a persisting defect fixed.
+   (User; devlog 2026-08-20-2311-cross-round-finding-fingerprint.md; #702.)
 
 ## 14. Risks
 

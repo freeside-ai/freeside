@@ -2448,6 +2448,107 @@ func TestCodexReviewSourceFindingIdentityIsInvocationScoped(t *testing.T) {
 	}
 }
 
+// TestCodexReviewSourceFindingsAreCrossRoundFingerprintable is the §7
+// decidability guarantee (#702): every codex_local finding that survives
+// normalization with a real (non-empty) explanation yields a computable
+// cross-round fingerprint, and two remediation rounds differing only in
+// invocation, candidate head, severity re-tag, and shifted line ranges yield
+// pairwise-equal fingerprints while their per-invocation FindingIDs differ. So
+// the fixed-disposition absence proof is decidable against real reviewer
+// output.
+func TestCodexReviewSourceFindingsAreCrossRoundFingerprintable(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
+		Review:              CodexReviewConfig{Model: "gpt-codex", ReasoningEffort: "high"},
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		CostOwner:           "owner", Now: func() time.Time { return now },
+	}}
+	round1Req := exec.ReviewRequest{
+		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/candidate",
+		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: now,
+	}
+	round1 := CodexReviewCollection{Result: []byte(
+		`{"findings":[` +
+			`{"severity":"P1","location":{"path":"daemon/main.go","start_line":10,"end_line":12},"explanation":"unchecked error from Close"},` +
+			`{"severity":"P2","location":{"path":"daemon/store.go","start_line":5,"end_line":5},"explanation":"nil map write"}` +
+			`]}`)}
+	// A later remediation round: different invocation and head, severity re-tagged,
+	// line ranges shifted by the intervening edits — the same two logical findings.
+	round2Req := round1Req
+	round2Req.RunID = "run-2"
+	round2Req.HeadSHA = strings.Repeat("d", 40)
+	round2 := CodexReviewCollection{Result: []byte(
+		`{"findings":[` +
+			`{"severity":"P2","location":{"path":"daemon/main.go","start_line":30,"end_line":33},"explanation":"unchecked error from Close"},` +
+			`{"severity":"P3","location":{"path":"daemon/store.go","start_line":9,"end_line":9},"explanation":"nil map write"}` +
+			`]}`)}
+
+	first := source.normalizeCollection("review-invocation-A", round1Req, round1)
+	second := source.normalizeCollection("review-invocation-B", round2Req, round2)
+	if first.Result == nil || second.Result == nil {
+		t.Fatalf("normalization failed: first=%#v second=%#v", first, second)
+	}
+	if len(first.Result.Findings) != len(second.Result.Findings) {
+		t.Fatalf("round finding counts differ: %d vs %d", len(first.Result.Findings), len(second.Result.Findings))
+	}
+
+	fingerprints := func(o CodexReviewSourceOutcome) []domain.FindingFingerprint {
+		out := make([]domain.FindingFingerprint, len(o.Result.Findings))
+		for i, f := range o.Result.Findings {
+			fp, err := f.Fingerprint()
+			if err != nil {
+				t.Fatalf("surviving finding %d has no computable fingerprint: %v", i, err)
+			}
+			out[i] = fp
+		}
+		return out
+	}
+	fp1, fp2 := fingerprints(first), fingerprints(second)
+	for i := range fp1 {
+		if fp1[i] != fp2[i] {
+			t.Errorf("finding %d fingerprint changed across rounds: %q != %q", i, fp1[i], fp2[i])
+		}
+		if first.Result.Findings[i].ID == second.Result.Findings[i].ID {
+			t.Errorf("finding %d FindingID stable across rounds; per-invocation IDs must differ", i)
+		}
+	}
+}
+
+// TestCodexReviewSourceEmptyExplanationRejectedBySource shows why codex_local
+// never emits an unfingerprintable finding through its full path. The ward
+// schema requires `explanation` present but sets no minLength, and
+// normalizeCollection applies no non-empty check, so an empty explanation
+// survives normalization with an empty Message. The production path rejects it
+// one step later: it calls outcome.Validate() right after normalization
+// (codex_review_source.go), and exec.ReviewResult.Validate rejects an
+// empty-Message finding, converting the payload into a contradiction — so it
+// never reaches fingerprinting. (The fingerprint's own empty-message
+// fail-closed branch remains a domain-level safety net for sources with weaker
+// Message guarantees; see the domain fail-closed tests.)
+func TestCodexReviewSourceEmptyExplanationRejectedBySource(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
+		Review:              CodexReviewConfig{Model: "gpt-codex", ReasoningEffort: "high"},
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		CostOwner:           "owner", Now: func() time.Time { return now },
+	}}
+	request := exec.ReviewRequest{
+		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/candidate",
+		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: now,
+	}
+	outcome := source.normalizeCollection("review-invocation-1", request, CodexReviewCollection{
+		Result: []byte(`{"findings":[{"severity":"P1","location":{"path":"a.go","start_line":1,"end_line":1},"explanation":""}]}`),
+	})
+	// The production source runs this Validate immediately after normalization
+	// and converts a failure into a ReviewFailureContradiction.
+	err := outcome.Validate()
+	if !errors.Is(err, domain.ErrEmptyField) {
+		t.Fatalf("empty-explanation outcome.Validate() = %v, want ErrEmptyField (empty-message rejection)", err)
+	}
+}
+
 func TestCodexReviewSourceClassifiesTerminalFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

@@ -163,3 +163,151 @@ func TestFindingLocationString(t *testing.T) {
 		}
 	}
 }
+
+// codexFinding builds a codex_local-shaped raw finding for the fingerprint
+// fixtures: the fields the source populates, with the per-round-varying inputs
+// (id, run, severity, line range) as arguments so a "round 2" finding differs
+// exactly where a real remediation review differs.
+func codexFinding(id domain.FindingID, run domain.RunID, sev domain.FindingSeverity, path, msg string, start, end int) domain.Finding {
+	return domain.Finding{
+		ID: id, RunID: run, Source: "codex_local", Severity: sev,
+		Location:  &domain.FindingLocation{Path: path, StartLine: start, EndLine: end},
+		Message:   msg,
+		RawText:   msg,
+		CreatedAt: time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+// TestFindingFingerprintStableAcrossRounds is the core acceptance case: the
+// same logical finding, observed in two remediation rounds that differ in
+// invocation-scoped ID, run, severity re-tag, and shifted line range, derives
+// one identity. The exact literal is pinned so any change to the derivation
+// (inputs, order, version, truncation) is visible in the diff.
+func TestFindingFingerprintStableAcrossRounds(t *testing.T) {
+	const path, msg = "daemon/main.go", "unchecked error from Close"
+	round1 := codexFinding("review-1111111111111111", "run-1", "P1", path, msg, 10, 12)
+	round2 := codexFinding("review-2222222222222222", "run-2", "P2", path, msg, 14, 16)
+
+	fp1, err := round1.Fingerprint()
+	if err != nil {
+		t.Fatalf("round1 fingerprint: %v", err)
+	}
+	fp2, err := round2.Fingerprint()
+	if err != nil {
+		t.Fatalf("round2 fingerprint: %v", err)
+	}
+	if fp1 != fp2 {
+		t.Errorf("fingerprint changed across rounds: %q != %q", fp1, fp2)
+	}
+	if round1.ID == round2.ID {
+		t.Fatal("fixture rounds must carry distinct FindingIDs")
+	}
+	const want = domain.FindingFingerprint("fpv1-a256def93b535bec95265451")
+	if fp1 != want {
+		t.Errorf("fingerprint = %q, want pinned %q", fp1, want)
+	}
+}
+
+// TestFindingFingerprintNormalization pins the message normalization: internal
+// whitespace runs collapse and leading/trailing whitespace is trimmed (equal
+// identity), while case differences are deliberately preserved (distinct
+// identity), and the location line range never enters the identity.
+func TestFindingFingerprintNormalization(t *testing.T) {
+	base := codexFinding("f-a", "run-1", "P1", "a.go", "unchecked error", 3, 5)
+	baseFP, err := base.Fingerprint()
+	if err != nil {
+		t.Fatalf("base fingerprint: %v", err)
+	}
+
+	for _, msg := range []string{
+		"  unchecked error  ",  // trimmed
+		"unchecked\terror",     // tab collapses
+		"unchecked   error",    // run collapses
+		"unchecked\n  error\n", // newline + run collapse and trim
+	} {
+		f := codexFinding("f-b", "run-9", "P3", "a.go", msg, 40, 41)
+		got, err := f.Fingerprint()
+		if err != nil {
+			t.Fatalf("fingerprint(%q): %v", msg, err)
+		}
+		if got != baseFP {
+			t.Errorf("fingerprint(%q) = %q, want equal to %q", msg, got, baseFP)
+		}
+	}
+
+	cased := codexFinding("f-c", "run-1", "P1", "a.go", "Unchecked Error", 3, 5)
+	casedFP, err := cased.Fingerprint()
+	if err != nil {
+		t.Fatalf("cased fingerprint: %v", err)
+	}
+	if casedFP == baseFP {
+		t.Error("case-differing messages must not share an identity")
+	}
+}
+
+// TestFindingFingerprintFailsClosed covers the fail-closed set: a finding with
+// no computable identity yields ErrUnfingerprintableFinding rather than an
+// invented one, so it can never satisfy the §7 absence proof.
+func TestFindingFingerprintFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		f    domain.Finding
+	}{
+		{"nil location", domain.Finding{Source: "codex_local", Message: "x"}},
+		{"empty path", domain.Finding{Source: "codex_local", Location: &domain.FindingLocation{Path: ""}, Message: "x"}},
+		{"empty message", codexFinding("f", "run-1", "P1", "a.go", "", 1, 1)},
+		{"whitespace-only message", codexFinding("f", "run-1", "P1", "a.go", "  \t\n ", 1, 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := tc.f.Fingerprint(); !errors.Is(err, domain.ErrUnfingerprintableFinding) {
+				t.Errorf("Fingerprint() err = %v, want ErrUnfingerprintableFinding", err)
+			}
+		})
+	}
+}
+
+// TestFindingIdentityAbsent is the fixed-disposition primitive: a fixed finding
+// is absent from the remediation round; a re-emitted finding is present (its
+// route back into adjudication as a failed fix is the consumers' behavior);
+// and an unfingerprintable prior or current finding fails the comparison closed.
+func TestFindingIdentityAbsent(t *testing.T) {
+	const path, msg = "daemon/main.go", "unchecked error from Close"
+	prior := codexFinding("review-1111111111111111", "run-1", "P1", path, msg, 10, 12)
+	reemitted := codexFinding("review-2222222222222222", "run-2", "P2", path, msg, 14, 16)
+	other := codexFinding("review-3333333333333333", "run-2", "P1", "daemon/other.go", "nil deref", 1, 1)
+
+	// Fixed: the prior finding's identity is absent from the remediation round.
+	absent, err := domain.FindingIdentityAbsent(prior, []domain.Finding{other})
+	if err != nil {
+		t.Fatalf("absent (fixed) err: %v", err)
+	}
+	if !absent {
+		t.Error("a fixed finding must be absent from the remediation round")
+	}
+
+	// Re-emitted: identity present, so not absent — it re-enters adjudication as
+	// a failed fix rather than counting as fixed.
+	absent, err = domain.FindingIdentityAbsent(prior, []domain.Finding{other, reemitted})
+	if err != nil {
+		t.Fatalf("absent (re-emitted) err: %v", err)
+	}
+	if absent {
+		t.Error("a re-emitted finding must not be reported absent")
+	}
+
+	// Empty remediation round: trivially absent.
+	absent, err = domain.FindingIdentityAbsent(prior, nil)
+	if err != nil || !absent {
+		t.Errorf("empty round: absent=%v err=%v, want true/nil", absent, err)
+	}
+
+	bad := domain.Finding{Source: "codex_local", Message: "x"} // nil location
+	if _, err := domain.FindingIdentityAbsent(bad, []domain.Finding{other}); !errors.Is(err, domain.ErrUnfingerprintableFinding) {
+		t.Errorf("unfingerprintable prior err = %v, want ErrUnfingerprintableFinding", err)
+	}
+	// An unfingerprintable current fails closed even when a matching finding
+	// precedes it in the batch.
+	if _, err := domain.FindingIdentityAbsent(prior, []domain.Finding{reemitted, bad}); !errors.Is(err, domain.ErrUnfingerprintableFinding) {
+		t.Errorf("unfingerprintable current err = %v, want ErrUnfingerprintableFinding", err)
+	}
+}
