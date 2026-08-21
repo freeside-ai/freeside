@@ -316,6 +316,38 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	adjudicationConfidence := domain.ConfidenceHigh
+	findingAdjudicationItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-finding-adjudication", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &recoveryRunID},
+		Type:    domain.AttentionFindingAdjudication, Priority: domain.PriorityHigh,
+		Reason: "a review finding needs an adjudicated route",
+		RequestedDecision: []domain.Action{
+			domain.ActionAcceptRecommendedRoute, domain.ActionChooseAlternativeRoute,
+			domain.ActionDiscuss, domain.ActionStop,
+		},
+		FindingAdjudication: &domain.FindingAdjudicationBinding{
+			RunID: "run-1", Round: 2,
+			AdjudicationDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+			Proposals: []domain.FindingAdjudicationProposal{{
+				FindingID: "finding-1", Producer: domain.AdjudicationProducerModel,
+				GoalRelationship: domain.GoalContradictory, Route: domain.RouteDecline,
+				Rationale:     "the finding contradicts the approved work unit",
+				CitedRules:    []string{"AGENTS.md: stay focused"},
+				Assumptions:   []string{"the reported path is accurate"},
+				OpenQuestions: []string{"Should a follow-up issue be filed?"},
+				Confidence:    &adjudicationConfidence,
+				OfferedAlternatives: []domain.OfferedAlternative{{
+					Route:       domain.RouteDispute,
+					Consequence: "ask a human to resolve the contract conflict",
+				}},
+			}},
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
 	reenrollmentBinding := domain.CodexReenrollmentRecoveryBinding{
 		AuthIdentityID: "codex-primary", LeaseFence: 4,
 		AuthStoreDigest:      "sha256:replacement-store",
@@ -992,6 +1024,7 @@ func TestGolden(t *testing.T) {
 		{"review_recovery_transition", reviewRecovery},
 		{"review_configuration_recovery_transition", configRecovery},
 		{"attention_item_review_configuration", configRecoveryItem},
+		{"attention_item_finding_adjudication", findingAdjudicationItem},
 		{"attention_item_codex_reenrollment", reenrollmentItem},
 		{"codex_reenrollment_recovery_transition", reenrollmentTransition},
 		{"classification", classification},

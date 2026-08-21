@@ -472,10 +472,13 @@ type AttentionItem struct {
 	// review_configuration items and is immutable across the item's
 	// lifecycle; the adoption target is resolved at decision time, not here.
 	ReviewConfigurationRecovery *ReviewConfigurationRecoveryBinding `json:"review_configuration_recovery"`
-	ItemVersion                 int                                 `json:"item_version"`
-	InterruptionClass           InterruptionClass                   `json:"interruption_class"`
-	ConversationID              *ConversationID                     `json:"conversation_id"`
-	Timing                      TimingSummary                       `json:"timing"`
+	// FindingAdjudication carries the proposal projection bound to the exact
+	// immutable artifact digest. It is present only on finding_adjudication.
+	FindingAdjudication *FindingAdjudicationBinding `json:"finding_adjudication"`
+	ItemVersion         int                         `json:"item_version"`
+	InterruptionClass   InterruptionClass           `json:"interruption_class"`
+	ConversationID      *ConversationID             `json:"conversation_id"`
+	Timing              TimingSummary               `json:"timing"`
 	// CreatedAt is the daemon-stamped instant this item was created. It is
 	// immutable across the item's lifecycle and nil only for legacy items
 	// persisted before the field existed.
@@ -528,6 +531,7 @@ type AttentionItemInput struct {
 	ReviewRecoveryBinding            *ReviewRecoveryBinding
 	CodexReenrollmentRecoveryBinding *CodexReenrollmentRecoveryBinding
 	ReviewConfigurationRecovery      *ReviewConfigurationRecoveryBinding
+	FindingAdjudication              *FindingAdjudicationBinding
 	ItemVersion                      int
 	InterruptionClass                InterruptionClass
 	ConversationID                   *ConversationID
@@ -571,6 +575,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		ReviewRecoveryBinding:            clonePtr(in.ReviewRecoveryBinding),
 		CodexReenrollmentRecoveryBinding: clonePtr(in.CodexReenrollmentRecoveryBinding),
 		ReviewConfigurationRecovery:      clonePtr(in.ReviewConfigurationRecovery),
+		FindingAdjudication:              cloneFindingAdjudicationBinding(in.FindingAdjudication),
 		ItemVersion:                      in.ItemVersion,
 		InterruptionClass:                in.InterruptionClass,
 		ConversationID:                   clonePtr(in.ConversationID),
@@ -592,7 +597,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 	// approval binds exactly what was shown (plan §3.1, §4). Validate re-derives
 	// and requires equality, which is what enforces this on the store-decode path
 	// that bypasses this constructor.
-	item.ArtifactDigests = bindingDigests(item.EvidenceSnapshot, item.AgentClaims)
+	item.ArtifactDigests = bindingDigests(item.EvidenceSnapshot, item.AgentClaims, item.FindingAdjudication)
 	if err := item.Validate(); err != nil {
 		return AttentionItem{}, err
 	}
@@ -720,6 +725,30 @@ func (i AttentionItem) Validate() error {
 			i.PRHeadSHA != i.ReviewConfigurationRecovery.HeadSHA {
 			return fmt.Errorf("item %s configuration recovery binding disagrees with its subject or head: %w",
 				i.ID, ErrReviewConfigRecoveryBindingMismatch)
+		}
+	}
+	if i.FindingAdjudication == nil {
+		if i.Type == AttentionFindingAdjudication {
+			return fmt.Errorf("item %s: %w", i.ID, ErrFindingAdjudicationBindingMissing)
+		}
+	} else {
+		if i.Type != AttentionFindingAdjudication {
+			return fmt.Errorf("item %s type %q carries a finding adjudication binding: %w",
+				i.ID, i.Type, ErrFindingAdjudicationBindingOutsideItem)
+		}
+		if err := i.FindingAdjudication.Validate(); err != nil {
+			return fmt.Errorf("item %s: %w", i.ID, err)
+		}
+		if i.Subject.Type != SubjectRun || i.Subject.RunID == nil ||
+			*i.Subject.RunID != i.FindingAdjudication.RunID ||
+			i.Subject.ID != SubjectID(i.FindingAdjudication.RunID) {
+			return fmt.Errorf("item %s finding adjudication binding disagrees with its subject: %w",
+				i.ID, ErrFindingAdjudicationBindingMismatch)
+		}
+		if i.Offers(ActionChooseAlternativeRoute) &&
+			!i.FindingAdjudication.hasOfferedAlternative() {
+			return fmt.Errorf("item %s offers choose_alternative_route without an offered alternative: %w",
+				i.ID, ErrFindingAdjudicationBindingMismatch)
 		}
 	}
 	if i.CodexReenrollmentRecoveryBinding != nil {
@@ -882,28 +911,34 @@ func (i AttentionItem) Validate() error {
 	// field's order and rejects a duplicate, an omission, or an extra unrendered
 	// entry. NewAttentionItem derives the set; a store-decoded item is held to
 	// the same equality here, since Validate is the reconstruction backstop.
-	if want := bindingDigests(i.EvidenceSnapshot, i.AgentClaims); !slices.Equal(i.ArtifactDigests, want) {
+	if want := bindingDigests(i.EvidenceSnapshot, i.AgentClaims, i.FindingAdjudication); !slices.Equal(i.ArtifactDigests, want) {
 		return fmt.Errorf("item %s artifact_digests %v, rendered digests resolve to %v: %w", i.ID, i.ArtifactDigests, want, ErrBindingMismatch)
 	}
 	return nil
 }
 
 // bindingDigests returns an item's canonical binding set: the sorted,
-// deduplicated union of the digests rendered in its evidence snapshot and its
-// agent claims. It is the single definition of what an approval binds, so
+// deduplicated union of the digests rendered in its evidence snapshot, agent
+// claims, and typed finding-adjudication binding. It is the single definition
+// of what an approval binds, so
 // NewAttentionItem derives ArtifactDigests from it and Validate requires
 // equality. It always returns a non-nil slice, so an item that renders no
 // artifacts (e.g. a system_health acknowledgement) serializes artifact_digests
 // as "[]", matching the required, non-null array the wire contract declares
 // (api/openapi.yaml). slices.Equal treats nil and empty as equal, so a value
 // decoded from a legacy null still satisfies the equality check.
-func bindingDigests(evidence []Artifact, claims []AgentClaim) []Digest {
-	out := make([]Digest, 0, len(evidence)+len(claims))
+func bindingDigests(
+	evidence []Artifact, claims []AgentClaim, adjudication *FindingAdjudicationBinding,
+) []Digest {
+	out := make([]Digest, 0, len(evidence)+len(claims)+1)
 	for _, a := range evidence {
 		out = append(out, a.Digest)
 	}
 	for _, c := range claims {
 		out = append(out, c.Digest)
+	}
+	if adjudication != nil {
+		out = append(out, adjudication.AdjudicationDigest)
 	}
 	slices.Sort(out)
 	return slices.Compact(out)
