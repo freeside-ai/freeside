@@ -262,7 +262,7 @@ Approval is not a universal action.
 | `finding_adjudication` | Accept the recommended route, choose an offered alternative, discuss, or stop (added with the Section 7 adjudication routing, 1B). Acceptance binds to the adjudication artifact digest and the item version; a Discuss response re-invokes adjudication against the same version bindings, and the new artifact supersedes the item. Stop leaves the run parked. |
 | `review_contradiction` | Recover only the exact persisted contradiction named by the card, or leave it parked. The card renders the bound run, invocation, round, base SHA, head SHA, and immutable failure-body digest; recovery preserves the original failure evidence. |
 | `review_configuration` | Adopt the review configuration (`adopt_review_configuration`), discuss, or stop. The run is parked, not terminal: adoption authorizes an operator-approved, review-configuration-only profile supersession of exactly the parked failure named by the card's binding, resolved at decision time as the repository's currently activated revision and re-gated on every read; stop concludes the run as a configuration failure always did. The card renders the same bound coordinates as `review_contradiction` plus the superseded profile digest. |
-| `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. |
+| `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. When the failure is classified as provider quota, credential expiry, or capacity, the card additionally offers retry under a qualified alternate provider profile or wait (the explicit alternate-provider retry below). |
 | `agent_question` | Answer and retry, answer without retry, or stop. |
 | `publish_blocked` | Rerun trust evaluation, choose an approved alternate publication profile, inspect the trust failure, or stop. |
 | `ready_for_final_review` | View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. |
@@ -273,6 +273,24 @@ Approval is not a universal action.
 
 Section 9 governs each type's presentation: what its card leads with and what
 layers below.
+
+**Explicit alternate-provider retry.** A provider quota, credential expiry,
+or capacity failure offers three resolutions beyond discuss: retry under a
+qualified alternate provider profile, wait, or stop. Qualified means a
+profile that is enabled, eligible for the failed role, and compatible with
+the run's credential mode and egress profile (Section 5.4); wait leaves the
+run parked with the same card until the operator returns to it. The offer
+is stated once here and applies on whichever card surfaces such a failure,
+including a review-side quota or expiry failure; it never widens a card's
+other actions. Each switch is a new recorded attempt that preserves the
+original failure and its evidence, re-evaluates cost owner and the Section
+7 review-independence check against the new selection, and continues
+provider state only where compatibility is proven (Section 5.8; a
+cross-profile switch defaults to a fresh invocation). A recurring choice
+becomes a project-policy proposal PR in the `review_diminishing_returns`
+shape, never a remembered default: Freeside does not learn a preferred
+profile from past switches. Automatic fallback stays out of scope (Section
+2 item 5; Section 14, single-provider execution capacity).
 
 ### Lifecycle Rules
 
@@ -1242,6 +1260,17 @@ while the predecessor may exist are forbidden. Forking is load-bearing: the
 pinned CLI retained the predecessor's system prompt on an ordinary resume,
 whereas a fork accepted the fresh explicit bundle while preserving
 conversation continuity.
+
+Resume is bound to one provider profile as well as one invocation. A
+Section 4 alternate-provider retry that switches profile, whether to
+another identity of the same provider or to another provider, defaults to
+a fresh invocation with no continuity remount; the Section 5.7 operating
+modes do not relax this. Revisit when: before #408 merges, design a
+continuation compatibility digest that states when a successor under a
+different profile may remount a predecessor's continuity volume, so that
+cross-profile continuation becomes a proven property instead of a default
+refusal. That design is its own tracked unit (#873), and #408 merges after
+it; this revision names the marker and does not design the digest.
 
 A replay of an already-journalled launch adopts or reaps that exact process;
 it never substitutes a resume or starts a duplicate. A resume generation
