@@ -564,7 +564,7 @@ func (b *CodexReviewLifecycle) codexReview(
 		InstructionFile: launch.InstructionFile, InstructionBinding: launch.InstructionBinding,
 		AgentsShadow: shadow, Snapshot: snapshot,
 	}
-	spec, binding, err := BuildCodexReviewAgentSpec(cfg, req)
+	spec, binding, err := buildReviewAgentSpec(b.reviewProvider(), cfg, req)
 	if err != nil {
 		return nil, err
 	}
@@ -608,7 +608,7 @@ func (b *CodexReviewLifecycle) codexReview(
 		return nil, err
 	}
 	binding, err = verifyCodexReviewAllowlistShape(
-		cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, currentNetwork, containerReport, spec,
+		b.reviewProvider(), cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, currentNetwork, containerReport, spec,
 	)
 	if err != nil {
 		return nil, err
@@ -2255,7 +2255,7 @@ func (b *CodexReviewLifecycle) reconstructCodexReview(
 	prepared.AgentsShadowPreStartObserverFingerprint = ""
 	prepared.WorkspacePreStartObserverFingerprint = ""
 	prepared.SnapshotPreStartObserverFingerprint = ""
-	if err := validateCodexReviewAgentSpec(cfg, req, spec, prepared); err != nil {
+	if err := validateReviewAgentSpec(b.reviewProvider(), cfg, req, spec, prepared); err != nil {
 		return err
 	}
 	return verifyAgentAllowlist(report, spec)

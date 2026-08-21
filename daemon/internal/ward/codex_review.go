@@ -913,6 +913,18 @@ func BuildCodexReviewAgentSpec(
 	cfg CodexReviewConfig,
 	req CodexReviewSpec,
 ) (ContainerSpec, CodexReviewJournalBinding, error) {
+	return buildReviewAgentSpec(codexReviewProvider{}, cfg, req)
+}
+
+// buildReviewAgentSpec is the provider-neutral spec assembler. The review
+// command and topology-version tag are read from the provider so the neutral
+// core builds the same audited topology for any provider; every other decision
+// is vendor-independent. The Codex path passes codexReviewProvider{}.
+func buildReviewAgentSpec(
+	provider reviewProvider,
+	cfg CodexReviewConfig,
+	req CodexReviewSpec,
+) (ContainerSpec, CodexReviewJournalBinding, error) {
 	if err := validateCodexReviewRequest(cfg, req); err != nil {
 		return ContainerSpec{}, CodexReviewJournalBinding{}, err
 	}
@@ -970,7 +982,7 @@ func BuildCodexReviewAgentSpec(
 		"HOME=" + CodexContainerHomeTarget,
 		"CODEX_HOME=" + CodexHomeTarget,
 	}, proxyEnvironment(cfg.ProxyURL)...)
-	command := codexReviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt)
+	command := provider.reviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt)
 	mounts := []Mount{
 		{Type: MountVolume, Source: req.WorkspaceVolume, Target: cfg.WorkspaceTarget, ReadOnly: true},
 		{Type: MountVolume, Source: req.Snapshot.volume, Target: codexReviewSnapshotTarget, ReadOnly: true},
@@ -990,7 +1002,7 @@ func BuildCodexReviewAgentSpec(
 		Network: codexReviewNetworkName(req.RunID),
 	}
 	binding := CodexReviewJournalBinding{
-		TopologyVersion:                 codexReviewTopologyVersion,
+		TopologyVersion:                 provider.topologyVersion(),
 		RunID:                           req.RunID,
 		Boundary:                        req.Boundary,
 		WorkspaceSourceRunID:            req.WorkspaceSourceRunID,
@@ -1043,7 +1055,7 @@ func BuildCodexReviewAgentSpec(
 		LauncherEnvironmentDigest:       digestEnvironment(env),
 		CommandDigest:                   digestStrings(command),
 	}
-	if err := validateCodexReviewAgentSpec(cfg, req, spec, binding); err != nil {
+	if err := validateReviewAgentSpec(provider, cfg, req, spec, binding); err != nil {
 		return ContainerSpec{}, CodexReviewJournalBinding{}, err
 	}
 	return spec, binding, nil
@@ -1894,6 +1906,20 @@ func validateCodexReviewAgentSpec(
 	spec ContainerSpec,
 	binding CodexReviewJournalBinding,
 ) error {
+	return validateReviewAgentSpec(codexReviewProvider{}, cfg, req, spec, binding)
+}
+
+// validateReviewAgentSpec independently re-derives the admitted topology and
+// rejects any divergence. The review command and topology-version tag are read
+// from the provider to match buildReviewAgentSpec; every other check is
+// vendor-independent. The Codex path passes codexReviewProvider{}.
+func validateReviewAgentSpec(
+	provider reviewProvider,
+	cfg CodexReviewConfig,
+	req CodexReviewSpec,
+	spec ContainerSpec,
+	binding CodexReviewJournalBinding,
+) error {
 	if err := validateCodexReviewRequest(cfg, req); err != nil {
 		return err
 	}
@@ -1926,7 +1952,7 @@ func validateCodexReviewAgentSpec(
 	if req.Snapshot.authDigest != wantAuthDigest || req.Snapshot.instructionDigest != wantInstructionDigest {
 		return failf(CheckCredentialSeparation, "Codex review snapshot volume diverged from the admitted bytes")
 	}
-	wantCommand := codexReviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt)
+	wantCommand := provider.reviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt)
 	wantEnv := append([]string{
 		"HOME=" + CodexContainerHomeTarget,
 		"CODEX_HOME=" + CodexHomeTarget,
@@ -1962,7 +1988,7 @@ func validateCodexReviewAgentSpec(
 	if err := binding.validatePrepared(); err != nil {
 		return failf(CheckControlPlaneIsolation, "Codex review journal binding is invalid")
 	}
-	if binding.TopologyVersion != codexReviewTopologyVersion ||
+	if binding.TopologyVersion != provider.topologyVersion() ||
 		binding.RunID != req.RunID ||
 		binding.WorkspaceSourceRunID != req.WorkspaceSourceRunID ||
 		binding.Boundary != CodexReviewFreshStart || !binding.FreshContext || binding.ContinuityMounted ||
@@ -2020,6 +2046,7 @@ func sameOptionalTime(a, b *time.Time) bool {
 // shape sanity check used inside CodexReviewLifecycle.CodexReview, not a safe launch gate
 // for callers holding decoded observations.
 func verifyCodexReviewAllowlistShape(
+	provider reviewProvider,
 	cfg CodexReviewConfig,
 	req CodexReviewSpec,
 	binding CodexReviewJournalBinding,
@@ -2042,7 +2069,7 @@ func verifyCodexReviewAllowlistShape(
 	if err := req.Network.verifyCurrent(currentNetwork); err != nil {
 		return CodexReviewJournalBinding{}, err
 	}
-	if err := validateCodexReviewAgentSpec(cfg, req, spec, binding); err != nil {
+	if err := validateReviewAgentSpec(provider, cfg, req, spec, binding); err != nil {
 		return CodexReviewJournalBinding{}, err
 	}
 	if err := verifyAgentAllowlist(rep, spec); err != nil {

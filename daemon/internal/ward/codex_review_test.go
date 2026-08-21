@@ -3650,7 +3650,7 @@ func TestCodexReviewAllowlistShapeChecksRealizedSpec(t *testing.T) {
 	binding.ReviewContainerFingerprint = "2026-08-03T12:00:05Z"
 	binding.ReviewOwnershipToken = testOwnershipLabel().Value
 	finalBinding, err := verifyCodexReviewAllowlistShape(
-		cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, currentNetwork, rep, spec,
+		codexReviewProvider{}, cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, currentNetwork, rep, spec,
 	)
 	if err != nil {
 		t.Fatalf("conforming realized spec rejected: %v", err)
@@ -3665,19 +3665,19 @@ func TestCodexReviewAllowlistShapeChecksRealizedSpec(t *testing.T) {
 	}
 	rep.Mounts[1].ReadOnly = false
 	if _, err := verifyCodexReviewAllowlistShape(
-		cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, currentNetwork, rep, spec,
+		codexReviewProvider{}, cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, currentNetwork, rep, spec,
 	); !errors.Is(err, ErrConformance) {
 		t.Fatalf("writable realized snapshot mount = %v, want conformance failure", err)
 	}
 	rep.Mounts[1].ReadOnly = true
 	if _, err := verifyCodexReviewAllowlistShape(
-		cfg, req, binding, req.AgentsShadow, freshWorkspace, freshSnapshot, currentNetwork, rep, spec,
+		codexReviewProvider{}, cfg, req, binding, req.AgentsShadow, freshWorkspace, freshSnapshot, currentNetwork, rep, spec,
 	); !errors.Is(err, ErrConformance) {
 		t.Fatalf("reused shadow proof = %v, want conformance failure", err)
 	}
 	freshShadow.fingerprint = "replacement"
 	if _, err := verifyCodexReviewAllowlistShape(
-		cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, currentNetwork, rep, spec,
+		codexReviewProvider{}, cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, currentNetwork, rep, spec,
 	); !errors.Is(err, ErrConformance) {
 		t.Fatalf("replaced shadow volume = %v, want conformance failure", err)
 	}
@@ -3687,14 +3687,14 @@ func TestCodexReviewAllowlistShapeChecksRealizedSpec(t *testing.T) {
 	changedWorkspace := freshWorkspace
 	changedWorkspace.treeDigest = strings.Repeat("2", 64)
 	if _, err := verifyCodexReviewAllowlistShape(
-		cfg, req, binding, freshShadow, changedWorkspace, freshSnapshot, currentNetwork, rep, spec,
+		codexReviewProvider{}, cfg, req, binding, freshShadow, changedWorkspace, freshSnapshot, currentNetwork, rep, spec,
 	); !errors.Is(err, ErrConformance) {
 		t.Fatalf("changed workspace tree = %v, want conformance failure", err)
 	}
 	replacedNetwork := currentNetwork
 	replacedNetwork.fingerprint = "replacement"
 	if _, err := verifyCodexReviewAllowlistShape(
-		cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, replacedNetwork, rep, spec,
+		codexReviewProvider{}, cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, replacedNetwork, rep, spec,
 	); !errors.Is(err, ErrConformance) {
 		t.Fatalf("replaced provider network = %v, want conformance failure", err)
 	}
