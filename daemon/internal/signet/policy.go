@@ -25,6 +25,10 @@ var allowedActionsByType = map[domain.AttentionType]map[domain.Action]struct{}{
 	domain.AttentionReviewConfiguration: actionSet(
 		domain.ActionAdoptReviewConfiguration, domain.ActionDiscuss, domain.ActionStop,
 	),
+	domain.AttentionFindingAdjudication: actionSet(
+		domain.ActionAcceptRecommendedRoute, domain.ActionChooseAlternativeRoute,
+		domain.ActionDiscuss, domain.ActionStop,
+	),
 	domain.AttentionExecutionFailure: actionSet(
 		domain.ActionRetry, domain.ActionRetryWithCapability, domain.ActionDiscuss, domain.ActionStop,
 	),
