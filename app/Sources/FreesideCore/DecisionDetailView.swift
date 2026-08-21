@@ -29,6 +29,8 @@ struct DecisionDetailView: View {
             if let snapshot = model.snapshot {
                 ScrollView {
                     card(snapshot.item)
+                        .padding(14)
+                        .freesideCard()
                         .padding()
                         .frame(maxWidth: 560, alignment: .leading)
                 }
@@ -68,7 +70,8 @@ struct DecisionDetailView: View {
             header(item)
             banner
             Text(item.reason)
-                .font(.body)
+                .font(FreesideFont.body)
+                .foregroundStyle(Color.ink)
             actions(item)
 
             // Daemon-derived commit-plan notice (plan §5.6): the reserved
@@ -76,7 +79,8 @@ struct DecisionDetailView: View {
             // that must never be silent.
             if let notice = item.commit_plan_notice?.value1 {
                 LabeledContent("Commit plan", value: AttentionDisplay.label(notice))
-                    .font(.callout)
+                    .font(FreesideFont.callout)
+                    .foregroundStyle(Color.ink)
             }
 
             if let facts = model.proposalFacts {
@@ -90,7 +94,7 @@ struct DecisionDetailView: View {
                     if let prior = facts.supersedes?.value1 {
                         Divider()
                         Text("Revision context")
-                            .font(.caption.weight(.semibold))
+                            .font(FreesideFont.sans(.caption, weight: .semibold))
                         proposalRevisionRows(prior)
                     }
                 }
@@ -107,7 +111,8 @@ struct DecisionDetailView: View {
             }
 
             if !item.agent_claims.isEmpty {
-                cardSection("Agent claims (unverified)") {
+                // Dashed: a claim must read as a claim (plan §9).
+                cardSection("Agent claims (unverified)", dashed: true) {
                     // Keyed by position: the daemon permits two claims on
                     // the same artifact under different labels, so no
                     // claim field is unique on its own and an id-keyed
@@ -125,15 +130,16 @@ struct DecisionDetailView: View {
                     ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
                         LabeledContent(row.label) {
                             Text(row.value)
-                                .font(.caption.monospaced())
                                 .multilineTextAlignment(.trailing)
                         }
+                        .font(FreesideFont.monoCaption)
+                        .foregroundStyle(Color.inkFaint)
                     }
                 }
                 .padding(.top, 6)
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .font(FreesideFont.caption)
+            .foregroundStyle(Color.inkDim)
             .textSelection(.enabled)
         }
     }
@@ -165,7 +171,8 @@ struct DecisionDetailView: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(AttentionDisplay.title(item._type))
-                    .font(.title2.weight(.semibold))
+                    .font(FreesideFont.title)
+                    .foregroundStyle(Color.ink)
                 creationTimestamp(item.created_at)
             }
             Spacer()
@@ -179,7 +186,7 @@ struct DecisionDetailView: View {
 
     @ViewBuilder
     private func creationTimestamp(_ createdAt: Date?) -> some View {
-        Label {
+        Group {
             if let createdAt {
                 Text(
                     "Created \(createdAt, format: .dateTime.month(.abbreviated).day().year().hour().minute())"
@@ -187,11 +194,9 @@ struct DecisionDetailView: View {
             } else {
                 Text("Created: not recorded")
             }
-        } icon: {
-            Image(systemName: "clock")
         }
-        .font(.callout)
-        .foregroundStyle(.secondary)
+        .font(FreesideFont.callout)
+        .foregroundStyle(Color.inkFaint)
     }
 
     @ViewBuilder
@@ -200,16 +205,18 @@ struct DecisionDetailView: View {
             bannerLabel(
                 "This item changed before your decision applied. Nothing was committed; re-review the replacement below.",
                 systemImage: "arrow.triangle.2.circlepath",
-                tint: .orange
+                tint: .accent, wash: .accentWash
             )
         } else {
             // An applied record persists even when the item stays open
             // (a non-resolving action such as acknowledge or open_pr).
             if let record = model.appliedRecord {
+                // Success is quiet: a plain tick on a neutral wash, never
+                // green and never the accent.
                 bannerLabel(
                     "Decision applied: \(AttentionDisplay.label(record.action))",
-                    systemImage: "checkmark.circle.fill",
-                    tint: .green
+                    systemImage: "checkmark",
+                    tint: .inkDim, wash: .neutralWash
                 )
             }
             // The retry affordance leads: when a preserved command may
@@ -219,43 +226,46 @@ struct DecisionDetailView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     bannerLabel(
                         "The response was lost; the decision may already be recorded.",
-                        systemImage: "arrow.clockwise.circle.fill",
-                        tint: .orange
+                        systemImage: "arrow.clockwise",
+                        tint: .accent, wash: .accentWash
                     )
                     Button("Retry") {
                         Task { await model.retryLostResponse() }
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(FreesideActionButtonStyle(tone: .primary))
                 }
             } else if case .failed(let message) = model.validation {
                 bannerLabel(
                     "Couldn't validate current state: \(message)",
-                    systemImage: "exclamationmark.triangle.fill",
-                    tint: .red
+                    systemImage: "exclamationmark",
+                    tint: .wax, wash: .waxWash
                 )
             } else if let message = model.submissionError {
                 bannerLabel(
                     "Submission failed: \(message)",
-                    systemImage: "exclamationmark.triangle.fill",
-                    tint: .red
+                    systemImage: "exclamationmark",
+                    tint: .wax, wash: .waxWash
                 )
             }
         }
     }
 
     private func cardSection(
-        _ title: String, @ViewBuilder content: () -> some View
+        _ title: String, dashed: Bool = false, @ViewBuilder content: () -> some View
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
+            KeywordLabel(text: title)
             content()
+                .font(FreesideFont.callout)
+                .foregroundStyle(Color.ink)
         }
-        .padding(10)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.ground))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.rule, style: StrokeStyle(lineWidth: 1, dash: dashed ? [4, 3] : []))
+        )
     }
 
     /// One labeled attachment row. Plan §9's presentation layers supersede
@@ -273,12 +283,12 @@ struct DecisionDetailView: View {
         var body: some View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(label)
-                    .font(.callout.weight(.semibold))
+                    .font(FreesideFont.sans(.callout, weight: .semibold))
                 if let text {
                     // No accessibility override: VoiceOver must hear the
                     // content, and the visible label already names the claim.
                     claimText(text)
-                        .font(.callout)
+                        .font(FreesideFont.callout)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
@@ -315,8 +325,8 @@ struct DecisionDetailView: View {
                     .accessibilityLabel("\(label) attachment image")
             case .unavailable:
                 Label("Attachment unavailable", systemImage: "photo.badge.exclamationmark")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(FreesideFont.caption)
+                    .foregroundStyle(Color.inkDim)
             case .loading, .notImage, nil:
                 EmptyView()
             }
@@ -331,14 +341,20 @@ struct DecisionDetailView: View {
         }
     }
 
-    private func bannerLabel(_ text: String, systemImage: String, tint: Color) -> some View {
-        Label(text, systemImage: systemImage)
-            .font(.callout)
-            .textSelection(.enabled)
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-            .foregroundStyle(tint)
+    /// A card banner: tinted wash, glyph and message in the state color.
+    private func bannerLabel(_ text: String, systemImage: String, tint: Color, wash: Color) -> some View {
+        Label {
+            Text(text)
+        } icon: {
+            Image(systemName: systemImage)
+                .font(.system(size: 10, weight: .semibold))
+        }
+        .font(FreesideFont.callout)
+        .textSelection(.enabled)
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(wash, in: RoundedRectangle(cornerRadius: 8))
+        .foregroundStyle(tint)
     }
 
     @ViewBuilder
@@ -346,16 +362,16 @@ struct DecisionDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             if model.validation == .pending {
                 HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
+                    ProgressView().controlSize(.small).tint(.water)
                     Text("Validating current state…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(FreesideFont.monoCaption)
+                        .foregroundStyle(Color.inkFaint)
                 }
             }
             // Keyed by position: the daemon boundary does not enforce
             // uniqueness in requested_decision, and duplicate ForEach
             // identities can drop or cross-wire buttons.
-            ForEach(Array(model.offeredActions.enumerated()), id: \.offset) { _, action in
+            ForEach(Array(model.offeredActions.enumerated()), id: \.offset) { offset, action in
                 Button {
                     switch action {
                     case .start_with_changes:
@@ -374,19 +390,32 @@ struct DecisionDetailView: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(FreesideActionButtonStyle(tone: Self.tone(for: action, leading: offset == 0)))
                 .disabled(!model.actionsEnabled || !model.isSubmittable(action))
             }
             if item._type == .blocked {
                 Text("A blocked item is informational; it resolves when the external wait clears.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(FreesideFont.caption)
+                    .foregroundStyle(Color.inkDim)
             } else if model.offeredActions.contains(where: { !model.isSubmittable($0) }) {
                 Text("Actions carrying discussion or parameters arrive with later units.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(FreesideFont.caption)
+                    .foregroundStyle(Color.inkDim)
             }
         }
-        .buttonStyle(.bordered)
+    }
+
+    /// The leading offered action is the primary one; stops and declines
+    /// are destructive; everything else is neutral.
+    private static func tone(
+        for action: Components.Schemas.Action, leading: Bool
+    ) -> FreesideActionButtonStyle.Tone {
+        switch action {
+        case .decline, .stop, .stop_unattended:
+            return .destructive
+        default:
+            return leading ? .primary : .neutral
+        }
     }
 }
 
@@ -428,6 +457,7 @@ private struct RunProposalRevisionSheet: View {
                 Toggle("Touches control plane", isOn: $touchesControlPlane)
             }
             .navigationTitle("Start with changes")
+            .tint(.accent)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -464,6 +494,7 @@ private struct RunProposalSnoozeSheet: View {
                     "Snooze until", selection: $until, in: Date()..., displayedComponents: [.date, .hourAndMinute])
             }
             .navigationTitle("Snooze proposal")
+            .tint(.accent)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -484,18 +515,13 @@ struct HealthPostureBadge: View {
     let posture: Components.Schemas.HealthPosture
 
     var body: some View {
-        Text(AttentionDisplay.label(posture))
-            .font(.caption2.weight(.medium))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.15), in: Capsule())
-            .foregroundStyle(color)
+        StateChip(label: AttentionDisplay.label(posture), color: color)
     }
 
     private var color: Color {
         switch posture {
-        case .blocking: return .red
-        case .advisory: return .secondary
+        case .blocking: return .wax
+        case .advisory: return .inkFaint
         }
     }
 }
