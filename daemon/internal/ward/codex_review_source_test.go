@@ -2094,7 +2094,7 @@ func TestCodexReviewRecoveryAbortsLegacyRunningInvocationWithLostProxy(t *testin
 	journal.binding.InstructionCompositionVersion = ""
 	journal.binding.HostInstructionDigest = nil
 	journal.binding.RepositoryInstructionSources = nil
-	if err := journal.binding.validateForTeardown(); err != nil {
+	if err := journal.binding.validateForTeardown(codexReviewProvider{}); err != nil {
 		t.Fatalf("legacy binding fixture: %v", err)
 	}
 	volumeLeaser, err := NewRuntimeCodexReviewVolumeLeaser(fx.rt)
@@ -3227,8 +3227,15 @@ func TestCodexReviewSourceOutcomeRejectsFindingCorruption(t *testing.T) {
 	if err := outcome.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	// The provider-aware completion-evidence gate accepts the intact outcome.
+	if err := outcome.verifyCompletionEvidence(codexReviewProvider{}); err != nil {
+		t.Fatal(err)
+	}
 	outcome.Result.Findings = nil
-	if err := outcome.Validate(); !errors.Is(err, domain.ErrInvalidReviewCompletionEvidence) {
+	// Finding corruption is caught by the completion-evidence recomputation, which
+	// now lives in the provider-aware gate (Validate is the provider-agnostic shape
+	// gate and no longer recomputes the namespaced evidence).
+	if err := outcome.verifyCompletionEvidence(codexReviewProvider{}); !errors.Is(err, domain.ErrInvalidReviewCompletionEvidence) {
 		t.Fatalf("corrupted outcome validation = %v", err)
 	}
 }

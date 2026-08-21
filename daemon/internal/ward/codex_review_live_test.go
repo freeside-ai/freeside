@@ -267,9 +267,11 @@ func TestLiveCodexReviewSnapshotDeliversExactlyTwoFilesReadOnly(t *testing.T) {
 	// Seed: a networkless running seeder receives the two files by copy and moves
 	// them onto the read-write-mounted volume, then is deleted.
 	if err := rt.CreateContainer(ctx, ContainerSpec{
-		Name:            seeder,
-		Image:           liveImage,
-		Command:         []string{"sh", "-c", codexReviewSnapshotSeederScript(cfg, codexReviewSnapshotSeedTarget)},
+		Name:  seeder,
+		Image: liveImage,
+		Command: []string{"sh", "-c", codexReviewSnapshotSeederScript(
+			cfg, codexReviewSnapshotSeedTarget, codexReviewSnapshotAuthName, codexReviewSnapshotInstrName,
+		)},
 		Mounts:          []Mount{{Type: MountVolume, Source: volume, Target: codexReviewSnapshotSeedTarget}},
 		Labels:          append(runLabels(runID), label),
 		NetworkDisabled: true,
@@ -297,6 +299,7 @@ func TestLiveCodexReviewSnapshotDeliversExactlyTwoFilesReadOnly(t *testing.T) {
 		Image: liveImage,
 		Command: []string{"sh", "-c", codexReviewSnapshotObserverScript(
 			label.Value, codexReviewSnapshotObserverTarget, codexReviewSnapshotProofPath,
+			codexReviewSnapshotAuthName, codexReviewSnapshotInstrName,
 		)},
 		Mounts:          []Mount{{Type: MountVolume, Source: volume, Target: codexReviewSnapshotObserverTarget, ReadOnly: true}},
 		Labels:          append(runLabels(runID), label),

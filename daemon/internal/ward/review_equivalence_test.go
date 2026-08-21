@@ -271,7 +271,7 @@ func oldBuildReviewAgentSpec(
 	cfg CodexReviewConfig,
 	req CodexReviewSpec,
 ) (ContainerSpec, CodexReviewJournalBinding, error) {
-	if err := validateCodexReviewRequest(cfg, req); err != nil {
+	if err := validateCodexReviewRequest(codexReviewProvider{}, cfg, req); err != nil {
 		return ContainerSpec{}, CodexReviewJournalBinding{}, err
 	}
 	authPath, hostAuthBody, err := readCodexReviewInput(cfg.InputRoot, req.AuthSnapshot, maxCodexAuthSnapshotBytes)

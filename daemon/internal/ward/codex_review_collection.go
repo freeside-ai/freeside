@@ -107,17 +107,19 @@ func (b *CodexReviewLifecycle) CollectCodexReview(
 func (b *CodexReviewLifecycle) authenticateCodexReviewContainer(
 	ctx context.Context, cfg CodexReviewConfig, runID string,
 ) (CodexReviewLaunchIntent, CodexReviewJournalBinding, InspectReport, error) {
-	return b.authenticateCodexReviewContainerWithImage(ctx, cfg, runID, cfg.ApprovedImage)
+	return b.authenticateCodexReviewContainerWithImage(
+		ctx, b.reviewProvider(), cfg, runID, cfg.ApprovedImage,
+	)
 }
 
-func (b *CodexReviewLifecycle) authenticateCodexReviewContainerForCleanup(
-	ctx context.Context, cfg CodexReviewConfig, runID string,
+func (b *CodexReviewLifecycle) authenticateCodexReviewContainerForProviderCleanup(
+	ctx context.Context, provider reviewProvider, cfg CodexReviewConfig, runID string,
 ) (CodexReviewLaunchIntent, CodexReviewJournalBinding, InspectReport, error) {
-	return b.authenticateCodexReviewContainerWithImage(ctx, cfg, runID, "")
+	return b.authenticateCodexReviewContainerWithImage(ctx, provider, cfg, runID, "")
 }
 
 func (b *CodexReviewLifecycle) authenticateCodexReviewContainerWithImage(
-	ctx context.Context, cfg CodexReviewConfig, runID, approvedImage string,
+	ctx context.Context, provider reviewProvider, cfg CodexReviewConfig, runID, approvedImage string,
 ) (CodexReviewLaunchIntent, CodexReviewJournalBinding, InspectReport, error) {
 	intent, err := cfg.Journal.GetCodexReviewIntent(ctx, runID)
 	if err != nil {
@@ -143,9 +145,9 @@ func (b *CodexReviewLifecycle) authenticateCodexReviewContainerWithImage(
 		return CodexReviewLaunchIntent{}, CodexReviewJournalBinding{}, InspectReport{},
 			codexReviewOperationalf("load Codex review durable binding: %v", err)
 	}
-	bindingErr := binding.validateShape()
+	bindingErr := binding.validateShape(provider)
 	if approvedImage == "" {
-		bindingErr = binding.validateForTeardown()
+		bindingErr = binding.validateForTeardown(provider)
 	}
 	if bindingErr != nil || binding.RunID != runID ||
 		binding.ReviewContainer != intent.ReviewContainer ||
@@ -191,7 +193,7 @@ func stripCodexReviewRuntimePath(environment []string) ([]string, bool) {
 func (b *CodexReviewLifecycle) CleanupCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, runID string,
 ) error {
-	return b.cleanupCodexReview(ctx, cfg, runID, false)
+	return b.cleanupCodexReview(ctx, b.reviewProvider(), cfg, runID, false)
 }
 
 // AbortCodexReview closes a started review whose daemon-owned CONNECT proxy
@@ -200,11 +202,11 @@ func (b *CodexReviewLifecycle) CleanupCodexReview(
 func (b *CodexReviewLifecycle) AbortCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, runID string,
 ) error {
-	return b.cleanupCodexReview(ctx, cfg, runID, true)
+	return b.cleanupCodexReview(ctx, b.reviewProvider(), cfg, runID, true)
 }
 
 func (b *CodexReviewLifecycle) cleanupCodexReview(
-	ctx context.Context, cfg CodexReviewConfig, runID string, abort bool,
+	ctx context.Context, provider reviewProvider, cfg CodexReviewConfig, runID string, abort bool,
 ) error {
 	intent, err := cfg.Journal.GetCodexReviewIntent(ctx, runID)
 	if err != nil {
@@ -237,7 +239,7 @@ func (b *CodexReviewLifecycle) cleanupCodexReview(
 		}
 		return codexReviewOperationalf("load Codex review durable binding: %v", err)
 	}
-	if binding.validateForTeardown() != nil || binding.RunID != runID ||
+	if binding.validateForTeardown(provider) != nil || binding.RunID != runID ||
 		binding.ReviewContainer != intent.ReviewContainer ||
 		binding.ReviewOwnershipToken != intent.OwnershipToken ||
 		binding.WorkspaceSourceRunID != runID ||
@@ -255,7 +257,9 @@ func (b *CodexReviewLifecycle) cleanupCodexReview(
 		return failf(CheckTeardown, "%v", err)
 	}
 	if found {
-		_, _, report, authErr := b.authenticateCodexReviewContainerForCleanup(ctx, cfg, runID)
+		_, _, report, authErr := b.authenticateCodexReviewContainerForProviderCleanup(
+			ctx, provider, cfg, runID,
+		)
 		if errors.Is(authErr, ErrCodexReviewOperational) {
 			return authErr
 		}

@@ -972,7 +972,7 @@ func TestCodexReviewSubscriptionRequiresHostRefreshDependencies(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			broken := cfg
 			tc.remove(&broken)
-			if err := validateCodexReviewLaunchStructure(broken, launch); !errors.Is(err, ErrInvalidCodexReviewSpec) {
+			if err := validateCodexReviewLaunchStructure(codexReviewProvider{}, broken, launch); !errors.Is(err, ErrInvalidCodexReviewSpec) {
 				t.Fatalf("validation = %v, want configuration refusal", err)
 			}
 		})

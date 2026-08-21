@@ -67,6 +67,12 @@ type CodexReviewLifecycle struct {
 func NewCodexReviewLifecycle(
 	rt Runtime, cfg Config, authorizeRuntimeResources RuntimeResourceAuthorizer,
 ) (*CodexReviewLifecycle, error) {
+	return newReviewLifecycle(codexReviewProvider{}, rt, cfg, authorizeRuntimeResources)
+}
+
+func newReviewLifecycle(
+	provider reviewProvider, rt Runtime, cfg Config, authorizeRuntimeResources RuntimeResourceAuthorizer,
+) (*CodexReviewLifecycle, error) {
 	if rt == nil {
 		return nil, fmt.Errorf("%w: Runtime is required", ErrInvalidConfig)
 	}
@@ -79,7 +85,7 @@ func NewCodexReviewLifecycle(
 		runtimeOps:                newRuntimeOps(rt, cfg),
 		cfg:                       newCodexReviewLifecycleConfig(cfg),
 		authorizeRuntimeResources: authorizeRuntimeResources,
-		provider:                  codexReviewProvider{},
+		provider:                  provider,
 		codexReviewRuns:           map[string]chan struct{}{},
 	}, nil
 }

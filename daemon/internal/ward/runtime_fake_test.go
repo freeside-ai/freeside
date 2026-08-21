@@ -388,18 +388,22 @@ func baseProofForAbsentGitDir(nonce string) []byte {
 		baseProofTreeKey)
 }
 
-// snapshotProofFor renders the proof the Codex-review snapshot observer would
-// write: valid only when the volume holds exactly the two named files, with
-// their sha256 digests. A missing, extra, or renamed entry reports invalid.
+// snapshotProofFor renders the proof the review snapshot observer would write:
+// valid only when the volume holds exactly one registered provider's two named
+// files, with their sha256 digests. A missing, extra, mixed, or renamed entry
+// reports invalid.
 func snapshotProofFor(nonce string, files map[string][]byte) []byte {
-	auth, hasAuth := files[codexReviewSnapshotAuthName]
-	instr, hasInstr := files[codexReviewSnapshotInstrName]
-	if !hasAuth || !hasInstr || len(files) != 2 {
-		return fmt.Appendf(nil, "nonce=%s\nvalid=invalid\nauth=sha256:\ninstr=sha256:\n", nonce)
+	for _, provider := range allReviewProviders() {
+		auth, hasAuth := files[provider.snapshotCredentialName()]
+		instr, hasInstr := files[provider.snapshotInstructionName()]
+		if !hasAuth || !hasInstr || len(files) != 2 {
+			continue
+		}
+		authSum := sha256.Sum256(auth)
+		instrSum := sha256.Sum256(instr)
+		return fmt.Appendf(nil, "nonce=%s\nvalid=valid\nauth=sha256:%x\ninstr=sha256:%x\n", nonce, authSum, instrSum)
 	}
-	authSum := sha256.Sum256(auth)
-	instrSum := sha256.Sum256(instr)
-	return fmt.Appendf(nil, "nonce=%s\nvalid=valid\nauth=sha256:%x\ninstr=sha256:%x\n", nonce, authSum, instrSum)
+	return fmt.Appendf(nil, "nonce=%s\nvalid=invalid\nauth=sha256:\ninstr=sha256:\n", nonce)
 }
 
 // writeProofTar streams a one-entry archive carrying proof at absolutePath,
