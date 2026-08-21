@@ -239,10 +239,11 @@ func (b *CodexReviewLifecycle) codexReview(
 	if !b.valid() {
 		return nil, fmt.Errorf("%w: Codex review lifecycle is not initialized", ErrInvalidConfig)
 	}
+	credentials := b.reviewProvider().newCredentialStrategy(b)
 	if err := validateCodexReviewLaunchShape(cfg, launch); err != nil {
 		return nil, err
 	}
-	if err := checkCodexAuthReenrollment(ctx, cfg, launch); err != nil {
+	if err := credentials.checkLaunchAdmission(ctx, cfg, launch); err != nil {
 		return nil, err
 	}
 	if err := validateCodexReviewLaunchStructure(cfg, launch); err != nil {
@@ -280,18 +281,16 @@ func (b *CodexReviewLifecycle) codexReview(
 			CheckControlPlaneIsolation, "load Codex review launch intent: %v", getErr,
 		)
 	}
-	authGuard, err := b.acquireCodexReviewAuth(ctx, cfg, launch)
+	authLease, err := credentials.acquireLease(ctx, cfg, launch)
 	if err != nil {
 		return nil, err
 	}
-	authGuardReleased := authGuard == nil
-	if authGuard != nil {
-		defer func() {
-			if !authGuardReleased {
-				retErr = errors.Join(retErr, b.releaseCodexReviewAuthLease(ctx, authGuard))
-			}
-		}()
-	}
+	authLeaseReleased := false
+	defer func() {
+		if !authLeaseReleased {
+			retErr = errors.Join(retErr, authLease.release(ctx))
+		}
+	}()
 	if err := validateCodexReviewLaunch(cfg, launch); err != nil {
 		return nil, err
 	}
@@ -507,7 +506,7 @@ func (b *CodexReviewLifecycle) codexReview(
 			CheckCredentialSeparation, "journal Codex review snapshot: %v", err,
 		)
 	}
-	if err := verifyCodexAuthLaunchAdmission(ctx, cfg, launch, authGuard); err != nil {
+	if err := authLease.verifyStillAdmissible(ctx); err != nil {
 		return nil, err
 	}
 	if err := b.seedCodexReviewSnapshot(ctx, cfg, launch, snapshotName, owner,
@@ -645,7 +644,7 @@ func (b *CodexReviewLifecycle) codexReview(
 	if err := validateCodexReviewStartLifetime(cfg, launch); err != nil {
 		return nil, err
 	}
-	if err := verifyCodexAuthLaunchAdmission(ctx, cfg, launch, authGuard); err != nil {
+	if err := authLease.verifyStillAdmissible(ctx); err != nil {
 		return nil, err
 	}
 	if err := cfg.Journal.MarkCodexReviewIntentPrepared(ctx, launch.RunID); err != nil {
@@ -658,7 +657,7 @@ func (b *CodexReviewLifecycle) codexReview(
 			CheckControlPlaneIsolation, "mark Codex review launch starting: %v", err,
 		)
 	}
-	startCtx, cancelStart, err := reserveCodexAuthStartAdmission(ctx, cfg, launch, authGuard)
+	startCtx, cancelStart, err := authLease.reserveStartAdmission(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -690,7 +689,7 @@ func (b *CodexReviewLifecycle) codexReview(
 	// start; #427 never owns a review whose start ward did not witness.
 	leaseTransferred = true
 	started = true
-	if err := b.releaseCodexReviewAuthLease(ctx, authGuard); err != nil {
+	if err := authLease.release(ctx); err != nil {
 		releaseErr := err
 		proxyErr := proxy.Close()
 		proxy = nil
@@ -699,7 +698,7 @@ func (b *CodexReviewLifecycle) codexReview(
 		}
 		return nil, errors.Join(releaseErr, proxyErr)
 	}
-	authGuardReleased = true
+	authLeaseReleased = true
 	if err := cfg.Journal.MarkCodexReviewIntentStarted(ctx, launch.RunID); err != nil {
 		// Without the durable handoff record #427 can never own this review, so
 		// destroy it now rather than strand a running credential-bearing
