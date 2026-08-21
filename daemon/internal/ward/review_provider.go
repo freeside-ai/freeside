@@ -1,6 +1,20 @@
 package ward
 
-import "context"
+import (
+	"context"
+	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
+)
+
+// reviewFindingsJSONSchema is the provider-neutral structured-output contract
+// every review CLI is constrained to: a findings array over the native P0–P3
+// severity scale, each carrying a concrete file location and an explanation.
+// Codex passes it via --output-schema (from a file); Claude passes it inline
+// via --json-schema. Both providers share this single literal so the two
+// runtimes can never drift on the severity scale or the location shape.
+const reviewFindingsJSONSchema = `{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["P0","P1","P2","P3"]},"location":{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1}},"required":["path","start_line","end_line"],"additionalProperties":false},"explanation":{"type":"string"}},"required":["severity","location","explanation"],"additionalProperties":false}}},"required":["findings"],"additionalProperties":false}`
 
 // review_provider.go carries the provider-neutral seam of the review runtime
 // (#872). The Codex ReviewSource and the forthcoming Claude shadow ReviewSource
@@ -39,6 +53,49 @@ type reviewProvider interface {
 	// reviewCommand builds the in-container review argv from the read-only
 	// workspace target and the deployment-pinned model configuration.
 	reviewCommand(workspaceTarget, model, reasoningEffort, prompt string) []string
+	// vendor is the agent vendor whose native instruction mechanism this
+	// provider's review invocation consumes (Codex: domain.AgentVendorCodex).
+	vendor() domain.AgentVendor
+	// reviewPrompt builds the production review prompt for one request.
+	reviewPrompt(req exec.ReviewRequest) string
+	// terminalFailureMessage extracts the provider's final structured CLI error
+	// message. Unstructured stderr and non-error envelopes are never authority
+	// for failure classification.
+	terminalFailureMessage(events []byte) string
+	// reviewContainerSuffix is the provider-specific review-container name suffix
+	// appended to the shared per-run prefix (Codex: "-codex").
+	reviewContainerSuffix() string
+	// legacyTopologyVersions lists prior topology versions this provider still
+	// accepts for teardown authentication only, never for launch (Codex: the v2
+	// snapshot shape; a provider with no history returns nil).
+	legacyTopologyVersions() []string
+	// homeTarget and configHomeTarget are the container HOME and the writable
+	// per-invocation agent config root the launcher environment binds (Codex:
+	// CodexContainerHomeTarget and CodexHomeTarget). They are recorded in the
+	// durable binding and re-derived at every reconstruction.
+	homeTarget() string
+	configHomeTarget() string
+	// containerEnv is the fixed, non-secret launcher environment (before the
+	// proxy variables) the review container runs under. It never carries a
+	// credential: the token reaches the CLI from the read-only snapshot file,
+	// never through the environment.
+	containerEnv() []string
+	// snapshotCredentialName and snapshotInstructionName are the two basenames
+	// the credential and instruction bytes carry on the read-only snapshot
+	// volume (Codex: "auth.json" and "AGENTS.md").
+	snapshotCredentialName() string
+	snapshotInstructionName() string
+	// requiresExpiringCredential reports whether this provider's credential
+	// carries an access-token lifetime the config floor and runtime checks gate
+	// (Codex: true; the setup-token strategy: false).
+	requiresExpiringCredential() bool
+	// acceptsAuthMode reports whether the given auth mode is one this provider
+	// delivers.
+	acceptsAuthMode(mode CodexAuthMode) bool
+	// inspectAgentAuthSnapshot derives the container-facing credential bytes and
+	// any access-token expiry from the host credential body. A no-expiry
+	// credential returns a nil expiry.
+	inspectAgentAuthSnapshot(mode CodexAuthMode, body []byte) ([]byte, *time.Time, error)
 	// newCredentialStrategy binds this provider's credential-delivery strategy
 	// to the lifecycle that will invoke it during launch.
 	newCredentialStrategy(lc *CodexReviewLifecycle) credentialStrategy
@@ -75,6 +132,15 @@ type reviewAuthLease interface {
 	release(ctx context.Context) error
 }
 
+// allReviewProviders is the closed set of review providers this runtime knows.
+// Teardown and recovery authenticate persisted resource names against each
+// provider's current topology, and outcome validation resolves a persisted
+// result's provider label against this set. Adding a provider registers it in
+// one place.
+func allReviewProviders() []reviewProvider {
+	return []reviewProvider{codexReviewProvider{}, claudeReviewProvider{}}
+}
+
 // codexReviewProvider is the first reviewProvider: the OpenAI Codex CLI review
 // runtime. Each returned value is the exact constant the core used before the
 // #872 extraction, so driving the neutral core with this provider preserves
@@ -98,6 +164,44 @@ func (codexReviewProvider) reviewCommand(
 	workspaceTarget, model, reasoningEffort, prompt string,
 ) []string {
 	return codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt)
+}
+
+func (codexReviewProvider) vendor() domain.AgentVendor { return domain.AgentVendorCodex }
+
+func (codexReviewProvider) reviewPrompt(req exec.ReviewRequest) string {
+	return codexProductionReviewPrompt(req)
+}
+
+func (codexReviewProvider) terminalFailureMessage(events []byte) string {
+	return codexTerminalFailureMessage(events)
+}
+
+func (codexReviewProvider) reviewContainerSuffix() string { return "-codex" }
+
+func (codexReviewProvider) legacyTopologyVersions() []string {
+	return []string{codexReviewTopologyVersionV2}
+}
+
+func (codexReviewProvider) homeTarget() string       { return CodexContainerHomeTarget }
+func (codexReviewProvider) configHomeTarget() string { return CodexHomeTarget }
+
+func (codexReviewProvider) containerEnv() []string {
+	return []string{"HOME=" + CodexContainerHomeTarget, "CODEX_HOME=" + CodexHomeTarget}
+}
+
+func (codexReviewProvider) snapshotCredentialName() string  { return codexReviewSnapshotAuthName }
+func (codexReviewProvider) snapshotInstructionName() string { return codexReviewSnapshotInstrName }
+
+func (codexReviewProvider) requiresExpiringCredential() bool { return true }
+
+func (codexReviewProvider) acceptsAuthMode(mode CodexAuthMode) bool {
+	return mode == CodexAuthSubscription || mode == CodexAuthAPIKey
+}
+
+func (codexReviewProvider) inspectAgentAuthSnapshot(
+	mode CodexAuthMode, body []byte,
+) ([]byte, *time.Time, error) {
+	return codexReviewAgentAuthSnapshot(mode, body)
 }
 
 func (codexReviewProvider) newCredentialStrategy(lc *CodexReviewLifecycle) credentialStrategy {

@@ -142,14 +142,18 @@ type CodexAuthMode string
 const (
 	CodexAuthSubscription CodexAuthMode = "subscription"
 	CodexAuthAPIKey       CodexAuthMode = "api_key"
+	// CodexAuthSetupToken is the Claude setup-token strategy (#865): a single
+	// static OAuth token with no host-side refresh and no access-token expiry.
+	// The type keeps its Codex-era name until the de-Codexing rename (#874).
+	CodexAuthSetupToken CodexAuthMode = "setup_token"
 )
 
-// AllCodexAuthModes is the single registration point for Codex review auth.
-var AllCodexAuthModes = []CodexAuthMode{CodexAuthSubscription, CodexAuthAPIKey}
+// AllCodexAuthModes is the single registration point for review auth modes.
+var AllCodexAuthModes = []CodexAuthMode{CodexAuthSubscription, CodexAuthAPIKey, CodexAuthSetupToken}
 
 func (m CodexAuthMode) valid() bool {
 	switch m {
-	case CodexAuthSubscription, CodexAuthAPIKey:
+	case CodexAuthSubscription, CodexAuthAPIKey, CodexAuthSetupToken:
 		return true
 	default:
 		return false
@@ -162,6 +166,8 @@ func (m CodexAuthMode) providerEndpoints() []string {
 		return []string{"chatgpt.com:443"}
 	case CodexAuthAPIKey:
 		return []string{"api.openai.com:443"}
+	case CodexAuthSetupToken:
+		return []string{"api.anthropic.com:443"}
 	}
 	return nil
 }
@@ -556,6 +562,15 @@ func BuildCodexReviewSnapshotObserverSpec(
 	runID, volume string,
 	ownershipLabel Label,
 ) (ContainerSpec, error) {
+	return buildReviewSnapshotObserverSpec(codexReviewProvider{}, cfg, runID, volume, ownershipLabel)
+}
+
+func buildReviewSnapshotObserverSpec(
+	provider reviewProvider,
+	cfg CodexReviewConfig,
+	runID, volume string,
+	ownershipLabel Label,
+) (ContainerSpec, error) {
 	switch {
 	case !runIDPattern.MatchString(runID):
 		return ContainerSpec{}, fmt.Errorf("%w: RunID is invalid", ErrInvalidCodexReviewSpec)
@@ -572,6 +587,7 @@ func BuildCodexReviewSnapshotObserverSpec(
 		Command: []string{
 			"sh", "-c", codexReviewSnapshotObserverScript(
 				ownershipLabel.Value, codexReviewSnapshotObserverTarget, codexReviewSnapshotProofPath,
+				provider.snapshotCredentialName(), provider.snapshotInstructionName(),
 			),
 		},
 		Mounts: []Mount{{
@@ -594,7 +610,22 @@ func ObserveCodexReviewSnapshot(
 	observerReport InspectReport,
 	proof []byte,
 ) (CodexReviewSnapshotObservation, error) {
-	spec, err := BuildCodexReviewSnapshotObserverSpec(cfg, runID, volume, observerOwnershipLabel)
+	return observeReviewSnapshot(
+		codexReviewProvider{}, cfg, runID, volume,
+		volumeOwnershipLabel, observerOwnershipLabel, volumeReport, observerReport, proof,
+	)
+}
+
+func observeReviewSnapshot(
+	provider reviewProvider,
+	cfg CodexReviewConfig,
+	runID, volume string,
+	volumeOwnershipLabel, observerOwnershipLabel Label,
+	volumeReport VolumeSummary,
+	observerReport InspectReport,
+	proof []byte,
+) (CodexReviewSnapshotObservation, error) {
+	spec, err := buildReviewSnapshotObserverSpec(provider, cfg, runID, volume, observerOwnershipLabel)
 	if err != nil {
 		return CodexReviewSnapshotObservation{}, err
 	}
@@ -644,18 +675,30 @@ func ObserveCodexReviewSnapshot(
 	}, nil
 }
 
+// snapshotEntriesListing renders the exact `find . ! -name . | sort` listing a
+// snapshot volume must show for one provider's two credential and instruction
+// basenames. The observer and seeder gate on this byte-for-byte, so the sort
+// must match the container's LC_ALL=C ordering (Go's default string sort is the
+// same C/byte order).
+func snapshotEntriesListing(credentialName, instructionName string) string {
+	entries := []string{"./" + credentialName, "./" + instructionName}
+	slices.Sort(entries)
+	return strings.Join(entries, "\n")
+}
+
 // codexReviewSnapshotObserverScript lists the snapshot volume and gates on it
-// holding exactly {AGENTS.md, auth.json} as regular, unsymlinked files, then
-// emits their sha256 digests. Any extra, missing, non-regular, or symlinked
-// entry leaves valid=invalid, which the proof parser fails closed on.
-func codexReviewSnapshotObserverScript(nonce, targetPath, proofPath string) string {
+// holding exactly the provider's two files (Codex: {AGENTS.md, auth.json}) as
+// regular, unsymlinked files, then emits their sha256 digests. Any extra,
+// missing, non-regular, or symlinked entry leaves valid=invalid, which the
+// proof parser fails closed on.
+func codexReviewSnapshotObserverScript(nonce, targetPath, proofPath, credentialName, instructionName string) string {
 	target := shellQuote(targetPath)
-	auth := shellQuote(targetPath + "/" + codexReviewSnapshotAuthName)
-	instr := shellQuote(targetPath + "/" + codexReviewSnapshotInstrName)
+	auth := shellQuote(targetPath + "/" + credentialName)
+	instr := shellQuote(targetPath + "/" + instructionName)
 	proof := shellQuote(proofPath)
 	return "set -u; LC_ALL=C; export LC_ALL; valid=invalid; authsum=; instrsum=; " +
 		"entries=\"$(cd " + target + " 2>/dev/null && find . ! -name . -print | sort)\"; " +
-		"if [ \"$entries\" = './AGENTS.md\n./auth.json' ] && " +
+		"if [ \"$entries\" = '" + snapshotEntriesListing(credentialName, instructionName) + "' ] && " +
 		"[ -f " + auth + " ] && [ ! -L " + auth + " ] && " +
 		"[ -f " + instr + " ] && [ ! -L " + instr + " ]; then " +
 		"authsum=\"$(sha256sum " + auth + " | cut -d' ' -f1)\"; " +
@@ -717,13 +760,13 @@ func parseCodexReviewSnapshotProof(proof []byte, nonce string) (string, string, 
 // clears the volume's filesystem lost+found, and copies the two files onto the
 // read-write-mounted snapshot volume. A separate read-only observer, in its own
 // VM, is the proof; this writer never vouches for its own write.
-func codexReviewSnapshotSeederScript(cfg Config, volumeTarget string) string {
+func codexReviewSnapshotSeederScript(cfg Config, volumeTarget, credentialName, instructionName string) string {
 	ready := shellQuote(path.Join(cfg.SeedReadyDir, seedReadyFile))
 	stage := shellQuote(cfg.SeedStageDir)
-	stageAuth := shellQuote(cfg.SeedStageDir + "/" + codexReviewSnapshotAuthName)
-	stageInstr := shellQuote(cfg.SeedStageDir + "/" + codexReviewSnapshotInstrName)
-	volAuth := shellQuote(volumeTarget + "/" + codexReviewSnapshotAuthName)
-	volInstr := shellQuote(volumeTarget + "/" + codexReviewSnapshotInstrName)
+	stageAuth := shellQuote(cfg.SeedStageDir + "/" + credentialName)
+	stageInstr := shellQuote(cfg.SeedStageDir + "/" + instructionName)
+	volAuth := shellQuote(volumeTarget + "/" + credentialName)
+	volInstr := shellQuote(volumeTarget + "/" + instructionName)
 	lostFound := shellQuote(volumeTarget + "/" + lostFoundDir)
 	ticks := seederScriptTicks(cfg)
 	return "set -eu; i=0; " +
@@ -731,7 +774,7 @@ func codexReviewSnapshotSeederScript(cfg Config, volumeTarget string) string {
 		"i=$((i+1)); if [ \"$i\" -gt " + fmt.Sprintf("%d", ticks) + " ]; then exit 91; fi; " +
 		"sleep 1; done; " +
 		"staged=\"$(cd " + stage + " && find . ! -name . -print | sort)\"; " +
-		"if [ \"$staged\" != './AGENTS.md\n./auth.json' ]; then exit 92; fi; " +
+		"if [ \"$staged\" != '" + snapshotEntriesListing(credentialName, instructionName) + "' ]; then exit 92; fi; " +
 		"if [ ! -f " + stageAuth + " ] || [ -L " + stageAuth + " ]; then exit 93; fi; " +
 		"if [ ! -f " + stageInstr + " ] || [ -L " + stageInstr + " ]; then exit 94; fi; " +
 		"rm -rf " + lostFound + "; " +
@@ -747,6 +790,15 @@ func BuildCodexReviewWorkspaceObserverSpec(
 	runID, volume string,
 	ownershipLabel Label,
 ) (ContainerSpec, error) {
+	return buildReviewWorkspaceObserverSpec(codexReviewProvider{}, cfg, runID, volume, ownershipLabel)
+}
+
+func buildReviewWorkspaceObserverSpec(
+	provider reviewProvider,
+	cfg CodexReviewConfig,
+	runID, volume string,
+	ownershipLabel Label,
+) (ContainerSpec, error) {
 	switch {
 	case !runIDPattern.MatchString(runID):
 		return ContainerSpec{}, fmt.Errorf("%w: RunID is invalid", ErrInvalidCodexReviewSpec)
@@ -754,7 +806,7 @@ func BuildCodexReviewWorkspaceObserverSpec(
 		return ContainerSpec{}, fmt.Errorf("%w: workspace volume is invalid", ErrInvalidCodexReviewSpec)
 	case !cleanAbs(cfg.WorkspaceTarget) || !cliSafe(cfg.WorkspaceTarget):
 		return ContainerSpec{}, fmt.Errorf("%w: WorkspaceTarget is invalid", ErrInvalidCodexReviewSpec)
-	case codexReviewWorkspaceOverlapsControlPath(cfg.WorkspaceTarget):
+	case codexReviewWorkspaceOverlapsControlPath(provider, cfg.WorkspaceTarget):
 		return ContainerSpec{}, fmt.Errorf("%w: WorkspaceTarget overlaps a protected path", ErrInvalidCodexReviewSpec)
 	case !digestPinnedImagePattern.MatchString(cfg.ObserverImage):
 		return ContainerSpec{}, fmt.Errorf("%w: ObserverImage must be digest-pinned", ErrInvalidCodexReviewSpec)
@@ -795,8 +847,23 @@ func ObserveCodexReviewWorkspace(
 	observerReport InspectReport,
 	proof []byte,
 ) (CodexReviewWorkspaceObservation, error) {
-	spec, err := BuildCodexReviewWorkspaceObserverSpec(
-		cfg, runID, volume, observerOwnershipLabel,
+	return observeReviewWorkspace(
+		codexReviewProvider{}, cfg, runID, volume, expectedHead,
+		workspaceOwnershipLabel, observerOwnershipLabel, volumeReport, observerReport, proof,
+	)
+}
+
+func observeReviewWorkspace(
+	provider reviewProvider,
+	cfg CodexReviewConfig,
+	runID, volume, expectedHead string,
+	workspaceOwnershipLabel, observerOwnershipLabel Label,
+	volumeReport VolumeSummary,
+	observerReport InspectReport,
+	proof []byte,
+) (CodexReviewWorkspaceObservation, error) {
+	spec, err := buildReviewWorkspaceObserverSpec(
+		provider, cfg, runID, volume, observerOwnershipLabel,
 	)
 	if err != nil {
 		return CodexReviewWorkspaceObservation{}, err
@@ -925,14 +992,14 @@ func buildReviewAgentSpec(
 	cfg CodexReviewConfig,
 	req CodexReviewSpec,
 ) (ContainerSpec, CodexReviewJournalBinding, error) {
-	if err := validateCodexReviewRequest(cfg, req); err != nil {
+	if err := validateCodexReviewRequest(provider, cfg, req); err != nil {
 		return ContainerSpec{}, CodexReviewJournalBinding{}, err
 	}
 	authPath, hostAuthBody, err := readCodexReviewInput(cfg.InputRoot, req.AuthSnapshot, maxCodexAuthSnapshotBytes)
 	if err != nil {
 		return ContainerSpec{}, CodexReviewJournalBinding{}, fmt.Errorf("%w: auth snapshot: %w", ErrInvalidCodexReviewSpec, err)
 	}
-	authBody, accessExpiry, err := codexReviewAgentAuthSnapshot(req.AuthMode, hostAuthBody)
+	authBody, accessExpiry, err := provider.inspectAgentAuthSnapshot(req.AuthMode, hostAuthBody)
 	if err != nil {
 		return ContainerSpec{}, CodexReviewJournalBinding{}, fmt.Errorf("%w: auth snapshot: %w", ErrInvalidCodexReviewSpec, err)
 	}
@@ -978,10 +1045,7 @@ func buildReviewAgentSpec(
 	}
 
 	shadowTargets := codexAgentsShadowTargets(cfg.WorkspaceTarget, req.Workspace.agentsEntry)
-	env := append([]string{
-		"HOME=" + CodexContainerHomeTarget,
-		"CODEX_HOME=" + CodexHomeTarget,
-	}, proxyEnvironment(cfg.ProxyURL)...)
+	env := append(provider.containerEnv(), proxyEnvironment(cfg.ProxyURL)...)
 	command := provider.reviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt)
 	mounts := []Mount{
 		{Type: MountVolume, Source: req.WorkspaceVolume, Target: cfg.WorkspaceTarget, ReadOnly: true},
@@ -993,7 +1057,7 @@ func buildReviewAgentSpec(
 		})
 	}
 	spec := ContainerSpec{
-		Name:    codexReviewContainerName(req.RunID),
+		Name:    reviewContainerName(provider, req.RunID),
 		Image:   req.Image,
 		Command: command,
 		Env:     env,
@@ -1015,8 +1079,8 @@ func buildReviewAgentSpec(
 		WorkspaceObserverFingerprint:    req.Workspace.observerFingerprint,
 		WorkspaceTarget:                 cfg.WorkspaceTarget,
 		WorkspaceReadOnly:               true,
-		HomeTarget:                      CodexContainerHomeTarget,
-		CodexHomeTarget:                 CodexHomeTarget,
+		HomeTarget:                      provider.homeTarget(),
+		CodexHomeTarget:                 provider.configHomeTarget(),
 		FreshContext:                    true,
 		ContinuityMounted:               false,
 		AuthMode:                        req.AuthMode,
@@ -1064,8 +1128,8 @@ func buildReviewAgentSpec(
 // validateShape checks the decoded binding's structural posture only. It is
 // deliberately not an authorization gate: CodexReview reloads the durable
 // record and reconstructs every runtime observation before start.
-func (b CodexReviewJournalBinding) validateShape() error {
-	return b.validate(true, false)
+func (b CodexReviewJournalBinding) validateShape(provider reviewProvider) error {
+	return b.validate(provider, true, false)
 }
 
 // validateForTeardown accepts the historical shapes that predate the current
@@ -1073,24 +1137,24 @@ func (b CodexReviewJournalBinding) validateShape() error {
 // and the v2 topology without the observed workspace .agents entry. It is
 // used only to authenticate cleanup targets; legacy authority can never
 // launch or satisfy a review result.
-func (b CodexReviewJournalBinding) validateForTeardown() error {
-	return b.validate(true, true)
+func (b CodexReviewJournalBinding) validateForTeardown(provider reviewProvider) error {
+	return b.validate(provider, true, true)
 }
 
-func (b CodexReviewJournalBinding) validatePrepared() error {
+func (b CodexReviewJournalBinding) validatePrepared(provider reviewProvider) error {
 	if b.AgentsShadowPreStartObserverFingerprint != "" ||
 		b.WorkspacePreStartObserverFingerprint != "" ||
 		b.SnapshotPreStartObserverFingerprint != "" {
 		return errors.New("codex review prepared journal binding carries pre-start evidence")
 	}
-	return b.validate(false, false)
+	return b.validate(provider, false, false)
 }
 
 func (b CodexReviewJournalBinding) validate(
-	requirePreStartObservation, allowLegacyTeardownBinding bool,
+	provider reviewProvider, requirePreStartObservation, allowLegacyTeardownBinding bool,
 ) error {
-	topologyVersionValid := b.TopologyVersion == codexReviewTopologyVersion
-	if allowLegacyTeardownBinding && b.TopologyVersion == codexReviewTopologyVersionV2 {
+	topologyVersionValid := b.TopologyVersion == provider.topologyVersion()
+	if allowLegacyTeardownBinding && slices.Contains(provider.legacyTopologyVersions(), b.TopologyVersion) {
 		topologyVersionValid = true
 	}
 	if !topologyVersionValid ||
@@ -1104,8 +1168,8 @@ func (b CodexReviewJournalBinding) validate(
 	if !runIDPattern.MatchString(b.WorkspaceSourceRunID) ||
 		b.WorkspaceVolume == "" || !cliSafe(b.WorkspaceVolume) || !cleanAbs(b.WorkspaceTarget) ||
 		!cliSafe(b.WorkspaceTarget) ||
-		codexReviewWorkspaceOverlapsControlPath(b.WorkspaceTarget) ||
-		b.HomeTarget != CodexContainerHomeTarget || b.CodexHomeTarget != CodexHomeTarget {
+		codexReviewWorkspaceOverlapsControlPath(provider, b.WorkspaceTarget) ||
+		b.HomeTarget != provider.homeTarget() || b.CodexHomeTarget != provider.configHomeTarget() {
 		return errors.New("codex review journal mount targets are invalid")
 	}
 	workspaceAgents := b.WorkspaceAgentsEntry
@@ -1170,7 +1234,7 @@ func (b CodexReviewJournalBinding) validate(
 		return errors.New("codex review journal omits distinct pre-start shadow evidence")
 	}
 	if requirePreStartObservation &&
-		(b.ReviewContainer != codexReviewContainerName(b.RunID) ||
+		(b.ReviewContainer != reviewContainerName(provider, b.RunID) ||
 			b.ReviewContainerFingerprint == "" ||
 			!ownershipTokenPattern.MatchString(b.ReviewOwnershipToken)) {
 		return errors.New("codex review journal container ownership evidence is invalid")
@@ -1186,7 +1250,7 @@ func (b CodexReviewJournalBinding) validate(
 	return nil
 }
 
-func validateCodexReviewRequest(cfg CodexReviewConfig, req CodexReviewSpec) error {
+func validateCodexReviewRequest(provider reviewProvider, cfg CodexReviewConfig, req CodexReviewSpec) error {
 	switch {
 	case !runIDPattern.MatchString(req.RunID):
 		return fmt.Errorf("%w: RunID is invalid", ErrInvalidCodexReviewSpec)
@@ -1200,7 +1264,7 @@ func validateCodexReviewRequest(cfg CodexReviewConfig, req CodexReviewSpec) erro
 		return fmt.Errorf("%w: WorkspaceTarget must be a clean absolute non-root path", ErrInvalidCodexReviewSpec)
 	case !cliSafe(cfg.WorkspaceTarget):
 		return fmt.Errorf("%w: WorkspaceTarget must be CLI-safe", ErrInvalidCodexReviewSpec)
-	case codexReviewWorkspaceOverlapsControlPath(cfg.WorkspaceTarget):
+	case codexReviewWorkspaceOverlapsControlPath(provider, cfg.WorkspaceTarget):
 		return fmt.Errorf("%w: WorkspaceTarget overlaps a protected Codex review path", ErrInvalidCodexReviewSpec)
 	case req.WorkspaceVolume == "" || !cliSafe(req.WorkspaceVolume):
 		return fmt.Errorf("%w: WorkspaceVolume is required and must be CLI-safe", ErrInvalidCodexReviewSpec)
@@ -1217,7 +1281,7 @@ func validateCodexReviewRequest(cfg CodexReviewConfig, req CodexReviewSpec) erro
 		return fmt.Errorf("%w: unsupported boundary %q", ErrInvalidCodexReviewSpec, req.Boundary)
 	case req.Boundary != CodexReviewFreshStart:
 		return fmt.Errorf("%w: %w", ErrInvalidCodexReviewSpec, ErrCodexReviewContinuityRefused)
-	case !req.AuthMode.valid():
+	case !req.AuthMode.valid() || !provider.acceptsAuthMode(req.AuthMode):
 		return fmt.Errorf("%w: unsupported auth mode %q", ErrInvalidCodexReviewSpec, req.AuthMode)
 	case req.AuthIdentityID == "":
 		return fmt.Errorf("%w: AuthIdentityID is required", ErrInvalidCodexReviewSpec)
@@ -1228,9 +1292,10 @@ func validateCodexReviewRequest(cfg CodexReviewConfig, req CodexReviewSpec) erro
 		return fmt.Errorf("%w: runtime-backed snapshot volume observation is required", ErrInvalidCodexReviewSpec)
 	case !cleanAbs(cfg.InputRoot):
 		return fmt.Errorf("%w: InputRoot must be a clean absolute non-root path", ErrInvalidCodexReviewSpec)
-	case cfg.AccessTokenLifetimeFloor <= 0:
+	case provider.requiresExpiringCredential() && cfg.AccessTokenLifetimeFloor <= 0:
 		return fmt.Errorf("%w: AccessTokenLifetimeFloor must be positive", ErrInvalidCodexReviewSpec)
-	case codexAuthRefreshThreshold(cfg) <= cfg.AccessTokenLifetimeFloor:
+	case provider.requiresExpiringCredential() &&
+		codexAuthRefreshThreshold(cfg) <= cfg.AccessTokenLifetimeFloor:
 		return fmt.Errorf("%w: AccessTokenRefreshThreshold must exceed AccessTokenLifetimeFloor", ErrInvalidCodexReviewSpec)
 	case cfg.Now == nil:
 		return fmt.Errorf("%w: Now is required", ErrInvalidCodexReviewSpec)
@@ -1252,7 +1317,7 @@ func validateCodexReviewRequest(cfg CodexReviewConfig, req CodexReviewSpec) erro
 	if err := req.Instructions.validate(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidCodexReviewSpec, err)
 	}
-	if req.Instructions.Vendor != domain.AgentVendorCodex || !req.Instructions.Present {
+	if req.Instructions.Vendor != provider.vendor() || !req.Instructions.Present {
 		return fmt.Errorf("%w: a present Codex append-file instruction is required", ErrInvalidCodexReviewSpec)
 	}
 	if err := req.InstructionBinding.Validate(); err != nil ||
@@ -1478,6 +1543,11 @@ func inspectCodexHostAuth(
 			return codexAuthFile{}, nil, errors.New("API-key snapshot also carries token credentials")
 		}
 		return auth, nil, nil
+	case CodexAuthSetupToken:
+		// The setup-token credential is a Claude concern with its own strategy
+		// (claudeReviewProvider.inspectAgentAuthSnapshot); it is never a Codex
+		// host-auth.json shape, so this Codex parser rejects it fail-closed.
+		return codexAuthFile{}, nil, errors.New("setup-token auth is not a Codex host-auth mode")
 	}
 	return codexAuthFile{}, nil, errors.New("unsupported auth mode")
 }
@@ -1549,7 +1619,7 @@ func jwtExpiry(token string) (time.Time, error) {
 }
 
 func codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt string) []string {
-	schema := `{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["P0","P1","P2","P3"]},"location":{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1}},"required":["path","start_line","end_line"],"additionalProperties":false},"explanation":{"type":"string"}},"required":["severity","location","explanation"],"additionalProperties":false}}},"required":["findings"],"additionalProperties":false}`
+	schema := reviewFindingsJSONSchema
 	// CODEX_HOME lives on the fresh, writable container rootfs; auth.json and
 	// AGENTS.md are symlinks into the read-only snapshot volume, so the credential
 	// bytes stay immutable while CODEX_HOME itself remains writable for the CLI's
@@ -1611,10 +1681,33 @@ func codexReviewNames(runID string) codexReviewResourceNames {
 	}
 }
 
+// reviewNames returns the runtime resource names for one review invocation
+// under a specific provider: the shared per-run names plus the provider's
+// review-container suffix. codexReviewNames supplies the Codex default so
+// provider-independent callers stay unchanged.
+func reviewNames(provider reviewProvider, runID string) codexReviewResourceNames {
+	names := codexReviewNames(runID)
+	names.reviewContainer = reviewContainerName(provider, runID)
+	return names
+}
+
+// reviewContainerName is the provider-specific review-container name: the shared
+// per-run prefix plus the provider's suffix (Codex: "-codex").
+func reviewContainerName(provider reviewProvider, runID string) string {
+	return "freeside-review-" + runID + provider.reviewContainerSuffix()
+}
+
 // CodexReviewRuntimeResourceNamesFor returns the complete current runtime
 // namespace one review invocation may create, including workspace preparation.
 func CodexReviewRuntimeResourceNamesFor(runID string) RuntimeResourceNames {
 	return codexReviewRuntimeResourceNames(runID, codexReviewNames(runID))
+}
+
+// reviewRuntimeResourceNamesFor is the provider-aware runtime namespace one
+// review invocation may create: the shared workspace-preparation and topology
+// resources plus the provider's review-container name.
+func reviewRuntimeResourceNamesFor(provider reviewProvider, runID string) RuntimeResourceNames {
+	return codexReviewRuntimeResourceNames(runID, reviewNames(provider, runID))
 }
 
 func codexReviewRuntimeResourceNames(
@@ -1791,31 +1884,27 @@ func codexReviewProofWorkspaceAgents(proof []byte) (string, error) {
 	return entry, nil
 }
 
-func codexReviewWorkspaceOverlapsControlPath(workspaceTarget string) bool {
+func codexReviewWorkspaceOverlapsControlPath(provider reviewProvider, workspaceTarget string) bool {
 	for current := workspaceTarget; current != "/"; current = path.Dir(current) {
 		if path.Base(current) == ".agents" {
 			return true
 		}
 	}
-	for _, protected := range []string{
-		"/bin",
-		"/dev",
-		"/etc",
-		"/lib",
-		"/lib64",
-		"/proc",
-		"/run",
-		"/sbin",
-		"/sys",
-		"/usr",
-		CodexHomeTarget,
-		CodexContainerHomeTarget,
-		CodexAuthFileTarget,
-		CodexInstructionTarget,
+	// The provider's writable HOME and config-home are the vendor-varying control
+	// dirs the read-only workspace mount must never shadow (Codex: /var/lib/
+	// freeside/home and /codex-home; Claude: /claude-review-home and
+	// /claude-review-config). Protecting a home dir subsumes the credential and
+	// instruction files under it, so the check stays byte-for-byte for Codex while
+	// protecting Claude's actual targets instead of Codex's.
+	protected := []string{
+		"/bin", "/dev", "/etc", "/lib", "/lib64", "/proc", "/run", "/sbin", "/sys", "/usr",
+		provider.homeTarget(),
+		provider.configHomeTarget(),
 		"/.agents",
-		path.Join(CodexContainerHomeTarget, ".agents"),
-	} {
-		if pathsOverlap(workspaceTarget, protected) {
+		path.Join(provider.homeTarget(), ".agents"),
+	}
+	for _, p := range protected {
+		if pathsOverlap(workspaceTarget, p) {
 			return true
 		}
 	}
@@ -1920,7 +2009,7 @@ func validateReviewAgentSpec(
 	spec ContainerSpec,
 	binding CodexReviewJournalBinding,
 ) error {
-	if err := validateCodexReviewRequest(cfg, req); err != nil {
+	if err := validateCodexReviewRequest(provider, cfg, req); err != nil {
 		return err
 	}
 	_, hostAuthBody, err := readCodexReviewInput(
@@ -1935,7 +2024,7 @@ func validateReviewAgentSpec(
 	if err != nil || !bytes.Equal(instructionBody, req.Instructions.Body) {
 		return failf(CheckControlPlaneIsolation, "Codex review instruction snapshot changed after admission")
 	}
-	authBody, expires, err := codexReviewAgentAuthSnapshot(req.AuthMode, hostAuthBody)
+	authBody, expires, err := provider.inspectAgentAuthSnapshot(req.AuthMode, hostAuthBody)
 	if err != nil {
 		return failf(CheckCredentialSeparation, "Codex review auth snapshot changed after admission")
 	}
@@ -1953,11 +2042,8 @@ func validateReviewAgentSpec(
 		return failf(CheckCredentialSeparation, "Codex review snapshot volume diverged from the admitted bytes")
 	}
 	wantCommand := provider.reviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt)
-	wantEnv := append([]string{
-		"HOME=" + CodexContainerHomeTarget,
-		"CODEX_HOME=" + CodexHomeTarget,
-	}, proxyEnvironment(cfg.ProxyURL)...)
-	if spec.Name != codexReviewContainerName(req.RunID) || spec.Image != req.Image ||
+	wantEnv := append(provider.containerEnv(), proxyEnvironment(cfg.ProxyURL)...)
+	if spec.Name != reviewContainerName(provider, req.RunID) || spec.Image != req.Image ||
 		spec.NetworkDisabled || spec.Network != codexReviewNetworkName(req.RunID) ||
 		!slices.Equal(spec.Command, wantCommand) || !slices.Equal(spec.Env, wantEnv) {
 		return failf(CheckControlPlaneIsolation, "Codex review command, environment, image, or network diverged")
@@ -1985,7 +2071,7 @@ func validateReviewAgentSpec(
 			return failf(CheckControlPlaneIsolation, "Codex review .agents shadow topology diverged")
 		}
 	}
-	if err := binding.validatePrepared(); err != nil {
+	if err := binding.validatePrepared(provider); err != nil {
 		return failf(CheckControlPlaneIsolation, "Codex review journal binding is invalid")
 	}
 	if binding.TopologyVersion != provider.topologyVersion() ||
@@ -2003,7 +2089,7 @@ func validateReviewAgentSpec(
 		!binding.WorkspaceReadOnly || !binding.AuthReadOnly || !binding.AuthStoreMutationLeaseRequired ||
 		!binding.InstructionReadOnly ||
 		!binding.AgentsShadowReadOnly || binding.RefreshEndpointReachable || binding.PublicationCredentials ||
-		binding.HomeTarget != CodexContainerHomeTarget || binding.CodexHomeTarget != CodexHomeTarget ||
+		binding.HomeTarget != provider.homeTarget() || binding.CodexHomeTarget != provider.configHomeTarget() ||
 		binding.AuthMode != req.AuthMode || binding.AuthIdentityID != req.AuthIdentityID ||
 		binding.AuthSnapshotDigest != wantAuthDigest || !sameOptionalTime(binding.AccessTokenExpiresAt, expires) ||
 		binding.InstructionDigest != req.Instructions.Digest ||
@@ -2078,7 +2164,7 @@ func verifyCodexReviewAllowlistShape(
 	binding.AgentsShadowPreStartObserverFingerprint = freshShadow.observerFingerprint
 	binding.WorkspacePreStartObserverFingerprint = freshWorkspace.observerFingerprint
 	binding.SnapshotPreStartObserverFingerprint = freshSnapshot.observerFingerprint
-	if err := binding.validateShape(); err != nil {
+	if err := binding.validateShape(provider); err != nil {
 		return CodexReviewJournalBinding{}, failf(
 			CheckControlPlaneIsolation, "Codex review final journal binding is invalid",
 		)

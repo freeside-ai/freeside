@@ -216,7 +216,7 @@ func (b *CodexReviewLifecycle) CodexReview(
 	if !b.valid() {
 		return nil, fmt.Errorf("%w: Codex review lifecycle is not initialized", ErrInvalidConfig)
 	}
-	if err := validateCodexReviewLaunchShape(cfg, launch); err != nil {
+	if err := validateCodexReviewLaunchShape(b.reviewProvider(), cfg, launch); err != nil {
 		return nil, err
 	}
 	releaseRun, err := b.acquireCodexReviewRun(ctx, launch.RunID)
@@ -240,16 +240,16 @@ func (b *CodexReviewLifecycle) codexReview(
 		return nil, fmt.Errorf("%w: Codex review lifecycle is not initialized", ErrInvalidConfig)
 	}
 	credentials := b.reviewProvider().newCredentialStrategy(b)
-	if err := validateCodexReviewLaunchShape(cfg, launch); err != nil {
+	if err := validateCodexReviewLaunchShape(b.reviewProvider(), cfg, launch); err != nil {
 		return nil, err
 	}
 	if err := credentials.checkLaunchAdmission(ctx, cfg, launch); err != nil {
 		return nil, err
 	}
-	if err := validateCodexReviewLaunchStructure(cfg, launch); err != nil {
+	if err := validateCodexReviewLaunchStructure(b.reviewProvider(), cfg, launch); err != nil {
 		return nil, err
 	}
-	if err := codexReviewOutcomeFence(ctx, cfg.Journal, launch.RunID); err != nil {
+	if err := codexReviewOutcomeFence(ctx, b.reviewProvider(), cfg.Journal, launch.RunID); err != nil {
 		return nil, err
 	}
 	cfg.ProviderEndpoints = slices.Clone(cfg.ProviderEndpoints)
@@ -291,7 +291,7 @@ func (b *CodexReviewLifecycle) codexReview(
 			retErr = errors.Join(retErr, authLease.release(ctx))
 		}
 	}()
-	if err := validateCodexReviewLaunch(cfg, launch); err != nil {
+	if err := validateCodexReviewLaunch(b.reviewProvider(), cfg, launch); err != nil {
 		return nil, err
 	}
 	owner, err := newOwnershipLabel()
@@ -300,16 +300,23 @@ func (b *CodexReviewLifecycle) codexReview(
 	}
 	shadowName := codexReviewShadowVolumeName(launch.RunID)
 	snapshotName := codexReviewSnapshotVolumeName(launch.RunID)
+	// The review container name is provider-specific (-codex / -claude). The
+	// intent, its journalled resource, and the launch-failure cleanup target must
+	// all use the same provider-derived name the spec build will create, or a
+	// Claude launch journals a -codex intent while creating a -claude container:
+	// the mark returns ErrParentKeyMismatch and cleanup reaps the wrong
+	// (nonexistent) name, leaving the credential-bearing container behind.
+	reviewContainer := reviewContainerName(b.reviewProvider(), launch.RunID)
 	intent := CodexReviewLaunchIntent{
 		RunID: launch.RunID, SpecDigest: intentDigest, OwnershipToken: owner.Value,
 		ShadowVolume: shadowName, Network: codexReviewNetworkName(launch.RunID),
-		ReviewContainer: codexReviewContainerName(launch.RunID),
+		ReviewContainer: reviewContainer,
 		SnapshotVolume:  snapshotName,
 		Resources: []CodexReviewIntentResource{
 			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
 			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
 			{Name: codexReviewShadowObserverName(launch.RunID)},
-			{Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value},
+			{Name: reviewContainer, OwnershipToken: owner.Value},
 			{Name: shadowName, OwnershipToken: owner.Value},
 			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
 			{Name: snapshotName, OwnershipToken: owner.Value},
@@ -410,7 +417,7 @@ func (b *CodexReviewLifecycle) codexReview(
 		}
 		if containerClaim.attempted {
 			containerErr := b.reapCodexReviewContainer(
-				cleanupCtx, codexReviewContainerName(launch.RunID), containerClaim, owner,
+				cleanupCtx, reviewContainer, containerClaim, owner,
 			)
 			if containerErr != nil {
 				// Releasing the attachment lease while a credential-bearing
@@ -627,7 +634,7 @@ func (b *CodexReviewLifecycle) codexReview(
 			CheckControlPlaneIsolation, "reload Codex review binding: %v", err,
 		)
 	}
-	if err := persisted.validateShape(); err != nil || !sameCodexReviewBinding(persisted, binding) {
+	if err := persisted.validateShape(b.reviewProvider()); err != nil || !sameCodexReviewBinding(persisted, binding) {
 		return nil, failf(CheckControlPlaneIsolation, "persisted Codex review binding diverged from live preparation")
 	}
 	if err := b.verifyCodexReviewWorkspaceExclusive(ctx, launch.WorkspaceVolume, spec.Name); err != nil {
@@ -641,7 +648,7 @@ func (b *CodexReviewLifecycle) codexReview(
 	if err := b.verifyCodexReviewWorkspaceExclusive(ctx, launch.WorkspaceVolume, spec.Name); err != nil {
 		return nil, err
 	}
-	if err := validateCodexReviewStartLifetime(cfg, launch); err != nil {
+	if err := validateCodexReviewStartLifetime(b.reviewProvider(), cfg, launch); err != nil {
 		return nil, err
 	}
 	if err := authLease.verifyStillAdmissible(ctx); err != nil {
@@ -724,7 +731,7 @@ func (b *CodexReviewLifecycle) recoverCodexReviewAfterStart(
 	return b.RecoverCodexReview(recoveryCtx, cfg, launch)
 }
 
-func codexReviewOutcomeFence(ctx context.Context, journal CodexReviewJournal, runID string) error {
+func codexReviewOutcomeFence(ctx context.Context, provider reviewProvider, journal CodexReviewJournal, runID string) error {
 	outcome, _, err := journal.GetCodexReviewOutcome(ctx, runID)
 	if errors.Is(err, ErrCodexReviewOutcomeNotFound) {
 		return nil
@@ -736,7 +743,7 @@ func codexReviewOutcomeFence(ctx context.Context, journal CodexReviewJournal, ru
 		return codexReviewOperationalCheckf(
 			CheckControlPlaneIsolation, "load Codex review outcome fence: %v", err)
 	}
-	if validateErr := outcome.Validate(); validateErr != nil || string(outcome.InvocationID) != runID {
+	if validateErr := errors.Join(outcome.Validate(), outcome.verifyCompletionEvidence(provider)); validateErr != nil || string(outcome.InvocationID) != runID {
 		return failf(CheckControlPlaneIsolation, "Codex review outcome fence is invalid: %v",
 			errors.Join(validateErr, domain.ErrParentKeyMismatch))
 	}
@@ -772,7 +779,7 @@ func (b *CodexReviewLifecycle) acquireCodexReviewRun(ctx context.Context, runID 
 	}
 }
 
-func validateCodexReviewLaunchShape(cfg CodexReviewConfig, launch CodexReviewLaunchSpec) error {
+func validateCodexReviewLaunchShape(provider reviewProvider, cfg CodexReviewConfig, launch CodexReviewLaunchSpec) error {
 	modelConfigurationError := ValidateCodexReviewModelConfiguration(cfg.Model, cfg.ReasoningEffort)
 	switch {
 	case cfg.Journal == nil:
@@ -801,7 +808,7 @@ func validateCodexReviewLaunchShape(cfg CodexReviewConfig, launch CodexReviewLau
 	case !commitSHAPattern.MatchString(launch.ExpectedHead):
 		return fmt.Errorf("%w: ExpectedHead is invalid", ErrInvalidCodexReviewSpec)
 	case !cleanAbs(cfg.WorkspaceTarget) || !cliSafe(cfg.WorkspaceTarget) ||
-		codexReviewWorkspaceOverlapsControlPath(cfg.WorkspaceTarget):
+		codexReviewWorkspaceOverlapsControlPath(provider, cfg.WorkspaceTarget):
 		return fmt.Errorf("%w: WorkspaceTarget is invalid", ErrInvalidCodexReviewSpec)
 	case !digestPinnedImagePattern.MatchString(cfg.ObserverImage):
 		return fmt.Errorf("%w: ObserverImage must be digest-pinned", ErrInvalidCodexReviewSpec)
@@ -816,11 +823,15 @@ func validateCodexReviewLaunchShape(cfg CodexReviewConfig, launch CodexReviewLau
 		return fmt.Errorf("%w: auth identity is invalid", ErrInvalidCodexReviewSpec)
 	case !cleanAbs(cfg.InputRoot):
 		return fmt.Errorf("%w: InputRoot is invalid", ErrInvalidCodexReviewSpec)
-	case cfg.AccessTokenLifetimeFloor <= 0 || cfg.Now == nil:
+	case cfg.Now == nil:
 		return fmt.Errorf("%w: credential lifetime configuration is invalid", ErrInvalidCodexReviewSpec)
-	case cfg.AccessTokenRefreshThreshold != 0 &&
+	case provider.requiresExpiringCredential() && cfg.AccessTokenLifetimeFloor <= 0:
+		return fmt.Errorf("%w: credential lifetime configuration is invalid", ErrInvalidCodexReviewSpec)
+	case provider.requiresExpiringCredential() && cfg.AccessTokenRefreshThreshold != 0 &&
 		cfg.AccessTokenRefreshThreshold <= cfg.AccessTokenLifetimeFloor:
 		return fmt.Errorf("%w: credential refresh threshold must exceed its lifetime floor", ErrInvalidCodexReviewSpec)
+	case !provider.acceptsAuthMode(launch.AuthMode):
+		return fmt.Errorf("%w: auth mode is not delivered by this provider", ErrInvalidCodexReviewSpec)
 	case launch.AuthMode == CodexAuthSubscription &&
 		(cfg.AuthStoreLeaser == nil || cfg.AuthRefresher == nil || cfg.AuthState == nil):
 		return fmt.Errorf("%w: subscription host refresh dependencies are required", ErrInvalidCodexReviewSpec)
@@ -828,7 +839,7 @@ func validateCodexReviewLaunchShape(cfg CodexReviewConfig, launch CodexReviewLau
 		return fmt.Errorf("%w: provider_only endpoints do not exactly match auth mode", ErrInvalidCodexReviewSpec)
 	}
 	if err := launch.Instructions.validate(); err != nil ||
-		launch.Instructions.Vendor != domain.AgentVendorCodex || !launch.Instructions.Present {
+		launch.Instructions.Vendor != provider.vendor() || !launch.Instructions.Present {
 		return fmt.Errorf("%w: Codex instructions are invalid", ErrInvalidCodexReviewSpec)
 	}
 	if err := launch.InstructionBinding.Validate(); err != nil ||
@@ -850,8 +861,8 @@ func ValidateCodexReviewModelConfiguration(model, reasoningEffort string) error 
 	return nil
 }
 
-func validateCodexReviewLaunchStructure(cfg CodexReviewConfig, launch CodexReviewLaunchSpec) error {
-	if err := validateCodexReviewLaunchShape(cfg, launch); err != nil {
+func validateCodexReviewLaunchStructure(provider reviewProvider, cfg CodexReviewConfig, launch CodexReviewLaunchSpec) error {
+	if err := validateCodexReviewLaunchShape(provider, cfg, launch); err != nil {
 		return err
 	}
 	authPath, authBody, err := readCodexReviewInput(
@@ -860,7 +871,7 @@ func validateCodexReviewLaunchStructure(cfg CodexReviewConfig, launch CodexRevie
 	if err != nil {
 		return fmt.Errorf("%w: auth snapshot: %w", ErrInvalidCodexReviewSpec, err)
 	}
-	if _, _, err := inspectCodexHostAuth(launch.AuthMode, authBody); err != nil {
+	if _, _, err := provider.inspectAgentAuthSnapshot(launch.AuthMode, authBody); err != nil {
 		return fmt.Errorf("%w: auth snapshot is invalid", ErrInvalidCodexReviewSpec)
 	}
 	instructionPath, instructionBody, err := readCodexReviewInput(
@@ -873,8 +884,8 @@ func validateCodexReviewLaunchStructure(cfg CodexReviewConfig, launch CodexRevie
 	return nil
 }
 
-func validateCodexReviewLaunch(cfg CodexReviewConfig, launch CodexReviewLaunchSpec) error {
-	if err := validateCodexReviewLaunchStructure(cfg, launch); err != nil {
+func validateCodexReviewLaunch(provider reviewProvider, cfg CodexReviewConfig, launch CodexReviewLaunchSpec) error {
+	if err := validateCodexReviewLaunchStructure(provider, cfg, launch); err != nil {
 		return err
 	}
 	_, authBody, err := readCodexReviewInput(
@@ -883,7 +894,7 @@ func validateCodexReviewLaunch(cfg CodexReviewConfig, launch CodexReviewLaunchSp
 	if err != nil {
 		return fmt.Errorf("%w: auth snapshot: %w", ErrInvalidCodexReviewSpec, err)
 	}
-	_, expires, err := codexReviewAgentAuthSnapshot(launch.AuthMode, authBody)
+	_, expires, err := provider.inspectAgentAuthSnapshot(launch.AuthMode, authBody)
 	if err != nil {
 		return fmt.Errorf("%w: auth snapshot: %w", ErrInvalidCodexReviewSpec, err)
 	}
@@ -1351,6 +1362,14 @@ func (r *CodexReviewRecovery) markFenceOnlyOutcomeReady(ctx context.Context, id 
 		return codexReviewJournalCheckf(
 			CheckControlPlaneIsolation, "load fence-only Codex review outcome: %v", err)
 	}
+	// A fence written before any launch carries only a failure. With no intent or
+	// binding there is no trusted provider association against which a result
+	// could be verified, so fail closed instead of letting its decoded label pick
+	// an evidence namespace.
+	if outcome.Result != nil {
+		return failf(CheckControlPlaneIsolation,
+			"fence-only Codex review outcome unexpectedly carries a result")
+	}
 	if err := outcome.Validate(); err != nil || string(outcome.InvocationID) != id {
 		return failf(CheckControlPlaneIsolation, "fence-only Codex review outcome is invalid: %v",
 			errors.Join(err, domain.ErrParentKeyMismatch))
@@ -1411,6 +1430,10 @@ func (r *CodexReviewRecovery) reconcileIntent(
 		}
 		return cleanupErr
 	}
+	provider, err := r.reviewProviderForStartedIntent(ctx, id, intent)
+	if err != nil {
+		return err
+	}
 	if outcomeMissing {
 		outcome := CodexReviewSourceOutcome{
 			InvocationID:  domain.InvocationID(id),
@@ -1423,7 +1446,7 @@ func (r *CodexReviewRecovery) reconcileIntent(
 				CheckControlPlaneIsolation, "persist recovered Codex review outcome: %v", err)
 		}
 	}
-	cleanupErr := r.lifecycle.AbortCodexReview(ctx, r.cfg, id)
+	cleanupErr := r.lifecycle.cleanupCodexReview(ctx, provider, r.cfg, id, true)
 	if cleanupErr == nil {
 		cleanupErr = r.removeInstructionSnapshot(id)
 	}
@@ -1437,6 +1460,55 @@ func (r *CodexReviewRecovery) reconcileIntent(
 		return errors.Join(cleanupErr, outcomeErr)
 	}
 	return cleanupErr
+}
+
+// reviewProviderForStartedIntent re-derives the provider from the complete
+// provider-specific binding and coherent intent topology. It does not trust a
+// stored provider bit or the container suffix alone: exactly one provider from
+// the deployment's closed registry must validate the whole teardown shape and
+// match the independently journalled intent owner and resources.
+func (r *CodexReviewRecovery) reviewProviderForStartedIntent(
+	ctx context.Context, id string, intent CodexReviewLaunchIntent,
+) (reviewProvider, error) {
+	binding, err := r.cfg.Journal.GetCodexReviewBinding(ctx, id)
+	if err != nil {
+		return nil, codexReviewJournalCheckf(
+			CheckControlPlaneIsolation, "load recoverable Codex review binding: %v", err)
+	}
+	var matched reviewProvider
+	for _, provider := range allReviewProviders() {
+		if !reviewProviderMatchesIntent(provider, intent, id) ||
+			binding.validateForTeardown(provider) != nil ||
+			binding.RunID != id || binding.ReviewContainer != intent.ReviewContainer ||
+			binding.ReviewOwnershipToken != intent.OwnershipToken ||
+			binding.WorkspaceSourceRunID != id ||
+			binding.WorkspaceVolume != namesFor(id).Workspace {
+			continue
+		}
+		if matched != nil {
+			return nil, failf(CheckControlPlaneIsolation,
+				"recoverable Codex review provider association is ambiguous")
+		}
+		matched = provider
+	}
+	if matched == nil {
+		return nil, failf(CheckControlPlaneIsolation,
+			"recoverable Codex review provider association is invalid")
+	}
+	return matched, nil
+}
+
+func reviewProviderMatchesIntent(
+	provider reviewProvider, intent CodexReviewLaunchIntent, runID string,
+) bool {
+	if intent.resourceNamesMatch(reviewNames(provider, runID)) {
+		return true
+	}
+	if provider.providerLabel() != (codexReviewProvider{}).providerLabel() {
+		return false
+	}
+	return intent.resourceNamesMatch(preSnapshotCodexReviewNames(runID)) ||
+		intent.resourceNamesMatch(legacyCodexReviewNames(runID))
 }
 
 func (r *CodexReviewRecovery) removeInstructionSnapshot(id string) error {
@@ -1544,10 +1616,18 @@ func (intent CodexReviewLaunchIntent) validatedResourceNames(runID string) (code
 	// Order matters only for disambiguating the two six-resource generations by
 	// their observer names; resourceNamesMatch keys the current nine-resource
 	// shape off a non-empty snapshot volume, so a persisted pre-#591 intent
-	// (run 482's round-2 record) is authenticated as cleanup-only legacy.
-	for _, names := range []codexReviewResourceNames{
-		codexReviewNames(runID), preSnapshotCodexReviewNames(runID), legacyCodexReviewNames(runID),
-	} {
+	// (run 482's round-2 record) is authenticated as cleanup-only legacy. The
+	// current-topology set is enumerated per provider: only the review-container
+	// suffix differs, so the persisted intent's own container name selects which
+	// provider actually ran. Teardown/recovery must authenticate a Claude review
+	// (-claude container) as readily as a Codex one; the two legacy shapes are
+	// Codex-only and a Claude intent never matches them.
+	candidates := make([]codexReviewResourceNames, 0, len(allReviewProviders())+2)
+	for _, p := range allReviewProviders() {
+		candidates = append(candidates, reviewNames(p, runID))
+	}
+	candidates = append(candidates, preSnapshotCodexReviewNames(runID), legacyCodexReviewNames(runID))
+	for _, names := range candidates {
 		if intent.resourceNamesMatch(names) {
 			return names, nil
 		}
@@ -1747,11 +1827,12 @@ func (b *CodexReviewLifecycle) seedCodexReviewSnapshot(
 	ctx context.Context, cfg CodexReviewConfig, launch CodexReviewLaunchSpec, volume string, owner Label,
 	mark func(CodexReviewIntentResource) error,
 ) (retErr error) {
+	provider := b.reviewProvider()
 	_, hostAuthBody, err := readCodexReviewInput(cfg.InputRoot, launch.AuthSnapshot, maxCodexAuthSnapshotBytes)
 	if err != nil {
 		return failf(CheckCredentialSeparation, "Codex review auth snapshot changed before snapshot seeding")
 	}
-	authBody, _, err := codexReviewAgentAuthSnapshot(launch.AuthMode, hostAuthBody)
+	authBody, _, err := provider.inspectAgentAuthSnapshot(launch.AuthMode, hostAuthBody)
 	if err != nil {
 		return failf(CheckCredentialSeparation, "Codex review auth snapshot changed before snapshot seeding")
 	}
@@ -1784,10 +1865,10 @@ func (b *CodexReviewLifecycle) seedCodexReviewSnapshot(
 			))
 		}
 	}()
-	if err := os.WriteFile(filepath.Join(dir, codexReviewSnapshotAuthName), authBody, 0o400); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, provider.snapshotCredentialName()), authBody, 0o400); err != nil {
 		return codexReviewOperationalCheckf(CheckCredentialSeparation, "stage Codex review snapshot auth: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, codexReviewSnapshotInstrName), instructionBody, 0o400); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, provider.snapshotInstructionName()), instructionBody, 0o400); err != nil {
 		return codexReviewOperationalCheckf(CheckCredentialSeparation, "stage Codex review snapshot instructions: %v", err)
 	}
 	readyDir, err := os.MkdirTemp("", "freeside-codex-review-snapshot-ready-"+launch.RunID+"-")
@@ -1799,9 +1880,12 @@ func (b *CodexReviewLifecycle) seedCodexReviewSnapshot(
 		return codexReviewOperationalCheckf(CheckCredentialSeparation, "write Codex review snapshot sentinel: %v", err)
 	}
 	spec := ContainerSpec{
-		Name:    codexReviewSnapshotSeederName(launch.RunID),
-		Image:   cfg.ObserverImage,
-		Command: []string{"sh", "-c", codexReviewSnapshotSeederScript(b.cfg.seedConfig(), codexReviewSnapshotSeedTarget)},
+		Name:  codexReviewSnapshotSeederName(launch.RunID),
+		Image: cfg.ObserverImage,
+		Command: []string{"sh", "-c", codexReviewSnapshotSeederScript(
+			b.cfg.seedConfig(), codexReviewSnapshotSeedTarget,
+			provider.snapshotCredentialName(), provider.snapshotInstructionName(),
+		)},
 		Mounts: []Mount{{
 			Type: MountVolume, Source: volume, Target: codexReviewSnapshotSeedTarget,
 		}},
@@ -1868,12 +1952,13 @@ func (b *CodexReviewLifecycle) observeCodexReviewSnapshot(
 	ctx context.Context, cfg CodexReviewConfig, runID, volume string,
 	volumeOwner Label, volumeReport VolumeSummary,
 ) (CodexReviewSnapshotObservation, error) {
+	provider := b.reviewProvider()
 	observerOwner, err := newOwnershipLabel()
 	if err != nil {
 		return CodexReviewSnapshotObservation{}, failf(CheckCredentialSeparation,
 			"mint Codex review snapshot observer ownership: %v", err)
 	}
-	spec, err := BuildCodexReviewSnapshotObserverSpec(cfg, runID, volume, observerOwner)
+	spec, err := buildReviewSnapshotObserverSpec(provider, cfg, runID, volume, observerOwner)
 	if err != nil {
 		return CodexReviewSnapshotObservation{}, err
 	}
@@ -1896,8 +1981,8 @@ func (b *CodexReviewLifecycle) observeCodexReviewSnapshot(
 	if err != nil {
 		return CodexReviewSnapshotObservation{}, err
 	}
-	return ObserveCodexReviewSnapshot(
-		cfg, runID, volume, volumeOwner, observerOwner, volumeReport, report, proof,
+	return observeReviewSnapshot(
+		provider, cfg, runID, volume, volumeOwner, observerOwner, volumeReport, report, proof,
 	)
 }
 
@@ -1910,8 +1995,8 @@ func (b *CodexReviewLifecycle) observeCodexReviewWorkspace(
 		return CodexReviewWorkspaceObservation{}, failf(CheckObservedBaseIdentity,
 			"mint Codex review workspace observer ownership: %v", err)
 	}
-	spec, err := BuildCodexReviewWorkspaceObserverSpec(
-		cfg, launch.RunID, launch.WorkspaceVolume, observerOwner,
+	spec, err := buildReviewWorkspaceObserverSpec(
+		b.reviewProvider(), cfg, launch.RunID, launch.WorkspaceVolume, observerOwner,
 	)
 	if err != nil {
 		return CodexReviewWorkspaceObservation{}, err
@@ -1937,8 +2022,8 @@ func (b *CodexReviewLifecycle) observeCodexReviewWorkspace(
 	if err != nil {
 		return CodexReviewWorkspaceObservation{}, err
 	}
-	return ObserveCodexReviewWorkspace(
-		cfg, launch.RunID, launch.WorkspaceVolume, launch.ExpectedHead,
+	return observeReviewWorkspace(
+		b.reviewProvider(), cfg, launch.RunID, launch.WorkspaceVolume, launch.ExpectedHead,
 		workspaceOwner, observerOwner, volumeReport, report, proof,
 	)
 }
@@ -2140,7 +2225,7 @@ func (b *CodexReviewLifecycle) verifyCodexReviewWorkspaceExclusive(
 }
 
 func validateCodexReviewStartLifetime(
-	cfg CodexReviewConfig, launch CodexReviewLaunchSpec,
+	provider reviewProvider, cfg CodexReviewConfig, launch CodexReviewLaunchSpec,
 ) error {
 	_, authBody, err := readCodexReviewInput(
 		cfg.InputRoot, launch.AuthSnapshot, maxCodexAuthSnapshotBytes,
@@ -2148,7 +2233,7 @@ func validateCodexReviewStartLifetime(
 	if err != nil {
 		return failf(CheckCredentialSeparation, "Codex review auth snapshot changed before start")
 	}
-	_, expires, err := codexReviewAgentAuthSnapshot(launch.AuthMode, authBody)
+	_, expires, err := provider.inspectAgentAuthSnapshot(launch.AuthMode, authBody)
 	if err != nil {
 		return failf(CheckCredentialSeparation, "Codex review auth snapshot changed before start")
 	}

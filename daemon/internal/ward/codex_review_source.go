@@ -79,7 +79,11 @@ type CodexReviewSourceOutcome struct {
 }
 
 // Validate rejects an outcome whose result and failure representations overlap
-// or whose terminal payload is malformed.
+// or whose terminal payload is malformed. It is the provider-agnostic shape
+// gate the persistence layer (wardstore) runs on write and read; it deliberately
+// does not recompute the provider-namespaced completion evidence, which requires
+// the caller's trusted provider and is re-gated by verifyCompletionEvidence at
+// the domain layer where that provider is known.
 func (o CodexReviewSourceOutcome) Validate() error {
 	if o.InvocationID == "" {
 		return domain.ErrEmptyID
@@ -94,10 +98,6 @@ func (o CodexReviewSourceOutcome) Validate() error {
 		if err := o.Result.Validate(); err != nil || !contentaddr.Valid(string(o.CollectionEvidence)) {
 			return errors.Join(err, domain.ErrInvalidReviewCompletionEvidence)
 		}
-		evidence, err := CodexReviewResultEvidence(*o.Result, o.CollectionEvidence)
-		if err != nil || evidence != o.Result.CompletionEvidence {
-			return errors.Join(err, domain.ErrInvalidReviewCompletionEvidence)
-		}
 		return nil
 	}
 	if o.FailureClass == "" || o.Failure == "" {
@@ -109,6 +109,28 @@ func (o CodexReviewSourceOutcome) Validate() error {
 	}
 	if !validClass {
 		return domain.ErrInvalidReviewFailureClass
+	}
+	return nil
+}
+
+// verifyCompletionEvidence re-gates a loaded outcome's completion evidence
+// against the caller's trusted provider, never a provider chosen by the decoded
+// row. Two fail-closed gates: the persisted provider label must match the
+// trusted provider (a rewritten row that flips the label and recomputes the
+// unkeyed evidence cannot self-validate against a different validator), and the
+// evidence must then recompute. Making it provider-aware fixes the #875 handoff
+// (a Codex-only recomputation turned every Claude result into a durable
+// contradiction). A failure/fence outcome carries no result evidence and passes.
+func (o CodexReviewSourceOutcome) verifyCompletionEvidence(provider reviewProvider) error {
+	if o.Result == nil {
+		return nil
+	}
+	if o.Result.Provider != provider.providerLabel() {
+		return domain.ErrInvalidReviewCompletionEvidence
+	}
+	evidence, err := reviewResultEvidence(provider, *o.Result, o.CollectionEvidence)
+	if err != nil || evidence != o.Result.CompletionEvidence {
+		return errors.Join(err, domain.ErrInvalidReviewCompletionEvidence)
 	}
 	return nil
 }
@@ -127,14 +149,20 @@ func NewCodexReviewSource(cfg CodexReviewSourceConfig) (*CodexReviewSource, erro
 	if !cfg.Lifecycle.valid() {
 		return nil, fmt.Errorf("codex review source: %w: lifecycle is not initialized", ErrInvalidConfig)
 	}
+	if cfg.provider == nil {
+		cfg.provider = codexReviewProvider{}
+	}
+	if lifecycleProvider := cfg.Lifecycle.reviewProvider(); lifecycleProvider.providerLabel() != cfg.provider.providerLabel() {
+		return nil, fmt.Errorf(
+			"codex review source: %w: lifecycle provider %q does not match source provider %q",
+			ErrInvalidConfig, lifecycleProvider.providerLabel(), cfg.provider.providerLabel(),
+		)
+	}
 	if cfg.Journal == nil || cfg.Review.Journal != cfg.Journal ||
 		cfg.Review.VolumeLifecycleLeaser == nil || cfg.WorkspaceSizeMB <= 0 ||
 		cfg.AuthIdentityID == "" || cfg.AuthSnapshot == "" || cfg.InstructionArtifacts == nil ||
 		!contentaddr.Valid(string(cfg.ConfigurationDigest)) || cfg.CostOwner == "" {
 		return nil, errors.New("codex review source: incomplete configuration")
-	}
-	if cfg.provider == nil {
-		cfg.provider = codexReviewProvider{}
 	}
 	digest, err := reviewConfigurationDigest(
 		cfg.provider, cfg.Review, cfg.WorkspaceSizeMB, cfg.AuthMode, cfg.AuthIdentityID,
@@ -187,11 +215,11 @@ func (s *CodexReviewSource) startRequestedReview(
 		}
 	}
 	defer releaseRun()
-	if err := codexReviewOutcomeFence(ctx, s.cfg.Journal, string(id)); err != nil {
+	if err := codexReviewOutcomeFence(ctx, s.reviewProvider(), s.cfg.Journal, string(id)); err != nil {
 		return &exec.ReviewSourceFailure{Class: classifyCodexLaunchFailure(err), Err: err}
 	}
 	if err := s.cfg.Lifecycle.authorizeRuntime(
-		ctx, CodexReviewRuntimeResourceNamesFor(string(id)),
+		ctx, reviewRuntimeResourceNamesFor(s.reviewProvider(), string(id)),
 	); err != nil {
 		return &exec.ReviewSourceFailure{
 			Class: domain.ReviewFailureTransient,
@@ -232,7 +260,7 @@ func (s *CodexReviewSource) startRequestedReview(
 	launch, err := s.cfg.Lifecycle.codexReview(ctx, s.cfg.Review, CodexReviewLaunchSpec{
 		RunID: string(id), WorkflowRunID: req.RunID, Image: s.cfg.Review.ApprovedImage,
 		WorkspaceSourceRunID: string(id), WorkspaceVolume: workspace.Volume,
-		ExpectedHead: req.HeadSHA, Prompt: codexProductionReviewPrompt(req),
+		ExpectedHead: req.HeadSHA, Prompt: s.reviewProvider().reviewPrompt(req),
 		Boundary: CodexReviewFreshStart, AuthMode: s.cfg.AuthMode,
 		AuthIdentityID: s.cfg.AuthIdentityID, AuthSnapshot: s.cfg.AuthSnapshot,
 		Instructions: instructions, InstructionFile: instructionFile,
@@ -278,8 +306,11 @@ func (s *CodexReviewSource) materializeReviewInstructions(
 	if err != nil {
 		return VendorInstructions{}, "", err
 	}
+	// The instruction vendor must be the source's own provider: the launch-shape
+	// gate compares it against the injected provider's vendor, so a Codex-hardcoded
+	// value would make a Claude source reject every request before launch.
 	return VendorInstructions{
-		Vendor:   domain.AgentVendorCodex,
+		Vendor:   s.reviewProvider().vendor(),
 		Delivery: domain.VendorInstructionDeliveryAppendFile,
 		Present:  true, Digest: binding.ResultDigest, Body: reconstructed,
 	}, path, nil
@@ -556,7 +587,7 @@ func (s *CodexReviewSource) Inspect(
 ) (exec.Status, error) {
 	outcome, ready, err := s.cfg.Journal.GetCodexReviewOutcome(ctx, string(id))
 	if err == nil {
-		if err := outcome.Validate(); err != nil {
+		if err := errors.Join(outcome.Validate(), outcome.verifyCompletionEvidence(s.reviewProvider())); err != nil {
 			return "", &exec.ReviewSourceFailure{Class: domain.ReviewFailureContradiction, Err: err}
 		}
 		if outcome.InvocationID != id {
@@ -652,7 +683,7 @@ func (s *CodexReviewSource) Inspect(
 		}
 	} else {
 		outcome = s.normalizeCollection(id, request, collection)
-		if err := outcome.Validate(); err != nil {
+		if err := errors.Join(outcome.Validate(), outcome.verifyCompletionEvidence(s.reviewProvider())); err != nil {
 			// A collected result that fails validation is a content contradiction
 			// inside a healthy topology: the reviewer answered, the answer is
 			// unusable. Persist it as a durable failure and finish authenticated
@@ -739,7 +770,7 @@ func (s *CodexReviewSource) normalizeCollection(
 	evidenceBytes = fmt.Appendf(evidenceBytes, ":%d", collection.ExitStatus)
 	collectionEvidence := domain.Digest(contentaddr.Sum(evidenceBytes))
 	if collection.ExitStatus != 0 {
-		class, terminalMessage := classifyCodexTerminalFailure(collection.Events)
+		class, terminalMessage := classifyReviewTerminalFailure(provider, collection.Events)
 		failure := fmt.Sprintf("Codex review exited with status %d", collection.ExitStatus)
 		if codexRefreshAttemptFailure([]byte(terminalMessage)) {
 			failure = "Codex review attempted an in-container credential refresh"
@@ -896,9 +927,12 @@ func newCodexReviewConfigurationEnvelope(
 	if cfg.WorkspaceTarget == "" || !digestPinnedImagePattern.MatchString(cfg.ApprovedImage) ||
 		!digestPinnedImagePattern.MatchString(cfg.ObserverImage) || cfg.Model == "" ||
 		cfg.ReasoningEffort == "" || len(cfg.ProviderEndpoints) == 0 ||
-		cfg.AccessTokenLifetimeFloor <= 0 || codexAuthRefreshThreshold(cfg) <= cfg.AccessTokenLifetimeFloor ||
-		workspaceSizeMB <= 0 || !authMode.valid() || authIdentityID == "" ||
-		costOwner == "" {
+		workspaceSizeMB <= 0 || !authMode.valid() || !provider.acceptsAuthMode(authMode) ||
+		authIdentityID == "" || costOwner == "" {
+		return codexReviewConfigurationEnvelope{}, ErrInvalidCodexReviewSpec
+	}
+	if provider.requiresExpiringCredential() &&
+		(cfg.AccessTokenLifetimeFloor <= 0 || codexAuthRefreshThreshold(cfg) <= cfg.AccessTokenLifetimeFloor) {
 		return codexReviewConfigurationEnvelope{}, ErrInvalidCodexReviewSpec
 	}
 	endpoints := slices.Clone(cfg.ProviderEndpoints)
@@ -979,7 +1013,7 @@ func (s *CodexReviewSource) Poll(
 		}
 		return exec.ReviewResult{}, codexReviewResultNotReady(err)
 	}
-	if err := outcome.Validate(); err != nil {
+	if err := errors.Join(outcome.Validate(), outcome.verifyCompletionEvidence(s.reviewProvider())); err != nil {
 		return exec.ReviewResult{}, &exec.ReviewSourceFailure{
 			Class: domain.ReviewFailureContradiction, Err: err,
 		}
@@ -1167,7 +1201,7 @@ func (s *CodexReviewSource) reconcileRejectedRequest(
 ) error {
 	outcome, ready, err := s.cfg.Journal.GetCodexReviewOutcome(ctx, string(id))
 	if err == nil {
-		if validateErr := outcome.Validate(); validateErr != nil || outcome.InvocationID != id {
+		if validateErr := errors.Join(outcome.Validate(), outcome.verifyCompletionEvidence(s.reviewProvider())); validateErr != nil || outcome.InvocationID != id {
 			return &exec.ReviewSourceFailure{
 				Class: domain.ReviewFailureContradiction,
 				Err:   errors.Join(validateErr, domain.ErrParentKeyMismatch),
@@ -1310,6 +1344,29 @@ func classifyCodexObservationFailure(err error) domain.ReviewFailureClass {
 }
 
 func classifyCodexTerminalFailure(events []byte) (domain.ReviewFailureClass, string) {
+	return classifyReviewTerminalFailure(codexReviewProvider{}, events)
+}
+
+func classifyReviewTerminalFailure(
+	provider reviewProvider, events []byte,
+) (domain.ReviewFailureClass, string) {
+	message := provider.terminalFailureMessage(events)
+	text := strings.ToLower(message)
+	switch {
+	case codexRefreshAttemptFailure([]byte(message)):
+		return domain.ReviewFailureConfiguration, message
+	case strings.Contains(text, "quota"), strings.Contains(text, "rate limit"),
+		strings.Contains(text, "too many requests"):
+		return domain.ReviewFailureQuota, message
+	case strings.Contains(text, "authentication"), strings.Contains(text, "unauthorized"),
+		strings.Contains(text, "invalid api key"), strings.Contains(text, "configuration"):
+		return domain.ReviewFailureConfiguration, message
+	default:
+		return domain.ReviewFailureTransient, message
+	}
+}
+
+func codexTerminalFailureMessage(events []byte) string {
 	var message string
 	for line := range bytes.SplitSeq(events, []byte("\n")) {
 		var terminal struct {
@@ -1326,20 +1383,7 @@ func classifyCodexTerminalFailure(events []byte) (domain.ReviewFailureClass, str
 		}
 		message = terminal.Error.Message
 	}
-
-	text := strings.ToLower(message)
-	switch {
-	case codexRefreshAttemptFailure([]byte(message)):
-		return domain.ReviewFailureConfiguration, message
-	case strings.Contains(text, "quota"), strings.Contains(text, "rate limit"),
-		strings.Contains(text, "too many requests"):
-		return domain.ReviewFailureQuota, message
-	case strings.Contains(text, "authentication"), strings.Contains(text, "unauthorized"),
-		strings.Contains(text, "invalid api key"), strings.Contains(text, "configuration"):
-		return domain.ReviewFailureConfiguration, message
-	default:
-		return domain.ReviewFailureTransient, message
-	}
+	return message
 }
 
 func codexRefreshAttemptFailure(events []byte) bool {

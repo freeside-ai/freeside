@@ -1181,7 +1181,7 @@ func TestBackendCodexReviewAuthenticatesAndReconstructsBeforeStart(t *testing.T)
 	if !startedAfterDurableBinding {
 		t.Fatal("review container was not started")
 	}
-	if err := launch.Binding.validateShape(); err != nil {
+	if err := launch.Binding.validateShape(codexReviewProvider{}); err != nil {
 		t.Fatalf("started binding = %v", err)
 	}
 	rt.mu.Lock()
@@ -2754,7 +2754,7 @@ func TestBuildCodexReviewAgentSpecConforms(t *testing.T) {
 	if err := validateCodexReviewAgentSpec(cfg, req, spec, binding); err != nil {
 		t.Fatalf("generated topology fails its conformance check: %v", err)
 	}
-	if err := binding.validateShape(); err == nil {
+	if err := binding.validateShape(codexReviewProvider{}); err == nil {
 		t.Fatal("prepared journal binding passed reconstruction before the pre-start observation")
 	}
 	finalBinding := binding
@@ -2764,12 +2764,12 @@ func TestBuildCodexReviewAgentSpecConforms(t *testing.T) {
 	finalBinding.ReviewContainer = codexReviewContainerName(req.RunID)
 	finalBinding.ReviewContainerFingerprint = "2026-08-03T12:00:05Z"
 	finalBinding.ReviewOwnershipToken = testOwnershipLabel().Value
-	if err := finalBinding.validateShape(); err != nil {
+	if err := finalBinding.validateShape(codexReviewProvider{}); err != nil {
 		t.Fatalf("complete journal binding fails reconstruction validation: %v", err)
 	}
 	wrongComposition := finalBinding
 	wrongComposition.InstructionCompositionVersion = "codex_explicit_bundle_v0"
-	if err := wrongComposition.validateShape(); err == nil {
+	if err := wrongComposition.validateShape(codexReviewProvider{}); err == nil {
 		t.Error("journal binding accepted a different instruction composition version")
 	}
 	wrongSources := binding
@@ -2780,18 +2780,18 @@ func TestBuildCodexReviewAgentSpecConforms(t *testing.T) {
 	}
 	reusedBinding := finalBinding
 	reusedBinding.AgentsShadowPreStartObserverFingerprint = reusedBinding.AgentsShadowObserverFingerprint
-	if err := reusedBinding.validateShape(); err == nil {
+	if err := reusedBinding.validateShape(codexReviewProvider{}); err == nil {
 		t.Error("journal binding accepted a reused observer fingerprint")
 	}
 	widenedNetwork := finalBinding
 	widenedNetwork.ProviderNetworkHostOnly = false
-	if err := widenedNetwork.validateShape(); err == nil {
+	if err := widenedNetwork.validateShape(codexReviewProvider{}); err == nil {
 		t.Error("journal binding accepted a non-host-only provider network")
 	}
 	reboundNetwork := finalBinding
 	reboundNetwork.ProviderNetworkGateway = "127.0.0.2"
 	reboundNetwork.ProviderProxyAuthority = "127.0.0.2:43123"
-	if err := reboundNetwork.validateShape(); err == nil {
+	if err := reboundNetwork.validateShape(codexReviewProvider{}); err == nil {
 		t.Error("journal binding accepted a proxy rebound away from the attested gateway")
 	}
 	for _, target := range []string{
@@ -2802,7 +2802,7 @@ func TestBuildCodexReviewAgentSpecConforms(t *testing.T) {
 		poisonedBinding := finalBinding
 		poisonedBinding.WorkspaceTarget = target
 		poisonedBinding.AgentsShadowTargets = codexAgentsShadowTargets(target, codexWorkspaceAgentsDir)
-		if err := poisonedBinding.validateShape(); err == nil {
+		if err := poisonedBinding.validateShape(codexReviewProvider{}); err == nil {
 			t.Errorf("journal binding accepted unsafe workspace target %q", target)
 		}
 	}
@@ -2993,7 +2993,7 @@ func TestBuildCodexReviewAgentSpecOmitsWorkspaceShadowWhenAgentsAbsent(t *testin
 	if want := codexAgentsShadowTargets(cfg.WorkspaceTarget, codexWorkspaceAgentsAbsent); !slices.Equal(binding.AgentsShadowTargets, want) {
 		t.Errorf("binding shadow targets = %q, want %q", binding.AgentsShadowTargets, want)
 	}
-	if err := binding.validatePrepared(); err != nil {
+	if err := binding.validatePrepared(codexReviewProvider{}); err != nil {
 		t.Errorf("prepared binding invalid: %v", err)
 	}
 	if err := validateCodexReviewAgentSpec(cfg, req, spec, binding); err != nil {
@@ -3014,17 +3014,17 @@ func TestCodexReviewBindingRejectsTopologyEntryMismatch(t *testing.T) {
 	}
 	flipped := binding
 	flipped.WorkspaceAgentsEntry = codexWorkspaceAgentsAbsent
-	if err := flipped.validatePrepared(); err == nil {
+	if err := flipped.validatePrepared(codexReviewProvider{}); err == nil {
 		t.Error("binding accepted an entry that disagrees with its stored target set")
 	}
 	reduced := binding
 	reduced.AgentsShadowTargets = codexAgentsShadowTargets(cfg.WorkspaceTarget, codexWorkspaceAgentsAbsent)
-	if err := reduced.validatePrepared(); err == nil {
+	if err := reduced.validatePrepared(codexReviewProvider{}); err == nil {
 		t.Error("binding accepted a target set that disagrees with its recorded entry")
 	}
 	empty := binding
 	empty.WorkspaceAgentsEntry = ""
-	if err := empty.validatePrepared(); err == nil {
+	if err := empty.validatePrepared(codexReviewProvider{}); err == nil {
 		t.Error("binding accepted an unrecorded workspace .agents entry")
 	}
 
@@ -3059,27 +3059,27 @@ func TestCodexReviewLegacyV2BindingAuthenticatesTeardownOnly(t *testing.T) {
 	binding.WorkspacePreStartObserverFingerprint = "pre-start-workspace"
 	binding.SnapshotPreStartObserverFingerprint = "pre-start-snapshot"
 	binding.AgentsShadowPreStartObserverFingerprint = "pre-start-shadow"
-	if err := binding.validateShape(); err != nil {
+	if err := binding.validateShape(codexReviewProvider{}); err != nil {
 		t.Fatalf("v3 binding shape: %v", err)
 	}
 
 	legacy := binding
 	legacy.TopologyVersion = codexReviewTopologyVersionV2
 	legacy.WorkspaceAgentsEntry = ""
-	if err := legacy.validateForTeardown(); err != nil {
+	if err := legacy.validateForTeardown(codexReviewProvider{}); err != nil {
 		t.Errorf("legacy v2 binding failed teardown authentication: %v", err)
 	}
-	if err := legacy.validateShape(); err == nil {
+	if err := legacy.validateShape(codexReviewProvider{}); err == nil {
 		t.Error("legacy v2 binding validated outside teardown")
 	}
 	downgraded := binding
 	downgraded.TopologyVersion = codexReviewTopologyVersionV2
-	if err := downgraded.validateShape(); err == nil {
+	if err := downgraded.validateShape(codexReviewProvider{}); err == nil {
 		t.Error("v2 topology version validated outside teardown")
 	}
 	unversioned := binding
 	unversioned.WorkspaceAgentsEntry = ""
-	if err := unversioned.validateForTeardown(); err == nil {
+	if err := unversioned.validateForTeardown(codexReviewProvider{}); err == nil {
 		t.Error("v3 binding without a recorded entry authenticated teardown")
 	}
 }
