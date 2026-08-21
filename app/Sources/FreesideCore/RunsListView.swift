@@ -29,17 +29,31 @@ struct RunsListView: View {
             .padding(.bottom, 8)
 
             if visibleRuns.isEmpty {
-                ContentUnavailableView(
-                    "No runs", systemImage: "point.3.connected.trianglepath.dotted",
-                    description: Text("Runs for this project will appear here."))
+                ContentUnavailableView {
+                    Label {
+                        Text("No runs").font(FreesideFont.title)
+                    } icon: {
+                        Image(systemName: "point.3.connected.trianglepath.dotted")
+                    }
+                } description: {
+                    Text("Runs for this project will appear here.").font(FreesideFont.callout)
+                }
+                .foregroundStyle(Color.inkDim)
             } else {
                 List(visibleRuns, id: \.run.id, selection: $selection) { snapshot in
                     RunRowView(
                         run: snapshot.run,
                         schedules: schedules.filter {
                             $0.schedule.run_id == snapshot.run.id && $0.schedule.status == .armed
-                        })
+                        },
+                        isSelected: selection == snapshot.run.id
+                    )
+                    .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
         }
         .navigationTitle("Runs")
@@ -70,25 +84,29 @@ struct RunsListView: View {
     }
 }
 
+/// One run as a ground-2 card; the selected row's border turns
+/// accent-dim in place of the platform selection highlight.
 private struct RunRowView: View {
     let run: Components.Schemas.Run
     let schedules: [Components.Schemas.ScheduleSnapshot]
+    var isSelected = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline) {
                 Text(run.project_id)
-                    .font(.headline)
+                    .font(FreesideFont.itemTitle)
+                    .foregroundStyle(Color.ink)
                 Spacer()
                 RunOutcomeBadge(outcome: run.outcome)
             }
             Text(run.id)
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
+                .font(FreesideFont.monoCaption)
+                .foregroundStyle(Color.inkFaint)
             if let campaign = RunDisplay.campaign(run) {
                 Text(campaign)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                    .font(FreesideFont.monoCaption)
+                    .foregroundStyle(Color.inkFaint)
             }
             HStack(spacing: 8) {
                 if let stage = run.stages.last {
@@ -101,12 +119,14 @@ private struct RunRowView: View {
                     Text(RunDisplay.label(milestone))
                 }
                 if let hold = run.hold_reason?.value1 {
+                    // A hold is attention; on a failed or lost run it
+                    // reads as part of the failure and keeps wax.
                     Label(RunDisplay.label(hold), systemImage: "pause.circle.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(holdIsFailure ? Color.wax : Color.accent)
                 }
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .font(FreesideFont.caption)
+            .foregroundStyle(Color.inkDim)
             if !schedules.isEmpty {
                 HStack(spacing: 6) {
                     ForEach(schedules, id: \.schedule.id) { snapshot in
@@ -115,50 +135,62 @@ private struct RunRowView: View {
                 }
             }
         }
-        .padding(.vertical, 3)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .freesideCard(border: isSelected ? .accentDim : .rule)
+    }
+
+    private var holdIsFailure: Bool {
+        switch run.outcome {
+        case .failed, .lost: true
+        case .unobserved, .pending, .published, .blocked: false
+        }
     }
 }
 
+/// Ready is quiet in hue but full contrast (a neutral tick in the text
+/// color, never green or the accent), in progress is water, blocked is
+/// the accent, failed and lost are wax, not observed is a dashed faint.
 struct RunOutcomeBadge: View {
     let outcome: Components.Schemas.RunOutcome
 
     var body: some View {
-        Text(RunDisplay.label(outcome))
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .foregroundStyle(color)
-            .background(color.opacity(0.14), in: Capsule())
+        StateChip(
+            label: RunDisplay.label(outcome), color: color, dashed: outcome == .unobserved,
+            glyph: outcome == .published ? "✓" : nil)
     }
 
     private var color: Color {
         switch outcome {
-        case .unobserved: .secondary
-        case .pending: .blue
-        case .published: .green
-        case .blocked: .orange
-        case .failed, .lost: .red
+        case .unobserved: .inkFaint
+        case .pending: .water
+        case .published: .ink
+        case .blocked: .accent
+        case .failed, .lost: .wax
         }
     }
 }
 
+/// A ground-3 pill: mono, kind and fire time joined by a middle dot.
 private struct ScheduleBadge: View {
     let schedule: Components.Schemas.Schedule
 
     var body: some View {
-        Label {
+        Group {
             if let fireAt = schedule.fire_at {
-                Text("\(RunDisplay.label(schedule.kind)) \(fireAt.formatted(date: .omitted, time: .shortened))")
+                Text("\(RunDisplay.label(schedule.kind)) · \(fireAt.formatted(date: .omitted, time: .shortened))")
             } else {
                 Text(RunDisplay.label(schedule.kind))
             }
-        } icon: {
-            Image(systemName: schedule.fire_at == nil ? "eye" : "clock")
         }
-        .font(.caption2)
-        .padding(.horizontal, 6)
+        .font(FreesideFont.chip)
+        .textCase(.lowercase)
+        .lineLimit(1)
+        .fixedSize()
+        .foregroundStyle(Color.inkDim)
+        .padding(.horizontal, 7)
         .padding(.vertical, 3)
-        .background(.quaternary, in: Capsule())
+        .background(Color.ground3, in: Capsule())
     }
 }
 
