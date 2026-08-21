@@ -50,6 +50,12 @@ type CodexReviewSourceConfig struct {
 	ConfigurationDigest  domain.Digest
 	CostOwner            string
 	Now                  func() time.Time
+
+	// provider supplies the vendor-varying labels, version tags, and review
+	// command. It is unexported so external callers cannot set it; the
+	// constructor defaults it to the Codex provider, and the same-package Claude
+	// runtime (#865) injects its own.
+	provider reviewProvider
 }
 
 // CodexReviewInstructionArtifacts is the content-addressed closure used to
@@ -127,8 +133,11 @@ func NewCodexReviewSource(cfg CodexReviewSourceConfig) (*CodexReviewSource, erro
 		!contentaddr.Valid(string(cfg.ConfigurationDigest)) || cfg.CostOwner == "" {
 		return nil, errors.New("codex review source: incomplete configuration")
 	}
-	digest, err := CodexReviewConfigurationDigest(
-		cfg.Review, cfg.WorkspaceSizeMB, cfg.AuthMode, cfg.AuthIdentityID,
+	if cfg.provider == nil {
+		cfg.provider = codexReviewProvider{}
+	}
+	digest, err := reviewConfigurationDigest(
+		cfg.provider, cfg.Review, cfg.WorkspaceSizeMB, cfg.AuthMode, cfg.AuthIdentityID,
 		cfg.CostOwner,
 	)
 	if err != nil || digest != cfg.ConfigurationDigest {
@@ -709,10 +718,21 @@ func (s *CodexReviewSource) finishCleanup(
 	return s.cfg.Journal.MarkCodexReviewOutcomeReady(ctx, string(id))
 }
 
+// reviewProvider returns the source's vendor seam, defaulting to Codex when a
+// direct struct construction (e.g. a focused test) left it unset. Construction
+// through NewCodexReviewSource always populates it.
+func (s *CodexReviewSource) reviewProvider() reviewProvider {
+	if s.cfg.provider != nil {
+		return s.cfg.provider
+	}
+	return codexReviewProvider{}
+}
+
 func (s *CodexReviewSource) normalizeCollection(
 	id domain.InvocationID, req exec.ReviewRequest, collection CodexReviewCollection,
 ) CodexReviewSourceOutcome {
-	evidenceBytes := fmt.Appendf(nil, "codex-review-completion-v1:%d:", len(collection.Events))
+	provider := s.reviewProvider()
+	evidenceBytes := fmt.Appendf(nil, "%s:%d:", provider.completionEvidenceVersion(), len(collection.Events))
 	evidenceBytes = append(evidenceBytes, collection.Events...)
 	evidenceBytes = fmt.Appendf(evidenceBytes, ":%d:", len(collection.Result))
 	evidenceBytes = append(evidenceBytes, collection.Result...)
@@ -802,19 +822,19 @@ func (s *CodexReviewSource) normalizeCollection(
 		sum := sha256.Sum256([]byte(identity))
 		findings[i] = domain.Finding{
 			ID: domain.FindingID(fmt.Sprintf("review-%x", sum[:12])), RunID: req.RunID,
-			Source: "codex_local", Severity: severity, Location: &location,
+			Source: provider.sourceLabel(), Severity: severity, Location: &location,
 			Message: item.Explanation, RawText: item.Explanation, CreatedAt: completedAt,
 		}
 	}
 	result := exec.ReviewResult{
 		InvocationID: id, BaseSHA: req.BaseSHA, HeadSHA: req.HeadSHA,
-		Provider: "openai", ModelConfiguration: s.cfg.Review.Model + "/" + s.cfg.Review.ReasoningEffort,
+		Provider: provider.providerLabel(), ModelConfiguration: s.cfg.Review.Model + "/" + s.cfg.Review.ReasoningEffort,
 		ConfigurationDigest: s.cfg.ConfigurationDigest,
 		InstructionDigest:   req.Instructions.ResultDigest,
 		CostOwner:           s.cfg.CostOwner, CompletedAt: completedAt,
 		Findings: findings,
 	}
-	result.CompletionEvidence, _ = CodexReviewResultEvidence(result, collectionEvidence)
+	result.CompletionEvidence, _ = reviewResultEvidence(provider, result, collectionEvidence)
 	return CodexReviewSourceOutcome{
 		InvocationID: id, Result: &result, CollectionEvidence: collectionEvidence,
 	}
@@ -825,12 +845,18 @@ func (s *CodexReviewSource) normalizeCollection(
 func CodexReviewResultEvidence(
 	result exec.ReviewResult, collectionEvidence domain.Digest,
 ) (domain.Digest, error) {
+	return reviewResultEvidence(codexReviewProvider{}, result, collectionEvidence)
+}
+
+func reviewResultEvidence(
+	provider reviewProvider, result exec.ReviewResult, collectionEvidence domain.Digest,
+) (domain.Digest, error) {
 	result.CompletionEvidence = ""
 	body, err := json.Marshal(struct {
 		Version            string            `json:"version"`
 		CollectionEvidence domain.Digest     `json:"collection_evidence"`
 		Result             exec.ReviewResult `json:"result"`
-	}{"codex-review-result-v3", collectionEvidence, result})
+	}{provider.resultEvidenceVersion(), collectionEvidence, result})
 	if err != nil {
 		return "", err
 	}
@@ -860,6 +886,7 @@ type codexReviewConfigurationEnvelope struct {
 }
 
 func newCodexReviewConfigurationEnvelope(
+	provider reviewProvider,
 	cfg CodexReviewConfig,
 	workspaceSizeMB int64,
 	authMode CodexAuthMode,
@@ -877,17 +904,17 @@ func newCodexReviewConfigurationEnvelope(
 	endpoints := slices.Clone(cfg.ProviderEndpoints)
 	slices.Sort(endpoints)
 	return codexReviewConfigurationEnvelope{
-		Version: "codex-review-configuration-v3", Topology: codexReviewTopologyVersion,
+		Version: provider.configurationVersion(), Topology: provider.topologyVersion(),
 		ApprovedImage: cfg.ApprovedImage, ObserverImage: cfg.ObserverImage,
 		WorkspaceTarget: cfg.WorkspaceTarget, WorkspaceSizeMB: workspaceSizeMB,
 		ProviderEndpoints: endpoints, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort,
 		AccessTokenLifetimeFloor:    int64(cfg.AccessTokenLifetimeFloor),
 		AccessTokenRefreshThreshold: int64(codexAuthRefreshThreshold(cfg)), AuthMode: authMode,
 		AuthIdentityID: authIdentityID, CostOwner: costOwner,
-		CommandTemplateDigest: digestStrings(codexReviewCommand(
+		CommandTemplateDigest: digestStrings(provider.reviewCommand(
 			cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, "<runtime-review-prompt>",
 		)),
-		PromptProtocol: codexProductionReviewPromptVersion,
+		PromptProtocol: provider.promptProtocol(),
 	}, nil
 }
 
@@ -908,8 +935,21 @@ func CodexReviewConfigurationDigest(
 	authIdentityID domain.AuthIdentityID,
 	costOwner string,
 ) (domain.Digest, error) {
+	return reviewConfigurationDigest(
+		codexReviewProvider{}, cfg, workspaceSizeMB, authMode, authIdentityID, costOwner,
+	)
+}
+
+func reviewConfigurationDigest(
+	provider reviewProvider,
+	cfg CodexReviewConfig,
+	workspaceSizeMB int64,
+	authMode CodexAuthMode,
+	authIdentityID domain.AuthIdentityID,
+	costOwner string,
+) (domain.Digest, error) {
 	envelope, err := newCodexReviewConfigurationEnvelope(
-		cfg, workspaceSizeMB, authMode, authIdentityID, costOwner,
+		provider, cfg, workspaceSizeMB, authMode, authIdentityID, costOwner,
 	)
 	if err != nil {
 		return "", err

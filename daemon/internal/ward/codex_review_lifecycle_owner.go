@@ -48,6 +48,12 @@ type CodexReviewLifecycle struct {
 	cfg                       codexReviewLifecycleConfig
 	authorizeRuntimeResources RuntimeResourceAuthorizer
 
+	// provider supplies the vendor-varying launch decisions (review command,
+	// topology-version tag). It is unexported so external callers cannot set it;
+	// NewCodexReviewLifecycle defaults it to the Codex provider, and the
+	// same-package Claude runtime (#865) injects its own.
+	provider reviewProvider
+
 	// codexReviewMu guards per-run lifecycle gates. A rejected request must not
 	// recover a preparing intent while the in-process launch still creates and
 	// journals resources under that same durable owner.
@@ -73,12 +79,23 @@ func NewCodexReviewLifecycle(
 		runtimeOps:                newRuntimeOps(rt, cfg),
 		cfg:                       newCodexReviewLifecycleConfig(cfg),
 		authorizeRuntimeResources: authorizeRuntimeResources,
+		provider:                  codexReviewProvider{},
 		codexReviewRuns:           map[string]chan struct{}{},
 	}, nil
 }
 
 func (l *CodexReviewLifecycle) valid() bool {
 	return l != nil && l.rt != nil && l.codexReviewRuns != nil
+}
+
+// reviewProvider returns the lifecycle's vendor seam, defaulting to Codex when
+// a direct struct construction (e.g. a focused test) left it unset.
+// NewCodexReviewLifecycle always populates it.
+func (l *CodexReviewLifecycle) reviewProvider() reviewProvider {
+	if l.provider != nil {
+		return l.provider
+	}
+	return codexReviewProvider{}
 }
 
 func (l *CodexReviewLifecycle) authorizeRuntime(

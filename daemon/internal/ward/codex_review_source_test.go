@@ -3275,7 +3275,7 @@ func TestCodexReviewConfigurationDigestBindsEffectiveInputs(t *testing.T) {
 		t.Fatal("cost owner change did not change configuration digest")
 	}
 	envelope, err := newCodexReviewConfigurationEnvelope(
-		cfg, 64, request.AuthMode, request.AuthIdentityID, "subscription:owner",
+		codexReviewProvider{}, cfg, 64, request.AuthMode, request.AuthIdentityID, "subscription:owner",
 	)
 	if err != nil {
 		t.Fatal(err)
