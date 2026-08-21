@@ -953,6 +953,69 @@ import Testing
         #expect(resolved.item.decided_at != nil)
     }
 
+    @Test func findingAdjudicationAcceptAndAlternativeChoiceResolve() async throws {
+        for (id, action, choices) in [
+            (
+                "cmd-accept-finding",
+                Components.Schemas.Action.accept_recommended_route,
+                Optional<[Components.Schemas.AlternativeChoice]>.none
+            ),
+            (
+                "cmd-choose-finding",
+                .choose_alternative_route,
+                [.init(finding_id: "review-finding-17", route: .dispute)]
+            ),
+        ] {
+            var seed = AttentionFixtures.fixture(type: .finding_adjudication)
+            seed.item.id += "-\(id)"
+            let server = MockServer(items: [seed])
+            let client = APIClientFactory.mock(server: server)
+            var command = Self.command(id: id, against: seed, action: action)
+            command.payload.alternative_choices = choices
+
+            let result = try await client.submitCommand(body: .json(command)).ok.body.json
+            let resolved = try await client.getAttentionItem(
+                path: .init(item_id: seed.item.id)
+            ).ok.body.json
+
+            #expect(result.record.action == action)
+            #expect(resolved.item.status == .resolved)
+        }
+    }
+
+    @Test func findingAdjudicationRejectsUnofferedChoice() async throws {
+        let seed = AttentionFixtures.fixture(type: .finding_adjudication)
+        let server = MockServer(items: [seed])
+        let client = APIClientFactory.mock(server: server)
+        var command = Self.command(
+            id: "cmd-unoffered-finding", against: seed, action: .choose_alternative_route)
+        command.payload.alternative_choices = [
+            .init(finding_id: "review-finding-17", route: .decline)
+        ]
+
+        let response = try await client.submitCommand(body: .json(command))
+        guard case .undocumented(let status, _) = response else {
+            Issue.record("unoffered adjudication choice was accepted: \(response)")
+            return
+        }
+        #expect(status == 400)
+        #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .open)
+    }
+
+    @Test func staleFindingAcceptReturnsTheReplacement() async throws {
+        let seed = AttentionFixtures.fixture(type: .finding_adjudication)
+        let server = MockServer(items: [seed])
+        let client = APIClientFactory.mock(server: server)
+        let command = Self.command(
+            id: "cmd-stale-finding", against: seed, action: .accept_recommended_route)
+        await server.advance(itemID: seed.item.id)
+
+        let rejection = try await client.submitCommand(body: .json(command)).conflict.body.json
+
+        #expect(rejection.replacement_item.entity_version == seed.entity_version + 1)
+        #expect(rejection.replacement_item.item.status == .open)
+    }
+
     static func command(
         id: String,
         against snapshot: Components.Schemas.AttentionItemSnapshot,

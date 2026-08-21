@@ -303,6 +303,11 @@ public struct MockServerTransport: ClientTransport {
                     status: .badRequest,
                     body: Components.Schemas._Error(message: rejection.reason)
                 )
+            } catch let rejection as MockServer.InvalidFindingAdjudicationDecisionError {
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(message: rejection.reason)
+                )
             } catch let rejection as MockServer.ItemPolicyError {
                 return try Self.json(
                     status: .unprocessableContent,

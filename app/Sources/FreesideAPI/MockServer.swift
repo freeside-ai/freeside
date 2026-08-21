@@ -66,6 +66,7 @@ public actor MockServer {
         let attachments: [String]
         let runProposalRevision: Components.Schemas.RunProposalRevisionInput?
         let snoozeUntil: Date?
+        let alternativeChoices: [Components.Schemas.AlternativeChoice]
 
         init(_ command: Components.Schemas.ClientCommand) {
             commandID = command.command_id
@@ -82,6 +83,9 @@ public actor MockServer {
             attachments = command.payload.attachments ?? []
             runProposalRevision = command.payload.run_proposal_revision?.value1
             snoozeUntil = command.payload.snooze_until
+            alternativeChoices = (command.payload.alternative_choices ?? []).sorted {
+                $0.finding_id < $1.finding_id
+            }
         }
     }
 
@@ -530,6 +534,10 @@ public actor MockServer {
     }
 
     public struct InvalidProposalDecisionError: Error {
+        public let reason: String
+    }
+
+    public struct InvalidFindingAdjudicationDecisionError: Error {
         public let reason: String
     }
 
@@ -982,6 +990,23 @@ public actor MockServer {
             guard let until = payload.snooze_until, until > currentTime else {
                 throw MalformedCommandError(
                     commandID: command.command_id, reason: "snooze_until is not in the future")
+            }
+        case .concludes(_) where payload.action == .choose_alternative_route:
+            guard let binding = current.item.finding_adjudication?.value1,
+                let choices = payload.alternative_choices
+            else {
+                throw InvalidFindingAdjudicationDecisionError(
+                    reason: "finding adjudication binding or choices are unavailable")
+            }
+            for choice in choices {
+                guard
+                    let proposal = binding.proposals.first(where: {
+                        $0.finding_id == choice.finding_id
+                    }), proposal.offered_alternatives.contains(where: { $0.route == choice.route })
+                else {
+                    throw InvalidFindingAdjudicationDecisionError(
+                        reason: "choice was not offered for finding \(choice.finding_id)")
+                }
             }
         default:
             break
