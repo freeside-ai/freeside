@@ -32,13 +32,13 @@ Mac and iOS match on every line unless a line says otherwise.
 
 | Screen | Status | Notes |
 | --- | --- | --- |
-| Pairing | Done | |
-| Inbox | Done | Rebuilds fully once a missed notification is detected; today the 15-second heartbeat detects it, and a refresh on return to foreground is Not yet (plan §5.14). |
-| Decision detail | Done | Generic layout; per-card layouts are tracked under Cards. |
-| Freshness banner | Done | |
-| Run list | Done | Filter by project; shows attached watches and deadlines. |
-| Run timeline | Done | |
-| Mac menu bar | Done | Daemon readiness today; doctor results and 1B.1 signals come later (plan §10). |
+| Pairing | Done | §15 styling: serif title on iOS, wax failure label, accent button. |
+| Inbox | Done | §15 styling: card rows, bordered priority and status chips. Rebuilds fully once a missed notification is detected; today the 15-second heartbeat detects it, and a refresh on return to foreground is Not yet (plan §5.14). |
+| Decision detail | Done | Generic layout; per-card layouts are tracked under Cards. §15 styling: bordered action buttons, quiet-neutral applied banner, dashed claims section. |
+| Freshness banner | Done | §15 styling: tinted wash with a mono keyword; unreachable and sync-failing take the accent, revoked takes wax. |
+| Run list | Done | Filter by project; shows attached watches and deadlines. §15 styling: outcome chips (ready is quiet, in progress water, blocked accent, failed wax, not observed dashed). |
+| Run timeline | Done | §15 styling: accent-washed hold card, milestone rail, invocation status chips. |
+| Mac menu bar | Done | Mono key template icon with the badge dot top-right; state line, facts, and explanation first, actions and Quit grouped last. Daemon readiness today; doctor results and 1B.1 signals come later (plan §10). |
 | Conversation / Discuss | Not yet | API exists (`getConversation`, `uploadAttachment`); no UI. Plan §5.14. |
 | Evidence packet viewer | Not yet | Detail view shows an evidence section; the full provenance-labeled viewer is missing. Plan §9, §5.15. |
 | Spec and diff viewer | Not yet | Diff from last reviewed version, prior comments, claimed addressals. Plan §4, §9. |
@@ -100,7 +100,7 @@ user sees.
 | Metadata in protected storage, only the device credential in Keychain, attachments never written to disk | Done |
 | Loopback and Tailscale transports | Done, but each endpoint pairs separately today; switching without re-pairing is Not yet |
 | Relay transport, surviving host takeover without re-pairing (plan §5.19) | Later |
-| Light (Freeside) and dark (Straylight) palettes; status colors never borrow the accent (plan §15) | Not yet; views use platform colors, and the accent marks only emphasis (latest timeline milestone). The Mac icon carries the §15 colors; iOS has no icon |
+| Light (Freeside) and dark (Straylight) palettes; status colors never borrow the accent (plan §15) | Done for every Done screen: tokens, the three faces, bordered state chips, and quiet-neutral success (`devlog/2026-08-21-1430-design-language-restyle.md`); the macOS window title and segmented controls stay system chrome. iOS has no icon |
 | Schedules synced and shown on the run list | Done; a schedules page is Later |
 | "Opened" receipts per delivery, and drill-down counts per card (plan §5.14, §8) | Not yet; API exists (`reportDeliveryOpened`) |
 | Device revocation | Not yet; API exists (`revokeDevice`), no screen |
