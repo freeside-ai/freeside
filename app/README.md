@@ -104,7 +104,7 @@ Repeat with `-FreesideColorScheme dark` into `dark.png`, then compare the two `s
 - `Sources/FreesideAPI` owns the generated client surface, the stateful mock server and its transport, and the per-type attention fixtures. Apple Swift OpenAPI Generator produces client and type source at build time from the schema mirror in that target.
 - `Sources/FreesideCore` contains shared SwiftUI presentation code.
 - `Tests/FreesideAPITests` exercises the generated client through the mock server, with no network or daemon; `Tests/FreesideCoreTests` covers the inbox, decision, sync, pairing, session, and daemon-menu models against the same mock, plus the cache and credential stores.
-- `Apps/macOS/AppIcon.icon` holds the macOS app icon, the §15 signet mark with explicit default and dark appearance artwork. `Apps/macOS/Info.plist` names that adaptive resource without a static icon-file fallback. Only the macOS target carries either file; iOS gains no icon here.
+- `Apps/macOS/AppIcon.icon` is the single app-icon source for both application targets: the §15 signet mark with explicit default and dark appearance artwork. `Apps/macOS/Info.plist` names that adaptive resource without a static icon-file fallback. FreesideIOS references the same document from its own Resources phase (no copy), names `AppIcon` in `Apps/iOS/Info.plist`, and sets `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` on its configurations because iOS shows the home-screen placeholder until `actool` runs with `--app-icon` and emits the `CFBundleIcons` entry SpringBoard reads.
 
 The Icon Composer document lets the system select the appearance and own the platform mask. Its default artwork is the prior light export; its dark artwork keeps that geometry but replaces the treatment with the §15 umber (`#16120E`) ground and tawny (`#C2912E`) mark. Re-derive the dark asset from the 1024-pixel default master with
 
@@ -112,7 +112,7 @@ The Icon Composer document lets the system select the appearance and own the pla
 ./scripts/generate-mac-icon.sh
 ```
 
-The mask preserves the approved mark geometry and its cutouts; the appearance change is palette-only. Xcode compiles the one document into the installed bundle's platform and appearance renditions. Keep the document as a normal resource and `CFBundleIconName` in `Info.plist` authoritative: asking the asset compiler to emit a standalone primary icon adds `CFBundleIconFile`, and Finder then prefers that static fallback over the appearance-aware catalog.
+The mask preserves the approved mark geometry and its cutouts; the appearance change is palette-only. Xcode compiles the one document into each installed bundle's platform and appearance renditions. On macOS, keep the document a normal resource with `CFBundleIconName` authoritative and leave `ASSETCATALOG_COMPILER_APPICON_NAME` unset: asking the asset compiler to emit a standalone primary icon adds `CFBundleIconFile`, and Finder then prefers that static fallback over the appearance-aware catalog. That caution is macOS-only; FreesideIOS sets the setting deliberately (above), because SpringBoard needs the `actool`-generated icon.
 
 `Sources/FreesideAPI/openapi.yaml` is a mechanical mirror of the repository contract at `../api/openapi.yaml`. Refreshing it and rebuilding the generated client is one reproducible command:
 
