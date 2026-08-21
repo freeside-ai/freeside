@@ -15,6 +15,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -504,6 +505,15 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 			SupersededProfileDigest: domain.Digest("sha256:profile-" + req.ID),
 		}
 	}
+	var findingAdjudication *domain.FindingAdjudicationBinding
+	if itemType == domain.AttentionFindingAdjudication {
+		binding, err := c.seedFindingAdjudicationAuthority(r.Context(), runID, req.ID)
+		if err != nil {
+			controlError(w, err)
+			return
+		}
+		findingAdjudication = &binding
+	}
 	createdInstant := time.Now().UTC()
 	createdAt := &createdInstant
 	if existing, err := c.service.GetAttentionItem(r.Context(), domain.ItemID(req.ID)); err == nil {
@@ -545,6 +555,7 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		ReviewRecoveryBinding:            reviewRecoveryBinding,
 		CodexReenrollmentRecoveryBinding: codexReenrollmentRecoveryBinding,
 		ReviewConfigurationRecovery:      reviewConfigurationRecovery,
+		FindingAdjudication:              findingAdjudication,
 		ItemVersion:                      req.ItemVersion,
 		InterruptionClass:                domain.InterruptionPlannedGate,
 		CreatedAt:                        createdAt,
@@ -582,6 +593,80 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	controlJSON(w, http.StatusOK, map[string]any{"revision": state.Revision})
+}
+
+func convergenceDigest(value string) domain.Digest {
+	sum := sha256.Sum256([]byte(value))
+	return domain.Digest(fmt.Sprintf("sha256:%x", sum))
+}
+
+func (c controlHandler) seedFindingAdjudicationAuthority(
+	ctx context.Context, runID domain.RunID, suffix string,
+) (domain.FindingAdjudicationBinding, error) {
+	createdAt := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	findingID := domain.FindingID("finding-" + suffix)
+	specDigest := convergenceDigest("spec-" + suffix)
+	policyDigest := convergenceDigest("policy-" + suffix)
+	instructionDigest := convergenceDigest("instructions-" + suffix)
+	finding := domain.Finding{
+		ID: findingID, RunID: runID, Source: "codex_local",
+		Location: &domain.FindingLocation{Path: "daemon/example.go", StartLine: 1, EndLine: 1},
+		Message:  "the finding contradicts the approved work unit",
+		RawText:  "the finding contradicts the approved work unit", CreatedAt: createdAt,
+	}
+	record, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: domain.InvocationID("review-" + suffix), RunID: runID, Round: 1,
+		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		ConfigurationDigest: convergenceDigest("configuration-" + suffix),
+		InstructionDigest:   instructionDigest, CostOwner: "owner",
+		BaseSHA: "beefcafe", HeadSHA: "cafebabe", CompletedAt: createdAt,
+		CompletionEvidence: convergenceDigest("completion-" + suffix),
+		Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{findingID},
+	})
+	if err != nil {
+		return domain.FindingAdjudicationBinding{}, err
+	}
+	entry, err := domain.NewModelAdjudicationEntry(
+		findingID, domain.GoalContradictory, nil, domain.RouteDecline,
+		domain.ConfidenceHigh, "the finding contradicts the approved work unit",
+		nil, []string{"AGENTS.md"}, []string{"the work contract is current"}, nil, nil,
+	)
+	if err != nil {
+		return domain.FindingAdjudicationBinding{}, err
+	}
+	artifact, err := domain.NewFindingAdjudication(
+		runID, 1, specDigest, instructionDigest, policyDigest,
+		[]domain.FindingAdjudicationEntry{entry}, createdAt,
+	)
+	if err != nil {
+		return domain.FindingAdjudicationBinding{}, err
+	}
+	if err := c.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: runID, ProjectID: "proj-convergence", SpecDigest: specDigest, PolicyDigest: policyDigest,
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutReviewRecord(ctx, record, []domain.Finding{finding}); err != nil {
+			return err
+		}
+		return tx.PutFindingAdjudication(ctx, artifact)
+	}); err != nil {
+		return domain.FindingAdjudicationBinding{}, err
+	}
+	return domain.FindingAdjudicationBinding{
+		RunID: runID, Round: 1, AdjudicationDigest: artifact.Digest,
+		Proposals: []domain.FindingAdjudicationProposal{{
+			FindingID: findingID, Producer: entry.Producer,
+			GoalRelationship: entry.GoalRelationship, Compatibility: entry.Compatibility,
+			Route: entry.Route, Rationale: entry.Rationale,
+			CitedRules: entry.CitedRules, Assumptions: entry.Assumptions,
+			OpenQuestions: entry.OpenQuestions, Confidence: entry.Confidence,
+			OfferedAlternatives: []domain.OfferedAlternative{{
+				Route: domain.RouteDispute, Consequence: "park for a human decision",
+			}},
+		}},
+	}, nil
 }
 
 type putRunRequest struct {
