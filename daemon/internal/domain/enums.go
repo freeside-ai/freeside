@@ -1344,3 +1344,266 @@ func (k ElaborationSourceKind) valid() bool {
 		return false
 	}
 }
+
+// GoalRelationship is the first FindingAdjudication axis: what the approved
+// work-unit outcome makes of one review finding (plan §7 Finding Adjudication).
+// The route is the decision; the axes are its evidence. The zero value is
+// invalid by design.
+type GoalRelationship string
+
+const (
+	GoalRequired      GoalRelationship = "required"
+	GoalAdjacent      GoalRelationship = "adjacent"
+	GoalContradictory GoalRelationship = "contradictory"
+	GoalUnclear       GoalRelationship = "unclear"
+)
+
+// AllGoalRelationships lists every valid GoalRelationship.
+var AllGoalRelationships = []GoalRelationship{
+	GoalRequired, GoalAdjacent, GoalContradictory, GoalUnclear,
+}
+
+func (g GoalRelationship) valid() bool {
+	switch g {
+	case GoalRequired, GoalAdjacent, GoalContradictory, GoalUnclear:
+		return true
+	default:
+		return false
+	}
+}
+
+// WorkUnitCompatibility is the second FindingAdjudication axis: whether the
+// repository's own rules let the proposed remediation land in this work unit
+// (plan §7). It is present exactly when the goal relationship is `required` —
+// the only case where remediating here is on the table. `allowed` is
+// representable only as an engine-derived declared-path containment verdict; a
+// model-residue entry structurally cannot carry it (see ProposedCompatibility).
+// The zero value is invalid by design.
+type WorkUnitCompatibility string
+
+const (
+	CompatibilityAllowed          WorkUnitCompatibility = "allowed"
+	CompatibilityWorkUnitRevision WorkUnitCompatibility = "work_unit_revision_required"
+	CompatibilitySeparateWork     WorkUnitCompatibility = "separate_work_required"
+	CompatibilityHumanDecision    WorkUnitCompatibility = "human_decision_required"
+	CompatibilityUnknown          WorkUnitCompatibility = "unknown"
+)
+
+// AllWorkUnitCompatibilities lists every valid WorkUnitCompatibility.
+var AllWorkUnitCompatibilities = []WorkUnitCompatibility{
+	CompatibilityAllowed, CompatibilityWorkUnitRevision, CompatibilitySeparateWork,
+	CompatibilityHumanDecision, CompatibilityUnknown,
+}
+
+func (c WorkUnitCompatibility) valid() bool {
+	switch c {
+	case CompatibilityAllowed, CompatibilityWorkUnitRevision, CompatibilitySeparateWork,
+		CompatibilityHumanDecision, CompatibilityUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// ProposedCompatibility is the model-emittable subset of WorkUnitCompatibility:
+// every member except `allowed`. A model-residue adjudication entry carries this
+// type, so `allowed` is unreachable through the model-entry constructor rather
+// than merely rejected after the fact — the deterministic declared-path
+// containment check (EngineCompatibility) is the sole producer of `allowed`
+// (plan §7). The zero value is invalid by design.
+type ProposedCompatibility string
+
+const (
+	ProposedWorkUnitRevision ProposedCompatibility = "work_unit_revision_required"
+	ProposedSeparateWork     ProposedCompatibility = "separate_work_required"
+	ProposedHumanDecision    ProposedCompatibility = "human_decision_required"
+	ProposedUnknown          ProposedCompatibility = "unknown"
+)
+
+// AllProposedCompatibilities lists every valid ProposedCompatibility.
+var AllProposedCompatibilities = []ProposedCompatibility{
+	ProposedWorkUnitRevision, ProposedSeparateWork, ProposedHumanDecision, ProposedUnknown,
+}
+
+func (c ProposedCompatibility) valid() bool {
+	switch c {
+	case ProposedWorkUnitRevision, ProposedSeparateWork, ProposedHumanDecision, ProposedUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// compatibility widens a model-proposed compatibility to the full axis. It maps
+// each proposed member to its WorkUnitCompatibility twin and, by construction,
+// never yields `allowed`, which has no ProposedCompatibility source. The switch
+// dispatches behaviour, so it omits default and the exhaustive linter forces a
+// new member to be handled; the trailing return covers the invalid zero value.
+func (c ProposedCompatibility) compatibility() WorkUnitCompatibility {
+	switch c {
+	case ProposedWorkUnitRevision:
+		return CompatibilityWorkUnitRevision
+	case ProposedSeparateWork:
+		return CompatibilitySeparateWork
+	case ProposedHumanDecision:
+		return CompatibilityHumanDecision
+	case ProposedUnknown:
+		return CompatibilityUnknown
+	}
+	return ""
+}
+
+// AdjudicationRoute is the decision a FindingAdjudication entry records; the two
+// axes are its evidence (plan §7). Exactly one route follows from each row of
+// the §7 validity table, except `contradictory`, which admits `decline` or
+// `dispute` under the ceiling rule (critical/high severity or below-threshold
+// proposal confidence). The zero value is invalid by design.
+type AdjudicationRoute string
+
+const (
+	RouteRemediate              AdjudicationRoute = "remediate"
+	RouteParkRevision           AdjudicationRoute = "park_revision"
+	RouteParkSeparateWork       AdjudicationRoute = "park_separate_work"
+	RouteAttentionHumanDecision AdjudicationRoute = "attention_human_decision"
+	RouteParkUnknown            AdjudicationRoute = "park_unknown"
+	RouteDefer                  AdjudicationRoute = "defer"
+	RouteDecline                AdjudicationRoute = "decline"
+	RouteDispute                AdjudicationRoute = "dispute"
+	RouteAttentionUnclear       AdjudicationRoute = "attention_unclear"
+)
+
+// AllAdjudicationRoutes lists every valid AdjudicationRoute.
+var AllAdjudicationRoutes = []AdjudicationRoute{
+	RouteRemediate, RouteParkRevision, RouteParkSeparateWork, RouteAttentionHumanDecision,
+	RouteParkUnknown, RouteDefer, RouteDecline, RouteDispute, RouteAttentionUnclear,
+}
+
+func (r AdjudicationRoute) valid() bool {
+	switch r {
+	case RouteRemediate, RouteParkRevision, RouteParkSeparateWork, RouteAttentionHumanDecision,
+		RouteParkUnknown, RouteDefer, RouteDecline, RouteDispute, RouteAttentionUnclear:
+		return true
+	default:
+		return false
+	}
+}
+
+// AdjudicationProducer names the origin of a FindingAdjudication entry: an
+// `engine` fast-path routing fact (no proposal, no confidence) or a `model`
+// residue proposal, which additionally records a self-assessed confidence
+// (plan §7). The zero value is invalid by design.
+type AdjudicationProducer string
+
+const (
+	AdjudicationProducerEngine AdjudicationProducer = "engine"
+	AdjudicationProducerModel  AdjudicationProducer = "model"
+)
+
+// AllAdjudicationProducers lists every valid AdjudicationProducer.
+var AllAdjudicationProducers = []AdjudicationProducer{
+	AdjudicationProducerEngine, AdjudicationProducerModel,
+}
+
+func (p AdjudicationProducer) valid() bool {
+	switch p {
+	case AdjudicationProducerEngine, AdjudicationProducerModel:
+		return true
+	default:
+		return false
+	}
+}
+
+// AdjudicationConfidence is the ordinal self-assessed proposal confidence a
+// model-residue adjudication entry records, ordered low < medium < high
+// (plan §7). It mirrors the landed classification/inference ordinal but is
+// declared in the domain package, which cannot import internal/inference; any
+// later unification is the engine unit's work. The zero value is invalid by
+// design.
+type AdjudicationConfidence string
+
+const (
+	ConfidenceLow    AdjudicationConfidence = "low"
+	ConfidenceMedium AdjudicationConfidence = "medium"
+	ConfidenceHigh   AdjudicationConfidence = "high"
+)
+
+// AllAdjudicationConfidences lists every valid AdjudicationConfidence in
+// ascending order.
+var AllAdjudicationConfidences = []AdjudicationConfidence{
+	ConfidenceLow, ConfidenceMedium, ConfidenceHigh,
+}
+
+func (c AdjudicationConfidence) valid() bool {
+	switch c {
+	case ConfidenceLow, ConfidenceMedium, ConfidenceHigh:
+		return true
+	default:
+		return false
+	}
+}
+
+// rank orders the confidence ordinal for threshold comparison; the invalid zero
+// value ranks 0, below every bounded-below dispatch threshold. The switch
+// dispatches behaviour, so it omits default with a trailing zero fallback.
+func (c AdjudicationConfidence) rank() int {
+	switch c {
+	case ConfidenceLow:
+		return 1
+	case ConfidenceMedium:
+		return 2
+	case ConfidenceHigh:
+		return 3
+	}
+	return 0
+}
+
+// meets reports whether this confidence reaches the dispatch threshold. An
+// invalid confidence (rank 0) never meets a valid threshold; threshold validity
+// is the caller's to check (see FindingAdjudicationEntry.Accepted).
+func (c AdjudicationConfidence) meets(t DispatchThreshold) bool {
+	return c.rank() >= t.rank()
+}
+
+// DispatchThreshold is the resolved-policy dispatch threshold the not-accepted
+// predicate takes as a parameter, bounded below to `medium` or `high` (never
+// `low`) and defaulting to `high` (plan §7). Resolving it from a policy key is
+// the engine unit's work, not this contract's. The zero value is invalid by
+// design.
+type DispatchThreshold string
+
+const (
+	DispatchThresholdMedium DispatchThreshold = "medium"
+	DispatchThresholdHigh   DispatchThreshold = "high"
+)
+
+// AllDispatchThresholds lists every valid DispatchThreshold in ascending order.
+var AllDispatchThresholds = []DispatchThreshold{
+	DispatchThresholdMedium, DispatchThresholdHigh,
+}
+
+// DefaultDispatchThreshold is the bounded-below default when no resolved-policy
+// key selects one. It is a var, not a typed const, so it is not itself an
+// enum member the registration ratchet would demand in AllDispatchThresholds.
+var DefaultDispatchThreshold = DispatchThresholdHigh
+
+func (t DispatchThreshold) valid() bool {
+	switch t {
+	case DispatchThresholdMedium, DispatchThresholdHigh:
+		return true
+	default:
+		return false
+	}
+}
+
+// rank orders the threshold ordinal against AdjudicationConfidence.rank; the
+// invalid zero value ranks 0. The switch dispatches behaviour, so it omits
+// default with a trailing zero fallback.
+func (t DispatchThreshold) rank() int {
+	switch t {
+	case DispatchThresholdMedium:
+		return 2
+	case DispatchThresholdHigh:
+		return 3
+	}
+	return 0
+}

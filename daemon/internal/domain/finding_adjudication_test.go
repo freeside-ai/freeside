@@ -1,0 +1,526 @@
+package domain_test
+
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/golden"
+)
+
+func adjDigest(seed string) domain.Digest {
+	return domain.Digest(contentaddr.Sum([]byte(seed)))
+}
+
+// TestAdjudicationEnumRegistrationReferences pins every new vocabulary's
+// registration slice so the enum-registration ratchet sees a test reference.
+func TestAdjudicationEnumRegistrationReferences(t *testing.T) {
+	t.Parallel()
+	if len(domain.AllGoalRelationships) != 4 ||
+		len(domain.AllWorkUnitCompatibilities) != 5 ||
+		len(domain.AllProposedCompatibilities) != 4 ||
+		len(domain.AllAdjudicationRoutes) != 9 ||
+		len(domain.AllAdjudicationProducers) != 2 ||
+		len(domain.AllAdjudicationConfidences) != 3 ||
+		len(domain.AllDispatchThresholds) != 2 {
+		t.Fatalf("adjudication vocabulary sizes changed; update the §7 fixtures")
+	}
+	if domain.DefaultDispatchThreshold != domain.DispatchThresholdHigh {
+		t.Fatalf("default dispatch threshold = %q, want high", domain.DefaultDispatchThreshold)
+	}
+}
+
+// validAdjudicationRows is the §7 validity table: the complete set of valid
+// (goal, compatibility, route) rows. Compatibility is the empty string where it
+// is absent (present exactly under `required`).
+var validAdjudicationRows = map[[3]string]struct{}{
+	{"required", "allowed", "remediate"}:                                {},
+	{"required", "work_unit_revision_required", "park_revision"}:        {},
+	{"required", "separate_work_required", "park_separate_work"}:        {},
+	{"required", "human_decision_required", "attention_human_decision"}: {},
+	{"required", "unknown", "park_unknown"}:                             {},
+	{"adjacent", "", "defer"}:                                           {},
+	{"contradictory", "", "decline"}:                                    {},
+	{"contradictory", "", "dispute"}:                                    {},
+	{"unclear", "", "attention_unclear"}:                                {},
+}
+
+// engineFastPathRows is the single §7 row an engine fast-path fact may carry:
+// the presumptive-`allowed` remediation row. The no-model fast path is
+// one-directional toward remediation; every other valid row (including the
+// `unknown` park, which is a model not-accepted representation) is model
+// residue.
+var engineFastPathRows = map[[3]string]struct{}{
+	{"required", "allowed", "remediate"}: {},
+}
+
+// TestAdjudicationRowCrossProduct enumerates every (producer × goal ×
+// compatibility-option × route) cell and asserts exactly the valid combinations
+// pass. A cell is valid when it is one of the eight §7 axis/route rows AND its
+// producer may carry that row: an engine entry only the two deterministic rows,
+// a model entry every row but the engine-only `allowed`. The rest of the cross
+// product is rejected — compatibility present exactly under `required`, the
+// route a function of the axes, and the producer/row trust boundary enforced.
+func TestAdjudicationRowCrossProduct(t *testing.T) {
+	t.Parallel()
+	compatOptions := []*domain.WorkUnitCompatibility{nil}
+	for _, c := range domain.AllWorkUnitCompatibilities {
+		compatOptions = append(compatOptions, ptr(c))
+	}
+	allowedRow := [3]string{"required", "allowed", "remediate"}
+	for _, producer := range domain.AllAdjudicationProducers {
+		valid := 0
+		for _, goal := range domain.AllGoalRelationships {
+			for _, compat := range compatOptions {
+				for _, route := range domain.AllAdjudicationRoutes {
+					compatKey := ""
+					if compat != nil {
+						compatKey = string(*compat)
+					}
+					key := [3]string{string(goal), compatKey, string(route)}
+					_, rowValid := validAdjudicationRows[key]
+					wantValid := rowValid
+					switch producer {
+					case domain.AdjudicationProducerEngine:
+						_, engineOK := engineFastPathRows[key]
+						wantValid = wantValid && engineOK
+					case domain.AdjudicationProducerModel:
+						wantValid = wantValid && key != allowedRow
+					}
+					entry := domain.FindingAdjudicationEntry{
+						FindingID: "finding-a", Producer: producer,
+						GoalRelationship: goal, Compatibility: compat, Route: route,
+						Rationale: "because",
+					}
+					// A model entry additionally requires proposal confidence;
+					// supply it so the row is judged on the axis/producer rules.
+					if producer == domain.AdjudicationProducerModel {
+						entry.Confidence = ptr(domain.ConfidenceHigh)
+					}
+					err := entry.Validate()
+					if wantValid {
+						valid++
+						if err != nil {
+							t.Errorf("producer %s row %v: want valid, got %v", producer, key, err)
+						}
+					} else if err == nil {
+						t.Errorf("producer %s row %v: want rejected, got valid", producer, key)
+					}
+				}
+			}
+		}
+		want := len(engineFastPathRows)
+		if producer == domain.AdjudicationProducerModel {
+			want = len(validAdjudicationRows) - 1 // every row but the engine-only allowed row
+		}
+		if valid != want {
+			t.Fatalf("producer %s validated %d rows, want %d", producer, valid, want)
+		}
+	}
+}
+
+// TestEngineEntryRestrictedToFastPath pins the engine trust boundary: an engine
+// label on any row but `required`/`allowed`/`remediate` is rejected, even a
+// valid §7 axis/route combination. The `unknown` park is included because it is
+// a model not-accepted representation, not an engine fast-path fact — the
+// no-model fast path is one-directional toward remediation (plan §7).
+func TestEngineEntryRestrictedToFastPath(t *testing.T) {
+	t.Parallel()
+	rejected := []struct {
+		name   string
+		goal   domain.GoalRelationship
+		compat *domain.WorkUnitCompatibility
+		route  domain.AdjudicationRoute
+	}{
+		{"adjacent deferral", domain.GoalAdjacent, nil, domain.RouteDefer},
+		{"contradictory decline", domain.GoalContradictory, nil, domain.RouteDecline},
+		{"contradictory dispute", domain.GoalContradictory, nil, domain.RouteDispute},
+		{"unclear attention", domain.GoalUnclear, nil, domain.RouteAttentionUnclear},
+		{"unknown park", domain.GoalRequired, ptr(domain.CompatibilityUnknown), domain.RouteParkUnknown},
+		{"human decision", domain.GoalRequired, ptr(domain.CompatibilityHumanDecision), domain.RouteAttentionHumanDecision},
+		{"work unit revision", domain.GoalRequired, ptr(domain.CompatibilityWorkUnitRevision), domain.RouteParkRevision},
+		{"separate work", domain.GoalRequired, ptr(domain.CompatibilitySeparateWork), domain.RouteParkSeparateWork},
+	}
+	for _, tc := range rejected {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := domain.FindingAdjudicationEntry{
+				FindingID: "f", Producer: domain.AdjudicationProducerEngine,
+				GoalRelationship: tc.goal, Compatibility: tc.compat, Route: tc.route, Rationale: "x",
+			}
+			if err := entry.Validate(); !errors.Is(err, domain.ErrEngineEntryNonDeterministicRow) {
+				t.Fatalf("engine+%s: got %v, want ErrEngineEntryNonDeterministicRow", tc.name, err)
+			}
+		})
+	}
+	// The sole engine fast-path row remains valid.
+	remediate := domain.FindingAdjudicationEntry{
+		FindingID: "f", Producer: domain.AdjudicationProducerEngine,
+		GoalRelationship: domain.GoalRequired, Compatibility: ptr(domain.CompatibilityAllowed),
+		Route: domain.RouteRemediate, Rationale: "x",
+	}
+	if err := remediate.Validate(); err != nil {
+		t.Errorf("engine+required+allowed+remediate: got %v, want valid", err)
+	}
+}
+
+func TestAdjudicationProducerAndConfidenceRules(t *testing.T) {
+	t.Parallel()
+	required := ptr(domain.CompatibilityUnknown)
+
+	// A model entry carrying `allowed` is rejected at validation.
+	modelAllowed := domain.FindingAdjudicationEntry{
+		FindingID: "f", Producer: domain.AdjudicationProducerModel,
+		GoalRelationship: domain.GoalRequired, Compatibility: ptr(domain.CompatibilityAllowed),
+		Route: domain.RouteRemediate, Rationale: "x", Confidence: ptr(domain.ConfidenceHigh),
+	}
+	if err := modelAllowed.Validate(); !errors.Is(err, domain.ErrModelEntryMintsAllowed) {
+		t.Errorf("model+allowed: got %v, want ErrModelEntryMintsAllowed", err)
+	}
+
+	// Confidence is present exactly on model entries. Use the engine fast-path
+	// row so the confidence rule, not the engine-row rule, is what rejects it.
+	engineWithConfidence := domain.FindingAdjudicationEntry{
+		FindingID: "f", Producer: domain.AdjudicationProducerEngine,
+		GoalRelationship: domain.GoalRequired, Compatibility: ptr(domain.CompatibilityAllowed),
+		Route: domain.RouteRemediate, Rationale: "x", Confidence: ptr(domain.ConfidenceHigh),
+	}
+	if err := engineWithConfidence.Validate(); !errors.Is(err, domain.ErrAdjudicationConfidenceMisplaced) {
+		t.Errorf("engine+confidence: got %v, want ErrAdjudicationConfidenceMisplaced", err)
+	}
+	modelNoConfidence := domain.FindingAdjudicationEntry{
+		FindingID: "f", Producer: domain.AdjudicationProducerModel,
+		GoalRelationship: domain.GoalRequired, Compatibility: required,
+		Route: domain.RouteParkUnknown, Rationale: "x",
+	}
+	if err := modelNoConfidence.Validate(); !errors.Is(err, domain.ErrAdjudicationConfidenceMisplaced) {
+		t.Errorf("model-no-confidence: got %v, want ErrAdjudicationConfidenceMisplaced", err)
+	}
+
+	// The model constructor cannot mint `allowed`: ProposedCompatibility has no
+	// `allowed` member, and its widening yields the twin non-`allowed` value.
+	entry, err := domain.NewModelAdjudicationEntry(
+		"f", domain.GoalRequired, ptr(domain.ProposedWorkUnitRevision),
+		domain.RouteParkRevision, domain.ConfidenceHigh, "x", nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("model entry construct: %v", err)
+	}
+	if entry.Compatibility == nil || *entry.Compatibility != domain.CompatibilityWorkUnitRevision {
+		t.Errorf("widened compatibility = %v, want work_unit_revision_required", entry.Compatibility)
+	}
+}
+
+func TestAdjudicationEntryRejectsInvalidUTF8FreeText(t *testing.T) {
+	t.Parallel()
+	// json.Marshal would silently rewrite invalid UTF-8 to U+FFFD, so every
+	// free-text field must be rejected before it can be hashed or persisted.
+	base := domain.FindingAdjudicationEntry{
+		FindingID: "f", Producer: domain.AdjudicationProducerEngine,
+		GoalRelationship: domain.GoalRequired, Compatibility: ptr(domain.CompatibilityAllowed),
+		Route: domain.RouteRemediate, Rationale: "ok",
+	}
+	rationaleBad := base
+	rationaleBad.Rationale = "bad \xff byte"
+	if err := rationaleBad.Validate(); !errors.Is(err, domain.ErrFindingAdjudicationInconsistent) {
+		t.Errorf("invalid-utf8 rationale: got %v, want ErrFindingAdjudicationInconsistent", err)
+	}
+	listBad := base
+	listBad.Evidence = []string{"bad \xff item"}
+	if err := listBad.Validate(); !errors.Is(err, domain.ErrFindingAdjudicationInconsistent) {
+		t.Errorf("invalid-utf8 list item: got %v, want ErrFindingAdjudicationInconsistent", err)
+	}
+}
+
+func TestAdjudicationAcceptedAndNotAcceptedRepresentation(t *testing.T) {
+	t.Parallel()
+	// Engine entries are always accepted.
+	engine := domain.FindingAdjudicationEntry{
+		FindingID: "f", Producer: domain.AdjudicationProducerEngine,
+		GoalRelationship: domain.GoalRequired, Compatibility: ptr(domain.CompatibilityAllowed),
+		Route: domain.RouteRemediate, Rationale: "x",
+	}
+	if ok, err := engine.Accepted(domain.DispatchThresholdHigh); err != nil || !ok {
+		t.Errorf("engine accepted = (%v, %v), want (true, nil)", ok, err)
+	}
+
+	cases := []struct {
+		name       string
+		confidence *domain.AdjudicationConfidence
+		threshold  domain.DispatchThreshold
+		wantOK     bool
+		wantErr    error
+	}{
+		// Accepted validates first, so a model entry with absent or out-of-scale
+		// confidence fails closed with an error rather than a silent not-accepted.
+		{"absent under high", nil, domain.DispatchThresholdHigh, false, domain.ErrAdjudicationConfidenceMisplaced},
+		{"out of scale", ptr(domain.AdjudicationConfidence("elevated")), domain.DispatchThresholdMedium, false, domain.ErrInvalidAdjudicationConfidence},
+		{"below threshold", ptr(domain.ConfidenceLow), domain.DispatchThresholdMedium, false, nil},
+		{"below high", ptr(domain.ConfidenceMedium), domain.DispatchThresholdHigh, false, nil},
+		{"meets medium", ptr(domain.ConfidenceMedium), domain.DispatchThresholdMedium, true, nil},
+		{"meets high", ptr(domain.ConfidenceHigh), domain.DispatchThresholdHigh, true, nil},
+		{"invalid threshold", ptr(domain.ConfidenceHigh), domain.DispatchThreshold("low"), false, domain.ErrInvalidDispatchThreshold},
+		{"zero threshold", ptr(domain.ConfidenceHigh), domain.DispatchThreshold(""), false, domain.ErrInvalidDispatchThreshold},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := domain.FindingAdjudicationEntry{
+				FindingID: "f", Producer: domain.AdjudicationProducerModel,
+				GoalRelationship: domain.GoalContradictory, Route: domain.RouteDecline,
+				Rationale: "x", Confidence: tc.confidence,
+			}
+			ok, err := entry.Accepted(tc.threshold)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("err = %v, want %v", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil || ok != tc.wantOK {
+				t.Fatalf("accepted = (%v, %v), want (%v, nil)", ok, err, tc.wantOK)
+			}
+		})
+	}
+
+	// Accepted fails closed on a structurally invalid entry that bypassed a
+	// constructor, rather than routing it to dispatch. A model-minted `allowed`
+	// with meeting confidence is not accepted, and a forged engine row is not
+	// accepted, even though the naive producer switch would have returned true.
+	modelAllowed := domain.FindingAdjudicationEntry{
+		FindingID: "f", Producer: domain.AdjudicationProducerModel,
+		GoalRelationship: domain.GoalRequired, Compatibility: ptr(domain.CompatibilityAllowed),
+		Route: domain.RouteRemediate, Rationale: "x", Confidence: ptr(domain.ConfidenceHigh),
+	}
+	if ok, err := modelAllowed.Accepted(domain.DispatchThresholdHigh); ok || !errors.Is(err, domain.ErrModelEntryMintsAllowed) {
+		t.Errorf("model+allowed accepted = (%v, %v), want (false, ErrModelEntryMintsAllowed)", ok, err)
+	}
+	forgedEngine := domain.FindingAdjudicationEntry{
+		FindingID: "f", Producer: domain.AdjudicationProducerEngine,
+		GoalRelationship: domain.GoalAdjacent, Route: domain.RouteDefer, Rationale: "x",
+	}
+	if ok, err := forgedEngine.Accepted(domain.DispatchThresholdHigh); ok || !errors.Is(err, domain.ErrEngineEntryNonDeterministicRow) {
+		t.Errorf("forged engine accepted = (%v, %v), want (false, ErrEngineEntryNonDeterministicRow)", ok, err)
+	}
+
+	// unknown is the not-accepted representation only where compatibility exists.
+	required := domain.FindingAdjudicationEntry{GoalRelationship: domain.GoalRequired}
+	if rep := required.NotAcceptedRepresentation(); rep == nil || *rep != domain.CompatibilityUnknown {
+		t.Errorf("required not-accepted representation = %v, want unknown", rep)
+	}
+	for _, goal := range []domain.GoalRelationship{domain.GoalAdjacent, domain.GoalContradictory, domain.GoalUnclear} {
+		nonRequired := domain.FindingAdjudicationEntry{GoalRelationship: goal}
+		if rep := nonRequired.NotAcceptedRepresentation(); rep != nil {
+			t.Errorf("%s not-accepted representation = %v, want nil", goal, rep)
+		}
+	}
+}
+
+func TestDeriveRemediationSurfaceFailsClosed(t *testing.T) {
+	t.Parallel()
+	existsBoth := func(string) (bool, bool, error) { return true, true, nil }
+	existsNeither := func(string) (bool, bool, error) { return false, false, nil }
+	candidateAdded := func(string) (bool, bool, error) { return false, true, nil }
+
+	cases := []struct {
+		name     string
+		location *domain.FindingLocation
+		resolve  func(string) (bool, bool, error)
+		wantPath string
+	}{
+		{"nil location", nil, existsBoth, ""},
+		{"absolute path", &domain.FindingLocation{Path: "/etc/passwd"}, existsBoth, ""},
+		{"traversal path", &domain.FindingLocation{Path: "a/../b"}, existsBoth, ""},
+		{"backslash path", &domain.FindingLocation{Path: "a\\b"}, existsBoth, ""},
+		{"control character path", &domain.FindingLocation{Path: "a\x00b"}, existsBoth, ""},
+		{"unresolvable", &domain.FindingLocation{Path: "daemon/x.go"}, existsNeither, ""},
+		{"resolves in base and candidate", &domain.FindingLocation{Path: "daemon/x.go"}, existsBoth, "daemon/x.go"},
+		{"candidate-added file keeps its route", &domain.FindingLocation{Path: "daemon/new.go"}, candidateAdded, "daemon/new.go"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := domain.DeriveRemediationSurface(tc.location, tc.resolve)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantPath == "" {
+				if got != nil {
+					t.Fatalf("got surface %v, want nil", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("got nil surface, want derived surface")
+			}
+			var matchedPath string
+			compatibility := domain.EngineCompatibility(got, nil, func(_ []string, path string) bool {
+				matchedPath = path
+				return true
+			})
+			if compatibility != domain.CompatibilityAllowed || matchedPath != tc.wantPath {
+				t.Fatalf("derived surface = (%q, %q), want (%q, %q)",
+					compatibility, matchedPath, domain.CompatibilityAllowed, tc.wantPath)
+			}
+		})
+	}
+
+	// A resolve error propagates.
+	boom := errors.New("resolve failed")
+	if _, err := domain.DeriveRemediationSurface(&domain.FindingLocation{Path: "daemon/x.go"},
+		func(string) (bool, bool, error) { return false, false, boom }); !errors.Is(err, boom) {
+		t.Fatalf("resolve error = %v, want boom", err)
+	}
+}
+
+func TestEngineCompatibilityIsSoleAllowedProducer(t *testing.T) {
+	t.Parallel()
+	declared := []string{"daemon/internal/domain/", "daemon/migrations/"}
+	derive := func(path string) *domain.RemediationSurface {
+		t.Helper()
+		surface, err := domain.DeriveRemediationSurface(
+			&domain.FindingLocation{Path: path},
+			func(string) (bool, bool, error) { return true, false, nil },
+		)
+		if err != nil || surface == nil {
+			t.Fatalf("derive surface %q = (%v, %v), want non-nil without error", path, surface, err)
+		}
+		return surface
+	}
+	// A test-local prefix matcher stands in for the injected importer allowlist
+	// matcher; the glob semantics are pathfold's own tested concern.
+	match := func(prefixes []string, p string) bool {
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(p, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// A nil surface never yields allowed, even with a matcher that would match.
+	if got := domain.EngineCompatibility(nil, declared, func([]string, string) bool { return true }); got != domain.CompatibilityUnknown {
+		t.Errorf("nil surface = %q, want unknown", got)
+	}
+	// The externally constructible zero value is not a derived capability and
+	// never yields allowed, even with a matcher that would match.
+	if got := domain.EngineCompatibility(&domain.RemediationSurface{}, declared, func([]string, string) bool { return true }); got != domain.CompatibilityUnknown {
+		t.Errorf("zero surface = %q, want unknown", got)
+	}
+	// A contained surface is allowed.
+	if got := domain.EngineCompatibility(derive("daemon/internal/domain/x.go"), declared, match); got != domain.CompatibilityAllowed {
+		t.Errorf("contained surface = %q, want allowed", got)
+	}
+	// A surface that exits the declared paths fails closed to unknown.
+	if got := domain.EngineCompatibility(derive("app/x.swift"), declared, match); got != domain.CompatibilityUnknown {
+		t.Errorf("out-of-scope surface = %q, want unknown", got)
+	}
+}
+
+func validAdjudicationFixture(t *testing.T) domain.FindingAdjudication {
+	t.Helper()
+	engine, err := domain.NewEngineAdjudicationEntry(
+		"finding-0001", domain.GoalRequired, ptr(domain.CompatibilityAllowed),
+		domain.RouteRemediate, "in declared scope", []string{"declared-path containment"}, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("engine entry: %v", err)
+	}
+	model, err := domain.NewModelAdjudicationEntry(
+		"finding-0002", domain.GoalContradictory, nil, domain.RouteDecline,
+		domain.ConfidenceHigh, "contradicts the approved spec",
+		[]string{"spec §2"}, []string{"AGENTS.md scope discipline"}, []string{"spec is authoritative"},
+		[]string{"defer to a separate work unit"}, []string{"which spec clause governs?"})
+	if err != nil {
+		t.Fatalf("model entry: %v", err)
+	}
+	artifact, err := domain.NewFindingAdjudication(
+		"run-abc", 2,
+		adjDigest("approved-spec"), adjDigest("instruction-snapshot"), adjDigest("resolved-policy"),
+		[]domain.FindingAdjudicationEntry{model, engine}, // deliberately unsorted
+		time.Date(2026, 8, 21, 15, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("artifact: %v", err)
+	}
+	return artifact
+}
+
+func TestFindingAdjudicationRoundTripAndDigestStability(t *testing.T) {
+	t.Parallel()
+	artifact := validAdjudicationFixture(t)
+
+	// Constructor sorts entries by finding id.
+	if artifact.Entries[0].FindingID != "finding-0001" || artifact.Entries[1].FindingID != "finding-0002" {
+		t.Fatalf("entries not sorted: %v", artifact.Entries)
+	}
+
+	body, err := artifact.Encode()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	decoded, err := domain.DecodeFindingAdjudication(body)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	reencoded, err := decoded.Encode()
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	if string(body) != string(reencoded) {
+		t.Fatalf("re-encode not deterministic:\n%s\n%s", body, reencoded)
+	}
+	if decoded.Digest != artifact.Digest {
+		t.Fatalf("digest changed across round-trip: %q vs %q", decoded.Digest, artifact.Digest)
+	}
+	recomputed, err := decoded.ComputeDigest()
+	if err != nil {
+		t.Fatalf("recompute: %v", err)
+	}
+	if recomputed != artifact.Digest {
+		t.Fatalf("recomputed digest %q, want %q", recomputed, artifact.Digest)
+	}
+}
+
+// TestFindingAdjudicationGolden pins the canonical encoding. The full-artifact
+// golden shows an engine entry with an explicit null confidence beside a model
+// entry with confidence present; the entry golden pins the model-entry shape.
+func TestFindingAdjudicationGolden(t *testing.T) {
+	t.Parallel()
+	fixture := validAdjudicationFixture(t)
+	body, err := json.MarshalIndent(fixture, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal artifact: %v", err)
+	}
+	golden.Assert(t, "finding_adjudication", append(body, '\n'))
+
+	model := fixture.Entries[1]
+	entryBody, err := json.MarshalIndent(model, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal model entry: %v", err)
+	}
+	golden.Assert(t, "finding_adjudication_entry_model", append(entryBody, '\n'))
+}
+
+func TestFindingAdjudicationDecodeRejects(t *testing.T) {
+	t.Parallel()
+	artifact := validAdjudicationFixture(t)
+	body, err := artifact.Encode()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	// A tampered digest is rejected by revalidation on decode.
+	tampered := artifact
+	tampered.Digest = adjDigest("not-the-real-digest")
+	tamperedBody, err := json.Marshal(tampered)
+	if err != nil {
+		t.Fatalf("marshal tampered: %v", err)
+	}
+	if _, err := domain.DecodeFindingAdjudication(tamperedBody); !errors.Is(err, domain.ErrFindingAdjudicationDigestMismatch) {
+		t.Fatalf("tampered digest decode = %v, want ErrFindingAdjudicationDigestMismatch", err)
+	}
+
+	// Trailing data is rejected.
+	if _, err := domain.DecodeFindingAdjudication(append(body, '!')); err == nil {
+		t.Fatalf("trailing data: want error, got nil")
+	}
+}
