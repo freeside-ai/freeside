@@ -1506,6 +1506,15 @@ components:
             Typed UTC deferral instant, present only for snooze. The daemon
             requires a future canonical instant and records it in the proposal
             ledger.
+        alternative_choices:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/AlternativeChoice"
+          description: >
+            Per-finding offered routes selected by choose_alternative_route.
+            Findings omitted from this list retain their recommended route.
+            Absent for every other action; finding IDs must be distinct.
       example:
         item_id: "item-1"
         action: "open_pr"
@@ -1797,6 +1806,7 @@ components:
         - review_recovery_binding
         - codex_reenrollment_recovery_binding
         - review_configuration_recovery
+        - finding_adjudication
         - item_version
         - interruption_class
         - conversation_id
@@ -1844,7 +1854,8 @@ components:
           description: >
             The approval binding set: the canonical (sorted, deduplicated)
             union of every digest rendered in evidence_snapshot and
-            agent_claims. Derived and enforced by the daemon
+            agent_claims, plus the adjudication_digest rendered in a
+            finding_adjudication binding. Derived and enforced by the daemon
             (domain.NewAttentionItem / Validate), never client-supplied, so
             an item cannot display one digest while binding another (the
             stale-approval class, plan §3.1; §4 "approvals bind to digests").
@@ -1927,6 +1938,15 @@ components:
             target is resolved at decision time as the repository's currently
             approved profile revision, so it is deliberately absent here;
             null on every other item.
+        finding_adjudication:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/FindingAdjudicationBinding"
+          description: >
+            The recommendation-led projection of one immutable adjudication
+            artifact. Required exactly on finding_adjudication items and null
+            elsewhere. The daemon re-gates its proposal axes against the
+            artifact named by adjudication_digest before persistence.
         item_version:
           type: integer
           minimum: 1
@@ -2035,6 +2055,7 @@ components:
         review_recovery_binding: null
         codex_reenrollment_recovery_binding: null
         review_configuration_recovery: null
+        finding_adjudication: null
         item_version: 1
         interruption_class: "planned_gate"
         conversation_id: "conv-1"
@@ -2830,6 +2851,7 @@ components:
         - review_dispute
         - review_contradiction
         - review_configuration
+        - finding_adjudication
         - ready_for_final_review
         - publish_blocked
         - run_proposal
@@ -2878,6 +2900,8 @@ components:
         - recover_review
         - adopt_review_configuration
         - resolve_reenrollment
+        - accept_recommended_route
+        - choose_alternative_route
 
     Priority:
       type: string
@@ -2887,6 +2911,36 @@ components:
         - normal
         - high
         - urgent
+
+    GoalRelationship:
+      type: string
+      description: How a review finding relates to the assigned work-unit goal.
+      enum: [required, adjacent, contradictory, unclear]
+
+    WorkUnitCompatibility:
+      type: string
+      description: Whether the finding can be acted on within the current work unit.
+      enum:
+        [allowed, work_unit_revision_required, separate_work_required,
+         human_decision_required, unknown]
+
+    AdjudicationRoute:
+      type: string
+      description: The disposition route proposed or selected for a review finding.
+      enum:
+        [remediate, park_revision, park_separate_work,
+         attention_human_decision, park_unknown, defer, decline, dispute,
+         attention_unclear]
+
+    AdjudicationProducer:
+      type: string
+      description: The authority that produced the adjudication proposal.
+      enum: [engine, model]
+
+    AdjudicationConfidence:
+      type: string
+      description: The proposal producer's confidence in its recommended route.
+      enum: [low, medium, high]
 
     ItemStatus:
       type: string
@@ -3080,6 +3134,103 @@ components:
         repo: "owner/repo"
         repository_id: 84958515
         superseded_profile_digest: "sha256:profile-superseded"
+
+    FindingAdjudicationBinding:
+      type: object
+      additionalProperties: false
+      description: >
+        Sync-carried proposal projection bound to one immutable finding
+        adjudication artifact. The store authenticates each proposal's copied
+        routing axes against that artifact before the item may persist. When
+        the item offers choose_alternative_route, at least one proposal must
+        carry an offered alternative so the action is executable.
+      required: [run_id, round, adjudication_digest, proposals]
+      properties:
+        run_id:
+          type: string
+          minLength: 1
+        round:
+          type: integer
+          minimum: 1
+        adjudication_digest:
+          $ref: "#/components/schemas/Digest"
+        proposals:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/FindingAdjudicationProposal"
+
+    FindingAdjudicationProposal:
+      type: object
+      description: >
+        One finding's recommendation-led projection, with authenticated routing
+        axes and the model's rationale, qualifications, and viable alternatives.
+      additionalProperties: false
+      required:
+        [finding_id, producer, goal_relationship, compatibility, route,
+         rationale, cited_rules, assumptions, open_questions, confidence,
+         offered_alternatives]
+      properties:
+        finding_id:
+          type: string
+          minLength: 1
+        producer:
+          $ref: "#/components/schemas/AdjudicationProducer"
+        goal_relationship:
+          $ref: "#/components/schemas/GoalRelationship"
+        compatibility:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/WorkUnitCompatibility"
+        route:
+          $ref: "#/components/schemas/AdjudicationRoute"
+        rationale:
+          type: string
+          minLength: 1
+        cited_rules:
+          type: array
+          items:
+            type: string
+        assumptions:
+          type: array
+          items:
+            type: string
+        open_questions:
+          type: array
+          items:
+            type: string
+        confidence:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AdjudicationConfidence"
+        offered_alternatives:
+          type: array
+          items:
+            $ref: "#/components/schemas/OfferedAlternative"
+
+    OfferedAlternative:
+      type: object
+      description: A selectable non-recommended route and its expected consequence.
+      additionalProperties: false
+      required: [route, consequence]
+      properties:
+        route:
+          $ref: "#/components/schemas/AdjudicationRoute"
+        consequence:
+          type: string
+          minLength: 1
+
+    AlternativeChoice:
+      type: object
+      description: The operator-selected offered route for one finding.
+      additionalProperties: false
+      required: [finding_id, route]
+      properties:
+        finding_id:
+          type: string
+          minLength: 1
+        route:
+          $ref: "#/components/schemas/AdjudicationRoute"
 
     CodexReenrollmentRecoveryBinding:
       type: object
