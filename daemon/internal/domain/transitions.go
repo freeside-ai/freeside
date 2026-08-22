@@ -183,6 +183,14 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		return fmt.Errorf("attention item %s: review configuration recovery binding would change: %w",
 			updated.ID, ErrImmutableTransition)
 	}
+	sameFindingAdjudication, err := jsonEqual(old.FindingAdjudication, updated.FindingAdjudication)
+	if err != nil {
+		return fmt.Errorf("attention item %s: %w", updated.ID, err)
+	}
+	if !sameFindingAdjudication {
+		return fmt.Errorf("attention item %s: finding adjudication binding would change: %w",
+			updated.ID, ErrImmutableTransition)
+	}
 	samePRReference, err := jsonEqual(old.PRReference, updated.PRReference)
 	if err != nil {
 		return fmt.Errorf("attention item %s: %w", updated.ID, err)

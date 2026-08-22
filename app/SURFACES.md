@@ -20,11 +20,12 @@ Mac and iOS match on every line unless a line says otherwise.
 - **Done:** pairing, inbox, decision detail, run list with watches and
   deadlines, run timeline, freshness banner, Mac menu bar, the sync
   and command-retry machinery, and the run-proposal card with its
-  "start with changes" and snooze sheets (its full-artifact view is not).
+  "start with changes" and snooze sheets (its full-artifact view is not),
+  plus the recommendation-led finding-adjudication card and typed route picker.
 - **Generic:** eleven of the fourteen card types render, but none has a
   layout of its own yet.
-- **Not yet:** two card types (`finding_adjudication`, `effect_proposal`),
-  conversations, the evidence and spec viewers, proposal batches, the
+- **Not yet:** one card type (`effect_proposal`), conversations, the evidence
+  and spec viewers, proposal batches, the
   initiative view, readiness display, push notifications.
 - **Open:** twelve placement questions, listed at the end.
 
@@ -60,7 +61,7 @@ lists open issues that will change the card.
 | `spec_approval` | approve, request changes, discuss, stop | Generic | #710; spec and diff viewer |
 | `review_diminishing_returns` | finish now, apply then finish, continue under policy, convert to policy | Generic | #724 |
 | `review_dispute` | adjudicate, discuss, stop | Generic | #724, #855 |
-| `finding_adjudication` | accept the recommended route, pick an alternative, discuss, stop (§7 widens this to answering questions, challenging assumptions, and asking for more detail) | Not yet | #836, #837 |
+| `finding_adjudication` | accept the recommended route, pick an alternative, discuss, stop (§7 widens this to answering questions, challenging assumptions, and asking for more detail) | Done for the proposal, daemon facts, typed route actions, and alternatives; Discuss UI is Not yet | #840 executes the chosen route; Conversation / Discuss under Screens |
 | `review_contradiction` | recover the exact contradiction, or leave parked | Generic (recovery details shown) | |
 | `review_configuration` | adopt the configuration, discuss, stop | Generic (recovery details shown) | |
 | `execution_failure` | retry, retry with capabilities, discuss, stop | Generic | #869 adds "retry with another provider profile" for quota, expiry, and capacity failures: a profile picker, with cost owner and review independence shown before confirming |

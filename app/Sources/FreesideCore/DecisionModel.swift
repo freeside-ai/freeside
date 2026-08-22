@@ -288,17 +288,30 @@ public final class DecisionModel {
     }
 
     public func submit(_ action: Components.Schemas.Action) async {
-        await submit(action, revision: nil, snoozeUntil: nil)
+        await submit(action, revision: nil, snoozeUntil: nil, alternativeChoices: nil)
+    }
+
+    public func submitFindingAlternatives(
+        _ choices: [Components.Schemas.AlternativeChoice]
+    ) async {
+        await submit(
+            .choose_alternative_route,
+            revision: nil,
+            snoozeUntil: nil,
+            alternativeChoices: choices
+        )
     }
 
     private func submit(
         _ action: Components.Schemas.Action,
         revision: Components.Schemas.RunProposalRevisionInput? = nil,
-        snoozeUntil: Date? = nil
+        snoozeUntil: Date? = nil,
+        alternativeChoices: [Components.Schemas.AlternativeChoice]? = nil
     ) async {
         guard actionsEnabled, isSubmittable(action), let snapshot else { return }
         guard (action == .start_with_changes) == (revision != nil),
-            (action == .snooze) == (snoozeUntil != nil)
+            (action == .snooze) == (snoozeUntil != nil),
+            (action == .choose_alternative_route) == (alternativeChoices != nil)
         else { return }
         let urlToOpen: URL?
         if action == .open_pr {
@@ -329,7 +342,8 @@ public final class DecisionModel {
                 run_proposal_revision: revision.map {
                     .init(value1: $0)
                 },
-                snooze_until: snoozeUntil
+                snooze_until: snoozeUntil,
+                alternative_choices: alternativeChoices
             )
         )
         if let urlToOpen {

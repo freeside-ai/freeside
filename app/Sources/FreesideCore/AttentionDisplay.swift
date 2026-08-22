@@ -24,6 +24,7 @@ enum AttentionDisplay {
         case .review_dispute: return "Review dispute"
         case .review_contradiction: return "Review contradiction"
         case .review_configuration: return "Review configuration"
+        case .finding_adjudication: return "Finding adjudication"
         case .ready_for_final_review: return "Ready for final review"
         case .publish_blocked: return "Publish blocked"
         case .run_proposal: return "Run proposal"
@@ -65,6 +66,8 @@ enum AttentionDisplay {
         case .recover_review: return "Recover review"
         case .adopt_review_configuration: return "Adopt review configuration"
         case .resolve_reenrollment: return "Resolve re-enrollment"
+        case .accept_recommended_route: return "Accept recommended route"
+        case .choose_alternative_route: return "Choose selected alternative"
         }
     }
 
@@ -158,7 +161,61 @@ enum AttentionDisplay {
         rows.append(contentsOf: reviewRecoveryBindingRows(item))
         rows.append(contentsOf: reviewConfigurationRecoveryRows(item))
         rows.append(contentsOf: codexReenrollmentRecoveryRows(item))
+        rows.append(contentsOf: findingAdjudicationRows(item))
         return rows
+    }
+
+    static func findingAdjudicationRows(
+        _ item: Components.Schemas.AttentionItem
+    ) -> [BindingRow] {
+        guard let binding = item.finding_adjudication?.value1 else { return [] }
+        return [
+            BindingRow(label: "Adjudication digest", value: binding.adjudication_digest),
+            BindingRow(label: "Adjudication run", value: binding.run_id),
+            BindingRow(label: "Adjudication round", value: "\(binding.round)"),
+        ]
+    }
+
+    static func label(_ route: Components.Schemas.AdjudicationRoute) -> String {
+        switch route {
+        case .remediate: return "Remediate"
+        case .park_revision: return "Revise this work unit"
+        case .park_separate_work: return "Create separate work"
+        case .attention_human_decision: return "Human decision"
+        case .park_unknown: return "Park as unknown"
+        case ._defer: return "Defer"
+        case .decline: return "Decline"
+        case .dispute: return "Dispute"
+        case .attention_unclear: return "Clarify"
+        }
+    }
+
+    static func label(_ relationship: Components.Schemas.GoalRelationship) -> String {
+        switch relationship {
+        case .required: return "Required"
+        case .adjacent: return "Adjacent"
+        case .contradictory: return "Contradictory"
+        case .unclear: return "Unclear"
+        }
+    }
+
+    static func label(_ confidence: Components.Schemas.AdjudicationConfidence) -> String {
+        switch confidence {
+        case .low: return "Low"
+        case .medium: return "Medium"
+        case .high: return "High"
+        }
+    }
+
+    static func label(_ compatibility: Components.Schemas.WorkUnitCompatibility?) -> String {
+        guard let compatibility else { return "Not assessed" }
+        switch compatibility {
+        case .allowed: return "Allowed"
+        case .work_unit_revision_required: return "Work-unit revision required"
+        case .separate_work_required: return "Separate work required"
+        case .human_decision_required: return "Human decision required"
+        case .unknown: return "Unknown"
+        }
     }
 
     static func reviewRecoveryBindingRows(

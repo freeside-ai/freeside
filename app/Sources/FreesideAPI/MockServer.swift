@@ -64,10 +64,8 @@ public actor MockServer {
         let artifactDigests: [String]
         let message: String
         let attachments: [String]
-        let runProposalRevision: Components.Schemas.RunProposalRevisionInput?
-        let snoozeUntil: Date?
 
-        init(_ command: Components.Schemas.ClientCommand) {
+        init(_ command: Components.Schemas.ClientCommand, message: String) {
             commandID = command.command_id
             deviceID = command.device_id
             itemID = command.payload.item_id
@@ -78,10 +76,8 @@ public actor MockServer {
             // Content fields normalize absent to empty (the daemon's record
             // shape); attachment order is authored, so it is compared as
             // sent, never canonicalized.
-            message = command.payload.message ?? ""
+            self.message = message
             attachments = command.payload.attachments ?? []
-            runProposalRevision = command.payload.run_proposal_revision?.value1
-            snoozeUntil = command.payload.snooze_until
         }
     }
 
@@ -474,7 +470,7 @@ public actor MockServer {
         _ command: Components.Schemas.ClientCommand, deviceID: String
     ) -> Components.Schemas.CommandResult? {
         guard let original = commandsByID[command.command_id],
-            original == NormalizedCommand(command),
+            original == Self.normalizedReplayCommand(command),
             original.deviceID == deviceID
         else { return nil }
         return resultsByCommandID[command.command_id]
@@ -530,6 +526,10 @@ public actor MockServer {
     }
 
     public struct InvalidProposalDecisionError: Error {
+        public let reason: String
+    }
+
+    public struct InvalidFindingAdjudicationDecisionError: Error {
         public let reason: String
     }
 
@@ -886,17 +886,18 @@ public actor MockServer {
 
     func submitCommand(_ command: Components.Schemas.ClientCommand) throws -> SubmitOutcome {
         convergeProposalSnoozes()
-        // Well-formedness precedes every lookup, as the signet boundary
-        // orders it (domain.NewCommand, then expected_entity_version):
-        // ids identify, versions are positive, digests content-address.
-        // Action validity is the generated enum's decode, upstream.
-        try MockContractValidation.validate(command)
+        // Structural well-formedness precedes every lookup, as the signet
+        // boundary orders it (domain.NewCommand, then
+        // expected_entity_version): ids identify, versions are positive,
+        // and digests content-address. Parameterized action content is
+        // interpreted only for a genuinely new command below.
+        try MockContractValidation.validateStructure(command)
         if let original = commandsByID[command.command_id] {
             // Replay is determined first, as the daemon orders it: a
             // reused id converges only on an identical normalized body,
             // and a different one is an immutable conflict even when its
             // new action would be rejected on other grounds.
-            guard original == NormalizedCommand(command),
+            guard original == Self.normalizedReplayCommand(command),
                 let recorded = resultsByCommandID[command.command_id]
             else {
                 throw ImmutableConflictError(commandID: command.command_id)
@@ -933,6 +934,11 @@ public actor MockServer {
             throw UnsupportedActionError(
                 commandID: command.command_id, action: payload.action)
         }
+        // Match Signet's command-id-first contract: malformed typed action
+        // content cannot displace a recorded result when its normalized
+        // durable command body is unchanged. New commands still fail closed
+        // before lifecycle and binding decisions.
+        try MockContractValidation.validateActionInput(command)
         // Openness before binding equality, as the daemon orders it. Per
         // the recorded #65 decision (devlog 2026-07-15-1655), a closed
         // item shares the API's 409 replacement-snapshot shape with
@@ -982,6 +988,23 @@ public actor MockServer {
             guard let until = payload.snooze_until, until > currentTime else {
                 throw MalformedCommandError(
                     commandID: command.command_id, reason: "snooze_until is not in the future")
+            }
+        case .concludes(_) where payload.action == .choose_alternative_route:
+            guard let binding = current.item.finding_adjudication?.value1,
+                let choices = payload.alternative_choices
+            else {
+                throw InvalidFindingAdjudicationDecisionError(
+                    reason: "finding adjudication binding or choices are unavailable")
+            }
+            for choice in choices {
+                guard
+                    let proposal = binding.proposals.first(where: {
+                        $0.finding_id == choice.finding_id
+                    }), proposal.offered_alternatives.contains(where: { $0.route == choice.route })
+                else {
+                    throw InvalidFindingAdjudicationDecisionError(
+                        reason: "choice was not offered for finding \(choice.finding_id)")
+                }
             }
         default:
             break
@@ -1064,7 +1087,7 @@ public actor MockServer {
             itemsByID[payload.item_id] = concluded(current, as: .resolved)
         case .revisesProposal:
             guard let revised = payload.run_proposal_revision?.value1, payload.snooze_until == nil,
-                payload.message == nil, payload.attachments == nil
+                (payload.message ?? "").isEmpty, (payload.attachments ?? []).isEmpty
             else {
                 throw MalformedCommandError(
                     commandID: command.command_id,
@@ -1115,8 +1138,8 @@ public actor MockServer {
                 scope: revised.scope)
         case .snoozesProposal:
             guard let until = payload.snooze_until,
-                payload.run_proposal_revision == nil, payload.message == nil,
-                payload.attachments == nil
+                payload.run_proposal_revision == nil, (payload.message ?? "").isEmpty,
+                (payload.attachments ?? []).isEmpty
             else {
                 throw MalformedCommandError(
                     commandID: command.command_id,
@@ -1137,6 +1160,7 @@ public actor MockServer {
             throw UnsupportedActionError(
                 commandID: command.command_id, action: payload.action)
         }
+        let recordedMessage = try Self.recordedMessage(payload)
         let result = Components.Schemas.CommandResult(
             record: .init(
                 command_id: command.command_id,
@@ -1151,14 +1175,64 @@ public actor MockServer {
                 // Conversation content renders in the record even when empty
                 // (one byte-form per write-once record, domain.NewCommand);
                 // attachment order is authored, never canonicalized.
-                message: payload.message ?? "",
+                message: recordedMessage,
                 attachments: payload.attachments ?? []
             ),
             revision: revision
         )
-        commandsByID[command.command_id] = NormalizedCommand(command)
+        commandsByID[command.command_id] = NormalizedCommand(
+            command, message: recordedMessage)
         resultsByCommandID[command.command_id] = result
         return .ok(result)
+    }
+
+    private static func recordedMessage(
+        _ payload: Components.Schemas.DecisionPayload
+    ) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        switch payload.action {
+        case .start_with_changes:
+            guard let revision = payload.run_proposal_revision?.value1 else {
+                return payload.message ?? ""
+            }
+            let touchesControlPlane = revision.scope.touches_control_plane ? "true" : "false"
+            return "{\"intent\":\"\(revision.intent.rawValue)\","
+                + "\"expected_cost_units\":\(revision.expected_cost_units),"
+                + "\"scope\":{\"component_count\":\(revision.scope.component_count),"
+                + "\"declared_path_count\":\(revision.scope.declared_path_count),"
+                + "\"touches_control_plane\":\(touchesControlPlane)}}"
+        case .snooze:
+            guard let until = payload.snooze_until else { return payload.message ?? "" }
+            return try RFC3339DateTranscoder().encode(until)
+        case .choose_alternative_route:
+            guard let choices = payload.alternative_choices else {
+                return payload.message ?? ""
+            }
+            return String(
+                decoding: try encoder.encode(choices.sorted { $0.finding_id < $1.finding_id }),
+                as: UTF8.self
+            )
+        default:
+            return payload.message ?? ""
+        }
+    }
+
+    /// Reconstruct the body Signet compares on command-id replay. A valid
+    /// typed payload becomes its canonical durable message; malformed typed
+    /// input falls back to the raw structural message, so the already-written
+    /// command remains the sole replay authority.
+    private static func normalizedReplayCommand(
+        _ command: Components.Schemas.ClientCommand
+    ) -> NormalizedCommand {
+        let message: String
+        do {
+            try MockContractValidation.validateActionInput(command)
+            message = try recordedMessage(command.payload)
+        } catch {
+            message = command.payload.message ?? ""
+        }
+        return NormalizedCommand(command, message: message)
     }
 
     private func convergeProposalSnoozes() {

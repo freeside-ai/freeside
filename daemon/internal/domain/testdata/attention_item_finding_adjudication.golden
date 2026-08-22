@@ -1,0 +1,78 @@
+{
+  "id": "item-finding-adjudication",
+  "project_id": "proj-1",
+  "subject": {
+    "subject_type": "run",
+    "subject_id": "run-1",
+    "run_id": "run-1"
+  },
+  "type": "finding_adjudication",
+  "priority": "high",
+  "reason": "a review finding needs an adjudicated route",
+  "requested_decision": [
+    "accept_recommended_route",
+    "choose_alternative_route",
+    "discuss",
+    "stop"
+  ],
+  "evidence_snapshot": null,
+  "agent_claims": null,
+  "artifact_digests": [
+    "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  ],
+  "pr_head_sha": "",
+  "pr_reference": null,
+  "commit_plan_notice": null,
+  "base_freshness": null,
+  "readiness_invalidation": null,
+  "review_recovery_binding": null,
+  "codex_reenrollment_recovery_binding": null,
+  "review_configuration_recovery": null,
+  "finding_adjudication": {
+    "run_id": "run-1",
+    "round": 2,
+    "adjudication_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "proposals": [
+      {
+        "finding_id": "finding-1",
+        "producer": "model",
+        "goal_relationship": "contradictory",
+        "compatibility": null,
+        "route": "decline",
+        "rationale": "the finding contradicts the approved work unit",
+        "cited_rules": [
+          "AGENTS.md: stay focused"
+        ],
+        "assumptions": [
+          "the reported path is accurate"
+        ],
+        "open_questions": [
+          "Should a follow-up issue be filed?"
+        ],
+        "confidence": "high",
+        "offered_alternatives": [
+          {
+            "route": "dispute",
+            "consequence": "ask a human to resolve the contract conflict"
+          }
+        ]
+      }
+    ]
+  },
+  "item_version": 1,
+  "interruption_class": "planned_gate",
+  "conversation_id": null,
+  "timing": {
+    "delivery_count": 0,
+    "first_submitted_at": null,
+    "first_accepted_at": null,
+    "first_opened_at": null,
+    "submit_to_first_open": null
+  },
+  "created_at": null,
+  "expires_when": null,
+  "decided_at": null,
+  "posture": null,
+  "blocking_supersession": null,
+  "status": "open"
+}

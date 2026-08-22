@@ -35,6 +35,7 @@
     "repository_id": 84958515,
     "superseded_profile_digest": "sha256:profile-superseded"
   },
+  "finding_adjudication": null,
   "item_version": 1,
   "interruption_class": "planned_gate",
   "conversation_id": null,

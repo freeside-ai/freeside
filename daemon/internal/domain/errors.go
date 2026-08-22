@@ -264,6 +264,9 @@ var (
 	ErrReviewConfigRecoveryBindingMissing     = errors.New("review configuration item lacks its recovery binding")
 	ErrReviewConfigRecoveryBindingOutsideItem = errors.New("review configuration recovery binding is a review_configuration semantic")
 	ErrReviewConfigRecoveryBindingMismatch    = errors.New("review configuration recovery binding disagrees with its persisted authority")
+	ErrFindingAdjudicationBindingMissing      = errors.New("finding adjudication item lacks its binding")
+	ErrFindingAdjudicationBindingOutsideItem  = errors.New("finding adjudication binding is a finding_adjudication semantic")
+	ErrFindingAdjudicationBindingMismatch     = errors.New("finding adjudication binding disagrees with its persisted authority")
 	ErrReviewConfigSupersessionInvalid        = errors.New("review configuration supersession exceeds the review configuration digest")
 	// ErrReviewConfigRecoveryIneffective classifies every determinate
 	// integrity or policy rejection of a persisted adoption on the read

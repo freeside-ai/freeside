@@ -51,6 +51,30 @@ func validItemInput(typ domain.AttentionType) domain.AttentionItemInput {
 			SupersededProfileDigest: "sha256:profile-superseded",
 		}
 	}
+	if typ == domain.AttentionFindingAdjudication {
+		runID := domain.RunID("run-1")
+		confidence := domain.ConfidenceHigh
+		in.Subject.RunID = &runID
+		in.RequestedDecision = []domain.Action{
+			domain.ActionAcceptRecommendedRoute, domain.ActionChooseAlternativeRoute,
+			domain.ActionDiscuss, domain.ActionStop,
+		}
+		in.FindingAdjudication = &domain.FindingAdjudicationBinding{
+			RunID: runID, Round: 2, AdjudicationDigest: "sha256:adjudication",
+			Proposals: []domain.FindingAdjudicationProposal{{
+				FindingID: "finding-1", Producer: domain.AdjudicationProducerModel,
+				GoalRelationship: domain.GoalContradictory, Route: domain.RouteDecline,
+				Rationale:     "the finding contradicts the approved work unit",
+				CitedRules:    []string{"AGENTS.md: stay focused"},
+				Assumptions:   []string{"the reported path is accurate"},
+				OpenQuestions: []string{"Should this become a follow-up?"},
+				Confidence:    &confidence,
+				OfferedAlternatives: []domain.OfferedAlternative{{
+					Route: domain.RouteDispute, Consequence: "ask a human to resolve the conflict",
+				}},
+			}},
+		}
+	}
 	if typ == domain.AttentionReadyForFinalReview {
 		in.PRReference = &domain.PRReference{Repo: "owner/repo", Number: 123}
 	}
@@ -78,8 +102,8 @@ func textClaims(text domain.ClaimText, digest domain.Digest) []domain.AgentClaim
 // attention types constructs a valid item; an unknown type and an invalid
 // subject type are rejected.
 func TestNewAttentionItemTypes(t *testing.T) {
-	if len(domain.AllAttentionTypes) != 12 {
-		t.Fatalf("expected twelve Phase 1 attention types, got %d", len(domain.AllAttentionTypes))
+	if len(domain.AllAttentionTypes) != 13 {
+		t.Fatalf("expected thirteen Phase 1 attention types, got %d", len(domain.AllAttentionTypes))
 	}
 	for _, typ := range domain.AllAttentionTypes {
 		t.Run(string(typ), func(t *testing.T) {
