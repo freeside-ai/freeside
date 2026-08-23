@@ -22,6 +22,7 @@ func validReviewRecord() domain.ReviewRecord {
 
 func TestReviewDispositionRecordValidate(t *testing.T) {
 	t.Parallel()
+	adjudicationDigest := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	valid := domain.ReviewDispositionRecord{
 		FindingID: "finding-1", RunID: "run-1", Round: 1,
 		Disposition: domain.ReviewDispositionFixed, Reason: "fixed in abc123",
@@ -50,6 +51,7 @@ func TestReviewDispositionRecordValidate(t *testing.T) {
 	}
 	deferred := valid
 	deferred.Disposition = domain.ReviewDispositionDeferred
+	deferred.AdjudicationDigest = adjudicationDigest
 	deferred.RemediationInvocationID = ""
 	if err := deferred.Validate(); err != nil {
 		t.Fatalf("valid deferred disposition rejected: %v", err)
@@ -57,6 +59,20 @@ func TestReviewDispositionRecordValidate(t *testing.T) {
 	deferred.RemediationInvocationID = "review-run-1-2"
 	if err := deferred.Validate(); !errors.Is(err, domain.ErrInvalidHeadBinding) {
 		t.Fatalf("deferred disposition with remediation head = %v, want invalid binding", err)
+	}
+	deferred.RemediationInvocationID = ""
+	deferred.AdjudicationDigest = ""
+	if err := deferred.Validate(); !errors.Is(err, domain.ErrEmptyField) {
+		t.Fatalf("deferred disposition without adjudication = %v, want empty field", err)
+	}
+	deferred.AdjudicationDigest = "sha256:not-a-digest"
+	if err := deferred.Validate(); !errors.Is(err, domain.ErrInvalidDispositionAdjudication) {
+		t.Fatalf("deferred disposition with malformed adjudication = %v, want invalid binding", err)
+	}
+	fixedWithAdjudication := valid
+	fixedWithAdjudication.AdjudicationDigest = adjudicationDigest
+	if err := fixedWithAdjudication.Validate(); !errors.Is(err, domain.ErrInvalidDispositionAdjudication) {
+		t.Fatalf("fixed disposition with adjudication = %v, want invalid binding", err)
 	}
 }
 

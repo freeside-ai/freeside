@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -123,6 +124,35 @@ func TestFindingDispositionReadFailsClosedOnTamper(t *testing.T) {
 				t.Fatalf("tampered disposition read = %v", err)
 			}
 		})
+	}
+}
+
+func TestFindingDispositionReadRejectsLegacyReasonOnlyRecord(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st, disposition, _ := seedFindingDisposition(t)
+	if _, err := st.db.ExecContext(ctx, `DELETE FROM finding_dispositions`); err != nil {
+		t.Fatal(err)
+	}
+	disposition.Disposition = domain.ReviewDispositionDeclined
+	disposition.RemediationInvocationID = ""
+	disposition.Reason = "legacy prose cites sha256:deadbeef"
+	body, err := json.Marshal(disposition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.ExecContext(ctx, putFindingDispositionSQL,
+		disposition.FindingID, disposition.RunID, disposition.Round,
+		disposition.Disposition, disposition.Reason, disposition.RemediationInvocationID,
+		formatTime(disposition.CreatedAt), reviewBodyDigest(string(body)), string(body)); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	err = st.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.ListFindingDispositions(ctx, disposition.RunID)
+		return err
+	})
+	if !errors.Is(err, domain.ErrEmptyField) {
+		t.Fatalf("legacy reason-only disposition read = %v, want ErrEmptyField", err)
 	}
 }
 

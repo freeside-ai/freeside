@@ -82,15 +82,17 @@ func dispositionHistoryFixture(t *testing.T) DispositionHistory {
 			},
 			{
 				FindingID: "finding-declined", RunID: runID, Round: 1,
-				Disposition: domain.ReviewDispositionDeclined,
-				Reason:      "not reproducible under the exact fixture",
-				CreatedAt:   time.Date(2026, 8, 11, 15, 9, 0, 0, time.UTC),
+				Disposition:        domain.ReviewDispositionDeclined,
+				Reason:             "not reproducible under the exact fixture",
+				AdjudicationDigest: dispositionDigestA,
+				CreatedAt:          time.Date(2026, 8, 11, 15, 9, 0, 0, time.UTC),
 			},
 			{
 				FindingID: "finding-deferred", RunID: runID, Round: 1,
-				Disposition: domain.ReviewDispositionDeferred,
-				Reason:      "follow-up is outside this work unit",
-				CreatedAt:   time.Date(2026, 8, 11, 15, 8, 0, 0, time.UTC),
+				Disposition:        domain.ReviewDispositionDeferred,
+				Reason:             "follow-up is outside this work unit",
+				AdjudicationDigest: dispositionDigestB,
+				CreatedAt:          time.Date(2026, 8, 11, 15, 8, 0, 0, time.UTC),
 			},
 		},
 		readiness: domain.ReadinessVerdict{
@@ -192,7 +194,8 @@ func TestDispositionHistoryFailsClosedOnIncompleteOrStaleRecords(t *testing.T) {
 				}},
 				dispositions: []domain.ReviewDispositionRecord{{
 					FindingID: "finding", RunID: runID, Round: 1, Disposition: domain.ReviewDispositionDeclined,
-					Reason: "reason", CreatedAt: time.Date(2026, 8, 11, 1, 1, 0, 0, time.UTC),
+					Reason: "reason", AdjudicationDigest: dispositionDigestA,
+					CreatedAt: time.Date(2026, 8, 11, 1, 1, 0, 0, time.UTC),
 				}},
 				readiness: domain.ReadinessVerdict{Class: domain.ReadinessReadyClean, EvaluationSetDigest: dispositionDigestC},
 			}

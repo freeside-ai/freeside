@@ -252,8 +252,10 @@ func TestGolden(t *testing.T) {
 	}
 	reviewDisposition := domain.ReviewDispositionRecord{
 		FindingID: finding.ID, RunID: finding.RunID, Round: 1,
-		Disposition: domain.ReviewDispositionDeferred,
-		Reason:      "requires a separate hardening unit", CreatedAt: ts,
+		Disposition:        domain.ReviewDispositionDeferred,
+		Reason:             "requires a separate hardening unit",
+		AdjudicationDigest: domain.Digest("sha256:" + strings.Repeat("a", 64)),
+		CreatedAt:          ts,
 	}
 	initiator := domain.InitiatorConfig{
 		Type: domain.InitiatorTypeLabel, Label: "freeside", Mode: domain.InitiatorModePropose,

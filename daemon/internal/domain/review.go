@@ -38,6 +38,7 @@ type ReviewDispositionRecord struct {
 	Round                   int               `json:"round"`
 	Disposition             ReviewDisposition `json:"disposition"`
 	Reason                  string            `json:"reason"`
+	AdjudicationDigest      Digest            `json:"adjudication_digest,omitempty"`
 	RemediationInvocationID InvocationID      `json:"remediation_invocation_id,omitempty"`
 	CreatedAt               time.Time         `json:"created_at"`
 }
@@ -55,6 +56,13 @@ func (r ReviewDispositionRecord) Validate() error {
 		return fmt.Errorf("review disposition %q: %w", r.Disposition, ErrInvalidReviewDisposition)
 	case r.Reason == "":
 		return fmt.Errorf("review disposition reason: %w", ErrEmptyField)
+	case r.Disposition != ReviewDispositionFixed && r.AdjudicationDigest == "":
+		return fmt.Errorf("final review disposition adjudication binding: %w", ErrEmptyField)
+	case r.Disposition != ReviewDispositionFixed && !contentaddr.Valid(string(r.AdjudicationDigest)):
+		return fmt.Errorf("final review disposition adjudication binding %q: %w",
+			r.AdjudicationDigest, ErrInvalidDispositionAdjudication)
+	case r.Disposition == ReviewDispositionFixed && r.AdjudicationDigest != "":
+		return fmt.Errorf("fixed review disposition adjudication binding: %w", ErrInvalidDispositionAdjudication)
 	case r.Disposition == ReviewDispositionFixed && r.RemediationInvocationID == "":
 		return fmt.Errorf("fixed review disposition remediation binding: %w", ErrEmptyField)
 	case r.Disposition != ReviewDispositionFixed && r.RemediationInvocationID != "":

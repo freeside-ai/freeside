@@ -44,6 +44,43 @@ func dispositionReviewRecord(
 	return record
 }
 
+func finalDispositionAdjudication(
+	t *testing.T,
+	runID domain.RunID,
+	round int,
+	dispositions map[domain.FindingID]domain.ReviewDisposition,
+	createdAt time.Time,
+) domain.FindingAdjudication {
+	t.Helper()
+	entries := make([]domain.FindingAdjudicationEntry, 0, len(dispositions))
+	for findingID, disposition := range dispositions {
+		var goal domain.GoalRelationship
+		var route domain.AdjudicationRoute
+		switch disposition {
+		case domain.ReviewDispositionDeclined:
+			goal, route = domain.GoalContradictory, domain.RouteDecline
+		case domain.ReviewDispositionDeferred:
+			goal, route = domain.GoalAdjacent, domain.RouteDefer
+		case domain.ReviewDispositionFixed:
+			t.Fatalf("fixed disposition %q does not use an adjudication binding", findingID)
+		}
+		entry, err := domain.NewModelAdjudicationEntry(
+			findingID, goal, nil, route, domain.ConfidenceHigh,
+			"authorizes the final disposition", nil, nil, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("new adjudication entry %q: %v", findingID, err)
+		}
+		entries = append(entries, entry)
+	}
+	artifact, err := domain.NewFindingAdjudication(
+		runID, round, adjSpecDigest, adjInstructionDigest, adjPolicyDigest,
+		entries, createdAt)
+	if err != nil {
+		t.Fatalf("new final-disposition adjudication: %v", err)
+	}
+	return artifact
+}
+
 func TestFindingDispositionsPersistAcrossRestart(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -54,7 +91,7 @@ func TestFindingDispositionsPersistAcrossRestart(t *testing.T) {
 	}
 	run := domain.Run{
 		ID: "run-dispositions", ProjectID: "project-1",
-		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+		SpecDigest: adjSpecDigest, PolicyDigest: adjPolicyDigest,
 	}
 	at := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	findingA := domain.Finding{
@@ -69,9 +106,13 @@ func TestFindingDispositionsPersistAcrossRestart(t *testing.T) {
 		t, run.ID, 1, []domain.FindingID{findingB.ID, findingA.ID}, at)
 	secondReview := dispositionReviewRecord(t, run.ID, 2, []domain.FindingID{findingA.ID}, at.Add(time.Minute))
 	thirdReview := dispositionReviewRecord(t, run.ID, 3, nil, at.Add(90*time.Second))
+	adjudication := finalDispositionAdjudication(t, run.ID, 1, map[domain.FindingID]domain.ReviewDisposition{
+		findingA.ID: domain.ReviewDispositionDeferred,
+		findingB.ID: domain.ReviewDispositionDeclined,
+	}, at.Add(90*time.Second))
 	want := []domain.ReviewDispositionRecord{
-		{FindingID: findingA.ID, RunID: run.ID, Round: 1, Disposition: domain.ReviewDispositionDeferred, Reason: "tracked in issue 700", CreatedAt: at.Add(2 * time.Minute)},
-		{FindingID: findingB.ID, RunID: run.ID, Round: 1, Disposition: domain.ReviewDispositionDeclined, Reason: "contradicted by the contract test", CreatedAt: at.Add(3 * time.Minute)},
+		{FindingID: findingA.ID, RunID: run.ID, Round: 1, Disposition: domain.ReviewDispositionDeferred, Reason: "tracked in issue 700", AdjudicationDigest: adjudication.Digest, CreatedAt: at.Add(2 * time.Minute)},
+		{FindingID: findingB.ID, RunID: run.ID, Round: 1, Disposition: domain.ReviewDispositionDeclined, Reason: "contradicted by the contract test", AdjudicationDigest: adjudication.Digest, CreatedAt: at.Add(3 * time.Minute)},
 		{FindingID: findingA.ID, RunID: run.ID, Round: 2, Disposition: domain.ReviewDispositionFixed, Reason: "fixed in the remediation head", RemediationInvocationID: thirdReview.InvocationID, CreatedAt: at.Add(4 * time.Minute)},
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
@@ -85,6 +126,9 @@ func TestFindingDispositionsPersistAcrossRestart(t *testing.T) {
 			return err
 		}
 		if err := tx.PutReviewRecord(ctx, thirdReview, nil); err != nil {
+			return err
+		}
+		if err := tx.PutFindingAdjudication(ctx, adjudication); err != nil {
 			return err
 		}
 		for _, disposition := range want {
@@ -140,6 +184,111 @@ func TestFindingDispositionsPersistAcrossRestart(t *testing.T) {
 		return tx.PutFindingDisposition(ctx, rewrite)
 	}); !errors.Is(err, store.ErrImmutableConflict) {
 		t.Fatalf("disposition rewrite = %v, want immutable conflict", err)
+	}
+}
+
+func TestPutFindingDispositionRejectsInvalidAdjudicationBinding(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		digest      func(domain.FindingAdjudication, domain.FindingAdjudication, domain.FindingAdjudication) domain.Digest
+		want        error
+		disposition domain.ReviewDisposition
+	}{
+		{
+			name: "missing", disposition: domain.ReviewDispositionDeclined,
+			digest: func(domain.FindingAdjudication, domain.FindingAdjudication, domain.FindingAdjudication) domain.Digest {
+				return ""
+			},
+			want: domain.ErrEmptyField,
+		},
+		{
+			name: "dangling", disposition: domain.ReviewDispositionDeclined,
+			digest: func(domain.FindingAdjudication, domain.FindingAdjudication, domain.FindingAdjudication) domain.Digest {
+				return domain.Digest("sha256:" + strings.Repeat("f", 64))
+			},
+			want: store.ErrNotFound,
+		},
+		{
+			name: "wrong round", disposition: domain.ReviewDispositionDeferred,
+			digest: func(_ domain.FindingAdjudication, roundTwo domain.FindingAdjudication, _ domain.FindingAdjudication) domain.Digest {
+				return roundTwo.Digest
+			},
+			want: domain.ErrParentKeyMismatch,
+		},
+		{
+			name: "wrong run", disposition: domain.ReviewDispositionDeclined,
+			digest: func(_ domain.FindingAdjudication, _ domain.FindingAdjudication, otherRun domain.FindingAdjudication) domain.Digest {
+				return otherRun.Digest
+			},
+			want: domain.ErrParentKeyMismatch,
+		},
+		{
+			name: "route not admitted", disposition: domain.ReviewDispositionDeferred,
+			digest: func(roundOne domain.FindingAdjudication, _ domain.FindingAdjudication, _ domain.FindingAdjudication) domain.Digest {
+				return roundOne.Digest
+			},
+			want: domain.ErrInvalidDispositionAdjudication,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			st := openStore(t, store.Options{})
+			at := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+			run := domain.Run{ID: "run-binding", ProjectID: "project-1", SpecDigest: adjSpecDigest, PolicyDigest: adjPolicyDigest}
+			finding := domain.Finding{ID: "finding-binding", RunID: run.ID, Source: "codex", CreatedAt: at}
+			roundOneRecord := dispositionReviewRecord(t, run.ID, 1, []domain.FindingID{finding.ID}, at)
+			roundTwoRecord := dispositionReviewRecord(t, run.ID, 2, []domain.FindingID{finding.ID}, at.Add(time.Minute))
+			otherRun := domain.Run{ID: "run-other-binding", ProjectID: "project-1", SpecDigest: adjSpecDigest, PolicyDigest: adjPolicyDigest}
+			otherFinding := domain.Finding{ID: "finding-other-binding", RunID: otherRun.ID, Source: "codex", CreatedAt: at}
+			otherRecord := dispositionReviewRecord(t, otherRun.ID, 1, []domain.FindingID{otherFinding.ID}, at)
+			roundOne := finalDispositionAdjudication(t, run.ID, 1, map[domain.FindingID]domain.ReviewDisposition{
+				finding.ID: domain.ReviewDispositionDeclined,
+			}, at)
+			roundTwo := finalDispositionAdjudication(t, run.ID, 2, map[domain.FindingID]domain.ReviewDisposition{
+				finding.ID: domain.ReviewDispositionDeferred,
+			}, at.Add(time.Minute))
+			other := finalDispositionAdjudication(t, otherRun.ID, 1, map[domain.FindingID]domain.ReviewDisposition{
+				otherFinding.ID: domain.ReviewDispositionDeclined,
+			}, at)
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				if err := tx.PutRun(ctx, run); err != nil {
+					return err
+				}
+				if err := tx.PutRun(ctx, otherRun); err != nil {
+					return err
+				}
+				if err := tx.PutReviewRecord(ctx, roundOneRecord, []domain.Finding{finding}); err != nil {
+					return err
+				}
+				if err := tx.PutReviewRecord(ctx, roundTwoRecord, []domain.Finding{finding}); err != nil {
+					return err
+				}
+				if err := tx.PutReviewRecord(ctx, otherRecord, []domain.Finding{otherFinding}); err != nil {
+					return err
+				}
+				for _, artifact := range []domain.FindingAdjudication{roundOne, roundTwo, other} {
+					if err := tx.PutFindingAdjudication(ctx, artifact); err != nil {
+						return err
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			disposition := domain.ReviewDispositionRecord{
+				FindingID: finding.ID, RunID: run.ID, Round: 1,
+				Disposition: tc.disposition, Reason: "final disposition",
+				AdjudicationDigest: tc.digest(roundOne, roundTwo, other), CreatedAt: at,
+			}
+			err := st.Write(ctx, func(tx *store.WriteTx) error {
+				return tx.PutFindingDisposition(ctx, disposition)
+			})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("put = %v, want %v", err, tc.want)
+			}
+		})
 	}
 }
 

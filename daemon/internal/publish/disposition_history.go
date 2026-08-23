@@ -593,6 +593,9 @@ func RenderDispositionHistory(h DispositionHistory) (string, error) {
 			fmt.Fprintf(&out, "    - Reviewer message (claim): %s\n", boundedDispositionClaim(finding.Message))
 			fmt.Fprintf(&out, "    - Recorded rationale (claim): %s\n", boundedDispositionClaim(disposition.Reason))
 			fmt.Fprintf(&out, "    - Recorded: %s\n", dispositionCode(disposition.CreatedAt.UTC().Format(time.RFC3339Nano)))
+			if disposition.AdjudicationDigest != "" {
+				fmt.Fprintf(&out, "    - Adjudication artifact: %s\n", dispositionCode(string(disposition.AdjudicationDigest)))
+			}
 			if disposition.RemediationInvocationID != "" {
 				fmt.Fprintf(&out, "    - Remediation review: %s\n", dispositionCode(string(disposition.RemediationInvocationID)))
 			}

@@ -100,7 +100,8 @@ func TestDesiredPRContentBoundsOversizedFindingClaim(t *testing.T) {
 		dispositions: []domain.ReviewDispositionRecord{{
 			FindingID: "finding-large", RunID: "run-large-finding", Round: 1,
 			Disposition: domain.ReviewDispositionDeclined, Reason: "not reproducible",
-			CreatedAt: time.Date(2026, 8, 11, 12, 0, 45, 0, time.UTC),
+			AdjudicationDigest: digest,
+			CreatedAt:          time.Date(2026, 8, 11, 12, 0, 45, 0, time.UTC),
 		}},
 		readiness: domain.ReadinessVerdict{Class: domain.ReadinessReadyClean, EvaluationSetDigest: digest},
 	}, nil)
@@ -146,7 +147,8 @@ func TestDesiredPRContentBoundsAggregateDispositionHistory(t *testing.T) {
 		dispositions[i] = domain.ReviewDispositionRecord{
 			FindingID: findingID, RunID: "run-aggregate-findings", Round: 1,
 			Disposition: domain.ReviewDispositionDeclined, Reason: claim,
-			CreatedAt: time.Date(2026, 8, 11, 13, 1, i, 0, time.UTC),
+			AdjudicationDigest: digest,
+			CreatedAt:          time.Date(2026, 8, 11, 13, 1, i, 0, time.UTC),
 		}
 	}
 	first, err := domain.NewReviewRecord(domain.ReviewRecord{
