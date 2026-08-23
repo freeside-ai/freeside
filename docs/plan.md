@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 38
+revision: 39
 status: active
-updated: 2026-08-21
+updated: 2026-08-23
 ---
 
 # Freeside
@@ -140,8 +140,10 @@ decide whether passing them yields a positive return.
    owns a model loop.
 4. It does not modify itself at runtime. Control-plane configuration is never
    hot-modified.
-5. Automatic provider fallback, voice, a pipeline DSL, and briefings are out of
-   scope until the recorded outcomes of later phases earn them.
+5. Silent provider fallback, voice, a pipeline DSL, and briefings are out of
+   scope until the recorded outcomes of later phases earn them. A switch a
+   project lineup names per failure class is explicit and recorded, not
+   fallback (Section 4).
 6. It is neither a formal pre-build validation study nor a generic CI security
    auditor.
 7. It is not a general-purpose synchronization platform. Server-authoritative
@@ -262,7 +264,7 @@ Approval is not a universal action.
 | `finding_adjudication` | Accept the recommended route, choose an offered alternative, discuss, or stop (added with the Section 7 adjudication routing, 1B). Acceptance binds to the adjudication artifact digest and the item version; a Discuss response re-invokes adjudication against the same version bindings, and the new artifact supersedes the item. Stop leaves the run parked. |
 | `review_contradiction` | Recover only the exact persisted contradiction named by the card, or leave it parked. The card renders the bound run, invocation, round, base SHA, head SHA, and immutable failure-body digest; recovery preserves the original failure evidence. |
 | `review_configuration` | Adopt the review configuration (`adopt_review_configuration`), discuss, or stop. The run is parked, not terminal: adoption authorizes an operator-approved, review-configuration-only profile supersession of exactly the parked failure named by the card's binding, resolved at decision time as the repository's currently activated revision and re-gated on every read; stop concludes the run as a configuration failure always did. The card renders the same bound coordinates as `review_contradiction` plus the superseded profile digest. |
-| `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. When the failure is classified as provider quota, credential expiry, or capacity, the card additionally offers retry under a qualified alternate provider profile or wait (the explicit alternate-provider retry below). |
+| `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. When the failure is classified as provider quota, credential expiry, or capacity, the card additionally offers retry under a qualified alternate agent or wait (the explicit alternate-agent retry below). |
 | `agent_question` | Answer and retry, answer without retry, or stop. |
 | `publish_blocked` | Rerun trust evaluation, choose an approved alternate publication profile, inspect the trust failure, or stop. |
 | `ready_for_final_review` | View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. |
@@ -274,23 +276,28 @@ Approval is not a universal action.
 Section 9 governs each type's presentation: what its card leads with and what
 layers below.
 
-**Explicit alternate-provider retry.** A provider quota, credential expiry,
+**Explicit alternate-agent retry.** A provider quota, credential expiry,
 or capacity failure offers three resolutions beyond discuss: retry under a
-qualified alternate provider profile, wait, or stop. Qualified means a
-profile that is enabled, eligible for the failed role, and compatible with
-the run's credential mode and egress profile (Section 5.4); wait leaves the
-run parked with the same card until the operator returns to it. The offer
-is stated once here and applies on whichever card surfaces such a failure,
-including a review-side quota or expiry failure; it never widens a card's
-other actions. Each switch is a new recorded attempt that preserves the
-original failure and its evidence, re-evaluates cost owner and the Section
-7 review-independence check against the new selection, and continues
-provider state only where compatibility is proven (Section 5.8; a
-cross-profile switch defaults to a fresh invocation). A recurring choice
-becomes a project-policy proposal PR in the `review_diminishing_returns`
-shape, never a remembered default: Freeside does not learn a preferred
-profile from past switches. Automatic fallback stays out of scope (Section
-2 item 5; Section 14, single-provider execution capacity).
+qualified alternate agent (Section 5.4), wait, or stop. Qualified is
+failure-specific, read from recorded facts: a quota failure needs an agent
+on a different usage pool (two harness clients on one subscription share
+one, so that switch is an experiment, never a hedge); an expiry or
+revocation needs an enrollment with a valid generation; a capacity failure
+needs a different service route. Wait leaves the run parked with the same
+card until the operator returns to it. The offer is stated once here and
+applies on whichever card surfaces such a failure, including a review-side
+quota or expiry failure; it never widens a card's other actions. Each
+switch is a new recorded attempt that preserves the original failure and
+its evidence, re-evaluates cost owner and the Section 7 review-independence
+rule against the new agent, and continues provider state only where the
+adapter proves compatibility (Section 5.8; a different adapter is a fresh
+invocation). By default the operator chooses from the card. A project
+lineup may instead name the switch per failure class; it then happens and
+is carded, a recorded choice like any other. Freeside never learns a
+preferred agent from past switches, and a switch is never silent (Section
+2 item 5; Section 14, single-provider execution capacity). Switching the
+review agent opens a new convergence segment (Section 7): the new
+reviewer's first pass is not the old reviewer's next round.
 
 ### Lifecycle Rules
 
@@ -500,9 +507,10 @@ accepted result. The workflow never advances twice.
 
 Phase 1 uses:
 
-- one local driver, **Claude**, in 1A; a second local driver, **Codex**,
-  joins in 1B as an execution capacity hedge (Section 11), blocked on its
-  pre-adoption gates (#401);
+- one harness adapter, **Claude Code**, in 1A; a second, the **Codex
+  CLI**, joins in 1B as an execution capacity hedge (Section 11), blocked
+  on its pre-adoption gates (#401); further adapters (pi first) follow as
+  consumers of the same admitted-agent contract (Section 5.4);
 - one production review source, a **Freeside-invoked local Codex review**
   binding (Section 7); GitHub-native Codex review is best-effort extra
   evidence and never satisfies the review requirement; and
@@ -594,11 +602,19 @@ to artifact IDs, not live web state.
 
 Provider concurrency has two independent controls:
 
-`AuthIdentity {auth_store_mutation_lease, auth_store_volume,
-max_parallel_executions, refresh_strategy, supports_read_only_auth_snapshot}`
+`AuthIdentity {account_binding, usage_pool, budget,
+auth_store_mutation_lease, max_parallel_executions, enabled, cost_owner}`
+
+`ClientEnrollment {auth_identity_id, harness_client, route, auth_method,
+credential_mode, refresh_strategy, supports_read_only_auth_snapshot,
+generations[]}`, each generation carrying the exact store locator
+(`auth_store_volume`), the store manifest digest, the lease fence, the
+account binding, and the token expiry where the auth method exposes one
+(admitted agents, below).
 
 1. Auth-store mutation, including refresh, login state, configuration writes,
-   and store replacement, is serialized per identity.
+   and store replacement, is serialized per identity: the one lease fences
+   every enrollment's store.
 2. Inference execution has a separate parallelism limit. 1B establishes that
    limit experimentally and exposes it to WIP scheduling.
 
@@ -606,179 +622,236 @@ If only one execution is safe, scheduling shows that constraint instead of
 hiding it in a lock. API-key fallback is always available. Vendor tooling stays
 native and unmodified.
 
-**Provider profiles.** A `ProviderProfile` is the operator-facing object
-over an `AuthIdentity`:
+**Admitted agents.** Freeside admits what an agent consumes by digest: the
+base commit, the prompt package, the vendor instructions, the policy, the
+input artifacts (Sections 5.8, 5.9, 5.12). The agent's own configuration is
+the one major input not admitted that way until this revision. An **agent**
+is one operator-authored document in the control-plane tree, reviewed as a
+diff, with four lines and no role:
 
-`ProviderProfile {id, name, provider, auth_identity_id, credential_mode,
-approved_model_configuration, role_eligibility, cost_owner, enabled,
-version}`
+```text
+agent sol-via-pi
+  who      enrollment  openai-chatgpt-A/pi    # this account, this client, this route
+  through  route       openai_chatgpt_codex   # hosts, protocol, terms basis
+  running  adapter     pi_json_v1@<build>     # Freeside adapter; pins the harness build
+  asking   offer       gpt-5.6-sol, effort max
+```
 
-The `id` is daemon-issued and immutable, never reused after deletion, and
-is what selections, composition manifests, and run records bind together
-with the version; the name is operator-chosen (`work`, `personal`),
-unique among the operator's profiles, and resolved to the `id` once, when
-a request or a per-project policy is authored; requests, policies, and
-records persist the `id`, so a later rename or name reuse can never
-redirect an existing policy; the provider is the
-vendor; `auth_identity_id` names exactly one identity, is immutable after
-creation (binding another identity means a new profile with a new `id`,
-so a persisted `id` can never be redirected to another account), and at
-most one profile
-names each identity (an identity enrolled through the interim surface has
-none until `auth add` adopts it; once adopted, a re-enrollment versions
-the one profile it backs); the credential mode is one of the modes above and is
-an enrollment fact the profile mirrors, never an editable selection: its
-trusted source is an identity-bound enrollment record that #406 introduces
-and the daemon-owned enrollment transaction writes, carrying the enrolled
-mode and the authoritative account binding (Codex: the account identity the
-transaction reads; Claude: the recorded operator attestation); no such
-record exists today (the Codex re-enrollment journal carries only operation
-coordinates, store digest, and expiry, and Claude has none), so #867
-migrates identities enrolled through the interim surface by writing the
-record at adoption (an adoption that cannot write it fails, and an
-identity without a record is never selectable); the record's `(provider, account binding)` is unique across
-identities, rejected as a duplicate at enrollment, adoption, and
-reconstruction, so one subscription never holds two mutation leases or two
-execution budgets and never passes the Section 7 independence check
-against itself (for Claude the key is the recorded attestation, so that
-uniqueness is operator-asserted, like the attestation itself); the
-existing re-enrollment journal and revoked-identity marker
-bind to that record rather than standing in for it, `AuthIdentity` itself
-stays unchanged, and the record, not the profile, is the trusted source at
-reconstruction; the approved model configuration is the model
-and reasoning settings a run may resolve against this profile; role
-eligibility is the set of roles (implementation, review, elaboration) the
-profile may be selected for; `cost_owner` is the operator-authored
-attribution label the interim `-review-cost-owner` flag carries today,
-required at enrollment, versioned like every other edit, and the only
-source the review configuration digest and run records draw cost owner
-from once the flag is removed, never derived from the name or `id`;
-`enabled` is an explicit operator switch; the
-version increments on every edit, so a selection and the records it
-produces bind to an exact profile version. The governing principle:
+The source uses names; the canonical body, which is what is hashed, holds
+the resolved enrollment id, the route, adapter, and offer digests, and the
+effort value. Names live in the tree's name-to-digest map and are never
+part of a digest. Resolution validates the join: the enrollment's route and
+client kind are the agent's route and the adapter's client kind; the effort
+is one the offer allows and the adapter can send; the enrollment's identity
+is enabled. "Harness, model, effort" is how a client renders an agent. A
+**lineup** is a policy's map of roles to agents; the project lineup, or the
+deployment lineup beneath it, is the only standing selection and the only
+approval. The one per-attempt selection is the Section 4 alternate-agent
+card, a recorded choice among agents resolved from the same tree; it never
+approves an agent the tree does not carry and never changes the lineup.
 
-> Provider accounts become first-class, versioned operator objects.
-> Credential authority stays in `AuthIdentity`; resolved facts and digests
-> stay in the composition manifest and run records. Probe output is
-> observation, never configuration authority. Switching account or provider
-> is always an explicit, recorded operator choice, never fallback.
+The lines:
 
-`AuthIdentity` is unchanged: it keeps the credential store, lease, refresh,
-snapshot, and execution-limit facts, and every credential rule in this
-section still binds to it. The profile repeats exactly two identity
-facts, `provider` and `credential_mode`, and the invariants binding it to
-the identity are re-checked at reconstruction and at every selection,
-failing closed: the referenced identity exists, no other profile names
-it, `provider` equals the identity's immutable provider, and
-`credential_mode` equals the mode the enrollment record carries, so
-selection, driver dispatch, the containment record, and the Section 7
-independence check can never name one vendor or mode while lease and
-credential-mount resolution follow another. The profile is a separate object because
-credential identity and runtime configuration change for different reasons:
-a token rotates or a store is re-enrolled without the operator's model
-choice or role eligibility changing, and a model-configuration or
-eligibility edit must never enter the credential transaction. Role
-*eligibility* lives on the profile; role *binding* is made per run or by
-per-project selection and recorded in the composition manifest and run
-records, never on the profile. The Section 7 independence check therefore
-compares provider and `auth_identity_id` across the implementation
-selection and the review selection; it never reads a role label off a
-profile. The profile is a sync-carried domain type landing through its own
-`kind:contract` unit (Section 11, Wave 7); the per-run preflight identity,
-volume, review, and image flag tuple and `enroll-codex`'s required-flag
-set are the interim surface it replaces, not a second surface beside it.
-The cutover is ordered so no enrolled identity goes dark: #406 lands the
-profile and enrollment-record types and their invariants without changing
-selection, the interim flags remain the only selection path until #867
-merges, and #867 carries adoption, the migration of every interim
-identity, and the switch to profile-only selection in one unit, so the
-"no record, never selectable" gate takes effect only once adoption can
-satisfy it; the interim path is removed in that same unit, never retained
-beside profiles. The same cutover covers every persisted pre-profile
-binding, split by whether it records a past selection or feeds a future
-one. A nonterminal run or admission that carries an `auth_identity_id`
-but no profile `id` and version is a record: it is read under an explicit
-legacy rule that keeps its admitted identity and credential mode, never
-resolved against a current profile revision; the rule is permanent, not a
-transition, because terminal pre-profile runs stay immutable history that
-timelines, export, and audit reconstruction must keep reading.
-A persisted request or per-project policy is an input, and today it
-carries no identity of its own: the pre-profile selection is the daemon's
-startup flag pair, `-auth-identity` for the implementation and
-elaboration roles (it is the shared admission environment today) and
-`-review-auth-identity` for the review role, shared by every queued input.
-The cutover therefore consumes those flags as the installation's one
-pre-profile selection: the adoption transaction adopts each flag identity
-(two adoptions when they differ, one when they coincide; the
-implementation-flag profile is eligible for both roles it replaces; the
-cutover is the operator's `auth add` adoption, so the review-flag profile
-takes its `cost_owner` from `-review-cost-owner` and the operator supplies
-the implementation-flag profile's `cost_owner` in that command, the
-adoption refusing to proceed without it rather than inventing one), then
-rewrites every input that carries no binding to the `id` of the profile
-adopted for its role, per input and durably, persisting the `id` alone as
-every input does, so each later selection from it resolves the profile's
-current version and passes the full profile gates (enabled, role
-eligibility, approved model configuration) at that moment, and the run
-record binds the version actually selected; a flag
-identity that cannot be adopted is retired as below and the inputs it
-would have bound stay unbound; the flags are removed only once that
-mapping is recorded, and no legacy selection path exists. An interim identity that cannot be adopted
-(its store is expired or corrupt, so Section 10 enrolls a new identity
-instead) is retired at the cutover: it is recorded as retired and holds
-nothing live. The cutover records `CancellationIntent` for each of its
-nonterminal runs and drives them through the Section 5.7 cancellation
-contract (stop, proven quiescence, ward teardown, `canceled`), raising an
-AttentionItem naming the retired identity; profile-only selection, and
-with it any same-account replacement profile, activates only after every
-such run has closed, because a retired identity has no enrollment record
-and so no lease or execution budget could fence a still-live writer
-against the replacement (the record-only legacy reader still covers a
-retired identity's terminal runs as history; retirement forbids selection
-and credential use, never reading), and its requests and
-policies are left unbound, so a selection from them fails closed with the
-same AttentionItem until the operator explicitly remaps each one to a
-profile and re-requests the stopped work, a recorded choice like any other
-account switch; the cutover never remaps on the operator's behalf. #867 ships
-these rules with the cutover, and a binding it cannot classify, rewrite,
-or retire fails closed.
-This section fixes the principle, the field list, and the trusted sources;
-the field-level schema, validation, the migration of pre-profile
-identities, and the complete lifecycle command set are settled by the
-#406 contract unit and the enrollment unit (#867), not enumerated here.
+- `who` names a record, a `ClientEnrollment`: one `AuthIdentity` × one
+  harness client × one route × one auth method, carrying `credential_mode`.
+  One identity has many enrollments (pi and the Codex CLI on one ChatGPT
+  subscription are one identity, one lease, one budget, two enrollments
+  with distinct sanitized stores). The revision 36 rule holds: an account
+  binding is unique across identities, and every enrollment and
+  generation carries the account binding its identity carries: enrollment,
+  adoption, reconstruction, and admission reject a second identity for one
+  account and a credential whose account differs from its identity's, so
+  one subscription never holds two leases or two budgets and no usage is
+  attributed to the wrong account. Every successful store mutation (login,
+  refresh, re-enrollment) appends an immutable generation entry (lease
+  fence, store manifest digest, account binding, token expiry) under the
+  enrollment and changes no agent; admission records the generation it
+  mounted. The stage receives a daemon-owned, single-route store, never a
+  harness's multi-provider home. `AuthIdentity` keeps the account binding,
+  the usage pool, the account budget and concurrency limit, the one
+  conservative mutation lease that fences every store mutation with
+  enrollment id, generation, exact locator, and manifest digest, and two
+  operator fields, `enabled` and `cost_owner`. The exact store locator,
+  refresh strategy, and snapshot support it carried before this revision
+  are client facts and move to the enrollment and its generations.
+- `route` is a content-addressed fragment with a stable logical id: service
+  operator, protocol, inference authorities, billing mode, fallback policy,
+  and a dated terms basis. An endpoint or terms edit changes the route
+  digest and every agent naming it, never the enrollment.
+- `adapter` is a content-addressed fragment naming the Freeside adapter
+  build and the exact harness build it pins, and declaring the launch
+  capabilities it honours in a closed vocabulary of its own (read tools,
+  mutation tools, exact resume, instruction delivery, structured output,
+  context severance, auxiliary-inference control, store contract per
+  route). `AgentVendor`, the instruction mechanism, is derived from the
+  adapter and never selected by policy.
+- `offer` is a content-addressed fragment: one route's offer of one model,
+  with its route model id, lineage group, `identity_stability` (pinned,
+  rolling, or opaque), allowed effort levels, pricing revision, and an
+  authored `not_after`. The same model through two routes is two offers.
+- `effort` is a value the offer allows; the adapter translates it and the
+  run records the requested and the effective native value. A clamp is
+  rendered as `max → xhigh`, never silently.
 
-**Multi-subscription per provider.** Two identities of one provider, each
-behind its own profile (a work and a personal subscription), are a
-supported shape. Selection among same-provider profiles is explicit (named
-in the run or reattempt request) or per-project policy, never silent: no
-default profile is inferred from enrollment order, recency, or
-availability. Cost owner is read from the selected profile version on
-every selection and recorded
-with it, so one project can attribute a review to one subscription and an
-implementation to another. The operator owns compliance with each
-provider's terms for multi-account use; Freeside attributes usage to a
-named profile and neither endorses nor polices the arrangement (Section 14,
-subscription-terms drift).
+Fragments are operator-authored authority and therefore configuration in
+the tree; identities, enrollments, generations, admissions, and
+observations are facts and therefore records. A record of a past selection
+is never upgraded through current configuration.
+
+**The stage owns the launch.** Elaboration, implementation, and review each
+define a launch: writer or read-only, output contract, severance, session
+mode, and an auxiliary-inference policy (`forbidden`, `declared`, or
+`observed`). The adapter maps the launch to harness-native controls or
+declares it cannot. Any stage therefore runs on any adapter whose proved
+capabilities cover its launch, and an agent carries no role. Review and
+experiment arms require `forbidden`; the Claude baseline runs `observed`.
+An agent narrows behaviour inside a stage and never waives or widens the
+stage's floors: no GitHub write credential in a workspace, publication
+credentials withheld, review's fresh context and read-only workspace,
+base/head invalidation, and the role capability ceilings all hold
+whatever the agent.
+
+**Admission**, in five steps, is what admission already does to every
+other input:
+
+1. *Resolve.* Resolve the name and every fragment against one control-plane
+   revision, build and hash the canonical body, and validate the join. Only
+   agents whose closure is present in the current approved revision
+   resolve; removing an agent from the tree withdraws it from new
+   selection, and its history keeps its closure by digest. An offer whose
+   authored `not_after` precedes the attempt deadline does not resolve. A
+   proposal binds `(name, digest)` and goes stale if either moves.
+2. *Selected.* The lineup names that digest for the role, or the Section 4
+   alternate-agent card records it as this attempt's choice; the admission
+   snapshot says which.
+3. *Proved.* Runner conformance holds (Section 5.7, unchanged), and the
+   adapter build's conformance record, one per build from the stage
+   contract suite, has proved capabilities covering the launch. That record
+   proves the store contract too: sanitized single-route store, read-only
+   to the agent, daemon-owned refresh under the identity lease, refresh
+   hosts reachable by the daemon only, harness update and telemetry hosts
+   absent from the proxy allowlist.
+4. *Credentialed.* The enrollment has a valid generation: its current one,
+   not retired, revoked, or marked by the credential-integrity probe. The
+   enrollment's auth method says whether expiry is observable. Where it is
+   (the Codex and pi OAuth tokens), the generation records the expiry and
+   it must cover the attempt deadline plus margin; otherwise the daemon
+   refreshes first, and a harness that fails against a read-only store at
+   refresh time (pi does) is contained by this rule, not by trusting the
+   harness. Where it is not (the Claude setup token), the generation
+   records no expiry, no refresh exists, and an authentication failure at
+   use fails the attempt closed and raises the existing revoked-identity
+   marker; that is the admission the Claude baseline cuts over under.
+5. *Snapshot.* `ExecutionAdmission` records the agent digest, the launch
+   digest, the lineup revision, the enrollment id and generation, the store
+   manifest digest, the effective egress allowlist, and whether the attempt
+   is attended, and derives its existing fields (identity, image,
+   credential mode, endpoints, instruction delivery) from them.
+   Reconstruction reads by digest and rechecks the derivations.
+
+A new agent × launch pair runs attended until an operator, having looked
+at a run, marks it unattended-eligible beside the agent in the tree
+(outside the hashed body, like the name). The mark names the exact agent
+digest and launch digest it was given for; a line edit is a different
+agent with a different digest, so the mark does not carry to it and the
+changed pair runs attended again. The mark is the approval; there is no
+smoke-record type. Harness × model is not pre-proved beyond that
+first run: a request works or fails closed against the stage's output
+validation, and an observed model, serving operator, or route that
+contradicts a pinned admitted value fails the attempt as a durable
+contradiction, never a log line. Pre-proving a rolling upstream would be
+fiction; offers say so with `identity_stability`, and records claim only
+what the route exposed.
+
+Every run records what was requested (agent name and bound digest, one
+provenance entry per role), what was admitted (the step 5 snapshot), and
+what was observed (effective model and serving operator with provenance,
+usage redacted and sourced, auxiliary inference, routing). Observed facts
+never authorise a future selection; they are authoritative history. A
+versioned **treatment digest** over route behaviour, adapter, launch, offer
+behaviour, and requested and effective effort, excluding enrollment,
+generation, cost owner, pricing, terms, deprecation, and labels, groups
+runs for comparison (Section 8); the agent digest stays the audit key.
+
+The Section 7 review-independence rule reads the offers: by default the
+review offer's lineage group differs from the implementation offer's, with
+the group derived at vendor-family granularity, curated conservatively, the
+same weights through any route one group, and unknown lineage failing
+closed. A project lineup may relax it with a stated reason; every card and
+record then carries which rule applied. This supersedes the
+provider-plus-identity comparison: stricter by default, explicit when not.
+
+The `ProviderProfile` of revision 36 is superseded: its approval role moved
+to agents and lineups in the tree, and its remaining facts, `enabled` and
+`cost_owner`, are identity fields. `freesided auth` keeps the profile name
+for the operator. The cutover has two steps because the daemon never writes
+the control-plane tree. The first lands the schemas, dual-read, and
+enrollment adoption while the interim flag selection stays active. The
+second is the operator's: `freesided auth adopt` adopts each interim
+identity's store as an enrollment with an initial generation and emits a
+proposed baseline patch (the baseline agents, the deployment lineup, and
+their attended-run marks, carrying resolved enrollment ids); a human
+commits it; selection activates and queued inputs are rewritten to agent
+digests; the flags are removed once every baseline role admits. The
+baseline is honest: today's Claude path passes neither a model nor an
+effort flag, so its offer is `claude-code-native-default` with
+`identity_stability` rolling-or-opaque and `effort harness_default`;
+choosing an explicit Claude model later is a change, not migration. The
+cutover rules of revision 36 carry forward unchanged: a nonterminal run or
+admission that carries an `auth_identity_id` but no agent digest is read
+under a permanent legacy rule that keeps its admitted identity and
+credential mode and is never resolved against a current agent; an interim
+identity that cannot be adopted is retired, its nonterminal runs are
+cancelled through the Section 5.7 contract with an AttentionItem naming
+it, and its requests and policies stay unbound until the operator remaps
+them; agent-only selection activates only after every such run has
+closed; a binding the cutover cannot classify, rewrite, or retire fails
+closed.
+
+This section fixes the principle, the objects, the cardinalities, and the
+admission steps; field-level schema, the canonical encodings, the adapter
+capability vocabulary, and the lifecycle command set are settled by the
+admitted-agent contract unit and the enrollment unit (#867), not enumerated
+here. Deliberately not built: a qualification ledger with projections and
+supersession (two proofs suffice, the adapter suite per build and the
+attended first run per agent × launch); alias and withdrawal machinery
+(the tree is the active set and git its history); stored projections
+beyond the treatment digest; named independence policies beyond the one
+rule and its knob; enforcement of auxiliary inference where the baseline
+cannot honour it; a separate credential-pass record (it is a proved
+adapter capability).
+
+**Multi-subscription per provider.** Two identities of one provider (a
+work and a personal subscription), each with its own enrollments and
+agents, are a supported shape. Selection among them is a lineup line or a
+carded per-attempt choice, never silent: no default is inferred from
+enrollment order, recency, or availability. Cost owner is read from the
+selected agent's identity on every selection and recorded with it, so one
+project can attribute a review to one subscription and an implementation
+to another.
+The operator owns compliance with each provider's terms for multi-account
+use; Freeside attributes usage to a named identity and neither endorses nor
+polices the arrangement (Section 14, subscription-terms drift).
 
 **Observation, never authority.** A credential-bounded account probe may
-record, per profile: a stable account fingerprint; a masked label for
+record, per identity: a stable account fingerprint; a masked label for
 operator display only, never written to evidence, composition manifests,
 run records, or export; auth type; plan type; expiry and revocation state;
 CLI version; a model and capability snapshot; the last probe time; and the
 last execution time. Probe output feeds `system_health` items, proposals, and the
-operator-facing profile projection (`freesided auth list` and the
-clients' profile display, which show the masked label) only, and every
+operator-facing identity projection (`freesided auth list` and the
+clients' display, which show the masked label) only, and every
 probe-derived item carries the `advisory` posture, so an
 observed expiry, revocation, or plan change informs the operator without
 closing the unattended admission gate; the operator's explicit stop action
 and the existing credential-integrity and revoked-identity markers keep
 their own postures. The gate is an exclusion list: no probe value is read by preflight,
 by scheduling, by the `max_parallel_executions` limit, or by any driver;
-those consumers read only the operator's explicit profile and identity
-records and the resolved policy. A probe that observes a newer model, a
-lapsed plan, or spare capacity produces a card or a proposal PR, never a
-changed selection. What a probe can report is a pinned-CLI empirical
-contract: the Codex app-server probe is expected to report account and plan
+those consumers read only the operator's explicit identity and enrollment
+records, the tree, and the resolved policy. A probe that observes a newer
+model, a lapsed plan, or spare capacity produces a card or a proposed
+offer diff in the tree, never a changed selection. What a probe can report
+is a pinned-CLI empirical contract: the Codex app-server probe is expected to report account and plan
 facts, subject to the refresh-safety spike Section 10 gates it on; the
 pinned Claude CLI offers a token digest plus an auth check, and plan,
 quota, and expiry are not observable through it, so the Claude probe's
@@ -1283,16 +1356,16 @@ pinned CLI retained the predecessor's system prompt on an ordinary resume,
 whereas a fork accepted the fresh explicit bundle while preserving
 conversation continuity.
 
-Resume is bound to one provider profile as well as one invocation. A
-Section 4 alternate-provider retry that switches profile, whether to
-another identity of the same provider or to another provider, defaults to
-a fresh invocation with no continuity remount; the Section 5.7 operating
-modes do not relax this. Revisit when: before #408 merges, design a
-continuation compatibility digest that states when a successor under a
-different profile may remount a predecessor's continuity volume, so that
-cross-profile continuation becomes a proven property instead of a default
-refusal. That design is its own tracked unit (#873), and #408 merges after
-it; this revision names the marker and does not design the digest.
+Resume is bound to one agent (Section 5.4) as well as one invocation. A
+Section 4 alternate-agent retry defaults to a fresh invocation with no
+continuity remount; the Section 5.7 operating modes do not relax this.
+Whether a successor agent may remount a predecessor's continuity volume is
+the adapter's call over the two agents' process facts (adapter build,
+session format, launch, and the session-bound route and offer facts where
+the harness binds them): a different adapter is always a fresh invocation,
+and missing expected session state is a typed failure, never a silently
+created session. That comparison is its own tracked unit (#873), and #408
+merges after it.
 
 A replay of an already-journalled launch adopts or reaps that exact process;
 it never substitutes a resume or starts a duplicate. A resume generation
@@ -2320,6 +2393,12 @@ Codex-reviews a same-vendor pairing, weakening the independence this section
 targets and raising the later value of a selectable Claude ReviewSource. The
 sequencing above and the deferred #397 promotion keep that pairing from
 becoming the default; shadow findings remain recorded and never routed.
+Once agents are admitted (Section 5.4), the independence rule reads the
+two selected agents' offers: by default their lineage groups differ, a
+project lineup may relax that with a stated reason, and every card and
+record carries which rule applied. Switching the review agent mid-run
+opens a new convergence segment, so the new reviewer's first pass is never
+counted as the old reviewer's next round by the yield policy.
 
 The classifier is never the sole safety gate:
 
@@ -2586,9 +2665,13 @@ Each run records:
 
 - stage and all governing digests;
 - per-key rein preset or override provenance;
+- the admitted agent and launch digests, the treatment digest, and the
+  requested, admitted, and observed selection facts (Section 5.4);
 - driver, credential mode, egress profile, and operating mode;
 - artifacts and their provenance;
-- tokens and cost;
+- tokens and cost, as billable cost, reported usage, and quota consumed
+  where the upstream exposes a unit, with the raw usage payload kept as a
+  redacted, sourced derivative;
 - active and elapsed clocks;
 - attempts, review rounds, and yield;
 - classifier samples and shadow results; and
@@ -2743,7 +2826,7 @@ Build the installer only after the underlying interfaces survive real use. The
 | `freesided setup` | Performs installation. On the Mac-first path the operator app registers the daemon LaunchAgent (Section 5.2) and no step is privileged; when a hardened deployment needs privileged steps (user creation, LaunchDaemon installation), they run through a narrow elevation helper; the daemon never retains root. |
 | `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls; a callback or `--resume` reopens the same review after approval. |
 | `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe). The integrity probe extends to the Section 5.4 account probe only after an empirical spike proves the Codex app-server probe runs against the access-only read snapshot and never triggers a refresh outside the mutation lease; until that spike passes, doctor reports integrity alone. Probe results are observation (Section 5.4): they file `advisory` `system_health` items and proposals, feed the operator-facing profile projection's display fields, and are read by nothing else. It runs on a schedule and files `system_health` items. |
-| `freesided auth add`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided provider-profile enrollment and lifecycle (Section 5.4); `auth doctor` ships with the account-probe unit (#868), gated on the #866 spike like the probe itself, never with the enrollment unit. `add` creates a profile over a new `AuthIdentity`, or adopts an existing identity that no profile names yet; adoption writes the identity-bound enrollment record (Section 5.4) that carries the enrolled mode and the enrolled-account binding `re-enroll` later compares against, transactionally and under the identity's lease (Codex: read from the adopted store through the same check the enrollment transaction uses; Claude: the operator's recorded attestation), and refuses when the adopted store cannot yield it, so an expired or corrupt legacy store is re-enrolled as a new identity rather than adopted: for Codex it packages the import, rotate, and snapshot sequence that `enroll-codex` exposes as separate required flags; for Claude it captures a setup token interactively, validates its length and performs an auth check before storing it (the truncation class the 1B.1 integrity probe detects), and keeps the token out of argv, shell history, logs, and client responses. `list` shows profiles with the masked label; `doctor` runs the account probe for one profile on demand once #868 lands; `re-enroll` replaces the credential through the daemon-owned enrollment transaction while no execution can use the identity, for the same account only: where the provider exposes an account identity (Codex), the transaction itself compares the incoming credential's account against the one recorded at enrollment, authoritatively and independent of the probe, and refuses a mismatch; where it does not (the Claude floor), the operator attests same-account in the transaction and the attestation is recorded; every re-enrollment increments the profile version and binds the enrollment operation, so later records show the credential changed. A different account is a new identity and a new profile, never a re-enrollment; `disable` withdraws a profile from selection without touching its credential, and `enable` reverses it; both version the profile. |
+| `freesided auth add`, `auth adopt`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided identity and enrollment lifecycle (Section 5.4); `auth doctor` ships with the account-probe unit (#868), gated on the #866 spike like the probe itself, never with the enrollment unit. `add` enrolls one harness client against one route for a new or existing `AuthIdentity`, creating a `ClientEnrollment` with its sanitized single-route store and initial generation; the transaction records the enrolled mode and the account binding `re-enroll` later compares against, under the identity's lease, and refuses when the store cannot yield it, so an expired or corrupt store is enrolled as a new identity rather than adopted. For Codex it packages the import, rotate, and snapshot sequence that `enroll-codex` exposes as separate required flags; for Claude it captures a setup token interactively, validates its length and performs an auth check before storing it (the truncation class the 1B.1 integrity probe detects), and keeps the token out of argv, shell history, logs, and client responses; for pi it captures the ChatGPT login into a one-entry store and performs a daemon-driven refresh before accepting it. `adopt` is the cutover command: it adopts each interim identity's store as an enrollment and emits the proposed baseline patch (agents, deployment lineup, attended-run marks) for the operator to commit; it never writes the tree. `list` shows identities and their enrollments with the masked label; `doctor` runs the account probe for one identity on demand once #868 lands; `re-enroll` replaces one enrollment's credential through the daemon-owned transaction while no execution can use the identity, for the same account only: where the provider exposes an account identity (Codex, pi), the transaction compares the incoming credential's account against the one recorded at enrollment, authoritatively and independent of the probe, and refuses a mismatch; where it does not (the Claude floor), the operator attests same-account and the attestation is recorded; every re-enrollment appends a generation, so later records show the credential changed. A different account is a new identity, never a re-enrollment; `disable` sets the identity's `enabled` off, withdrawing every agent on it from selection without touching credentials, and `enable` reverses it. |
 | `freesided submit` | Registers a manually initiated source work item, starts elaboration, and reserves its future implementation run. |
 | `freesided reattempt --parent-run <run>` or `--campaign <campaign>` | Requires an operator reason and allocates the campaign's next attempt from an already approved specification; a live parent is refused. |
 | `freesided resume --run <run>` | Reattaches observation to one exact non-terminal run without creating a replacement; terminal runs are refused and point to `reattempt`. |
@@ -3058,10 +3141,10 @@ Phase 1B adds:
 - the Codex execution driver, an execution capacity hedge against
   single-provider stalls (Section 14): the `agent-codex` agent base, the
   project images the reusable builder derives from it (Section 5.7),
-  ward's second vendor topology, the `codex` driver binding, and the
-  driver-selection contract land as separate follow-on units, sequenced
-  after the 1A.2 exit and blocked on the #401 pre-adoption gates; driver
-  selection stays explicit, with no automatic fallback; and
+  ward's second vendor topology, and the Codex adapter registration land
+  as separate follow-on units behind the admitted-agent contract (Section
+  5.4), sequenced after the 1A.2 exit and blocked on the #401 pre-adoption
+  gates; selection is a lineup line, never silent; and
 - the run timeline screen.
 
 Precondition: the verified 1A exit. 1B proceeds in three internal exits.
@@ -3141,7 +3224,7 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **4 (1B.0): the review stage** | Serial | The spine rescopes #406/#407 into review cores and execution remainders, then lands the review-selection contract core, the review ward-topology slice, #405 only if review needs a project-derived image, and #427 — landed PR-anchored under the then-open Section 7 fork (resolved pre-publication in revision 28; the implementation re-anchor is #527, unscheduled). Its close stands the minimal loop; real-backlog use begins. |
 | **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section 5.13 classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section 7 disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section 6 state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section 5.2 contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section 7 finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section 10). 1B.0 exit. |
-| **7 (1B.1): operational closure** | Parallel lanes | Human-gated follow-up filing with the `effect_proposal` card; the doctor credential-integrity probe; the stall heartbeat; the external daemon-liveness probe (Section 5.2); the deferral drain (sweep-eligible open deferrals enumerated at this wave's planning; dormant contract units excluded unless the spine assigns chain positions). The execution tail closes in order: #401 gate 3, the #406/#407 execution remainders, #405 if outstanding, #397 by explicit owner decision on shadow evidence, then #408. Provider profiles (Section 5.4) add the Codex probe refresh-safety spike (#866) as an independent unit; `ProviderProfile` is the core type of the #406 driver-selection contract, so guided enrollment (`freesided auth`, Section 10; #867) `starts-after` #406, the doctor account probe (#868) `starts-after` both #406 and #866, the explicit alternate-provider retry card (#869, one unit covering the implementation, review, and elaboration roles, every role a profile is eligible for) `starts-after` both #406 and #408, and #408 `merges-after` the continuation compatibility digest (#873; Section 5.8). The deferral drain also carries two sweep-eligible units for the egress floor's first capabilities above it (Sections 5.4, 5.7, Golden Agent and Project Images): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, a `kind:contract` unit because `EgressProfile` is a domain enum carried in the admission record, so the spine assigns its contract-chain position at this wave's planning; and (b) the policy-gated project-image rebuild in the reusable builder, whose gate reads the registry set from the policy field unit (a) declares, so (b) `starts-after` (a). Both build on merged work (#302 proxy enforcement, #334 builder); (a) has no open prerequisite. |
+| **7 (1B.1): operational closure** | Parallel lanes | Human-gated follow-up filing with the `effect_proposal` card; the doctor credential-integrity probe; the stall heartbeat; the external daemon-liveness probe (Section 5.2); the deferral drain (sweep-eligible open deferrals enumerated at this wave's planning; dormant contract units excluded unless the spine assigns chain positions). The execution tail closes in order: #401 gate 3, the #406/#407 execution remainders, #405 if outstanding, #397 by explicit owner decision on shadow evidence, then #408. Admitted agents (Section 5.4) reshape the tail: the admitted-agent contract unit (schemas, canonical encoding, enrollment and generation records, adapter conformance record, admission encoding, lineup policy keys, legacy reconstruction; `kind:contract`, dormant until cutover) replaces the selection half of #406, which becomes the Codex adapter registration and `starts-after` the contract; guided enrollment (`freesided auth`, Section 10; #867) carries multi-enrollment adoption, the proposed baseline patch, and the two-step cutover and `starts-after` the contract; the Codex probe refresh-safety spike (#866) stays independent and is the template for each adapter's credential proof; the doctor account probe (#868) `starts-after` the contract and #866 and proposes offer diffs; the alternate-agent retry card (#869) `starts-after` the contract and #408; #408 `merges-after` the continuation comparison (#873; Section 5.8); and the pi adapter, enrollment, and elaboration agent unit `starts-after` the contract and #867 (not #408: it is a second consumer, not a successor), with its pre-adoption gates on the #401 pattern run against the pinned build rather than as a prior spike. The deferral drain also carries two sweep-eligible units for the egress floor's first capabilities above it (Sections 5.4, 5.7, Golden Agent and Project Images): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, a `kind:contract` unit because `EgressProfile` is a domain enum carried in the admission record, so the spine assigns its contract-chain position at this wave's planning; and (b) the policy-gated project-image rebuild in the reusable builder, whose gate reads the registry set from the policy field unit (a) declares, so (b) `starts-after` (a). Both build on merged work (#302 proxy enforcement, #334 builder); (a) has no open prerequisite. |
 | **8 (1B.2): the initiative view** | Integrated | The Section 5.18 frontier projection and the deterministic initiative view. 1B exit evaluation. |
 
 Review bandwidth limits parallel width. Every wave ends with a fresh-context
@@ -3273,40 +3356,58 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 38 ("The egress floor does not move"):
+Revision 39 ("Admitted agents"):
 
-1. **The `provider_only` floor is a credential-containment boundary and does
-   not move** (Sections 5.4, 5.7, 14). Capability above it is added as
-   narrower, separately priced risk classes and as machine gates, never by
-   widening the writer toward general web under `subscription_contained`.
-   `provider_registry` (Section 5.4) admits a policy-declared set of
-   read-only package-registry authorities through the same CONNECT proxy,
-   with no DNS, no attacker-operated host, and exfiltration bounded to what
-   the registries' own endpoints accept (the tunnel cannot constrain method
-   or path, so a co-hosted write endpoint is a recorded residual); it is
-   opt-in per project and its proven allowlist joins
-   `supports_enforced_provider_egress`. The hosted agents' default shape
-   (egress off or proxy-allowlisted) motivated keeping the floor; Freeside
-   stays stricter only where the strictness was buying a human round trip
-   rather than containment. Rejected: widening the writer to general web;
-   making `provider_web_read` the default; folding the registry class into
-   the `provider_web_read` exposure record.
-   (User; devlog 2026-08-21-1510-registry-egress-profile.md; #871.)
-2. **Dependency changes inside policy rebuild the project image without an
-   AttentionItem** (Golden Agent and Project Images, Section 11): when the
-   manifest delta is lockfile-consistent, every changed package resolves
-   from the project policy's declared registry set (read by the builder
-   whatever the writer's profile), and the recipe is unchanged,
-   the reusable builder rebuilds from the trusted recipe, reruns the
-   networkless positive run and the negative probe, and the run resumes
-   against the new digest. Everything else keeps the fail-loud path, and the
-   human still reviews the change in the PR diff and provenance record. The
-   two follow-on units leave the Phase 2 list and drain in Wave 7, with the
-   profile unit `kind:contract`. Rejected: leaving every dependency change a
-   human gate; a setup-script phase with open internet as the hosted agents
-   run, because the bake step already provides it without a
-   credential-holding network phase.
-   (User; devlog 2026-08-21-1510-registry-egress-profile.md; #871.)
+1. **The agent is an admitted input** (Section 5.4): one operator-authored,
+   content-addressed document of four role-free lines (enrollment, route,
+   adapter, offer with effort), selected by a lineup line per role, admitted
+   in the same five steps every other input is, and recorded with requested,
+   admitted, and observed facts plus a behaviour-only treatment digest.
+   The stage owns the launch, so any stage runs on any adapter whose proved
+   capabilities cover it. New agent × launch pairs start attended; an
+   operator's mark in the tree is the approval. Rejected: per-axis policy
+   keys for harness, model, and effort (an unreviewed join); a qualification
+   ledger with projections and supersession (two proofs suffice); an alias
+   and withdrawal registry (the tree is the active set); a catalogue on the
+   profile (route-specific availability changes on a different cadence).
+   (User; devlog 2026-08-23-0825-admitted-agents.md.)
+2. **One identity, many client enrollments; the profile dissolves**
+   (Section 5.4). `ClientEnrollment` is identity × harness client × route ×
+   auth method with `credential_mode`, each with its own sanitized store and
+   append-only generations; the exact store locator leaves `AuthIdentity`;
+   the lease stays on the identity and fences the exact store by enrollment,
+   generation, locator, and manifest digest. `ProviderProfile`'s approval
+   role moves to agents and lineups; `enabled` and `cost_owner` become
+   identity fields. Changed assumption since revision 36: one harness client
+   per provider account. Rejected: a second identity per client (two leases
+   and two budgets on one subscription); one untyped store for all clients
+   (the lease would no longer name one exact store).
+   (User; devlog 2026-08-23-0825-admitted-agents.md.)
+3. **Never silent, not never automatic** (Sections 2, 4, 14). A project
+   lineup may name the alternate agent per failure class; the switch is a
+   new recorded attempt, carded, with failure-specific eligibility (quota
+   needs a different usage pool; two clients on one subscription are not a
+   hedge). The human gate stays the default. Changed assumption since
+   revision 36: fallback meant an unrecorded swap.
+   (User; devlog 2026-08-23-0825-admitted-agents.md.)
+4. **Review independence reads lineage, by default** (Section 7): the
+   offers' lineage groups differ, at vendor-family granularity, unknown
+   failing closed; a project lineup may relax it with a stated reason and
+   the record carries which rule applied. Supersedes the provider-plus-
+   identity comparison. Switching the review agent opens a new convergence
+   segment.
+   (User; devlog 2026-08-23-0825-admitted-agents.md.)
+5. **pi is the third adapter, via elaboration first** (Sections 5.3, 11),
+   on the ChatGPT subscription the owner records OpenAI as permitting
+   through third-party tools, with no stability commitment on that OAuth
+   interface (the route carries a dated terms basis). Source research on
+   pi 0.84.2 replaced a prior design spike: it hard-fails on a read-only
+   store at refresh, so admission step 4 and the Codex refresh pattern
+   contain it; its severance is flag-complete; its provider ids separate
+   subscription from API key. Its pre-adoption gates run against the pinned
+   build when the adapter exists. Rejected: sequencing pi behind #408 (it
+   is a second consumer of the contract, not a successor).
+   (User; devlog 2026-08-23-0825-admitted-agents.md.)
 
 ## 14. Risks
 
@@ -3318,7 +3419,7 @@ Revision 38 ("The egress floor does not move"):
 | Reviewer-instruction poisoning | Treat instruction paths as control-plane content and block candidate changes in the ordinary publication path. |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section 5.7); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed: review is Freeside-invoked (Section 7), and native review is best-effort extra evidence. |
-| Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section 11); keep driver selection explicit with no automatic fallback; usage remains observed telemetry (Section 8). |
+| Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section 11); keep selection explicit as a lineup line, never silent (a lineup may name the switch per failure class, Section 4); usage remains observed telemetry (Section 8). |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
 | Subscription-terms drift | Keep it as an explicit operating risk. |
 | Apple container immaturity | Prove actual runner capabilities and retain honest fallback classes. |

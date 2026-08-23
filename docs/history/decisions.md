@@ -1197,3 +1197,40 @@ Revision 37 ("Provider accounts are first-class operator objects"):
    the implementation, review, and elaboration roles, also `starts-after`
    #408.
    (User; devlog 2026-08-21-0405-provider-profiles.md; #863.)
+
+## Revision 38
+
+Revision 38 ("The egress floor does not move"):
+
+1. **The `provider_only` floor is a credential-containment boundary and does
+   not move** (Sections 5.4, 5.7, 14). Capability above it is added as
+   narrower, separately priced risk classes and as machine gates, never by
+   widening the writer toward general web under `subscription_contained`.
+   `provider_registry` (Section 5.4) admits a policy-declared set of
+   read-only package-registry authorities through the same CONNECT proxy,
+   with no DNS, no attacker-operated host, and exfiltration bounded to what
+   the registries' own endpoints accept (the tunnel cannot constrain method
+   or path, so a co-hosted write endpoint is a recorded residual); it is
+   opt-in per project and its proven allowlist joins
+   `supports_enforced_provider_egress`. The hosted agents' default shape
+   (egress off or proxy-allowlisted) motivated keeping the floor; Freeside
+   stays stricter only where the strictness was buying a human round trip
+   rather than containment. Rejected: widening the writer to general web;
+   making `provider_web_read` the default; folding the registry class into
+   the `provider_web_read` exposure record.
+   (User; devlog 2026-08-21-1510-registry-egress-profile.md; #871.)
+2. **Dependency changes inside policy rebuild the project image without an
+   AttentionItem** (Golden Agent and Project Images, Section 11): when the
+   manifest delta is lockfile-consistent, every changed package resolves
+   from the project policy's declared registry set (read by the builder
+   whatever the writer's profile), and the recipe is unchanged,
+   the reusable builder rebuilds from the trusted recipe, reruns the
+   networkless positive run and the negative probe, and the run resumes
+   against the new digest. Everything else keeps the fail-loud path, and the
+   human still reviews the change in the PR diff and provenance record. The
+   two follow-on units leave the Phase 2 list and drain in Wave 7, with the
+   profile unit `kind:contract`. Rejected: leaving every dependency change a
+   human gate; a setup-script phase with open internet as the hosted agents
+   run, because the bake step already provides it without a
+   credential-holding network phase.
+   (User; devlog 2026-08-21-1510-registry-egress-profile.md; #871.)
