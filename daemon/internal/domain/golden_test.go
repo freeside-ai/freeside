@@ -547,6 +547,40 @@ func TestGolden(t *testing.T) {
 		StoreManifestDigest: enrollmentGeneration.StoreManifestDigest,
 	}
 
+	// The admitted-agent configuration objects (§5.4): fragments, the
+	// stage-owned launch, and a resolved agent. The digests inside these
+	// goldens pin the canonical encodings — a field-order or encoding change
+	// moves them visibly.
+	goldenRoute := routeFragment(t)
+	goldenAdapter := adapterFragment(t)
+	goldenOffer := offerFragment(t)
+	goldenLaunch := launchSpec(t)
+	agentIdentity := domain.AuthIdentity{
+		ID: "auth-openai-A", Provider: "openai", AccountBinding: "acct-openai-a",
+		AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
+	}
+	agentEnrollment := domain.ClientEnrollment{
+		ID: "enroll-openai-A-codex", AuthIdentityID: agentIdentity.ID,
+		HarnessClient: domain.HarnessClientCodexCLI, Route: "openai_chatgpt_codex",
+		AuthMethod:      domain.AuthMethodOAuth,
+		CredentialMode:  domain.CredentialSubscriptionContained,
+		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+		AccountBinding: agentIdentity.AccountBinding,
+	}
+	goldenAgent, err := domain.ResolveAgentDefinition(domain.AgentResolutionInput{
+		Source: domain.AgentSource{
+			Name: "sol-via-codex", Enrollment: "openai-chatgpt-A/codex",
+			Route: "openai_chatgpt_codex", Adapter: "codex_proto_v1",
+			Offer: "gpt-5.6-sol", Effort: domain.EffortMax,
+		},
+		Identity: agentIdentity, Enrollment: agentEnrollment,
+		Route: goldenRoute, Adapter: goldenAdapter, Offer: goldenOffer,
+		OfferRoute: "openai_chatgpt_codex",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// The durable execution record for that attempt. Capabilities are passed
 	// unsorted to exercise the constructor's canonicalization.
 	authIdentity := identity.ID
@@ -1084,6 +1118,11 @@ func TestGolden(t *testing.T) {
 		{"auth_store_mutation_lease_bound", boundLease},
 		{"client_enrollment", enrollment},
 		{"enrollment_generation", enrollmentGeneration},
+		{"route_fragment", goldenRoute},
+		{"adapter_fragment", goldenAdapter},
+		{"offer_fragment", goldenOffer},
+		{"launch_spec", goldenLaunch},
+		{"agent_definition", goldenAgent},
 		{"stage_input_snapshot", stageInputs},
 		{"stage_input_snapshot_codex", codexStageInput},
 		{"execution_admission", admission},

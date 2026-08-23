@@ -1728,3 +1728,15 @@ func TestQueuedCompletionToleratesAConcurrentPublicationDispatch(t *testing.T) {
 		})
 	}
 }
+
+// TestProductionStageNameResolvesToCanonicalRole ties the §5.4 stage-role
+// resolver's exhaustive legacy set to the engine's persisted spelling: the
+// lineup keys resolve per role through CanonicalStageRole, and this is the
+// one legacy name the engine writes.
+func TestProductionStageNameResolvesToCanonicalRole(t *testing.T) {
+	role, err := domain.CanonicalStageRole(productionStageName)
+	if err != nil || role != domain.StageNameImplementation {
+		t.Fatalf("CanonicalStageRole(%q) = %q, %v; want %q",
+			productionStageName, role, err, domain.StageNameImplementation)
+	}
+}

@@ -1,0 +1,10 @@
+{
+  "name": "sol-via-codex",
+  "encoding_version": 1,
+  "enrollment_id": "enroll-openai-A-codex",
+  "route_digest": "sha256:974cd05bbeea6db059e0fd162ae900122069c1b01eeec8707eb98df38026cabe",
+  "adapter_digest": "sha256:f37088cecbdc7f0b98601729cadc96795867cef126e405d85a525dc4869d6a78",
+  "offer_digest": "sha256:d689da71e64a71486e85d764cda6eb26ad488a1cbb34613773672a9e6e93759e",
+  "effort": "max",
+  "digest": "sha256:fba2e91b81488102b4193bb2a7730f4ec9e5198a98b9baa6c0f2fc6ee60c3b8a"
+}

@@ -1,0 +1,12 @@
+{
+  "encoding_version": 1,
+  "service_operator": "openai",
+  "protocol": "chatgpt_backend",
+  "inference_authorities": [
+    "chatgpt.com"
+  ],
+  "billing_mode": "subscription",
+  "fallback_policy": "fail_closed",
+  "terms_basis_date": "2026-08-22",
+  "digest": "sha256:974cd05bbeea6db059e0fd162ae900122069c1b01eeec8707eb98df38026cabe"
+}

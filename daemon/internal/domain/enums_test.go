@@ -170,6 +170,26 @@ func TestEnumValidity(t *testing.T) {
 		valids["AuthMethod"] = append(valids["AuthMethod"], v.valid)
 	}
 	invalids["AuthMethod"] = AuthMethod("").valid
+	for _, v := range AllLaunchCapabilities {
+		valids["LaunchCapability"] = append(valids["LaunchCapability"], v.valid)
+	}
+	invalids["LaunchCapability"] = LaunchCapability("").valid
+	for _, v := range AllEffortLevels {
+		valids["EffortLevel"] = append(valids["EffortLevel"], v.valid)
+	}
+	invalids["EffortLevel"] = EffortLevel("").valid
+	for _, v := range AllIdentityStabilities {
+		valids["IdentityStability"] = append(valids["IdentityStability"], v.valid)
+	}
+	invalids["IdentityStability"] = IdentityStability("").valid
+	for _, v := range AllSessionModes {
+		valids["SessionMode"] = append(valids["SessionMode"], v.valid)
+	}
+	invalids["SessionMode"] = SessionMode("").valid
+	for _, v := range AllAuxiliaryInferencePolicies {
+		valids["AuxiliaryInferencePolicy"] = append(valids["AuxiliaryInferencePolicy"], v.valid)
+	}
+	invalids["AuxiliaryInferencePolicy"] = AuxiliaryInferencePolicy("").valid
 	for _, v := range AllIntakeOccurrenceStates {
 		valids["IntakeOccurrenceState"] = append(valids["IntakeOccurrenceState"], v.valid)
 	}
