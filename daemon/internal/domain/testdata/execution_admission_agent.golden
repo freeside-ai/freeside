@@ -1,0 +1,62 @@
+{
+  "id": "sha256:d0ccb5cd59afcdb0a4a52fda17530b455bbafd45dd220d260b1b2b2f107f9740",
+  "invocation_id": "inv-3",
+  "run_id": "run-1",
+  "stage_id": "stage-1",
+  "attempt_id": "attempt-3",
+  "backend": "fresh_vm_read_only_volume_handoff",
+  "capabilities": [
+    "supports_detachable_workspace",
+    "supports_post_exit_export"
+  ],
+  "operating_mode": "attended_dev",
+  "credential_mode": "subscription_contained",
+  "egress_profile": "provider_only",
+  "image_ref": "ghcr.io/freeside-ai/agent@sha256:abababababababababababababababababababababababababababababababab",
+  "spec_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "policy_digest": "sha256:dc1af0d4d3c8cdc2f6b59b72234a6988199c4d9dd9c3f2e663452eb58cd97ca7",
+  "input_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "stage_inputs": {
+    "id": "sha256:d91d648db7a94a30b7939a518afd682fd1b4a0c787a6e7d44474e8a970bfacf9",
+    "input_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "specification_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "prompt_package_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "policy_digest": "sha256:dc1af0d4d3c8cdc2f6b59b72234a6988199c4d9dd9c3f2e663452eb58cd97ca7",
+    "vendor_instructions": {
+      "vendor": "codex",
+      "delivery": "append_file",
+      "digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+    },
+    "conversation_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+    "prior_artifact_digests": [
+      "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    ],
+    "image_input_digests": [
+      "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+    ]
+  },
+  "base": {
+    "repo": "owner/repo",
+    "repository_id": 424242,
+    "base_ref": "refs/heads/main",
+    "base_sha": "deadbeef"
+  },
+  "workspace": "freeside-handoff-run-1-ws",
+  "auth_identity_id": "auth-openai-A",
+  "trust_profile_digest": null,
+  "backup_encryption_waiver": null,
+  "agent_binding": {
+    "agent_digest": "sha256:fba2e91b81488102b4193bb2a7730f4ec9e5198a98b9baa6c0f2fc6ee60c3b8a",
+    "launch_digest": "sha256:a3c077d3202e7218f405162176b564d5c5853628a0bf06b38b342db18174a1cc",
+    "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "enrollment_id": "enroll-openai-A-codex",
+    "enrollment_generation": 2,
+    "store_manifest_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+    "effective_egress": [
+      "chatgpt.com"
+    ],
+    "attended": true
+  },
+  "admitted_at": "2026-01-02T03:04:05Z"
+}

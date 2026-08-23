@@ -1,0 +1,15 @@
+{
+  "adapter_digest": "sha256:f37088cecbdc7f0b98601729cadc96795867cef126e405d85a525dc4869d6a78",
+  "outcome": "passed",
+  "proved_capabilities": [
+    "auxiliary_inference_control",
+    "context_severance",
+    "instruction_delivery",
+    "mutation_tools",
+    "read_tools",
+    "route_store_contract",
+    "structured_output"
+  ],
+  "generation": 0,
+  "proved_at": "2026-01-02T03:04:05Z"
+}

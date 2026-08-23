@@ -273,6 +273,8 @@ var (
 		"lineup policy key or selection value is malformed")
 	ErrUnknownStageRole = errors.New(
 		"stage name resolves to no canonical stage role")
+	ErrAdmissionDerivationMismatch = errors.New(
+		"admission's derived fields disagree with its admitted agent closure")
 
 	// Backend-conformance failures (issues #327, #320).
 	ErrConformanceOverclaim = errors.New(

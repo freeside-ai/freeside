@@ -96,3 +96,35 @@ CREATE TABLE client_enrollment_generations (
     body                  TEXT    NOT NULL,
     PRIMARY KEY (enrollment_id, ordinal)
 ) STRICT;
+
+-- Adapter conformance (§5.4 admission step 3): what one adapter build's
+-- stage contract suite proved, in the closed launch-capability vocabulary.
+-- The BackendConformance posture exactly: append-only, the newest row per
+-- adapter digest is the current declaration, id order decides supersession,
+-- and enum membership is the domain's check on every decode. Runner
+-- conformance (backend_conformance_records) is untouched.
+CREATE TABLE adapter_conformance_records (
+    id             INTEGER PRIMARY KEY,
+    adapter_digest TEXT NOT NULL CHECK (adapter_digest <> ''),
+    outcome        TEXT NOT NULL CHECK (outcome <> ''),
+    -- Canonical LaunchCapabilitySet JSON; the literal 'null' exactly when
+    -- the pass did not pass (a failed pass proves nothing).
+    proved_capabilities TEXT NOT NULL CHECK (proved_capabilities <> ''),
+    proved_at      TEXT NOT NULL CHECK (proved_at <> '')
+) STRICT;
+CREATE INDEX adapter_conformance_by_adapter
+    ON adapter_conformance_records (adapter_digest, id);
+-- No backfill: no adapter build durably proved anything before this
+-- contract existed. Absence reads as unproved, and agent admission fails
+-- closed on it.
+
+-- The v4 admission encoding (§5.4 admission step 5) rides in the body; the
+-- three columns below are the cross-checked, foreign-key-enforced keys an
+-- agent-admitted row binds. All are NULL on every legacy admission — the
+-- permanent legacy rule keeps a pre-cutover admission's identity and
+-- credential mode without ever resolving it against current configuration —
+-- and nothing is backfilled (the 0014 convention: inventing an agent for an
+-- attempt that was not admitted through one would forge an audit fact).
+ALTER TABLE execution_admissions ADD COLUMN agent_digest TEXT;
+ALTER TABLE execution_admissions ADD COLUMN enrollment_id TEXT REFERENCES client_enrollments (id);
+ALTER TABLE execution_admissions ADD COLUMN enrollment_generation INTEGER;

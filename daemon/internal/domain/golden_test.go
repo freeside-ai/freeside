@@ -635,6 +635,42 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The agent-bound (v4) variant: the §5.4 admission step 5 snapshot rides
+	// beside the existing fields, and its presence selects the new encoding
+	// version, which this golden pins through the changed content address.
+	agentIdentityID := agentIdentity.ID
+	agentAdmission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: "inv-3", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-3",
+		Backend: "fresh_vm_read_only_volume_handoff",
+		Capabilities: domain.CapabilitySnapshot{
+			domain.CapPostExitExport, domain.CapDetachableWorkspace,
+		},
+		OperatingMode:  domain.ModeAttendedDev,
+		CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile:  domain.EgressProviderOnly,
+		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
+		SpecDigest:     stageDigest("2"), PolicyDigest: resolvedPolicy.Digest, InputDigest: stageDigest("1"),
+		Base:           domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
+		Workspace:      "freeside-handoff-run-1-ws",
+		StageInputs:    &codexStageInput,
+		AuthIdentityID: &agentIdentityID,
+		AgentBinding: &domain.AdmissionAgentBinding{
+			AgentDigest:          goldenAgent.Digest,
+			LaunchDigest:         goldenLaunch.Digest,
+			LineupRevision:       stageDigest("c"),
+			EnrollmentID:         agentEnrollment.ID,
+			EnrollmentGeneration: 2,
+			StoreManifestDigest:  stageDigest("9"),
+			EffectiveEgress:      goldenRoute.InferenceAuthorities,
+			Attended:             true,
+		},
+		AdmittedAt: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapterConformance := adapterConformanceRecord(t)
+
 	waivedProfileDigest := domain.Digest("sha256:trust-profile-v1")
 	// The waived, unattended variant: both pointer-for-optional branches
 	// (waiver present, auth identity absent under clean verification) render
@@ -1127,6 +1163,8 @@ func TestGolden(t *testing.T) {
 		{"stage_input_snapshot_codex", codexStageInput},
 		{"execution_admission", admission},
 		{"execution_admission_waived", waivedAdmission},
+		{"execution_admission_agent", agentAdmission},
+		{"adapter_conformance", adapterConformance},
 		{"execution_export", export},
 		{"current_import_start", currentImportStart},
 		{"project_image", projectImage},

@@ -18,6 +18,7 @@ const (
 	admissionEncodingVersion              = "freeside.execution.admission/v1"
 	admissionInputEncodingVersion         = "freeside.execution.admission/v2"
 	admissionBackendConfigEncodingVersion = "freeside.execution.admission/v3"
+	admissionAgentEncodingVersion         = "freeside.execution.admission/v4"
 )
 
 // digestPinnedImage binds an image reference to one full lowercase sha256
@@ -161,7 +162,91 @@ type ExecutionAdmission struct {
 	// BackupEncryptionWaiver is nil in the ordinary case; a non-nil value is
 	// re-gated against the operator's configured waiver at reconstruction.
 	BackupEncryptionWaiver *BackupEncryptionWaiver `json:"backup_encryption_waiver"`
-	AdmittedAt             time.Time               `json:"admitted_at"`
+	// AgentBinding is the §5.4 admitted-agent snapshot (admission step 5):
+	// present exactly on an admission whose selection went through an
+	// admitted agent, and its presence selects the v4 encoding. Nil on every
+	// admission written before the #867 cutover. The permanent legacy rule:
+	// an admission carrying an AuthIdentityID but no agent binding keeps its
+	// admitted identity and credential mode and is never resolved against a
+	// current agent, however the tree has moved since.
+	AgentBinding *AdmissionAgentBinding `json:"agent_binding,omitempty"`
+	AdmittedAt   time.Time              `json:"admitted_at"`
+}
+
+// AdmissionAgentBinding is what §5.4 admission step 5 snapshots beyond the
+// existing fields: the exact agent, launch, lineup revision, enrollment
+// generation, store bytes, and egress the attempt was admitted with. The
+// existing fields (identity, credential mode, endpoints, instruction
+// delivery) become derivations of these; the ones the pure closure expresses
+// are rechecked at reconstruction (ValidateAdmissionAgentDerivations), while
+// the image's build-to-image binding is the #867 resolver's, since no
+// closure fragment carries an image reference. This value is the authority
+// the derivations flow from.
+type AdmissionAgentBinding struct {
+	AgentDigest  Digest `json:"agent_digest"`
+	LaunchDigest Digest `json:"launch_digest"`
+	// LineupRevision is the control-plane revision whose lineup (or recorded
+	// alternate-agent card) named the agent digest for the role.
+	LineupRevision       Digest             `json:"lineup_revision"`
+	EnrollmentID         ClientEnrollmentID `json:"enrollment_id"`
+	EnrollmentGeneration int                `json:"enrollment_generation"`
+	StoreManifestDigest  Digest             `json:"store_manifest_digest"`
+	// EffectiveEgress is the canonical (sorted, deduplicated) allowlist of
+	// authorities the writer's proxy admitted for this attempt.
+	EffectiveEgress []string `json:"effective_egress"`
+	// Attended records whether the attempt ran attended (§5.4: a new
+	// agent × launch pair runs attended until the operator marks it). It must
+	// agree with the admission's operating mode; carrying both keeps the
+	// snapshot self-contained while the cross-check refuses drift.
+	Attended bool `json:"attended"`
+}
+
+// Validate reports whether the binding is well-formed.
+func (b AdmissionAgentBinding) Validate() error {
+	for field, digest := range map[string]Digest{
+		"agent_digest": b.AgentDigest, "launch_digest": b.LaunchDigest,
+		"lineup_revision": b.LineupRevision, "store_manifest_digest": b.StoreManifestDigest,
+	} {
+		if !contentaddr.Valid(string(digest)) {
+			return fmt.Errorf("admission agent binding %s %q: %w", field, digest, ErrInvalidDigest)
+		}
+	}
+	if b.EnrollmentID == "" {
+		return fmt.Errorf("admission agent binding enrollment_id: %w", ErrEmptyID)
+	}
+	if b.EnrollmentGeneration < 1 {
+		return fmt.Errorf("admission agent binding enrollment_generation %d: %w",
+			b.EnrollmentGeneration, ErrNonPositive)
+	}
+	if len(b.EffectiveEgress) == 0 {
+		return fmt.Errorf("admission agent binding effective_egress: %w", ErrEmptyField)
+	}
+	for i, authority := range b.EffectiveEgress {
+		if authority == "" {
+			return fmt.Errorf("admission agent binding effective_egress: %w", ErrEmptyField)
+		}
+		if i > 0 && b.EffectiveEgress[i-1] >= authority {
+			return fmt.Errorf("admission agent binding effective_egress at %q: %w",
+				authority, ErrKeysNotCanonical)
+		}
+	}
+	return nil
+}
+
+// canonicalAgentBinding detaches the binding from the caller's pointer and
+// canonicalizes the egress allowlist (sorted, deduplicated), so one admitted
+// configuration has exactly one byte form under the content address.
+func canonicalAgentBinding(in *AdmissionAgentBinding) *AdmissionAgentBinding {
+	if in == nil {
+		return nil
+	}
+	cloned := *in
+	if len(in.EffectiveEgress) > 0 {
+		egress := slices.Clone(in.EffectiveEgress)
+		slices.Sort(egress)
+		cloned.EffectiveEgress = slices.Compact(egress)
+	}
+	return &cloned
 }
 
 // ExecutionAdmissionInput carries the caller-supplied fields of an
@@ -188,6 +273,7 @@ type ExecutionAdmissionInput struct {
 	AuthIdentityID             *AuthIdentityID
 	TrustProfileDigest         *Digest
 	BackupEncryptionWaiver     *BackupEncryptionWaiver
+	AgentBinding               *AdmissionAgentBinding
 	AdmittedAt                 time.Time
 }
 
@@ -225,6 +311,7 @@ func NewExecutionAdmission(in ExecutionAdmissionInput) (ExecutionAdmission, erro
 		AuthIdentityID:             clonePtr(in.AuthIdentityID),
 		TrustProfileDigest:         clonePtr(in.TrustProfileDigest),
 		BackupEncryptionWaiver:     clonePtr(in.BackupEncryptionWaiver),
+		AgentBinding:               canonicalAgentBinding(in.AgentBinding),
 		AdmittedAt:                 in.AdmittedAt.UTC(),
 	}
 	id, err := a.ComputeID()
@@ -264,6 +351,7 @@ type canonicalAdmission struct {
 	AuthIdentityID             *AuthIdentityID         `json:"auth_identity_id"`
 	TrustProfileDigest         *Digest                 `json:"trust_profile_digest"`
 	BackupEncryptionWaiver     *BackupEncryptionWaiver `json:"backup_encryption_waiver"`
+	AgentBinding               *AdmissionAgentBinding  `json:"agent_binding,omitempty"`
 	AdmittedAt                 time.Time               `json:"admitted_at"`
 }
 
@@ -281,6 +369,9 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 	}
 	if a.BackendConfigurationDigest != "" {
 		version = admissionBackendConfigEncodingVersion
+	}
+	if a.AgentBinding != nil {
+		version = admissionAgentEncodingVersion
 	}
 	body, err := json.Marshal(canonicalAdmission{
 		Version:                    version,
@@ -304,6 +395,7 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 		AuthIdentityID:             a.AuthIdentityID,
 		TrustProfileDigest:         a.TrustProfileDigest,
 		BackupEncryptionWaiver:     a.BackupEncryptionWaiver,
+		AgentBinding:               canonicalAgentBinding(a.AgentBinding),
 		AdmittedAt:                 a.AdmittedAt,
 	})
 	if err != nil {
@@ -392,6 +484,36 @@ func (a ExecutionAdmission) Validate() error {
 	}
 	if err := a.validateTrustBinding(); err != nil {
 		return err
+	}
+	if a.AgentBinding != nil {
+		if err := a.AgentBinding.Validate(); err != nil {
+			return fmt.Errorf("execution admission %s: %w", a.InvocationID, err)
+		}
+		// The binding's attended flag and the admission's operating mode are
+		// two spellings of one fact; drift between them would let a record
+		// claim an attended first run while dispatching unattended.
+		if a.AgentBinding.Attended == (a.OperatingMode == ModeUnattended) {
+			return fmt.Errorf("execution admission %s attended flag disagrees with mode %q: %w",
+				a.InvocationID, a.OperatingMode, ErrAdmissionInconsistent)
+		}
+		// An agent-admitted attempt always runs under some provider identity;
+		// a clean-verification stage never resolves an agent.
+		if a.AuthIdentityID == nil {
+			return fmt.Errorf("execution admission %s carries an agent binding with no identity: %w",
+				a.InvocationID, ErrAuthIdentityInconsistent)
+		}
+		// Unlike the historical nil shapes the legacy reader preserves, a v4
+		// admission is newly written and derives its instruction delivery
+		// from the adapter (§5.4 admission step 5): an agent-bound record
+		// with no explicit vendor-instruction snapshot has lost the
+		// provenance of what the attempt received, so it is an incoherent
+		// record, not history.
+		if a.StageInputs == nil || a.StageInputs.VendorInstructions == nil ||
+			a.StageInputs.VendorInstructions.Delivery == "" {
+			return fmt.Errorf(
+				"execution admission %s carries an agent binding without an explicit vendor-instruction snapshot: %w",
+				a.InvocationID, ErrAdmissionInconsistent)
+		}
 	}
 	if a.AdmittedAt.IsZero() {
 		return fmt.Errorf("execution admission %s admitted_at: %w", a.InvocationID, ErrMissingTimestamp)
@@ -817,6 +939,138 @@ func ValidateOutcomeBinding(a ExecutionAdmission, x ExecutionOutcome) error {
 	if x.RecordedAt.Before(a.AdmittedAt) {
 		return fmt.Errorf("execution outcome %s recorded %s, admitted %s: %w",
 			x.InvocationID, x.RecordedAt, a.AdmittedAt, ErrTimestampOutOfOrder)
+	}
+	return nil
+}
+
+// ValidateAdmissionAgentDerivations rechecks a v4 admission's derived fields
+// against the closure its agent binding names (§5.4 admission step 5:
+// "Reconstruction reads by digest and rechecks the derivations"). The caller
+// supplies the closure it resolved by digest — the agent, its adapter,
+// route, and offer fragments, the stage's launch with the role the
+// admission's stage resolves to, and the enrollment and generation records —
+// and every derived field must agree: the identity and credential mode with
+// the enrollment, the store manifest with the generation, the egress with
+// the route, the instruction-delivery vendor with the adapter, the binding's
+// launch digest with an authenticated launch for exactly that role, and the
+// agent's offer digest with an authenticated offer, so attended eligibility,
+// launch-capability provenance, and the admitted model can never be
+// attributed to a fragment the admission did not run. The joins the closure
+// itself expresses are re-run: the agent's effort must be one the offer
+// allows and the adapter can send, the enrollment's client must be the one
+// the adapter drives, and the launch must require nothing beyond the
+// adapter's declared capability set (the proved-set gate needs the
+// conformance record and stays with admission step 3). The enrollment and
+// generation records carry no content address; their authenticity is the
+// re-gating store read's (identity binding, column/body cross-checks), which
+// is the only supported source for them. Tree facts outside every digest
+// (the route names the offer and enrollment are authored under, the lineup
+// revision's content) and admission-time policy gates (identity enabled,
+// offer expiry against the attempt deadline) are the #867 resolver's to
+// re-establish; a record of a past selection is not invalidated by current
+// configuration. Any disagreement fails closed with a
+// typed error; a legacy admission (no binding) never reaches this function,
+// because the legacy rule forbids resolving it against current configuration
+// at all.
+func ValidateAdmissionAgentDerivations(
+	a ExecutionAdmission, agent AgentDefinition, adapter AdapterFragment,
+	route RouteFragment, offer OfferFragment, launch LaunchSpec, role StageName,
+	enrollment ClientEnrollment, generation EnrollmentGeneration,
+) error {
+	if err := a.Validate(); err != nil {
+		return err
+	}
+	fail := func(format string, args ...any) error {
+		detail := fmt.Sprintf(format, args...)
+		return fmt.Errorf("execution admission %s: %s: %w",
+			a.InvocationID, detail, ErrAdmissionDerivationMismatch)
+	}
+	binding := a.AgentBinding
+	if binding == nil {
+		return fail("no agent binding to recheck")
+	}
+	if err := agent.Validate(); err != nil {
+		return err
+	}
+	if err := adapter.Validate(); err != nil {
+		return err
+	}
+	if err := route.Validate(); err != nil {
+		return err
+	}
+	if err := offer.Validate(); err != nil {
+		return err
+	}
+	if err := launch.Validate(); err != nil {
+		return err
+	}
+	if !role.valid() {
+		return fmt.Errorf("execution admission %s stage role %q: %w",
+			a.InvocationID, role, ErrInvalidStageName)
+	}
+	if err := enrollment.Validate(); err != nil {
+		return err
+	}
+	if err := ValidateEnrollmentGenerationBinding(enrollment, generation); err != nil {
+		return err
+	}
+	if binding.AgentDigest != agent.Digest {
+		return fail("binding names agent %s, closure resolves %s", binding.AgentDigest, agent.Digest)
+	}
+	if agent.AdapterDigest != adapter.Digest {
+		return fail("agent pins adapter %s, closure supplies %s", agent.AdapterDigest, adapter.Digest)
+	}
+	if agent.RouteDigest != route.Digest {
+		return fail("agent pins route %s, closure supplies %s", agent.RouteDigest, route.Digest)
+	}
+	if agent.OfferDigest != offer.Digest {
+		return fail("agent pins offer %s, closure supplies %s", agent.OfferDigest, offer.Digest)
+	}
+	if binding.LaunchDigest != launch.Digest {
+		return fail("binding names launch %s, closure resolves %s", binding.LaunchDigest, launch.Digest)
+	}
+	if launch.Stage != role {
+		return fail("launch is for stage %q, the admission's stage resolves to %q", launch.Stage, role)
+	}
+	if !slices.Contains(offer.AllowedEfforts, agent.Effort) {
+		return fail("effort %q is not allowed by the agent's offer", agent.Effort)
+	}
+	if !slices.Contains(adapter.SendableEfforts, agent.Effort) {
+		return fail("effort %q is not sendable by the agent's adapter", agent.Effort)
+	}
+	if enrollment.HarnessClient != adapter.ClientKind {
+		return fail("enrollment binds client %q, adapter drives %q",
+			enrollment.HarnessClient, adapter.ClientKind)
+	}
+	if missing := MissingLaunchCapabilities(adapter.LaunchCapabilities, launch.RequiredCapabilities()); len(missing) > 0 {
+		return fail("launch requires %v beyond the adapter's declared capabilities", missing)
+	}
+	if agent.EnrollmentID != binding.EnrollmentID || enrollment.ID != binding.EnrollmentID {
+		return fail("enrollment %s disagrees with binding %s", enrollment.ID, binding.EnrollmentID)
+	}
+	if a.AuthIdentityID == nil || *a.AuthIdentityID != enrollment.AuthIdentityID {
+		return fail("admitted identity disagrees with enrollment identity %s", enrollment.AuthIdentityID)
+	}
+	if a.CredentialMode != enrollment.CredentialMode {
+		return fail("credential mode %q, enrollment carries %q", a.CredentialMode, enrollment.CredentialMode)
+	}
+	if generation.Ordinal != binding.EnrollmentGeneration {
+		return fail("generation ordinal %d, binding names %d", generation.Ordinal, binding.EnrollmentGeneration)
+	}
+	if generation.StoreManifestDigest != binding.StoreManifestDigest {
+		return fail("store manifest %s, binding names %s",
+			generation.StoreManifestDigest, binding.StoreManifestDigest)
+	}
+	for _, authority := range binding.EffectiveEgress {
+		if !slices.Contains(route.InferenceAuthorities, authority) {
+			return fail("effective egress authority %q is outside the route's authorities", authority)
+		}
+	}
+	// Validate already required the explicit snapshot on every agent-bound
+	// admission, so absence cannot reach this comparison.
+	if a.StageInputs.VendorInstructions.Vendor != adapter.Vendor {
+		return fail("instruction delivery vendor %q, adapter derives %q",
+			a.StageInputs.VendorInstructions.Vendor, adapter.Vendor)
 	}
 	return nil
 }

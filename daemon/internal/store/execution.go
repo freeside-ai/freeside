@@ -37,21 +37,25 @@ var ErrRepositoryUntrusted = errors.New("admission names a repository with no ap
 const (
 	recordExecutionAdmissionSQL = `
 INSERT INTO execution_admissions
-    (invocation_id, id, run_id, stage_id, attempt_id, operating_mode, auth_identity_id, admitted_at, body)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (invocation_id, id, run_id, stage_id, attempt_id, operating_mode, auth_identity_id,
+     agent_digest, enrollment_id, enrollment_generation, admitted_at, body)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (invocation_id) DO NOTHING`
 	selectExecutionAdmissionBodySQL = `SELECT body FROM execution_admissions WHERE invocation_id = ?`
 	getExecutionAdmissionSQL        = `
-SELECT invocation_id, id, run_id, stage_id, attempt_id, operating_mode, auth_identity_id, admitted_at, body
+SELECT invocation_id, id, run_id, stage_id, attempt_id, operating_mode, auth_identity_id,
+       agent_digest, enrollment_id, enrollment_generation, admitted_at, body
 FROM execution_admissions WHERE invocation_id = ?`
 	// Ordered by rowid (insertion order), never by the RFC3339Nano admitted_at
 	// column: trailing zeros are trimmed, so sub-second instants misorder
 	// lexicographically.
 	listRunExecutionAdmissionsSQL = `
-SELECT invocation_id, id, run_id, stage_id, attempt_id, operating_mode, auth_identity_id, admitted_at, body
+SELECT invocation_id, id, run_id, stage_id, attempt_id, operating_mode, auth_identity_id,
+       agent_digest, enrollment_id, enrollment_generation, admitted_at, body
 FROM execution_admissions WHERE run_id = ? ORDER BY rowid`
 	listExecutionAdmissionsSQL = `
-SELECT invocation_id, id, run_id, stage_id, attempt_id, operating_mode, auth_identity_id, admitted_at, body
+SELECT invocation_id, id, run_id, stage_id, attempt_id, operating_mode, auth_identity_id,
+       agent_digest, enrollment_id, enrollment_generation, admitted_at, body
 FROM execution_admissions ORDER BY rowid`
 	listActiveIdentityExecutionCandidatesSQL = `
 SELECT admission.invocation_id
@@ -163,10 +167,17 @@ func (tx *WriteTx) RecordExecutionAdmission(ctx context.Context, admission domai
 	if admission.AuthIdentityID != nil {
 		identity = *admission.AuthIdentityID
 	}
+	var agentDigest, enrollmentID, enrollmentGeneration any
+	if binding := admission.AgentBinding; binding != nil {
+		agentDigest = string(binding.AgentDigest)
+		enrollmentID = binding.EnrollmentID
+		enrollmentGeneration = binding.EnrollmentGeneration
+	}
 	inserted, err := tx.putImmutableInserted(ctx, recordExecutionAdmissionSQL,
 		[]any{
 			admission.InvocationID, admission.ID, admission.RunID, admission.StageID,
 			admission.AttemptID, admission.OperatingMode, identity,
+			agentDigest, enrollmentID, enrollmentGeneration,
 			formatTime(admission.AdmittedAt), body,
 		},
 		selectExecutionAdmissionBodySQL, []any{admission.InvocationID}, body)
@@ -401,18 +412,22 @@ func (tx *ReadTx) scanExecutionAdmission(ctx context.Context, row scanner) (doma
 // blobs a restore must preserve.
 func scanExecutionAdmissionRecord(row scanner) (domain.ExecutionAdmission, error) {
 	var (
-		invocationID   string
-		id             string
-		runID          string
-		stageID        string
-		attemptID      string
-		operatingMode  string
-		authIdentityID sql.NullString
-		admittedAt     string
-		body           []byte
+		invocationID         string
+		id                   string
+		runID                string
+		stageID              string
+		attemptID            string
+		operatingMode        string
+		authIdentityID       sql.NullString
+		agentDigest          sql.NullString
+		enrollmentID         sql.NullString
+		enrollmentGeneration sql.NullInt64
+		admittedAt           string
+		body                 []byte
 	)
 	if err := row.Scan(&invocationID, &id, &runID, &stageID, &attemptID,
-		&operatingMode, &authIdentityID, &admittedAt, &body); err != nil {
+		&operatingMode, &authIdentityID, &agentDigest, &enrollmentID,
+		&enrollmentGeneration, &admittedAt, &body); err != nil {
 		return domain.ExecutionAdmission{}, err
 	}
 	admission, err := decode[domain.ExecutionAdmission](body)
@@ -424,10 +439,28 @@ func scanExecutionAdmissionRecord(row scanner) (domain.ExecutionAdmission, error
 		string(admission.AttemptID) != attemptID ||
 		string(admission.OperatingMode) != operatingMode ||
 		!authIdentityColumnEqual(authIdentityID, admission.AuthIdentityID) ||
+		!agentBindingColumnsEqual(agentDigest, enrollmentID, enrollmentGeneration, admission.AgentBinding) ||
 		!timeColumnEqual(admittedAt, admission.AdmittedAt) {
 		return domain.ExecutionAdmission{}, errRowInconsistent
 	}
 	return admission, nil
+}
+
+// agentBindingColumnsEqual reports whether the extracted nullable agent
+// columns agree with the decoded body's binding: all absent on a legacy
+// admission, or all present and matching on a v4 one. Without this the
+// enrollment foreign key would be decorative, since reconstruction would take
+// the body's word for a binding no trusted row backs.
+func agentBindingColumnsEqual(
+	agentDigest, enrollmentID sql.NullString, generation sql.NullInt64,
+	want *domain.AdmissionAgentBinding,
+) bool {
+	if want == nil {
+		return !agentDigest.Valid && !enrollmentID.Valid && !generation.Valid
+	}
+	return agentDigest.Valid && agentDigest.String == string(want.AgentDigest) &&
+		enrollmentID.Valid && enrollmentID.String == string(want.EnrollmentID) &&
+		generation.Valid && generation.Int64 == int64(want.EnrollmentGeneration)
 }
 
 // authIdentityColumnEqual reports whether the extracted nullable column names
@@ -512,6 +545,41 @@ func (tx *ReadTx) gateAdmissionWithReviewConfigurationRecovery(
 		if _, err := tx.GetAuthIdentity(ctx, *admission.AuthIdentityID); err != nil {
 			return fmt.Errorf("admission %q names auth identity %q: %w",
 				admission.InvocationID, *admission.AuthIdentityID, err)
+		}
+	}
+	// A v4 admission's enrollment leg is re-gated here: the enrollment and the
+	// exact generation it mounted must still reconstruct (through their own
+	// account-binding and expiry-per-method gates), the enrollment must belong
+	// to the admitted identity, and the recorded credential mode and store
+	// manifest must agree with those records. A legacy admission (nil binding)
+	// deliberately gets none of this: the §5.4 permanent legacy rule keeps its
+	// admitted identity and credential mode and never resolves it against
+	// current configuration.
+	if binding := admission.AgentBinding; binding != nil {
+		enrollment, err := tx.GetClientEnrollment(ctx, binding.EnrollmentID)
+		if err != nil {
+			return fmt.Errorf("admission %q names enrollment %q: %w",
+				admission.InvocationID, binding.EnrollmentID, err)
+		}
+		if admission.AuthIdentityID == nil || enrollment.AuthIdentityID != *admission.AuthIdentityID {
+			return fmt.Errorf("admission %q enrollment %q belongs to identity %q: %w",
+				admission.InvocationID, binding.EnrollmentID, enrollment.AuthIdentityID,
+				domain.ErrAdmissionDerivationMismatch)
+		}
+		if admission.CredentialMode != enrollment.CredentialMode {
+			return fmt.Errorf("admission %q credential mode %q, enrollment carries %q: %w",
+				admission.InvocationID, admission.CredentialMode, enrollment.CredentialMode,
+				domain.ErrAdmissionDerivationMismatch)
+		}
+		generation, err := tx.GetEnrollmentGeneration(ctx, binding.EnrollmentID, binding.EnrollmentGeneration)
+		if err != nil {
+			return fmt.Errorf("admission %q names enrollment generation %q/%d: %w",
+				admission.InvocationID, binding.EnrollmentID, binding.EnrollmentGeneration, err)
+		}
+		if generation.StoreManifestDigest != binding.StoreManifestDigest {
+			return fmt.Errorf("admission %q store manifest %q, generation records %q: %w",
+				admission.InvocationID, binding.StoreManifestDigest, generation.StoreManifestDigest,
+				domain.ErrAdmissionDerivationMismatch)
 		}
 	}
 	if !admission.RequiresTrustProfile() {
