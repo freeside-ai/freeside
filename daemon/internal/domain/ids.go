@@ -23,6 +23,7 @@ type (
 	ProposalInstanceID  string
 	OpaqueSubjectHandle string
 	AuthIdentityID      string
+	ClientEnrollmentID  string
 	ScheduleID          string
 	WorkUnitID          string
 	RequirementKey      string

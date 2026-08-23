@@ -252,7 +252,7 @@ func TestCodexReenrollmentMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 51 {
+	if got := rawVersion(t, db); got != 52 {
 		t.Fatalf("schema version = %d, want 51", got)
 	}
 	for _, table := range []string{
@@ -566,9 +566,8 @@ func TestCodexReenrollmentReconstructionRejectsUnknownAndTrailingBody(t *testing
 			t.Cleanup(func() { _ = st.Close() })
 			at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 			identity := domain.AuthIdentity{
-				ID: "codex-primary", Provider: "codex", AuthStoreMutationLease: true,
-				AuthStoreVolume: "codex-auth", MaxParallelExecutions: 1,
-				RefreshStrategy: domain.RefreshOnDemand,
+				ID: "codex-primary", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+				Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth", RefreshStrategy: domain.RefreshOnDemand},
 			}
 			markerID := domain.ItemID(CodexReenrollmentMarkerPrefix(identity.ID) + "1")
 			var rec CodexReenrollmentJournal

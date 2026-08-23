@@ -28,8 +28,8 @@ func TestAdaptersRoundTripAcrossStoreReopen(t *testing.T) {
 	}
 	identity := domain.AuthIdentity{
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-		AuthStoreVolume:       "provider-cred",
-		MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+		MaxParallelExecutions: 1,
+		Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, at)
@@ -70,8 +70,8 @@ func TestAdaptersRoundTripAcrossStoreReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wardstore.New(reopened): %v", err)
 	}
-	if volume, err := adapters.Leaser.AuthStoreVolume(ctx, identity.ID); err != nil || volume != identity.AuthStoreVolume {
-		t.Fatalf("AuthStoreVolume = %q, %v; want %q", volume, err, identity.AuthStoreVolume)
+	if volume, err := adapters.Leaser.AuthStoreVolume(ctx, identity.ID); err != nil || volume != identity.Interim.AuthStoreVolume {
+		t.Fatalf("AuthStoreVolume = %q, %v; want %q", volume, err, identity.Interim.AuthStoreVolume)
 	}
 	got, err := adapters.Journal.Get(ctx, rec.RunID)
 	if err != nil {
@@ -126,9 +126,8 @@ func TestLeaserHeldMutationBlocksExpiredTakeoverUntilFilesystemMutationReturns(t
 	t.Cleanup(func() { _ = st.Close() })
 	at := time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)
 	identity := domain.AuthIdentity{
-		ID: "codex-atomic-mutation", Provider: "openai", AuthStoreMutationLease: true,
-		AuthStoreVolume: "codex-auth", MaxParallelExecutions: 1,
-		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+		ID: "codex-atomic-mutation", Provider: "openai", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth", RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true},
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, at)
@@ -399,8 +398,8 @@ func TestLeaserExcludesConcurrentHolderAndMapsEndedWindow(t *testing.T) {
 	at := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	identity := domain.AuthIdentity{
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-		AuthStoreVolume:       "provider-cred",
-		MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+		MaxParallelExecutions: 1,
+		Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, at)
@@ -441,9 +440,8 @@ func TestEnrollmentAdapterCreatesExclusiveRecoverableOperation(t *testing.T) {
 	}
 	at := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	identity := domain.AuthIdentity{
-		ID: "codex-enrollment", Provider: "openai", AuthStoreMutationLease: true,
-		AuthStoreVolume: "/private/auth/codex.json", MaxParallelExecutions: 1,
-		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+		ID: "codex-enrollment", Provider: "openai", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "/private/auth/codex.json", RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true},
 	}
 	lease, err := adapters.Enrollment.Begin(
 		ctx, identity, "project-1", "enrollment-holder", at, at.Add(time.Minute),
@@ -513,9 +511,8 @@ func TestEnrollmentAdapterRefusesChangedIdentityBindings(t *testing.T) {
 	}
 	at := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	stored := domain.AuthIdentity{
-		ID: "codex-fixed", Provider: "openai", AuthStoreMutationLease: true,
-		AuthStoreVolume: "/private/auth/original.json", MaxParallelExecutions: 1,
-		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+		ID: "codex-fixed", Provider: "openai", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "/private/auth/original.json", RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true},
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, stored, at)
@@ -523,7 +520,7 @@ func TestEnrollmentAdapterRefusesChangedIdentityBindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	changed := stored
-	changed.AuthStoreVolume = "/private/auth/rebound.json"
+	changed.Interim.AuthStoreVolume = "/private/auth/rebound.json"
 	if _, err := adapters.Enrollment.Begin(
 		ctx, changed, "project-1", "enrollment-holder", at, at.Add(time.Minute),
 	); !errors.Is(err, domain.ErrImmutableTransition) {
@@ -646,9 +643,8 @@ func TestCodexAuthStateRequiresVerifiedCommandBackedRecovery(t *testing.T) {
 	}
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	identity := domain.AuthIdentity{
-		ID: "codex-primary", Provider: "codex", AuthStoreMutationLease: true,
-		AuthStoreVolume: "codex-auth", MaxParallelExecutions: 1,
-		RefreshStrategy: domain.RefreshOnDemand,
+		ID: "codex-primary", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	run := domain.Run{
 		ID: "run-codex-recovery", ProjectID: "project-1",
@@ -793,9 +789,8 @@ func TestFailedCodexReenrollmentCannotProjectOrClearAdmission(t *testing.T) {
 	}
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	identity := domain.AuthIdentity{
-		ID: "codex-failed", Provider: "codex", AuthStoreMutationLease: true,
-		AuthStoreVolume: "codex-auth-failed", MaxParallelExecutions: 1,
-		RefreshStrategy: domain.RefreshOnDemand,
+		ID: "codex-failed", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth-failed", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	run := domain.Run{
 		ID: "run-codex-failed", ProjectID: "project-1",
@@ -857,9 +852,8 @@ func TestCodexReenrollmentOperationCannotCrossMarkerOccurrences(t *testing.T) {
 	}
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	identity := domain.AuthIdentity{
-		ID: "codex-occurrence", Provider: "codex", AuthStoreMutationLease: true,
-		AuthStoreVolume: "codex-auth-occurrence", MaxParallelExecutions: 1,
-		RefreshStrategy: domain.RefreshOnDemand,
+		ID: "codex-occurrence", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth-occurrence", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	run := domain.Run{
 		ID: "run-codex-occurrence", ProjectID: "project-1",

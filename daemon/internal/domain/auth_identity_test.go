@@ -11,8 +11,8 @@ import (
 func authIdentity() domain.AuthIdentity {
 	return domain.AuthIdentity{
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-		AuthStoreVolume:       "provider-cred",
-		MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+		MaxParallelExecutions: 1,
+		Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 }
 
@@ -26,15 +26,24 @@ func TestAuthIdentityValidate(t *testing.T) {
 		{"no id", func(i *domain.AuthIdentity) { i.ID = "" }, domain.ErrEmptyID},
 		{"no provider", func(i *domain.AuthIdentity) { i.Provider = "" }, domain.ErrEmptyField},
 		{"leased without auth-store volume", func(i *domain.AuthIdentity) {
-			i.AuthStoreVolume = ""
+			i.Interim.AuthStoreVolume = ""
 		}, domain.ErrEmptyField},
 		{"zero parallelism", func(i *domain.AuthIdentity) { i.MaxParallelExecutions = 0 }, domain.ErrNonPositive},
 		{"unknown refresh strategy", func(i *domain.AuthIdentity) {
-			i.RefreshStrategy = domain.RefreshStrategy("magic")
+			i.Interim.RefreshStrategy = domain.RefreshStrategy("magic")
 		}, domain.ErrInvalidRefreshStrategy},
 		{"zero refresh strategy", func(i *domain.AuthIdentity) {
-			i.RefreshStrategy = ""
+			i.Interim.RefreshStrategy = ""
 		}, domain.ErrInvalidRefreshStrategy},
+		{"negative budget", func(i *domain.AuthIdentity) { i.Budget = -1 }, domain.ErrNonPositive},
+		{
+			// A post-adoption identity carries no interim facts; the lease
+			// then binds stores through enrollments, so no volume is required
+			// here.
+			"leased without interim facts",
+			func(i *domain.AuthIdentity) { i.Interim = domain.InterimClientFacts{} },
+			nil,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,12 +65,12 @@ func TestValidateAuthIdentityTransition(t *testing.T) {
 	}{
 		{"unchanged", func(*domain.AuthIdentity) {}, nil},
 		{"remeasured parallelism", func(i *domain.AuthIdentity) { i.MaxParallelExecutions = 4 }, nil},
-		{"gained snapshot support", func(i *domain.AuthIdentity) { i.SupportsReadOnlyAuthSnapshot = true }, domain.ErrImmutableTransition},
-		{"restrategized refresh", func(i *domain.AuthIdentity) { i.RefreshStrategy = domain.RefreshExternal }, domain.ErrImmutableTransition},
+		{"gained snapshot support", func(i *domain.AuthIdentity) { i.Interim.SupportsReadOnlyAuthSnapshot = true }, domain.ErrImmutableTransition},
+		{"restrategized refresh", func(i *domain.AuthIdentity) { i.Interim.RefreshStrategy = domain.RefreshExternal }, domain.ErrImmutableTransition},
 		{"other identity", func(i *domain.AuthIdentity) { i.ID = "auth-2" }, domain.ErrImmutableTransition},
 		{"other provider", func(i *domain.AuthIdentity) { i.Provider = "openai" }, domain.ErrImmutableTransition},
 		{"other auth-store volume", func(i *domain.AuthIdentity) {
-			i.AuthStoreVolume = "other-provider-cred"
+			i.Interim.AuthStoreVolume = "other-provider-cred"
 		}, domain.ErrImmutableTransition},
 		{
 			// Retiring the serialization point while a holder still believes
@@ -70,6 +79,11 @@ func TestValidateAuthIdentityTransition(t *testing.T) {
 			func(i *domain.AuthIdentity) { i.AuthStoreMutationLease = false },
 			domain.ErrImmutableTransition,
 		},
+		{"account bound from empty", func(i *domain.AuthIdentity) { i.AccountBinding = "acct-1" }, nil},
+		{"usage pool set from empty", func(i *domain.AuthIdentity) { i.UsagePool = "pool-1" }, nil},
+		{"disabled by the operator", func(i *domain.AuthIdentity) { i.Enabled = false }, nil},
+		{"cost owner reassigned", func(i *domain.AuthIdentity) { i.CostOwner = "finance" }, nil},
+		{"budget revised", func(i *domain.AuthIdentity) { i.Budget = 250_000 }, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -169,6 +183,78 @@ func TestAuthStoreMutationLeaseHeldAt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.l.HeldAt(tc.now); got != tc.want {
 				t.Fatalf("HeldAt(%s) = %v, want %v", tc.now, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAuthIdentitySetOnceBindings(t *testing.T) {
+	bound := authIdentity()
+	bound.AccountBinding = "acct-1"
+	bound.UsagePool = "pool-1"
+	cases := []struct {
+		name    string
+		mutate  func(*domain.AuthIdentity)
+		wantErr error
+	}{
+		{"unchanged", func(*domain.AuthIdentity) {}, nil},
+		{
+			// Rebinding would re-home recorded usage onto a different
+			// account; the binding is set once, never moved.
+			"account rebound",
+			func(i *domain.AuthIdentity) { i.AccountBinding = "acct-2" },
+			domain.ErrImmutableTransition,
+		},
+		{
+			"account cleared",
+			func(i *domain.AuthIdentity) { i.AccountBinding = "" },
+			domain.ErrImmutableTransition,
+		},
+		{
+			"usage pool moved",
+			func(i *domain.AuthIdentity) { i.UsagePool = "pool-2" },
+			domain.ErrImmutableTransition,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			updated := bound
+			tc.mutate(&updated)
+			if err := domain.ValidateAuthIdentityTransition(bound, updated); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("ValidateAuthIdentityTransition = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestLeaseGenerationBindingValidate(t *testing.T) {
+	valid := domain.LeaseGenerationBinding{
+		EnrollmentID: "enroll-1", Generation: 2, AuthStoreVolume: "store-1",
+		StoreManifestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	cases := []struct {
+		name    string
+		mutate  func(*domain.LeaseGenerationBinding)
+		wantErr error
+	}{
+		{"valid", func(*domain.LeaseGenerationBinding) {}, nil},
+		{"no enrollment", func(b *domain.LeaseGenerationBinding) { b.EnrollmentID = "" }, domain.ErrEmptyID},
+		{"bootstrap generation", func(b *domain.LeaseGenerationBinding) { b.Generation = 0 }, nil},
+		{"negative generation", func(b *domain.LeaseGenerationBinding) { b.Generation = -1 }, domain.ErrNonPositive},
+		{"no volume", func(b *domain.LeaseGenerationBinding) { b.AuthStoreVolume = "" }, domain.ErrEmptyField},
+		{"malformed digest", func(b *domain.LeaseGenerationBinding) { b.StoreManifestDigest = "manifest-1" }, domain.ErrInvalidDigest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			binding := valid
+			tc.mutate(&binding)
+			if err := binding.Validate(); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Validate() = %v, want %v", err, tc.wantErr)
+			}
+			l := lease()
+			l.GenerationBinding = &binding
+			if err := l.Validate(); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("lease Validate() = %v, want %v", err, tc.wantErr)
 			}
 		})
 	}

@@ -155,9 +155,8 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 		t.Fatalf("NewAutomationTrustProfile: %v", err)
 	}
 	identity := domain.AuthIdentity{
-		ID: "auth-snapshot", Provider: "claude", AuthStoreMutationLease: true,
-		AuthStoreVolume: "provider-cred", MaxParallelExecutions: 1,
-		RefreshStrategy: domain.RefreshOnDemand,
+		ID: "auth-snapshot", Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	identityID := identity.ID
 	admittedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)

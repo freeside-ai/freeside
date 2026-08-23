@@ -162,6 +162,14 @@ func TestEnumValidity(t *testing.T) {
 		valids["RefreshStrategy"] = append(valids["RefreshStrategy"], v.valid)
 	}
 	invalids["RefreshStrategy"] = RefreshStrategy("").valid
+	for _, v := range AllHarnessClientKinds {
+		valids["HarnessClientKind"] = append(valids["HarnessClientKind"], v.valid)
+	}
+	invalids["HarnessClientKind"] = HarnessClientKind("").valid
+	for _, v := range AllAuthMethods {
+		valids["AuthMethod"] = append(valids["AuthMethod"], v.valid)
+	}
+	invalids["AuthMethod"] = AuthMethod("").valid
 	for _, v := range AllIntakeOccurrenceStates {
 		valids["IntakeOccurrenceState"] = append(valids["IntakeOccurrenceState"], v.valid)
 	}

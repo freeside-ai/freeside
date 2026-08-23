@@ -924,9 +924,8 @@ func TestPrepareCodexReviewAuthRejectsNonOpenAIIdentity(t *testing.T) {
 	setCodexHostAuth(t, cfg, launch, "old-refresh", codexReviewEpoch.Add(30*time.Minute), codexReviewEpoch)
 	refresher := &fakeCodexAuthRefresher{}
 	leaser := &fakeLeaser{identity: domain.AuthIdentity{
-		ID: launch.AuthIdentityID, Provider: "claude", AuthStoreMutationLease: true,
-		AuthStoreVolume: launch.AuthSnapshot, MaxParallelExecutions: 1,
-		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+		ID: launch.AuthIdentityID, Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		Interim: domain.InterimClientFacts{AuthStoreVolume: launch.AuthSnapshot, RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true},
 	}}
 	cfg.AuthStoreLeaser = leaser
 	cfg.AuthRefresher = refresher

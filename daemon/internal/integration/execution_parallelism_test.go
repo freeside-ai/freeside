@@ -446,7 +446,7 @@ func TestIdentityParallelismIsScopedPerIdentity(t *testing.T) {
 
 	secondIdentity := firstIdentity
 	secondIdentity.ID = "auth-claude-secondary"
-	secondIdentity.AuthStoreVolume = "claude-secondary-credentials"
+	secondIdentity.Interim.AuthStoreVolume = "claude-secondary-credentials"
 	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, secondIdentity, admittedAt)
 	}); err != nil {

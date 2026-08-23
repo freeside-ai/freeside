@@ -79,6 +79,8 @@ var (
 	ErrInvalidElaborationSourceKind     = errors.New("invalid elaboration source kind")
 	ErrInvalidProductionAttemptKind     = errors.New("invalid production attempt kind")
 	ErrInvalidFindingSeverity           = errors.New("invalid finding severity")
+	ErrInvalidHarnessClientKind         = errors.New("invalid harness client kind")
+	ErrInvalidAuthMethod                = errors.New("invalid auth method")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -230,6 +232,20 @@ var (
 	ErrRequirementDefinitionMismatch = errors.New(
 		"requirement resolution does not match its trusted requirement definition")
 	ErrCheckProofAuthorityUnregistered = errors.New("check class has no registered proof recipe authority")
+
+	// Admitted-agent enrollment and admission failures (plan §5.4, issue
+	// #894). ErrInvalidDigest is the generic shape refusal for a field that
+	// must be a content address; digest-vs-content mismatches keep their
+	// per-type sentinels.
+	ErrInvalidDigest          = errors.New("digest is not a valid content address")
+	ErrAccountBindingMismatch = errors.New(
+		"credential account binding does not match its identity's")
+	ErrAccountBindingTaken = errors.New(
+		"account binding already belongs to another identity")
+	ErrGenerationExpiryInconsistent = errors.New(
+		"enrollment generation expiry is inconsistent with its auth method")
+	ErrGenerationExpiryInsufficient = errors.New(
+		"enrollment generation token expiry does not cover the attempt deadline plus margin")
 
 	// Backend-conformance failures (issues #327, #320).
 	ErrConformanceOverclaim = errors.New(

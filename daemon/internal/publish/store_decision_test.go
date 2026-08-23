@@ -210,8 +210,9 @@ func seedExecutionPublicationChain(
 
 	identity := domain.AuthIdentity{
 		ID: "auth-producing-0001", Provider: "claude",
-		AuthStoreMutationLease: true, AuthStoreVolume: "provider-cred",
-		MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+		AuthStoreMutationLease: true,
+		MaxParallelExecutions:  1,
+		Interim:                domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	identityID := identity.ID
 	if opts.repo == "" {

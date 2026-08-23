@@ -1,0 +1,10 @@
+{
+  "enrollment_id": "enroll-claude-owner-cli",
+  "ordinal": 3,
+  "auth_store_volume": "claude-owner-cli-store",
+  "store_manifest_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+  "lease_fence": 1,
+  "account_binding": "acct-claude-owner-7f3a",
+  "token_expiry": null,
+  "recorded_at": "2026-01-02T03:04:05Z"
+}

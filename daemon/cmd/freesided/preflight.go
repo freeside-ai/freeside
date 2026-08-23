@@ -934,17 +934,17 @@ func (productionPreflightEnvironment) InspectDatabase(
 		}
 		inspection.ReviewError = tx.RequireReviewConfigurationApproved(ctx, reviewDigest)
 		identity, err := tx.GetAuthIdentity(ctx, cfg.AuthIdentityID)
-		if err != nil || identity.Provider != "claude" || identity.AuthStoreVolume != cfg.AuthVolume ||
+		if err != nil || identity.Provider != "claude" || identity.Interim.AuthStoreVolume != cfg.AuthVolume ||
 			!identity.AuthStoreMutationLease {
 			inspection.CredentialError = errors.Join(err, errors.New("identity cannot support the leased Claude auth store"))
 		}
 		if cfg.ReviewAuthMode == ward.CodexAuthSubscription {
 			reviewIdentity, err := tx.GetAuthIdentity(ctx, cfg.ReviewAuthIdentityID)
-			inspection.ReviewAuthStoreVolume = reviewIdentity.AuthStoreVolume
-			inspection.ReviewRefreshStrategy = reviewIdentity.RefreshStrategy
+			inspection.ReviewAuthStoreVolume = reviewIdentity.Interim.AuthStoreVolume
+			inspection.ReviewRefreshStrategy = reviewIdentity.Interim.RefreshStrategy
 			if err != nil || reviewIdentity.ID != cfg.ReviewAuthIdentityID ||
 				reviewIdentity.Provider != "openai" || !reviewIdentity.AuthStoreMutationLease ||
-				!reviewIdentity.SupportsReadOnlyAuthSnapshot {
+				!reviewIdentity.Interim.SupportsReadOnlyAuthSnapshot {
 				inspection.ReviewCredentialError = errors.Join(
 					err, errors.New("identity cannot support lease-held Codex auth snapshot refresh"),
 				)

@@ -124,9 +124,8 @@ func (f corpusFixture) seedAuthIdentity(t *testing.T) {
 	t.Helper()
 	f.mustWrite(t, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(context.Background(), domain.AuthIdentity{
-			ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-			AuthStoreVolume: "provider-cred", MaxParallelExecutions: 1,
-			RefreshStrategy: domain.RefreshOnDemand,
+			ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 		}, f.at)
 	})
 }

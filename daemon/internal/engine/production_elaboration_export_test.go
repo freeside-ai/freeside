@@ -104,8 +104,8 @@ func TestRecordExecutionExportElaborationArmMintsNoPublicationTask(t *testing.T)
 			return err
 		}
 		return tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
-			ID: identityID, Provider: "claude", AuthStoreMutationLease: true,
-			AuthStoreVolume: "provider-cred", MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+			ID: identityID, Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 		}, epoch)
 	}); err != nil {
 		t.Fatalf("seed run and identity: %v", err)

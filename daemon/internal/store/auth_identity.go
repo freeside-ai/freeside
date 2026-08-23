@@ -92,22 +92,31 @@ func (e *LeaseHeldError) Unwrap() error { return ErrLeaseHeld }
 const (
 	recordAuthIdentitySQL = `
 INSERT INTO auth_identities
-    (id, provider, auth_store_mutation_lease, auth_store_volume, max_parallel_executions,
-     refresh_strategy, supports_read_only_auth_snapshot, recorded_at, body)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (id, provider, account_binding, usage_pool, budget, auth_store_mutation_lease,
+     auth_store_volume, max_parallel_executions, refresh_strategy,
+     supports_read_only_auth_snapshot, enabled, cost_owner, recorded_at, body)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     provider                         = excluded.provider,
+    account_binding                  = excluded.account_binding,
+    usage_pool                       = excluded.usage_pool,
+    budget                           = excluded.budget,
     auth_store_mutation_lease        = excluded.auth_store_mutation_lease,
     auth_store_volume                = excluded.auth_store_volume,
     max_parallel_executions          = excluded.max_parallel_executions,
     refresh_strategy                 = excluded.refresh_strategy,
     supports_read_only_auth_snapshot = excluded.supports_read_only_auth_snapshot,
+    enabled                          = excluded.enabled,
+    cost_owner                       = excluded.cost_owner,
     recorded_at                      = excluded.recorded_at,
     body                             = excluded.body`
 	getAuthIdentitySQL = `
-SELECT provider, auth_store_mutation_lease, auth_store_volume, max_parallel_executions,
-       refresh_strategy, supports_read_only_auth_snapshot, recorded_at, body
+SELECT provider, account_binding, usage_pool, budget, auth_store_mutation_lease,
+       auth_store_volume, max_parallel_executions, refresh_strategy,
+       supports_read_only_auth_snapshot, enabled, cost_owner, recorded_at, body
 FROM auth_identities WHERE id = ?`
+	accountBindingHolderSQL = `
+SELECT id FROM auth_identities WHERE account_binding = ? AND id <> ?`
 
 	getLeaseSQL = `
 SELECT holder, fence, acquired_at, expires_at, released_at, body
@@ -159,13 +168,51 @@ func (tx *InternalTx) RecordAuthIdentity(ctx context.Context, identity domain.Au
 	case !errors.Is(err, ErrNotFound):
 		return fmt.Errorf("record auth identity %q: %w", identity.ID, err)
 	}
+	if err := tx.requireAccountBindingFree(ctx, identity); err != nil {
+		return fmt.Errorf("record auth identity %q: %w", identity.ID, err)
+	}
 	if _, err := tx.tx.ExecContext(ctx, recordAuthIdentitySQL,
-		identity.ID, identity.Provider, identity.AuthStoreMutationLease,
-		identity.AuthStoreVolume, identity.MaxParallelExecutions, identity.RefreshStrategy,
-		identity.SupportsReadOnlyAuthSnapshot, formatTime(recordedAt), body); err != nil {
+		identity.ID, identity.Provider, identity.AccountBinding, identity.UsagePool,
+		identity.Budget, identity.AuthStoreMutationLease,
+		identity.Interim.AuthStoreVolume, identity.MaxParallelExecutions,
+		interimRefreshColumn(identity), identity.Interim.SupportsReadOnlyAuthSnapshot,
+		identity.Enabled, identity.CostOwner, formatTime(recordedAt), body); err != nil {
 		return fmt.Errorf("record auth identity %q: %w", identity.ID, err)
 	}
 	return nil
+}
+
+// interimRefreshColumn is the refresh_strategy column value for an identity:
+// the interim fact where one is recorded, and the marker "none" for a
+// post-adoption identity with no interim facts. The 0013 CHECK requires the
+// column non-empty, and "none" is deliberately outside the RefreshStrategy
+// enum, so it can never be confused with a recorded strategy; the
+// reconstruction cross-check compares through this same function.
+func interimRefreshColumn(identity domain.AuthIdentity) string {
+	if identity.Interim.Present() {
+		return string(identity.Interim.RefreshStrategy)
+	}
+	return "none"
+}
+
+// requireAccountBindingFree enforces the kept revision 36 rule (§5.4): an
+// account binding belongs to at most one identity, so one subscription never
+// holds two leases or two budgets. The typed refusal fires before the write;
+// the partial unique index in 0052 is the mechanical backstop underneath it.
+func (tx *InternalTx) requireAccountBindingFree(ctx context.Context, identity domain.AuthIdentity) error {
+	if identity.AccountBinding == "" {
+		return nil
+	}
+	var holder domain.AuthIdentityID
+	err := tx.tx.QueryRowContext(ctx, accountBindingHolderSQL, identity.AccountBinding, identity.ID).Scan(&holder)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return err
+	}
+	return fmt.Errorf("account binding %q is held by identity %q: %w",
+		identity.AccountBinding, holder, domain.ErrAccountBindingTaken)
 }
 
 // requireForwardRevision refuses a declaration stamped before the stored one.
@@ -221,17 +268,23 @@ func (tx *ReadTx) getAuthIdentityRecord(
 	ctx context.Context, id domain.AuthIdentityID,
 ) (domain.AuthIdentity, time.Time, error) {
 	var (
-		provider   string
-		lease      bool
-		volume     sql.NullString
-		parallel   int
-		refresh    string
-		snapshots  bool
-		recordedAt string
-		body       []byte
+		provider       string
+		accountBinding string
+		usagePool      string
+		budget         int64
+		lease          bool
+		volume         sql.NullString
+		parallel       int
+		refresh        string
+		snapshots      bool
+		enabled        bool
+		costOwner      string
+		recordedAt     string
+		body           []byte
 	)
 	err := tx.tx.QueryRowContext(ctx, getAuthIdentitySQL, id).
-		Scan(&provider, &lease, &volume, &parallel, &refresh, &snapshots, &recordedAt, &body)
+		Scan(&provider, &accountBinding, &usagePool, &budget, &lease, &volume,
+			&parallel, &refresh, &snapshots, &enabled, &costOwner, &recordedAt, &body)
 	if err != nil {
 		return domain.AuthIdentity{}, time.Time{}, fmt.Errorf("get auth identity %q: %w", id, notFoundOr(err))
 	}
@@ -241,11 +294,16 @@ func (tx *ReadTx) getAuthIdentityRecord(
 	}
 	identity := record.Identity
 	if identity.ID != id || identity.Provider != provider ||
+		identity.AccountBinding != accountBinding ||
+		identity.UsagePool != usagePool ||
+		identity.Budget != budget ||
 		identity.AuthStoreMutationLease != lease ||
-		identity.AuthStoreVolume != volume.String ||
+		identity.Interim.AuthStoreVolume != volume.String ||
 		identity.MaxParallelExecutions != parallel ||
-		string(identity.RefreshStrategy) != refresh ||
-		identity.SupportsReadOnlyAuthSnapshot != snapshots ||
+		interimRefreshColumn(identity) != refresh ||
+		identity.Interim.SupportsReadOnlyAuthSnapshot != snapshots ||
+		identity.Enabled != enabled ||
+		identity.CostOwner != costOwner ||
 		!timeColumnEqual(recordedAt, record.RecordedAt) {
 		return domain.AuthIdentity{}, time.Time{}, fmt.Errorf("get auth identity %q: %w", id, errRowInconsistent)
 	}
@@ -268,8 +326,27 @@ func (tx *InternalTx) AcquireAuthStoreMutationLease(
 	ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
 	now, expiresAt time.Time,
 ) (domain.AuthStoreMutationLease, error) {
+	return tx.AcquireAuthStoreMutationLeaseBound(ctx, id, holder, nil, now, expiresAt)
+}
+
+// AcquireAuthStoreMutationLeaseBound is AcquireAuthStoreMutationLease with a
+// generation binding: the fence it grants names the exact enrollment store the
+// holder may mutate (§5.4). A nil binding takes an unbound lease — the
+// pre-enrollment interim path, whose identity's one store the Interim facts
+// locate. Re-acquisition by the current holder converges on the existing
+// lease unchanged, whatever binding it was taken with; a holder that needs a
+// different binding releases and re-acquires, so a fence can never silently
+// change which store it guards.
+func (tx *InternalTx) AcquireAuthStoreMutationLeaseBound(
+	ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
+	binding *domain.LeaseGenerationBinding, now, expiresAt time.Time,
+) (domain.AuthStoreMutationLease, error) {
 	if err := tx.requireLeaseDeclared(ctx, id); err != nil {
 		return domain.AuthStoreMutationLease{}, fmt.Errorf("acquire auth store mutation lease %q: %w", id, err)
+	}
+	if binding != nil {
+		detached := *binding
+		binding = &detached
 	}
 	if !expiresAt.After(now) {
 		return domain.AuthStoreMutationLease{}, fmt.Errorf(
@@ -279,7 +356,7 @@ func (tx *InternalTx) AcquireAuthStoreMutationLease(
 	current, err := tx.GetAuthStoreMutationLease(ctx, id)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return tx.insertLease(ctx, id, holder, now, expiresAt)
+		return tx.insertLease(ctx, id, holder, binding, now, expiresAt)
 	case err != nil:
 		return domain.AuthStoreMutationLease{}, fmt.Errorf("acquire auth store mutation lease %q: %w", id, err)
 	}
@@ -303,16 +380,17 @@ func (tx *InternalTx) AcquireAuthStoreMutationLease(
 				Fence: current.Fence, ExpiresAt: current.ExpiresAt,
 			})
 	}
-	return tx.takeoverLease(ctx, current, holder, now, expiresAt)
+	return tx.takeoverLease(ctx, current, holder, binding, now, expiresAt)
 }
 
 func (tx *InternalTx) insertLease(
 	ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
-	now, expiresAt time.Time,
+	binding *domain.LeaseGenerationBinding, now, expiresAt time.Time,
 ) (domain.AuthStoreMutationLease, error) {
 	lease := domain.AuthStoreMutationLease{
 		AuthIdentityID: id, Holder: holder, Fence: 1,
 		AcquiredAt: now.UTC(), ExpiresAt: expiresAt.UTC(),
+		GenerationBinding: binding,
 	}
 	body, err := encode(lease)
 	if err != nil {
@@ -338,12 +416,14 @@ func (tx *InternalTx) insertLease(
 
 func (tx *InternalTx) takeoverLease(
 	ctx context.Context, current domain.AuthStoreMutationLease,
-	holder domain.InvocationID, now, expiresAt time.Time,
+	holder domain.InvocationID, binding *domain.LeaseGenerationBinding,
+	now, expiresAt time.Time,
 ) (domain.AuthStoreMutationLease, error) {
 	id := current.AuthIdentityID
 	lease := domain.AuthStoreMutationLease{
 		AuthIdentityID: id, Holder: holder, Fence: current.Fence + 1,
 		AcquiredAt: now.UTC(), ExpiresAt: expiresAt.UTC(),
+		GenerationBinding: binding,
 	}
 	body, err := encode(lease)
 	if err != nil {

@@ -15,8 +15,8 @@ var leaseEpoch = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 func testAuthIdentity() domain.AuthIdentity {
 	return domain.AuthIdentity{
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-		AuthStoreVolume:       "provider-cred",
-		MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+		MaxParallelExecutions: 1,
+		Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 }
 
@@ -75,7 +75,7 @@ func TestAuthIdentityRoundTrip(t *testing.T) {
 	}
 
 	rebound := identity
-	rebound.AuthStoreVolume = "other-provider-cred"
+	rebound.Interim.AuthStoreVolume = "other-provider-cred"
 	err = s.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, rebound, leaseEpoch.Add(3*time.Hour))
 	})

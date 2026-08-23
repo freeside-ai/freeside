@@ -505,15 +505,46 @@ func TestGolden(t *testing.T) {
 	}
 
 	// The provider identity the stage below runs under, and a live lease on
-	// its auth store.
+	// its auth store. The identity carries the narrowed §5.4 shape: account
+	// and operator fields on the identity, the interim client facts under
+	// Interim until the #867 adoption moves them onto an enrollment.
 	identity := domain.AuthIdentity{
-		ID: "auth-claude-owner", Provider: "claude", AuthStoreMutationLease: true,
-		AuthStoreVolume:       "claude-owner-credentials",
-		MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+		ID: "auth-claude-owner", Provider: "claude",
+		AccountBinding: "acct-claude-owner-7f3a", UsagePool: "claude-owner-subscription",
+		Budget: 500_000, AuthStoreMutationLease: true,
+		MaxParallelExecutions: 1, Enabled: true, CostOwner: "owner",
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-owner-credentials", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	mutationLease := domain.AuthStoreMutationLease{
 		AuthIdentityID: identity.ID, Holder: "inv-1", Fence: 1,
 		AcquiredAt: ts, ExpiresAt: ts.Add(5 * time.Minute),
+	}
+
+	// One enrolled harness client on that identity, with the newest entry of
+	// its append-only store history. The Claude setup token observes no
+	// expiry, so the generation's token_expiry is the explicit null §5.4
+	// admits by design; the lease above carries the binding its fence guards.
+	enrollment := domain.ClientEnrollment{
+		ID: "enroll-claude-owner-cli", AuthIdentityID: identity.ID,
+		HarnessClient: domain.HarnessClientClaudeCode, Route: "anthropic_claude_subscription",
+		AuthMethod:      domain.AuthMethodSetupToken,
+		CredentialMode:  domain.CredentialSubscriptionContained,
+		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+		AccountBinding: identity.AccountBinding,
+	}
+	enrollmentGeneration := domain.EnrollmentGeneration{
+		EnrollmentID: enrollment.ID, Ordinal: 3,
+		AuthStoreVolume:     "claude-owner-cli-store",
+		StoreManifestDigest: stageDigest("9"),
+		LeaseFence:          1,
+		AccountBinding:      identity.AccountBinding,
+		RecordedAt:          ts,
+	}
+	boundLease := mutationLease
+	boundLease.GenerationBinding = &domain.LeaseGenerationBinding{
+		EnrollmentID: enrollment.ID, Generation: enrollmentGeneration.Ordinal,
+		AuthStoreVolume:     enrollmentGeneration.AuthStoreVolume,
+		StoreManifestDigest: enrollmentGeneration.StoreManifestDigest,
 	}
 
 	// The durable execution record for that attempt. Capabilities are passed
@@ -1050,6 +1081,9 @@ func TestGolden(t *testing.T) {
 		{"attempt", attempt},
 		{"auth_identity", identity},
 		{"auth_store_mutation_lease", mutationLease},
+		{"auth_store_mutation_lease_bound", boundLease},
+		{"client_enrollment", enrollment},
+		{"enrollment_generation", enrollmentGeneration},
 		{"stage_input_snapshot", stageInputs},
 		{"stage_input_snapshot_codex", codexStageInput},
 		{"execution_admission", admission},

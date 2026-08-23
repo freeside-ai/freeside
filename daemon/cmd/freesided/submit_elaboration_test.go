@@ -91,9 +91,8 @@ func testSubmitCommandElaborationDigest(t *testing.T, acceptedBody string, wantS
 			return err
 		}
 		return tx.RecordAuthIdentity(t.Context(), domain.AuthIdentity{
-			ID: "auth-submit", Provider: "codex", AuthStoreMutationLease: true,
-			AuthStoreVolume: "provider-credentials", MaxParallelExecutions: 1,
-			RefreshStrategy: domain.RefreshOnDemand,
+			ID: "auth-submit", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand},
 		}, now)
 	}); err != nil {
 		t.Fatal(err)

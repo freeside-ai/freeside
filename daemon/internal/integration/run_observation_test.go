@@ -156,9 +156,8 @@ func TestApprovedImplementationRemainsServedWhenObservationLagsExport(t *testing
 			return err
 		}
 		return tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
-			ID: "auth-785", Provider: "codex", AuthStoreMutationLease: true,
-			AuthStoreVolume: "provider-credentials", MaxParallelExecutions: 64,
-			RefreshStrategy: domain.RefreshOnDemand,
+			ID: "auth-785", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 64,
+			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand},
 		}, now)
 	}); err != nil {
 		t.Fatal(err)
