@@ -27,6 +27,10 @@ func TestAllowedActionsByType(t *testing.T) {
 		domain.AttentionReviewConfiguration: {
 			domain.ActionAdoptReviewConfiguration, domain.ActionDiscuss, domain.ActionStop,
 		},
+		domain.AttentionFindingAdjudication: {
+			domain.ActionAcceptRecommendedRoute, domain.ActionChooseAlternativeRoute,
+			domain.ActionDiscuss, domain.ActionStop,
+		},
 		domain.AttentionExecutionFailure: {
 			domain.ActionRetry, domain.ActionRetryWithCapability, domain.ActionDiscuss, domain.ActionStop,
 		},

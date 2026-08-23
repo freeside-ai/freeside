@@ -410,6 +410,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	if err := tx.gateEvidence(ctx, item); err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
 	}
+	if err := tx.gateFindingAdjudicationItem(ctx, item); err != nil {
+		return fmt.Errorf("put attention item %q finding adjudication binding: %w", item.ID, err)
+	}
 	existing, err := tx.existingBody(ctx, `SELECT body FROM attention_items WHERE id = ?`, item.ID)
 	if err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
@@ -454,6 +457,62 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 		tx.readyItemCreated = true
 	}
 	return nil
+}
+
+func (tx *ReadTx) gateFindingAdjudicationItem(
+	ctx context.Context, item domain.AttentionItem,
+) error {
+	if item.Type != domain.AttentionFindingAdjudication {
+		return nil
+	}
+	binding := item.FindingAdjudication
+	artifact, err := tx.GetFindingAdjudication(ctx, binding.AdjudicationDigest)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	if artifact.RunID != binding.RunID || artifact.Round != binding.Round {
+		return domain.ErrParentKeyMismatch
+	}
+	record, err := tx.reviewRecordForRound(ctx, binding.RunID, binding.Round)
+	if err != nil {
+		return err
+	}
+	if item.PRHeadSHA != record.HeadSHA {
+		return domain.ErrParentKeyMismatch
+	}
+	if len(binding.Proposals) != len(artifact.Entries) {
+		return domain.ErrParentKeyMismatch
+	}
+	entries := make(map[domain.FindingID]domain.FindingAdjudicationEntry, len(artifact.Entries))
+	for _, entry := range artifact.Entries {
+		entries[entry.FindingID] = entry
+	}
+	for _, proposal := range binding.Proposals {
+		entry, ok := entries[proposal.FindingID]
+		if !ok || proposal.Producer != entry.Producer ||
+			proposal.GoalRelationship != entry.GoalRelationship ||
+			!sameOptionalComparable(proposal.Compatibility, entry.Compatibility) ||
+			proposal.Route != entry.Route ||
+			proposal.Rationale != entry.Rationale ||
+			!sameSlice(proposal.CitedRules, entry.CitedRules) ||
+			!sameSlice(proposal.Assumptions, entry.Assumptions) ||
+			!sameSlice(proposal.OpenQuestions, entry.OpenQuestions) ||
+			!sameOptionalComparable(proposal.Confidence, entry.Confidence) {
+			return domain.ErrParentKeyMismatch
+		}
+	}
+	return nil
+}
+
+func sameOptionalComparable[T comparable](left, right *T) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
+func sameSlice[T comparable](left, right []T) bool {
+	return (left == nil) == (right == nil) && slices.Equal(left, right)
 }
 
 func (tx *ReadTx) GetAttentionItem(ctx context.Context, id domain.ItemID) (domain.AttentionItem, error) {
@@ -505,6 +564,9 @@ func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (do
 	// recipe approval, so an item carrying evidence under a now-unapproved (or
 	// forged) recipe fails closed rather than reconstructing as valid.
 	if err := tx.gateEvidence(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	if err := tx.gateFindingAdjudicationItem(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	if err := tx.gateReadyItemPRReference(ctx, item); err != nil {

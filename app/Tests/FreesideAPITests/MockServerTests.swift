@@ -87,6 +87,7 @@ import Testing
                 scope: .init(
                     component_count: 2, declared_path_count: 3,
                     touches_control_plane: true)))
+        command.payload.attachments = []
 
         _ = try await client.submitCommand(body: .json(command)).ok.body.json
 
@@ -149,6 +150,7 @@ import Testing
         let until = Date(timeIntervalSince1970: 1_786_506_245)
         var command = Self.command(id: "cmd-snooze-proposal", against: before, action: .snooze)
         command.payload.snooze_until = until
+        command.payload.attachments = []
 
         _ = try await client.submitCommand(body: .json(command)).ok.body.json
         _ = try await client.getAttentionItem(path: .init(item_id: before.item.id)).notFound
@@ -271,6 +273,161 @@ import Testing
             .getAttentionItem(path: .init(item_id: "item-agent_question")).ok.body.json
         #expect(after.item.item_version == before.item.item_version + 1)
         #expect(after.item.decided_at != nil)
+    }
+
+    @Test func findingAdjudicationReplayPrecedesActionInputValidation() async throws {
+        let seed = AttentionFixtures.fixture(type: .finding_adjudication)
+        let server = MockServer(items: [seed])
+        let client = APIClientFactory.mock(server: server)
+        let command = Self.command(
+            id: "cmd-finding-retry", against: seed, action: .accept_recommended_route)
+
+        let first = try await client.submitCommand(body: .json(command)).ok.body.json
+        var retry = command
+        retry.payload.alternative_choices = []
+        let second = try await client.submitCommand(body: .json(retry)).ok.body.json
+
+        #expect(second == first)
+        #expect(await server.snapshot(itemID: seed.item.id)?.item.item_version == 2)
+    }
+
+    @Test func findingAdjudicationReplayIdentityMatchesDurableCommandBody() async throws {
+        let actions: [Components.Schemas.Action] = [
+            .accept_recommended_route, .choose_alternative_route,
+        ]
+        let attachmentModes = ["absent", "empty", "present"]
+        let offered = Components.Schemas.AlternativeChoice(
+            finding_id: "review-finding-17", route: .dispute)
+
+        for action in actions {
+            let choiceModes =
+                action == .accept_recommended_route
+                ? ["absent", "empty", "present"]
+                : ["absent", "empty", "present", "different"]
+            for choiceMode in choiceModes {
+                for attachmentMode in attachmentModes {
+                    var seed = AttentionFixtures.fixture(type: .finding_adjudication)
+                    seed.item.id += "-\(action.rawValue)-\(choiceMode)-\(attachmentMode)"
+                    let server = MockServer(items: [seed])
+                    let client = APIClientFactory.mock(server: server)
+                    var original = Self.command(
+                        id: "cmd-replay-matrix", against: seed, action: action)
+                    if action == .choose_alternative_route {
+                        original.payload.alternative_choices = [offered]
+                    }
+                    let first = try await client.submitCommand(body: .json(original)).ok.body.json
+
+                    var retry = original
+                    switch choiceMode {
+                    case "absent":
+                        retry.payload.alternative_choices = nil
+                    case "empty":
+                        retry.payload.alternative_choices = []
+                    case "present":
+                        retry.payload.alternative_choices = [offered]
+                    case "different":
+                        retry.payload.alternative_choices = [
+                            .init(finding_id: offered.finding_id, route: ._defer)
+                        ]
+                    default:
+                        Issue.record("unknown choice mode \(choiceMode)")
+                    }
+                    if action == .choose_alternative_route,
+                        choiceMode == "absent" || choiceMode == "empty"
+                    {
+                        retry.payload.message = first.record.message
+                    }
+                    switch attachmentMode {
+                    case "absent": retry.payload.attachments = nil
+                    case "empty": retry.payload.attachments = []
+                    case "present": retry.payload.attachments = ["sha256:changed"]
+                    default: Issue.record("unknown attachment mode \(attachmentMode)")
+                    }
+
+                    let output = try await client.submitCommand(body: .json(retry))
+                    let shouldReplay =
+                        choiceMode != "different" && attachmentMode != "present"
+                    if shouldReplay {
+                        let replay = try output.ok.body.json
+                        #expect(
+                            replay == first,
+                            "\(action.rawValue), choices \(choiceMode), attachments \(attachmentMode)")
+                    } else {
+                        guard case .undocumented(let statusCode, _) = output else {
+                            Issue.record(
+                                "expected immutable conflict for \(action.rawValue), choices \(choiceMode), attachments \(attachmentMode)"
+                            )
+                            continue
+                        }
+                        #expect(statusCode == 422)
+                    }
+                }
+            }
+        }
+    }
+
+    @Test func findingAdjudicationAcceptsPresentEmptyMessage() async throws {
+        for action in [
+            Components.Schemas.Action.accept_recommended_route,
+            .choose_alternative_route,
+        ] {
+            var seed = AttentionFixtures.fixture(type: .finding_adjudication)
+            seed.item.id += "-empty-message-\(action.rawValue)"
+            let server = MockServer(items: [seed])
+            let client = APIClientFactory.mock(server: server)
+            var command = Self.command(id: "cmd-empty-message", against: seed, action: action)
+            command.payload.message = ""
+            if action == .choose_alternative_route {
+                command.payload.alternative_choices = [
+                    .init(finding_id: "review-finding-17", route: .dispute)
+                ]
+            }
+
+            _ = try await client.submitCommand(body: .json(command)).ok.body.json
+        }
+    }
+
+    @Test func parameterizedReplaysUseCanonicalDurableMessages() async throws {
+        do {
+            let seed = AttentionFixtures.fixture(type: .run_proposal)
+            let server = MockServer(items: [seed])
+            let client = APIClientFactory.mock(server: server)
+            var command = Self.command(
+                id: "cmd-replay-revision", against: seed, action: .start_with_changes)
+            command.payload.run_proposal_revision = .init(
+                value1: .init(
+                    intent: .implement_subject, expected_cost_units: 25,
+                    scope: .init(
+                        component_count: 2, declared_path_count: 3,
+                        touches_control_plane: true)))
+            let first = try await client.submitCommand(body: .json(command)).ok.body.json
+            #expect(
+                first.record.message
+                    == #"{"intent":"implement_subject","expected_cost_units":25,"scope":{"component_count":2,"declared_path_count":3,"touches_control_plane":true}}"#
+            )
+
+            var retry = command
+            retry.payload.run_proposal_revision = nil
+            retry.payload.message = first.record.message
+            let replay = try await client.submitCommand(body: .json(retry)).ok.body.json
+            #expect(replay == first)
+        }
+
+        do {
+            let seed = AttentionFixtures.fixture(type: .run_proposal)
+            let server = MockServer(items: [seed])
+            let client = APIClientFactory.mock(server: server)
+            var command = Self.command(
+                id: "cmd-replay-snooze", against: seed, action: .snooze)
+            command.payload.snooze_until = Date(timeIntervalSince1970: 1_786_506_245)
+            let first = try await client.submitCommand(body: .json(command)).ok.body.json
+
+            var retry = command
+            retry.payload.snooze_until = nil
+            retry.payload.message = first.record.message
+            let replay = try await client.submitCommand(body: .json(retry)).ok.body.json
+            #expect(replay == first)
+        }
     }
 
     @Test func reusedCommandIDWithADifferentBodyIsRejectedNotReplayed() async throws {
@@ -951,6 +1108,77 @@ import Testing
             .getAttentionItem(path: .init(item_id: noticeID)).ok.body.json
         #expect(resolved.item.status == .resolved)
         #expect(resolved.item.decided_at != nil)
+    }
+
+    @Test func findingAdjudicationAcceptAndAlternativeChoiceResolve() async throws {
+        for (id, action, choices) in [
+            (
+                "cmd-accept-finding",
+                Components.Schemas.Action.accept_recommended_route,
+                Optional<[Components.Schemas.AlternativeChoice]>.none
+            ),
+            (
+                "cmd-choose-finding",
+                .choose_alternative_route,
+                [.init(finding_id: "review-finding-17", route: .dispute)]
+            ),
+        ] {
+            var seed = AttentionFixtures.fixture(type: .finding_adjudication)
+            seed.item.id += "-\(id)"
+            let server = MockServer(items: [seed])
+            let client = APIClientFactory.mock(server: server)
+            var command = Self.command(id: id, against: seed, action: action)
+            command.payload.alternative_choices = choices
+            command.payload.attachments = []
+
+            let result = try await client.submitCommand(body: .json(command)).ok.body.json
+            let resolved = try await client.getAttentionItem(
+                path: .init(item_id: seed.item.id)
+            ).ok.body.json
+
+            #expect(result.record.action == action)
+            if action == .choose_alternative_route {
+                #expect(
+                    result.record.message
+                        == #"[{"finding_id":"review-finding-17","route":"dispute"}]"#)
+            } else {
+                #expect(result.record.message.isEmpty)
+            }
+            #expect(resolved.item.status == .resolved)
+        }
+    }
+
+    @Test func findingAdjudicationRejectsUnofferedChoice() async throws {
+        let seed = AttentionFixtures.fixture(type: .finding_adjudication)
+        let server = MockServer(items: [seed])
+        let client = APIClientFactory.mock(server: server)
+        var command = Self.command(
+            id: "cmd-unoffered-finding", against: seed, action: .choose_alternative_route)
+        command.payload.alternative_choices = [
+            .init(finding_id: "review-finding-17", route: .decline)
+        ]
+
+        let response = try await client.submitCommand(body: .json(command))
+        guard case .undocumented(let status, _) = response else {
+            Issue.record("unoffered adjudication choice was accepted: \(response)")
+            return
+        }
+        #expect(status == 400)
+        #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .open)
+    }
+
+    @Test func staleFindingAcceptReturnsTheReplacement() async throws {
+        let seed = AttentionFixtures.fixture(type: .finding_adjudication)
+        let server = MockServer(items: [seed])
+        let client = APIClientFactory.mock(server: server)
+        let command = Self.command(
+            id: "cmd-stale-finding", against: seed, action: .accept_recommended_route)
+        await server.advance(itemID: seed.item.id)
+
+        let rejection = try await client.submitCommand(body: .json(command)).conflict.body.json
+
+        #expect(rejection.replacement_item.entity_version == seed.entity_version + 1)
+        #expect(rejection.replacement_item.item.status == .open)
     }
 
     static func command(

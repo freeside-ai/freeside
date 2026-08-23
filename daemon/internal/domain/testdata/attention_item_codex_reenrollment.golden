@@ -29,6 +29,7 @@
     "access_token_expires_at": "2026-01-03T03:04:05Z"
   },
   "review_configuration_recovery": null,
+  "finding_adjudication": null,
   "item_version": 2,
   "interruption_class": "exceptional",
   "conversation_id": null,

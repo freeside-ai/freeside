@@ -874,7 +874,8 @@ func authenticateRunObservation(
 		case domain.AttentionSpecApproval, domain.AttentionExecutionFailure,
 			domain.AttentionAgentQuestion, domain.AttentionReviewDiminishing,
 			domain.AttentionReviewDispute, domain.AttentionReviewContradiction,
-			domain.AttentionReviewConfiguration, domain.AttentionRunProposal,
+			domain.AttentionReviewConfiguration, domain.AttentionFindingAdjudication,
+			domain.AttentionRunProposal,
 			domain.AttentionSystemHealth, domain.AttentionBlocked:
 		}
 	}
@@ -1229,6 +1230,21 @@ func normalizeAttentionItem(item domain.AttentionItem) domain.AttentionItem {
 	item.EvidenceSnapshot = nonNilSlice(item.EvidenceSnapshot)
 	item.AgentClaims = nonNilSlice(item.AgentClaims)
 	item.ArtifactDigests = nonNilSlice(item.ArtifactDigests)
+	if item.FindingAdjudication != nil {
+		binding := *item.FindingAdjudication
+		binding.Proposals = nonNilSlice(binding.Proposals)
+		if len(binding.Proposals) > 0 {
+			binding.Proposals = slices.Clone(binding.Proposals)
+			for idx := range binding.Proposals {
+				proposal := &binding.Proposals[idx]
+				proposal.CitedRules = nonNilSlice(proposal.CitedRules)
+				proposal.Assumptions = nonNilSlice(proposal.Assumptions)
+				proposal.OpenQuestions = nonNilSlice(proposal.OpenQuestions)
+				proposal.OfferedAlternatives = nonNilSlice(proposal.OfferedAlternatives)
+			}
+		}
+		item.FindingAdjudication = &binding
+	}
 	return item
 }
 

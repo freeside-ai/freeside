@@ -14,6 +14,9 @@ import Testing
         .review_dispute: [.adjudicate, .discuss, .stop],
         .review_contradiction: [.recover_review],
         .review_configuration: [.adopt_review_configuration, .discuss, .stop],
+        .finding_adjudication: [
+            .accept_recommended_route, .choose_alternative_route, .discuss, .stop,
+        ],
         .execution_failure: [.retry, .retry_with_capabilities, .discuss, .stop],
         .agent_question: [.answer_and_retry, .answer_without_retry, .stop],
         .publish_blocked: [
@@ -34,17 +37,17 @@ import Testing
         // blocked is pinned read-only by signet policy: it offers the
         // empty set, which the contract permits since #96.
         #expect(AttentionFixtures.phase1ActionSets[.blocked] == [])
-        #expect(AttentionFixtures.phase1ActionSets.count == 12)
+        #expect(AttentionFixtures.phase1ActionSets.count == 13)
     }
 
     /// phase1Actions is the enumeration universe the cross-language policy
     /// parity suite walks; if it dropped an action, that action's cells would
     /// go unchecked. Pin it to exactly the union of the per-type sets (every
-    /// action is offered by at least one type) and to a duplicate-free 31.
+    /// action is offered by at least one type) and to a duplicate-free 33.
     @Test func phase1ActionsCoverEveryOfferedActionWithoutDuplicates() {
         let offered = Set(AttentionFixtures.phase1ActionSets.values.flatMap { $0 })
         #expect(Set(AttentionFixtures.phase1Actions) == offered)
-        #expect(AttentionFixtures.phase1Actions.count == 31)
+        #expect(AttentionFixtures.phase1Actions.count == 33)
         #expect(Set(AttentionFixtures.phase1Actions).count == AttentionFixtures.phase1Actions.count)
     }
 
@@ -67,6 +70,7 @@ import Testing
                 "item-review_dispute",
                 "item-review_contradiction",
                 "item-review_configuration",
+                "item-finding_adjudication",
                 "item-ready_for_final_review",
                 "item-publish_blocked",
                 "item-run_proposal",
@@ -87,8 +91,11 @@ import Testing
         #expect(item.status == .open)
         #expect(item.created_at == AttentionFixtures.createdInstant)
         // artifact_digests is the daemon-derived canonical binding set:
-        // the sorted, deduplicated union of evidence and claim digests.
-        let union = item.evidence_snapshot.map(\.digest) + item.agent_claims.map(\.digest)
+        // the sorted, deduplicated union of evidence, claim, and typed
+        // authority-binding digests.
+        let union =
+            item.evidence_snapshot.map(\.digest) + item.agent_claims.map(\.digest)
+            + (item.finding_adjudication.map { [$0.value1.adjudication_digest] } ?? [])
         #expect(item.artifact_digests == Array(Set(union)).sorted())
     }
 }

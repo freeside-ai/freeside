@@ -30,15 +30,7 @@ ON CONFLICT (run_id, round) DO NOTHING`
 func (tx *ReadTx) validateFindingAdjudicationBinding(
 	ctx context.Context, artifact domain.FindingAdjudication,
 ) error {
-	var invocationID string
-	if err := tx.tx.QueryRowContext(ctx, `SELECT invocation_id FROM review_records
-        WHERE run_id = ? AND round = ?`, artifact.RunID, artifact.Round).Scan(&invocationID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return domain.ErrParentKeyMismatch
-		}
-		return err
-	}
-	record, err := tx.GetReviewRecord(ctx, domain.InvocationID(invocationID))
+	record, err := tx.reviewRecordForRound(ctx, artifact.RunID, artifact.Round)
 	if err != nil {
 		return err
 	}
@@ -79,6 +71,20 @@ func (tx *ReadTx) validateFindingAdjudicationBinding(
 		return domain.ErrParentKeyMismatch
 	}
 	return nil
+}
+
+func (tx *ReadTx) reviewRecordForRound(
+	ctx context.Context, runID domain.RunID, round int,
+) (domain.ReviewRecord, error) {
+	var invocationID string
+	if err := tx.tx.QueryRowContext(ctx, `SELECT invocation_id FROM review_records
+		WHERE run_id = ? AND round = ?`, runID, round).Scan(&invocationID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.ReviewRecord{}, domain.ErrParentKeyMismatch
+		}
+		return domain.ReviewRecord{}, err
+	}
+	return tx.GetReviewRecord(ctx, domain.InvocationID(invocationID))
 }
 
 // PutFindingAdjudication persists one round's immutable adjudication artifact.

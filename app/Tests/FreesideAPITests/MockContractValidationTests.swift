@@ -248,6 +248,104 @@ import Testing
                 == "resolve_reenrollment lacks codex re-enrollment binding")
     }
 
+    @Test func findingAdjudicationBindingIsExactAndTypeScoped() {
+        let fixture = AttentionFixtures.fixture(type: .finding_adjudication).item
+        #expect(MockContractValidation.itemValidityBreach(fixture) == nil)
+
+        var missing = fixture
+        missing.finding_adjudication = nil
+        #expect(
+            MockContractValidation.itemValidityBreach(missing)
+                == "finding_adjudication item lacks its binding")
+
+        var wrongType = AttentionFixtures.fixture(type: .spec_approval).item
+        wrongType.finding_adjudication = fixture.finding_adjudication
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "finding_adjudication binding on a different item type")
+
+        var noProposals = fixture
+        noProposals.finding_adjudication?.value1.proposals = []
+        #expect(
+            MockContractValidation.itemValidityBreach(noProposals)
+                == "finding_adjudication has no proposals")
+
+        var repeatedRoute = fixture
+        repeatedRoute.finding_adjudication?.value1.proposals[0].offered_alternatives[0].route =
+            .decline
+        #expect(
+            MockContractValidation.itemValidityBreach(repeatedRoute)
+                == "finding_adjudication alternative repeats the recommended route")
+
+        var modelWithoutConfidence = fixture
+        modelWithoutConfidence.finding_adjudication?.value1.proposals[0].confidence = nil
+        #expect(
+            MockContractValidation.itemValidityBreach(modelWithoutConfidence)
+                == "finding_adjudication model proposal lacks confidence")
+
+        var blankExplanations = fixture
+        blankExplanations.finding_adjudication?.value1.proposals[0].cited_rules = [""]
+        blankExplanations.finding_adjudication?.value1.proposals[0].assumptions = ["  "]
+        blankExplanations.finding_adjudication?.value1.proposals[0].open_questions = ["\n"]
+        #expect(MockContractValidation.itemValidityBreach(blankExplanations) == nil)
+
+        var modelAllowed = fixture
+        modelAllowed.finding_adjudication?.value1.proposals[0].goal_relationship = .required
+        modelAllowed.finding_adjudication?.value1.proposals[0].compatibility = .init(value1: .allowed)
+        modelAllowed.finding_adjudication?.value1.proposals[0].route = .remediate
+        modelAllowed.finding_adjudication?.value1.proposals[0].offered_alternatives = []
+        #expect(
+            MockContractValidation.itemValidityBreach(modelAllowed)
+                == "finding_adjudication model proposal mints allowed")
+
+        var engineWithConfidence = fixture
+        engineWithConfidence.finding_adjudication?.value1.proposals[0].producer = .engine
+        engineWithConfidence.finding_adjudication?.value1.proposals[0].goal_relationship = .required
+        engineWithConfidence.finding_adjudication?.value1.proposals[0].compatibility = .init(
+            value1: .allowed)
+        engineWithConfidence.finding_adjudication?.value1.proposals[0].route = .remediate
+        engineWithConfidence.finding_adjudication?.value1.proposals[0].offered_alternatives = []
+        #expect(
+            MockContractValidation.itemValidityBreach(engineWithConfidence)
+                == "finding_adjudication engine proposal carries confidence")
+
+        var engineOutsideFastPath = fixture
+        engineOutsideFastPath.finding_adjudication?.value1.proposals[0].producer = .engine
+        engineOutsideFastPath.finding_adjudication?.value1.proposals[0].confidence = nil
+        #expect(
+            MockContractValidation.itemValidityBreach(engineOutsideFastPath)
+                == "finding_adjudication engine proposal is not the deterministic fast path")
+
+        var noAlternatives = fixture
+        noAlternatives.finding_adjudication?.value1.proposals[0].offered_alternatives = []
+        #expect(
+            MockContractValidation.itemValidityBreach(noAlternatives)
+                == "finding_adjudication has no offered alternatives")
+        noAlternatives.requested_decision.removeAll { $0 == .choose_alternative_route }
+        #expect(MockContractValidation.itemValidityBreach(noAlternatives) == nil)
+
+        var incompatibleRoute = fixture
+        incompatibleRoute.finding_adjudication?.value1.proposals[0]
+            .offered_alternatives[0].route = ._defer
+        #expect(
+            MockContractValidation.itemValidityBreach(incompatibleRoute)
+                == "finding_adjudication alternative is incompatible with proposal axes")
+
+        var emptyConsequence = fixture
+        emptyConsequence.finding_adjudication?.value1.proposals[0]
+            .offered_alternatives[0].consequence = ""
+        #expect(
+            MockContractValidation.itemValidityBreach(emptyConsequence)
+                == "finding_adjudication alternative has an empty consequence")
+
+        var blankConsequence = fixture
+        blankConsequence.finding_adjudication?.value1.proposals[0]
+            .offered_alternatives[0].consequence = "  \n"
+        #expect(
+            MockContractValidation.itemValidityBreach(blankConsequence)
+                == "finding_adjudication alternative has an empty consequence")
+    }
+
     // The text-claim carrier (#217): the daemon recomputes the claim digest
     // over the content bytes, so the mirrored checks here are the empty
     // content, the byte cap, and the binding rule. The invalid-media-type
@@ -404,6 +502,49 @@ import Testing
         expectMalformed(reason: "duplicate attachment digest") {
             var c = command(against: snapshot)
             c.payload.attachments = ["sha256:a", "sha256:a"]
+            return c
+        }
+
+        let adjudication = AttentionFixtures.fixture(type: .finding_adjudication)
+        expectMalformed(reason: "invalid alternative_choices") {
+            var c = command(against: adjudication)
+            c.payload.action = .choose_alternative_route
+            return c
+        }
+        expectMalformed(reason: "finding adjudication input on accept") {
+            var c = command(against: adjudication)
+            c.payload.action = .accept_recommended_route
+            c.payload.alternative_choices = [
+                .init(finding_id: "review-finding-17", route: ._defer)
+            ]
+            return c
+        }
+        expectMalformed(reason: "invalid run_proposal_revision") {
+            var c = command(against: AttentionFixtures.fixture(type: .run_proposal))
+            c.payload.action = .start_with_changes
+            c.payload.run_proposal_revision = .init(
+                value1: .init(
+                    intent: .implement_subject,
+                    expected_cost_units: 25,
+                    scope: .init(
+                        component_count: 2,
+                        declared_path_count: 3,
+                        touches_control_plane: false
+                    )
+                )
+            )
+            c.payload.alternative_choices = [
+                .init(finding_id: "review-finding-17", route: .dispute)
+            ]
+            return c
+        }
+        expectMalformed(reason: "invalid snooze_until") {
+            var c = command(against: AttentionFixtures.fixture(type: .run_proposal))
+            c.payload.action = .snooze
+            c.payload.snooze_until = Date(timeIntervalSince1970: 1_786_506_245)
+            c.payload.alternative_choices = [
+                .init(finding_id: "review-finding-17", route: .dispute)
+            ]
             return c
         }
     }

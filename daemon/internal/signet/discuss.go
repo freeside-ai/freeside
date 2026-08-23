@@ -77,6 +77,21 @@ func (s *Service) validateCommandContent(command domain.Command) error {
 		}
 		return nil
 	}
+	if command.Action == domain.ActionChooseAlternativeRoute {
+		if len(command.Attachments) > 0 {
+			return fmt.Errorf("action %q: %w", command.Action, ErrContentNotAllowed)
+		}
+		if _, err := decodeAlternativeChoices(command.Message); err != nil {
+			return fmt.Errorf("action %q: %w", command.Action, err)
+		}
+		return nil
+	}
+	if command.Action == domain.ActionAcceptRecommendedRoute {
+		if command.Message != "" || len(command.Attachments) > 0 {
+			return fmt.Errorf("action %q: %w", command.Action, ErrContentNotAllowed)
+		}
+		return nil
+	}
 	if command.Action == domain.ActionRequestChanges {
 		if len(command.CommandID) > MaxRequestChangesCommandIDBytes {
 			return fmt.Errorf("action %q command id is %d bytes: %w",
