@@ -170,6 +170,7 @@ var (
 	ErrInvalidAdjudicationProducer       = errors.New("invalid finding-adjudication producer")
 	ErrInvalidAdjudicationConfidence     = errors.New("invalid finding-adjudication confidence")
 	ErrInvalidDispatchThreshold          = errors.New("invalid finding-adjudication dispatch threshold")
+	ErrInvalidDispositionAdjudication    = errors.New("review disposition is not authorized by finding adjudication")
 	ErrAdjudicationAxisMismatch          = errors.New("finding-adjudication axes and route do not form a valid §7 row")
 	ErrModelEntryMintsAllowed            = errors.New("model-residue adjudication entry cannot mint allowed compatibility")
 	ErrEngineEntryNonDeterministicRow    = errors.New("engine fast-path adjudication entry must carry the required/allowed remediation row")

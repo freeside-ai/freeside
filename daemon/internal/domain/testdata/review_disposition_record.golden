@@ -4,5 +4,6 @@
   "round": 1,
   "disposition": "deferred",
   "reason": "requires a separate hardening unit",
+  "adjudication_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "created_at": "2026-01-02T03:04:05Z"
 }

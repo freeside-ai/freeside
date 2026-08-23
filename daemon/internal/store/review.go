@@ -255,6 +255,19 @@ func (tx *ReadTx) validateFindingDispositionBinding(
 			remediation.BaseSHA != record.BaseSHA || remediation.HeadSHA == record.HeadSHA {
 			return domain.ErrParentKeyMismatch
 		}
+		return nil
+	}
+	adjudication, err := tx.GetFindingAdjudication(ctx, disposition.AdjudicationDigest)
+	if err != nil {
+		return err
+	}
+	if adjudication.RunID != disposition.RunID || adjudication.Round != disposition.Round {
+		return domain.ErrParentKeyMismatch
+	}
+	if err := adjudication.AuthorizesFinalDisposition(
+		disposition.FindingID, disposition.Disposition,
+	); err != nil {
+		return err
 	}
 	return nil
 }

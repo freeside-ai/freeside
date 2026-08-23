@@ -527,6 +527,40 @@ func (a FindingAdjudication) Validate() error {
 	return nil
 }
 
+// AuthorizesFinalDisposition reports whether this artifact's typed axes admit
+// the final declined or deferred disposition for findingID. It revalidates the
+// artifact before consulting an entry so a caller-supplied or decoded value
+// cannot grant authority without passing the content-addressed contract.
+func (a FindingAdjudication) AuthorizesFinalDisposition(
+	findingID FindingID, disposition ReviewDisposition,
+) error {
+	if err := a.Validate(); err != nil {
+		return err
+	}
+	var route AdjudicationRoute
+	switch disposition {
+	case ReviewDispositionDeclined:
+		route = RouteDecline
+	case ReviewDispositionDeferred:
+		route = RouteDefer
+	case ReviewDispositionFixed:
+		return fmt.Errorf("finding %q disposition %q: %w",
+			findingID, disposition, ErrInvalidDispositionAdjudication)
+	}
+	for _, entry := range a.Entries {
+		if entry.FindingID != findingID {
+			continue
+		}
+		if err := validAdjudicationRow(entry.GoalRelationship, entry.Compatibility, route); err != nil {
+			return fmt.Errorf("finding %q disposition %q: %w",
+				findingID, disposition, ErrInvalidDispositionAdjudication)
+		}
+		return nil
+	}
+	return fmt.Errorf("finding %q absent from adjudication artifact: %w",
+		findingID, ErrInvalidDispositionAdjudication)
+}
+
 func (a FindingAdjudication) canonical() canonicalFindingAdjudication {
 	return canonicalFindingAdjudication{
 		EncodingVersion:           a.EncodingVersion,

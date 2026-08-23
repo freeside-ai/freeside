@@ -480,6 +480,75 @@ func TestFindingAdjudicationRoundTripAndDigestStability(t *testing.T) {
 	}
 }
 
+func TestFindingAdjudicationAuthorizesFinalDisposition(t *testing.T) {
+	t.Parallel()
+	declined := validAdjudicationFixture(t)
+	adjacentEntry, err := domain.NewModelAdjudicationEntry(
+		"finding-adjacent", domain.GoalAdjacent, nil, domain.RouteDefer,
+		domain.ConfidenceHigh, "adjacent to the approved work unit",
+		nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disputeEntry, err := domain.NewModelAdjudicationEntry(
+		"finding-dispute", domain.GoalContradictory, nil, domain.RouteDispute,
+		domain.ConfidenceHigh, "requires operator judgment",
+		nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disputed, err := domain.NewFindingAdjudication(
+		"run-disputed", 1,
+		adjDigest("approved-spec"), adjDigest("instruction-snapshot"), adjDigest("resolved-policy"),
+		[]domain.FindingAdjudicationEntry{disputeEntry},
+		time.Date(2026, 8, 21, 16, 1, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deferred, err := domain.NewFindingAdjudication(
+		"run-adjacent", 1,
+		adjDigest("approved-spec"), adjDigest("instruction-snapshot"), adjDigest("resolved-policy"),
+		[]domain.FindingAdjudicationEntry{adjacentEntry},
+		time.Date(2026, 8, 21, 16, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name        string
+		artifact    domain.FindingAdjudication
+		findingID   domain.FindingID
+		disposition domain.ReviewDisposition
+		wantErr     bool
+	}{
+		{"contradictory decline", declined, "finding-0002", domain.ReviewDispositionDeclined, false},
+		{"contradictory dispute admits decline", disputed, "finding-dispute", domain.ReviewDispositionDeclined, false},
+		{"adjacent defer", deferred, "finding-adjacent", domain.ReviewDispositionDeferred, false},
+		{"contradictory defer", declined, "finding-0002", domain.ReviewDispositionDeferred, true},
+		{"adjacent decline", deferred, "finding-adjacent", domain.ReviewDispositionDeclined, true},
+		{"fixed", declined, "finding-0002", domain.ReviewDispositionFixed, true},
+		{"invalid disposition", declined, "finding-0002", domain.ReviewDisposition("ignored"), true},
+		{"absent finding", declined, "finding-absent", domain.ReviewDispositionDeclined, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.artifact.AuthorizesFinalDisposition(tc.findingID, tc.disposition)
+			if tc.wantErr && !errors.Is(err, domain.ErrInvalidDispositionAdjudication) {
+				t.Fatalf("authorization = %v, want ErrInvalidDispositionAdjudication", err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("authorization = %v, want nil", err)
+			}
+		})
+	}
+	tampered := declined
+	tampered.Digest = adjDigest("tampered")
+	if err := tampered.AuthorizesFinalDisposition(
+		"finding-0002", domain.ReviewDispositionDeclined,
+	); !errors.Is(err, domain.ErrFindingAdjudicationDigestMismatch) {
+		t.Fatalf("tampered artifact authorization = %v, want digest mismatch", err)
+	}
+}
+
 // TestFindingAdjudicationGolden pins the canonical encoding. The full-artifact
 // golden shows an engine entry with an explicit null confidence beside a model
 // entry with confidence present; the entry golden pins the model-entry shape.
