@@ -1,12 +1,37 @@
 package signet
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
+
+func TestNormalizeAttentionItemCarriesReadinessAndLegacyNull(t *testing.T) {
+	for name, readiness := range map[string]*domain.ReadinessSummary{
+		"degraded": {
+			Class: domain.ReadinessReadyDegraded, EvaluationSetDigest: "sha256:evaluation",
+		},
+		"legacy": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			body, err := json.Marshal(normalizeAttentionItem(domain.AttentionItem{Readiness: readiness}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := `"readiness":null`
+			if readiness != nil {
+				want = `"readiness":{"class":"ready_degraded","evaluation_set_digest":"sha256:evaluation"}`
+			}
+			if !strings.Contains(string(body), want) {
+				t.Fatalf("sync item = %s, want %s", body, want)
+			}
+		})
+	}
+}
 
 func TestPublicationAuthorityExclusivityRejectsReadyAndBlocked(t *testing.T) {
 	err := validatePublicationAuthorityExclusivity("run-1", true, true)

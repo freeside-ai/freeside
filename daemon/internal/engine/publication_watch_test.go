@@ -203,3 +203,23 @@ func TestCompatibleTerminalItemIgnoresReadinessInvalidation(t *testing.T) {
 		t.Fatal("genuinely different item accepted")
 	}
 }
+
+func TestCompatibleTerminalItemAcceptsLegacyNilReadinessOnly(t *testing.T) {
+	st := watchTestStore(t)
+	current := watchTestItem(t, st, domain.StatusOpen)
+	expected := current
+	expected.Readiness = &domain.ReadinessSummary{
+		Class: domain.ReadinessReadyClean, EvaluationSetDigest: "sha256:evaluation",
+	}
+	if !compatibleTerminalItem(expected, current) {
+		t.Fatal("legacy nil readiness rejected during recovery compatibility")
+	}
+
+	foreign := current
+	foreign.Readiness = &domain.ReadinessSummary{
+		Class: domain.ReadinessReadyDegraded, EvaluationSetDigest: "sha256:foreign",
+	}
+	if compatibleTerminalItem(expected, foreign) {
+		t.Fatal("conflicting persisted readiness accepted during recovery compatibility")
+	}
+}

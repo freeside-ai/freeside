@@ -56,35 +56,30 @@
     "number": 123
   },
   "readiness": {
-    "class": "ready_clean",
-    "evaluation_set_digest": "sha256:evaluation-clean"
+    "class": "ready_degraded",
+    "evaluation_set_digest": "sha256:evaluation-degraded"
   },
   "commit_plan_notice": "present_but_not_honored",
   "base_freshness": null,
-  "readiness_invalidation": {
-    "reason": "identity_changed",
-    "bound": "84958515#450",
-    "observed": "84958516#451",
-    "observed_at": "2026-01-02T03:55:05Z"
-  },
+  "readiness_invalidation": null,
   "review_recovery_binding": null,
   "codex_reenrollment_recovery_binding": null,
   "review_configuration_recovery": null,
   "finding_adjudication": null,
-  "item_version": 2,
+  "item_version": 1,
   "interruption_class": "planned_gate",
   "conversation_id": "conv-1",
   "timing": {
-    "delivery_count": 1,
-    "first_submitted_at": "2026-01-02T03:04:05Z",
-    "first_accepted_at": "2026-01-02T03:05:05Z",
-    "first_opened_at": "2026-01-02T03:09:05Z",
-    "submit_to_first_open": 300000000000
+    "delivery_count": 0,
+    "first_submitted_at": null,
+    "first_accepted_at": null,
+    "first_opened_at": null,
+    "submit_to_first_open": null
   },
   "created_at": "2026-01-02T03:04:05Z",
   "expires_when": "2026-01-03T03:04:05Z",
   "decided_at": null,
   "posture": null,
   "blocking_supersession": null,
-  "status": "superseded"
+  "status": "open"
 }

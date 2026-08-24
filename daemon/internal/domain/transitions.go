@@ -117,6 +117,14 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		return fmt.Errorf("attention item %s: recorded created_at would change: %w",
 			updated.ID, ErrImmutableTransition)
 	}
+	sameReadiness, err := jsonEqual(old.Readiness, updated.Readiness)
+	if err != nil {
+		return fmt.Errorf("attention item %s: %w", updated.ID, err)
+	}
+	if !sameReadiness {
+		return fmt.Errorf("attention item %s: readiness summary would change: %w",
+			updated.ID, ErrImmutableTransition)
+	}
 	// A recorded decision instant is the durable endpoint of the
 	// open-to-decision metric (issue #171): once stamped it never moves or
 	// disappears, so a writer holding a constructor-built copy (which always

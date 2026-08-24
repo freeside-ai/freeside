@@ -62,7 +62,7 @@ struct DecisionDetailView: View {
                 }
             }
         }
-        .navigationTitle(model.snapshot.map { AttentionDisplay.title($0.item._type) } ?? "Decision")
+        .navigationTitle(model.snapshot.map { AttentionDisplay.title($0.item) } ?? "Decision")
     }
 
     @ViewBuilder
@@ -291,7 +291,7 @@ struct DecisionDetailView: View {
     private func header(_ item: Components.Schemas.AttentionItem) -> some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(AttentionDisplay.title(item._type))
+                Text(AttentionDisplay.title(item))
                     .font(FreesideFont.title)
                     .foregroundStyle(Color.ink)
                 creationTimestamp(item.created_at)

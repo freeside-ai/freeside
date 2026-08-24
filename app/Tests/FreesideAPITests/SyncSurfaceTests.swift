@@ -140,6 +140,30 @@ import Testing
         }
     }
 
+    @Test func legacyReadinessIsPresentAsExplicitNullOnTheMockWire() async throws {
+        var legacy = AttentionFixtures.fixture(type: .ready_for_final_review)
+        legacy.item.readiness = nil
+        let transport = MockServerTransport(server: MockServer(items: [legacy]))
+        let request = HTTPRequest(
+            method: .get,
+            scheme: "https",
+            authority: "freeside.invalid",
+            path: "/attention/items")
+        let (_, body) = try await transport.send(
+            request,
+            body: nil,
+            baseURL: try #require(URL(string: "https://freeside.invalid")),
+            operationID: "listAttentionItems")
+        let data = try await Data(collecting: #require(body), upTo: 1 << 20)
+        let rows = try #require(
+            JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        let row = try #require(rows.first)
+        let item = try #require(row["item"] as? [String: Any])
+
+        #expect(item.keys.contains("readiness"))
+        #expect(item["readiness"] is NSNull)
+    }
+
     @Test func bootstrapFailsClosedOnOneInvalidRow() async throws {
         // One row the daemon could never serve fails the whole bootstrap
         // (the single-read gate), never a partial snapshot that would

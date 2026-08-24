@@ -635,6 +635,26 @@ type AdvisoryOutcomeRecord struct {
 	Outcome                     AdvisoryOutcome `json:"outcome"`
 }
 
+// ReadinessSummary preserves the readiness class and evaluation-set identity
+// downstream without duplicating the verdict's evidence payload. It is valid
+// only for ready verdicts; a blocked verdict cannot describe a ready item.
+type ReadinessSummary struct {
+	Class               ReadinessVerdictClass `json:"class"`
+	EvaluationSetDigest Digest                `json:"evaluation_set_digest"`
+}
+
+// Validate reports whether the summary identifies a complete ready verdict.
+func (s ReadinessSummary) Validate() error {
+	if !s.Class.valid() {
+		return fmt.Errorf("readiness summary class %q: %w", s.Class, ErrInvalidReadinessVerdictClass)
+	}
+	if (s.Class != ReadinessReadyClean && s.Class != ReadinessReadyDegraded) ||
+		s.EvaluationSetDigest == "" {
+		return ErrReadinessSummaryInconsistent
+	}
+	return nil
+}
+
 // ReadinessVerdict carries one of the three aggregate classes without a
 // flattened boolean. EvaluationSetDigest is present for both ready classes.
 type ReadinessVerdict struct {

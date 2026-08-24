@@ -314,3 +314,23 @@ func TestReadinessVerdictRejectsForgedPayloads(t *testing.T) {
 		}
 	}
 }
+
+func TestReadinessSummaryAcceptsOnlyReadyClassesWithDigest(t *testing.T) {
+	for _, summary := range []domain.ReadinessSummary{
+		{Class: domain.ReadinessReadyClean, EvaluationSetDigest: "sha256:clean"},
+		{Class: domain.ReadinessReadyDegraded, EvaluationSetDigest: "sha256:degraded"},
+	} {
+		if err := summary.Validate(); err != nil {
+			t.Fatalf("valid summary %+v rejected: %v", summary, err)
+		}
+	}
+	for _, summary := range []domain.ReadinessSummary{
+		{Class: domain.ReadinessBlocked, EvaluationSetDigest: "sha256:blocked"},
+		{Class: domain.ReadinessReadyClean},
+		{Class: "invented", EvaluationSetDigest: "sha256:invented"},
+	} {
+		if err := summary.Validate(); err == nil {
+			t.Fatalf("invalid summary %+v accepted", summary)
+		}
+	}
+}

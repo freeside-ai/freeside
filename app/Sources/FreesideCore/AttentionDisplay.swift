@@ -33,6 +33,13 @@ enum AttentionDisplay {
         }
     }
 
+    static func title(_ item: Components.Schemas.AttentionItem) -> String {
+        guard item._type == .ready_for_final_review,
+            item.readiness?.value1._class == .ready_degraded
+        else { return title(item._type) }
+        return "Ready for final review (degraded)"
+    }
+
     static func label(_ action: Components.Schemas.Action) -> String {
         switch action {
         case .approve: return "Approve"
@@ -162,7 +169,23 @@ enum AttentionDisplay {
         rows.append(contentsOf: reviewConfigurationRecoveryRows(item))
         rows.append(contentsOf: codexReenrollmentRecoveryRows(item))
         rows.append(contentsOf: findingAdjudicationRows(item))
+        rows.append(contentsOf: readinessSummaryRows(item))
         return rows
+    }
+
+    static func readinessSummaryRows(
+        _ item: Components.Schemas.AttentionItem
+    ) -> [BindingRow] {
+        guard let readiness = item.readiness?.value1 else { return [] }
+        let verdict: String
+        switch readiness._class {
+        case .ready_clean: verdict = "Clean"
+        case .ready_degraded: verdict = "Degraded"
+        }
+        return [
+            BindingRow(label: "Readiness", value: verdict),
+            BindingRow(label: "Evaluation set", value: readiness.evaluation_set_digest),
+        ]
     }
 
     static func findingAdjudicationRows(

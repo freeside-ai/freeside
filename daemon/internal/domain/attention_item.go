@@ -440,6 +440,11 @@ type AttentionItem struct {
 	// ready_for_final_review item. It is required exactly on that type and
 	// renders explicit null on every other item.
 	PRReference *PRReference `json:"pr_reference"`
+	// Readiness preserves the daemon-evaluated ready class and exact
+	// evaluation-set digest on ready_for_final_review items. Production creators
+	// always set it; nil remains valid for legacy persisted items and fake-mode
+	// items that never ran Section 6 verification. Once created it is immutable.
+	Readiness *ReadinessSummary `json:"readiness"`
 	// CommitPlanNotice is the daemon-derived commit-plan notice (plan §5.6;
 	// CommitPlanNoticeReason): set when the reserved plan channel was
 	// consumed without a plan structuring the import, nil otherwise. The
@@ -527,6 +532,7 @@ type AttentionItemInput struct {
 	AgentClaims                      []AgentClaim
 	PRHeadSHA                        string
 	PRReference                      *PRReference
+	Readiness                        *ReadinessSummary
 	CommitPlanNotice                 *CommitPlanNoticeReason
 	ReviewRecoveryBinding            *ReviewRecoveryBinding
 	CodexReenrollmentRecoveryBinding *CodexReenrollmentRecoveryBinding
@@ -571,6 +577,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		AgentClaims:                      cloneAgentClaims(in.AgentClaims),
 		PRHeadSHA:                        in.PRHeadSHA,
 		PRReference:                      clonePtr(in.PRReference),
+		Readiness:                        clonePtr(in.Readiness),
 		CommitPlanNotice:                 clonePtr(in.CommitPlanNotice),
 		ReviewRecoveryBinding:            clonePtr(in.ReviewRecoveryBinding),
 		CodexReenrollmentRecoveryBinding: clonePtr(in.CodexReenrollmentRecoveryBinding),
@@ -684,6 +691,15 @@ func (i AttentionItem) Validate() error {
 				i.ID, i.Type, ErrPRReferenceInconsistent)
 		}
 		if err := i.PRReference.Validate(); err != nil {
+			return fmt.Errorf("item %s: %w", i.ID, err)
+		}
+	}
+	if i.Readiness != nil {
+		if i.Type != AttentionReadyForFinalReview {
+			return fmt.Errorf("item %s type %q carries readiness: %w",
+				i.ID, i.Type, ErrReadinessSummaryInconsistent)
+		}
+		if err := i.Readiness.Validate(); err != nil {
 			return fmt.Errorf("item %s: %w", i.ID, err)
 		}
 	}

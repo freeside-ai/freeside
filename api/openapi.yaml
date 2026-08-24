@@ -1781,6 +1781,24 @@ components:
           type: integer
           minimum: 1
 
+    ReadinessSummary:
+      type: object
+      description: >
+        The daemon-evaluated ready class and the digest of the exact
+        evaluation set that produced it. This is a narrow projection of the
+        full readiness verdict: blocked is not representable on a ready item.
+      required:
+        - class
+        - evaluation_set_digest
+      properties:
+        class:
+          type: string
+          enum:
+            - ready_clean
+            - ready_degraded
+        evaluation_set_digest:
+          $ref: "#/components/schemas/Digest"
+
     AttentionItem:
       type: object
       description: >
@@ -1800,6 +1818,7 @@ components:
         - artifact_digests
         - pr_head_sha
         - pr_reference
+        - readiness
         - commit_plan_notice
         - base_freshness
         - readiness_invalidation
@@ -1871,6 +1890,17 @@ components:
             non-null exactly on that item type; null on every other type.
             Daemon-derived from the trusted publication coordinates, never
             client-set.
+        readiness:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ReadinessSummary"
+          description: >
+            The daemon-evaluated readiness class and exact evaluation-set
+            digest for this ready_for_final_review item (plan §6; mirrors
+            domain.AttentionItem.Readiness). Production-created ready items
+            always carry it; null is tolerated for legacy persisted items and
+            fake-mode items that did not run Section 6 verification. It is
+            fixed at creation and never client-set.
         commit_plan_notice:
           nullable: true
           allOf:
@@ -2049,6 +2079,9 @@ components:
         pr_reference:
           repo: "owner/repo"
           number: 123
+        readiness:
+          class: "ready_clean"
+          evaluation_set_digest: "sha256:evaluation"
         commit_plan_notice: "present_but_not_honored"
         base_freshness: null
         readiness_invalidation: null

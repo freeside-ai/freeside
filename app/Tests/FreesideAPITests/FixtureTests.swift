@@ -57,6 +57,18 @@ import Testing
         #expect(Set(inbox.map(\.item.id)).count == inbox.count)
     }
 
+    @Test func readyFixturesCoverCleanAndDegradedReadiness() {
+        let clean = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        let degraded = AttentionFixtures.degradedReady().item
+
+        #expect(clean.readiness?.value1._class == .ready_clean)
+        #expect(clean.readiness?.value1.evaluation_set_digest == "sha256:evaluation-clean")
+        #expect(degraded.readiness?.value1._class == .ready_degraded)
+        #expect(
+            degraded.readiness?.value1.evaluation_set_digest
+                == "sha256:evaluation-degraded")
+    }
+
     /// Pins the literal ids so the `-FreesideSelect` value list mirrored
     /// in app/README.md cannot drift silently: renaming a type or
     /// reordering the inbox must show up here as a doc-sync signal.

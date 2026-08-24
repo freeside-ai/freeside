@@ -80,8 +80,7 @@ public struct MockServerTransport: ClientTransport {
             do {
                 return try Self.json(
                     status: .ok,
-                    body: await server.bootstrapSnapshot(),
-                    insertingRequiredNullableRunTimestamps: true)
+                    body: await server.bootstrapSnapshot())
             } catch let invalid as MockServer.InvalidItemError {
                 // One invalid row fails the whole bootstrap closed, as the
                 // daemon's single-read upper-bound gate does (#105).
@@ -110,7 +109,9 @@ public struct MockServerTransport: ClientTransport {
             }
         case "listAttentionItems":
             do {
-                return try Self.json(status: .ok, body: await server.listAttentionItems())
+                return try Self.json(
+                    status: .ok,
+                    body: await server.listAttentionItems())
             } catch let invalid as MockServer.InvalidItemError {
                 // The daemon fails the whole read on the first invalid
                 // row; a client sees a failed refresh, never a partial
@@ -134,7 +135,9 @@ public struct MockServerTransport: ClientTransport {
                             message: "no entity exists under the identifier")
                     )
                 }
-                return try Self.json(status: .ok, body: snapshot)
+                return try Self.json(
+                    status: .ok,
+                    body: snapshot)
             } catch let invalid as MockServer.InvalidItemError {
                 return try Self.json(
                     status: .internalServerError,
@@ -157,8 +160,7 @@ public struct MockServerTransport: ClientTransport {
             do {
                 return try Self.json(
                     status: .ok,
-                    body: try await server.listRuns(),
-                    insertingRequiredNullableRunTimestamps: true)
+                    body: try await server.listRuns())
             } catch let invalid as MockServer.InvalidRunError {
                 return try Self.json(
                     status: .internalServerError,
@@ -179,8 +181,7 @@ public struct MockServerTransport: ClientTransport {
                 }
                 return try Self.json(
                     status: .ok,
-                    body: run,
-                    insertingRequiredNullableRunTimestamps: true)
+                    body: run)
             } catch let invalid as MockServer.InvalidRunError {
                 return try Self.json(
                     status: .internalServerError,
@@ -446,49 +447,48 @@ public struct MockServerTransport: ClientTransport {
 
     private static func json(
         status: HTTPResponse.Status,
-        body: some Encodable,
-        insertingRequiredNullableRunTimestamps: Bool = false
+        body: some Encodable
     ) throws -> (HTTPResponse, HTTPBody?) {
         let response = HTTPResponse(
             status: status,
             headerFields: [.contentType: "application/json"]
         )
-        var data = try encoder.encode(body)
-        if insertingRequiredNullableRunTimestamps {
-            data = try runTimestampsPresent(in: data)
-        }
+        let data = try requiredNullableMembersPresent(in: encoder.encode(body))
         return (response, HTTPBody(data))
     }
 
     /// Swift's synthesized Encodable omits nil optionals even when OpenAPI
-    /// declares them required and nullable. Patch only run-bearing mock
-    /// responses so their raw JSON exercises the production wire contract.
-    private static func runTimestampsPresent(in data: Data) throws -> Data {
+    /// declares them required and nullable. Patch the affected mock responses
+    /// so their raw JSON exercises the production wire contract.
+    private static func requiredNullableMembersPresent(in data: Data) throws -> Data {
         let object = try JSONSerialization.jsonObject(with: data)
         return try JSONSerialization.data(
-            withJSONObject: insertingRunTimestampNulls(in: object),
+            withJSONObject: insertingRequiredNullableMembers(in: object),
             options: [.sortedKeys])
     }
 
-    private static func insertingRunTimestampNulls(in value: Any) -> Any {
+    private static func insertingRequiredNullableMembers(in value: Any) -> Any {
         if let values = value as? [Any] {
-            return values.map(insertingRunTimestampNulls)
+            return values.map(insertingRequiredNullableMembers)
         }
         guard var object = value as? [String: Any] else { return value }
         for (key, nested) in object {
-            object[key] = insertingRunTimestampNulls(in: nested)
+            object[key] = insertingRequiredNullableMembers(in: nested)
         }
-        guard var run = object["run"] as? [String: Any] else { return object }
-        if !run.keys.contains("created_at") {
-            run["created_at"] = NSNull()
+        if var run = object["run"] as? [String: Any] {
+            for key in [
+                "created_at", "last_activity_at", "campaign_id", "attempt_number",
+                "attempt_reason", "parent_run_id",
+            ] where !run.keys.contains(key) {
+                run[key] = NSNull()
+            }
+            object["run"] = run
         }
-        if !run.keys.contains("last_activity_at") {
-            run["last_activity_at"] = NSNull()
+        if object["item_version"] != nil, object["requested_decision"] != nil,
+            !object.keys.contains("readiness")
+        {
+            object["readiness"] = NSNull()
         }
-        for key in ["campaign_id", "attempt_number", "attempt_reason", "parent_run_id"] where !run.keys.contains(key) {
-            run[key] = NSNull()
-        }
-        object["run"] = run
         return object
     }
 
