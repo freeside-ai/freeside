@@ -1346,7 +1346,7 @@ func TestProductionParkedReviewContradictionPrecedesConfigurationDrift(t *testin
 	}
 }
 
-func TestProductionReviewFindingsEscalateWithoutReady(t *testing.T) {
+func TestProductionReviewFindingsParkForAdjudicationWithoutReady(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	reviewID := engine.ProductionReviewInvocationID(p.runID, 1)
@@ -1368,8 +1368,8 @@ func TestProductionReviewFindingsEscalateWithoutReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 1 ||
-		result.PublicationTasksCompleted != 1 || result.LastPRNumber != 0 {
+	if result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 0 ||
+		result.PublicationTasksCompleted != 0 || result.LastPRNumber != 0 {
 		t.Fatalf("findings result = %#v", result)
 	}
 	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
@@ -1384,7 +1384,8 @@ func TestProductionReviewFindingsEscalateWithoutReady(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if item.Type != domain.AttentionReviewDiminishing || item.PRHeadSHA != p.replay.HeadSHA {
+		if item.Type != domain.AttentionReviewDispute || item.PRHeadSHA != p.replay.HeadSHA ||
+			!item.Offers(domain.ActionDiscuss) || !item.Offers(domain.ActionStop) {
 			t.Fatalf("review attention = %#v", item)
 		}
 		return nil
@@ -2742,6 +2743,7 @@ func TestProductionTransitionMatrixRegistersEveryEngineBoundary(t *testing.T) {
 	covered := map[engine.DurableTransition]bool{
 		engine.DurableTransitionElaborationOutcome:    true,
 		engine.DurableTransitionSpecificationApproval: true,
+		engine.DurableTransitionFindingAdjudication:   true,
 	}
 	for _, entry := range productionPublicationTransitionMatrix {
 		if covered[entry.transition] {

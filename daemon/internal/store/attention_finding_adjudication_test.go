@@ -154,6 +154,78 @@ func TestPutAttentionItemRegatesFindingAdjudicationBinding(t *testing.T) {
 	}
 }
 
+func TestFindingAdjudicationDecisionAuthenticatesCausalCommandHistory(t *testing.T) {
+	t.Parallel()
+	for _, action := range []domain.Action{
+		domain.ActionAcceptRecommendedRoute, domain.ActionStop,
+	} {
+		t.Run(string(action), func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			runID := domain.RunID("run-command-history-" + string(action))
+			at := time.Date(2026, 8, 24, 3, 0, 0, 0, time.UTC)
+			findingID := domain.FindingID("finding-command-history")
+			st := seedReviewRound(t, runID, 1, []domain.Finding{
+				adjudicationFinding(findingID, runID, "daemon/a.go", at),
+			}, at)
+			artifact := modelAdjudication(t, runID, 1, findingID, at)
+			item := adjudicationItem(t, "item-command-history", bindingFromAdjudication(artifact))
+			command, err := domain.NewCommand(domain.CommandInput{
+				CommandID: "command-" + string(action), DeviceID: "device-1",
+				ItemID: item.ID, ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA,
+				ArtifactDigests: item.ArtifactDigests, Action: action,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var concluded domain.AttentionItem
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				if err := tx.PutFindingAdjudication(ctx, artifact); err != nil {
+					return err
+				}
+				if err := tx.PutAttentionItem(ctx, item); err != nil {
+					return err
+				}
+				if err := tx.PutCommand(ctx, command); err != nil {
+					return err
+				}
+				concluded, err = item.WithDecidedAt(at.Add(time.Minute))
+				if err != nil {
+					return err
+				}
+				concluded.Status = domain.StatusResolved
+				concluded.ItemVersion++
+				return tx.PutAttentionItem(ctx, concluded)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			// A legal later terminal-item version advance must not break the
+			// causal link, which comes from immutable command history rather than
+			// current_item_version - 1 arithmetic.
+			advanced := concluded
+			advanced.ItemVersion++
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				return tx.PutAttentionItem(ctx, advanced)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Read(ctx, func(tx *store.ReadTx) error {
+				gotItem, gotCommand, err := tx.FindingAdjudicationDecision(ctx, item.ID)
+				if err != nil {
+					return err
+				}
+				if gotItem.ItemVersion != advanced.ItemVersion || gotCommand == nil ||
+					gotCommand.CommandID != command.CommandID || gotCommand.Action != action {
+					t.Fatalf("decision = item v%d, %#v", gotItem.ItemVersion, gotCommand)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestPutAttentionItemRejectsIncompleteOrTamperedAdjudicationProjection(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

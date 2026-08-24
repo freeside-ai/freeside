@@ -161,6 +161,7 @@ type productionPublicationWorkflow struct {
 	approvedRecipes           map[domain.Digest]bool
 	newRoom                   func(domain.ProjectImage) (ProductionVerificationRoom, error)
 	reviewSource              exec.ReviewSource
+	findingAdjudicator        findingAdjudicator
 	inference                 *inference.Client
 	reviewRecovery            func(context.Context) error
 	reviewRecoveryPending     bool
@@ -1847,6 +1848,10 @@ func (w *productionPublicationWorkflow) reviewWorkspacePath(
 	return filepath.Join(w.workDir, "review-workspaces", name), nil
 }
 
+func findingAdjudicationBaseWorkspaceID(id domain.InvocationID) domain.InvocationID {
+	return domain.InvocationID(string(id) + "-adjudication-base")
+}
+
 func (w *productionPublicationWorkflow) ensureReviewWorkspace(
 	ctx context.Context, id domain.InvocationID, checkout PublicationCheckout, headSHA string,
 ) (string, error) {
@@ -1939,7 +1944,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	if err != nil {
 		return productionReviewPending, err
 	}
-	if latestRecord != nil {
+	if latestRecord != nil && latestRecord.Outcome != domain.ReviewFindings {
 		if err := w.removeReviewWorkspace(latestRecord.InvocationID); err != nil {
 			return productionReviewPending, err
 		}
@@ -2019,19 +2024,29 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		}
 		if latestRecord.InstructionDigest == reviewInstructions.ResultDigest {
 			if latestRecord.Outcome == domain.ReviewFindings {
-				requiresAttention, classifyErr := w.classifyReviewFindings(ctx, task, *latestRecord)
-				itemType := domain.AttentionReviewDiminishing
-				reason := fmt.Sprintf("Codex review found %d issue(s) requiring remediation.", len(latestRecord.FindingIDs))
-				if classifyErr != nil || requiresAttention {
-					if w.reserveClassifierAttention(task, *latestRecord) {
-						itemType = domain.AttentionReviewDispute
-						reason = fmt.Sprintf("Codex review found %d issue(s); classification was unavailable or a critical/high finding lacks high confidence and requires adjudication.", len(latestRecord.FindingIDs))
-					}
-				}
-				if err := w.putReviewAttention(ctx, task, *latestRecord, reason, itemType); err != nil {
+				candidateWorkspace, err := w.ensureReviewWorkspace(
+					ctx, latestRecord.InvocationID, workspace, task.HeadSHA)
+				if err != nil {
 					return productionReviewPending, err
 				}
-				return productionReviewEscalated, nil
+				baseWorkspaceID := findingAdjudicationBaseWorkspaceID(latestRecord.InvocationID)
+				baseWorkspace, err := w.ensureReviewWorkspace(
+					ctx, baseWorkspaceID, workspace, binding.admission.Base.BaseSHA)
+				if err != nil {
+					return productionReviewPending, err
+				}
+				state, err := w.reconcileFindingAdjudication(
+					ctx, task, binding, *latestRecord, baseWorkspace, candidateWorkspace)
+				if err != nil {
+					return productionReviewPending, err
+				}
+				if err := w.removeReviewWorkspace(latestRecord.InvocationID); err != nil {
+					return productionReviewPending, err
+				}
+				if err := w.removeReviewWorkspace(baseWorkspaceID); err != nil {
+					return productionReviewPending, err
+				}
+				return state, nil
 			}
 			_, requestAuthority, err := w.productionReviewRequest(
 				task, binding, checkpoint, latestRecord.InvocationID,
@@ -2356,45 +2371,30 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		DurableTransitionReviewResult, DurableTransitionAfter); err != nil {
 		return productionReviewPending, err
 	}
-	requiresAttention, err := w.classifyReviewFindings(ctx, task, record)
-	if err != nil {
-		// Inference and its advisory telemetry are never control-plane
-		// availability dependencies. The existing review attention remains the
-		// conservative fallback for every unclassified finding.
-		requiresAttention = true
+	if record.Outcome == domain.ReviewFindings {
+		baseWorkspaceID := findingAdjudicationBaseWorkspaceID(id)
+		baseWorkspace, err := w.ensureReviewWorkspace(
+			ctx, baseWorkspaceID, workspace, binding.admission.Base.BaseSHA)
+		if err != nil {
+			return productionReviewPending, err
+		}
+		state, err := w.reconcileFindingAdjudication(
+			ctx, task, binding, record, baseWorkspace, reviewWorkspace)
+		if err != nil {
+			return productionReviewPending, err
+		}
+		if err := w.removeReviewWorkspace(id); err != nil {
+			return productionReviewPending, err
+		}
+		if err := w.removeReviewWorkspace(baseWorkspaceID); err != nil {
+			return productionReviewPending, err
+		}
+		return state, nil
 	}
 	if err := w.removeReviewWorkspace(id); err != nil {
 		return productionReviewPending, err
 	}
-	if record.Outcome == domain.ReviewFindings {
-		itemType := domain.AttentionReviewDiminishing
-		reason := fmt.Sprintf("Codex review found %d issue(s) requiring remediation.", len(record.FindingIDs))
-		if requiresAttention {
-			if w.reserveClassifierAttention(task, record) {
-				itemType = domain.AttentionReviewDispute
-				reason = fmt.Sprintf("Codex review found %d issue(s); a critical/high finding lacks a high-confidence classification and requires adjudication.", len(record.FindingIDs))
-			}
-		}
-		if err := w.putReviewAttention(ctx, task, record,
-			reason, itemType,
-		); err != nil {
-			return productionReviewPending, err
-		}
-		return productionReviewEscalated, nil
-	}
 	return productionReviewPassed, nil
-}
-
-func (w *productionPublicationWorkflow) reserveClassifierAttention(
-	task productionPublicationTask, record domain.ReviewRecord,
-) bool {
-	if w.inference == nil {
-		return false
-	}
-	return w.inference.ReserveAttention(
-		inference.ClassifierSiteID, string(task.ProjectID), string(task.RunID),
-		string(productionReviewItemID(task.RunID, record.Round)),
-	) == nil
 }
 
 func (w *productionPublicationWorkflow) classifyReviewFindings(
@@ -3308,9 +3308,16 @@ func (w *productionPublicationWorkflow) assertReviewedCandidate(
 			),
 		)
 	}
+	roundComplete := false
+	if record != nil {
+		roundComplete, err = w.reviewRoundDispositionComplete(ctx, *record)
+		if err != nil {
+			return domain.ReadinessVerdict{}, nil, err
+		}
+	}
 	if binding.profile.Review.Mode != domain.ReviewFreesideInvoked ||
 		record == nil ||
-		record.Outcome != domain.ReviewClean ||
+		!roundComplete ||
 		record.InstructionDigest != reviewInstructions.ResultDigest ||
 		record.BaseSHA != binding.admission.Base.BaseSHA ||
 		record.HeadSHA != task.HeadSHA ||

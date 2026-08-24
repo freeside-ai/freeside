@@ -10,6 +10,58 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
+// FindingAdjudicationDecision reconstructs the current adjudication item and
+// the immutable command that concluded it. A nil command means the item is
+// still open. The command is selected from authenticated command history,
+// rather than inferred from item-version arithmetic, so later delivery-driven
+// item-version advances cannot detach a terminal decision from its cause.
+func (tx *ReadTx) FindingAdjudicationDecision(
+	ctx context.Context, itemID domain.ItemID,
+) (domain.AttentionItem, *domain.Command, error) {
+	item, err := tx.GetAttentionItem(ctx, itemID)
+	if err != nil {
+		return domain.AttentionItem{}, nil, err
+	}
+	if item.Type != domain.AttentionFindingAdjudication || item.FindingAdjudication == nil {
+		return domain.AttentionItem{}, nil, domain.ErrParentKeyMismatch
+	}
+	commands, err := tx.ListCommandsForItem(ctx, itemID)
+	if err != nil {
+		return domain.AttentionItem{}, nil, err
+	}
+	var terminal *domain.Command
+	for i := range commands {
+		command := &commands[i]
+		switch command.Action {
+		case domain.ActionAcceptRecommendedRoute,
+			domain.ActionChooseAlternativeRoute,
+			domain.ActionStop:
+			if terminal != nil {
+				return domain.AttentionItem{}, nil, domain.ErrParentKeyMismatch
+			}
+			terminal = command
+		case domain.ActionDiscuss:
+			continue
+		default:
+			return domain.AttentionItem{}, nil, domain.ErrParentKeyMismatch
+		}
+	}
+	if item.Status == domain.StatusOpen {
+		if terminal != nil {
+			return domain.AttentionItem{}, nil, domain.ErrParentKeyMismatch
+		}
+		return item, nil, nil
+	}
+	if terminal == nil || item.Status != domain.StatusResolved || item.DecidedAt == nil ||
+		terminal.ItemVersion >= item.ItemVersion || !item.Offers(terminal.Action) ||
+		terminal.ItemID != item.ID || terminal.PRHeadSHA != item.PRHeadSHA ||
+		!slices.Equal(terminal.ArtifactDigests, item.ArtifactDigests) {
+		return domain.AttentionItem{}, nil, domain.ErrParentKeyMismatch
+	}
+	deciding := *terminal
+	return item, &deciding, nil
+}
+
 const putFindingAdjudicationSQL = `
 INSERT INTO finding_adjudications
     (run_id, round, content_digest, finding_batch_digest, approved_spec_digest,
