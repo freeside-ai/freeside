@@ -16,6 +16,7 @@ const (
 	DurableTransitionVerificationEvidence  DurableTransition = "verification_evidence"
 	DurableTransitionReviewRequest         DurableTransition = "review_request"
 	DurableTransitionReviewResult          DurableTransition = "review_result"
+	DurableTransitionFindingAdjudication   DurableTransition = "finding_adjudication"
 	DurableTransitionPublicationEffect     DurableTransition = "publication_effect"
 	DurableTransitionReadyItem             DurableTransition = "ready_attention_item"
 	DurableTransitionTerminalCompletion    DurableTransition = "terminal_completion"
@@ -30,6 +31,7 @@ var AllDurableTransitions = []DurableTransition{
 	DurableTransitionVerificationEvidence,
 	DurableTransitionReviewRequest,
 	DurableTransitionReviewResult,
+	DurableTransitionFindingAdjudication,
 	DurableTransitionPublicationEffect,
 	DurableTransitionReadyItem,
 	DurableTransitionTerminalCompletion,
@@ -42,6 +44,7 @@ func (transition DurableTransition) valid() bool {
 		DurableTransitionVerificationEvidence,
 		DurableTransitionReviewRequest,
 		DurableTransitionReviewResult,
+		DurableTransitionFindingAdjudication,
 		DurableTransitionPublicationEffect,
 		DurableTransitionReadyItem,
 		DurableTransitionTerminalCompletion:
