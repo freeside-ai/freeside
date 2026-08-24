@@ -1,7 +1,9 @@
 package domain_test
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -204,6 +206,115 @@ func TestResolveAgentDefinition(t *testing.T) {
 	})
 }
 
+func TestAgentNameValidation(t *testing.T) {
+	in := agentResolution(t)
+	in.Source.Name = ""
+	if err := in.Source.Validate(); !errors.Is(err, domain.ErrEmptyField) {
+		t.Fatalf("empty AgentSource.Validate() = %v, want %v", err, domain.ErrEmptyField)
+	}
+
+	for _, name := range []string{"sol-via-codex", "a", "x_1-y"} {
+		t.Run("valid source "+name, func(t *testing.T) {
+			in := agentResolution(t)
+			in.Source.Name = name
+			if err := in.Source.Validate(); err != nil {
+				t.Fatalf("Validate() = %v", err)
+			}
+		})
+	}
+	for _, name := range []string{
+		"sol@codex", "Sol-via-codex", "sol-Via-codex", "sol.via", "sol/via", "sol\\via",
+		"-sol", "sol-", "_sol", "sol_", "-", "_", "sol via", "sol\tvia", "sol\nvia",
+		"sol:via", "søl",
+	} {
+		t.Run("invalid source "+name, func(t *testing.T) {
+			in := agentResolution(t)
+			in.Source.Name = name
+			if err := in.Source.Validate(); !errors.Is(err, domain.ErrInvalidAgentName) {
+				t.Fatalf("Validate() = %v, want %v", err, domain.ErrInvalidAgentName)
+			}
+		})
+	}
+
+	// Enumerate the byte vocabulary at both name positions. Bytes outside
+	// ASCII are included, so every UTF-8 multibyte name is rejected too.
+	for value := range 256 {
+		char := byte(value)
+		alphanumeric := ('a' <= char && char <= 'z') || ('0' <= char && char <= '9')
+		for _, tc := range []struct {
+			name  string
+			valid bool
+		}{
+			{string([]byte{char}), alphanumeric},
+			{string([]byte{'a', char, 'z'}), alphanumeric || char == '-' || char == '_'},
+		} {
+			in := agentResolution(t)
+			in.Source.Name = tc.name
+			err := in.Source.Validate()
+			if tc.valid && err != nil {
+				t.Fatalf("Validate(%q) = %v", tc.name, err)
+			}
+			if !tc.valid && !errors.Is(err, domain.ErrInvalidAgentName) {
+				t.Fatalf("Validate(%q) = %v, want %v", tc.name, err, domain.ErrInvalidAgentName)
+			}
+		}
+	}
+
+	in = agentResolution(t)
+	agent, err := domain.ResolveAgentDefinition(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.Name = "sol@codex"
+	if err := agent.Validate(); !errors.Is(err, domain.ErrInvalidAgentName) {
+		t.Fatalf("AgentDefinition.Validate() = %v, want %v", err, domain.ErrInvalidAgentName)
+	}
+	body, err := json.Marshal(agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := domain.DecodeAgentDefinition(body); !errors.Is(err, domain.ErrInvalidAgentName) {
+		t.Fatalf("DecodeAgentDefinition() = %v, want %v", err, domain.ErrInvalidAgentName)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		wantErr error
+	}{
+		{strings.Repeat("a", 246), nil},
+		{strings.Repeat("a", 247), domain.ErrInvalidAgentName},
+	} {
+		t.Run(fmt.Sprintf("length %d", len(tc.name)), func(t *testing.T) {
+			in := agentResolution(t)
+			in.Source.Name = tc.name
+			assertAgentNameError(t, "AgentSource.Validate", in.Source.Validate(), tc.wantErr)
+
+			candidate := agent
+			candidate.Name = tc.name
+			assertAgentNameError(t, "AgentDefinition.Validate", candidate.Validate(), tc.wantErr)
+			body, err := json.Marshal(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = domain.DecodeAgentDefinition(body)
+			assertAgentNameError(t, "DecodeAgentDefinition", err, tc.wantErr)
+
+			_, err = domain.ParseLineupSelection(tc.name + "@sha256:" + strings.Repeat("a", 64))
+			assertAgentNameError(t, "ParseLineupSelection", err, tc.wantErr)
+		})
+	}
+}
+
+func assertAgentNameError(t *testing.T, operation string, got, want error) {
+	t.Helper()
+	if want == nil && got != nil {
+		t.Fatalf("%s = %v", operation, got)
+	}
+	if want != nil && !errors.Is(got, want) {
+		t.Fatalf("%s = %v, want %v", operation, got, want)
+	}
+}
+
 // TestAgentBodyRejectsNames is the acceptance fixture: a canonical body that
 // hashes names instead of resolved references fails validation.
 func TestAgentBodyRejectsNames(t *testing.T) {
@@ -249,6 +360,9 @@ func TestLineupPolicyKeys(t *testing.T) {
 	selection, err := domain.ParseLineupSelection("sol-via-codex@" + agentDigest)
 	if err != nil || selection.AgentName != "sol-via-codex" || string(selection.AgentDigest) != agentDigest {
 		t.Fatalf("ParseLineupSelection = %+v, %v", selection, err)
+	}
+	if _, err := domain.ParseLineupSelection("Sol@" + agentDigest); !errors.Is(err, domain.ErrInvalidAgentName) {
+		t.Fatalf("ParseLineupSelection(invalid agent name) = %v, want %v", err, domain.ErrInvalidAgentName)
 	}
 	for _, bad := range []string{"", "sol-via-codex", "@" + agentDigest, "sol@not-a-digest"} {
 		if _, err := domain.ParseLineupSelection(bad); !errors.Is(err, domain.ErrInvalidLineupKey) {

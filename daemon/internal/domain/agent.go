@@ -23,9 +23,15 @@ import (
 // AgentEncodingVersion tags the agent's canonical serialization.
 const AgentEncodingVersion = 1
 
+// maxAgentNameBytes leaves room for the nine-byte ".attended" suffix in a
+// 255-byte policy-tree filename component.
+const maxAgentNameBytes = 246
+
 // AgentSource is the operator-authored form: names, resolved against one
 // control-plane revision at admission step 1.
 type AgentSource struct {
+	// Name is at most 246 bytes of lowercase ASCII alphanumeric, with '-' and
+	// '_' allowed only as interior separators.
 	Name       string      `json:"name"`
 	Enrollment string      `json:"enrollment"`
 	Route      string      `json:"route"`
@@ -40,6 +46,9 @@ type AgentSource struct {
 func (s AgentSource) Validate() error {
 	if s.Name == "" {
 		return fmt.Errorf("agent source name: %w", ErrEmptyField)
+	}
+	if !validAgentName(s.Name) {
+		return fmt.Errorf("agent source name %q: %w", s.Name, ErrInvalidAgentName)
 	}
 	for field, value := range map[string]string{
 		"enrollment": s.Enrollment, "route": s.Route,
@@ -108,6 +117,9 @@ func (a AgentDefinition) ComputeDigest() (Digest, error) {
 func (a AgentDefinition) Validate() error {
 	if a.Name == "" {
 		return fmt.Errorf("agent name: %w", ErrEmptyField)
+	}
+	if !validAgentName(a.Name) {
+		return fmt.Errorf("agent name %q: %w", a.Name, ErrInvalidAgentName)
 	}
 	if a.EncodingVersion != AgentEncodingVersion {
 		return fmt.Errorf("agent %s encoding_version %d: %w", a.Name, a.EncodingVersion, ErrAgentEncodingVersion)
@@ -315,10 +327,30 @@ func ParseLineupSelection(value string) (LineupSelection, error) {
 	if !found || name == "" {
 		return LineupSelection{}, fmt.Errorf("lineup selection %q: %w", value, ErrInvalidLineupKey)
 	}
+	if !validAgentName(name) {
+		return LineupSelection{}, fmt.Errorf("lineup selection %q name %q: %w", value, name, ErrInvalidAgentName)
+	}
 	if !contentaddr.Valid(digest) {
 		return LineupSelection{}, fmt.Errorf("lineup selection %q digest: %w", value, ErrInvalidLineupKey)
 	}
 	return LineupSelection{AgentName: name, AgentDigest: Digest(digest)}, nil
+}
+
+func validAgentName(name string) bool {
+	if name == "" || len(name) > maxAgentNameBytes {
+		return false
+	}
+	for i := range len(name) {
+		char := name[i]
+		if ('a' <= char && char <= 'z') || ('0' <= char && char <= '9') {
+			continue
+		}
+		if 0 < i && i < len(name)-1 && (char == '-' || char == '_') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // ValidateLineupPolicyKeys is the namespaced key validator applied at policy
