@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -83,6 +84,14 @@ type ProductionPublicationConfig struct {
 	ApprovedRecipes map[domain.Digest]bool
 	NewRoom         func(domain.ProjectImage) (ProductionVerificationRoom, error)
 	ReviewSource    exec.ReviewSource
+	// ShadowReviewSource is optional. When present, every other shadow field
+	// is required and the source remains observation-only: it cannot satisfy
+	// routed review, advance rounds, or authorize publication.
+	ShadowReviewSource              exec.ReviewSource
+	ShadowReviewConfigurationDigest domain.Digest
+	ShadowReviewCostOwner           string
+	ShadowReviewDefaultRate         float64
+	ShadowReviewFailure             func(domain.RunID, int, domain.ReviewFailureClass, error)
 
 	// ReviewRecovery is the cleanup-only startup seam shared by both modes. It
 	// must not carry authority to start a new review.
@@ -152,27 +161,32 @@ type productionVerificationCheckpoint struct {
 }
 
 type productionPublicationWorkflow struct {
-	store                     *store.Store
-	attention                 attentionService
-	workDir                   string
-	transport                 PublicationTransport
-	publisher                 *publish.Publisher
-	artifacts                 ArtifactStore
-	approvedRecipes           map[domain.Digest]bool
-	newRoom                   func(domain.ProjectImage) (ProductionVerificationRoom, error)
-	reviewSource              exec.ReviewSource
-	findingAdjudicator        findingAdjudicator
-	inference                 *inference.Client
-	reviewRecovery            func(context.Context) error
-	reviewRecoveryPending     bool
-	reviewConfigurationDigest domain.Digest
-	reviewHostInstructions    ReviewHostInstructions
-	holdOnly                  bool
-	recipeReadTimeout         time.Duration
-	holdRetryInterval         time.Duration
-	now                       func() time.Time
-	holdRetryAfter            map[domain.RunID]time.Time
-	reviewRetryAfter          map[domain.RunID]time.Time
+	store                           *store.Store
+	attention                       attentionService
+	workDir                         string
+	transport                       PublicationTransport
+	publisher                       *publish.Publisher
+	artifacts                       ArtifactStore
+	approvedRecipes                 map[domain.Digest]bool
+	newRoom                         func(domain.ProjectImage) (ProductionVerificationRoom, error)
+	reviewSource                    exec.ReviewSource
+	shadowReviewSource              exec.ReviewSource
+	findingAdjudicator              findingAdjudicator
+	inference                       *inference.Client
+	reviewRecovery                  func(context.Context) error
+	reviewRecoveryPending           bool
+	reviewConfigurationDigest       domain.Digest
+	shadowReviewConfigurationDigest domain.Digest
+	shadowReviewCostOwner           string
+	shadowReviewDefaultRate         float64
+	shadowReviewFailure             func(domain.RunID, int, domain.ReviewFailureClass, error)
+	reviewHostInstructions          ReviewHostInstructions
+	holdOnly                        bool
+	recipeReadTimeout               time.Duration
+	holdRetryInterval               time.Duration
+	now                             func() time.Time
+	holdRetryAfter                  map[domain.RunID]time.Time
+	reviewRetryAfter                map[domain.RunID]time.Time
 	// holdPace bounds this workflow's per-pass hold projection writes: the
 	// hold-only composition's observations, and the active composition's
 	// clear when it accepts a queued task (issue #394). Process state only,
@@ -209,6 +223,7 @@ func newProductionPublicationWorkflow(
 	attention attentionService,
 	cfg ProductionPublicationConfig,
 ) (*productionPublicationWorkflow, error) {
+	shadowEnabled := cfg.ShadowReviewSource != nil
 	if st == nil || attention == nil || cfg.Transport == nil || cfg.Publisher == nil ||
 		cfg.Artifacts == nil || cfg.NewRoom == nil ||
 		cfg.ReviewRecovery == nil ||
@@ -216,6 +231,18 @@ func newProductionPublicationWorkflow(
 			!contentaddr.Valid(string(cfg.ReviewConfigurationDigest)) ||
 			cfg.ReviewHostInstructions.validate() != nil)) {
 		return nil, errors.New("nil dependency")
+	}
+	if shadowEnabled {
+		if !contentaddr.Valid(string(cfg.ShadowReviewConfigurationDigest)) ||
+			strings.TrimSpace(cfg.ShadowReviewCostOwner) == "" ||
+			math.IsNaN(cfg.ShadowReviewDefaultRate) || math.IsInf(cfg.ShadowReviewDefaultRate, 0) ||
+			cfg.ShadowReviewDefaultRate < 0 || cfg.ShadowReviewDefaultRate > 1 ||
+			cfg.ShadowReviewFailure == nil {
+			return nil, errors.New("invalid shadow review configuration")
+		}
+	} else if cfg.ShadowReviewConfigurationDigest != "" || cfg.ShadowReviewCostOwner != "" ||
+		cfg.ShadowReviewDefaultRate != 0 || cfg.ShadowReviewFailure != nil {
+		return nil, errors.New("partial shadow review configuration")
 	}
 	if strings.TrimSpace(cfg.WorkDir) == "" {
 		return nil, errors.New("empty work directory")
@@ -250,8 +277,13 @@ func newProductionPublicationWorkflow(
 		transport: cfg.Transport, publisher: cfg.Publisher, artifacts: cfg.Artifacts,
 		approvedRecipes: mapsClone(cfg.ApprovedRecipes),
 		newRoom:         cfg.NewRoom, reviewSource: cfg.ReviewSource,
-		reviewRecovery: cfg.ReviewRecovery, reviewRecoveryPending: true,
-		reviewConfigurationDigest: cfg.ReviewConfigurationDigest,
+		shadowReviewSource: cfg.ShadowReviewSource,
+		reviewRecovery:     cfg.ReviewRecovery, reviewRecoveryPending: true,
+		reviewConfigurationDigest:       cfg.ReviewConfigurationDigest,
+		shadowReviewConfigurationDigest: cfg.ShadowReviewConfigurationDigest,
+		shadowReviewCostOwner:           cfg.ShadowReviewCostOwner,
+		shadowReviewDefaultRate:         cfg.ShadowReviewDefaultRate,
+		shadowReviewFailure:             cfg.ShadowReviewFailure,
 		reviewHostInstructions: ReviewHostInstructions{
 			Present: cfg.ReviewHostInstructions.Present,
 			Digest:  cfg.ReviewHostInstructions.Digest,
@@ -1527,6 +1559,15 @@ func (w *productionPublicationWorkflow) reconcileTask(
 				ctx, task, binding, checkpoint, reviewInstructions,
 			)
 			if err != nil {
+				if errors.Is(err, errShadowReviewStopped) {
+					return productionTaskOutcome{}, fmt.Errorf(
+						"shadow review stopped after publication state existed: %w",
+						domain.ErrParentKeyMismatch,
+					)
+				}
+				if errors.Is(err, errShadowReviewBlocksReady) {
+					return productionTaskOutcome{}, nil
+				}
 				if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
 					return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
 				}
@@ -1659,6 +1700,20 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	// flatten the review/verification pair into an inferred ready bit.
 	_, persistReadiness, err := w.assertReviewedCandidate(ctx, task, binding, checkpoint, reviewInstructions)
 	if err != nil {
+		if errors.Is(err, errShadowReviewStopped) {
+			// A shadow Stop is a definitive operator refusal at the same
+			// pre-publication boundary as an escalated routed review. Use the
+			// standard publication-block transaction so the task terminalizes,
+			// crash recovery converges, and the durable operator surface is the
+			// ordinary publish_blocked card rather than a vanished dispute.
+			return w.completeBlockedTask(
+				ctx, task, binding.run, checkpoint.Imported, checkpoint.Artifacts,
+				productionBlockTrust,
+			)
+		}
+		if errors.Is(err, errShadowReviewBlocksReady) {
+			return productionTaskOutcome{}, nil
+		}
 		if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
 			return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
 		}
@@ -2023,6 +2078,15 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			)
 		}
 		if latestRecord.InstructionDigest == reviewInstructions.ResultDigest {
+			shadowComplete, err := w.reconcileShadowReview(
+				ctx, task, binding, checkpoint, workspace, reviewInstructions, *latestRecord,
+			)
+			if err != nil {
+				return productionReviewPending, err
+			}
+			if !shadowComplete {
+				return productionReviewPending, nil
+			}
 			if latestRecord.Outcome == domain.ReviewFindings {
 				candidateWorkspace, err := w.ensureReviewWorkspace(
 					ctx, latestRecord.InvocationID, workspace, task.HeadSHA)
@@ -2370,6 +2434,15 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	if err := runDurableTransitionHook(w.transitionHook,
 		DurableTransitionReviewResult, DurableTransitionAfter); err != nil {
 		return productionReviewPending, err
+	}
+	shadowComplete, err := w.reconcileShadowReview(
+		ctx, task, binding, checkpoint, workspace, reviewInstructions, record,
+	)
+	if err != nil {
+		return productionReviewPending, err
+	}
+	if !shadowComplete {
+		return productionReviewPending, nil
 	}
 	if record.Outcome == domain.ReviewFindings {
 		baseWorkspaceID := findingAdjudicationBaseWorkspaceID(id)
@@ -3054,7 +3127,28 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithID(
 	itemType domain.AttentionType,
 	itemID domain.ItemID,
 ) error {
+	return w.putReviewAttentionWithActionsAndID(
+		ctx, task, record, reason, itemType, itemID,
+		[]domain.Action{domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop},
+		nil,
+	)
+}
+
+func (w *productionPublicationWorkflow) putReviewAttentionWithActionsAndID(
+	ctx context.Context,
+	task productionPublicationTask,
+	record domain.ReviewRecord,
+	reason string,
+	itemType domain.AttentionType,
+	itemID domain.ItemID,
+	disputeActions []domain.Action,
+	agentClaims []domain.AgentClaim,
+) error {
 	runID := task.RunID
+	actions := []domain.Action{domain.ActionFinishNow}
+	if itemType == domain.AttentionReviewDispute {
+		actions = disputeActions
+	}
 	// The first item written at this round's deterministic identity durably
 	// binds its routing decision. Classification may recover differently on a
 	// later reconciliation, but changing the item's type in place is forbidden
@@ -3085,35 +3179,65 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithID(
 			return fmt.Errorf("review attention item %q disagrees with run %q: %w",
 				itemID, task.RunID, domain.ErrParentKeyMismatch)
 		}
-		// Repair an open dispute created before adjudication became executable
-		// only in Wave 6. The routing decision and all recovery bindings stay
-		// fixed; only its currently actionable controls advance one version.
-		executableDisputeActions := []domain.Action{domain.ActionDiscuss, domain.ActionStop}
-		if existing.Type == domain.AttentionReviewDispute && existing.Status == domain.StatusOpen &&
-			!slices.Equal(existing.RequestedDecision, executableDisputeActions) {
+		if existing.Type != domain.AttentionReviewDispute {
+			return nil
+		}
+		if agentClaims == nil {
+			if existing.Status == domain.StatusOpen &&
+				!slices.Equal(existing.RequestedDecision, disputeActions) {
+				repaired := *existing
+				repaired.RequestedDecision = disputeActions
+				repaired.ItemVersion++
+				return w.attention.PutItem(ctx, repaired)
+			}
+			return nil
+		}
+		createdAt := w.attentionCreatedAt()
+		if existing.CreatedAt != nil {
+			createdAt = *existing.CreatedAt
+		}
+		desired, err := domain.NewAttentionItem(domain.AttentionItemInput{
+			ID: itemID, ProjectID: task.ProjectID,
+			Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID},
+			Type:    itemType, Priority: domain.PriorityNormal, Reason: reason,
+			RequestedDecision: actions, AgentClaims: agentClaims,
+			PRHeadSHA: task.HeadSHA, ItemVersion: existing.ItemVersion + 1,
+			InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+			CreatedAt: &createdAt,
+		}, w.approvedRecipes)
+		if err != nil {
+			return err
+		}
+		claimsMatch := reflect.DeepEqual(existing.AgentClaims, desired.AgentClaims)
+		digestsMatch := slices.Equal(existing.ArtifactDigests, desired.ArtifactDigests)
+		presentationMatches := slices.Equal(existing.RequestedDecision, desired.RequestedDecision) &&
+			existing.Reason == desired.Reason && claimsMatch && digestsMatch
+		if !presentationMatches && existing.Status != domain.StatusOpen {
+			return fmt.Errorf("review attention item %q presentation disagrees with run %q: %w",
+				itemID, task.RunID, domain.ErrParentKeyMismatch)
+		}
+		// Reconcile an open dispute's context-appropriate controls and bound
+		// claims. The routing decision and recovery bindings stay fixed; the
+		// rendered decision surface advances together under one new version.
+		executableDisputeActions := disputeActions
+		if existing.Status == domain.StatusOpen && !presentationMatches {
 			repaired := *existing
 			repaired.RequestedDecision = executableDisputeActions
+			repaired.Reason = desired.Reason
+			repaired.AgentClaims = desired.AgentClaims
+			repaired.ArtifactDigests = desired.ArtifactDigests
 			repaired.ItemVersion++
 			return w.attention.PutItem(ctx, repaired)
 		}
 		return nil
-	}
-	// Review escalation completes the publication task before presenting this
-	// item. It therefore offers only actions executable at this boundary,
-	// rather than remediation choices whose effects this workflow cannot enact.
-	actions := []domain.Action{domain.ActionFinishNow}
-	if itemType == domain.AttentionReviewDispute {
-		// Wave 6 owns the adjudication transaction. Until it lands, keep the
-		// item actionable through the executable conversation and stop paths.
-		actions = []domain.Action{domain.ActionDiscuss, domain.ActionStop}
 	}
 	createdAt := w.attentionCreatedAt()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: itemID, ProjectID: task.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID},
 		Type:    itemType, Priority: domain.PriorityNormal, Reason: reason,
-		RequestedDecision: actions,
-		PRHeadSHA:         task.HeadSHA, ItemVersion: 1,
+		RequestedDecision: actions, AgentClaims: agentClaims,
+		PRHeadSHA: task.HeadSHA, ItemVersion: 1,
 		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
 		CreatedAt: &createdAt,
 	}, w.approvedRecipes)
@@ -3286,6 +3410,9 @@ func (w *productionPublicationWorkflow) assertReviewedCandidate(
 	checkpoint productionVerificationCheckpoint,
 	reviewInstructions exec.ReviewInstructionBinding,
 ) (domain.ReadinessVerdict, func(context.Context) error, error) {
+	if err := w.shadowReviewBlocksReady(ctx, task, binding); err != nil {
+		return domain.ReadinessVerdict{}, nil, err
+	}
 	record, failure, err := w.latestReviewState(ctx, task.RunID)
 	if err != nil {
 		return domain.ReadinessVerdict{}, nil, err
@@ -3360,6 +3487,15 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		// environmental and still propagates for retry. The already-published
 		// PR carries no binding on this held item, matching the recipe re-gate's
 		// pre-existing behavior across axes (tracked as a follow-up, not #527).
+		if errors.Is(err, errShadowReviewStopped) {
+			return productionTaskOutcome{}, fmt.Errorf(
+				"shadow review stopped after publication completed: %w",
+				domain.ErrParentKeyMismatch,
+			)
+		}
+		if errors.Is(err, errShadowReviewBlocksReady) {
+			return productionTaskOutcome{}, nil
+		}
 		if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
 			return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
 		}

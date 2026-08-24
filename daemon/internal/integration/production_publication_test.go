@@ -1450,7 +1450,7 @@ func TestProductionClassifierPersistsAnnotationAndEscalatesLowConfidenceP1(t *te
 			return err
 		}
 		if item.Type != domain.AttentionReviewDispute ||
-			item.Offers(domain.ActionAdjudicate) ||
+			!item.Offers(domain.ActionAdjudicate) ||
 			!item.Offers(domain.ActionDiscuss) || !item.Offers(domain.ActionStop) {
 			t.Fatalf("classifier ceiling attention = %#v", item)
 		}

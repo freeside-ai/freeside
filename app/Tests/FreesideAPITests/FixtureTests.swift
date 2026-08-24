@@ -11,7 +11,7 @@ import Testing
         .review_diminishing_returns: [
             .finish_now, .apply_then_finish, .continue_under_policy, .convert_to_policy,
         ],
-        .review_dispute: [.adjudicate, .discuss, .stop],
+        .review_dispute: [.approve, .adjudicate, .discuss, .stop],
         .review_contradiction: [.recover_review],
         .review_configuration: [.adopt_review_configuration, .discuss, .stop],
         .finding_adjudication: [

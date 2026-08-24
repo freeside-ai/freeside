@@ -1699,13 +1699,9 @@ func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 				item.Status != status {
 				t.Fatalf("reused legacy dispute = %#v", item)
 			}
-			if status == domain.StatusOpen {
-				if item.ItemVersion != 2 || item.Offers(domain.ActionAdjudicate) ||
-					!item.Offers(domain.ActionDiscuss) || !item.Offers(domain.ActionStop) {
-					t.Fatalf("repaired legacy dispute = %#v", item)
-				}
-			} else if item.ItemVersion != 1 || !item.Offers(domain.ActionAdjudicate) {
-				t.Fatalf("closed legacy dispute was rewritten = %#v", item)
+			if item.ItemVersion != 1 || !item.Offers(domain.ActionAdjudicate) ||
+				!item.Offers(domain.ActionDiscuss) || !item.Offers(domain.ActionStop) {
+				t.Fatalf("routed dispute changed = %#v", item)
 			}
 		})
 	}

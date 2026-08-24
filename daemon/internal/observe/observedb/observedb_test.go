@@ -57,7 +57,9 @@ var wantSurface = map[string]bool{
 	"Snapshot.Admissions":                       true,
 	"Snapshot.Attempt":                          true,
 	"Snapshot.AttentionItems":                   true,
+	"Snapshot.ClassifierSamples":                true,
 	"Snapshot.Observation":                      true,
+	"Snapshot.ShadowReviews":                    true,
 	"Snapshot.LastStage":                        true,
 	"Snapshot.PublicationInvocationID":          true,
 	"Store":                                     true,
@@ -438,6 +440,87 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 			}
 		})
 	}
+}
+
+func TestObserveSnapshotProjectsShadowEvidence(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	st, err := store.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	now := time.Date(2026, 8, 24, 15, 0, 0, 0, time.UTC)
+	run := domain.Run{
+		ID: "run-shadow-observe", ProjectID: "project-shadow",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+	}
+	routed, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-routed", RunID: run.ID, Round: 1,
+		Provider: "openai", ModelConfiguration: "codex/test",
+		ConfigurationDigest: observedShadowDigest("a"), InstructionDigest: observedShadowDigest("b"),
+		CostOwner: "routed", BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40),
+		CompletedAt: now, CompletionEvidence: observedShadowDigest("c"), Outcome: domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := domain.Finding{
+		ID: "shadow-observed-finding", RunID: run.ID, Source: string(domain.ShadowReviewClaudeLocal),
+		Severity: domain.FindingSeverityP2,
+		Location: &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1},
+		Message:  "shadow observation", RawText: "shadow observation", CreatedAt: now,
+	}
+	shadow, err := domain.NewShadowReviewRecord(domain.ShadowReviewRecord{
+		InvocationID: "shadow-review-observed", RunID: run.ID, ShadowedRound: 1,
+		Source: domain.ShadowReviewClaudeLocal, Provider: "anthropic",
+		ModelConfiguration: "claude/test", ConfigurationDigest: observedShadowDigest("d"),
+		InstructionDigest: routed.InstructionDigest, CostOwner: "shadow",
+		BaseSHA: routed.BaseSHA, HeadSHA: routed.HeadSHA, CompletedAt: now,
+		CompletionEvidence: observedShadowDigest("e"), Outcome: domain.ReviewFindings,
+		FindingIDs: []domain.FindingID{finding.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	classification := domain.Classification{
+		FindingID: finding.ID, Version: 1,
+		Materiality: "high", Confidence: "low", Note: "producer=deterministic/test; observation",
+	}
+	sample := domain.ClassifierAccuracySample{
+		RunID: run.ID, FindingID: finding.ID, ClassificationVersion: 1,
+		ShadowInvocationID: shadow.InvocationID,
+		Assessment:         domain.ClassifierAssessmentIndeterminate, RecordedAt: now,
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		if err := tx.PutReviewRecord(ctx, routed, nil); err != nil {
+			return err
+		}
+		if err := tx.PutShadowReviewRecord(ctx, shadow, []domain.Finding{finding}); err != nil {
+			return err
+		}
+		if err := tx.PutClassification(ctx, classification); err != nil {
+			return err
+		}
+		return tx.PutClassifierAccuracySample(ctx, sample)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := (&Store{store: st}).ObserveSnapshot(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.ShadowReviews) != 1 || snapshot.ShadowReviews[0].InvocationID != shadow.InvocationID ||
+		len(snapshot.ClassifierSamples) != 1 || snapshot.ClassifierSamples[0] != sample {
+		t.Fatalf("shadow snapshot = %+v", snapshot)
+	}
+}
+
+func observedShadowDigest(seed string) domain.Digest {
+	return domain.Digest("sha256:" + strings.Repeat(seed, 64))
 }
 
 // TestExportedSurfaceStaysNarrow fails when this package grows an exported

@@ -85,16 +85,18 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) (err erro
 }
 
 type supervisionSnapshot struct {
-	RunID             domain.RunID                     `json:"run_id"`
-	State             SupervisionState                 `json:"state"`
-	Outcome           domain.RunOutcome                `json:"outcome"`
-	Reason            *domain.RunHoldReason            `json:"outcome_reason,omitempty"`
-	Terminal          *domain.ObservedInvocationStatus `json:"terminal,omitempty"`
-	Lineage           *observedb.Lineage               `json:"lineage,omitempty"`
-	Admission         *observedb.Admission             `json:"admission,omitempty"`
-	LastStage         string                           `json:"last_stage,omitempty"`
-	AttentionItems    []observedb.AttentionItem        `json:"attention_items"`
-	LastAttentionItem *observedb.AttentionItem         `json:"last_attention_item,omitempty"`
+	RunID             domain.RunID                      `json:"run_id"`
+	State             SupervisionState                  `json:"state"`
+	Outcome           domain.RunOutcome                 `json:"outcome"`
+	Reason            *domain.RunHoldReason             `json:"outcome_reason,omitempty"`
+	Terminal          *domain.ObservedInvocationStatus  `json:"terminal,omitempty"`
+	Lineage           *observedb.Lineage                `json:"lineage,omitempty"`
+	Admission         *observedb.Admission              `json:"admission,omitempty"`
+	LastStage         string                            `json:"last_stage,omitempty"`
+	AttentionItems    []observedb.AttentionItem         `json:"attention_items"`
+	LastAttentionItem *observedb.AttentionItem          `json:"last_attention_item,omitempty"`
+	ShadowReviews     []domain.ShadowReviewRecord       `json:"shadow_reviews"`
+	ClassifierSamples []domain.ClassifierAccuracySample `json:"classifier_samples"`
 }
 
 func writeSnapshot(out io.Writer, current observedb.Snapshot) error {
@@ -104,6 +106,7 @@ func writeSnapshot(out io.Writer, current observedb.Snapshot) error {
 		Outcome: conclusion.Outcome, Reason: conclusion.Reason, Terminal: conclusion.Terminal,
 		Lineage: current.Attempt, LastStage: current.LastStage,
 		AttentionItems: current.AttentionItems,
+		ShadowReviews:  current.ShadowReviews, ClassifierSamples: current.ClassifierSamples,
 	}
 	if len(current.AttentionItems) > 0 {
 		last := current.AttentionItems[len(current.AttentionItems)-1]

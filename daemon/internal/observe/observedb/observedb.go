@@ -77,12 +77,14 @@ type Lineage struct {
 // run's observation, production-attempt lineage, open attention, recorded
 // admission identities, and authenticated publication-completion identity.
 type Snapshot struct {
-	Observation             domain.RunObservation `json:"observation"`
-	LastStage               string                `json:"-"`
-	PublicationInvocationID domain.InvocationID   `json:"-"`
-	Attempt                 *Lineage              `json:"lineage,omitempty"`
-	AttentionItems          []AttentionItem       `json:"attention_items"`
-	Admissions              []Admission           `json:"admissions"`
+	Observation             domain.RunObservation             `json:"observation"`
+	LastStage               string                            `json:"-"`
+	PublicationInvocationID domain.InvocationID               `json:"-"`
+	Attempt                 *Lineage                          `json:"lineage,omitempty"`
+	AttentionItems          []AttentionItem                   `json:"attention_items"`
+	Admissions              []Admission                       `json:"admissions"`
+	ShadowReviews           []domain.ShadowReviewRecord       `json:"shadow_reviews"`
+	ClassifierSamples       []domain.ClassifierAccuracySample `json:"classifier_samples"`
 }
 
 // Open opens the daemon's database at path. Options are empty by design: the
@@ -146,6 +148,16 @@ func (s *Store) ObserveSnapshot(ctx context.Context, runID domain.RunID) (Snapsh
 		}
 		snapshot.AttentionItems = []AttentionItem{}
 		snapshot.Admissions = []Admission{}
+		snapshot.ShadowReviews = []domain.ShadowReviewRecord{}
+		snapshot.ClassifierSamples = []domain.ClassifierAccuracySample{}
+		snapshot.ShadowReviews, err = tx.ListShadowReviewRecords(ctx, runID)
+		if err != nil {
+			return err
+		}
+		snapshot.ClassifierSamples, err = tx.ListClassifierAccuracySamples(ctx, runID)
+		if err != nil {
+			return err
+		}
 
 		if run.CampaignID != "" {
 			attempt, err := tx.GetProductionAttempt(ctx, run.CampaignID, run.AttemptNumber)

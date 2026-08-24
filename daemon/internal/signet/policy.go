@@ -19,7 +19,7 @@ var allowedActionsByType = map[domain.AttentionType]map[domain.Action]struct{}{
 		domain.ActionContinueUnderPolicy, domain.ActionConvertToPolicy,
 	),
 	domain.AttentionReviewDispute: actionSet(
-		domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop,
+		domain.ActionApprove, domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop,
 	),
 	domain.AttentionReviewContradiction: actionSet(domain.ActionRecoverReview),
 	domain.AttentionReviewConfiguration: actionSet(
