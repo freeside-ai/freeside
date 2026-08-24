@@ -25,7 +25,7 @@ func TestReviewConfigurationRecoveryMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 51 {
+	if got := rawVersion(t, db); got != 52 {
 		t.Fatalf("schema version = %d, want 51", got)
 	}
 	var count int
@@ -380,9 +380,8 @@ func TestAdmissionGateRejectsAnIneffectiveReviewConfigurationRecovery(t *testing
 		}),
 	})
 	identity := domain.AuthIdentity{
-		ID: "auth-config-recovery", Provider: "claude", AuthStoreMutationLease: true,
-		AuthStoreVolume: "provider-cred", MaxParallelExecutions: 1,
-		RefreshStrategy: domain.RefreshOnDemand,
+		ID: "auth-config-recovery", Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, transition.OccurredAt)

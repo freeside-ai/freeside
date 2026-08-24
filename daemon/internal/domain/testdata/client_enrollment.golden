@@ -1,0 +1,11 @@
+{
+  "id": "enroll-claude-owner-cli",
+  "auth_identity_id": "auth-claude-owner",
+  "harness_client": "claude_code",
+  "route": "anthropic_claude_subscription",
+  "auth_method": "setup_token",
+  "credential_mode": "subscription_contained",
+  "refresh_strategy": "refresh_on_demand",
+  "supports_read_only_auth_snapshot": true,
+  "account_binding": "acct-claude-owner-7f3a"
+}

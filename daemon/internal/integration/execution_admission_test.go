@@ -25,8 +25,8 @@ var (
 	// capacity; parallelism tests copy this identity and set the exact limit.
 	testIdentity = domain.AuthIdentity{
 		ID: "auth-claude-owner", Provider: "claude", AuthStoreMutationLease: true,
-		AuthStoreVolume:       "claude-owner-credentials",
-		MaxParallelExecutions: 64, RefreshStrategy: domain.RefreshOnDemand,
+		MaxParallelExecutions: 64,
+		Interim:               domain.InterimClientFacts{AuthStoreVolume: "claude-owner-credentials", RefreshStrategy: domain.RefreshOnDemand},
 	}
 )
 

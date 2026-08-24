@@ -35,8 +35,8 @@ func newAdmissionFixture(t *testing.T, mutate func(*domain.ExecutionAdmissionInp
 	}
 	identity := domain.AuthIdentity{
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-		AuthStoreVolume:       "provider-cred",
-		MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+		MaxParallelExecutions: 1,
+		Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	identityID := identity.ID
 	in := domain.ExecutionAdmissionInput{

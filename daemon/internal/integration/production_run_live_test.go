@@ -237,14 +237,12 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	// against. It is an operator precondition in production; the harness
 	// records it so a fresh state root is runnable.
 	identity := domain.AuthIdentity{
-		ID: env.authIdentityID, Provider: "claude", AuthStoreMutationLease: true,
-		AuthStoreVolume: env.authVolume, MaxParallelExecutions: 1,
-		RefreshStrategy: domain.RefreshOnDemand,
+		ID: env.authIdentityID, Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		Interim: domain.InterimClientFacts{AuthStoreVolume: env.authVolume, RefreshStrategy: domain.RefreshOnDemand},
 	}
 	reviewIdentity := domain.AuthIdentity{
-		ID: env.reviewAuthIdentityID, Provider: "openai", AuthStoreMutationLease: true,
-		AuthStoreVolume: env.reviewAuthSnapshot, MaxParallelExecutions: 1,
-		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+		ID: env.reviewAuthIdentityID, Provider: "openai", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		Interim: domain.InterimClientFacts{AuthStoreVolume: env.reviewAuthSnapshot, RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true},
 	}
 	if reviewIdentity.ID == identity.ID {
 		t.Fatal("writer and Codex reviewer auth identities must be distinct")

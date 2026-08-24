@@ -109,7 +109,7 @@ VALUES (?, 'proj-1', NULL, 'blocked', 'open', NULL, 1, 1, ?)`, row.id, row.body)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 51 {
+	if got := rawVersion(t, db); got != 52 {
 		t.Fatalf("schema version = %d, want 51", got)
 	}
 	bindings := map[string]sql.NullString{}

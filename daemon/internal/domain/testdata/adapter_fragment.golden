@@ -1,0 +1,21 @@
+{
+  "encoding_version": 1,
+  "adapter_build": "codex_proto_v1@build-7",
+  "harness_build": "codex-cli 0.29.0",
+  "client_kind": "codex_cli",
+  "vendor": "codex",
+  "launch_capabilities": [
+    "context_severance",
+    "instruction_delivery",
+    "mutation_tools",
+    "read_tools",
+    "route_store_contract",
+    "structured_output"
+  ],
+  "sendable_efforts": [
+    "medium",
+    "high",
+    "max"
+  ],
+  "digest": "sha256:f37088cecbdc7f0b98601729cadc96795867cef126e405d85a525dc4869d6a78"
+}

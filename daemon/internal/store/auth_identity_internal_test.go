@@ -114,7 +114,7 @@ func TestAuthIdentityFieldsCrossChecked(t *testing.T) {
 		},
 		{
 			"refresh strategy rewritten in the body alone",
-			`UPDATE auth_identities SET body = json_set(body, '$.identity.refresh_strategy', 'refresh_external') WHERE id = 'auth-1'`,
+			`UPDATE auth_identities SET body = json_set(body, '$.identity.interim.refresh_strategy', 'refresh_external') WHERE id = 'auth-1'`,
 		},
 		{
 			// recorded_at orders revisions, so moving it is how a superseded
@@ -129,7 +129,7 @@ func TestAuthIdentityFieldsCrossChecked(t *testing.T) {
 		{
 			"snapshot support claimed in the body alone",
 			`UPDATE auth_identities
-			 SET body = json_set(body, '$.identity.supports_read_only_auth_snapshot', json('true')) WHERE id = 'auth-1'`,
+			 SET body = json_set(body, '$.identity.interim.supports_read_only_auth_snapshot', json('true')) WHERE id = 'auth-1'`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -140,8 +140,8 @@ func TestAuthIdentityFieldsCrossChecked(t *testing.T) {
 			t.Cleanup(func() { _ = s.Close() })
 			identity := domain.AuthIdentity{
 				ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-				AuthStoreVolume:       "provider-cred",
-				MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+				MaxParallelExecutions: 1,
+				Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 			}
 			if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
 				return tx.RecordAuthIdentity(ctx, identity, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))

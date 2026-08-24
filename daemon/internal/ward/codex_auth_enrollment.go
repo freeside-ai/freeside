@@ -148,8 +148,11 @@ func EnrollCodexAuth(
 	}
 	identity := domain.AuthIdentity{
 		ID: cfg.AuthIdentityID, Provider: "openai", AuthStoreMutationLease: true,
-		AuthStoreVolume: storePath, MaxParallelExecutions: 1,
-		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+		MaxParallelExecutions: 1, Enabled: true,
+		Interim: domain.InterimClientFacts{
+			AuthStoreVolume: storePath, RefreshStrategy: domain.RefreshOnDemand,
+			SupportsReadOnlyAuthSnapshot: true,
+		},
 	}
 	retryLiveStore := false
 	if recovered, found, err := cfg.Journal.RecoverableVerified(ctx, identity); err != nil {

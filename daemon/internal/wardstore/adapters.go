@@ -570,7 +570,7 @@ func (a *Leaser) AuthStoreVolume(
 		if err != nil {
 			return err
 		}
-		volume = identity.AuthStoreVolume
+		volume = identity.Interim.AuthStoreVolume
 		return nil
 	})
 	if err != nil {
@@ -850,8 +850,12 @@ func (a *Enrollment) Begin(
 		case err != nil:
 			return err
 		default:
-			identity.MaxParallelExecutions = stored.MaxParallelExecutions
-			if identity != stored {
+			// The fixed-bindings predicate, not whole-record equality: the
+			// operator fields (enabled, cost owner, budget) and the set-once
+			// account binding may lawfully differ from what enrollment
+			// constructs, and comparing them here would refuse re-enrollment
+			// of an identity the operator has since characterized.
+			if !stored.SameFixedBindings(identity) {
 				return fmt.Errorf("existing Codex auth identity has incompatible fixed bindings: %w",
 					domain.ErrImmutableTransition)
 			}
@@ -996,8 +1000,7 @@ func (a *Enrollment) RecoverableVerified(
 		if err != nil {
 			return err
 		}
-		identity.MaxParallelExecutions = stored.MaxParallelExecutions
-		if identity != stored {
+		if !stored.SameFixedBindings(identity) {
 			return fmt.Errorf("existing Codex auth identity has incompatible fixed bindings: %w",
 				domain.ErrImmutableTransition)
 		}

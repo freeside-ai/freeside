@@ -118,8 +118,8 @@ func TestHandoffJournalColumnsAreCrossChecked(t *testing.T) {
 			t.Cleanup(func() { _ = s.Close() })
 			identity := domain.AuthIdentity{
 				ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-				AuthStoreVolume:       "provider-cred",
-				MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+				MaxParallelExecutions: 1,
+				Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 			}
 			at := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 			if err := s.WriteInternal(ctx, func(tx *InternalTx) error {

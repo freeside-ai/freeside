@@ -1,0 +1,14 @@
+{
+  "auth_identity_id": "auth-claude-owner",
+  "holder": "inv-1",
+  "fence": 1,
+  "acquired_at": "2026-01-02T03:04:05Z",
+  "expires_at": "2026-01-02T03:09:05Z",
+  "released_at": null,
+  "generation_binding": {
+    "enrollment_id": "enroll-claude-owner-cli",
+    "generation": 3,
+    "auth_store_volume": "claude-owner-cli-store",
+    "store_manifest_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+  }
+}

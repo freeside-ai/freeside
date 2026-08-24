@@ -77,7 +77,7 @@ func TestCurrentImportStartsMigrationAndReconstruction(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 51 {
+	if got := rawVersion(t, db); got != 52 {
 		t.Fatalf("schema version = %d, want 51", got)
 	}
 
@@ -328,8 +328,8 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 		}
 		if err := tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
 			ID: identityID, Provider: "claude", AuthStoreMutationLease: true,
-			AuthStoreVolume:       "provider-cred",
-			MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+			MaxParallelExecutions: 1,
+			Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 		}, admission.AdmittedAt); err != nil {
 			return err
 		}
@@ -364,6 +364,7 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 				[]any{
 					admission.InvocationID, admission.ID, admission.RunID, admission.StageID,
 					admission.AttemptID, admission.OperatingMode, identity,
+					nil, nil, nil,
 					formatTime(admission.AdmittedAt), body,
 				},
 				selectExecutionAdmissionBodySQL, []any{admission.InvocationID}, body)

@@ -1,9 +1,16 @@
 {
   "id": "auth-claude-owner",
   "provider": "claude",
+  "account_binding": "acct-claude-owner-7f3a",
+  "usage_pool": "claude-owner-subscription",
+  "budget": 500000,
   "auth_store_mutation_lease": true,
-  "auth_store_volume": "claude-owner-credentials",
   "max_parallel_executions": 1,
-  "refresh_strategy": "refresh_on_demand",
-  "supports_read_only_auth_snapshot": false
+  "enabled": true,
+  "cost_owner": "owner",
+  "interim": {
+    "auth_store_volume": "claude-owner-credentials",
+    "refresh_strategy": "refresh_on_demand",
+    "supports_read_only_auth_snapshot": false
+  }
 }

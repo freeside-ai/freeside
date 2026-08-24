@@ -1,0 +1,10 @@
+{
+  "encoding_version": 1,
+  "stage": "review",
+  "writer": false,
+  "output_contract": "review-findings/v3",
+  "severance": true,
+  "session_mode": "one_shot",
+  "auxiliary_inference": "forbidden",
+  "digest": "sha256:a3c077d3202e7218f405162176b564d5c5853628a0bf06b38b342db18174a1cc"
+}

@@ -505,15 +505,80 @@ func TestGolden(t *testing.T) {
 	}
 
 	// The provider identity the stage below runs under, and a live lease on
-	// its auth store.
+	// its auth store. The identity carries the narrowed §5.4 shape: account
+	// and operator fields on the identity, the interim client facts under
+	// Interim until the #867 adoption moves them onto an enrollment.
 	identity := domain.AuthIdentity{
-		ID: "auth-claude-owner", Provider: "claude", AuthStoreMutationLease: true,
-		AuthStoreVolume:       "claude-owner-credentials",
-		MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+		ID: "auth-claude-owner", Provider: "claude",
+		AccountBinding: "acct-claude-owner-7f3a", UsagePool: "claude-owner-subscription",
+		Budget: 500_000, AuthStoreMutationLease: true,
+		MaxParallelExecutions: 1, Enabled: true, CostOwner: "owner",
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-owner-credentials", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	mutationLease := domain.AuthStoreMutationLease{
 		AuthIdentityID: identity.ID, Holder: "inv-1", Fence: 1,
 		AcquiredAt: ts, ExpiresAt: ts.Add(5 * time.Minute),
+	}
+
+	// One enrolled harness client on that identity, with the newest entry of
+	// its append-only store history. The Claude setup token observes no
+	// expiry, so the generation's token_expiry is the explicit null §5.4
+	// admits by design; the lease above carries the binding its fence guards.
+	enrollment := domain.ClientEnrollment{
+		ID: "enroll-claude-owner-cli", AuthIdentityID: identity.ID,
+		HarnessClient: domain.HarnessClientClaudeCode, Route: "anthropic_claude_subscription",
+		AuthMethod:      domain.AuthMethodSetupToken,
+		CredentialMode:  domain.CredentialSubscriptionContained,
+		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+		AccountBinding: identity.AccountBinding,
+	}
+	enrollmentGeneration := domain.EnrollmentGeneration{
+		EnrollmentID: enrollment.ID, Ordinal: 3,
+		AuthStoreVolume:     "claude-owner-cli-store",
+		StoreManifestDigest: stageDigest("9"),
+		LeaseFence:          1,
+		AccountBinding:      identity.AccountBinding,
+		RecordedAt:          ts,
+	}
+	boundLease := mutationLease
+	boundLease.GenerationBinding = &domain.LeaseGenerationBinding{
+		EnrollmentID: enrollment.ID, Generation: enrollmentGeneration.Ordinal,
+		AuthStoreVolume:     enrollmentGeneration.AuthStoreVolume,
+		StoreManifestDigest: enrollmentGeneration.StoreManifestDigest,
+	}
+
+	// The admitted-agent configuration objects (§5.4): fragments, the
+	// stage-owned launch, and a resolved agent. The digests inside these
+	// goldens pin the canonical encodings — a field-order or encoding change
+	// moves them visibly.
+	goldenRoute := routeFragment(t)
+	goldenAdapter := adapterFragment(t)
+	goldenOffer := offerFragment(t)
+	goldenLaunch := launchSpec(t)
+	agentIdentity := domain.AuthIdentity{
+		ID: "auth-openai-A", Provider: "openai", AccountBinding: "acct-openai-a",
+		AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
+	}
+	agentEnrollment := domain.ClientEnrollment{
+		ID: "enroll-openai-A-codex", AuthIdentityID: agentIdentity.ID,
+		HarnessClient: domain.HarnessClientCodexCLI, Route: "openai_chatgpt_codex",
+		AuthMethod:      domain.AuthMethodOAuth,
+		CredentialMode:  domain.CredentialSubscriptionContained,
+		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+		AccountBinding: agentIdentity.AccountBinding,
+	}
+	goldenAgent, err := domain.ResolveAgentDefinition(domain.AgentResolutionInput{
+		Source: domain.AgentSource{
+			Name: "sol-via-codex", Enrollment: "openai-chatgpt-A/codex",
+			Route: "openai_chatgpt_codex", Adapter: "codex_proto_v1",
+			Offer: "gpt-5.6-sol", Effort: domain.EffortMax,
+		},
+		Identity: agentIdentity, Enrollment: agentEnrollment,
+		Route: goldenRoute, Adapter: goldenAdapter, Offer: goldenOffer,
+		OfferRoute: "openai_chatgpt_codex",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	// The durable execution record for that attempt. Capabilities are passed
@@ -569,6 +634,42 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// The agent-bound (v4) variant: the §5.4 admission step 5 snapshot rides
+	// beside the existing fields, and its presence selects the new encoding
+	// version, which this golden pins through the changed content address.
+	agentIdentityID := agentIdentity.ID
+	agentAdmission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: "inv-3", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-3",
+		Backend: "fresh_vm_read_only_volume_handoff",
+		Capabilities: domain.CapabilitySnapshot{
+			domain.CapPostExitExport, domain.CapDetachableWorkspace,
+		},
+		OperatingMode:  domain.ModeAttendedDev,
+		CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile:  domain.EgressProviderOnly,
+		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
+		SpecDigest:     stageDigest("2"), PolicyDigest: resolvedPolicy.Digest, InputDigest: stageDigest("1"),
+		Base:           domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
+		Workspace:      "freeside-handoff-run-1-ws",
+		StageInputs:    &codexStageInput,
+		AuthIdentityID: &agentIdentityID,
+		AgentBinding: &domain.AdmissionAgentBinding{
+			AgentDigest:          goldenAgent.Digest,
+			LaunchDigest:         goldenLaunch.Digest,
+			LineupRevision:       stageDigest("c"),
+			EnrollmentID:         agentEnrollment.ID,
+			EnrollmentGeneration: 2,
+			StoreManifestDigest:  stageDigest("9"),
+			EffectiveEgress:      goldenRoute.InferenceAuthorities,
+			Attended:             true,
+		},
+		AdmittedAt: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapterConformance := adapterConformanceRecord(t)
 
 	waivedProfileDigest := domain.Digest("sha256:trust-profile-v1")
 	// The waived, unattended variant: both pointer-for-optional branches
@@ -1050,10 +1151,20 @@ func TestGolden(t *testing.T) {
 		{"attempt", attempt},
 		{"auth_identity", identity},
 		{"auth_store_mutation_lease", mutationLease},
+		{"auth_store_mutation_lease_bound", boundLease},
+		{"client_enrollment", enrollment},
+		{"enrollment_generation", enrollmentGeneration},
+		{"route_fragment", goldenRoute},
+		{"adapter_fragment", goldenAdapter},
+		{"offer_fragment", goldenOffer},
+		{"launch_spec", goldenLaunch},
+		{"agent_definition", goldenAgent},
 		{"stage_input_snapshot", stageInputs},
 		{"stage_input_snapshot_codex", codexStageInput},
 		{"execution_admission", admission},
 		{"execution_admission_waived", waivedAdmission},
+		{"execution_admission_agent", agentAdmission},
+		{"adapter_conformance", adapterConformance},
 		{"execution_export", export},
 		{"current_import_start", currentImportStart},
 		{"project_image", projectImage},

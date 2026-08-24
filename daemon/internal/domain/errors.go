@@ -79,6 +79,15 @@ var (
 	ErrInvalidElaborationSourceKind     = errors.New("invalid elaboration source kind")
 	ErrInvalidProductionAttemptKind     = errors.New("invalid production attempt kind")
 	ErrInvalidFindingSeverity           = errors.New("invalid finding severity")
+	ErrInvalidHarnessClientKind         = errors.New("invalid harness client kind")
+	ErrInvalidAuthMethod                = errors.New("invalid auth method")
+	ErrInvalidAgentVendor               = errors.New("invalid agent vendor")
+	ErrInvalidStageName                 = errors.New("invalid stage name")
+	ErrInvalidEffortLevel               = errors.New("invalid effort level")
+	ErrInvalidIdentityStability         = errors.New("invalid identity stability")
+	ErrInvalidLaunchCapability          = errors.New("invalid launch capability")
+	ErrInvalidAuxiliaryInference        = errors.New("invalid auxiliary inference policy")
+	ErrInvalidSessionMode               = errors.New("invalid launch session mode")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -230,6 +239,42 @@ var (
 	ErrRequirementDefinitionMismatch = errors.New(
 		"requirement resolution does not match its trusted requirement definition")
 	ErrCheckProofAuthorityUnregistered = errors.New("check class has no registered proof recipe authority")
+
+	// Admitted-agent enrollment and admission failures (plan §5.4, issue
+	// #894). ErrInvalidDigest is the generic shape refusal for a field that
+	// must be a content address; digest-vs-content mismatches keep their
+	// per-type sentinels.
+	ErrInvalidDigest          = errors.New("digest is not a valid content address")
+	ErrAccountBindingMismatch = errors.New(
+		"credential account binding does not match its identity's")
+	ErrAccountBindingTaken = errors.New(
+		"account binding already belongs to another identity")
+	ErrGenerationExpiryInconsistent = errors.New(
+		"enrollment generation expiry is inconsistent with its auth method")
+	ErrGenerationExpiryInsufficient = errors.New(
+		"enrollment generation token expiry does not cover the attempt deadline plus margin")
+	ErrAgentEncodingVersion = errors.New(
+		"agent document carries an unsupported encoding version")
+	ErrAgentDigestMismatch = errors.New(
+		"agent document digest does not match its canonical content")
+	// ErrAgentJoinInvalid classifies every §5.4 resolution-join refusal: an
+	// enrollment whose route or client kind disagrees with the agent's, an
+	// effort the offer does not allow or the adapter cannot send, or a
+	// disabled identity. The wrapping message names the exact leg.
+	ErrAgentJoinInvalid = errors.New(
+		"agent resolution join is invalid")
+	ErrAgentBodyUnresolved = errors.New(
+		"agent canonical body carries a name where a resolved reference belongs")
+	ErrOfferExpired = errors.New(
+		"offer's authored not_after precedes the attempt deadline")
+	ErrLaunchCapabilityUnproved = errors.New(
+		"launch requires capabilities beyond the adapter build's proved set")
+	ErrInvalidLineupKey = errors.New(
+		"lineup policy key or selection value is malformed")
+	ErrUnknownStageRole = errors.New(
+		"stage name resolves to no canonical stage role")
+	ErrAdmissionDerivationMismatch = errors.New(
+		"admission's derived fields disagree with its admitted agent closure")
 
 	// Backend-conformance failures (issues #327, #320).
 	ErrConformanceOverclaim = errors.New(

@@ -298,7 +298,7 @@ func (b *CodexReviewLifecycle) acquireCodexReviewAuth(
 	}
 	if err := identity.Validate(); err != nil || identity.ID != launch.AuthIdentityID ||
 		identity.Provider != "openai" ||
-		!identity.AuthStoreMutationLease || !identity.SupportsReadOnlyAuthSnapshot {
+		!identity.AuthStoreMutationLease || !identity.Interim.SupportsReadOnlyAuthSnapshot {
 		return nil, fmt.Errorf(
 			"%w: Codex auth identity %q cannot support lease-held snapshot refresh",
 			ErrInvalidCodexReviewSpec, launch.AuthIdentityID,
@@ -340,7 +340,7 @@ func (b *CodexReviewLifecycle) acquireCodexReviewAuth(
 	if err != nil {
 		return nil, fmt.Errorf("%w: auth snapshot: %w", ErrInvalidCodexReviewSpec, err)
 	}
-	if identity.AuthStoreVolume != resolvedPath {
+	if identity.Interim.AuthStoreVolume != resolvedPath {
 		return nil, fmt.Errorf(
 			"%w: Codex auth identity %q is not bound to the configured host store",
 			ErrInvalidCodexReviewSpec, launch.AuthIdentityID,
@@ -370,7 +370,7 @@ func (b *CodexReviewLifecycle) acquireCodexReviewAuth(
 	if expires != nil && expires.Sub(now) >= codexAuthRefreshThreshold(cfg) {
 		return guard, nil
 	}
-	if identity.RefreshStrategy != domain.RefreshOnDemand {
+	if identity.Interim.RefreshStrategy != domain.RefreshOnDemand {
 		if expires != nil && expires.Sub(now) < cfg.AccessTokenLifetimeFloor {
 			return nil, codexAuthLifetimeRefusal(cfg, launch.AuthIdentityID, *expires, now)
 		}
