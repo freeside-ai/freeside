@@ -223,10 +223,14 @@ public enum AttentionFixtures {
             )
         ]
         if type != .system_health, type != .blocked {
-            let summary = "Work on **\(key)** is ready; one decision is open."
+            let summary =
+                type == .review_dispute
+                ? "**P1 shadow finding** at `daemon/main.go:42`: the sampled reviewer found a blocking defect."
+                : "Work on **\(key)** is ready; one decision is open."
+            let label = type == .review_dispute ? "Shadow finding review-fixture" : "summary"
             agentClaims.append(
                 .init(
-                    label: "summary",
+                    label: label,
                     artifact_id: "art-sum-\(key)",
                     digest: MockContractValidation.sha256Digest(of: summary),
                     provenance: claimProvenance,

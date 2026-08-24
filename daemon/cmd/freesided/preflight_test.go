@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -121,6 +122,236 @@ func TestPreflightManifestGolden(t *testing.T) {
 		environment.publicationAuthor.BotUserID != 12345 {
 		t.Fatalf("publication author = %+v", environment.publicationAuthor)
 	}
+}
+
+func TestPreflightCoversEnabledShadowReviewConfiguration(t *testing.T) {
+	args, environment := preflightFixture(t)
+	setupToken := enableShadowReviewFixture(t, &args)
+	var stdout, stderr bytes.Buffer
+	if err := runPreflightCommandWithEnvironment(
+		t.Context(), args, &stdout, &stderr, environment,
+		time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC), "2dce6570ee23",
+	); err != nil {
+		t.Fatalf("preflight: %v; stderr=%s\nmanifest=%s", err, stderr.String(), stdout.String())
+	}
+	var manifest compositionManifest
+	if err := json.Unmarshal(stdout.Bytes(), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.ShadowReviewConfigurationDigest == "" ||
+		checkStatus(manifest, "shadow_review_configuration") != compositionPassed ||
+		checkStatus(manifest, "shadow_reviewer_image") != compositionPassed {
+		t.Fatalf("shadow preflight manifest = %+v", manifest)
+	}
+	if strings.Contains(stdout.String(), "fixture-token") || strings.Contains(stdout.String(), setupToken) {
+		t.Fatal("shadow credential material or host path leaked into the manifest")
+	}
+}
+
+func TestPreflightRejectsMalformedShadowReviewCredential(t *testing.T) {
+	args, environment := preflightFixture(t)
+	setupToken := enableShadowReviewFixture(t, &args)
+	if err := os.WriteFile(setupToken, []byte("invalid\ntoken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	err := runPreflightCommandWithEnvironment(
+		t.Context(), args, &stdout, &stderr, environment,
+		time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC), "2dce6570ee23",
+	)
+	if !errors.Is(err, errCompositionPreflight) {
+		t.Fatalf("preflight error = %v; stderr=%s", err, stderr.String())
+	}
+	var manifest compositionManifest
+	if err := json.Unmarshal(stdout.Bytes(), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if checkStatus(manifest, "shadow_review_configuration") != compositionFailed {
+		t.Fatalf("shadow review configuration check = %+v", manifest.Checks)
+	}
+}
+
+func TestPreflightShadowApprovalPrecedesProtectedAccess(t *testing.T) {
+	args, environment := preflightFixture(t)
+	enableShadowReviewFixture(t, &args)
+	environment.database.ShadowReviewError = domain.ErrShadowReviewConfigUnapproved
+	var stdout, stderr bytes.Buffer
+	err := runPreflightCommandWithEnvironment(
+		t.Context(), args, &stdout, &stderr, environment,
+		time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC), "2dce6570ee23",
+	)
+	if !errors.Is(err, errCompositionPreflight) {
+		t.Fatalf("preflight error = %v; stderr=%s", err, stderr.String())
+	}
+	var manifest compositionManifest
+	if err := json.Unmarshal(stdout.Bytes(), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if checkStatus(manifest, "shadow_review_configuration") != compositionFailed ||
+		checkStatus(manifest, "repository_base") != compositionNotRun ||
+		checkStatus(manifest, "shadow_reviewer_image") != compositionNotRun ||
+		checkStatus(manifest, "claude_credentials") != compositionNotRun ||
+		checkStatus(manifest, "codex_credentials") != compositionNotRun {
+		t.Fatalf("shadow approval ordering checks = %+v", manifest.Checks)
+	}
+	if environment.repositoryCalls != 0 || environment.authVolumeCalls != 0 ||
+		environment.codexCalls != 0 {
+		t.Fatalf("protected access calls: repository=%d auth-volume=%d codex=%d",
+			environment.repositoryCalls, environment.authVolumeCalls, environment.codexCalls)
+	}
+	for role, calls := range environment.imageCalls {
+		if calls != 0 {
+			t.Fatalf("image probe %s called %d times before shadow approval", role, calls)
+		}
+	}
+}
+
+func TestProductionPreflightDatabaseStopsAtShadowApproval(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	st, err := store.Open(ctx, dbPath, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := approveShadowReviewProfile(t)
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(
+			ctx, profile, time.Date(2026, 8, 25, 20, 0, 0, 0, time.UTC),
+		)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := preflightConfig{
+		DBPath: dbPath, Repo: profile.Repo, RepositoryID: profile.RepositoryID,
+		ApprovedRecipe: domain.Digest("sha256:" + strings.Repeat("7", 64)),
+		AuthIdentityID: "missing-claude", ReviewAuthMode: ward.CodexAuthSubscription,
+		ReviewAuthIdentityID: "missing-codex",
+		ShadowReviewImage:    "ghcr.io/x/claude@sha256:" + strings.Repeat("6", 64),
+		ExporterImage:        "ghcr.io/x/exporter@sha256:" + strings.Repeat("5", 64),
+		ReviewInputRoot:      "/var/freeside/review-inputs",
+		ShadowReviewModel:    "claude-opus", ShadowReviewReasoningEffort: "high",
+		ShadowReviewCostOwner: "subscription:shadow", ShadowReviewWorkspaceSizeMB: 4096,
+		ShadowReviewRate: 0.2,
+	}
+	inspection := (productionPreflightEnvironment{}).InspectDatabase(
+		ctx, cfg, profile.Review.ConfigDigest,
+	)
+	if !errors.Is(inspection.ShadowReviewError, domain.ErrShadowReviewConfigUnapproved) {
+		t.Fatalf("shadow approval error = %v", inspection.ShadowReviewError)
+	}
+	assertNoPostShadowApprovalDatabaseProbes(t, inspection)
+
+	shadowDigest, err := preflightShadowReviewConfigurationDigest(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := domain.NewShadowReviewConfigurationApproval(
+		domain.ShadowReviewConfigurationApprovalInput{
+			Repo: profile.Repo, RepositoryID: profile.RepositoryID,
+			Source: domain.ShadowReviewClaudeLocal, ConfigurationDigest: shadowDigest,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err = store.OpenExisting(ctx, dbPath, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		now := time.Date(2026, 8, 25, 20, 1, 0, 0, time.UTC)
+		if err := tx.RecordInactiveShadowReviewConfigurationApproval(ctx, approval, now); err != nil {
+			return err
+		}
+		return tx.ActivateShadowReviewConfigurationApproval(
+			ctx, approval.Repo, approval.Source, approval.ApprovalDigest, now,
+		)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wrongIdentity := cfg
+	wrongIdentity.RepositoryID++
+	inspection = (productionPreflightEnvironment{}).InspectDatabase(
+		ctx, wrongIdentity, profile.Review.ConfigDigest,
+	)
+	if !errors.Is(inspection.ShadowReviewError, domain.ErrShadowReviewConfigUnapproved) ||
+		!errors.Is(inspection.ShadowReviewError, domain.ErrRepositoryIdentityMismatch) {
+		t.Fatalf("target identity shadow approval error = %v", inspection.ShadowReviewError)
+	}
+	assertNoPostShadowApprovalDatabaseProbes(t, inspection)
+}
+
+func assertNoPostShadowApprovalDatabaseProbes(t *testing.T, inspection databaseInspection) {
+	t.Helper()
+	if inspection.ShadowReviewAuthorized || inspection.CredentialError != nil ||
+		inspection.ReviewCredentialError != nil ||
+		inspection.ReviewReenrollmentError != nil || inspection.ProjectImageError != nil ||
+		inspection.ProjectImageFound {
+		t.Fatalf("post-approval database probes ran: %+v", inspection)
+	}
+}
+
+func TestPreflightRejectsShadowCredentialAsReviewInstructions(t *testing.T) {
+	args, environment := preflightFixture(t)
+	setupToken := enableShadowReviewFixture(t, &args)
+	for i := range args {
+		if args[i] == "-review-instructions" {
+			args[i+1] = setupToken
+			break
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	err := runPreflightCommandWithEnvironment(
+		t.Context(), args, &stdout, &stderr, environment,
+		time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC), "2dce6570ee23",
+	)
+	if !errors.Is(err, errCompositionPreflight) {
+		t.Fatalf("preflight error = %v; stderr=%s", err, stderr.String())
+	}
+	var manifest compositionManifest
+	if err := json.Unmarshal(stdout.Bytes(), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if checkStatus(manifest, "review_instructions") != compositionFailed {
+		t.Fatalf("review instructions check = %+v", manifest.Checks)
+	}
+}
+
+func enableShadowReviewFixture(t *testing.T, args *[]string) string {
+	t.Helper()
+	var inputRoot string
+	for i, arg := range *args {
+		if arg == "-review-input-root" {
+			inputRoot = (*args)[i+1]
+			break
+		}
+	}
+	if inputRoot == "" {
+		t.Fatal("fixture has no review input root")
+	}
+	setupToken := filepath.Join(inputRoot, "claude-token")
+	if err := os.WriteFile(setupToken, []byte("fixture-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	image := "registry.test/claude@sha256:" + strings.Repeat("a", 64)
+	*args = append(*args,
+		"-shadow-review-image", image,
+		"-shadow-review-auth-snapshot", setupToken,
+		"-shadow-review-model", "claude-opus",
+		"-shadow-review-reasoning-effort", "high",
+		"-shadow-review-cost-owner", "subscription:shadow",
+		"-shadow-review-workspace-size-mb", "4096",
+		"-shadow-review-rate", "0.4",
+	)
+	return setupToken
 }
 
 // TestPreflightCredentialCheckReceivesRigAuthorizer proves the credential check

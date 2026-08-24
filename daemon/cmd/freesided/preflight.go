@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,8 +35,9 @@ import (
 )
 
 const (
-	compositionManifestVersion = "freeside-production-composition-v1"
-	preflightMaxSeedEntries    = 100_000
+	compositionManifestVersion              = "freeside-production-composition-v1"
+	preflightMaxSeedEntries                 = 100_000
+	preflightMaxShadowReviewCredentialBytes = 1 << 20
 )
 
 var errCompositionPreflight = errors.New("production composition preflight failed")
@@ -88,65 +90,73 @@ type compositionImage struct {
 }
 
 type compositionManifest struct {
-	Version                   string                 `json:"version"`
-	Status                    compositionStatus      `json:"status"`
-	Rig                       daemonlock.RigManifest `json:"rig"`
-	DaemonBuild               string                 `json:"daemon_build"`
-	ServerURL                 string                 `json:"server_url"`
-	Repository                string                 `json:"repository"`
-	RepositoryID              int64                  `json:"repository_id"`
-	BaseRef                   string                 `json:"base_ref"`
-	BaseSHA                   string                 `json:"base_sha"`
-	ProfileDigest             domain.Digest          `json:"profile_digest,omitempty"`
-	ReviewConfigurationDigest domain.Digest          `json:"review_configuration_digest,omitempty"`
-	ReviewInstructionsPresent bool                   `json:"review_instructions_present"`
-	ReviewInstructionsDigest  domain.Digest          `json:"review_instructions_digest,omitempty"`
-	BuildEgressDigest         domain.Digest          `json:"build_egress_configuration_digest"`
-	AllowedPaths              []string               `json:"allowed_paths"`
-	ClaudeAuthIdentity        domain.AuthIdentityID  `json:"claude_auth_identity"`
-	ClaudeAuthVolume          string                 `json:"claude_auth_volume"`
-	CodexAuthIdentity         domain.AuthIdentityID  `json:"codex_auth_identity"`
-	Identity                  compositionIdentity    `json:"identity"`
-	Images                    []compositionImage     `json:"images"`
-	Checks                    []compositionCheck     `json:"checks"`
+	Version                         string                 `json:"version"`
+	Status                          compositionStatus      `json:"status"`
+	Rig                             daemonlock.RigManifest `json:"rig"`
+	DaemonBuild                     string                 `json:"daemon_build"`
+	ServerURL                       string                 `json:"server_url"`
+	Repository                      string                 `json:"repository"`
+	RepositoryID                    int64                  `json:"repository_id"`
+	BaseRef                         string                 `json:"base_ref"`
+	BaseSHA                         string                 `json:"base_sha"`
+	ProfileDigest                   domain.Digest          `json:"profile_digest,omitempty"`
+	ReviewConfigurationDigest       domain.Digest          `json:"review_configuration_digest,omitempty"`
+	ShadowReviewConfigurationDigest domain.Digest          `json:"shadow_review_configuration_digest,omitempty"`
+	ReviewInstructionsPresent       bool                   `json:"review_instructions_present"`
+	ReviewInstructionsDigest        domain.Digest          `json:"review_instructions_digest,omitempty"`
+	BuildEgressDigest               domain.Digest          `json:"build_egress_configuration_digest"`
+	AllowedPaths                    []string               `json:"allowed_paths"`
+	ClaudeAuthIdentity              domain.AuthIdentityID  `json:"claude_auth_identity"`
+	ClaudeAuthVolume                string                 `json:"claude_auth_volume"`
+	CodexAuthIdentity               domain.AuthIdentityID  `json:"codex_auth_identity"`
+	Identity                        compositionIdentity    `json:"identity"`
+	Images                          []compositionImage     `json:"images"`
+	Checks                          []compositionCheck     `json:"checks"`
 }
 
 type preflightConfig struct {
-	DBPath                    string
-	RigTokenFile              string
-	ServerURL                 string
-	ContainerBin              string
-	AgentImage                string
-	ExporterImage             string
-	ReviewImage               string
-	Repo                      string
-	RepositoryCheckout        string
-	RepositoryID              int64
-	BaseRef                   string
-	BaseSHA                   string
-	ApprovedRecipe            domain.Digest
-	AuthIdentityID            domain.AuthIdentityID
-	AuthVolume                string
-	ReviewInputRoot           string
-	ReviewAuthMode            ward.CodexAuthMode
-	ReviewAuthIdentityID      domain.AuthIdentityID
-	ReviewAuthSnapshot        string
-	ReviewInstructions        string
-	PublicationStateDir       string
-	PublicationCredentialsDir string
-	ReviewModel               string
-	ReviewReasoningEffort     string
-	ReviewCostOwner           string
-	ReviewWorkspaceSizeMB     int64
-	SpecPath                  string
-	PolicyPath                string
-	PublicationPath           string
-	WorkUnitPath              string
-	ProjectID                 domain.ProjectID
-	BuildProxy                string
-	LaunchAgentLabel          string
-	AllowedPaths              []string
-	PublicationAuthor         engine.ProductionCommitAuthor
+	DBPath                      string
+	RigTokenFile                string
+	ServerURL                   string
+	ContainerBin                string
+	AgentImage                  string
+	ExporterImage               string
+	ReviewImage                 string
+	Repo                        string
+	RepositoryCheckout          string
+	RepositoryID                int64
+	BaseRef                     string
+	BaseSHA                     string
+	ApprovedRecipe              domain.Digest
+	AuthIdentityID              domain.AuthIdentityID
+	AuthVolume                  string
+	ReviewInputRoot             string
+	ReviewAuthMode              ward.CodexAuthMode
+	ReviewAuthIdentityID        domain.AuthIdentityID
+	ReviewAuthSnapshot          string
+	ReviewInstructions          string
+	PublicationStateDir         string
+	PublicationCredentialsDir   string
+	ReviewModel                 string
+	ReviewReasoningEffort       string
+	ReviewCostOwner             string
+	ReviewWorkspaceSizeMB       int64
+	ShadowReviewImage           string
+	ShadowReviewAuthSnapshot    string
+	ShadowReviewModel           string
+	ShadowReviewReasoningEffort string
+	ShadowReviewCostOwner       string
+	ShadowReviewWorkspaceSizeMB int64
+	ShadowReviewRate            float64
+	SpecPath                    string
+	PolicyPath                  string
+	PublicationPath             string
+	WorkUnitPath                string
+	ProjectID                   domain.ProjectID
+	BuildProxy                  string
+	LaunchAgentLabel            string
+	AllowedPaths                []string
+	PublicationAuthor           engine.ProductionCommitAuthor
 }
 
 type databaseInspection struct {
@@ -158,6 +168,8 @@ type databaseInspection struct {
 	OpenError               error
 	ProfileError            error
 	ReviewError             error
+	ShadowReviewError       error
+	ShadowReviewAuthorized  bool
 	CredentialError         error
 	ReviewCredentialError   error
 	ReviewReenrollmentError error
@@ -243,7 +255,12 @@ func runPreflightCommandWithEnvironment(
 	if reviewDigestErr == nil {
 		manifest.ReviewConfigurationDigest = reviewDigest
 	}
-	evaluateComposition(ctx, &manifest, cfg, environment, now, rigErr, identityErr, reviewDigestErr)
+	shadowReviewDigest, shadowReviewDigestErr := preflightShadowReviewConfigurationDigest(cfg)
+	if shadowReviewDigestErr == nil {
+		manifest.ShadowReviewConfigurationDigest = shadowReviewDigest
+	}
+	evaluateComposition(ctx, &manifest, cfg, environment, now, rigErr, identityErr,
+		reviewDigestErr, shadowReviewDigestErr)
 	body, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode composition manifest: %w", err)
@@ -293,6 +310,13 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 	flags.StringVar(&cfg.ReviewReasoningEffort, "review-reasoning-effort", "", "review reasoning effort (required)")
 	flags.StringVar(&cfg.ReviewCostOwner, "review-cost-owner", "", "review cost owner (required)")
 	flags.Int64Var(&cfg.ReviewWorkspaceSizeMB, "review-workspace-size-mb", 8192, "review workspace size")
+	flags.StringVar(&cfg.ShadowReviewImage, "shadow-review-image", "", "digest-pinned Claude shadow reviewer image (optional)")
+	flags.StringVar(&cfg.ShadowReviewAuthSnapshot, "shadow-review-auth-snapshot", "", "Claude setup-token snapshot under review-input-root")
+	flags.StringVar(&cfg.ShadowReviewModel, "shadow-review-model", "", "pinned Claude shadow review model")
+	flags.StringVar(&cfg.ShadowReviewReasoningEffort, "shadow-review-reasoning-effort", "", "Claude shadow review reasoning effort")
+	flags.StringVar(&cfg.ShadowReviewCostOwner, "shadow-review-cost-owner", "", "Claude shadow review cost owner")
+	flags.Int64Var(&cfg.ShadowReviewWorkspaceSizeMB, "shadow-review-workspace-size-mb", 8192, "Claude shadow review workspace size")
+	flags.Float64Var(&cfg.ShadowReviewRate, "shadow-review-rate", 0.2, "fallback Claude shadow review rate in [0,1]")
 	flags.StringVar(&cfg.SpecPath, "spec", "", "source specification file (required)")
 	flags.StringVar(&cfg.PolicyPath, "policy", "", "resolved policy file (required)")
 	flags.StringVar(&cfg.PublicationPath, "publication", "", "publication metadata file (required)")
@@ -323,6 +347,18 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 		cfg.PublicationPath == "" || cfg.ProjectID == "" {
 		return preflightConfig{}, errors.New("all production composition flags except -work-unit and -build-proxy are required")
 	}
+	if cfg.ShadowReviewImage != "" &&
+		(cfg.ShadowReviewAuthSnapshot == "" || cfg.ShadowReviewModel == "" ||
+			cfg.ShadowReviewReasoningEffort == "" || cfg.ShadowReviewCostOwner == "" ||
+			cfg.ShadowReviewWorkspaceSizeMB <= 0 || math.IsNaN(cfg.ShadowReviewRate) ||
+			math.IsInf(cfg.ShadowReviewRate, 0) || cfg.ShadowReviewRate < 0 || cfg.ShadowReviewRate > 1) {
+		return preflightConfig{}, errors.New("all shadow review flags are required when -shadow-review-image enables the arm")
+	}
+	if cfg.ShadowReviewImage == "" &&
+		(cfg.ShadowReviewAuthSnapshot != "" || cfg.ShadowReviewModel != "" ||
+			cfg.ShadowReviewReasoningEffort != "" || cfg.ShadowReviewCostOwner != "") {
+		return preflightConfig{}, errors.New("-shadow-review-image is required when shadow review fields are set")
+	}
 	return cfg, nil
 }
 
@@ -330,14 +366,25 @@ func newCompositionManifest(cfg preflightConfig, daemonBuild string, now time.Ti
 	names := []string{
 		"rig_manifest", "state_database", "topic_key", "daemon_build",
 		"listener_server_url", "daemon_conflict", "repository_base", "trust_profile",
-		"review_configuration", "source_implementation_identity", "review_instructions", "seed_root",
+		"review_configuration", "shadow_review_configuration", "source_implementation_identity", "review_instructions", "seed_root",
 		"publication_authority",
 		"exporter_image", "implementer_image", "reviewer_image", "claude_credentials",
 		"codex_credentials", "build_egress_configuration", "build_egress_reachability",
 	}
+	if cfg.ShadowReviewImage != "" {
+		names = append(names, "shadow_reviewer_image")
+	}
 	checks := make([]compositionCheck, 0, len(names))
 	for _, name := range names {
 		checks = append(checks, compositionCheck{Name: name, Status: compositionNotRun, Evidence: "not evaluated"})
+	}
+	images := []compositionImage{
+		{Role: "exporter", Requested: cfg.ExporterImage},
+		{Role: "implementer", Requested: cfg.AgentImage},
+		{Role: "reviewer", Requested: cfg.ReviewImage},
+	}
+	if cfg.ShadowReviewImage != "" {
+		images = append(images, compositionImage{Role: "shadow_reviewer", Requested: cfg.ShadowReviewImage})
 	}
 	return compositionManifest{
 		Version: compositionManifestVersion, Status: compositionPassed,
@@ -347,12 +394,8 @@ func newCompositionManifest(cfg preflightConfig, daemonBuild string, now time.Ti
 		AllowedPaths:       slices.Clone(cfg.AllowedPaths),
 		ClaudeAuthIdentity: cfg.AuthIdentityID, ClaudeAuthVolume: cfg.AuthVolume,
 		CodexAuthIdentity: cfg.ReviewAuthIdentityID,
-		Images: []compositionImage{
-			{Role: "exporter", Requested: cfg.ExporterImage},
-			{Role: "implementer", Requested: cfg.AgentImage},
-			{Role: "reviewer", Requested: cfg.ReviewImage},
-		},
-		Checks: checks,
+		Images:            images,
+		Checks:            checks,
 	}
 }
 
@@ -362,10 +405,12 @@ func evaluateComposition(
 	cfg preflightConfig,
 	environment preflightEnvironment,
 	now time.Time,
-	rigErr, identityErr, reviewDigestErr error,
+	rigErr, identityErr, reviewDigestErr, shadowReviewDigestErr error,
 ) {
 	var database databaseInspection
 	daemonIdle := false
+	shadowReviewAuthorityApproved := cfg.ShadowReviewImage == ""
+	var shadowReviewCredentialErr error
 	if rigErr != nil {
 		failCheck(manifest, "rig_manifest", "rig acquisition could not be read and authenticated", "reacquire the production rig lease (#796)")
 	} else {
@@ -382,7 +427,7 @@ func evaluateComposition(
 	if cfg.DBPath == "" {
 		for _, check := range []string{
 			"state_database", "topic_key", "daemon_conflict", "trust_profile",
-			"review_configuration", "claude_credentials",
+			"review_configuration", "shadow_review_configuration", "claude_credentials",
 		} {
 			notRunCheck(manifest, check, "rig database path was unavailable")
 		}
@@ -402,7 +447,7 @@ func evaluateComposition(
 			passCheck(manifest, "topic_key", "private topic key is present and valid")
 		}
 		if database.OpenError != nil {
-			for _, check := range []string{"trust_profile", "review_configuration", "claude_credentials"} {
+			for _, check := range []string{"trust_profile", "review_configuration", "shadow_review_configuration", "claude_credentials"} {
 				notRunCheck(manifest, check, "database inspection did not complete")
 			}
 		} else {
@@ -420,13 +465,33 @@ func evaluateComposition(
 			} else {
 				passCheck(manifest, "review_configuration", "effective reviewer configuration digest is approved")
 			}
+			if cfg.ShadowReviewImage == "" {
+				passCheck(manifest, "shadow_review_configuration", "shadow review is disabled by the absent image flag")
+			} else if database.ProfileError != nil || shadowReviewDigestErr != nil ||
+				database.ShadowReviewError != nil {
+				failCheck(manifest, "shadow_review_configuration", "effective Claude shadow configuration is not approved", "approve the Claude shadow configuration digest before enabling the arm")
+			} else {
+				shadowReviewAuthorityApproved = true
+				shadowReviewCredentialErr = inspectShadowReviewSetupToken(cfg)
+				if shadowReviewCredentialErr != nil {
+					failCheck(manifest, "shadow_review_configuration", "approved Claude shadow configuration has invalid credential input", "restore the approved private Claude setup-token snapshot before enabling the arm")
+				} else {
+					passCheck(manifest, "shadow_review_configuration", "effective Claude shadow configuration digest is separately approved")
+				}
+			}
 		}
 		daemonIdle = evaluateDaemonConflict(ctx, manifest, cfg, environment)
 	}
+	shadowReviewProtectedAccessBlocked := cfg.ShadowReviewImage != "" &&
+		(!shadowReviewAuthorityApproved || shadowReviewCredentialErr != nil)
 	var repositoryInspection repositoryAuthorityInspection
 	repositoryInspectionNotRun := false
 	if err := validateCompositionRepositoryBase(cfg); err != nil {
 		repositoryInspection = repositoryAuthorityInspection{BaseError: err, AuthorityError: err}
+	} else if shadowReviewProtectedAccessBlocked {
+		err := errors.New("approved shadow review configuration is required before repository observation")
+		repositoryInspection = repositoryAuthorityInspection{BaseError: err, AuthorityError: err}
+		repositoryInspectionNotRun = true
 	} else if cfg.DBPath == "" || database.OpenError != nil || !daemonIdle {
 		err := errors.New("production database and daemon must be idle for authenticated repository observation")
 		repositoryInspection = repositoryAuthorityInspection{BaseError: err, AuthorityError: err}
@@ -467,8 +532,14 @@ func evaluateComposition(
 		))
 	}
 
-	if instructions, err := engine.SnapshotReviewHostInstructions(
-		ctx, cfg.ReviewInstructions, cfg.ReviewAuthSnapshot,
+	forbiddenInstructionPaths := []string{cfg.ReviewAuthSnapshot}
+	if cfg.ShadowReviewAuthSnapshot != "" {
+		forbiddenInstructionPaths = append(forbiddenInstructionPaths, cfg.ShadowReviewAuthSnapshot)
+	}
+	if shadowReviewProtectedAccessBlocked {
+		notRunCheck(manifest, "review_instructions", "approved shadow review configuration is required before instruction access")
+	} else if instructions, err := engine.SnapshotReviewHostInstructions(
+		ctx, cfg.ReviewInstructions, forbiddenInstructionPaths...,
 	); err != nil {
 		failCheck(manifest, "review_instructions", "review host instructions are absent, unreadable, or invalid", "provide a stable review-instructions file outside the credential snapshot")
 	} else {
@@ -484,7 +555,9 @@ func evaluateComposition(
 		passCheck(manifest, "publication_authority", "publication authority and claimed App bot identity match the repository-bound registration")
 	}
 
-	if rigErr != nil {
+	if shadowReviewProtectedAccessBlocked {
+		notRunCheck(manifest, "seed_root", "approved shadow review configuration is required before seed access")
+	} else if rigErr != nil {
 		notRunCheck(manifest, "seed_root", "rig seed root was unavailable")
 	} else if err := environment.CheckSeed(ctx, manifest.Rig.Resources.SeedRoot); err != nil {
 		failCheck(manifest, "seed_root", "canonical seed root is dirty or unreadable", "restore the exact-base clean seed checkout (#781)")
@@ -504,7 +577,28 @@ func evaluateComposition(
 		{"implementer_image", "implementer", cfg.AgentImage, []string{"sh", "git", "claude"}, "claude", 1},
 		{"reviewer_image", "reviewer", cfg.ReviewImage, []string{"sh", "git", "codex"}, "codex", 2},
 	}
+	if cfg.ShadowReviewImage != "" {
+		imageChecks = append(imageChecks, struct {
+			check       string
+			role        string
+			ref         string
+			tools       []string
+			versionTool string
+			index       int
+		}{
+			check:       "shadow_reviewer_image",
+			role:        "shadow reviewer",
+			ref:         cfg.ShadowReviewImage,
+			tools:       []string{"sh", "git", "claude"},
+			versionTool: "claude",
+			index:       3,
+		})
+	}
 	for _, image := range imageChecks {
+		if shadowReviewProtectedAccessBlocked {
+			notRunCheck(manifest, image.check, "approved shadow review configuration is required before runtime probing")
+			continue
+		}
 		if err := domain.ImageRef(image.ref).Validate(); err != nil || strings.HasPrefix(image.ref, "-") {
 			failCheck(manifest, image.check, image.role+" image reference is not a canonical digest pin", "rebuild and re-pin the "+image.role+" image")
 			continue
@@ -532,7 +626,9 @@ func evaluateComposition(
 		}
 	}
 
-	if cfg.DBPath == "" || database.OpenError != nil {
+	if shadowReviewProtectedAccessBlocked {
+		notRunCheck(manifest, "claude_credentials", "approved shadow review configuration is required before credential probing")
+	} else if cfg.DBPath == "" || database.OpenError != nil {
 		notRunCheck(manifest, "claude_credentials", "database inspection did not complete")
 	} else if database.CredentialError != nil || environment.CheckAuthVolume(
 		ctx, cfg.ContainerBin, cfg.AuthVolume, cfg.ExporterImage,
@@ -547,7 +643,9 @@ func evaluateComposition(
 		passCheck(manifest, "claude_credentials", "Claude auth identity and setup-token credential manifest are ready")
 	}
 
-	if cfg.DBPath == "" || database.OpenError != nil {
+	if shadowReviewProtectedAccessBlocked {
+		notRunCheck(manifest, "codex_credentials", "approved shadow review configuration is required before credential probing")
+	} else if cfg.DBPath == "" || database.OpenError != nil {
 		notRunCheck(manifest, "codex_credentials", "database inspection did not complete")
 	} else if credential := environment.InspectCodexCredential(
 		ctx, cfg, now, database.ReviewRefreshStrategy == domain.RefreshOnDemand,
@@ -889,10 +987,108 @@ func reviewConfigurationDigest(cfg preflightConfig) (domain.Digest, error) {
 	}, cfg.ReviewWorkspaceSizeMB, cfg.ReviewAuthMode, cfg.ReviewAuthIdentityID, cfg.ReviewCostOwner)
 }
 
+func preflightShadowReviewConfigurationDigest(cfg preflightConfig) (domain.Digest, error) {
+	if cfg.ShadowReviewImage == "" {
+		return "", nil
+	}
+	runtimeDigest, err := ward.ClaudeReviewConfigurationDigest(ward.CodexReviewConfig{
+		InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
+		ProviderEndpoints: []string{"api.anthropic.com:443"},
+		ApprovedImage:     cfg.ShadowReviewImage, ObserverImage: cfg.ExporterImage,
+		Model: cfg.ShadowReviewModel, ReasoningEffort: cfg.ShadowReviewReasoningEffort,
+	}, cfg.ShadowReviewWorkspaceSizeMB, ward.CodexAuthSetupToken,
+		cfg.AuthIdentityID, cfg.ShadowReviewCostOwner)
+	if err != nil {
+		return "", err
+	}
+	return shadowReviewCompositionDigest(runtimeDigest, cfg.ShadowReviewRate)
+}
+
+// inspectShadowReviewSetupToken mirrors the Claude review provider's token
+// shape check at preflight without returning credential bytes. Runtime remains
+// authoritative and repeats the check immediately before launch.
+func inspectShadowReviewSetupToken(cfg preflightConfig) error {
+	if cfg.ShadowReviewImage == "" {
+		return nil
+	}
+	if !canonicalAbsolute(cfg.ReviewInputRoot) || !canonicalAbsolute(cfg.ShadowReviewAuthSnapshot) {
+		return errors.New("shadow setup-token path is not canonical and absolute")
+	}
+	rootInfo, err := os.Lstat(cfg.ReviewInputRoot)
+	rootStat, rootStatOK := rootInfoSyscallStat(rootInfo)
+	if err != nil || rootInfo == nil || !rootInfo.IsDir() || rootInfo.Mode().Perm()&0o077 != 0 ||
+		!rootStatOK || !preflightUIDMatches(rootStat, os.Geteuid()) {
+		return errors.New("shadow setup-token root is not a private operator-owned directory")
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(cfg.ReviewInputRoot)
+	if err != nil {
+		return errors.New("shadow setup-token root cannot be resolved")
+	}
+	resolvedToken, err := filepath.EvalSymlinks(cfg.ShadowReviewAuthSnapshot)
+	if err != nil {
+		return errors.New("shadow setup-token snapshot cannot be resolved")
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedToken)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errors.New("shadow setup-token path leaves the review input root")
+	}
+	before, err := os.Lstat(cfg.ShadowReviewAuthSnapshot)
+	if err != nil || !before.Mode().IsRegular() {
+		return errors.New("shadow setup-token snapshot is absent or not a regular file")
+	}
+	file, err := os.OpenFile(resolvedToken, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return errors.New("shadow setup-token snapshot is unreadable")
+	}
+	opened, statErr := file.Stat()
+	openedStat, openedStatOK := rootInfoSyscallStat(opened)
+	body, readErr := io.ReadAll(io.LimitReader(file, preflightMaxShadowReviewCredentialBytes+1))
+	closeErr := file.Close()
+	after, afterErr := os.Lstat(resolvedToken)
+	if statErr != nil || readErr != nil || closeErr != nil || afterErr != nil ||
+		!opened.Mode().IsRegular() || !after.Mode().IsRegular() ||
+		!os.SameFile(before, opened) || !os.SameFile(opened, after) ||
+		!openedStatOK || opened.Mode().Perm()&0o077 != 0 || opened.Mode().Perm()&0o400 == 0 ||
+		openedStat.Nlink != 1 || !preflightUIDMatches(openedStat, os.Geteuid()) {
+		return errors.New("shadow setup-token snapshot changed while inspected")
+	}
+	if len(body) > preflightMaxShadowReviewCredentialBytes {
+		return errors.New("shadow setup-token snapshot exceeds the maximum size")
+	}
+	if opened.Size() != int64(len(body)) {
+		return errors.New("shadow setup-token snapshot changed while inspected")
+	}
+	token := body
+	if n := len(token); n > 0 && token[n-1] == '\n' {
+		token = token[:n-1]
+	}
+	if len(token) == 0 {
+		return errors.New("shadow setup-token snapshot is empty")
+	}
+	for _, b := range token {
+		if b < 0x20 || b == 0x7f {
+			return errors.New("shadow setup-token snapshot carries a control character")
+		}
+	}
+	return nil
+}
+
+func rootInfoSyscallStat(info os.FileInfo) (*syscall.Stat_t, bool) {
+	if info == nil {
+		return nil, false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return stat, ok
+}
+
+func preflightUIDMatches(stat *syscall.Stat_t, euid int) bool {
+	return stat != nil && euid >= 0 && uint64(stat.Uid) == uint64(euid)
+}
+
 func (productionPreflightEnvironment) InspectDatabase(
 	ctx context.Context, cfg preflightConfig, reviewDigest domain.Digest,
 ) databaseInspection {
-	inspection := databaseInspection{}
+	inspection := databaseInspection{ShadowReviewAuthorized: cfg.ShadowReviewImage == ""}
 	st, err := store.OpenReadOnly(ctx, cfg.DBPath, store.Options{
 		ApprovedRecipes: map[domain.Digest]bool{cfg.ApprovedRecipe: true},
 	})
@@ -933,6 +1129,13 @@ func (productionPreflightEnvironment) InspectDatabase(
 			}
 		}
 		inspection.ReviewError = tx.RequireReviewConfigurationApproved(ctx, reviewDigest)
+		inspection.ShadowReviewError = inspectPreflightShadowReviewAuthorization(
+			ctx, tx, cfg, inspection.ProfileError,
+		)
+		if inspection.ShadowReviewError != nil {
+			return nil
+		}
+		inspection.ShadowReviewAuthorized = true
 		identity, err := tx.GetAuthIdentity(ctx, cfg.AuthIdentityID)
 		if err != nil || identity.Provider != "claude" || identity.Interim.AuthStoreVolume != cfg.AuthVolume ||
 			!identity.AuthStoreMutationLease {
@@ -957,7 +1160,8 @@ func (productionPreflightEnvironment) InspectDatabase(
 		inspection.OpenError = err
 		return inspection
 	}
-	if cfg.ReviewAuthMode == ward.CodexAuthSubscription && inspection.ReviewCredentialError == nil {
+	if inspection.ShadowReviewAuthorized && cfg.ReviewAuthMode == ward.CodexAuthSubscription &&
+		inspection.ReviewCredentialError == nil {
 		adapters, err := wardstore.New(st)
 		if err != nil {
 			inspection.ReviewReenrollmentError = err
@@ -970,6 +1174,32 @@ func (productionPreflightEnvironment) InspectDatabase(
 		}
 	}
 	return inspection
+}
+
+// inspectPreflightShadowReviewAuthorization is the single boundary before the
+// database inspector touches credential identities, project-image provenance,
+// or re-enrollment state for an enabled shadow composition. The repository-
+// aggregate approval gate cannot replace the configured target identity check;
+// both must succeed.
+func inspectPreflightShadowReviewAuthorization(
+	ctx context.Context,
+	tx *store.ReadTx,
+	cfg preflightConfig,
+	profileErr error,
+) error {
+	if cfg.ShadowReviewImage == "" {
+		return nil
+	}
+	if profileErr != nil {
+		return errors.Join(profileErr, domain.ErrShadowReviewConfigUnapproved)
+	}
+	shadowDigest, err := preflightShadowReviewConfigurationDigest(cfg)
+	if err != nil {
+		return err
+	}
+	return tx.RequireShadowReviewConfigurationApproved(
+		ctx, domain.ShadowReviewClaudeLocal, shadowDigest,
+	)
 }
 
 func (productionPreflightEnvironment) AuthenticateRig(stateRoot, token string) (daemonlock.RigManifest, error) {

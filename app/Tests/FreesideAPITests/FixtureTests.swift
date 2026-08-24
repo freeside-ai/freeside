@@ -72,6 +72,14 @@ import Testing
         #expect(degraded.yield_history == clean.yield_history)
     }
 
+    @Test func reviewDisputeFixtureCarriesRenderableFindingEvidence() {
+        let item = AttentionFixtures.fixture(type: .review_dispute).item
+        let claim = item.agent_claims.first { $0.label.hasPrefix("Shadow finding") }
+
+        #expect(claim?.text?.content.contains("P1 shadow finding") == true)
+        #expect(claim.map { item.artifact_digests.contains($0.digest) } == true)
+    }
+
     /// Pins the literal ids so the `-FreesideSelect` value list mirrored
     /// in app/README.md cannot drift silently: renaming a type or
     /// reordering the inbox must show up here as a doc-sync signal.

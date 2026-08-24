@@ -12,6 +12,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -293,6 +294,194 @@ func TestClaudeDriverConfigAttendedModeDoesNotRequireProductionReview(t *testing
 	}
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("attended config without production review rejected: %v", err)
+	}
+}
+
+func TestClaudeShadowReviewConfigurationIsExplicitAndDigestBound(t *testing.T) {
+	t.Parallel()
+	cfg := claudeDriverConfig{ //nolint:gosec // fixture paths and digests, no credential material
+		AgentImage:    domain.ImageRef("ghcr.io/x/agent@sha256:" + strings.Repeat("a", 64)),
+		ExporterImage: "ghcr.io/x/exporter@sha256:" + strings.Repeat("b", 64),
+		SeedRoot:      "/var/freeside/seeds", StateDir: "/var/freeside/state",
+		ProviderEndpoints:            []string{"api.anthropic.com:443"},
+		PromptPackageFile:            "/Users/operator/prompt.md",
+		ElaborationPromptPackageFile: "/Users/operator/elaboration.md",
+		VendorInstructions:           "/Users/operator/CLAUDE.md",
+		Repo:                         "freeside-ai/candidate", RepositoryID: 42,
+		BaseRef: "main", BaseSHA: strings.Repeat("d", 40),
+		AuthIdentityID: "auth-claude-owner", AllowedPaths: []string{"daemon/**"},
+		StateRoot: "/var/freeside/app", CredentialsDir: "/var/freeside/creds",
+		OperatingMode:   domain.ModeUnattended,
+		ReviewImage:     "ghcr.io/x/codex@sha256:" + strings.Repeat("c", 64),
+		ReviewInputRoot: "/var/freeside/review-inputs", ReviewAuthMode: ward.CodexAuthSubscription,
+		ReviewAuthIdentityID: "auth-codex-owner", ReviewAuthSnapshot: "/var/freeside/review-inputs/auth.json",
+		ReviewInstructions: "/var/freeside/review-inputs/AGENTS.md",
+		ReviewModel:        "gpt-codex", ReviewReasoningEffort: "high",
+		ReviewCostOwner: "subscription:owner", ReviewWorkspaceSizeMB: 8192,
+		ShadowReviewImage:        "ghcr.io/x/claude@sha256:" + strings.Repeat("e", 64),
+		ShadowReviewAuthSnapshot: "/var/freeside/review-inputs/claude-token",
+		ShadowReviewModel:        "claude-opus", ShadowReviewReasoningEffort: "high",
+		ShadowReviewCostOwner: "subscription:shadow", ShadowReviewWorkspaceSizeMB: 4096,
+		ShadowReviewRate: 0.2,
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("valid shadow config rejected: %v", err)
+	}
+	digests, err := shadowReviewConfigurationDigests(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden.Assert(t, "shadow-review-composition-digest", []byte(digests.approval+"\n"))
+	for name, mutate := range map[string]func(*claudeDriverConfig){
+		"image": func(c *claudeDriverConfig) {
+			c.ShadowReviewImage = "ghcr.io/x/claude@sha256:" + strings.Repeat("f", 64)
+		},
+		"exporter": func(c *claudeDriverConfig) {
+			c.ExporterImage = "ghcr.io/x/exporter@sha256:" + strings.Repeat("7", 64)
+		},
+		"model":      func(c *claudeDriverConfig) { c.ShadowReviewModel = "claude-sonnet" },
+		"reasoning":  func(c *claudeDriverConfig) { c.ShadowReviewReasoningEffort = "medium" },
+		"identity":   func(c *claudeDriverConfig) { c.AuthIdentityID = "auth-other-owner" },
+		"cost owner": func(c *claudeDriverConfig) { c.ShadowReviewCostOwner = "subscription:other" },
+		"workspace":  func(c *claudeDriverConfig) { c.ShadowReviewWorkspaceSizeMB++ },
+		"rate":       func(c *claudeDriverConfig) { c.ShadowReviewRate = 0.3 },
+	} {
+		t.Run("digest binds "+name, func(t *testing.T) {
+			changed := cfg
+			mutate(&changed)
+			changedDigests, err := shadowReviewConfigurationDigests(changed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if changedDigests.approval == digests.approval {
+				t.Fatalf("%s change did not change approval digest", name)
+			}
+			if name == "rate" && changedDigests.runtime != digests.runtime {
+				t.Fatal("selection rate changed ward invocation-runtime digest")
+			}
+		})
+	}
+	for name, mutate := range map[string]func(*claudeDriverConfig){
+		"image":      func(c *claudeDriverConfig) { c.ShadowReviewImage = "" },
+		"snapshot":   func(c *claudeDriverConfig) { c.ShadowReviewAuthSnapshot = "" },
+		"model":      func(c *claudeDriverConfig) { c.ShadowReviewModel = "" },
+		"reasoning":  func(c *claudeDriverConfig) { c.ShadowReviewReasoningEffort = "" },
+		"cost owner": func(c *claudeDriverConfig) { c.ShadowReviewCostOwner = "" },
+		"workspace":  func(c *claudeDriverConfig) { c.ShadowReviewWorkspaceSizeMB = 0 },
+		"rate":       func(c *claudeDriverConfig) { c.ShadowReviewRate = 1.1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := cfg
+			mutate(&invalid)
+			if err := invalid.validate(); err == nil {
+				t.Fatalf("shadow configuration missing %s was accepted", name)
+			}
+		})
+	}
+}
+
+func TestClaudeShadowReviewConfigurationUsesSeparateExactApproval(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	cfg := claudeDriverConfig{
+		OperatingMode: domain.ModeUnattended, Repo: "example/repo", RepositoryID: 44,
+		ExporterImage:   "ghcr.io/x/exporter@sha256:" + strings.Repeat("b", 64),
+		ReviewInputRoot: "/var/freeside/review-inputs", AuthIdentityID: "auth-claude-owner",
+		ShadowReviewImage: "ghcr.io/x/claude@sha256:" + strings.Repeat("e", 64),
+		ShadowReviewModel: "claude-opus", ShadowReviewReasoningEffort: "high",
+		ShadowReviewCostOwner: "subscription:shadow", ShadowReviewWorkspaceSizeMB: 4096,
+		ShadowReviewRate: 0.2,
+	}
+	digests, err := shadowReviewConfigurationDigests(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routedDigest := domain.Digest("sha256:" + strings.Repeat("9", 64))
+	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: cfg.Repo, RepositoryID: cfg.RepositoryID,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest: domain.Digest("sha256:" + strings.Repeat("8", 64)),
+		Review:              domain.ReviewSettings{Mode: domain.ReviewFreesideInvoked, ConfigDigest: routedDigest},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 25, 19, 0, 0, 0, time.UTC)
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(ctx, profile, now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := requireApprovedShadowReviewConfiguration(ctx, st, cfg); !errors.Is(
+		err, domain.ErrShadowReviewConfigUnapproved,
+	) {
+		t.Fatalf("absent shadow approval error = %v", err)
+	}
+	disabled := cfg
+	disabled.ShadowReviewImage = ""
+	if got, err := requireApprovedShadowReviewConfiguration(ctx, st, disabled); err != nil ||
+		got != (shadowReviewDigests{}) {
+		t.Fatalf("disabled shadow approval = %#v, %v", got, err)
+	}
+	approval, err := domain.NewShadowReviewConfigurationApproval(
+		domain.ShadowReviewConfigurationApprovalInput{
+			Repo: cfg.Repo, RepositoryID: cfg.RepositoryID,
+			Source: domain.ShadowReviewClaudeLocal, ConfigurationDigest: digests.approval,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.RecordInactiveShadowReviewConfigurationApproval(ctx, approval, now); err != nil {
+			return err
+		}
+		return tx.ActivateShadowReviewConfigurationApproval(
+			ctx, approval.Repo, approval.Source, approval.ApprovalDigest, now,
+		)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	approved, err := requireApprovedShadowReviewConfiguration(ctx, st, cfg)
+	if err != nil {
+		t.Fatalf("separately approved shadow configuration rejected: %v", err)
+	}
+	if approved != digests {
+		t.Fatalf("approved digests = %#v, want %#v", approved, digests)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		return tx.RequireReviewConfigurationApproved(ctx, digests.approval)
+	}); !errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
+		t.Fatalf("shadow approval passed routed gate: %v", err)
+	}
+	changed := cfg
+	changed.ShadowReviewRate = 0.3
+	if _, err := requireApprovedShadowReviewConfiguration(ctx, st, changed); !errors.Is(
+		err, domain.ErrShadowReviewConfigUnapproved,
+	) {
+		t.Fatalf("stale rate approval error = %v", err)
+	}
+	wrongIdentity := cfg
+	wrongIdentity.RepositoryID++
+	if _, err := requireApprovedShadowReviewConfiguration(ctx, st, wrongIdentity); !errors.Is(
+		err, domain.ErrRepositoryIdentityMismatch,
+	) {
+		t.Fatalf("wrong repository identity error = %v", err)
+	}
+	wrongRepository := cfg
+	wrongRepository.Repo = "example/other"
+	if _, err := requireApprovedShadowReviewConfiguration(ctx, st, wrongRepository); !errors.Is(
+		err, domain.ErrShadowReviewConfigUnapproved,
+	) {
+		t.Fatalf("wrong repository error = %v", err)
 	}
 }
 

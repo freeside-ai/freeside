@@ -23,10 +23,21 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+func TestEnabledShadowReviewRate(t *testing.T) {
+	t.Parallel()
+	if got := enabledShadowReviewRate(nil, 0.2); got != 0 {
+		t.Fatalf("disabled shadow rate = %v, want 0", got)
+	}
+	if got := enabledShadowReviewRate(fake.NewReviewSource(), 0.2); got != 0.2 {
+		t.Fatalf("enabled shadow rate = %v, want 0.2", got)
+	}
+}
 
 type lockedBuffer struct {
 	mu  sync.Mutex
