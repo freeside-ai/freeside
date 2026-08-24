@@ -26,7 +26,8 @@ Mac and iOS match on every line unless a line says otherwise.
   layout of its own yet.
 - **Not yet:** one card type (`effect_proposal`), conversations, the evidence
   and spec viewers, proposal batches, the
-  initiative view, readiness display, push notifications.
+  initiative view, the remaining blocked-reason and waiver readiness display,
+  push notifications.
 - **Open:** twelve placement questions, listed at the end.
 
 ## Screens
@@ -67,7 +68,7 @@ lists open issues that will change the card.
 | `execution_failure` | retry, retry with capabilities, discuss, stop | Generic | #869 adds "retry with another provider profile" for quota, expiry, and capacity failures: a profile picker, with cost owner and review independence shown before confirming |
 | `agent_question` | answer and retry, answer without retry, stop | Generic | #724 |
 | `publish_blocked` | rerun trust check, choose another profile, inspect the failure, stop | Generic | |
-| `ready_for_final_review` | view PR, return to agent, mark seen, dismiss, stop | Generic | #839 (yield history), #724; readiness display below |
+| `ready_for_final_review` | view PR, return to agent, mark seen, dismiss, stop | Generic (clean/degraded title and evaluation-set details shown) | #839 (yield history), #724; remaining readiness display below |
 | `run_proposal` | start, start with changes, decline, snooze | Done for actions and facts; the full proposal artifact and the revised-digest diff are Not yet | Batch grouping (see Screens) |
 | `effect_proposal` | approve, approve with changes, decline, snooze; target picked from a daemon-supplied list | Not yet | Lands with the §5.13 effect registry in 1B |
 | `system_health` | acknowledge, run doctor, stop or resume unattended, resolve re-enrollment | Generic (posture badge and re-enrollment details shown) | #868 (account-probe items), #867 (retired-identity items) |
@@ -78,7 +79,7 @@ lists open issues that will change the card.
 | Rule | Status |
 | --- | --- |
 | Anything an agent wrote is visibly labeled as a claim, never shown as fact (plan §9) | Done for the claims section; the contract's text carrier exists, but per-card summaries are neither produced nor laid out yet, #723 |
-| Readiness shows as Blocked, ReadyClean, or ReadyDegraded with waiver IDs and who granted them, never a plain yes/no (plan §6) | Not yet |
+| Readiness shows as Blocked, ReadyClean, or ReadyDegraded with waiver IDs and who granted them, never a plain yes/no (plan §6) | Partial: ready final-review items show clean/degraded and the evaluation-set digest; blocked reasons and waiver identities are Not yet |
 | Severity uses one scale: critical, high, medium, low (plan §7) | Not yet |
 | Images load from the artifact store by digest; agent images are labeled claims (plan §4, §5.15) | Done |
 | Evidence from an older head is not shown as current after a remediation head (plan §5.15) | Not yet |

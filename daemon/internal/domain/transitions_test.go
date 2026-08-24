@@ -332,6 +332,40 @@ func TestValidateAttentionItemCreatedAtImmutable(t *testing.T) {
 	})
 }
 
+func TestValidateAttentionItemReadinessImmutable(t *testing.T) {
+	withSummary := validItemInput(domain.AttentionReadyForFinalReview)
+	withSummary.Readiness = &domain.ReadinessSummary{
+		Class: domain.ReadinessReadyClean, EvaluationSetDigest: "sha256:evaluation",
+	}
+	stored := mustItem(t, withSummary)
+
+	for name, mutate := range map[string]func(*domain.AttentionItem){
+		"remove": func(item *domain.AttentionItem) { item.Readiness = nil },
+		"replace": func(item *domain.AttentionItem) {
+			item.Readiness = &domain.ReadinessSummary{
+				Class: domain.ReadinessReadyDegraded, EvaluationSetDigest: "sha256:other",
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			updated := stored
+			updated.ItemVersion++
+			mutate(&updated)
+			if err := domain.ValidateAttentionItemTransition(stored, updated); !errors.Is(err, domain.ErrImmutableTransition) {
+				t.Fatalf("readiness %s error = %v, want ErrImmutableTransition", name, err)
+			}
+		})
+	}
+
+	legacy := mustItem(t, validItemInput(domain.AttentionReadyForFinalReview))
+	backfilled := legacy
+	backfilled.ItemVersion++
+	backfilled.Readiness = withSummary.Readiness
+	if err := domain.ValidateAttentionItemTransition(legacy, backfilled); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("backfilling legacy readiness = %v, want ErrImmutableTransition", err)
+	}
+}
+
 // TestValidateAttentionItemSupersessionImmutable pins the condition as fixed
 // at creation (issue #321): a later write may neither add, remove, nor
 // retarget it, while an advance that carries it unchanged is legal.

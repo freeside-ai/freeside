@@ -124,7 +124,7 @@ struct InboxRowView: View {
         let subject = AttentionDisplay.subject(item)
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-                Text(AttentionDisplay.title(item._type))
+                Text(AttentionDisplay.title(item))
                     .font(FreesideFont.itemTitle)
                     .foregroundStyle(Color.ink)
                 Spacer()

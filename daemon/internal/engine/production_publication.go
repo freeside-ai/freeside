@@ -1523,7 +1523,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			return productionTaskOutcome{}, err
 		}
 		if readyExists || finalizedIntent {
-			_, _, err := w.assertReviewedCandidate(
+			verdict, _, err := w.assertReviewedCandidate(
 				ctx, task, binding, checkpoint, reviewInstructions,
 			)
 			if err != nil {
@@ -1559,7 +1559,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			candidate.DispositionHistory = &history
 			if readyExists {
 				published, err := w.loadReadyPublicationOutcome(
-					ctx, task, binding, checkpoint, candidate,
+					ctx, task, binding, checkpoint, candidate, verdict,
 				)
 				if err != nil {
 					if held, handled, holdErr := w.holdPublicationRepairRefusal(
@@ -3372,7 +3372,7 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		}
 		return productionTaskOutcome{}, err
 	}
-	readyExists, err := w.hasCompatibleReadyItem(ctx, task, binding, checkpoint, published)
+	readyExists, err := w.hasCompatibleReadyItem(ctx, task, binding, checkpoint, published, verdict)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -3396,7 +3396,7 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		if err := persistReadiness(ctx); err != nil {
 			return productionTaskOutcome{}, err
 		}
-		ready, err := w.readyItem(task, checkpoint, published)
+		ready, err := w.readyItem(task, checkpoint, published, verdict)
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
@@ -3486,10 +3486,11 @@ func (w *productionPublicationWorkflow) hasCompatibleReadyItem(
 	binding productionBinding,
 	checkpoint productionVerificationCheckpoint,
 	published publish.Result,
+	verdict domain.ReadinessVerdict,
 ) (bool, error) {
 	historicalRecipes := mapsClone(w.approvedRecipes)
 	historicalRecipes[binding.image.RecipeDigest] = true
-	expectedReady, err := w.readyItemWithRecipes(task, checkpoint, published, historicalRecipes)
+	expectedReady, err := w.readyItemWithRecipes(task, checkpoint, published, verdict, historicalRecipes)
 	if err != nil {
 		return false, err
 	}
@@ -3498,7 +3499,7 @@ func (w *productionPublicationWorkflow) hasCompatibleReadyItem(
 		redactedCheckpoint := checkpoint
 		redactedCheckpoint.Artifacts = nil
 		expectedRedacted, err = w.readyItemWithRecipes(
-			task, redactedCheckpoint, published, historicalRecipes,
+			task, redactedCheckpoint, published, verdict, historicalRecipes,
 		)
 		if err != nil {
 			return false, err
@@ -3819,6 +3820,7 @@ func (w *productionPublicationWorkflow) loadReadyPublicationOutcome(
 	binding productionBinding,
 	checkpoint productionVerificationCheckpoint,
 	candidate publish.Candidate,
+	verdict domain.ReadinessVerdict,
 ) (publish.Result, error) {
 	published, found, err := w.loadPublicationOutcome(ctx, task, candidate, func(
 		ctx context.Context,
@@ -3829,7 +3831,7 @@ func (w *productionPublicationWorkflow) loadReadyPublicationOutcome(
 		published := publish.Result{
 			Identity: identity, Branch: outcome.Branch, PRNumber: outcome.PRNumber,
 		}
-		compatible, err := w.hasCompatibleReadyItem(ctx, task, binding, checkpoint, published)
+		compatible, err := w.hasCompatibleReadyItem(ctx, task, binding, checkpoint, published, verdict)
 		if err != nil {
 			return err
 		}
@@ -4449,14 +4451,16 @@ func (w *productionPublicationWorkflow) readyItem(
 	task productionPublicationTask,
 	checkpoint productionVerificationCheckpoint,
 	published publish.Result,
+	verdict domain.ReadinessVerdict,
 ) (domain.AttentionItem, error) {
-	return w.readyItemWithRecipes(task, checkpoint, published, w.approvedRecipes)
+	return w.readyItemWithRecipes(task, checkpoint, published, verdict, w.approvedRecipes)
 }
 
 func (w *productionPublicationWorkflow) readyItemWithRecipes(
 	task productionPublicationTask,
 	checkpoint productionVerificationCheckpoint,
 	published publish.Result,
+	verdict domain.ReadinessVerdict,
 	approvedRecipes map[domain.Digest]bool,
 ) (domain.AttentionItem, error) {
 	runID := task.RunID
@@ -4465,7 +4469,7 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 		ID: productionReadyItemID(task.RunID), ProjectID: task.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID},
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
-		Reason: fmt.Sprintf("Published %s#%d and completed clean production verification.",
+		Reason: fmt.Sprintf("Published %s#%d and completed production verification.",
 			checkpoint.Authorization.Repo, published.PRNumber),
 		RequestedDecision: []domain.Action{
 			domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionDismiss, domain.ActionStop,
@@ -4474,6 +4478,9 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 		PRHeadSHA: checkpoint.Imported.CommitSHA,
 		PRReference: &domain.PRReference{
 			Repo: checkpoint.Authorization.Repo, Number: published.PRNumber,
+		},
+		Readiness: &domain.ReadinessSummary{
+			Class: verdict.Class, EvaluationSetDigest: verdict.EvaluationSetDigest,
 		},
 		CommitPlanNotice: checkpoint.Imported.CommitPlanNotice,
 		ItemVersion:      1, InterruptionClass: domain.InterruptionPlannedGate,

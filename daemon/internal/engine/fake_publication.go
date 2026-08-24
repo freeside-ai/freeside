@@ -2288,6 +2288,14 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	// the terminal shape, so compare it using the durable original stamp.
 	expected.CreatedAt = current.CreatedAt
 	normalized := current
+	legacyReadiness := current.Readiness == nil && expected.Readiness != nil
+	if legacyReadiness {
+		// Ready items created before the readiness summary existed cannot be
+		// upgraded in place: the field is creation-immutable. Compare that one
+		// legacy absence against the freshly reconstructed daemon value, then
+		// keep nil as the transition baseline below.
+		normalized.Readiness = expected.Readiness
+	}
 	normalized.ItemVersion = expected.ItemVersion
 	normalized.Status = expected.Status
 	normalized.DecidedAt = expected.DecidedAt
@@ -2306,6 +2314,9 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	normalized.ReadinessInvalidation = expected.ReadinessInvalidation
 	if !reflect.DeepEqual(normalized, expected) {
 		return false
+	}
+	if legacyReadiness {
+		expected.Readiness = nil
 	}
 	if reflect.DeepEqual(current, expected) {
 		return true

@@ -38,6 +38,18 @@ import Testing
         #expect(model.actionsEnabled)
     }
 
+    @Test func degradedReadySummarySurvivesMockSyncAndDrivesDisplay() async {
+        let degraded = AttentionFixtures.degradedReady()
+        let store = await makeStore(server: MockServer(items: [degraded]))
+        let model = DecisionModel(store: store, itemID: degraded.item.id)
+
+        await model.validate()
+
+        let item = try? #require(model.snapshot?.item)
+        #expect(item?.readiness?.value1._class == .ready_degraded)
+        #expect(item.map(AttentionDisplay.title) == "Ready for final review (degraded)")
+    }
+
     @Test func rejectedPRNavigationDoesNotRecordOperatorEngagement() async {
         let server = MockServer()
         let store = await makeStore(server: server)

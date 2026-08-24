@@ -73,6 +73,7 @@
     "repo": "owner/repo",
     "number": 123
   },
+  "readiness": null,
   "commit_plan_notice": "present_but_not_honored",
   "base_freshness": null,
   "readiness_invalidation": null,

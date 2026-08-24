@@ -103,6 +103,9 @@ func TestGolden(t *testing.T) {
 	// both renders: present here (and on the decided fixture derived from
 	// it), explicit null on the blocked fixture.
 	noticeReason := domain.CommitPlanNoticePresentButNotHonored
+	readiness := domain.ReadinessSummary{
+		Class: domain.ReadinessReadyClean, EvaluationSetDigest: "sha256:evaluation-clean",
+	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-1", ProjectID: "proj-1", Subject: subject,
 		Type: domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
@@ -112,6 +115,7 @@ func TestGolden(t *testing.T) {
 		AgentClaims:       []domain.AgentClaim{agentClaim},
 		PRHeadSHA:         "cafebabe",
 		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
+		Readiness:         &readiness,
 		CommitPlanNotice:  &noticeReason,
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,
@@ -119,6 +123,10 @@ func TestGolden(t *testing.T) {
 	}, approved)
 	if err != nil {
 		t.Fatal(err)
+	}
+	degradedItem := item
+	degradedItem.Readiness = &domain.ReadinessSummary{
+		Class: domain.ReadinessReadyDegraded, EvaluationSetDigest: "sha256:evaluation-degraded",
 	}
 	item, err = item.WithTiming([]domain.AttentionDelivery{delivery})
 	if err != nil {
@@ -1121,6 +1129,7 @@ func TestGolden(t *testing.T) {
 		{"schedule_occurrence_consumed", consumedOccurrence},
 		{"schedule_event", scheduleEvent},
 		{"attention_item", item},
+		{"attention_item_readiness_degraded", degradedItem},
 		{"attention_item_blocked", blockedItem},
 		{"attention_item_decided", decidedItem},
 		{"attention_item_superseded", supersededItem},
@@ -1258,6 +1267,9 @@ func TestReadinessGoldenContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	summary := domain.ReadinessSummary{
+		Class: verdict.Class, EvaluationSetDigest: verdict.EvaluationSetDigest,
+	}
 	proofResolution, err := domain.NewRequirementResolution(domain.RequirementResolutionInput{
 		RequirementKey: "review", CheckClass: domain.CheckClassIndependentReview,
 		Kind: domain.RequirementRequired, Applicable: true, BaseDependent: true,
@@ -1283,6 +1295,7 @@ func TestReadinessGoldenContracts(t *testing.T) {
 		{"waiver_lifecycle_event", lifecycle},
 		{"validated_degraded_waiver", waiver},
 		{"check_state", state},
+		{"readiness_summary", summary},
 		{"readiness_verdict", verdict},
 	}
 	for _, fixture := range fixtures {

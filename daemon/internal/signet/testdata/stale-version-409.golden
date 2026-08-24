@@ -23,6 +23,7 @@
       "artifact_digests": [],
       "pr_head_sha": "1111111111111111111111111111111111111111",
       "pr_reference": null,
+      "readiness": null,
       "commit_plan_notice": null,
       "base_freshness": null,
       "readiness_invalidation": null,

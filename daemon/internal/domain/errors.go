@@ -149,6 +149,7 @@ var (
 	ErrInitiatorInconsistent        = errors.New("initiator fields do not match its type")
 	ErrCheckStateInconsistent       = errors.New("check state does not match its requirement resolution")
 	ErrReadinessVerdictInconsistent = errors.New("readiness verdict does not match its payload")
+	ErrReadinessSummaryInconsistent = errors.New("readiness summary does not match a ready verdict")
 
 	ErrInvalidReadinessInvalidationReason = errors.New("unknown readiness invalidation reason")
 	ErrReadinessInvalidationOutsideReview = errors.New("readiness invalidation is a ready_for_final_review semantic")

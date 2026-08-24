@@ -94,6 +94,31 @@ import Testing
                 == "non-positive pr_reference number")
     }
 
+    @Test func readinessSummaryIsReadyScopedAndLegacyOptional() {
+        let clean = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        #expect(MockContractValidation.itemValidityBreach(clean) == nil)
+        #expect(clean.readiness?.value1._class == .ready_clean)
+
+        let degraded = AttentionFixtures.degradedReady().item
+        #expect(MockContractValidation.itemValidityBreach(degraded) == nil)
+
+        var legacy = clean
+        legacy.readiness = nil
+        #expect(MockContractValidation.itemValidityBreach(legacy) == nil)
+
+        var emptyDigest = clean
+        emptyDigest.readiness?.value1.evaluation_set_digest = ""
+        #expect(
+            MockContractValidation.itemValidityBreach(emptyDigest)
+                == "empty readiness evaluation_set_digest")
+
+        var wrongType = AttentionFixtures.fixture(type: .spec_approval).item
+        wrongType.readiness = clean.readiness
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "readiness on a non-ready_for_final_review item")
+    }
+
     @Test func itemValidityBreachNamesTheFailedInvariant() {
         var empty = AttentionFixtures.fixture(type: .spec_approval).item
         empty.id = ""

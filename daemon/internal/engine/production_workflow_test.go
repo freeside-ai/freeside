@@ -32,6 +32,47 @@ func productionEntry(payload string) store.QueueEntry {
 	}
 }
 
+func TestProductionReadyItemPreservesReadinessSummary(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	w := &productionPublicationWorkflow{now: func() time.Time { return now }}
+	task := productionPublicationTask{RunID: "run-ready", ProjectID: "project-ready"}
+	checkpoint := productionVerificationCheckpoint{
+		Imported: importer.Result{CommitSHA: strings.Repeat("a", 40)},
+		Authorization: domain.CandidateAuthorization{
+			Repo: "owner/repo",
+		},
+	}
+	published := publish.Result{PRNumber: 123}
+
+	for _, verdict := range []domain.ReadinessVerdict{
+		{Class: domain.ReadinessReadyClean, EvaluationSetDigest: "sha256:evaluation-clean"},
+		{
+			Class: domain.ReadinessReadyDegraded, EvaluationSetDigest: "sha256:evaluation-degraded",
+			AdvisoryOutcomes: []domain.AdvisoryOutcomeRecord{{
+				RequirementResolutionDigest: "sha256:optional-check",
+				Outcome:                     domain.AdvisoryFailed,
+			}},
+		},
+	} {
+		t.Run(string(verdict.Class), func(t *testing.T) {
+			t.Parallel()
+			if err := verdict.Validate(); err != nil {
+				t.Fatalf("test verdict: %v", err)
+			}
+			item, err := w.readyItem(task, checkpoint, published, verdict)
+			if err != nil {
+				t.Fatalf("readyItem: %v", err)
+			}
+			if item.Readiness == nil || item.Readiness.Class != verdict.Class ||
+				item.Readiness.EvaluationSetDigest != verdict.EvaluationSetDigest {
+				t.Fatalf("ready item summary = %+v, want %q / %q",
+					item.Readiness, verdict.Class, verdict.EvaluationSetDigest)
+			}
+		})
+	}
+}
+
 func TestProductionTerminalFailureWritesAdvisoryDiagnosticOnce(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

@@ -118,6 +118,42 @@ func TestNewAttentionItemTypes(t *testing.T) {
 	}
 }
 
+func TestAttentionItemReadinessSummaryIsReadyScopedAndLegacyOptional(t *testing.T) {
+	ready := validItemInput(domain.AttentionReadyForFinalReview)
+	ready.Readiness = &domain.ReadinessSummary{
+		Class: domain.ReadinessReadyDegraded, EvaluationSetDigest: "sha256:evaluation",
+	}
+	item, err := domain.NewAttentionItem(ready, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem(degraded ready): %v", err)
+	}
+	ready.Readiness.Class = domain.ReadinessReadyClean
+	if item.Readiness.Class != domain.ReadinessReadyDegraded {
+		t.Fatal("readiness summary aliases caller-owned input")
+	}
+
+	legacy := validItemInput(domain.AttentionReadyForFinalReview)
+	if _, err := domain.NewAttentionItem(legacy, nil); err != nil {
+		t.Fatalf("legacy nil readiness rejected: %v", err)
+	}
+
+	blocked := validItemInput(domain.AttentionReadyForFinalReview)
+	blocked.Readiness = &domain.ReadinessSummary{
+		Class: domain.ReadinessBlocked, EvaluationSetDigest: "sha256:evaluation",
+	}
+	if _, err := domain.NewAttentionItem(blocked, nil); !errors.Is(err, domain.ErrReadinessSummaryInconsistent) {
+		t.Fatalf("blocked readiness error = %v, want ErrReadinessSummaryInconsistent", err)
+	}
+
+	wrongType := validItemInput(domain.AttentionSpecApproval)
+	wrongType.Readiness = &domain.ReadinessSummary{
+		Class: domain.ReadinessReadyClean, EvaluationSetDigest: "sha256:evaluation",
+	}
+	if _, err := domain.NewAttentionItem(wrongType, nil); !errors.Is(err, domain.ErrReadinessSummaryInconsistent) {
+		t.Fatalf("non-ready readiness error = %v, want ErrReadinessSummaryInconsistent", err)
+	}
+}
+
 func TestAttentionItemPRReferenceIsExactAndTypeScoped(t *testing.T) {
 	t.Run("ready item requires reference", func(t *testing.T) {
 		in := validItemInput(domain.AttentionReadyForFinalReview)

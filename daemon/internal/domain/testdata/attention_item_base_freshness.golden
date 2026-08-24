@@ -55,6 +55,10 @@
     "repo": "owner/repo",
     "number": 123
   },
+  "readiness": {
+    "class": "ready_clean",
+    "evaluation_set_digest": "sha256:evaluation-clean"
+  },
   "commit_plan_notice": "present_but_not_honored",
   "base_freshness": {
     "base_ref": "main",

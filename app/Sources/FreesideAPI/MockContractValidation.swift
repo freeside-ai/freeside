@@ -100,6 +100,14 @@ enum MockContractValidation {
         } else if item._type == .ready_for_final_review {
             return "ready_for_final_review item lacks pr_reference"
         }
+        if let readiness = item.readiness?.value1 {
+            if item._type != .ready_for_final_review {
+                return "readiness on a non-ready_for_final_review item"
+            }
+            if readiness.evaluation_set_digest.isEmpty {
+                return "empty readiness evaluation_set_digest"
+            }
+        }
         // commit_plan_notice mirrors the domain's optional daemon-derived
         // reason (#222): the generated closed enum makes the daemon's
         // ErrInvalidCommitPlanNotice arm unrepresentable here (an unknown

@@ -85,6 +85,20 @@ public enum AttentionFixtures {
         phase1Types.map { fixture(type: $0) }
     }
 
+    /// A ready fixture carrying the other valid readiness class. The default
+    /// inbox remains clean; tests and screenshots can opt into this one to
+    /// prove degraded readiness survives sync and renders distinctly.
+    public static func degradedReady() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .ready_for_final_review)
+        snapshot.item.id = "item-ready_for_final_review-degraded"
+        snapshot.item.readiness = .init(
+            value1: .init(
+                _class: .ready_degraded,
+                evaluation_set_digest: "sha256:evaluation-degraded"
+            ))
+        return snapshot
+    }
+
     /// The bytes behind the default inbox's attachment digests, for the
     /// mock's digest-addressed read path (plan §4: cards render image
     /// attachments directly from the artifact store by digest). Every
@@ -236,6 +250,14 @@ public enum AttentionFixtures {
         let prReference: Components.Schemas.AttentionItem.pr_referencePayload? =
             type == .ready_for_final_review
             ? .init(value1: .init(repo: "owner/repo", number: 123)) : nil
+        let readiness: Components.Schemas.AttentionItem.readinessPayload? =
+            type == .ready_for_final_review
+            ? .init(
+                value1: .init(
+                    _class: .ready_clean,
+                    evaluation_set_digest: "sha256:evaluation-clean"
+                ))
+            : nil
         let reviewRecoveryBinding: Components.Schemas.AttentionItem.review_recovery_bindingPayload? =
             type == .review_contradiction
             ? .init(
@@ -332,6 +354,7 @@ public enum AttentionFixtures {
                 + (findingAdjudication.map { [$0.value1.adjudication_digest] } ?? [])).sorted(),
             pr_head_sha: prHeadSHA,
             pr_reference: prReference,
+            readiness: readiness,
             commit_plan_notice: commitPlanNotice,
             review_recovery_binding: reviewRecoveryBinding,
             codex_reenrollment_recovery_binding: codexReenrollmentRecovery,

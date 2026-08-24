@@ -156,4 +156,22 @@ import Testing
                 .init(label: "Adjudication round", value: "3"),
             ])
     }
+
+    @Test func readyClassesRenderDistinctlyWithTheirEvaluationSet() {
+        let clean = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        let degraded = AttentionFixtures.degradedReady().item
+
+        #expect(AttentionDisplay.title(clean) == "Ready for final review")
+        #expect(AttentionDisplay.title(degraded) == "Ready for final review (degraded)")
+        #expect(
+            AttentionDisplay.readinessSummaryRows(clean) == [
+                .init(label: "Readiness", value: "Clean"),
+                .init(label: "Evaluation set", value: "sha256:evaluation-clean"),
+            ])
+        #expect(
+            AttentionDisplay.readinessSummaryRows(degraded) == [
+                .init(label: "Readiness", value: "Degraded"),
+                .init(label: "Evaluation set", value: "sha256:evaluation-degraded"),
+            ])
+    }
 }
