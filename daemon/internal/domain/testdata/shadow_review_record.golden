@@ -1,0 +1,19 @@
+{
+  "invocation_id": "shadow-review-run-1-1",
+  "run_id": "run-1",
+  "shadowed_round": 1,
+  "source": "claude_local",
+  "provider": "anthropic",
+  "model_configuration": "claude-opus/high",
+  "configuration_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "instruction_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "cost_owner": "subscription:owner",
+  "base_sha": "beefcafe",
+  "head_sha": "cafebabe",
+  "completed_at": "2026-01-02T03:04:05Z",
+  "completion_evidence": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "outcome": "findings",
+  "finding_ids": [
+    "shadow-find-1"
+  ]
+}

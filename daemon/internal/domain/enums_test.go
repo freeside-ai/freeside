@@ -302,6 +302,14 @@ func TestEnumValidity(t *testing.T) {
 		valids["NativeReviewProvider"] = append(valids["NativeReviewProvider"], v.valid)
 	}
 	invalids["NativeReviewProvider"] = NativeReviewProvider("").valid
+	for _, v := range AllShadowReviewSources {
+		valids["ShadowReviewSource"] = append(valids["ShadowReviewSource"], v.valid)
+	}
+	invalids["ShadowReviewSource"] = ShadowReviewSource("").valid
+	for _, v := range AllClassifierAccuracyAssessments {
+		valids["ClassifierAccuracyAssessment"] = append(valids["ClassifierAccuracyAssessment"], v.valid)
+	}
+	invalids["ClassifierAccuracyAssessment"] = ClassifierAccuracyAssessment("").valid
 	for _, v := range AllReviewFailureClasses {
 		valids["ReviewFailureClass"] = append(valids["ReviewFailureClass"], v.valid)
 	}

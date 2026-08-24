@@ -250,6 +250,25 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	shadowReviewRecord, err := domain.NewShadowReviewRecord(domain.ShadowReviewRecord{
+		InvocationID: "shadow-review-run-1-1", RunID: "run-1", ShadowedRound: 1,
+		Source: domain.ShadowReviewClaudeLocal, Provider: "anthropic",
+		ModelConfiguration:  "claude-opus/high",
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("f", 64)),
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		CostOwner:           "subscription:owner", BaseSHA: "beefcafe", HeadSHA: "cafebabe",
+		CompletedAt: ts, CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("a", 64)),
+		Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{"shadow-find-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	classifierAccuracySample := domain.ClassifierAccuracySample{
+		RunID: "run-1", FindingID: "shadow-find-1", ClassificationVersion: 1,
+		ShadowInvocationID: shadowReviewRecord.InvocationID,
+		Assessment:         domain.ClassifierAssessmentAccurate,
+		RecordedAt:         ts.Add(time.Minute),
+	}
 	reviewDisposition := domain.ReviewDispositionRecord{
 		FindingID: finding.ID, RunID: finding.RunID, Round: 1,
 		Disposition:        domain.ReviewDispositionDeferred,
@@ -1122,6 +1141,8 @@ func TestGolden(t *testing.T) {
 		{"pairing_code", pairingCode},
 		{"finding", finding},
 		{"review_record", reviewRecord},
+		{"shadow_review_record", shadowReviewRecord},
+		{"classifier_accuracy_sample", classifierAccuracySample},
 		{"review_disposition_record", reviewDisposition},
 		{"review_failure", reviewFailure},
 		{"review_recovery_transition", reviewRecovery},
