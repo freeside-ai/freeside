@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -203,6 +204,8 @@ type productionPublicationHarness struct {
 	reviewerDir               string
 	reviewSource              exec.ReviewSource
 	reviewConfigurationDigest domain.Digest
+	remediationPromptPackage  domain.Digest
+	productionDelivery        func(context.Context, exec.StartSpec) error
 	workflow                  *engine.Engine
 	invocation                domain.InvocationID
 	recipeReadTimeout         time.Duration
@@ -339,6 +342,9 @@ func newProductionPublicationHarnessWithPolicyKeysAndBoundIssue(
 		reviewConfigurationDigest: fake.DefaultReviewConfigurationDigest,
 		invocation:                submitted.InvocationID, declaration: declaration,
 	}
+	remediationPromptBody := []byte("<!-- freeside:render-prior-artifacts=v1 -->\nRemediate the adjudicated review findings.\n")
+	p.remediationPromptPackage = productionDigest(remediationPromptBody)
+	putProductionBlob(t, h, p.remediationPromptPackage, remediationPromptBody)
 	p.reviewSource = p.reviewer
 	// Mirror production: the signet decision-time adoption gate reads the
 	// engine's effective reviewer configuration. The closure reads the
@@ -368,9 +374,41 @@ func buildProductionReplay(
 	specBody []byte,
 	boundIssue *int,
 ) engine.ProductionReplay {
+	return buildProductionReplayWithContent(
+		t, h, runID, specDigest, specBody, boundIssue,
+		domain.InvocationID("inv-implement-"+string(runID)), "production change\n",
+	)
+}
+
+func buildProductionReplayWithContent(
+	t *testing.T,
+	h *publicationHarness,
+	runID domain.RunID,
+	specDigest domain.Digest,
+	specBody []byte,
+	boundIssue *int,
+	invocationID domain.InvocationID,
+	content string,
+) engine.ProductionReplay {
+	return buildProductionReplayWithContentAt(
+		t, h, runID, specDigest, specBody, boundIssue, invocationID, fakePublicationTime, content,
+	)
+}
+
+func buildProductionReplayWithContentAt(
+	t *testing.T,
+	h *publicationHarness,
+	runID domain.RunID,
+	specDigest domain.Digest,
+	specBody []byte,
+	boundIssue *int,
+	invocationID domain.InvocationID,
+	commitDate time.Time,
+	content string,
+) engine.ProductionReplay {
 	t.Helper()
 	workspace := t.TempDir()
-	writeFile(t, workspace, "README.md", "production change\n")
+	writeFile(t, workspace, "README.md", content)
 	handoff := filepath.Join(t.TempDir(), "handoff")
 	manifest, err := export.Export(os.DirFS(workspace), handoff, export.Options{})
 	if err != nil {
@@ -401,7 +439,7 @@ func buildProductionReplay(
 		t.Fatal(err)
 	}
 	options := importer.Options{
-		BaseSHA: h.baseSHA, CommitDate: fakePublicationTime,
+		BaseSHA: h.baseSHA, CommitDate: commitDate,
 		AuthorName:  productionPublicationMetadata().CommitAuthor.Name(),
 		AuthorEmail: productionPublicationMetadata().CommitAuthor.Email(),
 		Policy:      policy,
@@ -425,10 +463,54 @@ func buildProductionReplay(
 		t.Fatalf("production commit author = %q, want App bot attribution", author)
 	}
 	return engine.ProductionReplay{
-		InvocationID:    "inv-implement-run-production-publication",
+		InvocationID:    invocationID,
 		ObservedBaseSHA: h.baseSHA, HeadSHA: imported.CommitSHA,
 		Manifest: manifest, ManifestDigest: manifestDigest, ImportOptions: options,
 	}
+}
+
+func withRemediatorPushback(
+	t *testing.T,
+	h *publicationHarness,
+	replay engine.ProductionReplay,
+	findingIDs []domain.FindingID,
+	reason string,
+) engine.ProductionReplay {
+	t.Helper()
+	body, err := json.Marshal(struct {
+		Version    string             `json:"version"`
+		FindingIDs []domain.FindingID `json:"finding_ids"`
+		Reason     string             `json:"reason"`
+	}{
+		Version: "freeside.remediator-pushback/v1", FindingIDs: findingIDs, Reason: reason,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = append(body, '\n')
+	digest := productionDigest(body)
+	putProductionBlob(t, h, digest, body)
+	replay.Evidence = export.EvidenceManifest{
+		Version: export.EvidenceManifestVersion,
+		Entries: []export.EvidenceEntry{{
+			Label: "freeside.remediator_pushback", MediaType: "application/jsonl",
+			Size: int64(len(body)), Digest: export.Digest(digest),
+			Provenance: export.EvidenceProvenance{
+				ProducerClass:        export.EvidenceProducerAgent,
+				ProducerInvocationID: string(replay.InvocationID),
+				HeadBinding:          export.EvidenceHeadBound, SourceHeadSHA: replay.HeadSHA,
+				SensitivityClass: export.EvidenceSensitivityNormal,
+			},
+		}},
+	}
+	manifest, err := replay.Evidence.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestDigest := productionDigest(manifest)
+	putProductionBlob(t, h, manifestDigest, manifest)
+	replay.EvidenceManifestDigest = &manifestDigest
+	return replay
 }
 
 func productionDigest(body []byte) domain.Digest {
@@ -637,6 +719,11 @@ func (p *productionPublicationHarness) newEngineForMode(
 			}, nil
 		}),
 	}
+	productionDelivery := p.productionDelivery
+	if productionDelivery == nil {
+		productionDelivery = func(context.Context, exec.StartSpec) error { return nil }
+	}
+	options = append(options, engine.WithProductionDeliveryValidation(productionDelivery))
 	if p.judgments != nil {
 		options = append(options, engine.WithInference(p.judgments))
 	}
@@ -658,14 +745,15 @@ func (p *productionPublicationHarness) newEngineForMode(
 		options = append(options, engine.WithProductionPublication(engine.ProductionPublicationConfig{
 			WorkDir:   filepath.Join(p.workDir, "production-publication"),
 			Transport: p.transport, Publisher: p.newPublisher(t), Artifacts: p.blobs,
-			ApprovedRecipes:           approvedRecipes,
-			HoldOnly:                  holdOnly,
-			RecipeReadTimeout:         p.recipeReadTimeout,
-			HoldRetryInterval:         time.Minute,
-			Now:                       func() time.Time { return p.now },
-			ReviewSource:              p.reviewSource,
-			ReviewRecovery:            reviewRecovery,
-			ReviewConfigurationDigest: p.reviewConfigurationDigest,
+			ApprovedRecipes:                approvedRecipes,
+			RemediationPromptPackageDigest: p.remediationPromptPackage,
+			HoldOnly:                       holdOnly,
+			RecipeReadTimeout:              p.recipeReadTimeout,
+			HoldRetryInterval:              time.Minute,
+			Now:                            func() time.Time { return p.now },
+			ReviewSource:                   p.reviewSource,
+			ReviewRecovery:                 reviewRecovery,
+			ReviewConfigurationDigest:      p.reviewConfigurationDigest,
 			NewRoom: func(image domain.ProjectImage) (engine.ProductionVerificationRoom, error) {
 				if image.ID != p.image.ID {
 					return nil, domain.ErrParentKeyMismatch
@@ -778,7 +866,7 @@ func (p *productionPublicationHarness) assertReadyWithEvidence(t *testing.T, wan
 	var terminal store.QueueEntry
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		var err error
-		terminal, err = tx.GetInbox(p.ctx, string(p.invocation))
+		terminal, err = tx.GetInbox(p.ctx, string(p.replay.InvocationID))
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -1391,6 +1479,515 @@ func TestProductionReviewFindingsParkForAdjudicationWithoutReady(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProductionAdjudicatedRemediationRerunsVerificationAndReview(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	var delivered []exec.StartSpec
+	p.productionDelivery = func(_ context.Context, spec exec.StartSpec) error {
+		delivered = append(delivered, spec)
+		return nil
+	}
+	classifier := inferencefake.New()
+	classifier.Script(inference.ClassifierSiteID, inferencefake.Script{Response: inference.Response{
+		Output:       []byte(`{"materiality":"high","confidence":"high","note":"actionable"}`),
+		ComputeUnits: 3,
+	}})
+	advisoryStore, err := advisory.Open(
+		filepath.Join(t.TempDir(), "advisory.json"), 20, 16<<10,
+		advisory.WithClock(func() time.Time { return p.now }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := inference.Limits{
+		Calls: 10, ComputeUnits: 100_000, AttentionItems: 10, Starvation: time.Hour,
+	}
+	p.judgments, err = inference.New(inference.Config{
+		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
+		Binding:   inference.Binding{Provider: "fake", Model: "classifier", Driver: classifier},
+		Sites: []inference.Site{inference.ClassifierSite(inference.Budget{
+			Window: time.Hour, Site: limits, Project: limits, Global: limits,
+			MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
+		})},
+		Advisory: advisoryStore, Now: func() time.Time { return p.now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	finding := domain.Finding{
+		ID: "review-finding-remediate", RunID: p.runID,
+		Source: "codex_local", Severity: domain.FindingSeverityP1,
+		Location: &domain.FindingLocation{Path: "README.md", StartLine: 1, EndLine: 1},
+		Message:  "the production change is incomplete", RawText: "the production change is incomplete",
+		CreatedAt: p.now,
+	}
+	p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, 1), fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review findings")),
+			Findings: []domain.Finding{finding},
+		},
+	})
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
+		t.Fatalf("adjudicated review = %#v, %v", result, err)
+	}
+	// The adjudication, remediation stage, and dispatch intent are durable;
+	// a new process must resume them without reconstructing the route in memory.
+	p.restartDurableState(t)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+
+	remediationID := domain.InvocationID("inv-remediate-1-" + string(p.runID))
+	remediationStageID := domain.StageID("remediate-1-" + string(p.runID))
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		entry, err := tx.GetOutbox(p.ctx, string(remediationID))
+		if err != nil {
+			return err
+		}
+		publication, err := engine.AuthenticateRemediationInvocationTransition(
+			p.ctx, tx, entry, p.runID, remediationStageID,
+		)
+		if err != nil {
+			return err
+		}
+		if publication.CommitAuthor != productionPublicationMetadata().CommitAuthor {
+			t.Fatalf("remediation commit author = %#v", publication.CommitAuthor)
+		}
+		if _, err := engine.AuthenticateRemediationInvocationTransition(
+			p.ctx, tx, entry, "foreign-run", remediationStageID,
+		); !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Fatalf("foreign remediation run = %v, want ErrParentKeyMismatch", err)
+		}
+		if _, err := engine.AuthenticateRemediationInvocationTransition(
+			p.ctx, tx, entry, p.runID, "foreign-stage",
+		); !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Fatalf("foreign remediation stage = %v, want ErrParentKeyMismatch", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("authenticate remediation transition: %v", err)
+	}
+	p.driver.Script(remediationID, fake.StageScript{
+		PendingInspects: 1, Outcome: fake.OutcomeComplete,
+		Result: exec.StageResult{Summary: "Remediation export completed."},
+	})
+	if result, err := p.workflow.Reconcile(p.ctx); err != nil || result.InvocationsStarted != 1 {
+		t.Fatalf("remediation dispatch = %#v, %v", result, err)
+	}
+	if len(delivered) != 2 ||
+		delivered[0].StageID != domain.StageID("implement-"+string(p.runID)) ||
+		delivered[1].RunID != p.runID || delivered[1].StageID != remediationStageID ||
+		delivered[1].StageInputs == nil ||
+		delivered[1].StageInputs.PromptPackageDigest != p.remediationPromptPackage {
+		t.Fatalf("remediation delivery validation = %#v", delivered)
+	}
+	var (
+		run              domain.Run
+		admission        domain.ExecutionAdmission
+		remediationInput domain.Artifact
+	)
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		admission, err = tx.GetExecutionAdmissionRecord(p.ctx, remediationID)
+		if err != nil {
+			return err
+		}
+		remediationInput, err = tx.GetArtifact(
+			p.ctx, domain.ArtifactID("remediation-input-1-"+string(p.runID)))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inputBody, err := p.blobs.Open(remediationInput.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedInput, readErr := io.ReadAll(inputBody)
+	closeErr := inputBody.Close()
+	if err := errors.Join(readErr, closeErr); err != nil {
+		t.Fatal(err)
+	}
+	var input struct {
+		Instruction          string `json:"instruction"`
+		CandidatePatchBase64 []byte `json:"candidate_patch_base64"`
+	}
+	if err := json.Unmarshal(encodedInput, &input); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(input.Instruction) == "" ||
+		!bytes.Contains(input.CandidatePatchBase64, []byte("+production change")) {
+		t.Fatalf("remediation input did not reconstruct the candidate head: %#v", input)
+	}
+	remediated := buildProductionReplayWithContentAt(
+		t, p.publicationHarness, p.runID, run.SpecDigest,
+		submissionSpecification(string(p.runID)), nil, remediationID,
+		fakePublicationTime.Add(time.Minute),
+		"production change\nremediated review finding\n",
+	)
+	remediationExport, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: remediationID, AdmissionID: admission.ID,
+		ObservedBaseSHA: p.baseSHA, HeadSHA: remediated.HeadSHA,
+		ManifestDigest: remediated.ManifestDigest, RecordedAt: remediated.ImportOptions.CommitDate,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.RecordProductionExecutionExport(
+		p.ctx, p.store, remediationExport, remediated,
+	); err != nil {
+		t.Fatal(err)
+	}
+	p.replay = remediated
+	p.now = p.now.Add(time.Minute)
+	p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, 2), fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: remediated.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("clean remediation review")),
+		},
+	})
+	var completed engine.ReconcileResult
+	for range 4 {
+		result, err := p.reconcileLanes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		completed.InvocationsStarted += result.InvocationsStarted
+		completed.ResultsAccepted += result.ResultsAccepted
+		completed.PublicationTasksCompleted += result.PublicationTasksCompleted
+		completed.ReadyItemsCreated += result.ReadyItemsCreated
+		if completed.PublicationTasksCompleted > 0 {
+			break
+		}
+	}
+	if completed.PublicationTasksCompleted != 1 || completed.ReadyItemsCreated != 1 {
+		t.Fatalf("remediation convergence = %#v", completed)
+	}
+	if p.room.runs != 2 {
+		t.Fatalf("verification runs = %d, want one per head", p.room.runs)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		disposition, err := tx.GetFindingDisposition(p.ctx, finding.ID, 1)
+		if err != nil {
+			return err
+		}
+		if disposition.Disposition != domain.ReviewDispositionFixed ||
+			disposition.RemediationInvocationID != engine.ProductionReviewInvocationID(p.runID, 2) {
+			t.Fatalf("fixed disposition = %#v", disposition)
+		}
+		records, err := tx.ListReviewRecords(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if len(records) != 2 || records[0].HeadSHA == records[1].HeadSHA ||
+			records[0].BaseSHA != records[1].BaseSHA {
+			t.Fatalf("review history = %#v", records)
+		}
+		storedRun, err := tx.GetRun(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		attempts := 0
+		for _, stage := range storedRun.Stages {
+			for _, attempt := range stage.Attempts {
+				if attempt.InvocationID == remediationID {
+					attempts++
+				}
+			}
+		}
+		if attempts != 1 {
+			t.Fatalf("remediation attempts = %d, want exactly one", attempts)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.assertReady(t)
+}
+
+func TestProductionUndeliverableRemediationTerminalizesPerRun(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	deliveryCalls := 0
+	p.productionDelivery = func(_ context.Context, spec exec.StartSpec) error {
+		deliveryCalls++
+		if spec.StageID == domain.StageID("remediate-1-"+string(p.runID)) {
+			return errors.Join(engine.ErrProductionInputUndeliverable, exec.ErrInputTooLarge)
+		}
+		return nil
+	}
+	classifier := inferencefake.New()
+	classifier.Script(inference.ClassifierSiteID, inferencefake.Script{Response: inference.Response{
+		Output:       []byte(`{"materiality":"high","confidence":"high","note":"actionable"}`),
+		ComputeUnits: 3,
+	}})
+	advisoryStore, err := advisory.Open(
+		filepath.Join(t.TempDir(), "advisory.json"), 20, 16<<10,
+		advisory.WithClock(func() time.Time { return p.now }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := inference.Limits{
+		Calls: 10, ComputeUnits: 100_000, AttentionItems: 10, Starvation: time.Hour,
+	}
+	p.judgments, err = inference.New(inference.Config{
+		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
+		Binding:   inference.Binding{Provider: "fake", Model: "classifier", Driver: classifier},
+		Sites: []inference.Site{inference.ClassifierSite(inference.Budget{
+			Window: time.Hour, Site: limits, Project: limits, Global: limits,
+			MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
+		})},
+		Advisory: advisoryStore, Now: func() time.Time { return p.now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	finding := domain.Finding{
+		ID: "review-finding-undeliverable-remediation", RunID: p.runID,
+		Source: "codex_local", Severity: domain.FindingSeverityP1,
+		Location: &domain.FindingLocation{Path: "README.md", StartLine: 1, EndLine: 1},
+		Message:  "the production change is incomplete", RawText: "the production change is incomplete",
+		CreatedAt: p.now,
+	}
+	p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, 1), fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review findings")),
+			Findings: []domain.Finding{finding},
+		},
+	})
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
+		t.Fatalf("adjudicated review = %#v, %v", result, err)
+	}
+	remediationID := domain.InvocationID("inv-remediate-1-" + string(p.runID))
+	if result, err := p.workflow.Reconcile(p.ctx); err != nil || result.InvocationsStarted != 0 {
+		t.Fatalf("undeliverable remediation dispatch = %#v, %v", result, err)
+	}
+	if deliveryCalls != 2 {
+		t.Fatalf("delivery validation calls = %d, want initial plus remediation", deliveryCalls)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		marker, err := tx.GetOutbox(p.ctx, string(remediationID))
+		if err != nil {
+			return err
+		}
+		if !marker.Dispatched() {
+			return errors.New("undeliverable remediation marker remained pending")
+		}
+		if _, err := tx.GetInbox(p.ctx, string(remediationID)); err == nil {
+			return errors.New("remediation refusal unexpectedly recorded an inbox row")
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("read remediation refusal inbox: %w", err)
+		}
+		if _, err := tx.GetExecutionOutcomeRecord(p.ctx, remediationID); err == nil {
+			return errors.New("fresh remediation refusal unexpectedly recorded an execution outcome")
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("read fresh remediation refusal outcome: %w", err)
+		}
+		item, err := tx.GetAttentionItem(
+			p.ctx, domain.ItemID("execution-failure-"+string(remediationID)))
+		if err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionExecutionFailure || item.Subject.RunID == nil ||
+			*item.Subject.RunID != p.runID ||
+			!slices.Equal(item.RequestedDecision, []domain.Action{domain.ActionAcknowledge}) {
+			return fmt.Errorf("remediation delivery attention = %#v", item)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.restartDurableState(t)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if result, err := p.reconcileLanes(); err != nil || result.InvocationsStarted != 0 {
+		t.Fatalf("undeliverable remediation replay = %#v, %v", result, err)
+	}
+	if deliveryCalls != 2 {
+		t.Fatalf("durable replay repeated delivery validation %d times", deliveryCalls)
+	}
+}
+
+func TestProductionRemediationNoopPushbackEscalatesWithoutReverification(t *testing.T) {
+	t.Run("different commit with identical tree", func(t *testing.T) {
+		testProductionRemediationNoopPushback(t, fakePublicationTime.Add(time.Minute), false)
+	})
+	t.Run("identical commit replay", func(t *testing.T) {
+		testProductionRemediationNoopPushback(t, fakePublicationTime, true)
+	})
+}
+
+func testProductionRemediationNoopPushback(
+	t *testing.T,
+	commitDate time.Time,
+	wantIdenticalHead bool,
+) {
+	t.Helper()
+	p := newProductionPublicationHarness(t, "")
+	classifier := inferencefake.New()
+	classifier.Script(inference.ClassifierSiteID, inferencefake.Script{Response: inference.Response{
+		Output:       []byte(`{"materiality":"high","confidence":"high","note":"actionable"}`),
+		ComputeUnits: 3,
+	}})
+	advisoryStore, err := advisory.Open(
+		filepath.Join(t.TempDir(), "advisory.json"), 20, 16<<10,
+		advisory.WithClock(func() time.Time { return p.now }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := inference.Limits{
+		Calls: 10, ComputeUnits: 100_000, AttentionItems: 10, Starvation: time.Hour,
+	}
+	p.judgments, err = inference.New(inference.Config{
+		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
+		Binding:   inference.Binding{Provider: "fake", Model: "classifier", Driver: classifier},
+		Sites: []inference.Site{inference.ClassifierSite(inference.Budget{
+			Window: time.Hour, Site: limits, Project: limits, Global: limits,
+			MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
+		})},
+		Advisory: advisoryStore, Now: func() time.Time { return p.now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	finding := domain.Finding{
+		ID: "review-finding-pushback", RunID: p.runID,
+		Source: "codex_local", Severity: domain.FindingSeverityP1,
+		Location: &domain.FindingLocation{Path: "README.md", StartLine: 1, EndLine: 1},
+		Message:  "the requested fix exceeds this work unit", RawText: "the requested fix exceeds this work unit",
+		CreatedAt: p.now,
+	}
+	p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, 1), fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("pushback finding")),
+			Findings: []domain.Finding{finding},
+		},
+	})
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
+		t.Fatalf("adjudicated review = %#v, %v", result, err)
+	}
+	remediationID := domain.InvocationID("inv-remediate-1-" + string(p.runID))
+	p.driver.Script(remediationID, fake.StageScript{
+		PendingInspects: 1, Outcome: fake.OutcomeComplete,
+		Result: exec.StageResult{Summary: "Remediation declined with pushback."},
+	})
+	if result, err := p.workflow.Reconcile(p.ctx); err != nil || result.InvocationsStarted != 1 {
+		t.Fatalf("remediation dispatch = %#v, %v", result, err)
+	}
+	var (
+		run       domain.Run
+		admission domain.ExecutionAdmission
+	)
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		admission, err = tx.GetExecutionAdmissionRecord(p.ctx, remediationID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sourceHead := p.replay.HeadSHA
+	noop := buildProductionReplayWithContentAt(
+		t, p.publicationHarness, p.runID, run.SpecDigest,
+		submissionSpecification(string(p.runID)), nil, remediationID, commitDate,
+		"production change\n",
+	)
+	if got := noop.HeadSHA == p.replay.HeadSHA; got != wantIdenticalHead {
+		t.Fatalf("no-op replay head equality = %t, want %t (%s vs %s)",
+			got, wantIdenticalHead, noop.HeadSHA, p.replay.HeadSHA)
+	}
+	noop = withRemediatorPushback(
+		t, p.publicationHarness, noop, []domain.FindingID{finding.ID},
+		"the route requires an undeclared path",
+	)
+	executionExport, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: remediationID, AdmissionID: admission.ID,
+		ObservedBaseSHA: p.baseSHA, HeadSHA: noop.HeadSHA,
+		ManifestDigest:         noop.ManifestDigest,
+		EvidenceManifestDigest: noop.EvidenceManifestDigest,
+		RecordedAt:             noop.ImportOptions.CommitDate,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.RecordProductionExecutionExport(p.ctx, p.store, executionExport, noop); err != nil {
+		t.Fatal(err)
+	}
+	p.replay = noop
+	p.restartDurableState(t)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	verificationRuns := p.room.runs
+	result, err := p.reconcileLanes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 0 {
+		t.Fatalf("no-op pushback convergence = %#v", result)
+	}
+	if p.room.runs != verificationRuns {
+		t.Fatalf("no-op pushback ran %d successor verification commands", p.room.runs-verificationRuns)
+	}
+	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+		t.Fatalf("no-op pushback caused publication effects: %d refs, %d prs", refs, prs)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		records, err := tx.ListReviewRecords(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if len(records) != 1 || records[0].HeadSHA != sourceHead {
+			t.Fatalf("no-op pushback review history = %#v, want original round only", records)
+		}
+		item, err := tx.GetAttentionItem(
+			p.ctx, domain.ItemID("production-remediation-dissent-"+string(p.runID)+"-1"),
+		)
+		if err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionReviewDispute || item.PRHeadSHA != noop.HeadSHA ||
+			!strings.Contains(item.Reason, "undeclared path") || len(item.AgentClaims) != 1 ||
+			item.AgentClaims[0].Label != "freeside.remediator_pushback" {
+			t.Fatalf("no-op pushback attention = %#v", item)
+		}
+		task, err := tx.GetOutbox(p.ctx, "production-publication/"+string(p.runID))
+		if err != nil {
+			return err
+		}
+		if !task.Dispatched() {
+			t.Fatalf("no-op pushback task status = %q, want dispatched", task.Status)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.RecordProductionExecutionExport(p.ctx, p.store, executionExport, noop); err != nil {
+		t.Fatalf("recorded no-op pushback replay did not converge: %v", err)
+	}
+	if replay, err := p.reconcileLanes(); err != nil || replay != (engine.ReconcileResult{}) {
+		t.Fatalf("no-op pushback durable replay = %#v, %v", replay, err)
 	}
 }
 
@@ -3122,6 +3719,64 @@ func TestReadyProductionPublicationWinsOverLaterExternalConflict(t *testing.T) {
 	}
 }
 
+func TestReadyProductionPublicationRecoversLegacyVerificationCheckpoint(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterReady: func() error { return errors.New("stop after durable ready item") },
+	}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("ready-item seam did not interrupt reconciliation")
+	}
+
+	currentKey := "production-verification/" + string(p.runID) + "/" + p.replay.HeadSHA
+	legacyKey := "production-verification/" + string(p.runID)
+	raw, err := sql.Open("sqlite", p.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload []byte
+	if err := raw.QueryRowContext(
+		p.ctx, "SELECT payload FROM inbox WHERE idempotency_key = ?", currentKey,
+	).Scan(&payload); err != nil {
+		_ = raw.Close()
+		t.Fatal(err)
+	}
+	var legacy map[string]any
+	if err := json.Unmarshal(payload, &legacy); err != nil {
+		_ = raw.Close()
+		t.Fatal(err)
+	}
+	legacy["version"] = "freeside.production-verification/v1"
+	delete(legacy, "head_sha")
+	legacyPayload, err := json.Marshal(legacy)
+	if err != nil {
+		_ = raw.Close()
+		t.Fatal(err)
+	}
+	result, updateErr := raw.ExecContext(
+		p.ctx,
+		"UPDATE inbox SET idempotency_key = ?, payload = ? WHERE idempotency_key = ?",
+		legacyKey, legacyPayload, currentKey,
+	)
+	closeErr := raw.Close()
+	if updateErr != nil || closeErr != nil {
+		t.Fatal(errors.Join(updateErr, closeErr))
+	}
+	if changed, err := result.RowsAffected(); err != nil || changed != 1 {
+		t.Fatalf("legacy checkpoint rows changed = %d, %v, want 1", changed, err)
+	}
+
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	resultState, err := p.reconcileLanes()
+	if err != nil || resultState.PublicationTasksCompleted != 1 ||
+		resultState.ReadyItemsCreated != 1 {
+		t.Fatalf("legacy checkpoint recovery = %#v, %v", resultState, err)
+	}
+	p.assertReady(t)
+}
+
 func TestReadyProductionPublicationMissingPrerequisiteFailsClosed(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -3143,7 +3798,7 @@ func TestReadyProductionPublicationMissingPrerequisiteFailsClosed(t *testing.T) 
 			}
 			arg := tc.arg
 			if tc.name == "checkpoint" {
-				arg = tc.arg.(string) + string(p.runID)
+				arg = tc.arg.(string) + string(p.runID) + "/" + p.replay.HeadSHA
 			}
 			raw, err := sql.Open("sqlite", p.dbPath)
 			if err != nil {
@@ -3646,7 +4301,7 @@ func TestProductionPublicationCorruptCheckpointStillFailsLoud(t *testing.T) {
 	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
 		_, inserted, err := tx.RecordInbox(
 			p.ctx,
-			"production-verification/"+string(p.runID),
+			"production-verification/"+string(p.runID)+"/"+p.replay.HeadSHA,
 			"production_verification_checkpoint",
 			[]byte(`{"version":`),
 		)
@@ -4466,6 +5121,345 @@ func TestQuarantinedMarkerHoldsAndReleasesThePublicationLane(t *testing.T) {
 	if released.Status != domain.StatusSuperseded || released.ItemVersion <= held.ItemVersion {
 		t.Fatalf("quarantine notice after recovery = %#v", released)
 	}
+}
+
+func TestDispatchedRemediationMarkerHoldsAndReleasesThePublicationLane(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		markerKey    func(*productionPublicationHarness, domain.InvocationID) string
+		markerKind   string
+		noticePrefix string
+		remove       bool
+	}{
+		{
+			name: "corrupt remediation marker",
+			markerKey: func(_ *productionPublicationHarness, remediationID domain.InvocationID) string {
+				return string(remediationID)
+			},
+			markerKind:   engine.KindRemediationInvocationRequested,
+			noticePrefix: "remediation-marker-quarantined-1-",
+		},
+		{
+			name: "missing remediation marker",
+			markerKey: func(_ *productionPublicationHarness, remediationID domain.InvocationID) string {
+				return string(remediationID)
+			},
+			markerKind:   engine.KindRemediationInvocationRequested,
+			noticePrefix: "remediation-marker-quarantined-1-",
+			remove:       true,
+		},
+		{
+			name: "missing original production marker",
+			markerKey: func(p *productionPublicationHarness, _ domain.InvocationID) string {
+				return "inv-implement-" + string(p.runID)
+			},
+			markerKind:   engine.KindProductionInvocationRequested,
+			noticePrefix: "production-marker-quarantined-1-",
+			remove:       true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, remediationID := prepareDispatchedRemediationPublicationTask(t)
+			key := tc.markerKey(p, remediationID)
+			original := readOutboxPayload(t, p, key)
+			if tc.remove {
+				deleteOutboxRow(t, p, key)
+			} else {
+				writeOutboxPayload(t, p, key, []byte(`{"version":"freeside.remediation-request/v9"}`))
+			}
+
+			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+			result, err := p.reconcileLanes()
+			if err != nil {
+				t.Fatalf("reconcile with %s: %v", tc.name, err)
+			}
+			if result.PublicationTasksCompleted != 0 || result.ReadyItemsCreated != 0 {
+				t.Fatalf("held remediation task advanced = %#v", result)
+			}
+			if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+				t.Fatalf("held remediation task published: %d refs/%d PRs", refs, prs)
+			}
+			held := productionItemRecord(t, p, tc.noticePrefix+string(p.runID))
+			if held.Status != domain.StatusOpen {
+				t.Fatalf("marker notice = %#v", held)
+			}
+			unrelated := p.submitUnrelatedRun(t, "run-unrelated-remediation-marker")
+			if result, err := p.workflow.Reconcile(p.ctx); err != nil ||
+				result.InvocationsStarted != 1 {
+				t.Fatalf("unrelated work beside held remediation = %#v, %v", result, err)
+			}
+			p.driver.Script(unrelated, fake.StageScript{
+				PendingInspects: 100, Outcome: fake.OutcomeComplete,
+				Result: exec.StageResult{
+					HeadSHA: p.replay.HeadSHA, Summary: "Claude export completed.",
+				},
+			})
+			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+				_, err := tx.GetExecutionAdmissionRecord(p.ctx, unrelated)
+				return err
+			}); err != nil {
+				t.Fatalf("unrelated invocation %q did not advance: %v", unrelated, err)
+			}
+
+			if tc.remove {
+				if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+					if _, _, err := tx.EnqueueOutbox(p.ctx, key, tc.markerKind, original); err != nil {
+						return err
+					}
+					return tx.MarkOutboxDispatched(p.ctx, key)
+				}); err != nil {
+					t.Fatalf("restore %s: %v", tc.name, err)
+				}
+			} else {
+				writeOutboxPayload(t, p, key, original)
+			}
+			var completed engine.ReconcileResult
+			for range 4 {
+				result, err := p.workflow.ReconcileProductionPublications(p.ctx)
+				if err != nil {
+					t.Fatalf("reconcile after remediation marker repair: %v", err)
+				}
+				completed.PublicationTasksCompleted += result.PublicationTasksCompleted
+				completed.ReadyItemsCreated += result.ReadyItemsCreated
+				if completed.PublicationTasksCompleted > 0 {
+					break
+				}
+			}
+			if completed.PublicationTasksCompleted != 1 || completed.ReadyItemsCreated != 1 {
+				t.Fatalf("repaired remediation convergence = %#v", completed)
+			}
+			p.assertReady(t)
+			released := productionItemRecord(t, p, tc.noticePrefix+string(p.runID))
+			if released.Status != domain.StatusSuperseded ||
+				released.ItemVersion <= held.ItemVersion {
+				t.Fatalf("remediation marker notice after repair = %#v", released)
+			}
+		})
+	}
+}
+
+// TestDispatchedRemediationMarkerBeforeExportHoldsAndReleasesThePublicationLane
+// covers the lifecycle interval where durable remediation is active but the
+// publication task still names the original implementation producer.
+func TestDispatchedRemediationMarkerBeforeExportHoldsAndReleasesThePublicationLane(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		mutation string
+	}{
+		{name: "corrupt active marker", mutation: "corrupt-marker"},
+		{name: "missing active marker", mutation: "remove-marker"},
+		{name: "corrupt active input blob", mutation: "corrupt-input"},
+		{name: "missing active input blob", mutation: "remove-input"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, remediationID := prepareRemediationPublicationLifecycle(t, false)
+			key := string(remediationID)
+			original := readOutboxPayload(t, p, key)
+			var request struct {
+				InputArtifactDigest domain.Digest `json:"input_artifact_digest"`
+			}
+			if err := json.Unmarshal(original, &request); err != nil {
+				t.Fatalf("decode active remediation marker: %v", err)
+			}
+			blobPath := filepath.Join(
+				p.blobDir, "sha256-"+strings.TrimPrefix(string(request.InputArtifactDigest), "sha256:"))
+			originalBlob, err := os.ReadFile(blobPath) //nolint:gosec // test-owned digest path
+			if err != nil {
+				t.Fatalf("read active remediation input: %v", err)
+			}
+			switch tc.mutation {
+			case "remove-marker":
+				deleteOutboxRow(t, p, key)
+			case "corrupt-marker":
+				writeOutboxPayload(t, p, key, []byte(`{"version":"freeside.remediation-request/v9"}`))
+			case "remove-input":
+				if err := os.Remove(blobPath); err != nil {
+					t.Fatalf("remove active remediation input: %v", err)
+				}
+			case "corrupt-input":
+				if err := os.WriteFile(blobPath, []byte("corrupt"), 0o600); err != nil {
+					t.Fatalf("corrupt active remediation input: %v", err)
+				}
+			default:
+				t.Fatalf("unknown mutation %q", tc.mutation)
+			}
+
+			result, err := p.workflow.ReconcileProductionPublications(p.ctx)
+			if err != nil {
+				t.Fatalf("reconcile before remediation export: %v", err)
+			}
+			if result.PublicationTasksCompleted != 0 || result.ReadyItemsCreated != 0 {
+				t.Fatalf("held pre-export task advanced = %#v", result)
+			}
+			held := productionItemRecord(
+				t, p, "remediation-marker-quarantined-1-"+string(p.runID))
+			if held.Status != domain.StatusOpen {
+				t.Fatalf("pre-export marker notice = %#v", held)
+			}
+
+			unrelated := p.submitUnrelatedRun(t, "run-unrelated-pre-export-remediation")
+			if result, err := p.workflow.Reconcile(p.ctx); err != nil ||
+				result.InvocationsStarted != 1 {
+				t.Fatalf("unrelated work beside pre-export hold = %#v, %v", result, err)
+			}
+			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+				_, err := tx.GetExecutionAdmissionRecord(p.ctx, unrelated)
+				return err
+			}); err != nil {
+				t.Fatalf("unrelated invocation %q did not advance: %v", unrelated, err)
+			}
+
+			switch tc.mutation {
+			case "remove-marker":
+				if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+					if _, _, err := tx.EnqueueOutbox(
+						p.ctx, key, engine.KindRemediationInvocationRequested, original,
+					); err != nil {
+						return err
+					}
+					return tx.MarkOutboxDispatched(p.ctx, key)
+				}); err != nil {
+					t.Fatalf("restore active remediation marker: %v", err)
+				}
+			case "corrupt-marker":
+				writeOutboxPayload(t, p, key, original)
+			case "remove-input", "corrupt-input":
+				if err := os.WriteFile(blobPath, originalBlob, 0o600); err != nil { //nolint:gosec // test-owned digest path
+					t.Fatalf("restore active remediation input: %v", err)
+				}
+			}
+			if _, err := p.workflow.ReconcileProductionPublications(p.ctx); err != nil {
+				t.Fatalf("reconcile after pre-export marker repair: %v", err)
+			}
+			released := productionItemRecord(
+				t, p, "remediation-marker-quarantined-1-"+string(p.runID))
+			if released.Status != domain.StatusSuperseded ||
+				released.ItemVersion <= held.ItemVersion {
+				t.Fatalf("pre-export marker notice after repair = %#v", released)
+			}
+		})
+	}
+}
+
+func prepareDispatchedRemediationPublicationTask(
+	t *testing.T,
+) (*productionPublicationHarness, domain.InvocationID) {
+	return prepareRemediationPublicationLifecycle(t, true)
+}
+
+func prepareRemediationPublicationLifecycle(
+	t *testing.T,
+	exportRemediation bool,
+) (*productionPublicationHarness, domain.InvocationID) {
+	t.Helper()
+	p := newProductionPublicationHarness(t, "")
+	classifier := inferencefake.New()
+	classifier.Script(inference.ClassifierSiteID, inferencefake.Script{Response: inference.Response{
+		Output:       []byte(`{"materiality":"high","confidence":"high","note":"actionable"}`),
+		ComputeUnits: 3,
+	}})
+	advisoryStore, err := advisory.Open(
+		filepath.Join(t.TempDir(), "advisory.json"), 20, 16<<10,
+		advisory.WithClock(func() time.Time { return p.now }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := inference.Limits{
+		Calls: 10, ComputeUnits: 100_000, AttentionItems: 10, Starvation: time.Hour,
+	}
+	p.judgments, err = inference.New(inference.Config{
+		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
+		Binding: inference.Binding{
+			Provider: "fake", Model: "classifier", Driver: classifier,
+		},
+		Sites: []inference.Site{inference.ClassifierSite(inference.Budget{
+			Window: time.Hour, Site: limits, Project: limits, Global: limits,
+			MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
+		})},
+		Advisory: advisoryStore, Now: func() time.Time { return p.now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	finding := domain.Finding{
+		ID: "review-finding-marker-quarantine", RunID: p.runID,
+		Source: "codex_local", Severity: domain.FindingSeverityP1,
+		Location: &domain.FindingLocation{Path: "README.md", StartLine: 1, EndLine: 1},
+		Message:  "the production change is incomplete",
+		RawText:  "the production change is incomplete", CreatedAt: p.now,
+	}
+	p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, 1), fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review findings")),
+			Findings: []domain.Finding{finding},
+		},
+	})
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
+		t.Fatalf("adjudicated review = %#v, %v", result, err)
+	}
+	remediationID := domain.InvocationID("inv-remediate-1-" + string(p.runID))
+	p.driver.Script(remediationID, fake.StageScript{
+		PendingInspects: 1, Outcome: fake.OutcomeComplete,
+		Result: exec.StageResult{Summary: "Remediation export completed."},
+	})
+	if result, err := p.workflow.Reconcile(p.ctx); err != nil || result.InvocationsStarted != 1 {
+		t.Fatalf("remediation dispatch = %#v, %v", result, err)
+	}
+	if !exportRemediation {
+		return p, remediationID
+	}
+	var (
+		run       domain.Run
+		admission domain.ExecutionAdmission
+	)
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		admission, err = tx.GetExecutionAdmissionRecord(p.ctx, remediationID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	remediated := buildProductionReplayWithContentAt(
+		t, p.publicationHarness, p.runID, run.SpecDigest,
+		submissionSpecification(string(p.runID)), nil, remediationID,
+		fakePublicationTime.Add(time.Minute),
+		"production change\nremediated review finding\n",
+	)
+	executionExport, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: remediationID, AdmissionID: admission.ID,
+		ObservedBaseSHA: p.baseSHA, HeadSHA: remediated.HeadSHA,
+		ManifestDigest: remediated.ManifestDigest, RecordedAt: remediated.ImportOptions.CommitDate,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.RecordProductionExecutionExport(
+		p.ctx, p.store, executionExport, remediated,
+	); err != nil {
+		t.Fatal(err)
+	}
+	p.replay = remediated
+	p.now = p.now.Add(time.Minute)
+	p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, 2), fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: remediated.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt:        p.now,
+			CompletionEvidence: productionDigest([]byte("clean remediation review")),
+		},
+	})
+	return p, remediationID
 }
 
 // TestUnreadablePublicationTaskDoesNotEndTheEngineLoop is the sibling row of

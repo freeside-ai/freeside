@@ -96,6 +96,18 @@ func productionVerificationInvocationID(runID domain.RunID) domain.InvocationID 
 	return domain.InvocationID("verify-production-" + string(runID))
 }
 
+func productionVerificationInvocationIDForProducer(
+	runID domain.RunID, producer domain.InvocationID,
+) domain.InvocationID {
+	if producer == productionInvocationID(runID) {
+		return productionVerificationInvocationID(runID)
+	}
+	if round, ok := remediationRoundForInvocation(runID, producer); ok {
+		return domain.InvocationID(fmt.Sprintf("verify-remediation-%d-%s", round, runID))
+	}
+	return ""
+}
+
 func productionPublicationInvocationID(runID domain.RunID) domain.InvocationID {
 	return domain.InvocationID("publish-production-" + string(runID))
 }
@@ -918,23 +930,35 @@ func productionRequestFormat(request productionInvocationRequest) string {
 // Unowned is the safe answer, not a quiet one: the run is never dispatched or
 // accepted as production work, and quarantineProductionMarker records why.
 func (e *Engine) ownsProductionRun(ctx context.Context, run domain.Run) (bool, error) {
-	var entry store.QueueEntry
+	var transition authenticatedProductionRunTransition
 	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		entry, err = tx.GetOutbox(ctx, string(productionInvocationID(run.ID)))
+		transition, err = authenticateProductionRunTransition(ctx, tx, run.ID)
 		return err
 	})
-	if errors.Is(err, store.ErrNotFound) {
+	if transition.run.ID != "" {
+		run = transition.run
+	}
+	if err == nil {
+		var artifacts ArtifactStore
+		if e.productionPublication != nil {
+			artifacts = e.productionPublication.artifacts
+		}
+		err = authenticateProductionRunInput(artifacts, transition)
+	}
+	if err == nil && transition.production == nil {
 		// No marker row means the run is not this lane's, which is also how a
 		// repaired store looks after the bad row is removed: the hold a
 		// quarantine notice describes has ended either way.
+		if releaseErr := releaseProductionQuarantine(
+			ctx, e.store, e.signet, productionMarkerQuarantinePrefix, run.ID,
+		); releaseErr != nil {
+			return false, releaseErr
+		}
 		return false, releaseProductionQuarantine(
-			ctx, e.store, e.signet, productionMarkerQuarantinePrefix, run.ID)
+			ctx, e.store, e.signet, remediationMarkerQuarantinePrefix, run.ID)
 	}
-	if err != nil {
-		return false, fmt.Errorf("find production marker for run %q: %w", run.ID, err)
-	}
-	if _, err := authenticateProductionMarker(entry, run.ID); err != nil {
+	if _, markerFailure := productionQuarantineReason(err); markerFailure {
 		quarantined, quarantineErr := quarantineProductionMarker(
 			ctx, e.store, e.signet, run.ID, run.ProjectID, err)
 		if quarantineErr != nil {
@@ -947,6 +971,18 @@ func (e *Engine) ownsProductionRun(ctx context.Context, run domain.Run) (bool, e
 		}
 		return false, fmt.Errorf("authenticate production marker for run %q: %w", run.ID, err)
 	}
+	if errors.Is(err, errRemediationMarkerUnreadable) {
+		if quarantineErr := recordProductionQuarantine(
+			ctx, e.store, e.signet, remediationMarkerQuarantinePrefix,
+			run.ID, run.ProjectID, remediationQuarantineUnreadable,
+		); quarantineErr != nil {
+			return false, errors.Join(err, quarantineErr)
+		}
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("authenticate production transition for run %q: %w", run.ID, err)
+	}
 	// The marker reads again, so an earlier pass's quarantine no longer
 	// describes this run: the upgrade the notice asked for has happened, or
 	// the row was repaired. Retiring it here is what keeps the notice a
@@ -955,7 +991,8 @@ func (e *Engine) ownsProductionRun(ctx context.Context, run domain.Run) (bool, e
 		ctx, e.store, e.signet, productionMarkerQuarantinePrefix, run.ID); err != nil {
 		return false, err
 	}
-	return true, nil
+	return true, releaseProductionQuarantine(
+		ctx, e.store, e.signet, remediationMarkerQuarantinePrefix, run.ID)
 }
 
 // loadProductionBinding resolves the durable state behind one production
@@ -1043,6 +1080,7 @@ func decodeProductionTerminal(
 		return productionTerminalRecord{}, fmt.Errorf("decode terminal record %q: %w",
 			entry.IdempotencyKey, err)
 	}
+	stage, stageFound := productionStageForInvocation(run, terminal.InvocationID)
 	switch {
 	case string(terminal.InvocationID) != entry.IdempotencyKey:
 		return productionTerminalRecord{}, fmt.Errorf(
@@ -1052,8 +1090,7 @@ func decodeProductionTerminal(
 		return productionTerminalRecord{}, fmt.Errorf(
 			"terminal record %q names run %q, attempt is on %q: %w",
 			entry.IdempotencyKey, terminal.RunID, run.ID, domain.ErrParentKeyMismatch)
-	case terminal.InvocationID != productionInvocationID(run.ID) ||
-		terminal.StageID != productionStageID(run.ID):
+	case !stageFound || terminal.StageID != stage.ID:
 		return productionTerminalRecord{}, fmt.Errorf(
 			"terminal record %q disagrees with lane derivation for run %q: %w",
 			entry.IdempotencyKey, run.ID, domain.ErrParentKeyMismatch)
@@ -1080,18 +1117,27 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		return false, fmt.Errorf("attempt %q disagrees with invocation %q: %w",
 			attempt.ID, attempt.InvocationID, domain.ErrParentKeyMismatch)
 	}
-	if attempt.StageID != productionStageID(run.ID) ||
-		attempt.InvocationID != productionInvocationID(run.ID) {
+	stage, ok := productionStageForInvocation(run, attempt.InvocationID)
+	if !ok || attempt.StageID != stage.ID {
 		return false, fmt.Errorf("attempt binding disagrees with run: %w", domain.ErrParentKeyMismatch)
 	}
 	request, err := (&productionPublicationWorkflow{store: e.store}).loadProductionRequest(ctx, run)
 	if err != nil {
 		return false, err
 	}
-	legacy := request.Legacy
+	legacy := request.Legacy && attempt.InvocationID == productionInvocationID(run.ID)
 
-	var recorded *productionTerminalRecord
+	var (
+		recorded        *productionTerminalRecord
+		outcomeRecorded bool
+	)
 	err = e.store.Read(ctx, func(tx *store.ReadTx) error {
+		if _, outcomeErr := tx.GetExecutionOutcomeRecord(ctx, attempt.InvocationID); outcomeErr == nil {
+			outcomeRecorded = true
+			return nil
+		} else if !errors.Is(outcomeErr, store.ErrNotFound) {
+			return outcomeErr
+		}
 		entry, err := tx.GetInbox(ctx, string(attempt.InvocationID))
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
@@ -1113,6 +1159,9 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 	})
 	if err != nil {
 		return false, err
+	}
+	if outcomeRecorded {
+		return false, nil
 	}
 	if recorded != nil {
 		if legacy && recorded.Status == exec.StatusCompleted {
@@ -1448,6 +1497,92 @@ func (e *Engine) recordProductionTerminalWithAuthority(
 	return inserted && terminal.Status == exec.StatusCompleted, nil
 }
 
+// recordProductionDeliveryRefusal closes one deterministic pre-start refusal.
+// A fresh refusal has no admission to close, while a replay of a pre-fix
+// admitted attempt records the standard non-export outcome so identity
+// capacity and restart reconstruction use the same authority as every other
+// failed execution. The attention item and dispatched marker commit beside
+// that authority, leaving no successor task for an invocation that never ran.
+func (e *Engine) recordProductionDeliveryRefusal(
+	ctx context.Context,
+	run domain.Run,
+	stage domain.Stage,
+	invocationID domain.InvocationID,
+	summary string,
+) error {
+	terminal := productionTerminalRecord{
+		InvocationID: invocationID,
+		RunID:        run.ID,
+		StageID:      stage.ID,
+		Status:       exec.StatusFailed,
+		Summary:      "Input delivery was refused before driver start: " + summary,
+	}
+	return e.store.Write(ctx, func(tx *store.WriteTx) error {
+		current, err := tx.GetRun(ctx, run.ID)
+		if err != nil {
+			return err
+		}
+		currentStage, ok := productionStageForInvocation(current, invocationID)
+		if !ok || currentStage.ID != stage.ID || current.ProjectID != run.ProjectID {
+			return domain.ErrParentKeyMismatch
+		}
+		hasAttempt := attemptRecorded(current, invocationID)
+		admission, admissionErr := tx.GetExecutionAdmissionRecord(ctx, invocationID)
+		switch {
+		case admissionErr == nil && !hasAttempt:
+			return fmt.Errorf("delivery refusal admission has no attempt: %w", domain.ErrParentKeyMismatch)
+		case errors.Is(admissionErr, store.ErrNotFound) && hasAttempt:
+			return fmt.Errorf("delivery refusal attempt has no admission: %w", domain.ErrParentKeyMismatch)
+		case admissionErr != nil && !errors.Is(admissionErr, store.ErrNotFound):
+			return admissionErr
+		case admissionErr == nil:
+			outcome := domain.ExecutionOutcome{
+				InvocationID: invocationID,
+				AdmissionID:  admission.ID,
+				Status:       domain.ExecutionOutcomeFailed,
+				Summary:      terminal.Summary,
+				RecordedAt:   time.Now().UTC(),
+			}
+			stored, outcomeErr := tx.GetExecutionOutcomeRecord(ctx, invocationID)
+			if outcomeErr == nil {
+				outcome.RecordedAt = stored.RecordedAt
+				if !reflect.DeepEqual(stored, outcome) {
+					return domain.ErrImmutableTransition
+				}
+			} else if errors.Is(outcomeErr, store.ErrNotFound) {
+				if err := tx.RecordExecutionOutcome(ctx, outcome); err != nil {
+					return err
+				}
+			} else {
+				return outcomeErr
+			}
+		}
+
+		itemID := domain.ItemID("execution-failure-" + string(invocationID))
+		item, itemErr := tx.GetAttentionItem(ctx, itemID)
+		if errors.Is(itemErr, store.ErrNotFound) {
+			item, err = productionFailureItem(current, terminal, time.Now().UTC())
+			if err != nil {
+				return err
+			}
+			if err := tx.PutAttentionItem(ctx, item); err != nil {
+				return err
+			}
+		} else if itemErr != nil {
+			return itemErr
+		} else {
+			want, err := productionFailureItem(current, terminal, *item.CreatedAt)
+			if err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(item, want) {
+				return domain.ErrImmutableTransition
+			}
+		}
+		return tx.MarkOutboxDispatched(ctx, string(invocationID))
+	})
+}
+
 // productionFailureItem is the §4 execution_failure notice for a production
 // stage that ended without an accepted result. Deterministic identity and
 // content, so a replayed pass converges instead of raising a second item.
@@ -1461,7 +1596,7 @@ func productionFailureItem(
 	reason := fmt.Sprintf("Unattended %s stage ended %q without an accepted result.",
 		productionStageName, terminal.Status)
 	if terminal.Summary != "" {
-		reason += " Driver summary: " + terminal.Summary
+		reason += " Summary: " + terminal.Summary
 	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID:        domain.ItemID("execution-failure-" + string(terminal.InvocationID)),
@@ -1761,6 +1896,9 @@ func productionQuarantineNoticeFor(prefix, reason string) bool {
 	}
 	if prefix == elaborationMarkerQuarantinePrefix {
 		return reason == elaborationQuarantineUnreadable
+	}
+	if prefix == remediationMarkerQuarantinePrefix {
+		return reason == remediationQuarantineUnreadable
 	}
 	return reason == productionQuarantineUnsupportedVersion ||
 		reason == productionQuarantineUnreadable

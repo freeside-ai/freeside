@@ -3153,7 +3153,8 @@ func loadFakePublicationBlob(
 	}
 	got := domain.Digest(contentaddr.Format(hasher.Sum(nil)))
 	if got != digest {
-		return nil, fmt.Errorf("body hashes to %s, want %s", got, digest)
+		return nil, fmt.Errorf(
+			"body hashes to %s, want %s: %w", got, digest, domain.ErrParentKeyMismatch)
 	}
 	return content.Bytes(), nil
 }

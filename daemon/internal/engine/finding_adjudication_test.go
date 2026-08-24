@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	mrand "math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -650,13 +651,13 @@ func TestFindingAdjudicationStructuredDissentValidation(t *testing.T) {
 		findingDissentImportPathRejected, findingDissentRemediatorPushback,
 	} {
 		if err := validateFindingAdjudicationDissent(findingAdjudicationDissent{
-			Kind: kind, FindingID: "finding-a", Evidence: "boundary rejected daemon/x.go",
+			Kind: kind, FindingIDs: []domain.FindingID{"finding-a"}, Evidence: "boundary rejected daemon/x.go",
 		}); err != nil {
 			t.Fatalf("valid dissent %q: %v", kind, err)
 		}
 	}
 	if err := validateFindingAdjudicationDissent(findingAdjudicationDissent{
-		Kind: "invented", FindingID: "finding-a", Evidence: "x",
+		Kind: "invented", FindingIDs: []domain.FindingID{"finding-a"}, Evidence: "x",
 	}); !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("invented dissent = %v", err)
 	}
@@ -671,7 +672,7 @@ func TestFindingAdjudicationStructuredDissentForcesModelReentry(t *testing.T) {
 	state, err := f.workflow.reenterFindingAdjudication(
 		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot,
 		findingAdjudicationDissent{
-			Kind: findingDissentImportPathRejected, FindingID: f.finding.ID,
+			Kind: findingDissentImportPathRejected, FindingIDs: []domain.FindingID{f.finding.ID},
 			Evidence: "the import boundary rejected the required fix path",
 		},
 	)
@@ -778,4 +779,142 @@ func TestFindingAdjudicationDecisionRejectsPayloadOnlyRouteAuthority(t *testing.
 	if _, err := findingRoutesFromDecision(artifact, &command); err == nil {
 		t.Fatal("payload-only decline route was authorized against adjacent artifact axes")
 	}
+}
+
+// TestRemediationOversizedInputParksRunWithoutStoppingLane proves the #911
+// regression: a remediation candidate whose marshalled remediationInput exceeds
+// exec.ProductionMaxInputBytes must not fail the production publication lane. It
+// drives the finding-adjudication fast path to RouteRemediate over a git-backed
+// candidate checkout whose head commit adds a ~4.5 MiB incompressible blob, so
+// the git binary patch (and therefore the JSON input) overflows the 4 MiB
+// deliverable limit. prepareRemediationIntent then returns
+// ErrRemediationInputUndeliverable, executeFindingAdjudication terminalizes it as
+// a durable AttentionExecutionFailure item and returns productionReviewPending
+// (never a lane-fatal error). A second reconcile replays through the recorded
+// escalation without re-diffing, dispatching a marker, or duplicating the item.
+func TestRemediationOversizedInputParksRunWithoutStoppingLane(t *testing.T) {
+	location := &domain.FindingLocation{Path: "daemon/a.go"}
+	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "high", "high")
+
+	// The marshalled input overflows only because the candidate patch carries
+	// incompressible bytes; a fixed PRNG seed keeps the fixture deterministic and
+	// avoids crypto/rand or wall-clock entropy.
+	const oversizedBlobBytes = 4608 << 10 // 4.5 MiB > exec.ProductionMaxInputBytes.
+	blob := make([]byte, oversizedBlobBytes)
+	rng := mrand.New(mrand.NewSource(1)) //nolint:gosec // G404: deterministic incompressible test fixture, not security-sensitive
+	if _, err := rng.Read(blob); err != nil {
+		t.Fatal(err)
+	}
+
+	// A real git checkout is required: remediationCandidatePatch renders
+	// git diff --binary base..head against it. daemon/a.go lands in the head tree
+	// so the finding's location resolves as candidate-added within daemon/**, and
+	// the oversized blob is the diff that overflows the limit.
+	candidateRoot := t.TempDir()
+	runRemediationGit(t, candidateRoot, nil, "init", "-q", "-b", "main", "--object-format=sha1")
+	if err := os.MkdirAll(filepath.Join(candidateRoot, "daemon"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(candidateRoot, "daemon", "a.go"),
+		[]byte("package fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRemediationGit(t, candidateRoot, nil, "add", "daemon/a.go")
+	runRemediationGit(t, candidateRoot, nil, "commit", "-q", "-m", "base")
+	baseSHA := strings.TrimSpace(string(runRemediationGit(t, candidateRoot, nil, "rev-parse", "HEAD")))
+	if err := os.WriteFile(filepath.Join(candidateRoot, "daemon", "blob.bin"), blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRemediationGit(t, candidateRoot, nil, "add", "daemon/blob.bin")
+	runRemediationGit(t, candidateRoot, nil, "commit", "-q", "-m", "candidate")
+	headSHA := strings.TrimSpace(string(runRemediationGit(t, candidateRoot, nil, "rev-parse", "HEAD")))
+
+	// A non-nil artifact store plus a workDir arms the remediation-preparation
+	// branch; the production invocation supplies the single input id
+	// prepareRemediationIntent chains onto the remediation invocation.
+	f.workflow.artifacts = remediationArtifactStore{}
+	f.workflow.workDir = t.TempDir()
+	productionInvocation, err := domain.NewAgentInvocation(
+		productionInvocationID(f.task.RunID),
+		[]domain.ArtifactID{domain.ArtifactID("production-input-" + string(f.task.RunID))}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(f.ctx, func(tx *store.WriteTx) error {
+		return tx.PutAgentInvocation(f.ctx, productionInvocation)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.task.HeadSHA = headSHA
+	f.task.Replay.ObservedBaseSHA = baseSHA
+
+	itemID := productionRemediationUndeliverableItemID(f.task.RunID, f.record.Round)
+	markerKey := string(remediationInvocationID(f.task.RunID, f.record.Round))
+
+	countAttentionItems := func() int {
+		var items []store.Snapshotted[domain.AttentionItem]
+		if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+			var readErr error
+			items, readErr = tx.ListAttentionItems(f.ctx)
+			return readErr
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return len(items)
+	}
+	assertNoDispatchedMarker := func() {
+		var markerErr error
+		if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+			_, markerErr = tx.GetOutbox(f.ctx, markerKey)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if !errors.Is(markerErr, store.ErrNotFound) {
+			t.Fatalf("remediation marker lookup = %v, want ErrNotFound (never dispatched)", markerErr)
+		}
+	}
+
+	state, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, candidateRoot)
+	if err != nil {
+		t.Fatalf("first reconcile err = %v, want nil (lane not fatal)", err)
+	}
+	if state != productionReviewPending {
+		t.Fatalf("first reconcile state = %d, want pending", state)
+	}
+
+	var item domain.AttentionItem
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		var readErr error
+		item, readErr = tx.GetAttentionItem(f.ctx, itemID)
+		return readErr
+	}); err != nil {
+		t.Fatalf("undeliverable attention item = %v, want present", err)
+	}
+	if item.Type != domain.AttentionExecutionFailure {
+		t.Fatalf("attention item type = %q, want %q", item.Type, domain.AttentionExecutionFailure)
+	}
+	if item.Subject.RunID == nil || *item.Subject.RunID != f.task.RunID {
+		t.Fatalf("attention item subject run = %v, want %q", item.Subject.RunID, f.task.RunID)
+	}
+	if got := countAttentionItems(); got != 1 {
+		t.Fatalf("attention items after first reconcile = %d, want 1", got)
+	}
+	assertNoDispatchedMarker()
+
+	// Replay must short-circuit through the recorded escalation: still pending,
+	// still no error, no duplicate item, no dispatched marker.
+	replayState, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, candidateRoot)
+	if err != nil {
+		t.Fatalf("replay reconcile err = %v, want nil", err)
+	}
+	if replayState != productionReviewPending {
+		t.Fatalf("replay reconcile state = %d, want pending", replayState)
+	}
+	if got := countAttentionItems(); got != 1 {
+		t.Fatalf("attention items after replay = %d, want 1 (no duplicate)", got)
+	}
+	assertNoDispatchedMarker()
 }

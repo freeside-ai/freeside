@@ -520,6 +520,7 @@ SLEEP_STUB
     FREESIDE_REAL_RUN_BASE_SHA=0123456789012345678901234567890123456789 \
     FREESIDE_REAL_RUN_PROMPT_PACKAGE="$input_dir/prompts.json" \
     FREESIDE_REAL_RUN_ELABORATION_PROMPT_PACKAGE="$input_dir/elaborator.md" \
+    FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE="$input_dir/remediator.md" \
     FREESIDE_REAL_RUN_INSTRUCTIONS="$input_dir/CLAUDE.md" \
     FREESIDE_REAL_RUN_APPROVED_RECIPE="$digest" \
     FREESIDE_REAL_RUN_APP_STATE="$CASE_DIR/app-state" \
@@ -1133,10 +1134,11 @@ else
 	report_failure "verification did not stay bound to the future implementation identity"
 fi
 if grep -qx -- '-prompt-package' "$CASE_DIR/daemon.args" &&
-  grep -qx -- '-elaboration-prompt-package' "$CASE_DIR/daemon.args"; then
+  grep -qx -- '-elaboration-prompt-package' "$CASE_DIR/daemon.args" &&
+  grep -qx -- '-remediation-prompt-package' "$CASE_DIR/daemon.args"; then
 	pass=$((pass + 1))
 else
-	report_failure "daemon invocation omitted one of the stage prompt flags"
+	report_failure "daemon invocation omitted one of the three stage prompt flags"
 fi
 if grep -q -- '-rig-token-file' "$CASE_DIR/daemon.args" &&
   grep -q -- 'rig cleanup -state-root' "$CASE_DIR/rig-cleanup.args"; then

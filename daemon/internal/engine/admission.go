@@ -13,6 +13,8 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
+var ErrProductionInputUndeliverable = errors.New("production input cannot be delivered")
+
 // Admission wiring (plan §5.3, §5.7): before an attempt is dispatched, the
 // engine checks the runner backend against the policy floor and records what
 // admitted it, in the same transaction that appends the attempt. #39 deferred
@@ -239,12 +241,24 @@ func (e *Engine) admitAttempt(
 	}
 	promptPackageDigest := e.admission.environment.PromptPackageDigest
 	isElaboration := stage.ID == elaborationStageID(binding.run.ID) && stage.Name == elaborationStageName
+	isProduction := invocationID == productionInvocationID(binding.run.ID) &&
+		stage.ID == productionStageID(binding.run.ID) && stage.Name == productionStageName
 	if isElaboration {
 		if e.elaboration == nil {
 			return domain.ExecutionAdmission{}, false, fmt.Errorf(
 				"admit invocation %q: elaboration stage has no elaboration workflow", invocationID)
 		}
 		promptPackageDigest = e.elaboration.promptPackage
+	}
+	if round, ok := remediationRoundForInvocation(binding.run.ID, invocationID); ok {
+		if stage.ID != remediationStageID(binding.run.ID, round) || stage.Name != productionStageName ||
+			e.productionPublication == nil ||
+			!contentaddr.Valid(string(e.productionPublication.remediationPromptPackage)) {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q: remediation prompt package is unavailable", invocationID)
+		}
+		isProduction = true
+		promptPackageDigest = e.productionPublication.remediationPromptPackage
 	}
 	stageInputs, err := e.stageInputSnapshot(
 		ctx, binding, inputDigest, promptPackageDigest, isElaboration,
@@ -313,7 +327,78 @@ func (e *Engine) admitAttempt(
 	if err != nil {
 		return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
 	}
+	if isProduction {
+		if err := e.validateProductionDelivery(ctx, invocationID, admission); err != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q production delivery: %w", invocationID, err,
+			)
+		}
+	}
 	return admission, true, nil
+}
+
+func (e *Engine) validateProductionDelivery(
+	ctx context.Context,
+	invocationID domain.InvocationID,
+	admission domain.ExecutionAdmission,
+) error {
+	initial, remediation := productionDeliveryInvocation(invocationID, admission)
+	if !initial && !remediation {
+		return nil
+	}
+	if e.productionDeliveryValidator == nil {
+		return nil
+	}
+	err := e.productionDeliveryValidator(
+		ctx, exec.StartSpecFromAdmission(admission),
+	)
+	if err == nil {
+		return nil
+	}
+	// The materializer owns the distinction between a permanent shape refusal
+	// and an operational failure. Only the former is safe to turn into a
+	// terminal outcome; an unavailable blob or other transient fault must stay
+	// retryable instead of being laundered into a deterministic refusal here.
+	if !errors.Is(err, ErrProductionInputUndeliverable) {
+		return err
+	}
+	if remediation {
+		err = errors.Join(ErrRemediationInputUndeliverable, err)
+	}
+	return err
+}
+
+func productionDeliveryInvocation(
+	invocationID domain.InvocationID,
+	admission domain.ExecutionAdmission,
+) (initial, remediation bool) {
+	initial = invocationID == productionInvocationID(admission.RunID) &&
+		admission.StageID == productionStageID(admission.RunID)
+	round, remediation := remediationRoundForInvocation(admission.RunID, invocationID)
+	remediation = remediation && admission.StageID == remediationStageID(admission.RunID, round)
+	return initial, remediation
+}
+
+func (e *Engine) validateProductionReplayDelivery(
+	ctx context.Context,
+	invocationID domain.InvocationID,
+	admission domain.ExecutionAdmission,
+) error {
+	initial, remediation := productionDeliveryInvocation(invocationID, admission)
+	if !initial && !remediation {
+		return nil
+	}
+	inspection, err := e.driver.Inspect(ctx, invocationID)
+	if errors.Is(err, exec.ErrUnknownInvocation) {
+		return e.validateProductionDelivery(ctx, invocationID, admission)
+	}
+	if err != nil {
+		return fmt.Errorf("inspect admitted invocation: %w", err)
+	}
+	if err := inspection.Validate(); err != nil {
+		return fmt.Errorf("inspect admitted invocation: %w", err)
+	}
+	return nil
 }
 
 // imageInputArtifactType is the Phase 1 artifact vocabulary already used for
