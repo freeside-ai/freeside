@@ -88,6 +88,8 @@ var (
 	ErrInvalidLaunchCapability          = errors.New("invalid launch capability")
 	ErrInvalidAuxiliaryInference        = errors.New("invalid auxiliary inference policy")
 	ErrInvalidSessionMode               = errors.New("invalid launch session mode")
+	ErrInvalidShadowReviewSource        = errors.New("invalid shadow review source")
+	ErrInvalidClassifierAssessment      = errors.New("invalid classifier accuracy assessment")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")

@@ -96,7 +96,8 @@ func TestAdmittedAgentsMigrationNarrowsIdentities(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if entry.Name() == "0052_admitted_agents.sql" || entry.IsDir() {
+		if entry.Name() == "0052_admitted_agents.sql" ||
+			entry.Name() == "0053_shadow_review.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())

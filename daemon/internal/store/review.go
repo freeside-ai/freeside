@@ -47,6 +47,10 @@ func (tx *WriteTx) PutReviewRecord(
 	if err := record.Validate(); err != nil {
 		return fmt.Errorf("put review record %q: %w", record.InvocationID, err)
 	}
+	if err := tx.ensureInvocationNotShadowRecorded(ctx, record.InvocationID); err != nil {
+		return fmt.Errorf("put review record %q shadow invocation binding: %w",
+			record.InvocationID, err)
+	}
 	if len(findings) != len(record.FindingIDs) {
 		return fmt.Errorf("put review record %q finding count: %w",
 			record.InvocationID, domain.ErrParentKeyMismatch)
@@ -68,6 +72,10 @@ func (tx *WriteTx) PutReviewRecord(
 		if !ok {
 			return fmt.Errorf("put review record %q missing finding %q: %w",
 				record.InvocationID, id, domain.ErrParentKeyMismatch)
+		}
+		if err := tx.ensureFindingNotShadowLinked(ctx, id); err != nil {
+			return fmt.Errorf("put review record %q shadow finding %q: %w",
+				record.InvocationID, id, err)
 		}
 		if err := tx.PutFinding(ctx, finding); err != nil {
 			return err
@@ -132,6 +140,10 @@ func (tx *ReadTx) GetReviewRecord(
 		string(record.Outcome) != outcome || formatTime(record.CompletedAt) != completedAt {
 		return domain.ReviewRecord{}, fmt.Errorf("get review record %q: %w", id, errRowInconsistent)
 	}
+	if err := tx.ensureInvocationNotShadowRecorded(ctx, record.InvocationID); err != nil {
+		return domain.ReviewRecord{}, fmt.Errorf(
+			"get review record %q shadow invocation binding: %w", id, err)
+	}
 	rows, err := tx.tx.QueryContext(ctx, `SELECT finding_id FROM review_record_findings
         WHERE invocation_id = ? ORDER BY ordinal`, id)
 	if err != nil {
@@ -151,6 +163,12 @@ func (tx *ReadTx) GetReviewRecord(
 	}
 	if !slices.Equal(ids, record.FindingIDs) {
 		return domain.ReviewRecord{}, fmt.Errorf("get review record %q findings: %w", id, errRowInconsistent)
+	}
+	for _, findingID := range ids {
+		if err := tx.ensureFindingNotShadowLinked(ctx, findingID); err != nil {
+			return domain.ReviewRecord{}, fmt.Errorf("get review record %q shadow finding %q: %w",
+				id, findingID, err)
+		}
 	}
 	return record, nil
 }
@@ -431,6 +449,10 @@ func (tx *WriteTx) PutReviewFailure(ctx context.Context, failure domain.ReviewFa
 	if err := failure.Validate(); err != nil {
 		return fmt.Errorf("put review failure %q: %w", failure.InvocationID, err)
 	}
+	if err := tx.ensureInvocationNotShadowRecorded(ctx, failure.InvocationID); err != nil {
+		return fmt.Errorf("put review failure %q shadow invocation binding: %w",
+			failure.InvocationID, err)
+	}
 	if _, err := tx.GetReviewRecord(ctx, failure.InvocationID); err == nil {
 		return fmt.Errorf("put review failure %q after result: %w",
 			failure.InvocationID, ErrImmutableConflict)
@@ -483,6 +505,10 @@ func (tx *ReadTx) GetReviewFailure(
 		formatTime(failure.ObservedAt) != observedAt {
 		return domain.ReviewFailure{}, fmt.Errorf("get review failure %q: %w", id, errRowInconsistent)
 	}
+	if err := tx.ensureInvocationNotShadowRecorded(ctx, failure.InvocationID); err != nil {
+		return domain.ReviewFailure{}, fmt.Errorf(
+			"get review failure %q shadow invocation binding: %w", id, err)
+	}
 	return failure, nil
 }
 
@@ -511,6 +537,9 @@ ON CONFLICT (run_id) DO UPDATE SET
 func (tx *WriteTx) PutReviewRetry(ctx context.Context, retry domain.ReviewRetry) error {
 	if err := retry.Validate(); err != nil {
 		return fmt.Errorf("put review retry %q: %w", retry.RunID, err)
+	}
+	if err := tx.ensureInvocationNotShadowRecorded(ctx, retry.InvocationID); err != nil {
+		return fmt.Errorf("put review retry %q shadow invocation binding: %w", retry.RunID, err)
 	}
 	body, err := encode(retry)
 	if err != nil {
@@ -550,6 +579,10 @@ func (tx *ReadTx) GetReviewRetry(ctx context.Context, runID domain.RunID) (domai
 		retry.Round != round || retry.BaseSHA != baseSHA || retry.HeadSHA != headSHA ||
 		formatTime(retry.ObservedAt) != observedAt {
 		return domain.ReviewRetry{}, fmt.Errorf("get review retry %q: %w", runID, errRowInconsistent)
+	}
+	if err := tx.ensureInvocationNotShadowRecorded(ctx, retry.InvocationID); err != nil {
+		return domain.ReviewRetry{}, fmt.Errorf(
+			"get review retry %q shadow invocation binding: %w", runID, err)
 	}
 	return retry, nil
 }

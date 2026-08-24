@@ -1,0 +1,8 @@
+{
+  "run_id": "run-1",
+  "finding_id": "shadow-find-1",
+  "classification_version": 1,
+  "shadow_invocation_id": "shadow-review-run-1-1",
+  "assessment": "accurate",
+  "recorded_at": "2026-01-02T03:05:05Z"
+}
