@@ -265,6 +265,8 @@ var (
 		"agent resolution join is invalid")
 	ErrAgentBodyUnresolved = errors.New(
 		"agent canonical body carries a name where a resolved reference belongs")
+	ErrInvalidAgentName = errors.New(
+		"agent name is not at most 246 bytes of lowercase ASCII alphanumeric with interior '-' or '_'")
 	ErrOfferExpired = errors.New(
 		"offer's authored not_after precedes the attempt deadline")
 	ErrLaunchCapabilityUnproved = errors.New(
