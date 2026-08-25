@@ -270,19 +270,33 @@ struct StateChip: View {
     /// A leading state glyph (a tick, a live dot); VoiceOver reads the
     /// label alone.
     var glyph: String? = nil
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        Text((glyph.map { "\($0) " } ?? "") + label.lowercased())
-            .font(FreesideFont.chip)
-            .tracking(0.6)
-            .foregroundStyle(color)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1.5)
-            .overlay(
-                RoundedRectangle(cornerRadius: 3)
-                    .strokeBorder(color, style: StrokeStyle(lineWidth: 1, dash: dashed ? [2, 2] : []))
-            )
-            .accessibilityLabel(label)
+        Group {
+            if dynamicTypeSize >= .accessibility1 {
+                Text((glyph.map { "\($0) " } ?? "") + label)
+                    .font(FreesideFont.callout)
+            } else {
+                Text((glyph.map { "\($0) " } ?? "") + label.lowercased())
+                    .font(FreesideFont.chip)
+                    .tracking(0.6)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1.5)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 3)
+                            .strokeBorder(
+                                color,
+                                style: StrokeStyle(
+                                    lineWidth: 1,
+                                    dash: dashed ? [2, 2] : []))
+                    )
+            }
+        }
+        .foregroundStyle(color)
+        .accessibilityLabel(label)
     }
 }
 
@@ -328,13 +342,17 @@ struct FreesideActionButtonStyle: ButtonStyle {
 
     let tone: Tone
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(FreesideFont.sans(.body, weight: .medium))
             .foregroundStyle(tone.labelColor)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.vertical, dynamicTypeSize >= .accessibility1 ? 12 : 7)
+            .frame(minHeight: dynamicTypeSize >= .accessibility1 ? 52 : nil)
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 6)

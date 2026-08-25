@@ -4,6 +4,22 @@ import Testing
 @testable import FreesideCore
 
 @Suite struct AttentionDisplayTests {
+    @Test func everyAttentionTypeHasAOneSentenceQuestionAsk() {
+        for type in AttentionFixtures.phase1Types {
+            let ask = AttentionDisplay.ask(AttentionFixtures.fixture(type: type).item)
+            #expect(!ask.isEmpty)
+            #expect(ask.hasSuffix("?"))
+            #expect(ask.dropLast().contains("?") == false)
+        }
+    }
+
+    @Test func askNeverUsesTheItemsFreeTextReason() {
+        var item = AttentionFixtures.fixture(type: .execution_failure).item
+        item.reason = "free text that must not become the ask"
+
+        #expect(AttentionDisplay.ask(item) == "How should this failed execution continue?")
+    }
+
     @Test func existingPullRequestActionUsesViewLanguage() {
         #expect(AttentionDisplay.label(Components.Schemas.Action.open_pr) == "View PR")
     }

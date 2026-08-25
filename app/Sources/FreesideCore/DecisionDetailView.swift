@@ -6,97 +6,204 @@ import SwiftUI
 /// and exactly the item's requested actions. Actions stay disabled until
 /// the model's revalidation of current state succeeds.
 struct DecisionDetailView: View {
+    private struct PendingConfirmation {
+        let action: Components.Schemas.Action
+        let reviewedSnapshot: Components.Schemas.AttentionItemSnapshot
+    }
+
     private enum ProposalEditor: String, Identifiable {
         case revision
         case snooze
         var id: String { rawValue }
     }
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var model: DecisionModel
     @State private var proposalEditor: ProposalEditor?
+    @State private var pendingConfirmation: PendingConfirmation?
     @State private var detailsExpanded: Bool
+    @State private var claimsExpanded = false
+    @State private var evidenceExpanded = false
+    @State private var recommendationVisible = true
     @State private var alternativeSelections: [String: Components.Schemas.AdjudicationRoute] = [:]
     private let attachments: AttachmentLoader
+    private let recommendation: DecisionRecommendationPresentation?
+    private let showsValidationProgress: Bool
 
     @MainActor
-    init(store: InboxStore, itemID: String, detailsExpanded: Bool = false) {
+    init(
+        store: InboxStore,
+        itemID: String,
+        detailsExpanded: Bool = false,
+        recommendation: DecisionRecommendationPresentation? = nil,
+        showsValidationProgress: Bool = true
+    ) {
         _model = State(initialValue: DecisionModel(store: store, itemID: itemID))
         _detailsExpanded = State(initialValue: detailsExpanded)
         attachments = store.attachments
+        self.recommendation = recommendation
+        self.showsValidationProgress = showsValidationProgress
     }
 
     var body: some View {
-        Group {
-            if let snapshot = model.snapshot {
-                ScrollView {
-                    card(snapshot.item)
-                        .padding(14)
-                        .freesideCard()
-                        .padding()
-                        .frame(maxWidth: 560, alignment: .leading)
+        platformBody(
+            Group {
+                if let snapshot = model.snapshot {
+                    ScrollView {
+                        card(snapshot.item, accessibilityLayout: isAccessibilityLayout)
+                            .padding(14)
+                            .freesideCard()
+                            .padding()
+                            .frame(maxWidth: 560, alignment: .leading)
+                    }
+                    .coordinateSpace(name: "decision-card-scroll")
+                } else {
+                    ContentUnavailableView(
+                        "Item unavailable",
+                        systemImage: "questionmark.circle",
+                        description: Text("This attention item is not in the inbox.")
+                    )
                 }
-            } else {
-                ContentUnavailableView(
-                    "Item unavailable",
-                    systemImage: "questionmark.circle",
-                    description: Text("This attention item is not in the inbox.")
-                )
             }
-        }
-        // Re-validate on open and whenever the cache is evicted for a new
-        // sync epoch (the id carries the store's cache generation), so a
-        // card left open across a restore recertifies the re-bootstrapped
-        // snapshot instead of sitting on a stale validation (issue #162).
-        .task(id: model.revalidationID) { await model.validate() }
-        .sheet(item: $proposalEditor) { editor in
-            switch editor {
-            case .revision:
-                if let facts = model.proposalFacts {
-                    RunProposalRevisionSheet(facts: facts) { revision in
-                        Task { await model.submitRunProposalRevision(revision) }
+            // Re-validate on open and whenever the cache is evicted for a new
+            // sync epoch (the id carries the store's cache generation), so a
+            // card left open across a restore recertifies the re-bootstrapped
+            // snapshot instead of sitting on a stale validation (issue #162).
+            .task(id: model.revalidationID) { await model.validate() }
+            .sheet(item: $proposalEditor) { editor in
+                switch editor {
+                case .revision:
+                    if let facts = model.proposalFacts {
+                        RunProposalRevisionSheet(facts: facts) { revision in
+                            Task { await model.submitRunProposalRevision(revision) }
+                        }
+                    }
+                case .snooze:
+                    RunProposalSnoozeSheet { until in
+                        Task { await model.snooze(until: until) }
                     }
                 }
-            case .snooze:
-                RunProposalSnoozeSheet { until in
-                    Task { await model.snooze(until: until) }
+            }
+            .navigationTitle(model.snapshot.map { AttentionDisplay.title($0.item) } ?? "Decision")
+            .confirmationDialog(
+                confirmationTitle,
+                isPresented: confirmationIsPresented,
+                titleVisibility: .visible
+            ) {
+                if let confirmation = pendingConfirmation {
+                    Button(AttentionDisplay.label(confirmation.action), role: .destructive) {
+                        pendingConfirmation = nil
+                        Task {
+                            await model.submitConfirmed(
+                                confirmation.action,
+                                reviewedSnapshot: confirmation.reviewedSnapshot)
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) { pendingConfirmation = nil }
+            } message: {
+                if let confirmation = pendingConfirmation,
+                    let consequence = AttentionDisplay.confirmationConsequence(
+                        confirmation.action)
+                {
+                    Text(consequence)
                 }
             }
-        }
-        .navigationTitle(model.snapshot.map { AttentionDisplay.title($0.item) } ?? "Decision")
+            .onChange(of: model.snapshot?.item.item_version) {
+                pendingConfirmation = nil
+            }
+        )
     }
 
     @ViewBuilder
-    private func card(_ item: Components.Schemas.AttentionItem) -> some View {
+    private func platformBody<Content: View>(_ content: Content) -> some View {
+        #if os(iOS)
+            content.safeAreaInset(edge: .bottom, spacing: 0) {
+                if let item = model.snapshot?.item,
+                    let recommendation,
+                    !recommendationVisible
+                {
+                    actionButton(
+                        recommendation.action,
+                        item: item,
+                        tone: .primary,
+                        showsIcon: false
+                    )
+                    .padding(.horizontal)
+                    .padding(.vertical, 10)
+                    .background(.bar)
+                }
+            }
+        #else
+            content
+        #endif
+    }
+
+    private var isAccessibilityLayout: Bool {
+        dynamicTypeSize >= .accessibility1
+    }
+
+    private var confirmationIsPresented: Binding<Bool> {
+        Binding(
+            get: { pendingConfirmation != nil },
+            set: { presented in
+                if !presented { pendingConfirmation = nil }
+            })
+    }
+
+    private var confirmationTitle: String {
+        guard let pendingConfirmation else { return "Confirm action" }
+        return "Confirm \(AttentionDisplay.label(pendingConfirmation.action).lowercased())?"
+    }
+
+    @ViewBuilder
+    private func card(
+        _ item: Components.Schemas.AttentionItem,
+        rendersInteractiveControls: Bool = true,
+        accessibilityLayout: Bool
+    ) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            header(item)
+            header(item, accessibilityLayout: accessibilityLayout)
             banner
-            Text(item.reason)
-                .font(FreesideFont.body)
+            Text(AttentionDisplay.ask(item))
+                .font(FreesideFont.sectionTitle)
                 .foregroundStyle(Color.ink)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let recommendation,
+                actionRanking(item).recommended == recommendation.action
+            {
+                recommendationBlock(recommendation, item: item)
+            }
+            actions(item, accessibilityLayout: accessibilityLayout)
+
+            cardSection("Context") {
+                Text(item.reason)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if let adjudication = item.finding_adjudication?.value1 {
-                findingAdjudication(adjudication)
-                actions(item)
-            } else {
-                actions(item)
+                findingAdjudication(
+                    adjudication,
+                    rendersInteractiveControls: rendersInteractiveControls)
             }
 
             // Daemon-derived commit-plan notice (plan §5.6): the reserved
             // plan channel was consumed without structuring the import, and
             // that must never be silent.
             if let notice = item.commit_plan_notice?.value1 {
-                LabeledContent("Commit plan", value: AttentionDisplay.label(notice))
-                    .font(FreesideFont.callout)
-                    .foregroundStyle(Color.ink)
+                cardSection("Facts") {
+                    factRow("Commit plan", value: AttentionDisplay.label(notice))
+                }
             }
 
             if let facts = model.proposalFacts {
                 cardSection("Authenticated proposal") {
-                    LabeledContent("Intent", value: facts.intent.rawValue)
-                    LabeledContent("Expected cost", value: "\(facts.expected_cost_units) units")
-                    LabeledContent("Components", value: "\(facts.scope.component_count)")
-                    LabeledContent("Declared paths", value: "\(facts.scope.declared_path_count)")
-                    LabeledContent(
+                    factRow("Intent", value: facts.intent.rawValue)
+                    factRow("Expected cost", value: "\(facts.expected_cost_units) units")
+                    factRow("Components", value: "\(facts.scope.component_count)")
+                    factRow("Declared paths", value: "\(facts.scope.declared_path_count)")
+                    factRow(
                         "Control plane", value: facts.scope.touches_control_plane ? "Yes" : "No")
                     if let prior = facts.supersedes?.value1 {
                         Divider()
@@ -107,19 +214,16 @@ struct DecisionDetailView: View {
                 }
             }
 
-            if !item.evidence_snapshot.isEmpty {
-                cardSection("Evidence") {
-                    ForEach(item.evidence_snapshot, id: \.id) { artifact in
-                        AttachmentRow(
-                            label: artifact._type.rawValue, digest: artifact.digest,
-                            attachments: attachments)
-                    }
-                }
-            }
-
             if !item.agent_claims.isEmpty {
                 // Dashed: a claim must read as a claim (plan §9).
-                cardSection("Agent claims (unverified)", dashed: true) {
+                lowerSection(
+                    "Agent claims (unverified)",
+                    isExpanded: $claimsExpanded,
+                    accessibilityLayout: accessibilityLayout,
+                    dashed: true
+                ) {
+                    Text("Written by the agent, not checked by the daemon.")
+                        .foregroundStyle(Color.inkDim)
                     // Keyed by position: the daemon permits two claims on
                     // the same artifact under different labels, so no
                     // claim field is unique on its own and an id-keyed
@@ -132,18 +236,30 @@ struct DecisionDetailView: View {
                 }
             }
 
-            DisclosureGroup("Details", isExpanded: $detailsExpanded) {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
-                        LabeledContent(row.label) {
-                            Text(row.value)
-                                .multilineTextAlignment(.trailing)
-                        }
-                        .font(FreesideFont.monoCaption)
-                        .foregroundStyle(Color.inkDim)
+            if !item.evidence_snapshot.isEmpty {
+                lowerSection(
+                    "Evidence",
+                    isExpanded: $evidenceExpanded,
+                    accessibilityLayout: accessibilityLayout
+                ) {
+                    ForEach(item.evidence_snapshot, id: \.id) { artifact in
+                        AttachmentRow(
+                            label: artifact._type.rawValue, digest: artifact.digest,
+                            attachments: attachments)
                     }
                 }
-                .padding(.top, 6)
+            }
+
+            lowerSection(
+                "Details",
+                isExpanded: $detailsExpanded,
+                accessibilityLayout: accessibilityLayout
+            ) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
+                        factRow(row.label, value: row.value, monospaced: true)
+                    }
+                }
             }
             .font(FreesideFont.caption)
             .foregroundStyle(Color.inkDim)
@@ -151,9 +267,28 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// The project-owned card content without navigation and presentation
+    /// containers that ImageRenderer cannot draw off-screen on macOS.
+    @ViewBuilder
+    func screenshotCard(
+        _ item: Components.Schemas.AttentionItem,
+        at dynamicTypeSize: DynamicTypeSize
+    ) -> some View {
+        card(
+            item,
+            rendersInteractiveControls: false,
+            accessibilityLayout: dynamicTypeSize >= .accessibility1
+        )
+        .padding(14)
+        .freesideCard()
+        .padding()
+        .frame(maxWidth: 560, alignment: .leading)
+    }
+
     @ViewBuilder
     private func findingAdjudication(
-        _ binding: Components.Schemas.FindingAdjudicationBinding
+        _ binding: Components.Schemas.FindingAdjudicationBinding,
+        rendersInteractiveControls: Bool
     ) -> some View {
         ForEach(binding.proposals, id: \.finding_id) { proposal in
             cardSection(
@@ -161,24 +296,24 @@ struct DecisionDetailView: View {
                     ? "Model proposal (unverified)" : "Daemon recommendation",
                 dashed: proposal.producer == .model
             ) {
-                LabeledContent("Finding", value: proposal.finding_id)
-                LabeledContent("Recommended route", value: AttentionDisplay.label(proposal.route))
-                LabeledContent(
+                factRow("Finding", value: proposal.finding_id)
+                factRow("Recommended route", value: AttentionDisplay.label(proposal.route))
+                factRow(
                     "Goal relationship", value: AttentionDisplay.label(proposal.goal_relationship))
-                LabeledContent(
+                factRow(
                     "Work-unit compatibility",
                     value: AttentionDisplay.label(proposal.compatibility?.value1))
                 if let confidence = proposal.confidence?.value1 {
-                    LabeledContent("Proposal confidence", value: AttentionDisplay.label(confidence))
+                    factRow("Proposal confidence", value: AttentionDisplay.label(confidence))
                 }
                 Text(proposal.rationale)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             cardSection("Daemon facts") {
-                LabeledContent("Binding digest", value: binding.adjudication_digest)
-                LabeledContent("Run", value: binding.run_id)
-                LabeledContent("Round", value: "\(binding.round)")
+                factRow("Binding digest", value: binding.adjudication_digest)
+                factRow("Run", value: binding.run_id)
+                factRow("Round", value: "\(binding.round)")
             }
 
             if !proposal.assumptions.isEmpty {
@@ -196,18 +331,22 @@ struct DecisionDetailView: View {
                             Text(alternative.consequence)
                         }
                     }
-                    Picker(
-                        "Selected route",
-                        selection: alternativeSelection(for: proposal)
-                    ) {
-                        Text("Keep recommendation")
-                            .tag(Optional<Components.Schemas.AdjudicationRoute>.none)
-                        ForEach(proposal.offered_alternatives, id: \.route) { alternative in
-                            Text(AttentionDisplay.label(alternative.route))
-                                .tag(Optional(alternative.route))
+                    if rendersInteractiveControls {
+                        Picker(
+                            "Selected route",
+                            selection: alternativeSelection(for: proposal)
+                        ) {
+                            Text("Keep recommendation")
+                                .tag(Optional<Components.Schemas.AdjudicationRoute>.none)
+                            ForEach(proposal.offered_alternatives, id: \.route) { alternative in
+                                Text(AttentionDisplay.label(alternative.route))
+                                    .tag(Optional(alternative.route))
+                            }
                         }
+                        .pickerStyle(.menu)
+                    } else {
+                        factRow("Selected route", value: "Keep recommendation")
                     }
-                    .pickerStyle(.menu)
                 }
             }
             if !proposal.open_questions.isEmpty {
@@ -268,56 +407,57 @@ struct DecisionDetailView: View {
     private func detailRows(
         _ item: Components.Schemas.AttentionItem
     ) -> [AttentionDisplay.BindingRow] {
-        AttentionDisplay.detailBindingRows(
+        var rows = AttentionDisplay.detailBindingRows(
             item,
             priorProposalDigest: model.proposalFacts?.supersedes?.value1.proposal_digest,
             proposalDigest: model.proposalFacts?.proposal_digest
         )
+        rows.append(
+            contentsOf: actionRanking(item).unavailable.map {
+                .init(
+                    label: "Requested, not available here",
+                    value: AttentionDisplay.label($0))
+            })
+        return rows
     }
 
     @ViewBuilder
     private func proposalRevisionRows(
         _ prior: Components.Schemas.RunProposalRevisionFacts
     ) -> some View {
-        LabeledContent("Prior intent", value: prior.intent.rawValue)
-        LabeledContent("Prior cost", value: "\(prior.expected_cost_units) units")
-        LabeledContent(
+        factRow("Prior intent", value: prior.intent.rawValue)
+        factRow("Prior cost", value: "\(prior.expected_cost_units) units")
+        factRow(
             "Prior scope",
             value: "\(prior.scope.component_count) components, \(prior.scope.declared_path_count) paths")
-        LabeledContent(
+        factRow(
             "Prior control plane", value: prior.scope.touches_control_plane ? "Yes" : "No")
     }
 
-    private func header(_ item: Components.Schemas.AttentionItem) -> some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(AttentionDisplay.title(item))
-                    .font(FreesideFont.title)
-                    .foregroundStyle(Color.ink)
-                creationTimestamp(item.created_at)
-            }
-            Spacer()
+    @ViewBuilder
+    private func header(
+        _ item: Components.Schemas.AttentionItem,
+        accessibilityLayout: Bool
+    ) -> some View {
+        headerBadges(item, accessibilityLayout: accessibilityLayout)
+    }
+
+    @ViewBuilder
+    private func headerBadges(
+        _ item: Components.Schemas.AttentionItem,
+        accessibilityLayout: Bool
+    ) -> some View {
+        let layout =
+            accessibilityLayout
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
+        layout {
             PriorityBadge(priority: item.priority)
             if let posture = item.posture?.value1 {
                 HealthPostureBadge(posture: posture)
             }
             StatusBadge(status: item.status)
         }
-    }
-
-    @ViewBuilder
-    private func creationTimestamp(_ createdAt: Date?) -> some View {
-        Group {
-            if let createdAt {
-                Text(
-                    "Created \(createdAt, format: .dateTime.month(.abbreviated).day().year().hour().minute())"
-                )
-            } else {
-                Text("Created: not recorded")
-            }
-        }
-        .font(FreesideFont.callout)
-        .foregroundStyle(Color.inkDim)
     }
 
     @ViewBuilder
@@ -371,8 +511,43 @@ struct DecisionDetailView: View {
         }
     }
 
+    private func recommendationBlock(
+        _ recommendation: DecisionRecommendationPresentation,
+        item: Components.Schemas.AttentionItem
+    ) -> some View {
+        cardSection(
+            "Recommended",
+            border: .accentBorder,
+            fill: .accentWash
+        ) {
+            KeywordLabel(text: "Why")
+            Text(recommendation.reason)
+                .fixedSize(horizontal: false, vertical: true)
+            if let confidence = recommendation.confidence {
+                factRow("Confidence", value: confidence)
+            }
+            actionButton(
+                recommendation.action,
+                item: item,
+                tone: AttentionDisplay.confirmationConsequence(recommendation.action) == nil
+                    ? .primary : .destructive,
+                showsIcon: false
+            )
+            .padding(.top, 4)
+        }
+        .onGeometryChange(for: Bool.self) { geometry in
+            geometry.frame(in: .named("decision-card-scroll")).maxY > 0
+        } action: { visible in
+            recommendationVisible = visible
+        }
+    }
+
     private func cardSection(
-        _ title: String, dashed: Bool = false, @ViewBuilder content: () -> some View
+        _ title: String,
+        dashed: Bool = false,
+        border: Color = .rule,
+        fill: Color = .ground,
+        @ViewBuilder content: () -> some View
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             KeywordLabel(text: title)
@@ -382,11 +557,48 @@ struct DecisionDetailView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.ground))
+        .background(RoundedRectangle(cornerRadius: 8).fill(fill))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(Color.rule, style: StrokeStyle(lineWidth: 1, dash: dashed ? [4, 3] : []))
+                .strokeBorder(
+                    border,
+                    style: StrokeStyle(lineWidth: 1, dash: dashed ? [4, 3] : []))
         )
+    }
+
+    @ViewBuilder
+    private func lowerSection<Content: View>(
+        _ title: String,
+        isExpanded: Binding<Bool>,
+        accessibilityLayout: Bool,
+        dashed: Bool = false,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        if accessibilityLayout {
+            DisclosureGroup(isExpanded: isExpanded) {
+                VStack(alignment: .leading, spacing: 8) {
+                    content()
+                }
+                .padding(.top, 8)
+            } label: {
+                KeywordLabel(text: title)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .freesideCard(dashed: dashed)
+        } else {
+            cardSection(title, dashed: dashed) {
+                content()
+            }
+        }
+    }
+
+    private func factRow(
+        _ label: String,
+        value: String,
+        monospaced: Bool = false
+    ) -> some View {
+        DecisionFactRow(label: label, value: value, monospaced: monospaced)
     }
 
     /// One labeled attachment row. Plan §9's presentation layers supersede
@@ -479,9 +691,13 @@ struct DecisionDetailView: View {
     }
 
     @ViewBuilder
-    private func actions(_ item: Components.Schemas.AttentionItem) -> some View {
+    private func actions(
+        _ item: Components.Schemas.AttentionItem,
+        accessibilityLayout: Bool
+    ) -> some View {
+        let ranking = actionRanking(item)
         VStack(alignment: .leading, spacing: 8) {
-            if model.validation == .pending {
+            if showsValidationProgress && model.validation == .pending {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small).tint(.waterText)
                     Text("Validating current state…")
@@ -489,59 +705,187 @@ struct DecisionDetailView: View {
                         .foregroundStyle(Color.inkDim)
                 }
             }
-            // Keyed by position: the daemon boundary does not enforce
-            // uniqueness in requested_decision, and duplicate ForEach
-            // identities can drop or cross-wire buttons.
-            ForEach(Array(model.offeredActions.enumerated()), id: \.offset) { offset, action in
-                Button {
-                    switch action {
-                    case .start_with_changes:
-                        proposalEditor = .revision
-                    case .snooze:
-                        proposalEditor = .snooze
-                    case .choose_alternative_route:
-                        guard let binding = item.finding_adjudication?.value1 else { return }
-                        Task { await model.submitFindingAlternatives(selectedAlternatives(binding)) }
-                    default:
-                        Task { await model.submit(action) }
+
+            if !ranking.principal.isEmpty {
+                let layout =
+                    accessibilityLayout
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                    : AnyLayout(HStackLayout(alignment: .top, spacing: 8))
+                layout {
+                    // Keyed by position: requested_decision does not enforce
+                    // uniqueness, and duplicate identities may not drop a button.
+                    ForEach(Array(ranking.principal.enumerated()), id: \.offset) { _, action in
+                        actionButton(action, item: item, tone: .neutral)
                     }
-                } label: {
-                    HStack {
-                        Text(AttentionDisplay.label(action))
-                        if model.phase == .submitting(action) {
-                            ProgressView().controlSize(.small)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(FreesideActionButtonStyle(tone: Self.tone(for: action, leading: offset == 0)))
-                .disabled(
-                    !model.actionsEnabled || !model.isSubmittable(action)
-                        || !actionInputReady(action, item: item))
+            }
+
+            if let reviewing = ranking.reviewing {
+                actionButton(reviewing, item: item, tone: .neutral)
+            }
+
+            overflowMenu(ranking.overflow, item: item)
+
+            if ranking.notDecidableHere {
+                bannerLabel(
+                    "This decision needs a written answer, and this build cannot carry one. Nothing is blocked by opening it; the item stays open until answered.",
+                    systemImage: "exclamationmark.bubble",
+                    tint: .accentText,
+                    wash: .accentWash
+                )
             }
             if item._type == .blocked {
                 Text("A blocked item is informational; it resolves when the external wait clears.")
-                    .font(FreesideFont.caption)
-                    .foregroundStyle(Color.inkDim)
-            } else if model.offeredActions.contains(where: { !model.isSubmittable($0) }) {
-                Text("Actions carrying discussion or parameters arrive with later units.")
                     .font(FreesideFont.caption)
                     .foregroundStyle(Color.inkDim)
             }
         }
     }
 
-    /// The leading offered action is the primary one; stops and declines
-    /// are destructive; everything else is neutral.
-    private static func tone(
-        for action: Components.Schemas.Action, leading: Bool
-    ) -> FreesideActionButtonStyle.Tone {
-        switch action {
-        case .decline, .stop, .stop_unattended:
-            return .destructive
-        default:
-            return leading ? .primary : .neutral
+    private func actionRanking(
+        _ item: Components.Schemas.AttentionItem
+    ) -> DecisionActionRanking {
+        DecisionActionRanking(
+            requested: item.requested_decision,
+            recommendedAction: recommendation?.action)
+    }
+
+    @ViewBuilder
+    private func overflowMenu(
+        _ actions: [Components.Schemas.Action],
+        item: Components.Schemas.AttentionItem
+    ) -> some View {
+        if !actions.isEmpty {
+            let ordinary = actions.filter {
+                AttentionDisplay.confirmationConsequence($0) == nil
+            }
+            let consequential = actions.filter {
+                AttentionDisplay.confirmationConsequence($0) != nil
+            }
+            Menu {
+                ForEach(Array(ordinary.enumerated()), id: \.offset) { _, action in
+                    Button {
+                        trigger(action, item: item)
+                    } label: {
+                        actionLabel(action)
+                    }
+                }
+                if !ordinary.isEmpty, !consequential.isEmpty {
+                    Divider()
+                }
+                ForEach(Array(consequential.enumerated()), id: \.offset) { _, action in
+                    Button(role: .destructive) {
+                        trigger(action, item: item)
+                    } label: {
+                        actionLabel(action)
+                    }
+                }
+            } label: {
+                Text("More")
+                    .frame(maxWidth: .infinity)
+            }
+            .menuStyle(.button)
+            .buttonStyle(FreesideActionButtonStyle(tone: .neutral))
+            .disabled(!model.actionsEnabled)
+            .accessibilityLabel("More decision actions")
         }
+    }
+
+    private func actionButton(
+        _ action: Components.Schemas.Action,
+        item: Components.Schemas.AttentionItem,
+        tone: FreesideActionButtonStyle.Tone,
+        showsIcon: Bool = true
+    ) -> some View {
+        Button {
+            trigger(action, item: item)
+        } label: {
+            HStack {
+                actionLabel(action, showsIcon: showsIcon)
+                if model.phase == .submitting(action) {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(FreesideActionButtonStyle(tone: tone))
+        .disabled(
+            !model.actionsEnabled || !model.isSubmittable(action)
+                || !actionInputReady(action, item: item))
+    }
+
+    @ViewBuilder
+    private func actionLabel(
+        _ action: Components.Schemas.Action,
+        showsIcon: Bool = true
+    ) -> some View {
+        if showsIcon, let systemImage = AttentionDisplay.systemImage(action) {
+            Label(AttentionDisplay.label(action), systemImage: systemImage)
+        } else {
+            Text(AttentionDisplay.label(action))
+        }
+    }
+
+    private func trigger(
+        _ action: Components.Schemas.Action,
+        item: Components.Schemas.AttentionItem
+    ) {
+        if AttentionDisplay.confirmationConsequence(action) != nil {
+            guard let snapshot = model.snapshot,
+                snapshot.item.id == item.id,
+                snapshot.item.item_version == item.item_version
+            else { return }
+            pendingConfirmation = PendingConfirmation(
+                action: action,
+                reviewedSnapshot: snapshot)
+        } else {
+            perform(action, item: item)
+        }
+    }
+
+    private func perform(
+        _ action: Components.Schemas.Action,
+        item: Components.Schemas.AttentionItem?
+    ) {
+        switch action {
+        case .start_with_changes:
+            proposalEditor = .revision
+        case .snooze:
+            proposalEditor = .snooze
+        case .choose_alternative_route:
+            guard let binding = item?.finding_adjudication?.value1 else { return }
+            Task { await model.submitFindingAlternatives(selectedAlternatives(binding)) }
+        default:
+            Task { await model.submit(action) }
+        }
+    }
+}
+
+private struct DecisionFactRow: View {
+    let label: String
+    let value: String
+    let monospaced: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        Group {
+            if dynamicTypeSize >= .accessibility1 {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label)
+                        .foregroundStyle(Color.inkDim)
+                    Text(value)
+                        .foregroundStyle(Color.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                LabeledContent(label) {
+                    Text(value)
+                        .multilineTextAlignment(.trailing)
+                }
+            }
+        }
+        .font(monospaced ? FreesideFont.monoCaption : FreesideFont.callout)
+        .foregroundStyle(monospaced ? Color.inkDim : Color.ink)
     }
 }
 

@@ -21,9 +21,11 @@ Mac and iOS match on every line unless a line says otherwise.
   deadlines, run timeline, freshness banner, Mac menu bar, the sync
   and command-retry machinery, and the run-proposal card with its
   "start with changes" and snooze sheets (its full-artifact view is not),
-  plus the recommendation-led finding-adjudication card and typed route picker.
-- **Generic:** eleven of the fourteen card types render, but none has a
-  layout of its own yet.
+  plus the shared ask-first decision shell, recommendation slot, action
+  hierarchy, and the recommendation-led finding-adjudication card and typed
+  route picker.
+- **Generic:** eleven of the fourteen card types use the shared decision shell,
+  but none has a card-specific layout yet.
 - **Not yet:** one card type (`effect_proposal`), conversations, the evidence
   and spec viewers, proposal batches, the
   initiative view, the remaining blocked-reason and waiver readiness display,
@@ -36,7 +38,7 @@ Mac and iOS match on every line unless a line says otherwise.
 | --- | --- | --- |
 | Pairing | Done | §15 styling: serif title on iOS, wax failure label, accent button. |
 | Inbox | Done | §15 styling: card rows, bordered priority and status chips. Rebuilds fully once a missed notification is detected; today the 15-second heartbeat detects it, and a refresh on return to foreground is Not yet (plan §5.14). |
-| Decision detail | Done | Generic layout; per-card layouts are tracked under Cards. §15 styling: bordered action buttons, quiet-neutral applied banner, dashed claims section. |
+| Decision detail | Done | One shell orders ask, optional recommendation, actions, facts, claims, evidence, and details without repeating the navigation title. Actions rank by job and unavailable requests are recorded in Details. Accessibility Dynamic Type stacks facts and actions and collapses lower sections. Per-card layouts are tracked under Cards. |
 | Freshness banner | Done | §15 styling: tinted wash with a mono keyword; unreachable and sync-failing take the accent, revoked takes wax. |
 | Run list | Done | Filter by project; shows attached watches and deadlines. §15 styling: outcome chips (ready is quiet, in progress water, blocked accent, failed wax, not observed dashed). |
 | Run timeline | Done | §15 styling: accent-washed hold card, milestone rail, invocation status chips. |
@@ -87,6 +89,8 @@ lists open issues that will change the card.
 | Fault-class capture at resolution: a suggested value, one tap to correct, allowed to stay unknown (plan §4) | Not yet |
 | A stale submission swaps in the replacement item and says so (plan §4) | Done |
 | Actions that matter are disabled until current state is confirmed; no offline approvals in Phase 1 (plan §5.14) | Done |
+| A recommendation is rendered only when the contract supplies one; offer order never implies a recommendation | Done in the client shell; no production recommendation field exists yet, #917 |
+| Consequential stop, decline, and dismiss actions require an explicit destructive confirmation; navigation and loss-risk actions alone use icons | Done |
 | Notifications are hints only; a late one for a resolved item opens current state with no stale action (plan §4, §5.14) | Not yet (no push channel until Phase 2) |
 
 ## Behind the Scenes
@@ -104,6 +108,7 @@ user sees.
 | Relay transport, surviving host takeover without re-pairing (plan §5.19) | Later |
 | Light (Freeside) and dark (Straylight) palettes; status colors never borrow the accent (plan §15) | Done for every Done screen: contrast-safe text/wash/border tokens with Increased Contrast cuts, the three faces, bordered state chips, and quiet-neutral success (`devlog/2026-08-21-1430-design-language-restyle.md`); the macOS window title and segmented controls stay system chrome. iOS has no icon |
 | Schedules synced and shown on the run list | Done; a schedules page is Later |
+| Deterministic screenshot coverage across the inbox, every Phase 1 card, runs, timeline, and pairing at six Dynamic Type sizes | Done; pixel digests fail with inspectable PNG dumps and record only through `FREESIDE_RECORD_SCREENSHOTS=1` |
 | "Opened" receipts per delivery, and drill-down counts per card (plan §5.14, §8) | Not yet; API exists (`reportDeliveryOpened`) |
 | Device revocation | Not yet; API exists (`revokeDevice`), no screen |
 

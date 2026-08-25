@@ -82,6 +82,24 @@ struct RunsListView: View {
             self.selection = nil
         }
     }
+
+    /// The project-owned row composition without List and Picker, whose
+    /// AppKit-backed controls ImageRenderer cannot draw off-screen.
+    @ViewBuilder
+    func screenshotContent() -> some View {
+        VStack(spacing: 8) {
+            ForEach(Array(visibleRuns.prefix(5)), id: \.run.id) { snapshot in
+                RunRowView(
+                    run: snapshot.run,
+                    schedules: schedules.filter {
+                        $0.schedule.run_id == snapshot.run.id && $0.schedule.status == .armed
+                    },
+                    isSelected: selection == snapshot.run.id
+                )
+            }
+        }
+        .padding()
+    }
 }
 
 /// One run as a ground-2 card; the selected row's border turns

@@ -288,7 +288,18 @@ public final class DecisionModel {
     }
 
     public func submit(_ action: Components.Schemas.Action) async {
-        await submit(action, revision: nil, snoozeUntil: nil, alternativeChoices: nil)
+        await submit(
+            action, revision: nil, snoozeUntil: nil, alternativeChoices: nil,
+            reviewedSnapshot: nil)
+    }
+
+    func submitConfirmed(
+        _ action: Components.Schemas.Action,
+        reviewedSnapshot: Components.Schemas.AttentionItemSnapshot
+    ) async {
+        await submit(
+            action, revision: nil, snoozeUntil: nil, alternativeChoices: nil,
+            reviewedSnapshot: reviewedSnapshot)
     }
 
     public func submitFindingAlternatives(
@@ -306,9 +317,13 @@ public final class DecisionModel {
         _ action: Components.Schemas.Action,
         revision: Components.Schemas.RunProposalRevisionInput? = nil,
         snoozeUntil: Date? = nil,
-        alternativeChoices: [Components.Schemas.AlternativeChoice]? = nil
+        alternativeChoices: [Components.Schemas.AlternativeChoice]? = nil,
+        reviewedSnapshot: Components.Schemas.AttentionItemSnapshot? = nil
     ) async {
         guard actionsEnabled, isSubmittable(action), let snapshot else { return }
+        if let reviewedSnapshot {
+            guard Self.hasSameDecisionBindings(reviewedSnapshot, snapshot) else { return }
+        }
         guard (action == .start_with_changes) == (revision != nil),
             (action == .snooze) == (snoozeUntil != nil),
             (action == .choose_alternative_route) == (alternativeChoices != nil)
@@ -517,6 +532,17 @@ public final class DecisionModel {
         } catch {
             await settleAmbiguousOutcome(command, message: String(describing: error))
         }
+    }
+
+    private static func hasSameDecisionBindings(
+        _ reviewed: Components.Schemas.AttentionItemSnapshot,
+        _ current: Components.Schemas.AttentionItemSnapshot
+    ) -> Bool {
+        reviewed.entity_version == current.entity_version
+            && reviewed.item.id == current.item.id
+            && reviewed.item.item_version == current.item.item_version
+            && reviewed.item.pr_head_sha == current.item.pr_head_sha
+            && reviewed.item.artifact_digests == current.item.artifact_digests
     }
 
     /// A submit failure that proves nothing about commitment (transport
