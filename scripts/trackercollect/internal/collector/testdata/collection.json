@@ -1,0 +1,118 @@
+{
+  "MergedPullRequest:300:": {
+    "data": {
+      "repository": {
+        "defaultBranchRef": {"name": "main", "target": {"oid": "base-sha"}},
+        "pullRequest": {
+          "id": "PR_300", "databaseId": 300, "number": 300,
+          "title": "Merge the unit", "state": "MERGED", "merged": true,
+          "updatedAt": "2026-08-25T10:00:00Z", "headRefName": "work",
+          "baseRefName": "main", "body": "Closes #935",
+          "mergeCommit": {"oid": "merge-sha"},
+          "closingIssuesReferences": {
+            "nodes": [{
+              "id": "I_935", "databaseId": 935, "number": 935,
+              "title": "Collect evidence", "state": "CLOSED",
+              "updatedAt": "2026-08-25T10:00:01Z", "body": "## Dependencies\nnone",
+              "timelineItems": {"nodes": [{
+                "__typename": "ClosedEvent", "id": "CE_935",
+                "closer": {"__typename": "PullRequest", "number": 300,
+                  "merged": true, "mergeCommit": {"oid": "merge-sha"}}
+              }]}
+            }],
+            "pageInfo": {"hasNextPage": false, "endCursor": null}
+          }
+        }
+      }
+    }
+  },
+  "PinnedIssues::": {
+    "data": {"repository": {"pinnedIssues": {
+      "nodes": [{"issue": {
+        "id": "I_835", "databaseId": 835, "number": 835,
+        "title": "Wave 6 (1B.0) tracking", "state": "OPEN",
+        "updatedAt": "2026-08-25T09:00:00Z", "body": "tracker"
+      }}],
+      "pageInfo": {"hasNextPage": true, "endCursor": "next"}
+    }}}
+  },
+  "PinnedIssues::next": {
+    "data": {"repository": {"pinnedIssues": {
+      "nodes": [{"issue": {
+        "id": "I_578", "databaseId": 578, "number": 578,
+        "title": "Reliability tracking", "state": "OPEN",
+        "updatedAt": "2026-08-25T09:00:00Z", "body": "tracker"
+      }}],
+      "pageInfo": {"hasNextPage": false, "endCursor": null}
+    }}}
+  },
+  "OpenIssues::": {
+    "data": {"repository": {"issues": {
+      "nodes": [{
+        "id": "I_100", "databaseId": 100, "number": 100,
+        "title": "Ad hoc tracking", "state": "OPEN",
+        "updatedAt": "2026-08-25T09:30:00Z",
+        "body": "## Units\n- [ ] #935 — Collect evidence\n\n## Implementation Order\nPending"
+      }],
+      "pageInfo": {"hasNextPage": false, "endCursor": null}
+    }}}
+  },
+  "OpenPullRequests::": {
+    "data": {"repository": {"pullRequests": {
+      "nodes": [{
+        "id": "PR_400", "databaseId": 400, "number": 400,
+        "title": "Open work", "state": "OPEN", "merged": false,
+        "updatedAt": "2026-08-25T09:45:00Z", "headRefName": "work",
+        "baseRefName": "main", "isDraft": false,
+        "body": "## Scope\nScope: scripts/",
+        "headRepository": {"nameWithOwner": "FREESIDE-AI/FREESIDE"}
+      }],
+      "pageInfo": {"hasNextPage": false, "endCursor": null}
+    }}}
+  },
+  "PullRequestClosingIssues:400:": {
+    "data": {"repository": {"pullRequest": {
+      "id": "PR_400", "databaseId": 400, "number": 400,
+      "updatedAt": "2026-08-25T09:45:00Z",
+      "closingIssuesReferences": {
+      "nodes": [{
+        "id": "I_800", "databaseId": 800, "number": 800,
+        "title": "Linked closed issue", "state": "CLOSED",
+        "updatedAt": "2026-08-24T12:00:00Z",
+        "body": "### Scope / declared paths\n- `AGENTS.md`\n- `scripts/`\n\n### Dependencies\nnone"
+      }],
+      "pageInfo": {"hasNextPage": false, "endCursor": null}
+    }}}}
+  },
+  "IssueDetails:935:": {
+    "data": {"repository": {"issue": {
+      "id": "I_935", "databaseId": 935, "number": 935,
+      "title": "Collect evidence", "state": "CLOSED",
+      "updatedAt": "2026-08-25T10:00:01Z",
+      "body": "### Dependencies\nnone\n\n### Scope / declared paths\n- `scripts/trackercollect/`",
+      "closedByPullRequestsReferences": {
+        "nodes": [{
+          "id": "PR_300", "databaseId": 300, "number": 300,
+          "title": "Merge the unit", "state": "MERGED", "merged": true,
+          "updatedAt": "2026-08-25T10:00:00Z", "headRefName": "work",
+          "baseRefName": "main", "body": "Closes #935",
+          "headRepository": {"nameWithOwner": "freeside-ai/freeside"}
+        }],
+        "pageInfo": {"hasNextPage": false, "endCursor": null}
+      }
+    }}}
+  },
+  "IssueComments:935:": {
+    "data": {"repository": {"issue": {
+      "id": "I_935", "databaseId": 935, "number": 935,
+      "updatedAt": "2026-08-25T10:00:01Z",
+      "comments": {
+      "nodes": [{
+        "id": "IC_1", "databaseId": 9001,
+        "body": "<!-- freeside-work-claim:v1 -->\nClaim: work",
+        "createdAt": "2026-08-25T08:00:00Z", "updatedAt": "2026-08-25T08:00:00Z"
+      }],
+      "pageInfo": {"hasNextPage": false, "endCursor": null}
+    }}}}
+  }
+}

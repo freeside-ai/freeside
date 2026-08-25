@@ -1,9 +1,9 @@
 name: scripts CI
 
-# Gates the repo's maintained Bash scripts: bash syntax and shellcheck
-# over every script under scripts/ and app/scripts/ (the set AGENTS.md
-# tells contributors to run), plus the commit-message and
-# merge-result-audit regression suites (isolated synthetic repos, no
+# Gates the repo's maintained development tools: trackercollect's Go module,
+# plus bash syntax and shellcheck over every script under scripts/ and
+# app/scripts/ (the set AGENTS.md tells contributors to run), plus the
+# commit-message and merge-result-audit regression suites (isolated synthetic repos, no
 # network), the build-image reference regression suite, and the
 # check-agent-image regression suite (both use scripted container-runtime
 # stand-ins, no network), plus the Mac and iOS installer suites (command
@@ -76,6 +76,22 @@ jobs:
         run: bash scripts/test-install-mac-app.sh
       - name: iOS installer regression suite
         run: bash scripts/test-install-ios-app.sh
+
+  trackercollect:
+    name: trackercollect (build, test, vet)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scripts/trackercollect
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: scripts/trackercollect/go.mod
+          cache: false
+      - run: go build ./...
+      - run: go test ./...
+      - run: go vet ./...
 
   mac-installer:
     name: Mac installer real-Swift matrix
