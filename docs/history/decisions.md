@@ -1234,3 +1234,58 @@ Revision 38 ("The egress floor does not move"):
    run, because the bake step already provides it without a
    credential-holding network phase.
    (User; devlog 2026-08-21-1510-registry-egress-profile.md; #871.)
+
+## Revision 39
+
+Revision 39 ("Admitted agents"):
+
+1. **The agent is an admitted input** (Section 5.4): one operator-authored,
+   content-addressed document of four role-free lines (enrollment, route,
+   adapter, offer with effort), selected by a lineup line per role, admitted
+   in the same five steps every other input is, and recorded with requested,
+   admitted, and observed facts plus a behaviour-only treatment digest.
+   The stage owns the launch, so any stage runs on any adapter whose proved
+   capabilities cover it. New agent × launch pairs start attended; an
+   operator's mark in the tree is the approval. Rejected: per-axis policy
+   keys for harness, model, and effort (an unreviewed join); a qualification
+   ledger with projections and supersession (two proofs suffice); an alias
+   and withdrawal registry (the tree is the active set); a catalogue on the
+   profile (route-specific availability changes on a different cadence).
+   (User; devlog 2026-08-23-0825-admitted-agents.md.)
+2. **One identity, many client enrollments; the profile dissolves**
+   (Section 5.4). `ClientEnrollment` is identity × harness client × route ×
+   auth method with `credential_mode`, each with its own sanitized store and
+   append-only generations; the exact store locator leaves `AuthIdentity`;
+   the lease stays on the identity and fences the exact store by enrollment,
+   generation, locator, and manifest digest. `ProviderProfile`'s approval
+   role moves to agents and lineups; `enabled` and `cost_owner` become
+   identity fields. Changed assumption since revision 36: one harness client
+   per provider account. Rejected: a second identity per client (two leases
+   and two budgets on one subscription); one untyped store for all clients
+   (the lease would no longer name one exact store).
+   (User; devlog 2026-08-23-0825-admitted-agents.md.)
+3. **Never silent, not never automatic** (Sections 2, 4, 14). A project
+   lineup may name the alternate agent per failure class; the switch is a
+   new recorded attempt, carded, with failure-specific eligibility (quota
+   needs a different usage pool; two clients on one subscription are not a
+   hedge). The human gate stays the default. Changed assumption since
+   revision 36: fallback meant an unrecorded swap.
+   (User; devlog 2026-08-23-0825-admitted-agents.md.)
+4. **Review independence reads lineage, by default** (Section 7): the
+   offers' lineage groups differ, at vendor-family granularity, unknown
+   failing closed; a project lineup may relax it with a stated reason and
+   the record carries which rule applied. Supersedes the provider-plus-
+   identity comparison. Switching the review agent opens a new convergence
+   segment.
+   (User; devlog 2026-08-23-0825-admitted-agents.md.)
+5. **pi is the third adapter, via elaboration first** (Sections 5.3, 11),
+   on the ChatGPT subscription the owner records OpenAI as permitting
+   through third-party tools, with no stability commitment on that OAuth
+   interface (the route carries a dated terms basis). Source research on
+   pi 0.84.2 replaced a prior design spike: it hard-fails on a read-only
+   store at refresh, so admission step 4 and the Codex refresh pattern
+   contain it; its severance is flag-complete; its provider ids separate
+   subscription from API key. Its pre-adoption gates run against the pinned
+   build when the adapter exists. Rejected: sequencing pi behind #408 (it
+   is a second consumer of the contract, not a successor).
+   (User; devlog 2026-08-23-0825-admitted-agents.md.)
