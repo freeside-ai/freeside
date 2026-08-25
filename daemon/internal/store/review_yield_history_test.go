@@ -21,8 +21,8 @@ func TestAttentionYieldHistoryMigrationAppliesFromPriorHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 55 {
-		t.Fatalf("schema version = %d, want 55", got)
+	if got := rawVersion(t, db); got != 56 {
+		t.Fatalf("schema version = %d, want 56", got)
 	}
 	var count int
 	if err := db.QueryRowContext(ctx,

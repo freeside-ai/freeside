@@ -99,7 +99,8 @@ func TestAdmittedAgentsMigrationNarrowsIdentities(t *testing.T) {
 		if entry.Name() == "0052_admitted_agents.sql" ||
 			entry.Name() == "0053_shadow_review.sql" ||
 			entry.Name() == "0054_attention_readiness_summary.sql" ||
-			entry.Name() == "0055_attention_yield_history.sql" || entry.IsDir() {
+			entry.Name() == "0055_attention_yield_history.sql" ||
+			entry.Name() == "0056_shadow_review_configuration_approval.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())

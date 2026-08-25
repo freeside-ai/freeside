@@ -216,6 +216,8 @@ var (
 	ErrTrustProfileInconsistent          = errors.New("trust profile digest is inconsistent with the admission's operating mode")
 	ErrTrustProfileSuperseded            = errors.New("admission names a trust profile revision that is no longer active")
 	ErrReviewConfigurationUnapproved     = errors.New("trust profile does not approve the effective reviewer configuration")
+	ErrShadowApprovalDigestMismatch      = errors.New("shadow review configuration approval digest does not match its content")
+	ErrShadowReviewConfigUnapproved      = errors.New("shadow review configuration is not independently approved")
 	ErrBackupAuthorizationMissing        = errors.New("unattended admission presents no backup authorization")
 	ErrBackupEncryptionWaiverUnsupported = errors.New(
 		"backup encryption waiver is unsupported by this encrypted-checkpoint build")
