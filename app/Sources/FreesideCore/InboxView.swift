@@ -141,7 +141,7 @@ struct InboxRowView: View {
                 if let identifier = subject.identifier {
                     Text(identifier)
                         .font(FreesideFont.monoCaption)
-                        .foregroundStyle(Color.inkFaint)
+                        .foregroundStyle(Color.inkDim)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -152,7 +152,7 @@ struct InboxRowView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .freesideCard(border: isSelected ? .accentDim : .rule)
+        .freesideCard(border: isSelected ? .accentBorder : .rule)
     }
 }
 
@@ -166,10 +166,10 @@ struct PriorityBadge: View {
 
     private var color: Color {
         switch priority {
-        case .urgent: return .wax
-        case .high: return .accent
-        case .normal: return .water
-        case .low: return .inkFaint
+        case .urgent: return .waxText
+        case .high: return .accentText
+        case .normal: return .waterText
+        case .low: return .inkDim
         }
     }
 }

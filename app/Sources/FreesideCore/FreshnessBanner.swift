@@ -15,7 +15,7 @@ struct FreshnessBanner: View {
             banner(
                 "Daemon unreachable — showing cached items; actions are disabled.",
                 keyword: "Unreachable",
-                tint: .accent,
+                tint: .accentText,
                 wash: .accentWash
             )
         case .syncFailing:
@@ -25,7 +25,7 @@ struct FreshnessBanner: View {
             banner(
                 "Daemon is reachable but sync is failing — showing cached items; actions are disabled.",
                 keyword: "Sync failing",
-                tint: .accent,
+                tint: .accentText,
                 wash: .accentWashSoft,
                 foreground: .ink
             )
@@ -33,7 +33,7 @@ struct FreshnessBanner: View {
             banner(
                 "This device's access was revoked. Cached items stay readable; actions are disabled.",
                 keyword: "Revoked",
-                tint: .wax,
+                tint: .waxText,
                 wash: .waxWash
             )
         }

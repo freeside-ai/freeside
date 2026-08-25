@@ -102,7 +102,7 @@ user sees.
 | Metadata in protected storage, only the device credential in Keychain, attachments never written to disk | Done |
 | Loopback and Tailscale transports | Done, but each endpoint pairs separately today; switching without re-pairing is Not yet |
 | Relay transport, surviving host takeover without re-pairing (plan §5.19) | Later |
-| Light (Freeside) and dark (Straylight) palettes; status colors never borrow the accent (plan §15) | Done for every Done screen: tokens, the three faces, bordered state chips, and quiet-neutral success (`devlog/2026-08-21-1430-design-language-restyle.md`); the macOS window title and segmented controls stay system chrome. iOS has no icon |
+| Light (Freeside) and dark (Straylight) palettes; status colors never borrow the accent (plan §15) | Done for every Done screen: contrast-safe text/wash/border tokens with Increased Contrast cuts, the three faces, bordered state chips, and quiet-neutral success (`devlog/2026-08-21-1430-design-language-restyle.md`); the macOS window title and segmented controls stay system chrome. iOS has no icon |
 | Schedules synced and shown on the run list | Done; a schedules page is Later |
 | "Opened" receipts per delivery, and drill-down counts per card (plan §5.14, §8) | Not yet; API exists (`reportDeliveryOpened`) |
 | Device revocation | Not yet; API exists (`revokeDevice`), no screen |

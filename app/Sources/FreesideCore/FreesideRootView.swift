@@ -48,7 +48,7 @@ public struct FreesideRootView: View {
         }
         .preferredColorScheme(launchColorScheme)
         .background(Color.ground)
-        .tint(.accent)
+        .tint(.accentText)
     }
 
     private func synced(_ coordinator: SyncCoordinator) -> some View {

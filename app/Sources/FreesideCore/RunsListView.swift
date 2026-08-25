@@ -102,11 +102,11 @@ private struct RunRowView: View {
             }
             Text(run.id)
                 .font(FreesideFont.monoCaption)
-                .foregroundStyle(Color.inkFaint)
+                .foregroundStyle(Color.inkDim)
             if let campaign = RunDisplay.campaign(run) {
                 Text(campaign)
                     .font(FreesideFont.monoCaption)
-                    .foregroundStyle(Color.inkFaint)
+                    .foregroundStyle(Color.inkDim)
             }
             HStack(spacing: 8) {
                 if let stage = run.stages.last {
@@ -122,7 +122,7 @@ private struct RunRowView: View {
                     // A hold is attention; on a failed or lost run it
                     // reads as part of the failure and keeps wax.
                     Label(RunDisplay.label(hold), systemImage: "pause.circle.fill")
-                        .foregroundStyle(holdIsFailure ? Color.wax : Color.accent)
+                        .foregroundStyle(holdIsFailure ? Color.waxText : Color.accentText)
                 }
             }
             .font(FreesideFont.caption)
@@ -137,7 +137,7 @@ private struct RunRowView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .freesideCard(border: isSelected ? .accentDim : .rule)
+        .freesideCard(border: isSelected ? .accentBorder : .rule)
     }
 
     private var holdIsFailure: Bool {
@@ -162,11 +162,11 @@ struct RunOutcomeBadge: View {
 
     private var color: Color {
         switch outcome {
-        case .unobserved: .inkFaint
-        case .pending: .water
+        case .unobserved: .inkDim
+        case .pending: .waterText
         case .published: .ink
-        case .blocked: .accent
-        case .failed, .lost: .wax
+        case .blocked: .accentText
+        case .failed, .lost: .waxText
         }
     }
 }

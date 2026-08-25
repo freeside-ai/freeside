@@ -140,7 +140,7 @@ struct DecisionDetailView: View {
                                 .multilineTextAlignment(.trailing)
                         }
                         .font(FreesideFont.monoCaption)
-                        .foregroundStyle(Color.inkFaint)
+                        .foregroundStyle(Color.inkDim)
                     }
                 }
                 .padding(.top, 6)
@@ -317,7 +317,7 @@ struct DecisionDetailView: View {
             }
         }
         .font(FreesideFont.callout)
-        .foregroundStyle(Color.inkFaint)
+        .foregroundStyle(Color.inkDim)
     }
 
     @ViewBuilder
@@ -326,7 +326,7 @@ struct DecisionDetailView: View {
             bannerLabel(
                 "This item changed before your decision applied. Nothing was committed; re-review the replacement below.",
                 systemImage: "arrow.triangle.2.circlepath",
-                tint: .accent, wash: .accentWash
+                tint: .accentText, wash: .accentWash
             )
         } else {
             // An applied record persists even when the item stays open
@@ -348,7 +348,7 @@ struct DecisionDetailView: View {
                     bannerLabel(
                         "The response was lost; the decision may already be recorded.",
                         systemImage: "arrow.clockwise",
-                        tint: .accent, wash: .accentWash
+                        tint: .accentText, wash: .accentWash
                     )
                     Button("Retry") {
                         Task { await model.retryLostResponse() }
@@ -359,13 +359,13 @@ struct DecisionDetailView: View {
                 bannerLabel(
                     "Couldn't validate current state: \(message)",
                     systemImage: "exclamationmark",
-                    tint: .wax, wash: .waxWash
+                    tint: .waxText, wash: .waxWash
                 )
             } else if let message = model.submissionError {
                 bannerLabel(
                     "Submission failed: \(message)",
                     systemImage: "exclamationmark",
-                    tint: .wax, wash: .waxWash
+                    tint: .waxText, wash: .waxWash
                 )
             }
         }
@@ -483,10 +483,10 @@ struct DecisionDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             if model.validation == .pending {
                 HStack(spacing: 8) {
-                    ProgressView().controlSize(.small).tint(.water)
+                    ProgressView().controlSize(.small).tint(.waterText)
                     Text("Validating current state…")
                         .font(FreesideFont.monoCaption)
-                        .foregroundStyle(Color.inkFaint)
+                        .foregroundStyle(Color.inkDim)
                 }
             }
             // Keyed by position: the daemon boundary does not enforce
@@ -550,7 +550,7 @@ private struct FindingListLabelStyle: LabelStyle {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             configuration.icon
                 .font(.system(size: 4))
-                .foregroundStyle(Color.inkFaint)
+                .foregroundStyle(Color.inkDim)
             configuration.title
         }
     }
@@ -594,7 +594,7 @@ private struct RunProposalRevisionSheet: View {
                 Toggle("Touches control plane", isOn: $touchesControlPlane)
             }
             .navigationTitle("Start with changes")
-            .tint(.accent)
+            .tint(.accentText)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -631,7 +631,7 @@ private struct RunProposalSnoozeSheet: View {
                     "Snooze until", selection: $until, in: Date()..., displayedComponents: [.date, .hourAndMinute])
             }
             .navigationTitle("Snooze proposal")
-            .tint(.accent)
+            .tint(.accentText)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -657,8 +657,8 @@ struct HealthPostureBadge: View {
 
     private var color: Color {
         switch posture {
-        case .blocking: return .wax
-        case .advisory: return .inkFaint
+        case .blocking: return .waxText
+        case .advisory: return .inkDim
         }
     }
 }
