@@ -68,7 +68,7 @@ lists open issues that will change the card.
 | `execution_failure` | retry, retry with capabilities, discuss, stop | Generic | #869 adds "retry with another provider profile" for quota, expiry, and capacity failures: a profile picker, with cost owner and review independence shown before confirming |
 | `agent_question` | answer and retry, answer without retry, stop | Generic | #724 |
 | `publish_blocked` | rerun trust check, choose another profile, inspect the failure, stop | Generic | |
-| `ready_for_final_review` | view PR, return to agent, mark seen, dismiss, stop | Generic (clean/degraded title and evaluation-set details shown) | #839 (yield history), #724; remaining readiness display below |
+| `ready_for_final_review` | view PR, return to agent, mark seen, dismiss, stop | Generic (clean/degraded title, evaluation-set details, and per-round review-yield history shown) | #724; remaining readiness display below |
 | `run_proposal` | start, start with changes, decline, snooze | Done for actions and facts; the full proposal artifact and the revised-digest diff are Not yet | Batch grouping (see Screens) |
 | `effect_proposal` | approve, approve with changes, decline, snooze; target picked from a daemon-supplied list | Not yet | Lands with the §5.13 effect registry in 1B |
 | `system_health` | acknowledge, run doctor, stop or resume unattended, resolve re-enrollment | Generic (posture badge and re-enrollment details shown) | #868 (account-probe items), #867 (retired-identity items) |

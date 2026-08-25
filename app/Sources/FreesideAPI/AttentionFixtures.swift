@@ -258,6 +258,27 @@ public enum AttentionFixtures {
                     evaluation_set_digest: "sha256:evaluation-clean"
                 ))
             : nil
+        let yieldHistory: Components.Schemas.AttentionItem.yield_historyPayload? =
+            type == .ready_for_final_review
+            ? .init(
+                value1: .init(
+                    rounds: [
+                        .init(
+                            round: 1, findings_ingested: 2, new_findings: 2,
+                            recurring_findings: 0, fixed: 1, declined: 0, deferred: 1,
+                            outcome: .findings),
+                        .init(
+                            round: 2, findings_ingested: 2, new_findings: 1,
+                            recurring_findings: 1, fixed: 1, declined: 1, deferred: 0,
+                            outcome: .findings),
+                        .init(
+                            round: 3, findings_ingested: 0, new_findings: 0,
+                            recurring_findings: 0, fixed: 0, declined: 0, deferred: 0,
+                            outcome: .clean),
+                    ],
+                    terminal_outcome: .clean
+                ))
+            : nil
         let reviewRecoveryBinding: Components.Schemas.AttentionItem.review_recovery_bindingPayload? =
             type == .review_contradiction
             ? .init(
@@ -355,6 +376,7 @@ public enum AttentionFixtures {
             pr_head_sha: prHeadSHA,
             pr_reference: prReference,
             readiness: readiness,
+            yield_history: yieldHistory,
             commit_plan_notice: commitPlanNotice,
             review_recovery_binding: reviewRecoveryBinding,
             codex_reenrollment_recovery_binding: codexReenrollmentRecovery,

@@ -1230,6 +1230,11 @@ func normalizeAttentionItem(item domain.AttentionItem) domain.AttentionItem {
 	item.EvidenceSnapshot = nonNilSlice(item.EvidenceSnapshot)
 	item.AgentClaims = nonNilSlice(item.AgentClaims)
 	item.ArtifactDigests = nonNilSlice(item.ArtifactDigests)
+	if item.YieldHistory != nil {
+		history := *item.YieldHistory
+		history.Rounds = nonNilSlice(slices.Clone(history.Rounds))
+		item.YieldHistory = &history
+	}
 	if item.FindingAdjudication != nil {
 		binding := *item.FindingAdjudication
 		binding.Proposals = nonNilSlice(binding.Proposals)

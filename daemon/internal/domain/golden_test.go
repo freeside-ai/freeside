@@ -106,6 +106,20 @@ func TestGolden(t *testing.T) {
 	readiness := domain.ReadinessSummary{
 		Class: domain.ReadinessReadyClean, EvaluationSetDigest: "sha256:evaluation-clean",
 	}
+	yieldHistory := domain.ReviewYieldHistory{
+		Rounds: []domain.ReviewYieldRound{
+			{
+				Round: 1, FindingsIngested: 2, NewFindings: 2, Fixed: 1, Deferred: 1,
+				Outcome: domain.ReviewFindings,
+			},
+			{
+				Round: 2, FindingsIngested: 2, NewFindings: 1, RecurringFindings: 1,
+				Fixed: 1, Declined: 1, Outcome: domain.ReviewFindings,
+			},
+			{Round: 3, Outcome: domain.ReviewClean},
+		},
+		TerminalOutcome: domain.ReviewClean,
+	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-1", ProjectID: "proj-1", Subject: subject,
 		Type: domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
@@ -116,6 +130,7 @@ func TestGolden(t *testing.T) {
 		PRHeadSHA:         "cafebabe",
 		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
 		Readiness:         &readiness,
+		YieldHistory:      &yieldHistory,
 		CommitPlanNotice:  &noticeReason,
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,
@@ -1159,6 +1174,7 @@ func TestGolden(t *testing.T) {
 		{"attention_item_review_configuration", configRecoveryItem},
 		{"attention_item_finding_adjudication", findingAdjudicationItem},
 		{"attention_item_codex_reenrollment", reenrollmentItem},
+		{"review_yield_history", yieldHistory},
 		{"codex_reenrollment_recovery_transition", reenrollmentTransition},
 		{"classification", classification},
 		{"command_discuss", discussCommand},

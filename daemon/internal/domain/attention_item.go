@@ -445,6 +445,11 @@ type AttentionItem struct {
 	// always set it; nil remains valid for legacy persisted items and fake-mode
 	// items that never ran Section 6 verification. Once created it is immutable.
 	Readiness *ReadinessSummary `json:"readiness"`
+	// YieldHistory preserves the deterministic per-round routed-review digest
+	// on ready_for_final_review items. Production creators always set it; nil
+	// remains valid for legacy persisted items and fake-mode items. Once created
+	// it is immutable.
+	YieldHistory *ReviewYieldHistory `json:"yield_history"`
 	// CommitPlanNotice is the daemon-derived commit-plan notice (plan §5.6;
 	// CommitPlanNoticeReason): set when the reserved plan channel was
 	// consumed without a plan structuring the import, nil otherwise. The
@@ -533,6 +538,7 @@ type AttentionItemInput struct {
 	PRHeadSHA                        string
 	PRReference                      *PRReference
 	Readiness                        *ReadinessSummary
+	YieldHistory                     *ReviewYieldHistory
 	CommitPlanNotice                 *CommitPlanNoticeReason
 	ReviewRecoveryBinding            *ReviewRecoveryBinding
 	CodexReenrollmentRecoveryBinding *CodexReenrollmentRecoveryBinding
@@ -578,6 +584,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		PRHeadSHA:                        in.PRHeadSHA,
 		PRReference:                      clonePtr(in.PRReference),
 		Readiness:                        clonePtr(in.Readiness),
+		YieldHistory:                     cloneReviewYieldHistory(in.YieldHistory),
 		CommitPlanNotice:                 clonePtr(in.CommitPlanNotice),
 		ReviewRecoveryBinding:            clonePtr(in.ReviewRecoveryBinding),
 		CodexReenrollmentRecoveryBinding: clonePtr(in.CodexReenrollmentRecoveryBinding),
@@ -620,6 +627,15 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		}
 	}
 	return item, nil
+}
+
+func cloneReviewYieldHistory(history *ReviewYieldHistory) *ReviewYieldHistory {
+	if history == nil {
+		return nil
+	}
+	cloned := *history
+	cloned.Rounds = slices.Clone(history.Rounds)
+	return &cloned
 }
 
 // Validate reports whether the item is structurally sound. It enforces the
@@ -700,6 +716,15 @@ func (i AttentionItem) Validate() error {
 				i.ID, i.Type, ErrReadinessSummaryInconsistent)
 		}
 		if err := i.Readiness.Validate(); err != nil {
+			return fmt.Errorf("item %s: %w", i.ID, err)
+		}
+	}
+	if i.YieldHistory != nil {
+		if i.Type != AttentionReadyForFinalReview {
+			return fmt.Errorf("item %s type %q carries yield history: %w",
+				i.ID, i.Type, ErrReviewYieldHistoryInconsistent)
+		}
+		if err := i.YieldHistory.Validate(); err != nil {
 			return fmt.Errorf("item %s: %w", i.ID, err)
 		}
 	}

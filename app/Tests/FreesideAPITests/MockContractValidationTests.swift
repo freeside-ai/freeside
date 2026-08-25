@@ -119,6 +119,33 @@ import Testing
                 == "readiness on a non-ready_for_final_review item")
     }
 
+    @Test func reviewYieldHistoryIsReadyScopedConsistentAndLegacyOptional() {
+        let ready = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        #expect(MockContractValidation.itemValidityBreach(ready) == nil)
+
+        var legacy = ready
+        legacy.yield_history = nil
+        #expect(MockContractValidation.itemValidityBreach(legacy) == nil)
+
+        var wrongType = AttentionFixtures.fixture(type: .spec_approval).item
+        wrongType.yield_history = ready.yield_history
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "yield_history on a non-ready_for_final_review item")
+
+        var inconsistent = ready
+        inconsistent.yield_history?.value1.rounds[1].recurring_findings = 0
+        #expect(
+            MockContractValidation.itemValidityBreach(inconsistent)
+                == "inconsistent review yield totals")
+
+        var wrongTerminal = ready
+        wrongTerminal.yield_history?.value1.terminal_outcome = .findings
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongTerminal)
+                == "review yield terminal outcome disagrees with final round")
+    }
+
     @Test func itemValidityBreachNamesTheFailedInvariant() {
         var empty = AttentionFixtures.fixture(type: .spec_approval).item
         empty.id = ""

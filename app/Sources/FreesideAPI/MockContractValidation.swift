@@ -108,6 +108,38 @@ enum MockContractValidation {
                 return "empty readiness evaluation_set_digest"
             }
         }
+        if let history = item.yield_history?.value1 {
+            if item._type != .ready_for_final_review {
+                return "yield_history on a non-ready_for_final_review item"
+            }
+            if history.rounds.isEmpty { return "empty review yield history" }
+            var previousRound = 0
+            for round in history.rounds {
+                if round.round < 1 || round.round <= previousRound {
+                    return "invalid review yield round order"
+                }
+                let counts = [
+                    round.findings_ingested, round.new_findings, round.recurring_findings,
+                    round.fixed, round.declined, round.deferred,
+                ]
+                if counts.contains(where: { $0 < 0 }) {
+                    return "negative review yield count"
+                }
+                if round.new_findings + round.recurring_findings != round.findings_ingested
+                    || round.fixed + round.declined + round.deferred > round.findings_ingested
+                    || (round.round == 1 && round.recurring_findings != 0)
+                {
+                    return "inconsistent review yield totals"
+                }
+                if (round.outcome == .clean) != (round.findings_ingested == 0) {
+                    return "review yield outcome disagrees with findings"
+                }
+                previousRound = round.round
+            }
+            if history.terminal_outcome != history.rounds.last?.outcome {
+                return "review yield terminal outcome disagrees with final round"
+            }
+        }
         // commit_plan_notice mirrors the domain's optional daemon-derived
         // reason (#222): the generated closed enum makes the daemon's
         // ErrInvalidCommitPlanNotice arm unrepresentable here (an unknown

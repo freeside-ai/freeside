@@ -1,0 +1,35 @@
+{
+  "rounds": [
+    {
+      "round": 1,
+      "findings_ingested": 2,
+      "new_findings": 2,
+      "recurring_findings": 0,
+      "fixed": 1,
+      "declined": 0,
+      "deferred": 1,
+      "outcome": "findings"
+    },
+    {
+      "round": 2,
+      "findings_ingested": 2,
+      "new_findings": 1,
+      "recurring_findings": 1,
+      "fixed": 1,
+      "declined": 1,
+      "deferred": 0,
+      "outcome": "findings"
+    },
+    {
+      "round": 3,
+      "findings_ingested": 0,
+      "new_findings": 0,
+      "recurring_findings": 0,
+      "fixed": 0,
+      "declined": 0,
+      "deferred": 0,
+      "outcome": "clean"
+    }
+  ],
+  "terminal_outcome": "clean"
+}

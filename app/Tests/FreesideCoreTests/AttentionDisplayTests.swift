@@ -174,4 +174,29 @@ import Testing
                 .init(label: "Evaluation set", value: "sha256:evaluation-degraded"),
             ])
     }
+
+    @Test func readyReviewYieldRendersEveryRoundAndTerminalOutcome() {
+        let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
+
+        #expect(
+            AttentionDisplay.reviewYieldRows(item) == [
+                .init(
+                    label: "Review round 1",
+                    value: "2 findings · 2 new · 0 recurring · 1 fixed · 0 declined · 1 deferred · Findings"),
+                .init(
+                    label: "Review round 2",
+                    value: "2 findings · 1 new · 1 recurring · 1 fixed · 1 declined · 0 deferred · Findings"),
+                .init(
+                    label: "Review round 3",
+                    value: "0 findings · 0 new · 0 recurring · 0 fixed · 0 declined · 0 deferred · Clean"),
+                .init(label: "Terminal review", value: "Clean"),
+            ])
+    }
+
+    @Test func legacyReadyItemOmitsReviewYieldRows() {
+        var item = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        item.yield_history = nil
+
+        #expect(AttentionDisplay.reviewYieldRows(item).isEmpty)
+    }
 }

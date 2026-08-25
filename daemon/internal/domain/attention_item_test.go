@@ -154,6 +154,32 @@ func TestAttentionItemReadinessSummaryIsReadyScopedAndLegacyOptional(t *testing.
 	}
 }
 
+func TestAttentionItemReviewYieldHistoryIsReadyScopedAndLegacyOptional(t *testing.T) {
+	ready := validItemInput(domain.AttentionReadyForFinalReview)
+	history := validReviewYieldHistory()
+	ready.YieldHistory = &history
+	item, err := domain.NewAttentionItem(ready, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem(ready with yield): %v", err)
+	}
+	ready.YieldHistory.Rounds[0].NewFindings = 0
+	if item.YieldHistory.Rounds[0].NewFindings != 2 {
+		t.Fatal("yield history aliases caller-owned rounds")
+	}
+
+	legacy := validItemInput(domain.AttentionReadyForFinalReview)
+	if _, err := domain.NewAttentionItem(legacy, nil); err != nil {
+		t.Fatalf("legacy nil yield history rejected: %v", err)
+	}
+
+	wrongType := validItemInput(domain.AttentionSpecApproval)
+	history = validReviewYieldHistory()
+	wrongType.YieldHistory = &history
+	if _, err := domain.NewAttentionItem(wrongType, nil); !errors.Is(err, domain.ErrReviewYieldHistoryInconsistent) {
+		t.Fatalf("non-ready yield error = %v, want ErrReviewYieldHistoryInconsistent", err)
+	}
+}
+
 func TestAttentionItemPRReferenceIsExactAndTypeScoped(t *testing.T) {
 	t.Run("ready item requires reference", func(t *testing.T) {
 		in := validItemInput(domain.AttentionReadyForFinalReview)

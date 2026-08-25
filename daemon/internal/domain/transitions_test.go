@@ -366,6 +366,39 @@ func TestValidateAttentionItemReadinessImmutable(t *testing.T) {
 	}
 }
 
+func TestValidateAttentionItemReviewYieldHistoryImmutable(t *testing.T) {
+	withHistory := validItemInput(domain.AttentionReadyForFinalReview)
+	history := validReviewYieldHistory()
+	withHistory.YieldHistory = &history
+	stored := mustItem(t, withHistory)
+
+	for name, mutate := range map[string]func(*domain.AttentionItem){
+		"remove": func(item *domain.AttentionItem) { item.YieldHistory = nil },
+		"replace": func(item *domain.AttentionItem) {
+			replacement := validReviewYieldHistory()
+			replacement.Rounds[0].Declined = 0
+			item.YieldHistory = &replacement
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			updated := stored
+			updated.ItemVersion++
+			mutate(&updated)
+			if err := domain.ValidateAttentionItemTransition(stored, updated); !errors.Is(err, domain.ErrImmutableTransition) {
+				t.Fatalf("yield history %s error = %v, want ErrImmutableTransition", name, err)
+			}
+		})
+	}
+
+	legacy := mustItem(t, validItemInput(domain.AttentionReadyForFinalReview))
+	backfilled := legacy
+	backfilled.ItemVersion++
+	backfilled.YieldHistory = &history
+	if err := domain.ValidateAttentionItemTransition(legacy, backfilled); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("backfilling legacy yield history = %v, want ErrImmutableTransition", err)
+	}
+}
+
 // TestValidateAttentionItemSupersessionImmutable pins the condition as fixed
 // at creation (issue #321): a later write may neither add, remove, nor
 // retarget it, while an advance that carries it unchanged is legal.

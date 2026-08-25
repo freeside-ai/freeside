@@ -170,7 +170,37 @@ enum AttentionDisplay {
         rows.append(contentsOf: codexReenrollmentRecoveryRows(item))
         rows.append(contentsOf: findingAdjudicationRows(item))
         rows.append(contentsOf: readinessSummaryRows(item))
+        rows.append(contentsOf: reviewYieldRows(item))
         return rows
+    }
+
+    static func reviewYieldRows(
+        _ item: Components.Schemas.AttentionItem
+    ) -> [BindingRow] {
+        guard let history = item.yield_history?.value1 else { return [] }
+        var rows = history.rounds.map { round in
+            BindingRow(
+                label: "Review round \(round.round)",
+                value: "\(round.findings_ingested) findings · \(round.new_findings) new · "
+                    + "\(round.recurring_findings) recurring · \(round.fixed) fixed · "
+                    + "\(round.declined) declined · \(round.deferred) deferred · "
+                    + reviewOutcomeLabel(round.outcome)
+            )
+        }
+        rows.append(
+            .init(
+                label: "Terminal review",
+                value: reviewOutcomeLabel(history.terminal_outcome)))
+        return rows
+    }
+
+    private static func reviewOutcomeLabel(
+        _ outcome: Components.Schemas.ReviewOutcome
+    ) -> String {
+        switch outcome {
+        case .clean: return "Clean"
+        case .findings: return "Findings"
+        }
     }
 
     static func readinessSummaryRows(

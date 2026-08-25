@@ -63,10 +63,13 @@ import Testing
 
         #expect(clean.readiness?.value1._class == .ready_clean)
         #expect(clean.readiness?.value1.evaluation_set_digest == "sha256:evaluation-clean")
+        #expect(clean.yield_history?.value1.rounds.map(\.round) == [1, 2, 3])
+        #expect(clean.yield_history?.value1.terminal_outcome == .clean)
         #expect(degraded.readiness?.value1._class == .ready_degraded)
         #expect(
             degraded.readiness?.value1.evaluation_set_digest
                 == "sha256:evaluation-degraded")
+        #expect(degraded.yield_history == clean.yield_history)
     }
 
     /// Pins the literal ids so the `-FreesideSelect` value list mirrored

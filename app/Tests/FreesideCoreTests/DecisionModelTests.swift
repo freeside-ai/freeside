@@ -47,6 +47,7 @@ import Testing
 
         let item = try? #require(model.snapshot?.item)
         #expect(item?.readiness?.value1._class == .ready_degraded)
+        #expect(item?.yield_history?.value1.rounds.count == 3)
         #expect(item.map(AttentionDisplay.title) == "Ready for final review (degraded)")
     }
 
