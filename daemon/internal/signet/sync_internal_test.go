@@ -33,6 +33,30 @@ func TestNormalizeAttentionItemCarriesReadinessAndLegacyNull(t *testing.T) {
 	}
 }
 
+func TestNormalizeAttentionItemCarriesYieldHistoryWithoutMutation(t *testing.T) {
+	history := &domain.ReviewYieldHistory{
+		Rounds:          []domain.ReviewYieldRound{{Round: 1, Outcome: domain.ReviewClean}},
+		TerminalOutcome: domain.ReviewClean,
+	}
+	item := domain.AttentionItem{YieldHistory: history}
+
+	normalized := normalizeAttentionItem(item)
+	if normalized.YieldHistory == nil || len(normalized.YieldHistory.Rounds) != 1 {
+		t.Fatalf("normalized yield history = %+v", normalized.YieldHistory)
+	}
+	normalized.YieldHistory.Rounds[0].Round = 2
+	if item.YieldHistory.Rounds[0].Round != 1 {
+		t.Fatalf("input yield history was mutated: %+v", item.YieldHistory)
+	}
+	legacy, err := json.Marshal(normalizeAttentionItem(domain.AttentionItem{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(legacy), `"yield_history":null`) {
+		t.Fatalf("legacy sync item = %s, want yield_history null", legacy)
+	}
+}
+
 func TestPublicationAuthorityExclusivityRejectsReadyAndBlocked(t *testing.T) {
 	err := validatePublicationAuthorityExclusivity("run-1", true, true)
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {

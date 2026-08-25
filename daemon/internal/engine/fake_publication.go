@@ -2296,6 +2296,10 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 		// keep nil as the transition baseline below.
 		normalized.Readiness = expected.Readiness
 	}
+	legacyYieldHistory := current.YieldHistory == nil && expected.YieldHistory != nil
+	if legacyYieldHistory {
+		normalized.YieldHistory = expected.YieldHistory
+	}
 	normalized.ItemVersion = expected.ItemVersion
 	normalized.Status = expected.Status
 	normalized.DecidedAt = expected.DecidedAt
@@ -2317,6 +2321,9 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	}
 	if legacyReadiness {
 		expected.Readiness = nil
+	}
+	if legacyYieldHistory {
+		expected.YieldHistory = nil
 	}
 	if reflect.DeepEqual(current, expected) {
 		return true

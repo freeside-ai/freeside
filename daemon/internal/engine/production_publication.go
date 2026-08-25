@@ -3372,7 +3372,13 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		}
 		return productionTaskOutcome{}, err
 	}
-	readyExists, err := w.hasCompatibleReadyItem(ctx, task, binding, checkpoint, published, verdict)
+	yieldHistory, err := w.reviewYieldHistory(ctx, task.RunID)
+	if err != nil {
+		return productionTaskOutcome{}, err
+	}
+	readyExists, err := w.hasCompatibleReadyItem(
+		ctx, task, binding, checkpoint, published, verdict, yieldHistory,
+	)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -3396,7 +3402,7 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		if err := persistReadiness(ctx); err != nil {
 			return productionTaskOutcome{}, err
 		}
-		ready, err := w.readyItem(task, checkpoint, published, verdict)
+		ready, err := w.readyItem(task, checkpoint, published, verdict, yieldHistory)
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
@@ -3487,10 +3493,13 @@ func (w *productionPublicationWorkflow) hasCompatibleReadyItem(
 	checkpoint productionVerificationCheckpoint,
 	published publish.Result,
 	verdict domain.ReadinessVerdict,
+	yieldHistory domain.ReviewYieldHistory,
 ) (bool, error) {
 	historicalRecipes := mapsClone(w.approvedRecipes)
 	historicalRecipes[binding.image.RecipeDigest] = true
-	expectedReady, err := w.readyItemWithRecipes(task, checkpoint, published, verdict, historicalRecipes)
+	expectedReady, err := w.readyItemWithRecipes(
+		task, checkpoint, published, verdict, yieldHistory, historicalRecipes,
+	)
 	if err != nil {
 		return false, err
 	}
@@ -3499,7 +3508,7 @@ func (w *productionPublicationWorkflow) hasCompatibleReadyItem(
 		redactedCheckpoint := checkpoint
 		redactedCheckpoint.Artifacts = nil
 		expectedRedacted, err = w.readyItemWithRecipes(
-			task, redactedCheckpoint, published, verdict, historicalRecipes,
+			task, redactedCheckpoint, published, verdict, yieldHistory, historicalRecipes,
 		)
 		if err != nil {
 			return false, err
@@ -3822,6 +3831,10 @@ func (w *productionPublicationWorkflow) loadReadyPublicationOutcome(
 	candidate publish.Candidate,
 	verdict domain.ReadinessVerdict,
 ) (publish.Result, error) {
+	yieldHistory, err := w.reviewYieldHistory(ctx, task.RunID)
+	if err != nil {
+		return publish.Result{}, err
+	}
 	published, found, err := w.loadPublicationOutcome(ctx, task, candidate, func(
 		ctx context.Context,
 		candidate publish.Candidate,
@@ -3831,7 +3844,9 @@ func (w *productionPublicationWorkflow) loadReadyPublicationOutcome(
 		published := publish.Result{
 			Identity: identity, Branch: outcome.Branch, PRNumber: outcome.PRNumber,
 		}
-		compatible, err := w.hasCompatibleReadyItem(ctx, task, binding, checkpoint, published, verdict)
+		compatible, err := w.hasCompatibleReadyItem(
+			ctx, task, binding, checkpoint, published, verdict, yieldHistory,
+		)
 		if err != nil {
 			return err
 		}
@@ -4452,8 +4467,11 @@ func (w *productionPublicationWorkflow) readyItem(
 	checkpoint productionVerificationCheckpoint,
 	published publish.Result,
 	verdict domain.ReadinessVerdict,
+	yieldHistory domain.ReviewYieldHistory,
 ) (domain.AttentionItem, error) {
-	return w.readyItemWithRecipes(task, checkpoint, published, verdict, w.approvedRecipes)
+	return w.readyItemWithRecipes(
+		task, checkpoint, published, verdict, yieldHistory, w.approvedRecipes,
+	)
 }
 
 func (w *productionPublicationWorkflow) readyItemWithRecipes(
@@ -4461,6 +4479,7 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 	checkpoint productionVerificationCheckpoint,
 	published publish.Result,
 	verdict domain.ReadinessVerdict,
+	yieldHistory domain.ReviewYieldHistory,
 	approvedRecipes map[domain.Digest]bool,
 ) (domain.AttentionItem, error) {
 	runID := task.RunID
@@ -4482,6 +4501,7 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 		Readiness: &domain.ReadinessSummary{
 			Class: verdict.Class, EvaluationSetDigest: verdict.EvaluationSetDigest,
 		},
+		YieldHistory:     &yieldHistory,
 		CommitPlanNotice: checkpoint.Imported.CommitPlanNotice,
 		ItemVersion:      1, InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt: &createdAt,

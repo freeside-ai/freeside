@@ -384,8 +384,8 @@ func (tx *ReadTx) GetArtifact(ctx context.Context, id domain.ArtifactID) (domain
 }
 
 const putAttentionItemSQL = `
-INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, entity_version, as_of_revision, body)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, yield_history, entity_version, as_of_revision, body)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     project_id      = excluded.project_id,
     conversation_id = excluded.conversation_id,
@@ -421,6 +421,14 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 		}
 		readinessSummary = &encoded
 	}
+	var yieldHistory *string
+	if item.YieldHistory != nil {
+		encoded, err := encode(*item.YieldHistory)
+		if err != nil {
+			return fmt.Errorf("put attention item %q yield history: %w", item.ID, err)
+		}
+		yieldHistory = &encoded
+	}
 	existing, err := tx.existingBody(ctx, `SELECT body FROM attention_items WHERE id = ?`, item.ID)
 	if err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
@@ -455,7 +463,7 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	}
 	if _, err := tx.tx.ExecContext(ctx, putAttentionItemSQL,
 		item.ID, item.ProjectID, item.ConversationID, item.Type, item.Status,
-		item.Posture, item.Subject.RunID, readinessSummary, tx.asOfRevision, body); err != nil {
+		item.Posture, item.Subject.RunID, readinessSummary, yieldHistory, tx.asOfRevision, body); err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
 	}
 	if err := tx.putAttentionItemPRReference(ctx, item); err != nil {
@@ -534,7 +542,7 @@ func (tx *ReadTx) GetAttentionItem(ctx context.Context, id domain.ItemID) (domai
 // domain content matches, so acceptance needs the store's own version counter.
 func (tx *ReadTx) GetAttentionItemSnapshot(ctx context.Context, id domain.ItemID) (domain.AttentionItem, Snapshot, error) {
 	item, snap, err := tx.scanAttentionItemSnapshot(ctx, tx.tx.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
 	if err != nil {
 		return domain.AttentionItem{}, Snapshot{}, fmt.Errorf("get attention item %q: %w", id, notFoundOr(err))
 	}
@@ -550,7 +558,7 @@ func (tx *ReadTx) GetAttentionItemRecord(
 	id domain.ItemID,
 ) (domain.AttentionItem, error) {
 	item, _, err := scanAttentionItemRecord(tx.tx.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
 	if err != nil {
 		return domain.AttentionItem{}, fmt.Errorf("get attention item record %q: %w", id, notFoundOr(err))
 	}
@@ -593,10 +601,11 @@ func scanAttentionItemRecord(sc scanner) (domain.AttentionItem, Snapshot, error)
 		healthPosture  sql.NullString
 		subjectRunID   sql.NullString
 		readinessBody  sql.NullString
+		yieldBody      sql.NullString
 		snap           Snapshot
 		body           []byte
 	)
-	if err := sc.Scan(&id, &projectID, &conversationID, &itemType, &status, &healthPosture, &subjectRunID, &readinessBody, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
+	if err := sc.Scan(&id, &projectID, &conversationID, &itemType, &status, &healthPosture, &subjectRunID, &readinessBody, &yieldBody, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	item, err := decode[domain.AttentionItem](body)
@@ -636,6 +645,26 @@ func scanAttentionItemRecord(sc scanner) (domain.AttentionItem, Snapshot, error)
 		consistent = consistent && item.Readiness != nil && *item.Readiness == readiness
 	} else {
 		consistent = consistent && item.Readiness == nil
+	}
+	if yieldBody.Valid {
+		history, err := decode[domain.ReviewYieldHistory]([]byte(yieldBody.String))
+		if err != nil {
+			return domain.AttentionItem{}, Snapshot{}, err
+		}
+		encoded, err := encode(history)
+		if err != nil {
+			return domain.AttentionItem{}, Snapshot{}, err
+		}
+		consistent = consistent && item.YieldHistory != nil && yieldBody.String == encoded
+		if consistent {
+			itemEncoded, err := encode(*item.YieldHistory)
+			if err != nil {
+				return domain.AttentionItem{}, Snapshot{}, err
+			}
+			consistent = itemEncoded == encoded
+		}
+	} else {
+		consistent = consistent && item.YieldHistory == nil
 	}
 	// The metadata is store-stamped, so anything outside the values the Puts
 	// can produce (versions start at 1, revisions are client-visible and

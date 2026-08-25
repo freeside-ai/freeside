@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,10 @@ func TestProductionReadyItemPreservesReadinessSummary(t *testing.T) {
 		},
 	}
 	published := publish.Result{PRNumber: 123}
+	yieldHistory := domain.ReviewYieldHistory{
+		Rounds:          []domain.ReviewYieldRound{{Round: 1, Outcome: domain.ReviewClean}},
+		TerminalOutcome: domain.ReviewClean,
+	}
 
 	for _, verdict := range []domain.ReadinessVerdict{
 		{Class: domain.ReadinessReadyClean, EvaluationSetDigest: "sha256:evaluation-clean"},
@@ -60,7 +65,7 @@ func TestProductionReadyItemPreservesReadinessSummary(t *testing.T) {
 			if err := verdict.Validate(); err != nil {
 				t.Fatalf("test verdict: %v", err)
 			}
-			item, err := w.readyItem(task, checkpoint, published, verdict)
+			item, err := w.readyItem(task, checkpoint, published, verdict, yieldHistory)
 			if err != nil {
 				t.Fatalf("readyItem: %v", err)
 			}
@@ -68,6 +73,9 @@ func TestProductionReadyItemPreservesReadinessSummary(t *testing.T) {
 				item.Readiness.EvaluationSetDigest != verdict.EvaluationSetDigest {
 				t.Fatalf("ready item summary = %+v, want %q / %q",
 					item.Readiness, verdict.Class, verdict.EvaluationSetDigest)
+			}
+			if item.YieldHistory == nil || !reflect.DeepEqual(*item.YieldHistory, yieldHistory) {
+				t.Fatalf("ready item yield history = %+v, want %+v", item.YieldHistory, yieldHistory)
 			}
 		})
 	}

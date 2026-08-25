@@ -1799,6 +1799,65 @@ components:
         evaluation_set_digest:
           $ref: "#/components/schemas/Digest"
 
+    ReviewYieldRound:
+      type: object
+      description: >
+        The daemon-derived yield totals for one persisted routed-review
+        round. New and recurring findings are classified by stable finding
+        fingerprint against earlier rounds in the same reviewer-configuration
+        segment; dispositions remain attributed to the round that produced
+        the finding.
+      required:
+        - round
+        - findings_ingested
+        - new_findings
+        - recurring_findings
+        - fixed
+        - declined
+        - deferred
+        - outcome
+      additionalProperties: false
+      properties:
+        round:
+          type: integer
+          minimum: 1
+        findings_ingested:
+          type: integer
+          minimum: 0
+        new_findings:
+          type: integer
+          minimum: 0
+        recurring_findings:
+          type: integer
+          minimum: 0
+        fixed:
+          type: integer
+          minimum: 0
+        declined:
+          type: integer
+          minimum: 0
+        deferred:
+          type: integer
+          minimum: 0
+        outcome:
+          $ref: "#/components/schemas/ReviewOutcome"
+
+    ReviewYieldHistory:
+      type: object
+      description: >
+        The immutable review-yield digest derived from persisted review
+        records and finding dispositions when a candidate becomes ready.
+      required: [rounds, terminal_outcome]
+      additionalProperties: false
+      properties:
+        rounds:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ReviewYieldRound"
+        terminal_outcome:
+          $ref: "#/components/schemas/ReviewOutcome"
+
     AttentionItem:
       type: object
       description: >
@@ -1819,6 +1878,7 @@ components:
         - pr_head_sha
         - pr_reference
         - readiness
+        - yield_history
         - commit_plan_notice
         - base_freshness
         - readiness_invalidation
@@ -1901,6 +1961,17 @@ components:
             always carry it; null is tolerated for legacy persisted items and
             fake-mode items that did not run Section 6 verification. It is
             fixed at creation and never client-set.
+        yield_history:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ReviewYieldHistory"
+          description: >
+            The daemon-derived per-round review yield for this
+            ready_for_final_review item (mirrors
+            domain.AttentionItem.YieldHistory). Production-created ready
+            items always carry it; null is tolerated for legacy persisted
+            items and fake-mode items. It is fixed at creation and never
+            client-set.
         commit_plan_notice:
           nullable: true
           allOf:
@@ -2082,6 +2153,33 @@ components:
         readiness:
           class: "ready_clean"
           evaluation_set_digest: "sha256:evaluation"
+        yield_history:
+          rounds:
+            - round: 1
+              findings_ingested: 2
+              new_findings: 2
+              recurring_findings: 0
+              fixed: 1
+              declined: 0
+              deferred: 1
+              outcome: "findings"
+            - round: 2
+              findings_ingested: 2
+              new_findings: 1
+              recurring_findings: 1
+              fixed: 1
+              declined: 1
+              deferred: 0
+              outcome: "findings"
+            - round: 3
+              findings_ingested: 0
+              new_findings: 0
+              recurring_findings: 0
+              fixed: 0
+              declined: 0
+              deferred: 0
+              outcome: "clean"
+          terminal_outcome: "clean"
         commit_plan_notice: "present_but_not_honored"
         base_freshness: null
         readiness_invalidation: null
@@ -2890,6 +2988,13 @@ components:
         - run_proposal
         - system_health
         - blocked
+
+    ReviewOutcome:
+      type: string
+      description: The result of one routed-review pass.
+      enum:
+        - clean
+        - findings
 
     InterruptionClass:
       type: string

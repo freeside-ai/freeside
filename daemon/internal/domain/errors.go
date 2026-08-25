@@ -151,6 +151,7 @@ var (
 	ErrReadinessVerdictInconsistent = errors.New("readiness verdict does not match its payload")
 	ErrReadinessSummaryInconsistent = errors.New("readiness summary does not match a ready verdict")
 
+	ErrReviewYieldHistoryInconsistent     = errors.New("review yield history is internally inconsistent")
 	ErrInvalidReadinessInvalidationReason = errors.New("unknown readiness invalidation reason")
 	ErrReadinessInvalidationOutsideReview = errors.New("readiness invalidation is a ready_for_final_review semantic")
 	ErrReadinessInvalidationNotSuperseded = errors.New("readiness invalidation requires a superseded item")
