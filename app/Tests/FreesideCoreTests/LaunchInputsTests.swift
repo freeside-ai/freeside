@@ -15,6 +15,22 @@ import Testing
         #expect(LaunchInputs(colorSchemeRaw: raw, selectionRaw: nil).colorScheme == nil)
     }
 
+    @Test func contrastParsesStandardAndIncreased() {
+        #expect(
+            LaunchInputs(colorSchemeRaw: nil, contrastRaw: "standard", selectionRaw: nil)
+                .contrast == .standard)
+        #expect(
+            LaunchInputs(colorSchemeRaw: nil, contrastRaw: "increased", selectionRaw: nil)
+                .contrast == .increased)
+    }
+
+    @Test(arguments: [nil, "high", "Increased", ""] as [String?])
+    func unrecognizedContrastFollowsTheSystem(raw: String?) {
+        #expect(
+            LaunchInputs(colorSchemeRaw: nil, contrastRaw: raw, selectionRaw: nil).contrast
+                == nil)
+    }
+
     @Test(arguments: AttentionFixtures.defaultInboxItemIDs())
     func everyCanonicalItemIDIsAccepted(id: String) {
         #expect(LaunchInputs(colorSchemeRaw: nil, selectionRaw: id).selection == id)

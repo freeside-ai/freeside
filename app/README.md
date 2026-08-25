@@ -25,6 +25,7 @@ Build the daemon you point it at from the same commit as the client. The API sch
 Launch arguments also pin the presentation per launch (`LaunchInputs`), so screenshot and testing workflows drive the app without UI automation. These are launch arguments rather than environment variables because `open --args` forwards only arguments, and `xcrun simctl launch` forwards them too:
 
 - `-FreesideColorScheme light|dark`: force an appearance without touching the system setting; unset follows the system.
+- `-FreesideContrast standard|increased`: force accessibility contrast without touching the system setting; unset follows the system.
 - `-FreesideSelect <item-id>`: select the given inbox item at launch. `AttentionFixtures.defaultInboxItemIDs()` is the source of truth for the accepted values, today the default mock inbox's ids: `item-spec_approval`, `item-execution_failure`, `item-agent_question`, `item-review_diminishing_returns`, `item-review_dispute`, `item-review_contradiction`, `item-review_configuration`, `item-finding_adjudication`, `item-ready_for_final_review`, `item-publish_blocked`, `item-run_proposal`, `item-system_health`, `item-blocked`. An unknown id is ignored with a note on stderr.
 - `-FreesideInboxScope open|resolved|all`: select the inbox scope for a screenshot or automation launch.
 - `-FreesideProject <project-id>`: select the inbox project filter for a screenshot or automation launch.
@@ -82,7 +83,8 @@ APP=/tmp/freeside-dd/Build/Products/Debug/FreesideMac.app
 # One pass per appearance: launch pinned, find the window by owner
 # name (the app's display name is "Freeside"), capture it by id, quit.
 open -n "$APP" --args -ApplePersistenceIgnoreState YES \
-  -FreesideMock YES -FreesideColorScheme light -FreesideSelect item-blocked
+  -FreesideMock YES -FreesideColorScheme light -FreesideContrast standard \
+  -FreesideSelect item-blocked
 sleep 3
 WID=$(swift -e 'import CoreGraphics
 let windows = CGWindowListCopyWindowInfo(
@@ -96,7 +98,7 @@ sips -g pixelWidth -g pixelHeight light.png
 pkill -x FreesideMac
 ```
 
-Repeat with `-FreesideColorScheme dark` into `dark.png`, then compare the two `sips` outputs: a light/dark pair must be dimension-identical, and a mismatch means a launch picked up stray window state — re-capture rather than shipping the pair.
+Repeat for `light|dark` crossed with `standard|increased` to capture all four cuts, then compare the `sips` outputs: the set must be dimension-identical, and a mismatch means a launch picked up stray window state — re-capture rather than shipping it.
 
 ## Structure
 

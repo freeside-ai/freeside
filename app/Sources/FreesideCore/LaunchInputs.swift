@@ -11,6 +11,11 @@ import SwiftUI
 /// `AppSession.fromEnvironment` follow the same convention. Unset
 /// means the ordinary launch: system appearance, nothing selected.
 public struct LaunchInputs {
+    public enum Contrast: String {
+        case standard
+        case increased
+    }
+
     public enum Screen: String {
         case inbox
         case runs
@@ -22,6 +27,10 @@ public struct LaunchInputs {
     /// `-FreesideColorScheme light|dark`; unset or unrecognized
     /// follows the system.
     public let colorScheme: ColorScheme?
+
+    /// `-FreesideContrast standard|increased`; unset or unrecognized
+    /// follows the system accessibility contrast.
+    public let contrast: Contrast?
 
     /// `-FreesideSelect <item-id>`: the inbox item selected at launch.
     /// `AttentionFixtures.defaultInboxItemIDs()` is the canonical value
@@ -36,8 +45,9 @@ public struct LaunchInputs {
     public let detailsExpanded: Bool
 
     public init(
-        colorSchemeRaw: String?, selectionRaw: String?, inboxScopeRaw: String? = nil,
-        projectIDRaw: String? = nil, detailsExpanded: Bool = false, screenRaw: String? = nil
+        colorSchemeRaw: String?, contrastRaw: String? = nil, selectionRaw: String?,
+        inboxScopeRaw: String? = nil, projectIDRaw: String? = nil,
+        detailsExpanded: Bool = false, screenRaw: String? = nil
     ) {
         screen = Screen(rawValue: screenRaw ?? "") ?? .inbox
         colorScheme =
@@ -46,6 +56,7 @@ public struct LaunchInputs {
             case "dark": .dark
             default: nil
             }
+        contrast = Contrast(rawValue: contrastRaw ?? "")
         let knownSelections =
             screen == .runs
             ? RunFixtures.defaultRunIDs() : AttentionFixtures.defaultInboxItemIDs()
@@ -67,10 +78,15 @@ public struct LaunchInputs {
         let defaults = UserDefaults.standard
         return LaunchInputs(
             colorSchemeRaw: defaults.string(forKey: "FreesideColorScheme"),
+            contrastRaw: accessibilityContrastOverride(defaults: defaults)?.rawValue,
             selectionRaw: defaults.string(forKey: "FreesideSelect"),
             inboxScopeRaw: defaults.string(forKey: "FreesideInboxScope"),
             projectIDRaw: defaults.string(forKey: "FreesideProject"),
             detailsExpanded: defaults.bool(forKey: "FreesideDetailsExpanded"),
             screenRaw: defaults.string(forKey: "FreesideScreen"))
+    }
+
+    static func accessibilityContrastOverride(defaults: UserDefaults = .standard) -> Contrast? {
+        Contrast(rawValue: defaults.string(forKey: "FreesideContrast") ?? "")
     }
 }

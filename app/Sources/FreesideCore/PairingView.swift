@@ -26,7 +26,7 @@ struct PairingView: View {
                 if case .failed(let message) = model.phase {
                     Section {
                         Label(message, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(Color.wax)
+                            .foregroundStyle(Color.waxText)
                     }
                     .listRowBackground(Color.ground2)
                 }
@@ -51,7 +51,7 @@ struct PairingView: View {
             .formStyle(.grouped)
             .font(FreesideFont.body)
             .foregroundStyle(Color.ink)
-            .tint(.accent)
+            .tint(.accentText)
             .scrollContentBackground(.hidden)
             .background(Color.ground)
             .navigationTitle("Pair with Freeside")

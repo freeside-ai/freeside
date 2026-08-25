@@ -40,7 +40,7 @@ struct RunTimelineView: View {
                     .frame(maxWidth: .infinity, minHeight: 180)
                 } else {
                     ProgressView("Loading timeline…")
-                        .tint(.water)
+                        .tint(.waterText)
                         .font(FreesideFont.callout)
                         .foregroundStyle(Color.inkDim)
                         .frame(maxWidth: .infinity, minHeight: 180)
@@ -72,7 +72,7 @@ struct RunTimelineView: View {
                         .font(FreesideFont.largeTitle)
                     Text(snapshot.run.id)
                         .font(FreesideFont.monoCallout)
-                        .foregroundStyle(Color.inkFaint)
+                        .foregroundStyle(Color.inkDim)
                 }
                 Spacer()
                 RunOutcomeBadge(outcome: snapshot.run.outcome)
@@ -122,20 +122,21 @@ struct RunTimelineView: View {
 
     private func holdCard(_ hold: Components.Schemas.RunHold) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            KeywordLabel(text: "Current hold", color: holdIsFailure ? .wax : .accent)
+            KeywordLabel(text: "Current hold", color: holdIsFailure ? .waxText : .accentText)
             Text(RunDisplay.label(hold.reason))
                 .font(FreesideFont.sectionTitle)
             Text(
                 "Observed \(hold.first_observed_at.formatted(date: .abbreviated, time: .shortened)) to \(hold.last_observed_at.formatted(date: .omitted, time: .shortened))"
             )
             .font(FreesideFont.monoCaption)
-            .foregroundStyle(Color.inkFaint)
+            .foregroundStyle(Color.inkDim)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 8).fill(holdIsFailure ? Color.waxWash : Color.accentWash))
         .overlay(
-            RoundedRectangle(cornerRadius: 8).strokeBorder(holdIsFailure ? Color.wax : Color.accentDim, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 8).strokeBorder(
+                holdIsFailure ? Color.waxText : Color.accentBorder, lineWidth: 1)
         )
     }
 
@@ -147,7 +148,7 @@ struct RunTimelineView: View {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(spacing: 0) {
                         Circle()
-                            .fill(index == timeline.milestones.count - 1 ? Color.accent : Color.milestonePrior)
+                            .fill(index == timeline.milestones.count - 1 ? Color.accentBorder : Color.milestonePrior)
                             .frame(width: 10, height: 10)
                         if index < timeline.milestones.count - 1 {
                             Rectangle()
@@ -169,7 +170,7 @@ struct RunTimelineView: View {
                         }
                         Text(milestone.recorded_at.formatted(date: .abbreviated, time: .shortened))
                             .font(FreesideFont.monoCaption)
-                            .foregroundStyle(Color.inkFaint)
+                            .foregroundStyle(Color.inkDim)
                     }
                 }
             }
@@ -190,7 +191,7 @@ struct RunTimelineView: View {
                             .font(FreesideFont.sans(.headline, weight: .semibold))
                         Text(invocation.observed_at.formatted(date: .abbreviated, time: .shortened))
                             .font(FreesideFont.monoCaption)
-                            .foregroundStyle(Color.inkFaint)
+                            .foregroundStyle(Color.inkDim)
                     }
                     Spacer()
                     let presentation = InvocationPresentation(invocation, asOf: timeline.as_of)
@@ -248,23 +249,23 @@ struct InvocationPresentation {
         if !isTerminal && stale {
             label = "Observation gap"
             symbol = "exclamationmark.triangle"
-            color = .accent
+            color = .accentText
             glyph = nil
         } else {
             label = invocation.status.rawValue.capitalized
             symbol = invocation.live ? "wave.3.right.circle.fill" : "circle"
             switch invocation.status {
             case .running:
-                color = .water
+                color = .waterText
                 glyph = invocation.live ? "●" : "○"
             case .completed:
                 color = .ink
                 glyph = "✓"
             case .failed, .canceled:
-                color = .wax
+                color = .waxText
                 glyph = nil
             case .pending, .gone:
-                color = .inkFaint
+                color = .inkDim
                 glyph = invocation.live ? "●" : "○"
             }
         }
