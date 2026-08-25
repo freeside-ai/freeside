@@ -124,6 +124,9 @@ func main() {
 		case "enroll-codex":
 			runEnrollCodexMain(os.Args[2:])
 			return
+		case "approve-shadow-review":
+			runApproveShadowReviewMain(os.Args[2:])
+			return
 		case "rig":
 			runRigMain(os.Args[2:])
 			return

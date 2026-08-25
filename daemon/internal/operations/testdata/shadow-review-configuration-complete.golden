@@ -1,0 +1,11 @@
+{
+  "status": "complete",
+  "approval_digest": "sha256:4614882b085c35cc905fe8ed58242f57798d0742c5e59651e599bb8362532f6c",
+  "approval": {
+    "repo": "example/repo",
+    "repository_id": 44,
+    "source": "claude_local",
+    "configuration_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "approval_digest": "sha256:4614882b085c35cc905fe8ed58242f57798d0742c5e59651e599bb8362532f6c"
+  }
+}

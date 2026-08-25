@@ -1,0 +1,7 @@
+{
+  "repo": "freeside-ai/freeside",
+  "repository_id": 123456789,
+  "source": "claude_local",
+  "configuration_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "approval_digest": "sha256:fefaeb74873697c930a268ab72c2bc16124182b61b23b3b415da5c54e18dae8c"
+}
