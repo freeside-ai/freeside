@@ -21,7 +21,7 @@ func TestAllowedActionsByType(t *testing.T) {
 			domain.ActionContinueUnderPolicy, domain.ActionConvertToPolicy,
 		},
 		domain.AttentionReviewDispute: {
-			domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop,
+			domain.ActionApprove, domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop,
 		},
 		domain.AttentionReviewContradiction: {domain.ActionRecoverReview},
 		domain.AttentionReviewConfiguration: {

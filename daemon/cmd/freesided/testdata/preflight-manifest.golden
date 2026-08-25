@@ -110,6 +110,11 @@
       "evidence": "effective reviewer configuration digest is approved"
     },
     {
+      "name": "shadow_review_configuration",
+      "status": "passed",
+      "evidence": "shadow review is disabled by the absent image flag"
+    },
+    {
       "name": "source_implementation_identity",
       "status": "passed",
       "evidence": "source sha256:98f7ecbbe8aa0b856e2af4856e0d6ed099ac777be5cada07dc9026a9f37bdb62 deterministically reserves run run-712d5690150ec0a0162b3d17fff0be6276d50a77d051205997b0121ca8e2da91 and invocation inv-implement-run-712d5690150ec0a0162b3d17fff0be6276d50a77d051205997b0121ca8e2da91"

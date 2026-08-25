@@ -54,6 +54,31 @@ type ClassificationDecision struct {
 	Fallback          bool
 }
 
+// ConservativeClassifierDecision is the classifier site's deterministic
+// fail-safe when the daemon has no inference client. It preserves the site's
+// declared high-materiality, low-confidence fallback without letting an
+// unavailable model turn a shadow finding into missing evidence.
+func ConservativeClassifierDecision(
+	finding domain.Finding, version int,
+) ClassificationDecision {
+	output := classifierOutput{
+		Materiality: OrdinalHigh,
+		Confidence:  OrdinalLow,
+		Note:        "inference unavailable; conservative classification",
+	}
+	contract := ClassifierSite(Budget{}).Annotation
+	severity := contract.normalizedSeverity(finding.Source, string(finding.Severity))
+	return ClassificationDecision{
+		Classification: domain.Classification{
+			FindingID: finding.ID, Version: version,
+			Materiality: string(output.Materiality), Confidence: string(output.Confidence),
+			Note: "producer=deterministic/fallback; " + output.Note,
+		},
+		RequiresAttention: contract.requiresSecondAdjudication(severity, string(output.Confidence)),
+		Fallback:          true,
+	}
+}
+
 // ClassifierSite declares the first ceiling-bounded annotation site.
 func ClassifierSite(budget Budget) Site {
 	fallback := `{"materiality":"high","confidence":"low","note":"inference unavailable; conservative classification"}`
@@ -146,6 +171,16 @@ func (c *Client) ClassifyFinding(
 func (c *Client) EvaluateClassification(
 	finding domain.Finding, classification domain.Classification,
 ) (requiresAttention bool, err error) {
+	return EvaluateClassifierClassification(finding, classification)
+}
+
+// EvaluateClassifierClassification revalidates a classifier annotation
+// without requiring a live inference client. Reconstruction and the
+// deterministic unavailable-client fallback therefore consume the same
+// lattice and producer-label contract as a live site.
+func EvaluateClassifierClassification(
+	finding domain.Finding, classification domain.Classification,
+) (requiresAttention bool, err error) {
 	if !Ordinal(classification.Materiality).valid() || !Ordinal(classification.Confidence).valid() {
 		return true, errors.New("persisted classification is outside the site lattice")
 	}
@@ -154,7 +189,7 @@ func (c *Client) EvaluateClassification(
 	if !labeled || !separated || !strings.Contains(producer, "/") || strings.TrimSpace(note) == "" {
 		return true, errors.New("persisted classification lacks a producer-labeled note")
 	}
-	contract := c.sites[ClassifierSiteID].Annotation
+	contract := ClassifierSite(Budget{}).Annotation
 	return contract.requiresSecondAdjudication(
 		contract.normalizedSeverity(finding.Source, string(finding.Severity)), classification.Confidence,
 	), nil

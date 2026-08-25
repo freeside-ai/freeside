@@ -6,10 +6,12 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -71,19 +73,26 @@ type claudeDriverConfig struct {
 	RunConformance bool
 	// StateRoot and CredentialsDir locate the GitHub App authority and
 	// credential material the exact-base transport authenticates with.
-	StateRoot             string
-	CredentialsDir        string
-	OperatingMode         domain.OperatingMode
-	ReviewImage           string
-	ReviewInputRoot       string
-	ReviewAuthMode        ward.CodexAuthMode
-	ReviewAuthIdentityID  domain.AuthIdentityID
-	ReviewAuthSnapshot    string
-	ReviewInstructions    string
-	ReviewModel           string
-	ReviewReasoningEffort string
-	ReviewCostOwner       string
-	ReviewWorkspaceSizeMB int64
+	StateRoot                   string
+	CredentialsDir              string
+	OperatingMode               domain.OperatingMode
+	ReviewImage                 string
+	ReviewInputRoot             string
+	ReviewAuthMode              ward.CodexAuthMode
+	ReviewAuthIdentityID        domain.AuthIdentityID
+	ReviewAuthSnapshot          string
+	ReviewInstructions          string
+	ReviewModel                 string
+	ReviewReasoningEffort       string
+	ReviewCostOwner             string
+	ReviewWorkspaceSizeMB       int64
+	ShadowReviewImage           string
+	ShadowReviewAuthSnapshot    string
+	ShadowReviewModel           string
+	ShadowReviewReasoningEffort string
+	ShadowReviewCostOwner       string
+	ShadowReviewWorkspaceSizeMB int64
+	ShadowReviewRate            float64
 }
 
 var errBackendConformanceUnavailable = errors.New("exact passing backend conformance proof is unavailable")
@@ -143,6 +152,24 @@ func (c claudeDriverConfig) validate() error {
 	case c.OperatingMode == domain.ModeUnattended &&
 		c.ReviewAuthMode != ward.CodexAuthSubscription && c.ReviewAuthMode != ward.CodexAuthAPIKey:
 		return fmt.Errorf("-review-auth-mode is invalid")
+	case c.ShadowReviewImage != "" && c.OperatingMode != domain.ModeUnattended:
+		return fmt.Errorf("shadow review requires unattended mode")
+	case c.ShadowReviewImage == "" &&
+		(c.ShadowReviewAuthSnapshot != "" || c.ShadowReviewModel != "" ||
+			c.ShadowReviewReasoningEffort != "" || c.ShadowReviewCostOwner != ""):
+		return fmt.Errorf("-shadow-review-image is required when shadow review fields are set")
+	case c.ShadowReviewImage != "" &&
+		(c.ShadowReviewAuthSnapshot == "" || c.ShadowReviewModel == "" ||
+			c.ShadowReviewReasoningEffort == "" || c.ShadowReviewCostOwner == "" ||
+			c.ShadowReviewWorkspaceSizeMB <= 0 || math.IsNaN(c.ShadowReviewRate) ||
+			math.IsInf(c.ShadowReviewRate, 0) || c.ShadowReviewRate < 0 || c.ShadowReviewRate > 1):
+		return fmt.Errorf("complete shadow review configuration is required when enabled")
+	case c.ShadowReviewImage != "" && domain.ImageRef(c.ShadowReviewImage).Validate() != nil:
+		return fmt.Errorf("-shadow-review-image must be digest-pinned")
+	case c.ShadowReviewImage != "" &&
+		(strings.IndexByte(c.ShadowReviewModel, 0) >= 0 ||
+			strings.IndexByte(c.ShadowReviewReasoningEffort, 0) >= 0):
+		return fmt.Errorf("shadow review model configuration must be NUL-free")
 	}
 	return nil
 }
@@ -1123,22 +1150,26 @@ func isPermanentSeedCredentialError(err error) bool {
 // matching prior pass is restored. The daemon keeps the same conformance
 // closure for every scheduled doctor pass.
 type claudeComposition struct {
-	driver                    *claude.Driver
-	backend                   *ward.Backend
-	authority                 *publish.InstallationAuthorityStore
-	publicationTransport      engine.PublicationTransport
-	publisher                 *publish.Publisher
-	reviewSource              exec.ReviewSource
-	reviewRecovery            func(context.Context) error
-	reviewConfigurationDigest domain.Digest
-	reviewHostInstructions    engine.ReviewHostInstructions
-	containerBin              string
-	env                       engine.AdmissionEnvironment
-	elaborationPromptPackage  domain.Digest
-	derive                    engine.AdmissionDerivation
-	runConformance            func(context.Context) error
-	closer                    sessionCloser
-	janitor                   *janitorSession
+	driver                          *claude.Driver
+	backend                         *ward.Backend
+	authority                       *publish.InstallationAuthorityStore
+	publicationTransport            engine.PublicationTransport
+	publisher                       *publish.Publisher
+	reviewSource                    exec.ReviewSource
+	shadowReviewSource              exec.ReviewSource
+	reviewRecovery                  func(context.Context) error
+	reviewConfigurationDigest       domain.Digest
+	shadowReviewConfigurationDigest domain.Digest
+	shadowReviewCostOwner           string
+	shadowReviewRate                float64
+	reviewHostInstructions          engine.ReviewHostInstructions
+	containerBin                    string
+	env                             engine.AdmissionEnvironment
+	elaborationPromptPackage        domain.Digest
+	derive                          engine.AdmissionDerivation
+	runConformance                  func(context.Context) error
+	closer                          sessionCloser
+	janitor                         *janitorSession
 	// observeBaseTip is the base-advance watch's conditional ref read
 	// through the publish reconciler (§5.11 conditional requests; §5.16
 	// base_advance_watch consumer).
@@ -1230,6 +1261,10 @@ func composeClaudeDriver(
 		return nil, err
 	}
 	reviewConfigurationDigest, err := requireApprovedReviewConfiguration(ctx, st, cfg)
+	if err != nil {
+		return nil, err
+	}
+	shadowReviewDigests, err := requireApprovedShadowReviewConfiguration(ctx, st, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -1326,9 +1361,50 @@ func composeClaudeDriver(
 	if err != nil {
 		return nil, fmt.Errorf("compose Codex review recovery: %w", err)
 	}
+	var shadowReviewRecovery func(context.Context) error
+	var shadowReviewSource exec.ReviewSource
+	if cfg.ShadowReviewImage != "" {
+		shadowLifecycle, lifecycleErr := ward.NewClaudeReviewLifecycle(
+			runtime, wardConfig, productionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile),
+		)
+		if lifecycleErr != nil {
+			return nil, fmt.Errorf("compose Claude shadow review lifecycle: %w", lifecycleErr)
+		}
+		shadowRecovery, recoveryErr := ward.NewCodexReviewRecovery(
+			shadowLifecycle, adapters.Journal, volumeLeaser, cfg.ReviewInputRoot,
+		)
+		if recoveryErr != nil {
+			return nil, fmt.Errorf("compose Claude shadow review recovery: %w", recoveryErr)
+		}
+		shadowReviewRecovery = shadowRecovery.Reconcile
+		shadowConfig := ward.CodexReviewConfig{
+			InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
+			ProviderEndpoints: []string{"api.anthropic.com:443"},
+			ApprovedImage:     cfg.ShadowReviewImage, ObserverImage: cfg.ExporterImage,
+			Model: cfg.ShadowReviewModel, ReasoningEffort: cfg.ShadowReviewReasoningEffort,
+			AuthStoreLeaser: adapters.Leaser, AuthState: adapters.AuthState,
+			Now: func() time.Time { return time.Now().UTC() }, Journal: adapters.Journal,
+			VolumeLifecycleLeaser: volumeLeaser,
+		}
+		shadowReviewSource, err = ward.NewClaudeReviewSource(ward.CodexReviewSourceConfig{
+			Lifecycle: shadowLifecycle, Review: shadowConfig, Journal: adapters.Journal,
+			WorkspaceSizeMB: cfg.ShadowReviewWorkspaceSizeMB,
+			AuthMode:        ward.CodexAuthSetupToken, AuthIdentityID: cfg.AuthIdentityID,
+			AuthSnapshot: cfg.ShadowReviewAuthSnapshot, InstructionArtifacts: blobs,
+			ConfigurationDigest: shadowReviewDigests.runtime,
+			CostOwner:           cfg.ShadowReviewCostOwner, Now: func() time.Time { return time.Now().UTC() },
+		})
+		if err != nil {
+			return nil, fmt.Errorf("compose Claude shadow review source: %w", err)
+		}
+	}
 	if cfg.OperatingMode == domain.ModeUnattended {
+		forbiddenInstructionPaths := []string{cfg.ReviewAuthSnapshot}
+		if cfg.ShadowReviewAuthSnapshot != "" {
+			forbiddenInstructionPaths = append(forbiddenInstructionPaths, cfg.ShadowReviewAuthSnapshot)
+		}
 		reviewHostInstructions, err = engine.SnapshotReviewHostInstructions(
-			ctx, cfg.ReviewInstructions, cfg.ReviewAuthSnapshot,
+			ctx, cfg.ReviewInstructions, forbiddenInstructionPaths...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("snapshot Codex review host instructions: %w", err)
@@ -1471,9 +1547,17 @@ func composeClaudeDriver(
 			}
 		},
 		publicationTransport: publicationTransport,
-		publisher:            publisher, reviewSource: reviewSource,
-		reviewRecovery:            reviewRecovery.Reconcile,
+		publisher:            publisher, reviewSource: reviewSource, shadowReviewSource: shadowReviewSource,
+		reviewRecovery: func(recoveryCtx context.Context) error {
+			err := reviewRecovery.Reconcile(recoveryCtx)
+			if shadowReviewRecovery != nil {
+				err = errors.Join(err, shadowReviewRecovery(recoveryCtx))
+			}
+			return err
+		},
 		reviewConfigurationDigest: reviewConfigurationDigest, containerBin: cfg.ContainerBin,
+		shadowReviewConfigurationDigest: shadowReviewDigests.runtime,
+		shadowReviewCostOwner:           cfg.ShadowReviewCostOwner, shadowReviewRate: cfg.ShadowReviewRate,
 		reviewHostInstructions:   reviewHostInstructions,
 		env:                      env,
 		elaborationPromptPackage: elaborationPromptPackage,
@@ -1564,6 +1648,96 @@ func claudeReviewConfigurationDigest(cfg claudeDriverConfig) (domain.Digest, err
 		return "", fmt.Errorf("digest Codex review configuration: %w", err)
 	}
 	return digest, nil
+}
+
+func requireApprovedShadowReviewConfiguration(
+	ctx context.Context, st *store.Store, cfg claudeDriverConfig,
+) (shadowReviewDigests, error) {
+	if cfg.OperatingMode != domain.ModeUnattended || cfg.ShadowReviewImage == "" {
+		return shadowReviewDigests{}, nil
+	}
+	digests, err := shadowReviewConfigurationDigests(cfg)
+	if err != nil {
+		return shadowReviewDigests{}, err
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		profiles, err := tx.InspectLatestTrustProfiles(ctx)
+		if err != nil {
+			return err
+		}
+		matched := false
+		for _, current := range profiles {
+			if current.Repo != cfg.Repo {
+				continue
+			}
+			if current.ReconstructionError != nil || current.Profile.RepositoryID != cfg.RepositoryID {
+				return errors.Join(current.ReconstructionError, domain.ErrRepositoryIdentityMismatch)
+			}
+			matched = true
+		}
+		if !matched {
+			return fmt.Errorf("target repository has no active trust profile: %w",
+				domain.ErrShadowReviewConfigUnapproved)
+		}
+		return tx.RequireShadowReviewConfigurationApproved(
+			ctx, domain.ShadowReviewClaudeLocal, digests.approval,
+		)
+	}); err != nil {
+		return shadowReviewDigests{}, fmt.Errorf(
+			"require approved Claude shadow review configuration: %w", err,
+		)
+	}
+	return digests, nil
+}
+
+type shadowReviewDigests struct {
+	runtime  domain.Digest
+	approval domain.Digest
+}
+
+const shadowReviewCompositionDigestVersion = "freeside-shadow-review-composition/v1"
+
+func shadowReviewConfigurationDigests(cfg claudeDriverConfig) (shadowReviewDigests, error) {
+	runtimeDigest, err := ward.ClaudeReviewConfigurationDigest(ward.CodexReviewConfig{
+		InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
+		ProviderEndpoints: []string{"api.anthropic.com:443"},
+		ApprovedImage:     cfg.ShadowReviewImage, ObserverImage: cfg.ExporterImage,
+		Model: cfg.ShadowReviewModel, ReasoningEffort: cfg.ShadowReviewReasoningEffort,
+	}, cfg.ShadowReviewWorkspaceSizeMB, ward.CodexAuthSetupToken,
+		cfg.AuthIdentityID, cfg.ShadowReviewCostOwner)
+	if err != nil {
+		return shadowReviewDigests{}, fmt.Errorf(
+			"digest Claude shadow review runtime configuration: %w", err,
+		)
+	}
+	approvalDigest, err := shadowReviewCompositionDigest(runtimeDigest, cfg.ShadowReviewRate)
+	if err != nil {
+		return shadowReviewDigests{}, err
+	}
+	return shadowReviewDigests{runtime: runtimeDigest, approval: approvalDigest}, nil
+}
+
+// shadowReviewCompositionDigest extends ward's invocation-runtime digest with
+// the deployment-owned sampling rate. The runtime digest remains the value the
+// source and returned evidence re-authenticate; this outer digest is the exact
+// independently owner-approved composition from #912.
+func shadowReviewCompositionDigest(runtimeDigest domain.Digest, rate float64) (domain.Digest, error) {
+	if !contentaddr.Valid(string(runtimeDigest)) || math.IsNaN(rate) || math.IsInf(rate, 0) ||
+		rate < 0 || rate > 1 {
+		return "", errors.New("invalid Claude shadow review composition")
+	}
+	if rate == 0 {
+		rate = 0
+	}
+	body, err := json.Marshal(struct {
+		Version       string        `json:"version"`
+		RuntimeDigest domain.Digest `json:"runtime_digest"`
+		Rate          float64       `json:"rate"`
+	}{shadowReviewCompositionDigestVersion, runtimeDigest, rate})
+	if err != nil {
+		return "", fmt.Errorf("encode Claude shadow review composition: %w", err)
+	}
+	return domain.Digest(contentaddr.Sum(body)), nil
 }
 
 func bindRigInvocationResources(

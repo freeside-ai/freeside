@@ -11,7 +11,7 @@ import Testing
         .review_diminishing_returns: [
             .finish_now, .apply_then_finish, .continue_under_policy, .convert_to_policy,
         ],
-        .review_dispute: [.adjudicate, .discuss, .stop],
+        .review_dispute: [.approve, .adjudicate, .discuss, .stop],
         .review_contradiction: [.recover_review],
         .review_configuration: [.adopt_review_configuration, .discuss, .stop],
         .finding_adjudication: [
@@ -70,6 +70,14 @@ import Testing
             degraded.readiness?.value1.evaluation_set_digest
                 == "sha256:evaluation-degraded")
         #expect(degraded.yield_history == clean.yield_history)
+    }
+
+    @Test func reviewDisputeFixtureCarriesRenderableFindingEvidence() {
+        let item = AttentionFixtures.fixture(type: .review_dispute).item
+        let claim = item.agent_claims.first { $0.label.hasPrefix("Shadow finding") }
+
+        #expect(claim?.text?.content.contains("P1 shadow finding") == true)
+        #expect(claim.map { item.artifact_digests.contains($0.digest) } == true)
     }
 
     /// Pins the literal ids so the `-FreesideSelect` value list mirrored

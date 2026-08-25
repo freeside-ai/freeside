@@ -182,6 +182,13 @@ func main() {
 	reviewReasoningEffort := flags.String("review-reasoning-effort", "", "Codex review reasoning effort")
 	reviewCostOwner := flags.String("review-cost-owner", "", "account charged for Codex review")
 	reviewWorkspaceSize := flags.Int64("review-workspace-size-mb", 8192, "Codex review workspace volume size")
+	shadowReviewImage := flags.String("shadow-review-image", "", "digest-pinned Claude shadow review image (enables the shadow arm)")
+	shadowReviewAuthSnapshot := flags.String("shadow-review-auth-snapshot", "", "Claude setup-token snapshot under review-input-root")
+	shadowReviewModel := flags.String("shadow-review-model", "", "pinned Claude shadow review model")
+	shadowReviewReasoningEffort := flags.String("shadow-review-reasoning-effort", "", "Claude shadow review reasoning effort")
+	shadowReviewCostOwner := flags.String("shadow-review-cost-owner", "", "account charged for Claude shadow review")
+	shadowReviewWorkspaceSize := flags.Int64("shadow-review-workspace-size-mb", 8192, "Claude shadow review workspace volume size")
+	shadowReviewRate := flags.Float64("shadow-review-rate", 0.2, "fallback Claude shadow review sampling rate in [0,1]")
 	runConformance := flags.Bool("run-conformance", false,
 		"run and durably record the full ward suite for this exact Claude configuration before admission")
 	operatingMode := flags.String(
@@ -289,6 +296,13 @@ func main() {
 			ReviewAuthSnapshot:   *reviewAuthSnapshot, ReviewInstructions: *reviewInstructions,
 			ReviewModel: *reviewModel, ReviewReasoningEffort: *reviewReasoningEffort,
 			ReviewCostOwner: *reviewCostOwner, ReviewWorkspaceSizeMB: *reviewWorkspaceSize,
+			ShadowReviewImage:           *shadowReviewImage,
+			ShadowReviewAuthSnapshot:    *shadowReviewAuthSnapshot,
+			ShadowReviewModel:           *shadowReviewModel,
+			ShadowReviewReasoningEffort: *shadowReviewReasoningEffort,
+			ShadowReviewCostOwner:       *shadowReviewCostOwner,
+			ShadowReviewWorkspaceSizeMB: *shadowReviewWorkspaceSize,
+			ShadowReviewRate:            *shadowReviewRate,
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "freesided: -driver %q is not fake or claude\n", *driverMode)
@@ -410,6 +424,13 @@ func logEffectiveReviewConfiguration(logger *slog.Logger, digest domain.Digest) 
 		return
 	}
 	logger.Info("effective reviewer configuration", "digest", digest)
+}
+
+func enabledShadowReviewRate(source exec.ReviewSource, configured float64) float64 {
+	if source == nil {
+		return 0
+	}
+	return configured
 }
 
 func (cfg config) storeOptions() (store.Options, error) {
@@ -717,16 +738,31 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			PromptPackageDigest: claudeWiring.elaborationPromptPackage,
 			ValidateDelivery:    productionElaborationDeliveryValidator(deliveryMaterializer),
 		}))
+		var shadowReviewFailure func(domain.RunID, int, domain.ReviewFailureClass, error)
+		if claudeWiring.shadowReviewSource != nil {
+			shadowReviewFailure = func(runID domain.RunID, round int, class domain.ReviewFailureClass, err error) {
+				if cfg.Logger != nil {
+					cfg.Logger.Warn("shadow review abandoned", "run_id", runID, "round", round,
+						"failure_class", class, "error", err)
+				}
+			}
+		}
 		engineOptions = append(engineOptions, engine.WithProductionPublication(engine.ProductionPublicationConfig{
 			WorkDir:   filepath.Join(cfg.Claude.SeedRoot, "production-publication"),
 			Transport: claudeWiring.publicationTransport,
 			Publisher: claudeWiring.publisher, Artifacts: blobs,
-			ApprovedRecipes:           cfg.ApprovedRecipes,
-			ReviewSource:              claudeWiring.reviewSource,
-			ReviewRecovery:            claudeWiring.reviewRecovery,
-			ReviewConfigurationDigest: claudeWiring.reviewConfigurationDigest,
-			ReviewHostInstructions:    claudeWiring.reviewHostInstructions,
-			HoldOnly:                  cfg.Claude.OperatingMode != domain.ModeUnattended,
+			ApprovedRecipes:                 cfg.ApprovedRecipes,
+			ReviewSource:                    claudeWiring.reviewSource,
+			ShadowReviewSource:              claudeWiring.shadowReviewSource,
+			ReviewRecovery:                  claudeWiring.reviewRecovery,
+			ReviewConfigurationDigest:       claudeWiring.reviewConfigurationDigest,
+			ShadowReviewConfigurationDigest: claudeWiring.shadowReviewConfigurationDigest,
+			ShadowReviewCostOwner:           claudeWiring.shadowReviewCostOwner,
+			ShadowReviewDefaultRate: enabledShadowReviewRate(
+				claudeWiring.shadowReviewSource, claudeWiring.shadowReviewRate),
+			ShadowReviewFailure:    shadowReviewFailure,
+			ReviewHostInstructions: claudeWiring.reviewHostInstructions,
+			HoldOnly:               cfg.Claude.OperatingMode != domain.ModeUnattended,
 			NewRoom: func(image domain.ProjectImage) (engine.ProductionVerificationRoom, error) {
 				return ward.NewProjectImageRoom(claudeWiring.containerBin, image)
 			},
