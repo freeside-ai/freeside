@@ -1,0 +1,1444 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+  <meta name="design_doc_mode" content="canvas" />
+  <link href="https://fonts.googleapis.com/css2?family=Source+Serif+Pro:ital,wght@0,400;0,500;1,400&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet" />
+  <style>
+    body { margin: 0; background: #E4DDC7; }
+    a { color: #7E5D0F; text-decoration: none; border-bottom: 1px solid #B99A4A; }
+    a:hover { color: #8F6B14; border-bottom-color: #8F6B14; }
+  </style>
+</helmet>
+<div style="width: 1340px; margin: 0 auto; padding: 56px 40px 120px; background: #EDE7D6; font-family: 'IBM Plex Sans', sans-serif; color: #2B2416;">
+
+  <div data-screen-label="Cover">
+    <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: #6E6450;">Freeside · design response to the UX review · main @ 0e81ee2e</div>
+    <h1 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 44px; line-height: 1.12; margin: 14px 0 0; max-width: 900px; text-wrap: pretty;">What we should build from the review — and what we should not</h1>
+    <p style="font-size: 15px; line-height: 1.62; max-width: 780px; margin: 16px 0 0; color: #4C4432;">The review is largely right and unusually specific. Every one of its twenty-seven findings is worth acting on; nine need their solution changed, one is right but premature, and four of its proposed remedies should be refused because they trade Freeside's identity or its low-vision users for implementation convenience. Below: a verdict on every finding, then a worked example of each accepted proposal — mocked where color, type, and contrast carry the decision, wireframed where the proposal is structural.</p>
+    <div style="display: flex; gap: 44px; margin-top: 28px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">
+      <div><div style="letter-spacing: 0.12em; text-transform: uppercase; font-size: 9.5px;">Adopt as written</div><div style="font-size: 26px; color: #7E5D0F; margin-top: 4px;">17</div></div>
+      <div><div style="letter-spacing: 0.12em; text-transform: uppercase; font-size: 9.5px;">Adopt, modified</div><div style="font-size: 26px; color: #7E5D0F; margin-top: 4px;">9</div></div>
+      <div><div style="letter-spacing: 0.12em; text-transform: uppercase; font-size: 9.5px;">Right, not yet</div><div style="font-size: 26px; color: #6E6450; margin-top: 4px;">1</div></div>
+      <div><div style="letter-spacing: 0.12em; text-transform: uppercase; font-size: 9.5px;">Remedies refused</div><div style="font-size: 26px; color: #8A2D1C; margin-top: 4px;">4</div></div>
+      <div><div style="letter-spacing: 0.12em; text-transform: uppercase; font-size: 9.5px;">Worked examples</div><div style="font-size: 26px; color: #2B2416; margin-top: 4px;">12</div></div>
+    </div>
+  </div>
+
+  <sc-if value="{{ showLedger }}" hint-placeholder-val="{{ true }}">
+  <div style="margin-top: 48px; border-top: 2px solid #2B2416; padding-top: 22px;" data-screen-label="Verdict ledger">
+    <h2 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 28px; margin: 0;">Verdict ledger</h2>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 740px; margin: 8px 0 0; color: #4C4432;">All twenty-seven findings, grouped by what we intend to do about them. The example column links to the worked proposal below.</p>
+
+    <div style="margin-top: 26px; display: flex; align-items: baseline; gap: 10px;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #7E5D0F; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 3px; padding: 2px 7px;">Adopt as written</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">17 findings · the review's own solution is the one we would have chosen</span>
+    </div>
+    <div style="margin-top: 12px; display: grid; grid-template-columns: 58px minmax(0, 1fr) minmax(0, 1.55fr) 54px; font-size: 12.5px; line-height: 1.5;">
+      <sc-for list="{{ adopt }}" as="row" hint-placeholder-count="8">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 9px 10px 9px 0; border-top: 1px solid #D6CDB2;">{{ row.id }}</div>
+        <div style="padding: 9px 14px 9px 0; border-top: 1px solid #D6CDB2; font-weight: 500;">{{ row.finding }}</div>
+        <div style="padding: 9px 14px 9px 0; border-top: 1px solid #D6CDB2; color: #4C4432;">{{ row.position }}</div>
+        <div style="padding: 9px 0; border-top: 1px solid #D6CDB2; font-family: 'IBM Plex Mono', monospace; font-size: 11px;"><a href="{{ row.href }}">{{ row.ex }}</a></div>
+      </sc-for>
+    </div>
+
+    <div style="margin-top: 30px; display: flex; align-items: baseline; gap: 10px;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #7E5D0F; border: 1px solid #B99A4A; border-radius: 3px; padding: 2px 7px;">Adopt, modified</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">9 findings · the diagnosis holds, the prescription changes</span>
+    </div>
+    <div style="margin-top: 12px; display: grid; grid-template-columns: 58px minmax(0, 1fr) minmax(0, 1.55fr) 54px; font-size: 12.5px; line-height: 1.5;">
+      <sc-for list="{{ mod }}" as="row" hint-placeholder-count="6">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 9px 10px 9px 0; border-top: 1px solid #D6CDB2;">{{ row.id }}</div>
+        <div style="padding: 9px 14px 9px 0; border-top: 1px solid #D6CDB2; font-weight: 500;">{{ row.finding }}</div>
+        <div style="padding: 9px 14px 9px 0; border-top: 1px solid #D6CDB2; color: #4C4432;">{{ row.position }}</div>
+        <div style="padding: 9px 0; border-top: 1px solid #D6CDB2; font-family: 'IBM Plex Mono', monospace; font-size: 11px;"><a href="{{ row.href }}">{{ row.ex }}</a></div>
+      </sc-for>
+    </div>
+
+    <div style="margin-top: 30px; display: flex; align-items: baseline; gap: 10px;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 7px;">Right, not yet</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">1 finding</span>
+    </div>
+    <div style="margin-top: 12px; display: grid; grid-template-columns: 58px minmax(0, 1fr) minmax(0, 1.55fr) 54px; font-size: 12.5px; line-height: 1.5;">
+      <sc-for list="{{ later }}" as="row" hint-placeholder-count="1">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 9px 10px 9px 0; border-top: 1px solid #D6CDB2;">{{ row.id }}</div>
+        <div style="padding: 9px 14px 9px 0; border-top: 1px solid #D6CDB2; font-weight: 500;">{{ row.finding }}</div>
+        <div style="padding: 9px 14px 9px 0; border-top: 1px solid #D6CDB2; color: #4C4432;">{{ row.position }}</div>
+        <div style="padding: 9px 0; border-top: 1px solid #D6CDB2; font-family: 'IBM Plex Mono', monospace; font-size: 11px;"><a href="{{ row.href }}">{{ row.ex }}</a></div>
+      </sc-for>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ showDeclined }}" hint-placeholder-val="{{ true }}">
+  <div style="margin-top: 40px; background: #E8E2CD; border: 1px solid #D6CDB2; border-radius: 10px; padding: 22px 26px;" data-screen-label="Refusals">
+    <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #8A2D1C;">Four remedies to refuse</div>
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px 40px; margin-top: 16px;">
+      <div>
+        <div style="font-size: 14px; font-weight: 600;">P0-1 Solution A — cap Dynamic Type inside cards</div>
+        <p style="font-size: 13px; line-height: 1.55; margin: 5px 0 0; color: #4C4432;">The review calls this the wrong product decision and it is right. Capping trades a layout bug for a permanent exclusion of the users who chose the larger text. Reflow instead — <a href="#1a">1a</a>.</p>
+      </div>
+      <div>
+        <div style="font-size: 14px; font-weight: 600;">P0-2 Solution A — swap the palette for system colors</div>
+        <p style="font-size: 13px; line-height: 1.55; margin: 5px 0 0; color: #4C4432;">This discards the thing the same review calls a product advantage in order to inherit four variants we can author in a day. Author them — <a href="#1b">1b</a>.</p>
+      </div>
+      <div>
+        <div style="font-size: 14px; font-weight: 600;">System red for destructive controls</div>
+        <p style="font-size: 13px; line-height: 1.55; margin: 5px 0 0; color: #4C4432;">Wax is Freeside's failure and revocation color everywhere else; a red Stop beside a wax "failed" chip teaches two reds. Keep wax in content, and take the native destructive <i>role</i> only on system-owned surfaces — confirmations, menus — where the system paints its own red. Fix wax's dusk contrast instead — <a href="#1b">1b</a>.</p>
+      </div>
+      <div>
+        <div style="font-size: 14px; font-weight: 600;">Sticky action footer on macOS</div>
+        <p style="font-size: 13px; line-height: 1.55; margin: 5px 0 0; color: #4C4432;">A bar floating over a desktop detail pane is a web habit. The Mac has the width to keep the primary action in view without one: put it in the card's trailing action area — <a href="#1g">1g</a>. Keep the sticky safe-area inset on iPhone only.</p>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <div style="margin-top: 64px; border-top: 2px solid #2B2416; padding-top: 22px;">
+    <h2 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 30px; margin: 0;">Worked proposals</h2>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 800px; margin: 8px 0 0; color: #4C4432;">Twelve examples covering every accepted finding. Fidelity is a decision, not a default: contrast, badge weight, and recommendation prominence are argued as mocks because their entire content is color and type. Navigation and pane structure are argued as wireframes, because a mock there only invites an argument about paint.</p>
+  </div>
+
+  <div id="1a" data-screen-label="1a Accessibility composition" style="margin-top: 52px; border-top: 1px solid #D6CDB2; padding-top: 24px;">
+    <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; color: #7E5D0F; border: 1px solid #8F6B14; border-radius: 3px; padding: 2px 7px;">1a</span>
+      <h3 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 24px; margin: 0;">The accessibility composition</h3>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Mock · iPhone · AX5</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">P0-1</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #7E5D0F; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 3px; padding: 2px 6px;">Client only</span>
+    </div>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 830px; margin: 10px 0 0; color: #4C4432;">Reflowing the existing card is necessary but not sufficient: at AX5 a phone shows roughly four words a line, so the card must also decide what the operator sees <i>first</i>. This is the same content in the same order as <a href="#1c">1c</a> — the accessibility composition is not a separate design, it is the recommendation-led card with every horizontal pair broken into a vertical one and everything below the recommendation collapsed by default.</p>
+    <div style="display: flex; gap: 26px; flex-wrap: wrap; align-items: flex-start; margin-top: 22px;">
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">As built · AX5 · text drawn at 0.62×</div>
+        <div style="width: 393px; background: #EDE7D6; border: 1px solid #C9BFA2; border-radius: 16px; overflow: hidden;">
+          <div style="padding: 12px 16px 10px; background: #E4DDC7; border-bottom: 1px solid #D6CDB2;">
+            <div style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 30px; white-space: nowrap; overflow: hidden;">Spec approval</div>
+          </div>
+          <div style="margin: 12px; background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 14px;">
+            <div style="display: flex; gap: 6px; align-items: flex-start;">
+              <div style="flex: 1; font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 26px; white-space: nowrap; overflow: hidden;">Spec approval</div>
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 17px; color: #8F6B14; border: 1px solid #B99A4A; border-radius: 3px; padding: 1px 4px; width: 30px; word-break: break-all; line-height: 1.05;">high</span>
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 17px; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 1px 4px; width: 28px; word-break: break-all; line-height: 1.05;">open</span>
+            </div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 15px; color: #94896E; margin-top: 6px; white-space: nowrap; overflow: hidden;">Created Jan 1, 2026 at 9:04 PM</div>
+            <div style="font-size: 21px; line-height: 1.3; margin-top: 10px;">the spec for the auth work is ready for approval</div>
+            <div style="height: 40px; border: 1px solid #B99A4A; border-radius: 6px; margin-top: 12px; overflow: hidden; display: flex; align-items: center; justify-content: center;"><span style="font-size: 22px; color: #8F6B14; white-space: nowrap;">Approve</span></div>
+            <div style="height: 40px; border: 1px solid #C9BFA2; border-radius: 6px; margin-top: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; opacity: 0.45;"><span style="font-size: 22px; color: #6E6450; white-space: nowrap;">Request changes</span></div>
+            <div style="display: flex; justify-content: space-between; gap: 10px; margin-top: 14px; overflow: hidden;">
+              <span style="font-size: 19px; color: #6E6450; white-space: nowrap;">Expected cost</span>
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 19px; white-space: nowrap;">1 200 units</span>
+            </div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #8A2D1C; margin-top: 14px; line-height: 1.5;">↑ header clipped · chips wrap per character · label and value collide · buttons clip their own labels</div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Proposed · AX5 · text drawn at 0.62×</div>
+        <div style="width: 393px; background: #EDE7D6; border: 1px solid #C9BFA2; border-radius: 16px; overflow: hidden;">
+          <div style="padding: 10px 16px; background: #E4DDC7; border-bottom: 1px solid #D6CDB2; display: flex; align-items: baseline; gap: 8px;">
+            <span style="font-size: 17px; color: #7E5D0F;">‹ Inbox</span>
+            <span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 20px; margin-left: auto;">Spec approval</span>
+          </div>
+          <div style="margin: 12px; background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 16px;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 15px; line-height: 1.5; color: #4C4432;">
+              <div style="color: #8F6B14;">HIGH PRIORITY</div>
+              <div>WAITING 12 MIN</div>
+            </div>
+            <div style="font-family: 'Source Serif Pro', serif; font-size: 25px; line-height: 1.28; margin-top: 12px; text-wrap: pretty;">Approve the authentication work specification?</div>
+            <div style="margin-top: 16px; background: #E9DFC2; border: 1px solid #8F6B14; border-radius: 8px; padding: 14px;">
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 14px; letter-spacing: 0.08em; color: #7E5D0F;">✓ RECOMMENDED</div>
+              <div style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 26px; margin-top: 6px;">Approve</div>
+              <div style="font-size: 18px; line-height: 1.45; margin-top: 10px; color: #4C4432;">The plan stays inside the approved auth surface. Two of three questions are resolved.</div>
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 15px; margin-top: 10px; color: #4C4432;">CONFIDENCE HIGH</div>
+              <div style="margin-top: 14px; background: #7E5D0F; border-radius: 8px; padding: 14px 12px; text-align: center;"><span style="font-size: 21px; font-weight: 600; color: #F3EEE1; line-height: 1.3;">Approve</span></div>
+            </div>
+            <div style="margin-top: 14px; border: 1px solid #C9BFA2; border-radius: 8px; padding: 13px 12px; text-align: center;"><span style="font-size: 19px; color: #4C4432;">Review changes</span></div>
+            <div style="margin-top: 8px; border: 1px solid #C9BFA2; border-radius: 8px; padding: 13px 12px; text-align: center;"><span style="font-size: 19px; color: #4C4432;">Other actions (2)</span></div>
+            <div style="margin-top: 18px; border-top: 1px solid #DDD4B9; padding-top: 12px;">
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 14px; letter-spacing: 0.08em; color: #4C4432;">KEY FACTS</div>
+              <div style="margin-top: 10px;">
+                <div style="font-size: 16px; color: #4C4432;">Declared paths</div>
+                <div style="font-family: 'IBM Plex Mono', monospace; font-size: 19px; margin-top: 2px;">3</div>
+              </div>
+              <div style="margin-top: 10px;">
+                <div style="font-size: 16px; color: #4C4432;">Control plane</div>
+                <div style="font-family: 'IBM Plex Mono', monospace; font-size: 19px; margin-top: 2px;">Not touched</div>
+              </div>
+            </div>
+            <div style="margin-top: 14px; display: flex; flex-direction: column; gap: 10px;">
+              <div style="display: flex; gap: 8px; align-items: baseline; font-size: 18px; color: #4C4432;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 14px;">▸</span><span>Agent summary, unverified</span></div>
+              <div style="display: flex; gap: 8px; align-items: baseline; font-size: 18px; color: #4C4432;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 14px;">▸</span><span>Evidence (2)</span></div>
+              <div style="display: flex; gap: 8px; align-items: baseline; font-size: 18px; color: #4C4432;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 14px;">▸</span><span>Technical details</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="width: 300px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">What changed</div>
+        <div style="font-size: 13px; line-height: 1.62; color: #4C4432; display: flex; flex-direction: column; gap: 12px;">
+          <div><b style="color: #2B2416;">No repeated title.</b> The navigation bar names the type; the card opens on the question. That alone returns a full line of text at AX5 (P2-1).</div>
+          <div><b style="color: #2B2416;">Badges become a text line.</b> Priority and waiting time as a two-line mono block: no chip geometry to break, no per-character wrapping, and <code style="font-family: 'IBM Plex Mono', monospace;">open</code> is gone in the Open scope (P2-2).</div>
+          <div><b style="color: #2B2416;">Facts stack.</b> Every label/value pair becomes label above value at accessibility sizes; nothing competes for the same line.</div>
+          <div><b style="color: #2B2416;">Everything below the recommendation collapses.</b> Three disclosure rows instead of four expanded sections: the reachable content in the first screen is the decision, not the schema.</div>
+        </div>
+      </div>
+    </div>
+    <sc-if value="{{ showNotes }}" hint-placeholder-val="{{ true }}">
+    <div style="margin-top: 22px; border-top: 1px solid #D6CDB2; padding-top: 12px; display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 16px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450;">Build rules</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.65; color: #4C4432; columns: 2; column-gap: 34px;">
+        <li>Switch composition on the size category, not on width: at <code style="font-family: 'IBM Plex Mono', monospace;">.accessibilityMedium</code> and above, header, facts, and action rows go vertical.</li>
+        <li>Chips render single-line and non-compressible, or they render as text. Never a fixed-width chip with wrapping content.</li>
+        <li>Buttons grow vertically; labels wrap to two lines rather than truncating.</li>
+        <li>Disclosure state is composition-dependent: expanded at standard sizes, collapsed at accessibility sizes.</li>
+        <li>VoiceOver order matches the visual order exactly: type, urgency, ask, recommendation, action, facts, evidence, details.</li>
+        <li>Screenshot regression at xSmall, Large, xxxLarge, AX1, AX3, AX5 for inbox, every card type, run list, run timeline, and pairing.</li>
+      </ul>
+    </div>
+    </sc-if>
+  </div>
+
+  <div id="1b" data-screen-label="1b Contrast-safe semantics" style="margin-top: 52px; border-top: 1px solid #D6CDB2; padding-top: 24px;">
+    <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; color: #7E5D0F; border: 1px solid #8F6B14; border-radius: 3px; padding: 2px 7px;">1b</span>
+      <h3 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 24px; margin: 0;">Text, wash, border — one semantic, three jobs</h3>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Mock · tokens · both grounds</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">P0-2</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #7E5D0F; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 3px; padding: 2px 6px;">Client only</span>
+    </div>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 830px; margin: 10px 0 0; color: #4C4432;">The palette is not the problem; asking one hex to be a chip fill, a hairline, and eleven-point text is. Every semantic splits into <code style="font-family: 'IBM Plex Mono', monospace;">…Text</code>, <code style="font-family: 'IBM Plex Mono', monospace;">…Wash</code>, and <code style="font-family: 'IBM Plex Mono', monospace;">…Border</code>, each held to the threshold its job actually has: 4.5 for text, 3.0 for borders and indicators, none for washes. The hue does not move — only the lightness needed to clear the ratio. Faint ink stops being a text color altogether.</p>
+    <div style="display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; margin-top: 22px;">
+      <div style="background: #EDE7D6; border: 1px solid #C9BFA2; border-radius: 12px; padding: 20px; width: 470px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #4C4432;">Freeside · day · measured on the card ground #F3EEE1</div>
+        <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 14px; margin-top: 12px; display: flex; flex-direction: column; gap: 11px;">
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: #4C4432;"><span>token</span><span>sample</span><span>hex</span><span>ratio</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">ink</span><span style="color: #2B2416;">Binding digest verified</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">2B2416</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">13.3 ✓</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">inkDim</span><span style="color: #6E6450;">Waiting 12 minutes</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">6E6450</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">5.0 ✓</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; text-decoration: line-through; color: #6E6450;">inkFaint</span><span style="color: #94896E;">retired as a text color</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">94896E</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #8A2D1C;">3.0 ✗</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">accentText</span><span style="color: #7E5D0F; font-weight: 500;">Recommended · Approve</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">7E5D0F</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">4.9 ✓</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">accentBorder</span><span><span style="display: inline-block; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 3px; padding: 1px 7px; font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #7E5D0F;">urgent</span></span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">8F6B14</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">4.0 ✓</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">waxText</span><span style="color: #8A2D1C;">Verification failed</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">8A2D1C</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">7.3 ✓</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">waterText</span><span style="color: #3F6F74;">In progress · round 2</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">3F6F74</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">4.6 ✓</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">was water</span><span style="color: #6F9EA3;">In progress · round 2</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">6F9EA3</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #8A2D1C;">2.6 ✗</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr; gap: 10px; align-items: center; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">washes</span><span style="display: flex; gap: 6px;"><span style="width: 46px; height: 18px; background: #E9DFC2; border-radius: 3px;"></span><span style="width: 46px; height: 18px; background: #E8D5C9; border-radius: 3px;"></span><span style="width: 46px; height: 18px; background: #DCE6E4; border-radius: 3px;"></span><span style="width: 46px; height: 18px; background: #E8E2CD; border-radius: 3px;"></span></span></div>
+        </div>
+      </div>
+      <div style="background: #16120E; border: 1px solid #322A1E; border-radius: 12px; padding: 20px; width: 470px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #B3A88E;">Straylight · dusk · measured on the card ground #1E1812</div>
+        <div style="background: #1E1812; border: 1px solid #322A1E; border-radius: 8px; padding: 14px; margin-top: 12px; display: flex; flex-direction: column; gap: 11px;">
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: #B3A88E;"><span>token</span><span>sample</span><span>hex</span><span>ratio</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #B3A88E;">ink</span><span style="color: #EAE3CF;">Binding digest verified</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">EAE3CF</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">13.7 ✓</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #B3A88E;">inkDim</span><span style="color: #B3A88E;">Waiting 12 minutes</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">B3A88E</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">7.5 ✓</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; text-decoration: line-through; color: #B3A88E;">inkFaint</span><span style="color: #7D7460;">retired as a text color</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">7D7460</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #C55F3E;">3.8 ✗</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #B3A88E;">accentText</span><span style="color: #C2912E; font-weight: 500;">Recommended · Approve</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">C2912E</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">6.2 ✓</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #B3A88E;">accentBorder</span><span><span style="display: inline-block; border: 1px solid #8A6A26; background: #26200F; border-radius: 3px; padding: 1px 7px; font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #C2912E;">urgent</span></span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">8A6A26</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">3.1 ✓</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #B3A88E;">waxText</span><span style="color: #C55F3E;">Verification failed</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">C55F3E</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">4.6 ✓</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #B3A88E;">was wax</span><span style="color: #9A3520;">Verification failed</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">9A3520</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #C55F3E;">2.4 ✗</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr 62px 58px; gap: 10px; align-items: baseline; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #B3A88E;">waterText</span><span style="color: #7FAAAF;">In progress · round 2</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">7FAAAF</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">6.9 ✓</span></div>
+          <div style="display: grid; grid-template-columns: 118px 1fr; gap: 10px; align-items: center; font-size: 12px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #B3A88E;">washes</span><span style="display: flex; gap: 6px;"><span style="width: 46px; height: 18px; background: #26200F; border-radius: 3px;"></span><span style="width: 46px; height: 18px; background: #241310; border-radius: 3px;"></span><span style="width: 46px; height: 18px; background: #17201F; border-radius: 3px;"></span><span style="width: 46px; height: 18px; background: #221C11; border-radius: 3px;"></span></span></div>
+        </div>
+      </div>
+      <div style="width: 300px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Increased Contrast cuts</div>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; gap: 8px; align-items: stretch;">
+            <div style="flex: 1; background: #EDE7D6; border: 1px solid #C9BFA2; border-radius: 6px; padding: 9px 11px;"><div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432;">DAY · IC</div><div style="color: #6B4E0B; font-size: 12.5px; font-weight: 500; margin-top: 3px;">Recommended</div><div style="color: #71230F; font-size: 12.5px;">Failed</div><div style="color: #33595E; font-size: 12.5px;">In progress</div></div>
+            <div style="flex: 1; background: #16120E; border: 1px solid #322A1E; border-radius: 6px; padding: 9px 11px;"><div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #B3A88E;">DUSK · IC</div><div style="color: #E0AE46; font-size: 12.5px; font-weight: 500; margin-top: 3px;">Recommended</div><div style="color: #DC7A57; font-size: 12.5px;">Failed</div><div style="color: #9CC3C7; font-size: 12.5px;">In progress</div></div>
+          </div>
+          <div style="font-size: 12.5px; line-height: 1.6; color: #4C4432;">Four cuts per semantic — day, dusk, day IC, dusk IC — declared in one asset catalog entry so Increase Contrast actually moves the custom colors. Rules also step up (day <code style="font-family: 'IBM Plex Mono', monospace;">B9AF92</code>, dusk <code style="font-family: 'IBM Plex Mono', monospace;">4A3F2C</code>) so the card edge survives without a fill.</div>
+          <div style="font-size: 12.5px; line-height: 1.6; color: #4C4432; margin-top: 2px;"><b style="color: #2B2416;">Wax keeps the seal.</b> Its dusk value gets a legibility lift, not a replacement: the brand register already treats the dusk wax as a lift of one artifact colour, so this is in policy.</div>
+        </div>
+      </div>
+    </div>
+    <sc-if value="{{ showNotes }}" hint-placeholder-val="{{ true }}">
+    <div style="margin-top: 22px; border-top: 1px solid #D6CDB2; padding-top: 12px; display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 16px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450;">Build rules</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.65; color: #4C4432; columns: 2; column-gap: 34px;">
+        <li>Ratios above are computed sRGB values against the card ground; the build must assert them in a test, not trust this sheet.</li>
+        <li>Text tokens are the only ones a <code style="font-family: 'IBM Plex Mono', monospace;">Text</code> view may use. A lint rule on <code style="font-family: 'IBM Plex Mono', monospace;">.foregroundStyle(.accent)</code> is cheaper than another audit.</li>
+        <li>Mono chips at 9–10pt are small text: they take the text token, never the border token.</li>
+        <li>Washes carry no threshold because they carry no meaning alone — every wash pairs with a text token and a glyph.</li>
+        <li>Differentiate Without Color is a separate pass from contrast; see <a href="#1e">1e</a> for selection and <a href="#1h">1h</a> for status glyphs.</li>
+      </ul>
+    </div>
+    </sc-if>
+  </div>
+
+  <div id="1c" data-screen-label="1c Recommendation-led card" style="margin-top: 52px; border-top: 1px solid #D6CDB2; padding-top: 24px;">
+    <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; color: #7E5D0F; border: 1px solid #8F6B14; border-radius: 3px; padding: 2px 7px;">1c</span>
+      <h3 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 24px; margin: 0;">The recommendation-led card</h3>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Mock · iPhone 393</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">P1-1 · P1-4 · P2-1 · P2-12 · P3-2</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #7E5D0F; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 3px; padding: 2px 6px;">Client · shell</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #4C4432; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Wave 7 · recommendation authority</span>
+    </div>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 830px; margin: 10px 0 0; color: #4C4432;">One shell for all eleven card types: <b>ask → recommendation → why → confidence → accepting action → facts → claims → evidence → details</b>. The recommendation block owns the primary action, so the reasoning and the button that acts on it can never drift apart. Everything that made the old card feel like a control panel — the repeated title, the absolute timestamp, the four equal buttons — comes out.</p>
+    <div style="display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; margin-top: 22px;">
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">As built · spec approval</div>
+        <div style="width: 370px; background: #F3EEE1; border: 1px solid #D0C6A8; border-radius: 10px; padding: 18px;">
+          <div style="display: flex; align-items: flex-start; gap: 8px;">
+            <div style="flex: 1;"><div style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 20px;">Spec approval</div><div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #94896E; margin-top: 3px;">Created Jan 1, 2026 at 9:04 PM</div></div>
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #8F6B14; border: 1px solid #B99A4A; border-radius: 3px; padding: 1px 6px;">high</span>
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 1px 6px;">open</span>
+          </div>
+          <p style="font-size: 13px; line-height: 1.5; margin: 12px 0 0;">the spec for the auth work is ready for approval</p>
+          <div style="text-align: center; font-size: 12.5px; font-weight: 600; color: #8F6B14; background: #F3EEE1; border: 1px solid #B99A4A; border-radius: 6px; padding: 7px 0; margin-top: 12px;">Approve</div>
+          <div style="text-align: center; font-size: 12.5px; font-weight: 600; color: #6E6450; border: 1px solid #C9BFA2; border-radius: 6px; padding: 7px 0; margin-top: 7px; opacity: 0.45;">Request changes</div>
+          <div style="text-align: center; font-size: 12.5px; font-weight: 600; color: #6E6450; border: 1px solid #C9BFA2; border-radius: 6px; padding: 7px 0; margin-top: 7px; opacity: 0.45;">Discuss</div>
+          <div style="text-align: center; font-size: 12.5px; font-weight: 600; color: #8A2D1C; border: 1px solid #8A2D1C; border-radius: 6px; padding: 7px 0; margin-top: 7px;">Stop</div>
+          <div style="font-size: 11px; color: #94896E; margin-top: 8px;">Actions carrying discussion or parameters arrive with later units.</div>
+          <div style="background: #EDE7D6; border: 1px solid #D6CDB2; border-radius: 8px; padding: 10px 12px; margin-top: 12px;"><div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.12em; color: #94896E;">EVIDENCE</div><div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; margin-top: 5px;">verify_log</div></div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #8A2D1C; margin-top: 12px; line-height: 1.5;">The first viewport is four buttons and a roadmap note. Nothing here says what to do or why.</div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Proposed · first viewport</div>
+        <div style="width: 393px; background: #EDE7D6; border: 1px solid #C9BFA2; border-radius: 16px; overflow: hidden;">
+          <div style="padding: 9px 14px; background: #E4DDC7; border-bottom: 1px solid #D6CDB2; display: flex; align-items: baseline;">
+            <span style="font-size: 13.5px; color: #7E5D0F;">‹ Inbox</span>
+            <span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 15px; margin-left: auto;">Spec approval</span>
+          </div>
+          <div style="margin: 12px; background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 16px;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.1em; color: #4C4432;">HIGH PRIORITY · WAITING 12 MIN</div>
+            <div style="font-family: 'Source Serif Pro', serif; font-size: 19px; line-height: 1.32; margin-top: 10px; text-wrap: pretty;">Approve the authentication work specification?</div>
+            <div style="font-size: 12.5px; line-height: 1.55; color: #4C4432; margin-top: 8px;">freeside · auth token rotation · proposed by the review agent</div>
+            <div style="margin-top: 14px; background: #E9DFC2; border: 1px solid #8F6B14; border-radius: 8px; padding: 13px;">
+              <div style="display: flex; align-items: baseline; gap: 6px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #7E5D0F;">✓</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; color: #7E5D0F;">RECOMMENDED</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.1em; color: #4C4432; margin-left: auto;">CONFIDENCE HIGH</span></div>
+              <div style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 20px; margin-top: 6px;">Approve</div>
+              <div style="font-size: 12.5px; line-height: 1.55; color: #4C4432; margin-top: 8px;">The plan stays inside the approved auth surface, and touches no control-plane path. Two of three implementation questions are resolved; one remains open and is listed below.</div>
+              <div style="background: #7E5D0F; border-radius: 7px; padding: 10px 0; text-align: center; margin-top: 12px;"><span style="font-size: 13.5px; font-weight: 600; color: #F3EEE1;">Approve</span></div>
+            </div>
+            <div style="display: flex; gap: 8px; margin-top: 10px;">
+              <div style="flex: 1; border: 1px solid #C9BFA2; border-radius: 7px; padding: 9px 0; text-align: center; font-size: 12.5px; color: #4C4432;">Review changes</div>
+              <div style="flex: 0 0 92px; border: 1px solid #C9BFA2; border-radius: 7px; padding: 9px 0; text-align: center; font-size: 12.5px; color: #4C4432;">More…</div>
+            </div>
+            <div style="margin-top: 16px; border-top: 1px solid #DDD4B9; padding-top: 12px;">
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; color: #4C4432;">KEY FACTS</div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px; margin-top: 8px;"><span style="color: #4C4432;">Declared paths</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">3</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px; margin-top: 5px;"><span style="color: #4C4432;">Control plane</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">Not touched</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px; margin-top: 5px;"><span style="color: #4C4432;">Open question</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">1 · token TTL</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px; margin-top: 5px;"><span style="color: #4C4432;">Expected cost</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">1 200 units</span></div>
+            </div>
+            <div style="border: 1px dashed #C9BFA2; border-radius: 8px; padding: 11px 12px; margin-top: 14px;">
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; color: #4C4432;">AGENT SUMMARY · UNVERIFIED</div>
+              <div style="font-size: 12px; line-height: 1.5; color: #4C4432; margin-top: 6px;">Written by the agent, not checked by the daemon. Facts above are daemon-authenticated.</div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 9px; margin-top: 12px; font-size: 12.5px; color: #4C4432;">
+              <div><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px;">▸</span> Evidence (2)</div>
+              <div><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px;">▸</span> Technical details</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Proposed · scrolled to evidence</div>
+        <div style="width: 300px; background: #EDE7D6; border: 1px solid #C9BFA2; border-radius: 16px; overflow: hidden;">
+          <div style="padding: 8px 12px; background: #E4DDC7; border-bottom: 1px solid #D6CDB2; display: flex; align-items: baseline;"><span style="font-size: 12.5px; color: #7E5D0F;">‹ Inbox</span><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 13px; margin-left: auto;">Spec approval</span></div>
+          <div style="margin: 10px; background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 12px;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; color: #4C4432;">EVIDENCE</div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; margin-top: 6px;">verifier_report</div>
+            <div style="height: 74px; margin-top: 6px; border: 1px solid #D6CDB2; border-radius: 6px; background: repeating-linear-gradient(-45deg, #E4DDC7 0 10px, #ECE5D2 10px 20px); display: flex; align-items: center; justify-content: center; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432;">screenshot · tap to expand</div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; color: #4C4432; margin-top: 14px;">TECHNICAL DETAILS</div>
+            <div style="display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432; margin-top: 6px;"><span>item version</span><span>7</span></div>
+            <div style="display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432; margin-top: 4px;"><span>evidence digest</span><span>sha256:2c88f1…</span></div>
+          </div>
+          <div style="border-top: 1px solid #D6CDB2; background: #E4DDC7; padding: 10px 12px 16px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <div style="flex: 1; background: #7E5D0F; border-radius: 7px; padding: 9px 0; text-align: center;"><span style="font-size: 13px; font-weight: 600; color: #F3EEE1;">Approve</span></div>
+              <div style="flex: 0 0 66px; border: 1px solid #C9BFA2; border-radius: 7px; padding: 9px 0; text-align: center; font-size: 12.5px; color: #4C4432;">More…</div>
+            </div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 7px; line-height: 1.5;">Pinned only once the recommendation block has scrolled out of view — iPhone only.</div>
+          </div>
+        </div>
+      </div>
+      <div style="width: 268px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Help, where it belongs</div>
+        <div style="font-size: 13px; line-height: 1.62; color: #4C4432; display: flex; flex-direction: column; gap: 11px;">
+          <div><b style="color: #2B2416;">Inline, for load-bearing concepts.</b> "Written by the agent, not checked by the daemon" sits in the claims block permanently. A consequence never hides in a tooltip.</div>
+          <div><b style="color: #2B2416;">Tooltip, for the mono register.</b> On the Mac, <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">waiting 12 min</span> reveals the exact timestamp; <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">as-of revision</span> explains what a revision is. Compact controls only.</div>
+          <div><b style="color: #2B2416;">No TipKit yet.</b> Teaching this card while we are still replacing it buys a second migration. Revisit once the compositions in <a href="#1h">1h</a> land.</div>
+        </div>
+      </div>
+    </div>
+    <sc-if value="{{ showNotes }}" hint-placeholder-val="{{ true }}">
+    <div style="margin-top: 22px; border-top: 1px solid #D6CDB2; padding-top: 12px; display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 16px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450;">Build rules</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.65; color: #4C4432; columns: 2; column-gap: 34px;">
+        <li>The ask is one sentence, phrased as a question, generated per card type — not the item's free-text reason.</li>
+        <li>No recommendation, no block: if the daemon offers no recommended action the card shows the ask, the facts, and equally weighted choices. Never invent a recommendation to fill the shell.</li>
+        <li>Confidence is stated in words the daemon actually supplies; absent confidence renders nothing rather than "unknown".</li>
+        <li>One prominent action per card. The recommendation block holds it; the bordered row holds the reviewing action; everything else goes to More… (<a href="#1d">1d</a>).</li>
+        <li>The pinned footer appears only after the recommendation block leaves the viewport, and never on macOS.</li>
+      </ul>
+    </div>
+    </sc-if>
+  </div>
+
+  <div id="1d" data-screen-label="1d Action model" style="margin-top: 52px; border-top: 1px solid #D6CDB2; padding-top: 24px;">
+    <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; color: #7E5D0F; border: 1px solid #8F6B14; border-radius: 3px; padding: 2px 7px;">1d</span>
+      <h3 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 24px; margin: 0;">Actions: one primary, no roadmap, real consequences</h3>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Mock · macOS</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">P1-2 · P1-9 · P3-2 · P3-3</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #7E5D0F; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 3px; padding: 2px 6px;">Client · ranking</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #4C4432; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Wave 7 · action transactions</span>
+    </div>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 830px; margin: 10px 0 0; color: #4C4432;">Five equal buttons and a sentence about later units is the app telling the operator about its own backlog. Actions this client cannot perform disappear; the remaining ones are ranked; consequences get stated in words before they happen. The one case worth a visible state is the item whose <i>faithful</i> response is missing — then say so plainly instead of shipping half a card.</p>
+    <div style="display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; margin-top: 22px;">
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">As built · ready for final review</div>
+        <div style="width: 320px; background: #F3EEE1; border: 1px solid #D0C6A8; border-radius: 10px; padding: 16px;">
+          <div style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 18px;">Ready for final review</div>
+          <div style="font-size: 12.5px; margin-top: 8px;">checks are green and the diff is ready</div>
+          <div style="text-align: center; font-size: 12.5px; font-weight: 600; color: #8F6B14; border: 1px solid #B99A4A; border-radius: 6px; padding: 7px 0; margin-top: 12px;">View PR</div>
+          <div style="text-align: center; font-size: 12.5px; color: #6E6450; border: 1px solid #C9BFA2; border-radius: 6px; padding: 7px 0; margin-top: 7px; opacity: 0.45;">Return to agent</div>
+          <div style="text-align: center; font-size: 12.5px; color: #6E6450; border: 1px solid #C9BFA2; border-radius: 6px; padding: 7px 0; margin-top: 7px;">Mark seen</div>
+          <div style="text-align: center; font-size: 12.5px; color: #6E6450; border: 1px solid #C9BFA2; border-radius: 6px; padding: 7px 0; margin-top: 7px;">Dismiss</div>
+          <div style="text-align: center; font-size: 12.5px; color: #8A2D1C; border: 1px solid #8A2D1C; border-radius: 6px; padding: 7px 0; margin-top: 7px;">Stop</div>
+          <div style="font-size: 11px; color: #94896E; margin-top: 8px;">Actions carrying discussion or parameters arrive with later units.</div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Proposed · ranked, with overflow open</div>
+        <div style="width: 340px; background: #F3EEE1; border: 1px solid #D0C6A8; border-radius: 10px; padding: 16px; position: relative;">
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.1em; color: #4C4432;">READY FOR FINAL REVIEW · WAITING 4 MIN</div>
+          <div style="font-family: 'Source Serif Pro', serif; font-size: 18px; line-height: 1.3; margin-top: 8px;">Take the final review on this work unit?</div>
+          <div style="margin-top: 12px; background: #E9DFC2; border: 1px solid #8F6B14; border-radius: 8px; padding: 12px;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; color: #7E5D0F;">✓ RECOMMENDED</div>
+            <div style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 17px; margin-top: 4px;">Review the pull request</div>
+            <div style="font-size: 12px; line-height: 1.5; color: #4C4432; margin-top: 6px;">All four gates pass and review yield reached zero in round 3.</div>
+            <div style="display: flex; align-items: center; justify-content: center; gap: 7px; background: #7E5D0F; border-radius: 7px; padding: 9px 0; margin-top: 10px;"><span style="font-size: 13px; font-weight: 600; color: #F3EEE1;">View PR</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #E9DFC2;">↗</span></div>
+          </div>
+          <div style="display: flex; gap: 8px; margin-top: 10px;">
+            <div style="flex: 1; border: 1px solid #C9BFA2; border-radius: 7px; padding: 8px 0; text-align: center; font-size: 12.5px; color: #4C4432;">Return to agent</div>
+            <div style="flex: 0 0 84px; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 7px; padding: 8px 0; text-align: center; font-size: 12.5px; color: #7E5D0F;">More… ▾</div>
+          </div>
+          <div style="position: absolute; right: 16px; top: 276px; width: 214px; background: #F7F3E8; border: 1px solid #C9BFA2; border-radius: 8px; box-shadow: 0 12px 30px rgba(43,36,22,0.20); padding: 5px; z-index: 2;">
+            <div style="display: flex; align-items: center; gap: 8px; padding: 6px 9px; font-size: 12.5px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #4C4432; width: 12px;">◷</span>Snooze…</div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 6px 9px; font-size: 12.5px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #4C4432; width: 12px;">✓</span>Mark seen</div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 6px 9px; font-size: 12.5px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #4C4432; width: 12px;">⊘</span>Dismiss</div>
+            <div style="height: 1px; background: #DDD4B9; margin: 4px 6px;"></div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 6px 9px; font-size: 12.5px; color: #C0392B;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; width: 12px;">■</span>Stop run…</div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #6E6450; padding: 4px 9px 5px; line-height: 1.5;">destructive role · system paints its own red here</div>
+          </div>
+          <div style="height: 196px;"></div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432; border-top: 1px solid #DDD4B9; padding-top: 8px; line-height: 1.5;">1 requested action is unavailable on this device — listed in Technical details, not as a button.</div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Confirmation · consequence in words</div>
+        <div style="width: 300px; background: #F7F3E8; border: 1px solid #C9BFA2; border-radius: 12px; padding: 18px 20px; box-shadow: 0 14px 40px rgba(43,36,22,0.16);">
+          <div style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 17px;">Stop run run-freeside-657?</div>
+          <div style="font-size: 12.5px; line-height: 1.55; color: #4C4432; margin-top: 8px;">The current invocation is discarded. Work already exported stays; the round in flight does not. The campaign will not restart on its own.</div>
+          <div style="display: flex; justify-content: flex-end; gap: 9px; margin-top: 16px;">
+            <div style="border: 1px solid #C9BFA2; border-radius: 6px; padding: 6px 14px; font-size: 12.5px; font-weight: 600;">Cancel</div>
+            <div style="border-radius: 6px; padding: 6px 14px; font-size: 12.5px; font-weight: 600; color: #FFF; background: #C0392B;">Stop run</div>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #6E6450; margin-top: 10px; line-height: 1.5;">Cancel is the default. Confirm only where the action stops or discards work — never on Approve.</div>
+        </div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin: 20px 0 10px;">Capability mismatch · the honest state</div>
+        <div style="width: 300px; background: #F3EEE1; border: 1px solid #D0C6A8; border-radius: 10px; padding: 16px;">
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.1em; color: #4C4432;">AGENT QUESTION · WAITING 31 MIN</div>
+          <div style="font-family: 'Source Serif Pro', serif; font-size: 17px; line-height: 1.3; margin-top: 8px;">Which migration order should the agent take?</div>
+          <div style="margin-top: 12px; background: #E8E2CD; border: 1px solid #B9AF92; border-radius: 8px; padding: 12px;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; color: #4C4432;">NOT DECIDABLE HERE</div>
+            <div style="font-size: 12.5px; line-height: 1.55; color: #4C4432; margin-top: 6px;">This decision needs a written answer, and this build cannot carry one. Nothing is blocked by opening it — the item stays open until answered.</div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #4C4432; margin-top: 9px;">requested · answer_and_retry</div>
+          </div>
+          <div style="display: flex; gap: 8px; margin-top: 10px;">
+            <div style="flex: 1; border: 1px solid #C9BFA2; border-radius: 7px; padding: 8px 0; text-align: center; font-size: 12.5px; color: #4C4432;">Copy question</div>
+            <div style="flex: 1; border: 1px solid #C9BFA2; border-radius: 7px; padding: 8px 0; text-align: center; font-size: 12.5px; color: #4C4432;">Snooze…</div>
+          </div>
+        </div>
+      </div>
+      <div style="width: 250px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Symbols that earn their place</div>
+        <div style="display: flex; flex-direction: column; gap: 7px;">
+          <div style="display: flex; gap: 10px; align-items: baseline; font-size: 12.5px;"><span style="font-family: 'IBM Plex Mono', monospace; width: 14px; color: #4C4432;">↗</span><span>View PR — leaves the app</span></div>
+          <div style="display: flex; gap: 10px; align-items: baseline; font-size: 12.5px;"><span style="font-family: 'IBM Plex Mono', monospace; width: 14px; color: #4C4432;">⟳</span><span>Retry — repeats work</span></div>
+          <div style="display: flex; gap: 10px; align-items: baseline; font-size: 12.5px;"><span style="font-family: 'IBM Plex Mono', monospace; width: 14px; color: #4C4432;">◷</span><span>Snooze — time-shifted</span></div>
+          <div style="display: flex; gap: 10px; align-items: baseline; font-size: 12.5px;"><span style="font-family: 'IBM Plex Mono', monospace; width: 14px; color: #4C4432;">■</span><span>Stop — destructive</span></div>
+          <div style="display: flex; gap: 10px; align-items: baseline; font-size: 12.5px;"><span style="font-family: 'IBM Plex Mono', monospace; width: 14px; color: #4C4432;">↺</span><span>Return to agent — hands back</span></div>
+        </div>
+        <div style="font-size: 12.5px; line-height: 1.62; color: #4C4432; margin-top: 14px;">Approve, Decline, and Adjudicate get <b style="color: #2B2416;">no icon</b>: a tick beside Approve says nothing the word does not, and the recommended action should read as language, not as a glyph. Icons mark actions that change <i>where you go</i> or <i>what is lost</i>.</div>
+      </div>
+    </div>
+    <sc-if value="{{ showNotes }}" hint-placeholder-val="{{ true }}">
+    <div style="margin-top: 22px; border-top: 1px solid #D6CDB2; padding-top: 12px; display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 16px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450;">Build rules</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.65; color: #4C4432; columns: 2; column-gap: 34px;">
+        <li>The client publishes a capability set. Requested actions outside it are filtered out of the button row and recorded in Technical details, so an audit still shows what the daemon asked for.</li>
+        <li>When <i>every</i> faithful response is outside the set, the card renders the not-decidable-here state — never a card with no way to act and no explanation.</li>
+        <li>No roadmap language anywhere in shipping copy. "Later units" is a devlog phrase.</li>
+        <li>Confirmation is required for stop, decline, and dismiss-with-loss; never for approve or snooze. Cancel is always the default button.</li>
+        <li>Destructive role only where the system draws the surface. In-card destructive actions keep wax text and no fill (see <a href="#1b">1b</a>).</li>
+      </ul>
+    </div>
+    </sc-if>
+  </div>
+
+  <div id="1e" data-screen-label="1e Inbox rows and filters" style="margin-top: 52px; border-top: 1px solid #D6CDB2; padding-top: 24px;">
+    <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; color: #7E5D0F; border: 1px solid #8F6B14; border-radius: 3px; padding: 2px 7px;">1e</span>
+      <h3 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 24px; margin: 0;">The scanning layer</h3>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Mock · macOS sidebar · both grounds</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">P1-8 · P2-2 · P2-3 · P2-4 · P2-5</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #7E5D0F; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 3px; padding: 2px 6px;">Client · rows</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #4C4432; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Wave 7 · project &amp; unit names</span>
+    </div>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 830px; margin: 10px 0 0; color: #4C4432;">Five findings are really one: the row spends its three lines on things the operator already knows or cannot use. Replace <code style="font-family: 'IBM Plex Mono', monospace;">proj-1 run-execution-failure</code> and a permanent <code style="font-family: 'IBM Plex Mono', monospace;">open</code> badge with the project's name, the work unit's name, and how long this has been waiting. The dusk panel carries the selection treatment, because that is where a border-only selection is hardest to see.</p>
+    <div style="display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; margin-top: 22px;">
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">As built</div>
+        <div style="width: 244px; background: #E4DDC7; border: 1px solid #C9BFA2; border-radius: 10px; padding: 12px;">
+          <div style="display: flex; align-items: center; gap: 6px; font-size: 11.5px;"><span style="color: #6E6450;">Section</span><span style="background: #8F6B14; color: #F3EEE1; border-radius: 4px; padding: 2px 8px; font-size: 11px;">Inbox</span><span style="color: #6E6450;">Runs</span></div>
+          <div style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; margin-top: 7px;"><span style="color: #6E6450;">Scope</span><span style="background: #8F6B14; color: #F3EEE1; border-radius: 4px; padding: 2px 8px; font-size: 11px;">Open</span><span style="color: #6E6450;">Resolved</span><span style="color: #6E6450;">All</span></div>
+          <div style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; margin-top: 7px;"><span style="color: #6E6450;">Project</span><span style="border: 1px solid #C9BFA2; border-radius: 4px; padding: 2px 8px; font-size: 11px; background: #F3EEE1;">All projects ⌃⌄</span></div>
+          <div style="margin-top: 12px; background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 9px 10px;">
+            <div style="display: flex; align-items: baseline;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 13px; flex: 1;">Execution failure</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #8A2D1C; border: 1px solid #8A2D1C; border-radius: 3px; padding: 1px 5px;">urgent</span></div>
+            <div style="font-size: 11px; color: #4C4432; line-height: 1.4; margin-top: 4px;">the build stage failed twice on the same test</div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #94896E; margin-top: 5px;">proj-1 &nbsp;run-execution-failure</div>
+          </div>
+          <div style="margin-top: 8px; background: #F3EEE1; border: 1px solid #8F6B14; border-radius: 8px; padding: 9px 10px;">
+            <div style="display: flex; align-items: baseline;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 13px; flex: 1;">Spec approval</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #8F6B14; border: 1px solid #B99A4A; border-radius: 3px; padding: 1px 5px;">high</span></div>
+            <div style="font-size: 11px; color: #4C4432; line-height: 1.4; margin-top: 4px;">the spec for the auth work is ready for approval</div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #94896E; margin-top: 5px;">proj-1 &nbsp;run-spec_approval</div>
+          </div>
+          <div style="margin-top: 8px; background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 9px 10px;">
+            <div style="display: flex; align-items: baseline;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 13px; flex: 1;">Agent question</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 1px 5px;">normal</span></div>
+            <div style="font-size: 11px; color: #4C4432; line-height: 1.4; margin-top: 4px;">the agent needs a decision on the migration order</div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #94896E; margin-top: 5px;">proj-1 &nbsp;run-agent_question</div>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #8A2D1C; margin-top: 10px; line-height: 1.55;">selection = border colour only · identifiers outrank meaning · no counts · no waiting time</div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Proposed · day</div>
+        <div style="width: 276px; background: #E4DDC7; border: 1px solid #C9BFA2; border-radius: 10px; padding: 12px;">
+          <div style="display: flex; align-items: baseline; gap: 12px; font-size: 11.5px;">
+            <span style="color: #2B2416; font-weight: 600; border-bottom: 2px solid #7E5D0F; padding-bottom: 3px;">Open <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #4C4432;">7</span></span>
+            <span style="color: #4C4432;">Resolved <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px;">3</span></span>
+            <span style="color: #4C4432;">All <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px;">10</span></span>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 10px;">
+            <span style="border: 1px solid #C9BFA2; border-radius: 4px; padding: 2px 8px; font-size: 11px; background: #F3EEE1;">All projects ⌃⌄</span>
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #7E5D0F; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 3px; padding: 1px 6px;">1 URGENT</span>
+          </div>
+          <div style="margin-top: 12px; display: flex;">
+            <div style="width: 3px; border-radius: 2px; background: #F3EEE1;"></div>
+            <div style="flex: 1; background: #F3EEE1; border: 1px solid #D6CDB2; border-left: none; border-radius: 0 8px 8px 0; padding: 9px 10px;">
+              <div style="display: flex; align-items: baseline; gap: 6px;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 13.5px; flex: 1;">Execution failure</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #8A2D1C; border: 1px solid #8A2D1C; border-radius: 3px; padding: 1px 5px;">urgent</span></div>
+              <div style="font-size: 11.5px; color: #4C4432; line-height: 1.42; margin-top: 4px;">Verify failed twice on the same test</div>
+              <div style="font-size: 10.5px; color: #4C4432; margin-top: 5px;">freeside · acceptance rig · <span style="font-family: 'IBM Plex Mono', monospace;">waiting 12m</span></div>
+            </div>
+          </div>
+          <div style="margin-top: 8px; display: flex;">
+            <div style="width: 3px; border-radius: 2px; background: #7E5D0F;"></div>
+            <div style="flex: 1; background: #E9DFC2; border: 1px solid #8F6B14; border-left: none; border-radius: 0 8px 8px 0; padding: 9px 10px;">
+              <div style="display: flex; align-items: baseline; gap: 6px;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 13.5px; flex: 1;">Spec approval</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #7E5D0F; border: 1px solid #8F6B14; border-radius: 3px; padding: 1px 5px;">high</span></div>
+              <div style="font-size: 11.5px; color: #4C4432; line-height: 1.42; margin-top: 4px;">Auth work specification ready for approval</div>
+              <div style="font-size: 10.5px; color: #4C4432; margin-top: 5px;">freeside · auth token rotation · <span style="font-family: 'IBM Plex Mono', monospace;">waiting 12m</span></div>
+            </div>
+          </div>
+          <div style="margin-top: 8px; display: flex;">
+            <div style="width: 3px; border-radius: 2px; background: #F3EEE1;"></div>
+            <div style="flex: 1; background: #F3EEE1; border: 1px solid #D6CDB2; border-left: none; border-radius: 0 8px 8px 0; padding: 9px 10px;">
+              <div style="display: flex; align-items: baseline; gap: 6px;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 13.5px; flex: 1;">Agent question</span></div>
+              <div style="font-size: 11.5px; color: #4C4432; line-height: 1.42; margin-top: 4px;">Which migration order should it take?</div>
+              <div style="font-size: 10.5px; color: #4C4432; margin-top: 5px;">oriole · schema cutover · <span style="font-family: 'IBM Plex Mono', monospace;">waiting 31m</span></div>
+            </div>
+          </div>
+          <div style="margin-top: 8px; display: flex;">
+            <div style="width: 3px; border-radius: 2px; background: #F3EEE1;"></div>
+            <div style="flex: 1; background: #F3EEE1; border: 1px solid #D6CDB2; border-left: none; border-radius: 0 8px 8px 0; padding: 9px 10px;">
+              <div style="display: flex; align-items: baseline; gap: 6px;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 13.5px; flex: 1;">Review dispute</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432; border: 1px solid #B9AF92; border-radius: 3px; padding: 1px 5px;">superseded</span></div>
+              <div style="font-size: 11.5px; color: #4C4432; line-height: 1.42; margin-top: 4px;">Replaced by a later dispute on the same finding</div>
+              <div style="font-size: 10.5px; color: #4C4432; margin-top: 5px;">freeside · payment retries · <span style="font-family: 'IBM Plex Mono', monospace;">6h ago</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Proposed · dusk · Differentiate Without Color</div>
+        <div style="width: 276px; background: #1E1812; border: 1px solid #322A1E; border-radius: 10px; padding: 12px;">
+          <div style="display: flex; align-items: baseline; gap: 12px; font-size: 11.5px;">
+            <span style="color: #EAE3CF; font-weight: 600; border-bottom: 2px solid #C2912E; padding-bottom: 3px;">Open <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #B3A88E;">7</span></span>
+            <span style="color: #B3A88E;">Resolved <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px;">3</span></span>
+            <span style="color: #B3A88E;">All <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px;">10</span></span>
+          </div>
+          <div style="margin-top: 14px; display: flex;">
+            <div style="width: 3px; border-radius: 2px; background: #16120E;"></div>
+            <div style="flex: 1; background: #16120E; border: 1px solid #322A1E; border-left: none; border-radius: 0 8px 8px 0; padding: 9px 10px;">
+              <div style="display: flex; align-items: baseline; gap: 6px;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 13.5px; color: #EAE3CF; flex: 1;">Execution failure</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #C55F3E; border: 1px solid #C55F3E; border-radius: 3px; padding: 1px 5px;">urgent</span></div>
+              <div style="font-size: 11.5px; color: #B3A88E; line-height: 1.42; margin-top: 4px;">Verify failed twice on the same test</div>
+              <div style="font-size: 10.5px; color: #B3A88E; margin-top: 5px;">freeside · acceptance rig · <span style="font-family: 'IBM Plex Mono', monospace;">waiting 12m</span></div>
+            </div>
+          </div>
+          <div style="margin-top: 8px; display: flex;">
+            <div style="width: 3px; border-radius: 2px; background: #C2912E;"></div>
+            <div style="flex: 1; background: #26200F; border: 1px solid #8A6A26; border-left: none; border-radius: 0 8px 8px 0; padding: 9px 10px;">
+              <div style="display: flex; align-items: baseline; gap: 6px;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 13.5px; color: #EAE3CF; flex: 1;">Spec approval</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #C2912E; border: 1px solid #8A6A26; border-radius: 3px; padding: 1px 5px;">high</span></div>
+              <div style="font-size: 11.5px; color: #B3A88E; line-height: 1.42; margin-top: 4px;">Auth work specification ready for approval</div>
+              <div style="font-size: 10.5px; color: #B3A88E; margin-top: 5px;">freeside · auth token rotation · <span style="font-family: 'IBM Plex Mono', monospace;">waiting 12m</span></div>
+            </div>
+          </div>
+          <div style="margin-top: 8px; display: flex;">
+            <div style="width: 3px; border-radius: 2px; background: #16120E;"></div>
+            <div style="flex: 1; background: #16120E; border: 1px solid #322A1E; border-left: none; border-radius: 0 8px 8px 0; padding: 9px 10px;">
+              <div style="display: flex; align-items: baseline; gap: 6px;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 13.5px; color: #EAE3CF; flex: 1;">Agent question</span></div>
+              <div style="font-size: 11.5px; color: #B3A88E; line-height: 1.42; margin-top: 4px;">Which migration order should it take?</div>
+              <div style="font-size: 10.5px; color: #B3A88E; margin-top: 5px;">oriole · schema cutover · <span style="font-family: 'IBM Plex Mono', monospace;">waiting 31m</span></div>
+            </div>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #B3A88E; margin-top: 12px; line-height: 1.6;">selection carries three cues: leading bar, wash step, border. Remove the colour and the bar and fill still read.</div>
+        </div>
+      </div>
+      <div style="width: 250px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Where the identifiers went</div>
+        <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 12px;">
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.1em; color: #4C4432;">CONTEXT MENU</div>
+          <div style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px; font-size: 12px;">
+            <div>Copy item ID</div>
+            <div>Copy run reference</div>
+            <div>Copy evidence digest</div>
+            <div style="height: 1px; background: #DDD4B9;"></div>
+            <div>Reveal in Technical details</div>
+          </div>
+        </div>
+        <div style="font-size: 12.5px; line-height: 1.62; color: #4C4432; margin-top: 12px;">Identifiers stay one gesture away and fully copyable — they are how an operator files a bug. They just stop being the third line of every row. The Mac tooltip on <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">waiting 12m</span> gives the exact timestamp.</div>
+        <div style="font-size: 12.5px; line-height: 1.62; color: #4C4432; margin-top: 10px;"><b style="color: #2B2416;">Badges earn their place:</b> urgent and high always; unusual lifecycle states (superseded, expired, revoked, degraded) always; normal and open never inside the Open scope.</div>
+      </div>
+    </div>
+    <sc-if value="{{ showNotes }}" hint-placeholder-val="{{ true }}">
+    <div style="margin-top: 22px; border-top: 1px solid #D6CDB2; padding-top: 12px; display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 16px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450;">Build rules</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.65; color: #4C4432; columns: 2; column-gap: 34px;">
+        <li>Row line 2 is a written summary, sentence-cased, generated per card type — not the daemon's lowercase reason string.</li>
+        <li>Row line 3 is project name · work-unit name · relative time. If a name is missing, fall back to the identifier rather than showing nothing.</li>
+        <li>Relative time updates on a coarse timer (minute granularity under an hour) and reads "blocked 18h" or "due in 2h" where the item has a deadline.</li>
+        <li>The urgent pill renders only when the count is non-zero, and never for high.</li>
+        <li>Counts come from the same query as the list, so a count and its scope can never disagree.</li>
+        <li>Selection is bar + wash + border on both platforms; on iOS the system selection remains underneath.</li>
+      </ul>
+    </div>
+    </sc-if>
+  </div>
+
+  <div id="1f" data-screen-label="1f iPhone tab IA" style="margin-top: 52px; border-top: 1px solid #D6CDB2; padding-top: 24px;">
+    <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; color: #7E5D0F; border: 1px solid #8F6B14; border-radius: 3px; padding: 2px 7px;">1f</span>
+      <h3 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 24px; margin: 0;">iPhone: two tabs, two stacks</h3>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Wireframe · iPhone</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">P1-3</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #7E5D0F; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 3px; padding: 2px 6px;">Client only</span>
+    </div>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 830px; margin: 10px 0 0; color: #4C4432;">Wireframed on purpose: the argument is about what survives a drill-down, and a painted mock would only start a conversation about the chip radius. Today the Inbox/Runs switch lives inside the collapsed sidebar, so opening a decision hides the app's other half and drops the run you were reading. Two tabs, each with its own stack, fix both — and the phone keeps its place in each section when you switch away and back.</p>
+    <div style="display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; margin-top: 22px;">
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Today · segmented control in the collapsed sidebar</div>
+        <div style="width: 250px; background: #EDE7D6; border: 1px solid #B9AF92; border-radius: 14px; padding: 12px;">
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">Freeside</div>
+          <div style="display: flex; gap: 5px; margin-top: 9px;"><div style="flex: 1; background: #D6CDB2; border-radius: 4px; text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; padding: 4px 0;">Inbox</div><div style="flex: 1; border: 1px solid #C9BFA2; border-radius: 4px; text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; padding: 4px 0; color: #4C4432;">Runs</div></div>
+          <div style="display: flex; gap: 5px; margin-top: 6px;"><div style="flex: 1; background: #D6CDB2; border-radius: 4px; text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 9px; padding: 3px 0;">Open</div><div style="flex: 1; border: 1px solid #C9BFA2; border-radius: 4px; text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 9px; padding: 3px 0; color: #4C4432;">Resolved</div><div style="flex: 1; border: 1px solid #C9BFA2; border-radius: 4px; text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 9px; padding: 3px 0; color: #4C4432;">All</div></div>
+          <div style="border: 1px solid #C9BFA2; border-radius: 4px; font-family: 'IBM Plex Mono', monospace; font-size: 9px; padding: 3px 7px; margin-top: 6px; color: #4C4432;">All projects</div>
+          <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 6px;">
+            <div style="background: #E4DDC7; border: 1px solid #C9BFA2; border-radius: 6px; height: 40px;"></div>
+            <div style="background: #E4DDC7; border: 1px solid #C9BFA2; border-radius: 6px; height: 40px;"></div>
+            <div style="background: #E4DDC7; border: 1px solid #C9BFA2; border-radius: 6px; height: 40px;"></div>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 10px; line-height: 1.55;">3 controls before the first item · the switch is filter-shaped, not destination-shaped</div>
+        </div>
+      </div>
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 18px; color: #B9AF92; align-self: center;">→</div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Inbox tab · root</div>
+        <div style="width: 234px; background: #EDE7D6; border: 1px solid #B9AF92; border-radius: 14px; padding: 12px; display: flex; flex-direction: column;">
+          <div style="font-family: 'Source Serif Pro', serif; font-size: 17px; font-weight: 500;">Inbox</div>
+          <div style="display: flex; gap: 9px; margin-top: 8px; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432;"><span style="border-bottom: 2px solid #4C4432; padding-bottom: 2px;">Open 7</span><span>Resolved 3</span><span>All 10</span></div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 8px;">1 urgent · all projects</div>
+          <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 7px;">
+            <div style="border: 1px solid #C9BFA2; border-radius: 6px; padding: 7px 8px;"><div style="height: 7px; width: 74%; background: #C9BFA2; border-radius: 2px;"></div><div style="height: 6px; width: 92%; background: #DDD4B9; border-radius: 2px; margin-top: 5px;"></div><div style="height: 6px; width: 58%; background: #DDD4B9; border-radius: 2px; margin-top: 4px;"></div></div>
+            <div style="border: 1px solid #C9BFA2; border-radius: 6px; padding: 7px 8px;"><div style="height: 7px; width: 62%; background: #C9BFA2; border-radius: 2px;"></div><div style="height: 6px; width: 86%; background: #DDD4B9; border-radius: 2px; margin-top: 5px;"></div><div style="height: 6px; width: 52%; background: #DDD4B9; border-radius: 2px; margin-top: 4px;"></div></div>
+            <div style="border: 1px solid #C9BFA2; border-radius: 6px; padding: 7px 8px;"><div style="height: 7px; width: 68%; background: #C9BFA2; border-radius: 2px;"></div><div style="height: 6px; width: 90%; background: #DDD4B9; border-radius: 2px; margin-top: 5px;"></div><div style="height: 6px; width: 46%; background: #DDD4B9; border-radius: 2px; margin-top: 4px;"></div></div>
+          </div>
+          <div style="margin-top: 12px; border-top: 1px solid #C9BFA2; padding-top: 8px; display: flex;">
+            <div style="flex: 1; text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #2B2416; font-weight: 600;">Inbox<div style="font-size: 8px; color: #4C4432;">7</div></div>
+            <div style="flex: 1; text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432;">Runs</div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Inbox tab · decision pushed</div>
+        <div style="width: 234px; background: #EDE7D6; border: 1px solid #B9AF92; border-radius: 14px; padding: 12px; display: flex; flex-direction: column;">
+          <div style="display: flex; align-items: baseline; gap: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432;"><span>‹ Inbox</span><span style="margin-left: auto;">Spec approval</span></div>
+          <div style="margin-top: 10px; border: 1px solid #C9BFA2; border-radius: 6px; padding: 9px;">
+            <div style="height: 6px; width: 54%; background: #DDD4B9; border-radius: 2px;"></div>
+            <div style="height: 9px; width: 88%; background: #C9BFA2; border-radius: 2px; margin-top: 6px;"></div>
+            <div style="height: 9px; width: 62%; background: #C9BFA2; border-radius: 2px; margin-top: 3px;"></div>
+            <div style="border: 1px dashed #B9AF92; border-radius: 5px; padding: 8px; margin-top: 9px;"><div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432;">RECOMMENDED</div><div style="height: 8px; width: 46%; background: #C9BFA2; border-radius: 2px; margin-top: 5px;"></div><div style="height: 20px; background: #D6CDB2; border-radius: 4px; margin-top: 8px;"></div></div>
+            <div style="height: 6px; width: 100%; background: #E4DDC7; border-radius: 2px; margin-top: 9px;"></div>
+            <div style="height: 6px; width: 80%; background: #E4DDC7; border-radius: 2px; margin-top: 4px;"></div>
+          </div>
+          <div style="margin-top: 12px; border-top: 1px solid #C9BFA2; padding-top: 8px; display: flex;">
+            <div style="flex: 1; text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #2B2416; font-weight: 600;">Inbox</div>
+            <div style="flex: 1; text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432;">Runs</div>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 8px; line-height: 1.55;">the other half of the app stays reachable</div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Runs tab · keeps its own place</div>
+        <div style="width: 234px; background: #EDE7D6; border: 1px solid #B9AF92; border-radius: 14px; padding: 12px; display: flex; flex-direction: column;">
+          <div style="display: flex; align-items: baseline; gap: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432;"><span>‹ Runs</span><span style="margin-left: auto;">run-freeside-657</span></div>
+          <div style="margin-top: 10px; border: 1px solid #C9BFA2; border-radius: 6px; padding: 9px;">
+            <div style="height: 9px; width: 70%; background: #C9BFA2; border-radius: 2px;"></div>
+            <div style="display: flex; gap: 7px; margin-top: 10px;">
+              <div style="width: 7px; display: flex; flex-direction: column; align-items: center; gap: 3px;"><div style="width: 6px; height: 6px; border-radius: 50%; background: #B9AF92;"></div><div style="width: 1px; flex: 1; background: #C9BFA2;"></div><div style="width: 6px; height: 6px; border-radius: 50%; background: #B9AF92;"></div><div style="width: 1px; flex: 1; background: #C9BFA2;"></div><div style="width: 6px; height: 6px; border-radius: 50%; border: 1px solid #B9AF92; background: #EDE7D6;"></div></div>
+              <div style="flex: 1; display: flex; flex-direction: column; gap: 13px;"><div><div style="height: 6px; width: 76%; background: #DDD4B9; border-radius: 2px;"></div><div style="height: 5px; width: 50%; background: #E4DDC7; border-radius: 2px; margin-top: 3px;"></div></div><div><div style="height: 6px; width: 66%; background: #DDD4B9; border-radius: 2px;"></div><div style="height: 5px; width: 44%; background: #E4DDC7; border-radius: 2px; margin-top: 3px;"></div></div><div><div style="height: 6px; width: 58%; background: #DDD4B9; border-radius: 2px;"></div></div></div>
+            </div>
+          </div>
+          <div style="margin-top: 12px; border-top: 1px solid #C9BFA2; padding-top: 8px; display: flex;">
+            <div style="flex: 1; text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432;">Inbox<div style="font-size: 8px;">7</div></div>
+            <div style="flex: 1; text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #2B2416; font-weight: 600;">Runs</div>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 8px; line-height: 1.55;">switch to Inbox, decide, come back — this timeline is still here, at this scroll position</div>
+        </div>
+      </div>
+    </div>
+    <sc-if value="{{ showNotes }}" hint-placeholder-val="{{ true }}">
+    <div style="margin-top: 22px; border-top: 1px solid #D6CDB2; padding-top: 12px; display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 16px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450;">Build rules</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.65; color: #4C4432; columns: 2; column-gap: 34px;">
+        <li>Two <code style="font-family: 'IBM Plex Mono', monospace;">NavigationStack</code>s inside a <code style="font-family: 'IBM Plex Mono', monospace;">TabView</code>; the Mac keeps <code style="font-family: 'IBM Plex Mono', monospace;">NavigationSplitView</code>. One shared store, two navigation paths.</li>
+        <li>Scope and project move into the Inbox root — filters belong to a list, not to the app.</li>
+        <li>Tab badge shows the open count only when it is non-zero; urgent is stated in text under the list header, not as a red dot.</li>
+        <li>Deep links (notification taps) select the tab, then push — never present a decision outside its stack.</li>
+        <li>Where the deployment target allows it, adopt the adaptable tab/sidebar so iPad regular width gets a sidebar from the same declaration.</li>
+      </ul>
+    </div>
+    </sc-if>
+  </div>
+
+  <div id="1g" data-screen-label="1g macOS width" style="margin-top: 52px; border-top: 1px solid #D6CDB2; padding-top: 24px;">
+    <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; color: #7E5D0F; border: 1px solid #8F6B14; border-radius: 3px; padding: 2px 7px;">1g</span>
+      <h3 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 24px; margin: 0;">macOS: spend the width, but only when there is width</h3>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Wireframe + mock · macOS</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">P2-7 · P3-1</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #7E5D0F; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 3px; padding: 2px 6px;">Client only</span>
+    </div>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 830px; margin: 10px 0 0; color: #4C4432;">The review asks for a third column. A permanent third column is the wrong shape: facts and bindings are reference material, consulted on a minority of decisions, and a column that is empty half the time is worse than a button. Make it an <b>inspector</b> the operator opens — remembered per section, and never the thing standing between them and the recommendation. The card itself goes two-column above roughly 1000pt, with the recommendation and the actions in the trailing column so the primary action sits in view without a floating bar.</p>
+    <div style="display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; margin-top: 22px;">
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Wide · inspector open</div>
+        <div style="width: 560px; background: #EDE7D6; border: 1px solid #B9AF92; border-radius: 10px; overflow: hidden;">
+          <div style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: #E4DDC7; border-bottom: 1px solid #C9BFA2; font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432;">
+            <span>▤</span><span style="border: 1px solid #C9BFA2; border-radius: 4px; padding: 2px 26px 2px 6px; background: #F3EEE1;">Search</span><span>⟳</span><span>Updated 12s ago</span><span style="margin-left: auto; border: 1px solid #B9AF92; border-radius: 3px; padding: 1px 5px;">▥ Inspector</span>
+          </div>
+          <div style="display: flex; height: 300px;">
+            <div style="width: 132px; border-right: 1px solid #C9BFA2; padding: 9px; background: #E4DDC7;">
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #2B2416; font-weight: 600;">Inbox 7</div>
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 4px;">Runs 4</div>
+              <div style="height: 1px; background: #C9BFA2; margin: 8px 0;"></div>
+              <div style="display: flex; flex-direction: column; gap: 6px;">
+                <div style="border: 1px solid #C9BFA2; border-radius: 5px; height: 30px; background: #F3EEE1;"></div>
+                <div style="border: 1px solid #B9AF92; border-left: 3px solid #4C4432; border-radius: 5px; height: 30px; background: #E9DFC2;"></div>
+                <div style="border: 1px solid #C9BFA2; border-radius: 5px; height: 30px; background: #F3EEE1;"></div>
+                <div style="border: 1px solid #C9BFA2; border-radius: 5px; height: 30px; background: #F3EEE1;"></div>
+              </div>
+            </div>
+            <div style="flex: 1; padding: 12px; display: flex; gap: 12px;">
+              <div style="flex: 1.25;">
+                <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432;">SPEC APPROVAL · WAITING 12 MIN</div>
+                <div style="height: 10px; width: 92%; background: #C9BFA2; border-radius: 2px; margin-top: 7px;"></div>
+                <div style="height: 10px; width: 64%; background: #C9BFA2; border-radius: 2px; margin-top: 4px;"></div>
+                <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432; margin-top: 14px;">KEY FACTS</div>
+                <div style="height: 6px; width: 86%; background: #DDD4B9; border-radius: 2px; margin-top: 6px;"></div>
+                <div style="height: 6px; width: 74%; background: #DDD4B9; border-radius: 2px; margin-top: 4px;"></div>
+                <div style="border: 1px dashed #B9AF92; border-radius: 5px; height: 46px; margin-top: 12px;"></div>
+                <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432; margin-top: 12px;">EVIDENCE</div>
+                <div style="border: 1px solid #C9BFA2; border-radius: 5px; height: 44px; margin-top: 6px; background: repeating-linear-gradient(-45deg, #E4DDC7 0 8px, #ECE5D2 8px 16px);"></div>
+              </div>
+              <div style="flex: 0.85;">
+                <div style="border: 1px solid #B9AF92; border-radius: 6px; padding: 9px;">
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432;">✓ RECOMMENDED</div>
+                  <div style="height: 9px; width: 52%; background: #C9BFA2; border-radius: 2px; margin-top: 6px;"></div>
+                  <div style="height: 5px; width: 100%; background: #DDD4B9; border-radius: 2px; margin-top: 7px;"></div>
+                  <div style="height: 5px; width: 84%; background: #DDD4B9; border-radius: 2px; margin-top: 3px;"></div>
+                  <div style="height: 22px; background: #C9BFA2; border-radius: 4px; margin-top: 9px;"></div>
+                </div>
+                <div style="border: 1px solid #C9BFA2; border-radius: 5px; height: 20px; margin-top: 7px;"></div>
+                <div style="border: 1px solid #C9BFA2; border-radius: 5px; height: 20px; margin-top: 5px;"></div>
+                <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432; margin-top: 9px; line-height: 1.5;">trailing action area — no floating bar needed</div>
+              </div>
+            </div>
+            <div style="width: 128px; border-left: 1px solid #C9BFA2; background: #E8E2CD; padding: 10px;">
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432;">INSPECTOR</div>
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432; margin-top: 9px;">VERIFICATION</div>
+              <div style="height: 5px; width: 90%; background: #D6CDB2; border-radius: 2px; margin-top: 5px;"></div>
+              <div style="height: 5px; width: 70%; background: #D6CDB2; border-radius: 2px; margin-top: 3px;"></div>
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432; margin-top: 11px;">BINDINGS</div>
+              <div style="height: 5px; width: 96%; background: #D6CDB2; border-radius: 2px; margin-top: 5px;"></div>
+              <div style="height: 5px; width: 82%; background: #D6CDB2; border-radius: 2px; margin-top: 3px;"></div>
+              <div style="height: 5px; width: 88%; background: #D6CDB2; border-radius: 2px; margin-top: 3px;"></div>
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432; margin-top: 11px;">ATTACHMENTS</div>
+              <div style="border: 1px solid #C9BFA2; border-radius: 4px; height: 30px; margin-top: 5px;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Narrow · inspector closed, card single column</div>
+        <div style="width: 300px; background: #EDE7D6; border: 1px solid #B9AF92; border-radius: 10px; overflow: hidden;">
+          <div style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: #E4DDC7; border-bottom: 1px solid #C9BFA2; font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432;"><span>▤</span><span>⟳</span><span>Updated 12s</span><span style="margin-left: auto; border: 1px solid #B9AF92; border-radius: 3px; padding: 1px 5px;">▥</span></div>
+          <div style="display: flex; height: 300px;">
+            <div style="width: 104px; border-right: 1px solid #C9BFA2; padding: 8px; background: #E4DDC7;">
+              <div style="display: flex; flex-direction: column; gap: 6px;"><div style="border: 1px solid #C9BFA2; border-radius: 5px; height: 28px; background: #F3EEE1;"></div><div style="border: 1px solid #B9AF92; border-left: 3px solid #4C4432; border-radius: 5px; height: 28px; background: #E9DFC2;"></div><div style="border: 1px solid #C9BFA2; border-radius: 5px; height: 28px; background: #F3EEE1;"></div></div>
+            </div>
+            <div style="flex: 1; padding: 11px;">
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432;">SPEC APPROVAL · 12 MIN</div>
+              <div style="height: 9px; width: 94%; background: #C9BFA2; border-radius: 2px; margin-top: 7px;"></div>
+              <div style="border: 1px solid #B9AF92; border-radius: 6px; padding: 8px; margin-top: 10px;"><div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432;">✓ RECOMMENDED</div><div style="height: 8px; width: 46%; background: #C9BFA2; border-radius: 2px; margin-top: 6px;"></div><div style="height: 20px; background: #C9BFA2; border-radius: 4px; margin-top: 8px;"></div></div>
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432; margin-top: 12px;">KEY FACTS</div>
+              <div style="height: 5px; width: 88%; background: #DDD4B9; border-radius: 2px; margin-top: 5px;"></div>
+              <div style="height: 5px; width: 72%; background: #DDD4B9; border-radius: 2px; margin-top: 3px;"></div>
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432; margin-top: 12px; line-height: 1.55;">facts and bindings fold back into the flow at this width — same content, one column</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Mock · nothing selected (P3-1)</div>
+        <div style="width: 320px; background: #EDE7D6; border: 1px solid #C9BFA2; border-radius: 10px; padding: 26px 24px;">
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; color: #4C4432;">THIS MORNING</div>
+          <div style="font-family: 'Source Serif Pro', serif; font-size: 21px; line-height: 1.28; margin-top: 10px;">Seven decisions open. One is urgent.</div>
+          <div style="margin-top: 16px; display: flex; flex-direction: column; gap: 9px; font-size: 12.5px;">
+            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #DDD4B9; padding-bottom: 7px;"><span style="color: #4C4432;">Highest priority</span><span style="color: #2B2416;">Execution failure · freeside</span></div>
+            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #DDD4B9; padding-bottom: 7px;"><span style="color: #4C4432;">Waiting longest</span><span style="color: #2B2416;">Agent question · 31m</span></div>
+            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #DDD4B9; padding-bottom: 7px;"><span style="color: #4C4432;">Active runs</span><span style="color: #2B2416;">2 · 1 held</span></div>
+            <div style="display: flex; justify-content: space-between;"><span style="color: #4C4432;">Daemon</span><span style="color: #2B2416;">Reachable · synced 12s ago</span></div>
+          </div>
+          <div style="margin-top: 18px; display: flex; gap: 8px;">
+            <div style="border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 6px; padding: 7px 12px; font-size: 12.5px; color: #7E5D0F; font-weight: 600;">Open the urgent item</div>
+            <div style="border: 1px solid #C9BFA2; border-radius: 6px; padding: 7px 12px; font-size: 12.5px; color: #4C4432;">Runs</div>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 14px; line-height: 1.55;">no charts, no celebration — four lines the operator would otherwise go looking for</div>
+        </div>
+      </div>
+    </div>
+    <sc-if value="{{ showNotes }}" hint-placeholder-val="{{ true }}">
+    <div style="margin-top: 22px; border-top: 1px solid #D6CDB2; padding-top: 12px; display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 16px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450;">Build rules</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.65; color: #4C4432; columns: 2; column-gap: 34px;">
+        <li>Native <code style="font-family: 'IBM Plex Mono', monospace;">.inspector</code>, toggled from the toolbar, state remembered per section. It never opens by default.</li>
+        <li>Card goes two-column only above ~1000pt of detail width; below that the trailing column's content returns to the flow in the same order.</li>
+        <li>The card keeps a max measure for reading (~72 characters); extra width goes to the trailing column and the inspector, never to longer lines.</li>
+        <li>The empty pane is a summary, not a dashboard: counts and one route in. It never animates and never colours a number that is not exceptional.</li>
+      </ul>
+    </div>
+    </sc-if>
+  </div>
+
+  <div id="1h" data-screen-label="1h Card compositions" style="margin-top: 52px; border-top: 1px solid #D6CDB2; padding-top: 24px;">
+    <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; color: #7E5D0F; border: 1px solid #8F6B14; border-radius: 3px; padding: 2px 7px;">1h</span>
+      <h3 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 24px; margin: 0;">Four compositions, one module set</h3>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Mock ×2 · Wireframe ×2</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">P1-5</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #7E5D0F; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 3px; padding: 2px 6px;">Client · modules</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #4C4432; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Wave 7 · typed card facts</span>
+    </div>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 830px; margin: 10px 0 0; color: #4C4432;">The review asks for seven bespoke compositions. Four are worth building now, and none of them is a new layout — each is the <a href="#1c">1c</a> shell with one graphic module inserted where the decisive fact lives: a checklist, a stage rail, a two-position comparison, a yield chart. System health and blocked are re-orderings of existing fact modules; they can follow once these four prove the module set. The two graphics with real design risk are mocked; the two that are structural arguments are wireframed.</p>
+    <div style="display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; margin-top: 22px;">
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Mock · ready for final review</div>
+        <div style="width: 330px; background: #F3EEE1; border: 1px solid #D0C6A8; border-radius: 10px; padding: 16px;">
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.1em; color: #4C4432;">READY FOR FINAL REVIEW · WAITING 4 MIN</div>
+          <div style="font-family: 'Source Serif Pro', serif; font-size: 18px; line-height: 1.3; margin-top: 8px;">Take the final review on auth token rotation?</div>
+          <div style="margin-top: 12px; border: 1px solid #D6CDB2; border-radius: 8px; padding: 11px 12px; background: #EDE7D6;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; color: #4C4432;">READINESS</div>
+            <div style="display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; margin-top: 8px;"><span style="font-family: 'IBM Plex Mono', monospace; color: #4C4432; width: 10px;">✓</span><span style="flex: 1;">Checks passing</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #4C4432;">14 of 14</span></div>
+            <div style="display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; margin-top: 6px;"><span style="font-family: 'IBM Plex Mono', monospace; color: #4C4432; width: 10px;">✓</span><span style="flex: 1;">Review findings resolved</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #4C4432;">8 of 8</span></div>
+            <div style="display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; margin-top: 6px;"><span style="font-family: 'IBM Plex Mono', monospace; color: #4C4432; width: 10px;">✓</span><span style="flex: 1;">Head bound to evidence</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #4C4432;">a91f0c2</span></div>
+            <div style="display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; margin-top: 6px;"><span style="font-family: 'IBM Plex Mono', monospace; color: #8A2D1C; width: 10px;">!</span><span style="flex: 1; color: #8A2D1C;">Commit plan honored</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #8A2D1C;">not honored</span></div>
+          </div>
+          <div style="margin-top: 12px; border: 1px solid #D6CDB2; border-radius: 8px; padding: 11px 12px; background: #EDE7D6;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; color: #4C4432;">CHANGE · 14 FILES</div>
+            <div style="display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 9px;"><div style="width: 81%; background: #B99A4A;"></div><div style="width: 19%; background: #C0A08A;"></div></div>
+            <div style="display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432; margin-top: 6px;"><span>+412 added</span><span>−96 removed</span></div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432; margin-top: 8px;">yield · R1 6 → R2 2 → R3 0</div>
+          </div>
+          <div style="margin-top: 12px; background: #E9DFC2; border: 1px solid #8F6B14; border-radius: 8px; padding: 12px;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; color: #7E5D0F;">✓ RECOMMENDED · CONFIDENCE MEDIUM</div>
+            <div style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 17px; margin-top: 5px;">Review the pull request</div>
+            <div style="font-size: 12px; line-height: 1.5; color: #4C4432; margin-top: 6px;">Ready on every gate but one: the commit plan was present and not honored, so read the history before merging.</div>
+            <div style="display: flex; align-items: center; justify-content: center; gap: 7px; background: #7E5D0F; border-radius: 7px; padding: 9px 0; margin-top: 10px;"><span style="font-size: 13px; font-weight: 600; color: #F3EEE1;">View PR</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #E9DFC2;">↗</span></div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Mock · execution failure</div>
+        <div style="width: 330px; background: #F3EEE1; border: 1px solid #D0C6A8; border-radius: 10px; padding: 16px;">
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.1em; color: #8A2D1C;">EXECUTION FAILURE · URGENT · WAITING 12 MIN</div>
+          <div style="font-family: 'Source Serif Pro', serif; font-size: 18px; line-height: 1.3; margin-top: 8px;">Verify failed twice on the same test. Retry, or hand it back?</div>
+          <div style="margin-top: 14px; border: 1px solid #D6CDB2; border-radius: 8px; padding: 13px 12px; background: #EDE7D6;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; color: #4C4432;">STAGE · ATTEMPT 2</div>
+            <div style="display: flex; align-items: center; margin-top: 12px;">
+              <div style="display: flex; flex-direction: column; align-items: center; width: 56px;"><div style="width: 9px; height: 9px; border-radius: 50%; background: #B9AF92;"></div><div style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432; margin-top: 6px;">Plan</div></div>
+              <div style="flex: 1; height: 1px; background: #C9BFA2; margin-bottom: 15px;"></div>
+              <div style="display: flex; flex-direction: column; align-items: center; width: 68px;"><div style="width: 9px; height: 9px; border-radius: 50%; background: #B9AF92;"></div><div style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432; margin-top: 6px;">Implement</div></div>
+              <div style="flex: 1; height: 1px; background: #C9BFA2; margin-bottom: 15px;"></div>
+              <div style="display: flex; flex-direction: column; align-items: center; width: 62px;"><div style="width: 13px; height: 13px; border-radius: 50%; background: #8A2D1C; display: flex; align-items: center; justify-content: center;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #F3EEE1;">!</span></div><div style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #8A2D1C; margin-top: 4px; font-weight: 600;">Verify</div></div>
+              <div style="flex: 1; height: 1px; background: #DDD4B9; margin-bottom: 15px;"></div>
+              <div style="display: flex; flex-direction: column; align-items: center; width: 62px;"><div style="width: 9px; height: 9px; border-radius: 50%; border: 1px solid #B9AF92; background: #EDE7D6;"></div><div style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432; margin-top: 6px;">Publish</div></div>
+            </div>
+            <div style="border-top: 1px solid #DDD4B9; margin-top: 12px; padding-top: 10px;">
+              <div style="font-size: 12.5px; line-height: 1.5;"><b>Likely cause</b> · the same assertion failed on both attempts, in <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">acceptance/auth_test.go:214</span></div>
+              <div style="font-size: 12px; line-height: 1.5; color: #4C4432; margin-top: 6px;">Attempt 1 failed after 4m 12s; attempt 2 after 4m 20s. No code changed between them.</div>
+            </div>
+          </div>
+          <div style="margin-top: 12px; background: #E9DFC2; border: 1px solid #8F6B14; border-radius: 8px; padding: 12px;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; color: #7E5D0F;">✓ RECOMMENDED · CONFIDENCE HIGH</div>
+            <div style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 17px; margin-top: 5px;">Return to agent</div>
+            <div style="font-size: 12px; line-height: 1.5; color: #4C4432; margin-top: 6px;">A third identical attempt is unlikely to pass: the failure is deterministic and nothing changed between runs.</div>
+            <div style="background: #7E5D0F; border-radius: 7px; padding: 9px 0; margin-top: 10px; text-align: center;"><span style="font-size: 13px; font-weight: 600; color: #F3EEE1;">Return to agent</span></div>
+          </div>
+          <div style="display: flex; gap: 8px; margin-top: 10px;">
+            <div style="flex: 1; border: 1px solid #C9BFA2; border-radius: 7px; padding: 8px 0; text-align: center; font-size: 12.5px; color: #4C4432;">⟳ Retry anyway</div>
+            <div style="flex: 0 0 84px; border: 1px solid #C9BFA2; border-radius: 7px; padding: 8px 0; text-align: center; font-size: 12.5px; color: #4C4432;">More… ▾</div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Wireframe · review dispute</div>
+        <div style="width: 286px; background: #EDE7D6; border: 1px solid #B9AF92; border-radius: 10px; padding: 13px;">
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432;">REVIEW DISPUTE · ROUND 3</div>
+          <div style="height: 9px; width: 92%; background: #C9BFA2; border-radius: 2px; margin-top: 8px;"></div>
+          <div style="height: 9px; width: 56%; background: #C9BFA2; border-radius: 2px; margin-top: 4px;"></div>
+          <div style="display: flex; gap: 9px; margin-top: 13px;">
+            <div style="flex: 1; border: 1px solid #C9BFA2; border-radius: 6px; padding: 9px;">
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432;">REVIEWER HOLDS</div>
+              <div style="height: 5px; width: 96%; background: #DDD4B9; border-radius: 2px; margin-top: 7px;"></div>
+              <div style="height: 5px; width: 88%; background: #DDD4B9; border-radius: 2px; margin-top: 3px;"></div>
+              <div style="height: 5px; width: 62%; background: #DDD4B9; border-radius: 2px; margin-top: 3px;"></div>
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432; margin-top: 8px;">cites · 2 rules</div>
+            </div>
+            <div style="flex: 1; border: 1px solid #C9BFA2; border-radius: 6px; padding: 9px;">
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432;">AUTHOR HOLDS</div>
+              <div style="height: 5px; width: 92%; background: #DDD4B9; border-radius: 2px; margin-top: 7px;"></div>
+              <div style="height: 5px; width: 78%; background: #DDD4B9; border-radius: 2px; margin-top: 3px;"></div>
+              <div style="height: 5px; width: 70%; background: #DDD4B9; border-radius: 2px; margin-top: 3px;"></div>
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432; margin-top: 8px;">cites · 1 rule</div>
+            </div>
+          </div>
+          <div style="border: 1px dashed #B9AF92; border-radius: 6px; padding: 9px; margin-top: 11px;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432;">WHAT THE DAEMON CAN VERIFY</div>
+            <div style="height: 5px; width: 84%; background: #DDD4B9; border-radius: 2px; margin-top: 6px;"></div>
+            <div style="height: 5px; width: 66%; background: #DDD4B9; border-radius: 2px; margin-top: 3px;"></div>
+          </div>
+          <div style="border: 1px solid #B9AF92; border-radius: 6px; padding: 9px; margin-top: 11px;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432;">ADJUDICATE — PICK A SIDE</div>
+            <div style="display: flex; gap: 7px; margin-top: 8px;"><div style="flex: 1; height: 20px; background: #D6CDB2; border-radius: 4px;"></div><div style="flex: 1; height: 20px; border: 1px solid #C9BFA2; border-radius: 4px;"></div></div>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 10px; line-height: 1.55;">equal columns, equal weight — neither position may read as the default, and no recommendation block appears here</div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Wireframe · diminishing returns</div>
+        <div style="width: 250px; background: #EDE7D6; border: 1px solid #B9AF92; border-radius: 10px; padding: 13px;">
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432;">DIMINISHING RETURNS · ROUND 4</div>
+          <div style="height: 9px; width: 88%; background: #C9BFA2; border-radius: 2px; margin-top: 8px;"></div>
+          <div style="border: 1px solid #C9BFA2; border-radius: 6px; padding: 11px 10px; margin-top: 12px;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432;">FINDINGS PER ROUND</div>
+            <div style="display: flex; align-items: flex-end; gap: 12px; height: 76px; margin-top: 10px;">
+              <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;"><div style="display: flex; align-items: flex-end; gap: 2px;"><div style="width: 11px; height: 62px; background: #B9AF92;"></div><div style="width: 11px; height: 6px; background: #DDD4B9;"></div></div><span style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432;">R1</span></div>
+              <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;"><div style="display: flex; align-items: flex-end; gap: 2px;"><div style="width: 11px; height: 30px; background: #B9AF92;"></div><div style="width: 11px; height: 18px; background: #DDD4B9;"></div></div><span style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432;">R2</span></div>
+              <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;"><div style="display: flex; align-items: flex-end; gap: 2px;"><div style="width: 11px; height: 10px; background: #B9AF92;"></div><div style="width: 11px; height: 26px; background: #DDD4B9;"></div></div><span style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432;">R3</span></div>
+              <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;"><div style="display: flex; align-items: flex-end; gap: 2px;"><div style="width: 11px; height: 4px; background: #B9AF92;"></div><div style="width: 11px; height: 24px; background: #DDD4B9;"></div></div><span style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432;">R4</span></div>
+            </div>
+            <div style="display: flex; gap: 12px; margin-top: 9px; font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432;"><span><span style="display: inline-block; width: 7px; height: 7px; background: #B9AF92; margin-right: 4px;"></span>new</span><span><span style="display: inline-block; width: 7px; height: 7px; background: #DDD4B9; margin-right: 4px;"></span>recurring</span></div>
+          </div>
+          <div style="border: 1px solid #B9AF92; border-radius: 6px; padding: 9px; margin-top: 11px;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: #4C4432;">RECOMMENDED · FINISH NOW</div>
+            <div style="height: 5px; width: 90%; background: #DDD4B9; border-radius: 2px; margin-top: 6px;"></div>
+            <div style="height: 20px; background: #D6CDB2; border-radius: 4px; margin-top: 8px;"></div>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 10px; line-height: 1.55;">the chart <i>is</i> the argument for finishing — four numbers in a table would not be</div>
+        </div>
+      </div>
+    </div>
+    <sc-if value="{{ showNotes }}" hint-placeholder-val="{{ true }}">
+    <div style="margin-top: 22px; border-top: 1px solid #D6CDB2; padding-top: 12px; display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 16px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450;">Build rules</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.65; color: #4C4432; columns: 2; column-gap: 34px;">
+        <li>Module set: <code style="font-family: 'IBM Plex Mono', monospace;">FactBlock</code>, <code style="font-family: 'IBM Plex Mono', monospace;">Recommendation</code>, <code style="font-family: 'IBM Plex Mono', monospace;">Checklist</code>, <code style="font-family: 'IBM Plex Mono', monospace;">StageRail</code>, <code style="font-family: 'IBM Plex Mono', monospace;">Comparison</code>, <code style="font-family: 'IBM Plex Mono', monospace;">YieldChart</code>, <code style="font-family: 'IBM Plex Mono', monospace;">Claims</code>, <code style="font-family: 'IBM Plex Mono', monospace;">Evidence</code>, <code style="font-family: 'IBM Plex Mono', monospace;">Details</code>. A card type is an ordering of modules, never a new view.</li>
+        <li>Success stays quiet: the checklist tick is neutral ink, not green. Only the failing line takes wax.</li>
+        <li>Every graphic carries adjacent text stating the same fact, and a VoiceOver summary ("verify failed, stage 3 of 4"). Decorative rails are hidden from VoiceOver.</li>
+        <li>Dispute cards render <i>no</i> recommendation block even if one is offered — a card that preserves dissent cannot also pick a winner in accent colour.</li>
+        <li>The stage rail reflows to a vertical rail at accessibility sizes, reusing the run timeline's rail rather than a second implementation.</li>
+      </ul>
+    </div>
+    </sc-if>
+  </div>
+
+  <div id="1i" data-screen-label="1i Evidence states" style="margin-top: 52px; border-top: 1px solid #D6CDB2; padding-top: 24px;">
+    <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; color: #7E5D0F; border: 1px solid #8F6B14; border-radius: 3px; padding: 2px 7px;">1i</span>
+      <h3 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 24px; margin: 0;">Evidence has five states, and none of them is silence</h3>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Mock · both platforms</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">P1-7</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #7E5D0F; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 3px; padding: 2px 6px;">Client · states</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #4C4432; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Wave 7 · evidence metadata</span>
+    </div>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 830px; margin: 10px 0 0; color: #4C4432;">A claim labelled <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px;">screenshot</span> with nothing underneath is the one failure mode a trust-first product cannot afford: the operator cannot tell whether the evidence is missing, loading, or being withheld. Every attachment renders one of five states, and the digest survives all five.</p>
+    <div style="display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; margin-top: 22px;">
+      <div style="width: 224px; background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 13px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.12em; color: #4C4432;">1 · LOADING</div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; margin-top: 7px;">screenshot</div>
+        <div style="height: 96px; margin-top: 7px; border: 1px solid #D6CDB2; border-radius: 6px; background: #EDE7D6; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px;">
+          <div style="width: 15px; height: 15px; border-radius: 50%; border: 2px solid #C9BFA2; border-top-color: #7E5D0F;"></div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432;">fetching by digest…</div>
+        </div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 7px;">sha256:2c88f1…9be0</div>
+      </div>
+      <div style="width: 224px; background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 13px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.12em; color: #4C4432;">2 · IMAGE AVAILABLE</div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; margin-top: 7px;">screenshot</div>
+        <div style="height: 96px; margin-top: 7px; border: 1px solid #D6CDB2; border-radius: 6px; background: repeating-linear-gradient(-45deg, #E4DDC7 0 10px, #ECE5D2 10px 20px); display: flex; align-items: flex-end; justify-content: flex-end; padding: 7px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432; background: #F3EEE1; border: 1px solid #C9BFA2; border-radius: 3px; padding: 1px 5px;">⤢ expand</span>
+        </div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 7px;">1 442 × 900 · memory-only</div>
+      </div>
+      <div style="width: 224px; background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 13px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.12em; color: #4C4432;">3 · NOT AN IMAGE</div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; margin-top: 7px;">verify_log</div>
+        <div style="height: 96px; margin-top: 7px; border: 1px solid #D6CDB2; border-radius: 6px; background: #EDE7D6; padding: 9px; display: flex; flex-direction: column; justify-content: space-between;">
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; line-height: 1.6;">text/plain · 12.4 KB<br />first line preview:<br /><span style="color: #2B2416;">FAIL auth_test.go:214</span></div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432; border: 1px solid #C9BFA2; border-radius: 3px; padding: 2px 0; text-align: center; background: #F3EEE1;">Quick Look</div>
+        </div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 7px;">sha256:7f10ab…4c21</div>
+      </div>
+      <div style="width: 224px; background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 13px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.12em; color: #8A2D1C;">4 · UNAVAILABLE</div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; margin-top: 7px;">screenshot</div>
+        <div style="height: 96px; margin-top: 7px; border: 1px solid #C0A08A; border-radius: 6px; background: #E8D5C9; padding: 10px; display: flex; flex-direction: column; justify-content: center; gap: 6px;">
+          <div style="font-size: 11.5px; line-height: 1.45; color: #8A2D1C;">The daemon holds the digest but not the bytes.</div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432;">the claim is still a claim — judge it accordingly</div>
+        </div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 7px;">sha256:91cc02…7ae5 · copy</div>
+      </div>
+      <div style="width: 224px; background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 13px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.12em; color: #4C4432;">5 · TOO LARGE HERE</div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; margin-top: 7px;">trace_bundle</div>
+        <div style="height: 96px; margin-top: 7px; border: 1px solid #D6CDB2; border-radius: 6px; background: #EDE7D6; padding: 10px; display: flex; flex-direction: column; justify-content: center; gap: 7px;">
+          <div style="font-size: 11.5px; line-height: 1.45;">42.6 MB — above the phone's memory-only limit.</div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432; border: 1px solid #C9BFA2; border-radius: 3px; padding: 2px 0; text-align: center; background: #F3EEE1;">Open on the Mac</div>
+        </div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 7px;">sha256:aa41d8…0b93</div>
+      </div>
+    </div>
+    <sc-if value="{{ showNotes }}" hint-placeholder-val="{{ true }}">
+    <div style="margin-top: 22px; border-top: 1px solid #D6CDB2; padding-top: 12px; display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 16px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450;">Build rules</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.65; color: #4C4432; columns: 2; column-gap: 34px;">
+        <li>The digest is a caption, never the headline. The headline is the artifact's kind.</li>
+        <li>Unavailable is a state, not an error banner: the card stays usable and the claim stays labelled as a claim.</li>
+        <li>Images open in a native preview (Quick Look on the Mac, a zoomable sheet on iPhone) and remain memory-only.</li>
+        <li>A loading state that outlives its timeout becomes unavailable — it never spins forever, which is what the rendered fixture did for seven seconds.</li>
+        <li>Every state keeps a copy affordance for the digest, because that is what gets pasted into a bug report.</li>
+      </ul>
+    </div>
+    </sc-if>
+  </div>
+
+  <div id="1j" data-screen-label="1j Confirmation and next item" style="margin-top: 52px; border-top: 1px solid #D6CDB2; padding-top: 24px;">
+    <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; color: #7E5D0F; border: 1px solid #8F6B14; border-radius: 3px; padding: 2px 7px;">1j</span>
+      <h3 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 24px; margin: 0;">After the decision</h3>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Mock · macOS detail</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">P1-6</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #7E5D0F; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 3px; padding: 2px 6px;">Client only</span>
+    </div>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 830px; margin: 10px 0 0; color: #4C4432;">Today a resolving action can delete its own confirmation: the row leaves the Open scope, selection falls back to the empty pane, and the "Decision applied" banner goes with it. Three states fix it — the confirmation outlives the card, the advance is announced rather than silent, and an uncertain outcome keeps Retry rather than guessing.</p>
+    <div style="display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; margin-top: 22px;">
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">1 · applied, confirmation holds</div>
+        <div style="width: 330px; background: #EDE7D6; border: 1px solid #C9BFA2; border-radius: 10px; padding: 14px;">
+          <div style="display: flex; align-items: baseline; gap: 9px; background: #E8E2CD; border: 1px solid #D6CDB2; border-radius: 7px; padding: 10px 12px;">
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #4C4432;">✓</span>
+            <div style="flex: 1;"><div style="font-size: 12.5px; color: #2B2416;">Decision applied · Approve</div><div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432; margin-top: 3px;">spec approval · auth token rotation</div></div>
+            <span style="font-size: 11.5px; color: #7E5D0F;">View</span>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432; margin-top: 10px;">NEXT · HIGHEST PRIORITY</div>
+          <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 12px; margin-top: 7px;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #8A2D1C;">EXECUTION FAILURE · URGENT</div>
+            <div style="font-family: 'Source Serif Pro', serif; font-size: 16px; line-height: 1.3; margin-top: 6px;">Verify failed twice on the same test. Retry, or hand it back?</div>
+            <div style="height: 6px; width: 88%; background: #E4DDC7; border-radius: 2px; margin-top: 10px;"></div>
+            <div style="height: 6px; width: 66%; background: #E4DDC7; border-radius: 2px; margin-top: 4px;"></div>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 10px; line-height: 1.55;">banner persists ~6s and through the advance; it is announced to VoiceOver before focus moves</div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">2 · nothing left to decide</div>
+        <div style="width: 300px; background: #EDE7D6; border: 1px solid #C9BFA2; border-radius: 10px; padding: 14px;">
+          <div style="display: flex; align-items: baseline; gap: 9px; background: #E8E2CD; border: 1px solid #D6CDB2; border-radius: 7px; padding: 10px 12px;">
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #4C4432;">✓</span>
+            <div style="flex: 1;"><div style="font-size: 12.5px;">Decision applied · Finish now</div></div>
+            <span style="font-size: 11.5px; color: #7E5D0F;">View</span>
+          </div>
+          <div style="text-align: center; padding: 26px 10px 22px;">
+            <div style="font-family: 'Source Serif Pro', serif; font-size: 18px;">Inbox clear</div>
+            <div style="font-size: 12px; color: #4C4432; margin-top: 6px; line-height: 1.5;">Two runs are still working. Nothing needs your judgement.</div>
+            <div style="border: 1px solid #C9BFA2; border-radius: 6px; padding: 6px 12px; font-size: 12px; display: inline-block; margin-top: 12px; color: #4C4432;">Watch the active runs</div>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; line-height: 1.55;">an empty inbox is a result, not a blank pane — and it never says "well done"</div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">3 · uncertain outcome, nothing advances</div>
+        <div style="width: 330px; background: #EDE7D6; border: 1px solid #C9BFA2; border-radius: 10px; padding: 14px;">
+          <div style="display: flex; align-items: baseline; gap: 9px; background: #E9DFC2; border: 1px solid #8F6B14; border-radius: 7px; padding: 10px 12px;">
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.06em; color: #7E5D0F;">RETRY</span>
+            <div style="flex: 1; font-size: 12.5px; line-height: 1.5; color: #4C4432;">The response was lost. The decision may already be recorded — retrying is safe.</div>
+          </div>
+          <div style="display: flex; gap: 8px; margin-top: 10px;">
+            <div style="flex: 1; background: #7E5D0F; border-radius: 7px; padding: 8px 0; text-align: center;"><span style="font-size: 12.5px; font-weight: 600; color: #F3EEE1;">Retry Approve</span></div>
+            <div style="flex: 1; border: 1px solid #C9BFA2; border-radius: 7px; padding: 8px 0; text-align: center; font-size: 12.5px; color: #4C4432;">Check current state</div>
+          </div>
+          <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 12px; margin-top: 12px;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432;">SPEC APPROVAL · STILL OPEN HERE</div>
+            <div style="height: 6px; width: 90%; background: #E4DDC7; border-radius: 2px; margin-top: 8px;"></div>
+            <div style="height: 6px; width: 72%; background: #E4DDC7; border-radius: 2px; margin-top: 4px;"></div>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 10px; line-height: 1.55;">the card stays, the selection stays, the operator decides when to move on</div>
+        </div>
+      </div>
+    </div>
+    <sc-if value="{{ showNotes }}" hint-placeholder-val="{{ true }}">
+    <div style="margin-top: 22px; border-top: 1px solid #D6CDB2; padding-top: 12px; display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 16px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450;">Build rules</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.65; color: #4C4432; columns: 2; column-gap: 34px;">
+        <li>Confirmation lives above the detail pane, outside the card's lifetime, so resolving the item cannot unmount its own receipt.</li>
+        <li>Advance is opt-out in settings but never instant: the banner appears, then the next item loads. Success stays neutral — no green, no chime.</li>
+        <li>"View" re-opens the resolved item in the Resolved scope without changing the current filter.</li>
+        <li>Uncertain submissions never advance and never clear the action row; Retry is idempotent at the daemon.</li>
+      </ul>
+    </div>
+    </sc-if>
+  </div>
+
+  <div id="1k" data-screen-label="1k Desktop efficiency and refresh" style="margin-top: 52px; border-top: 1px solid #D6CDB2; padding-top: 24px;">
+    <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; color: #7E5D0F; border: 1px solid #8F6B14; border-radius: 3px; padding: 2px 7px;">1k</span>
+      <h3 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 24px; margin: 0;">Freshness, keyboard, and the way back in</h3>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Mock · macOS chrome + iOS</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">P1-10 · P2-6 · P2-10 · P2-11</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #7E5D0F; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 3px; padding: 2px 6px;">Client only</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #4C4432; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Phase 2 · search</span>
+    </div>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 830px; margin: 10px 0 0; color: #4C4432;">Four findings that share one theme: the operator has no way to ask "is this current?" and no fast way to move. Refresh is a confidence affordance — the heartbeat still does the work; the button exists so a person can stop wondering. Search is the one finding we are deliberately postponing: it is right, but a seven-item inbox does not earn an index, and search written before <a href="#1e">1e</a> would index the strings we are about to demote. Reserve <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px;">⌘F</span> and leave the field out of the toolbar until it works.</p>
+    <div style="display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; margin-top: 22px;">
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">macOS toolbar · with last-updated</div>
+        <div style="width: 430px; background: #E4DDC7; border: 1px solid #C9BFA2; border-radius: 10px 10px 0 0; padding: 9px 12px; display: flex; align-items: center; gap: 12px;">
+          <div style="display: flex; gap: 5px;"><span style="width: 9px; height: 9px; border-radius: 50%; background: #C9BFA2;"></span><span style="width: 9px; height: 9px; border-radius: 50%; background: #C9BFA2;"></span><span style="width: 9px; height: 9px; border-radius: 50%; background: #C9BFA2;"></span></div>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #4C4432;">▤</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #4C4432;">⟳</span>
+          <span style="font-size: 11.5px; color: #4C4432;">Updated 12s ago</span>
+          <span style="margin-left: auto; font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #4C4432; border: 1px solid #B9AF92; border-radius: 4px; padding: 2px 7px;">▥ Inspector</span>
+        </div>
+        <div style="width: 430px; background: #EDE7D6; border: 1px solid #C9BFA2; border-top: none; border-radius: 0 0 10px 10px; padding: 12px;">
+          <div style="display: flex; gap: 14px;">
+            <div style="flex: 0 0 158px;">
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.12em; color: #4C4432;">VIEW MENU</div>
+              <div style="margin-top: 8px; background: #F7F3E8; border: 1px solid #C9BFA2; border-radius: 6px; padding: 5px;">
+                <div style="display: flex; justify-content: space-between; font-size: 11.5px; padding: 3px 7px;"><span>Inbox</span><span style="font-family: 'IBM Plex Mono', monospace; color: #4C4432;">⌘1</span></div>
+                <div style="display: flex; justify-content: space-between; font-size: 11.5px; padding: 3px 7px;"><span>Runs</span><span style="font-family: 'IBM Plex Mono', monospace; color: #4C4432;">⌘2</span></div>
+                <div style="height: 1px; background: #DDD4B9; margin: 4px 6px;"></div>
+                <div style="display: flex; justify-content: space-between; font-size: 11.5px; padding: 3px 7px;"><span>Refresh</span><span style="font-family: 'IBM Plex Mono', monospace; color: #4C4432;">⌘R</span></div>
+                <div style="display: flex; justify-content: space-between; font-size: 11.5px; padding: 3px 7px;"><span>Show Inspector</span><span style="font-family: 'IBM Plex Mono', monospace; color: #4C4432;">⌥⌘I</span></div>
+                <div style="height: 1px; background: #DDD4B9; margin: 4px 6px;"></div>
+                <div style="display: flex; justify-content: space-between; font-size: 11.5px; padding: 3px 7px;"><span>Next item</span><span style="font-family: 'IBM Plex Mono', monospace; color: #4C4432;">J · ↓</span></div>
+                <div style="display: flex; justify-content: space-between; font-size: 11.5px; padding: 3px 7px;"><span>Previous item</span><span style="font-family: 'IBM Plex Mono', monospace; color: #4C4432;">K · ↑</span></div>
+                <div style="display: flex; justify-content: space-between; font-size: 11.5px; padding: 3px 7px;"><span>Take recommended</span><span style="font-family: 'IBM Plex Mono', monospace; color: #4C4432;">↩</span></div>
+              </div>
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 8px; line-height: 1.55;">every shortcut has a menu item — a shortcut nobody can find is not a feature</div>
+            </div>
+            <div style="flex: 1;">
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.12em; color: #4C4432;">KEYBOARD POLICY</div>
+              <div style="font-size: 12px; line-height: 1.6; color: #4C4432; margin-top: 8px;"><b style="color: #2B2416;">↩ takes the recommendation</b> — but only when revalidation has passed and the card actually has one. Otherwise Return does nothing and says so in the status line.</div>
+              <div style="font-size: 12px; line-height: 1.6; color: #4C4432; margin-top: 8px;"><b style="color: #2B2416;">Esc</b> dismisses sheets and clears the pending action; it never resolves an item.</div>
+              <div style="font-size: 12px; line-height: 1.6; color: #4C4432; margin-top: 8px;"><b style="color: #2B2416;">Space is not bound.</b> The review suggests Space to expand details; on a list with a focused row, Space belongs to the system and to Quick Look. Disclosure stays a click or ⌥⌘I.</div>
+              <div style="font-size: 12px; line-height: 1.6; color: #4C4432; margin-top: 8px;"><b style="color: #2B2416;">No destructive shortcut.</b> Stop and Decline are never one keystroke away.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Menu-bar extra · a route back</div>
+        <div style="width: 236px; background: #F7F3E8; border: 1px solid #C9BFA2; border-radius: 8px; padding: 6px; box-shadow: 0 12px 30px rgba(43,36,22,0.14);">
+          <div style="font-size: 12px; padding: 5px 9px; font-weight: 600;">Open Freeside</div>
+          <div style="font-size: 12px; padding: 5px 9px;">Show Inbox <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432;">· 7</span></div>
+          <div style="height: 1px; background: #DDD4B9; margin: 5px 7px;"></div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #7E5D0F; padding: 4px 9px;">1 URGENT · EXECUTION FAILURE</div>
+          <div style="font-size: 12px; padding: 5px 9px;">Open the urgent item</div>
+          <div style="height: 1px; background: #DDD4B9; margin: 5px 7px;"></div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.1em; color: #4C4432; padding: 4px 9px;">DAEMON</div>
+          <div style="font-size: 12px; padding: 5px 9px;">Reachable · synced 12s ago</div>
+          <div style="font-size: 12px; padding: 5px 9px;">Restart daemon…</div>
+          <div style="height: 1px; background: #DDD4B9; margin: 5px 7px;"></div>
+          <div style="font-size: 12px; padding: 5px 9px;">Quit Freeside</div>
+        </div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 9px; line-height: 1.6; width: 236px;">the urgent line appears only when something is urgent · closing the window can no longer strand the operator in a utility</div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">iPhone · pull to refresh</div>
+        <div style="width: 220px; background: #EDE7D6; border: 1px solid #C9BFA2; border-radius: 14px; padding: 12px;">
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px 0 10px;">
+            <div style="width: 15px; height: 15px; border-radius: 50%; border: 2px solid #C9BFA2; border-top-color: #7E5D0F;"></div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432;">Checking with the daemon…</div>
+          </div>
+          <div style="font-family: 'Source Serif Pro', serif; font-size: 17px; font-weight: 500;">Inbox</div>
+          <div style="display: flex; gap: 9px; margin-top: 7px; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432;"><span style="border-bottom: 2px solid #7E5D0F; padding-bottom: 2px; color: #2B2416;">Open 7</span><span>Resolved 3</span><span>All 10</span></div>
+          <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 7px;">
+            <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 7px; height: 46px;"></div>
+            <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 7px; height: 46px;"></div>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 10px; line-height: 1.6;">also refreshes on foreground · the freshness banner still owns the unreachable and revoked cases</div>
+        </div>
+      </div>
+    </div>
+    <sc-if value="{{ showNotes }}" hint-placeholder-val="{{ true }}">
+    <div style="margin-top: 22px; border-top: 1px solid #D6CDB2; padding-top: 12px; display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 16px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450;">Build rules</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.65; color: #4C4432; columns: 2; column-gap: 34px;">
+        <li>Last-updated is relative and always visible; it turns to wax text once the data is older than the staleness threshold, at which point the freshness banner takes over.</li>
+        <li>Manual refresh never blocks the UI and never clears a pending decision.</li>
+        <li>Refresh on foreground activation and on network reachability regained, coalesced so a fast app-switch does not thrash the daemon.</li>
+        <li>⌘F is registered and disabled with no visible affordance until search ships, so the shortcut does not become someone else's.</li>
+        <li>The menu-bar item's urgent line is derived from the same count as the tab badge and the sidebar pill — one source, three surfaces.</li>
+      </ul>
+    </div>
+    </sc-if>
+  </div>
+
+  <div id="1l" data-screen-label="1l Pairing and run rows" style="margin-top: 52px; border-top: 1px solid #D6CDB2; padding-top: 24px;">
+    <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; color: #7E5D0F; border: 1px solid #8F6B14; border-radius: 3px; padding: 2px 7px;">1l</span>
+      <h3 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 24px; margin: 0;">First run, and the run list</h3>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Mock · iPhone + macOS</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450;">P2-8 · P2-9</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #7E5D0F; border: 1px solid #8F6B14; background: #E9DFC2; border-radius: 3px; padding: 2px 6px;">Client · run rows</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #4C4432; border: 1px solid #B9AF92; border-radius: 3px; padding: 2px 6px;">Wave 7 · pairing identity &amp; expiry</span>
+    </div>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 830px; margin: 10px 0 0; color: #4C4432;">Pairing is the first thing anyone sees and it is asked to be trusted with a device credential, so it should say what it is joining and where the name it takes will appear. The review's numeric keypad does not apply — the daemon's codes are not numeric — but the rest of its list does. The run row is a smaller fix: two lines and a wrapping chip row instead of five facts fighting for one.</p>
+    <div style="display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; margin-top: 22px;">
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">As built</div>
+        <div style="width: 260px; background: #F3EEE1; border: 1px solid #D0C6A8; border-radius: 12px; padding: 16px;">
+          <div style="font-family: 'Source Serif Pro', serif; font-size: 16px; font-weight: 500;">Pair with Freeside</div>
+          <div style="background: #EDE7D6; border: 1px solid #D6CDB2; border-radius: 6px; padding: 8px 10px; margin-top: 12px; font-size: 12px; color: #94896E;">Pairing code</div>
+          <div style="background: #EDE7D6; border: 1px solid #D6CDB2; border-radius: 6px; padding: 8px 10px; margin-top: 7px; font-size: 12px; color: #94896E;">Device name</div>
+          <div style="font-size: 11px; color: #4C4432; margin-top: 9px; line-height: 1.5;">Run the pairing command on the daemon host and enter the code it displays. The code works once and expires quickly.</div>
+          <div style="border: 1px solid #D6CDB2; border-radius: 6px; padding: 8px 0; margin-top: 12px; text-align: center; font-size: 12.5px; color: #94896E;">Pair this device</div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #8A2D1C; margin-top: 10px; line-height: 1.55;">two empty fields · no host named · no paste · nothing says where the name shows up</div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Proposed</div>
+        <div style="width: 300px; background: #F3EEE1; border: 1px solid #D0C6A8; border-radius: 12px; padding: 18px;">
+          <div style="font-family: 'Source Serif Pro', serif; font-size: 18px; font-weight: 500;">Pair this device</div>
+          <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 10px; background: #EDE7D6; border: 1px solid #D6CDB2; border-radius: 7px; padding: 9px 11px;">
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.1em; color: #4C4432;">JOINING</span>
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #2B2416;">freesided · studio.local</span>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; color: #4C4432; margin-top: 14px;">PAIRING CODE</div>
+          <div style="display: flex; align-items: center; gap: 8px; margin-top: 6px;">
+            <div style="flex: 1; display: flex; gap: 6px;">
+              <div style="flex: 1; background: #EDE7D6; border: 1px solid #8F6B14; border-radius: 6px; padding: 9px 0; text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 15px; letter-spacing: 0.16em;">K4T9</div>
+              <div style="align-self: center; font-family: 'IBM Plex Mono', monospace; color: #4C4432;">–</div>
+              <div style="flex: 1; background: #EDE7D6; border: 1px solid #D6CDB2; border-radius: 6px; padding: 9px 0; text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 15px; letter-spacing: 0.16em; color: #94896E;">••••</div>
+            </div>
+            <div style="border: 1px solid #C9BFA2; border-radius: 6px; padding: 7px 9px; font-size: 11.5px; color: #4C4432;">Paste</div>
+          </div>
+          <div style="font-size: 11.5px; color: #4C4432; margin-top: 8px; line-height: 1.5;">Run <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">freeside pair</span> on the host. The code works once and expires in 10 minutes.</div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; color: #4C4432; margin-top: 16px;">DEVICE NAME</div>
+          <div style="background: #EDE7D6; border: 1px solid #D6CDB2; border-radius: 6px; padding: 9px 11px; margin-top: 6px; font-size: 12.5px;">Anna's iPhone</div>
+          <div style="font-size: 11.5px; color: #4C4432; margin-top: 7px; line-height: 1.5;">Shown in Devices on the host and in the audit record of every decision you make from here.</div>
+          <div style="background: #7E5D0F; border-radius: 7px; padding: 10px 0; margin-top: 16px; text-align: center;"><span style="font-size: 13px; font-weight: 600; color: #F3EEE1;">Pair this device</span></div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; margin-bottom: 10px;">Run rows · as built vs. two lines</div>
+        <div style="width: 300px; background: #E4DDC7; border: 1px solid #C9BFA2; border-radius: 10px; padding: 12px;">
+          <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 9px 10px;">
+            <div style="display: flex; align-items: baseline;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 13px; flex: 1;">freeside</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #3F6F74; border: 1px solid #A8C2C4; border-radius: 3px; padding: 1px 5px;">in progress</span></div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #94896E; margin-top: 4px;">run-freeside-657</div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 3px; line-height: 1.35;">Campaign campaign-freeside-acceptance · Attempt 2</div>
+            <div style="display: flex; gap: 5px; font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432; margin-top: 4px;"><span>Implementatio n</span><span>Round 2</span><span>Invocation Started</span><span>Verificatio n Findings</span></div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432; margin-top: 3px;">checks · 11:40 pm &nbsp; review · 10:40 pm</div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #8A2D1C; margin-top: 6px; line-height: 1.5;">five facts in one row · words break mid-syllable</div>
+          </div>
+          <div style="margin-top: 12px; display: flex;">
+            <div style="width: 3px; border-radius: 2px; background: #7E5D0F;"></div>
+            <div style="flex: 1; background: #E9DFC2; border: 1px solid #8F6B14; border-left: none; border-radius: 0 8px 8px 0; padding: 10px;">
+              <div style="display: flex; align-items: baseline; gap: 6px;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 13.5px; flex: 1;">freeside · acceptance</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #3F6F74; border: 1px solid #A8C2C4; border-radius: 3px; padding: 1px 5px;">in progress</span></div>
+              <div style="font-size: 11.5px; color: #4C4432; margin-top: 5px;">Implementation · round 2 · attempt 2</div>
+              <div style="font-size: 11.5px; color: #2B2416; margin-top: 3px;">Held on verification findings · <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px;">18m</span></div>
+              <div style="display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px;">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432; border: 1px solid #C9BFA2; border-radius: 3px; padding: 1px 6px; background: #F3EEE1;">checks 11:40p</span>
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432; border: 1px solid #C9BFA2; border-radius: 3px; padding: 1px 6px; background: #F3EEE1;">review 10:40p</span>
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #4C4432; border: 1px solid #C9BFA2; border-radius: 3px; padding: 1px 6px; background: #F3EEE1;">base watch</span>
+              </div>
+            </div>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #4C4432; margin-top: 10px; line-height: 1.6;">line 1 what it is · line 2 where it is · line 3 what is holding it · chips wrap, never compress · the run ID moves to the timeline header and the copy menu</div>
+        </div>
+      </div>
+    </div>
+    <sc-if value="{{ showNotes }}" hint-placeholder-val="{{ true }}">
+    <div style="margin-top: 22px; border-top: 1px solid #D6CDB2; padding-top: 12px; display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 16px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450;">Build rules</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.65; color: #4C4432; columns: 2; column-gap: 34px;">
+        <li>Code field uses one-time-code semantics and the ASCII-uppercase keyboard the daemon's alphabet actually needs; grouping is display-only, never validation.</li>
+        <li>Paste accepts the code with or without its separator, and trims what the terminal put on the clipboard.</li>
+        <li>Device name prefills from the system device name and stays editable; the helper states both places the name appears.</li>
+        <li>Pairing never shows a credential, a token, or a key — only the host, the code, and the name.</li>
+        <li>Watch chips are single-line and wrap; the hold line is the only line permitted to use emphasis, because it is the reason the run is on screen.</li>
+      </ul>
+    </div>
+    </sc-if>
+  </div>
+
+  <div style="margin-top: 60px; border-top: 2px solid #2B2416; padding-top: 22px;" data-screen-label="Work split">
+    <h2 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 26px; margin: 0;">What is client-only, and what needs the daemon first</h2>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 840px; margin: 8px 0 0; color: #4C4432;">Most of what is proposed above is recomposition inside the app: it changes order, weight, and wording of data the client already holds, so it can start now and needs no contract change. The rest is not a UI problem wearing a UI mask — a recommendation the client <i>infers</i>, a fact the client <i>parses out of prose</i>, or a button whose transaction does not exist would each be a worse product than the current honest mess. Those belong in the Wave 7 attention-contract unit, ahead of the client work that consumes them, and they are what makes "approvals are decidable from the phone" testable rather than approximated.</p>
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 24px;">
+      <div style="background: #E9DFC2; border: 1px solid #8F6B14; border-radius: 10px; padding: 18px 20px;">
+        <div style="display: flex; align-items: baseline; gap: 10px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7E5D0F;">Work item A · client recomposition</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432; margin-left: auto;">no contract change</span>
+        </div>
+        <div style="font-family: 'Source Serif Pro', serif; font-size: 18px; margin-top: 8px;">Ships against today's API, in any wave</div>
+        <div style="font-size: 13px; line-height: 1.62; color: #4C4432; margin-top: 9px;">Colour variants and Increased Contrast (<a href="#1b">1b</a>); the accessibility composition (<a href="#1a">1a</a>); tabs and independent stacks (<a href="#1f">1f</a>); inspector, two-column card, empty-pane summary (<a href="#1g">1g</a>); badge, time, count, and selection rules (<a href="#1e">1e</a>); durable confirmation and deliberate advance (<a href="#1j">1j</a>); refresh, last-updated, keyboard, menus, menu-bar route (<a href="#1k">1k</a>); two-line run rows (<a href="#1l">1l</a>); the card shell's order, measure, and help placement (<a href="#1c">1c</a>); action ranking, overflow, confirmation copy, and destructive roles (<a href="#1d">1d</a>).</div>
+        <div style="font-size: 13px; line-height: 1.62; color: #4C4432; margin-top: 9px;">This is the majority of the review by finding count, and all three of its release blockers except the facts behind them.</div>
+      </div>
+      <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 18px 20px;">
+        <div style="display: flex; align-items: baseline; gap: 10px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #4C4432;">Work item B · Wave 7, before the 1B exit</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432; margin-left: auto;">contract first</span>
+        </div>
+        <div style="font-family: 'Source Serif Pro', serif; font-size: 18px; margin-top: 8px;">Phase 1 attention presentation &amp; action contract</div>
+        <div style="font-size: 13px; line-height: 1.62; color: #4C4432; margin-top: 9px;">Five things, in this order, each landing before the client work that draws it:</div>
+        <div style="display: flex; flex-direction: column; gap: 7px; margin-top: 9px; font-size: 12.5px; line-height: 1.55; color: #4C4432;">
+          <div><b style="color: #2B2416;">1 · Recommendation authority.</b> <code style="font-family: 'IBM Plex Mono', monospace;">recommended_action</code>, <code style="font-family: 'IBM Plex Mono', monospace;">recommendation_reason</code>, <code style="font-family: 'IBM Plex Mono', monospace;">recommendation_source</code> (deterministic policy · validated agent judgment · human policy), and confidence where it exists. Feeds <a href="#1c">1c</a>, <a href="#1h">1h</a>.</div>
+          <div><b style="color: #2B2416;">2 · Typed minimum facts per card type.</b> The §9 table as daemon projections: readiness gates and change summary, failure class and failing step, both dispute positions, per-round finding trend, blocked-since and clearing condition. Feeds <a href="#1h">1h</a>.</div>
+          <div><b style="color: #2B2416;">3 · Transactions behind the actions we display.</b> Whatever survives the decision in the callout below.</div>
+          <div><b style="color: #2B2416;">4 · Evidence metadata.</b> Validated media type, byte size, producer, creation time, source run or claim, availability status. Feeds <a href="#1i">1i</a>.</div>
+          <div><b style="color: #2B2416;">5 · Operational identity.</b> Pairing-code expiry, host display identity, local versus relayed, granted scope. Feeds <a href="#1l">1l</a>. Also: human project and work-unit names for the row's third line (<a href="#1e">1e</a>).</div>
+        </div>
+      </div>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin-top: 20px;">
+      <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 16px 18px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #4C4432;">Work item C · Wave 7 instrumentation</div>
+        <div style="font-size: 13px; line-height: 1.6; color: #4C4432; margin-top: 8px;">The comprehension telemetry §8 and §9 already prescribe — open-to-decision latency, drill-down by type and device, non-recommended choice rate, time on unavailable actions. Typed events, small and privacy-conscious; no clickstream. Landed in Wave 7, <i>read</i> in Wave 8, because these are the numbers that say whether any of this worked.</div>
+      </div>
+      <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 16px 18px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #4C4432;">Work item D · Wave 8 evaluation</div>
+        <div style="font-size: 13px; line-height: 1.6; color: #4C4432; margin-top: 8px;">Wave 8 consumes the contract and answers four questions per card type: can it be decided from iOS, does every shown action execute, can the operator identify the recommended path, can they see enough to reject it. A missing core fact found here is an exit-blocking 1B defect, not Wave 8 scope. The review's own verification criteria make a serviceable exit checklist.</div>
+      </div>
+      <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 16px 18px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #4C4432;">Work item E · Phase 2 and later</div>
+        <div style="font-size: 13px; line-height: 1.6; color: #4C4432; margin-top: 8px;">Search, with its query API, indexing, pagination and authorization, is new scope and belongs here — as does OCR and derived previews, richer or risk-classified card types, and grouping metadata. Live and mid-turn conversation stays Phase 3. Note that <a href="#1k">1k</a> only reserves ⌘F; nothing in the client work depends on this.</div>
+      </div>
+    </div>
+    <div style="margin-top: 22px; background: #E8E2CD; border: 1px solid #D6CDB2; border-radius: 10px; padding: 18px 22px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #8A2D1C;">The one decision that cannot be made in the client</div>
+      <div style="font-size: 13.5px; line-height: 1.62; color: #4C4432; margin-top: 9px; max-width: 900px;">Hiding unsupported actions (<a href="#1d">1d</a>) removes the noise, and I would ship it either way — but it does not settle P1-2, and it must not be allowed to look like it did. An action that is hidden is still an action the daemon requested and nobody can take. Two honest resolutions, and only two:</div>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 12px;">
+        <div><div style="font-size: 13px; font-weight: 600;">Implement the transactions in Wave 7</div><div style="font-size: 12.5px; line-height: 1.6; color: #4C4432; margin-top: 4px;"><code style="font-family: 'IBM Plex Mono', monospace;">discuss</code>, <code style="font-family: 'IBM Plex Mono', monospace;">continue_under_policy</code>, <code style="font-family: 'IBM Plex Mono', monospace;">convert_to_policy</code>, <code style="font-family: 'IBM Plex Mono', monospace;">adjudicate</code>, <code style="font-family: 'IBM Plex Mono', monospace;">request_changes</code>, <code style="font-family: 'IBM Plex Mono', monospace;">answer_and_retry</code>, <code style="font-family: 'IBM Plex Mono', monospace;">answer_without_retry</code>, <code style="font-family: 'IBM Plex Mono', monospace;">return_to_agent</code>, <code style="font-family: 'IBM Plex Mono', monospace;">retry_with_capabilities</code>, <code style="font-family: 'IBM Plex Mono', monospace;">choose_alternate_profile</code> — each with payload, validation, idempotency, transition, outcome, sync, and retry semantics. Asynchronous discussion counts; live streaming does not.</div></div>
+        <div><div style="font-size: 13px; font-weight: 600;">Or remove those workflows from the 1B exit claim</div><div style="font-size: 12.5px; line-height: 1.6; color: #4C4432; margin-top: 4px;">Diminishing-returns review sits inside the 1B chain, so if <code style="font-family: 'IBM Plex Mono', monospace;">continue_under_policy</code> and <code style="font-family: 'IBM Plex Mono', monospace;">convert_to_policy</code> do not execute, that card is not decidable from the phone and the exit criterion should say so. The capability-mismatch state in <a href="#1d">1d</a> is the honest presentation of that choice — not a substitute for making it.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top: 60px; border-top: 2px solid #2B2416; padding-top: 22px;" data-screen-label="Sequence">
+    <h2 style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 26px; margin: 0;">Inside the client, build in this order</h2>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 800px; margin: 8px 0 0; color: #4C4432;">Work item A, sequenced. Close to the review's own roadmap, with one change: the card shell (<a href="#1c">1c</a>) comes before the accessibility reflow (<a href="#1a">1a</a>). Reflowing the card we are about to replace is work we would do twice, and the accessibility composition is a property of the new shell, not a patch on the old one. Each band names the contract pieces it waits on; nothing in the first two bands waits on anything.</p>
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; margin-top: 22px;">
+      <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 16px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; color: #7E5D0F;">FIRST · SAFE TO SHIP</div>
+        <div style="font-size: 13px; line-height: 1.6; color: #4C4432; margin-top: 9px;">Semantic colour variants and Increased Contrast (<a href="#1b">1b</a>). Independent of every layout change, and it unblocks the audit.</div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432; margin-top: 10px;">P0-2</div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432; margin-top: 6px; line-height: 1.5;">waits on nothing</div>
+      </div>
+      <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 16px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; color: #7E5D0F;">SECOND · THE SHELL</div>
+        <div style="font-size: 13px; line-height: 1.6; color: #4C4432; margin-top: 9px;">Recommendation-led card, ranked actions, capability rules, and its accessibility composition together (<a href="#1c">1c</a>, <a href="#1d">1d</a>, <a href="#1a">1a</a>).</div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432; margin-top: 10px;">P0-1 · P1-1 · P1-2 · P1-4 · P1-9 · P3-2</div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432; margin-top: 6px; line-height: 1.5;">shell ships now · the RECOMMENDED block lights up when Wave 7 sends recommendation authority — never inferred client-side</div>
+      </div>
+      <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 16px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; color: #7E5D0F;">THIRD · GETTING AROUND</div>
+        <div style="font-size: 13px; line-height: 1.6; color: #4C4432; margin-top: 9px;">Tabs, the scanning layer, confirmation and advance, refresh, inspector, menu-bar route (<a href="#1e">1e</a>, <a href="#1f">1f</a>, <a href="#1g">1g</a>, <a href="#1j">1j</a>, <a href="#1k">1k</a>).</div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432; margin-top: 10px;">P1-3 · P1-6 · P1-8 · P1-10 · P2-1…P2-11</div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432; margin-top: 6px; line-height: 1.5;">all client-side except the row's third line, which waits on project and work-unit names</div>
+      </div>
+      <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 10px; padding: 16px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; color: #7E5D0F;">FOURTH · COMPREHENSION</div>
+        <div style="font-size: 13px; line-height: 1.6; color: #4C4432; margin-top: 9px;">Evidence states, then the four card compositions, then search once the row content has settled (<a href="#1i">1i</a>, <a href="#1h">1h</a>, <a href="#1l">1l</a>).</div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #4C4432; margin-top: 10px;">P1-5 · P1-7 · P2-6 · P2-8 · P2-9</div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #4C4432; margin-top: 6px; line-height: 1.5;">gated on Wave 7 typed facts, evidence metadata, and pairing identity · search sits out until Phase 2</div>
+      </div>
+    </div>
+    <p style="font-size: 13.5px; line-height: 1.6; max-width: 840px; margin: 22px 0 0; color: #4C4432;">One thing the review does not say, and should: the run timeline is the standard the rest of the app is being measured against. Every graphic proposed here — the stage rail, the readiness checklist, the yield chart — is that page's grammar applied to a smaller surface. If a proposed module cannot state its fact in text beside the graphic, it does not belong in Freeside.</p>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;showLedger&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Document&quot;},&quot;showDeclined&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Document&quot;},&quot;showNotes&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Document&quot;}}">
+const ROWS = [
+  ["P0-1", "Dynamic Type breaks core iOS layouts", "adopt", "Solution B reflow plus the Solution C accessibility composition. The screenshot regression matrix is part of the work, not a follow-up.", "1a"],
+  ["P1-1", "Action inventory ahead of understanding", "adopt", "Recommendation-led header. The action stack was never the problem; its position and its equal weight were.", "1c"],
+  ["P1-2", "Unsupported actions shown as disabled", "adopt", "Hide what this client cannot perform; state a capability mismatch when the item's requested action is load-bearing.", "1d"],
+  ["P1-3", "iPhone inherits the sidebar model", "adopt", "Persistent tabs with independent stacks; adaptable tab/sidebar where the deployment target allows it.", "1f"],
+  ["P1-4", "Recommendation far from its action", "adopt", "Same shell as P1-1: recommendation, why, confidence, and the accepting action inside the block.", "1c"],
+  ["P1-6", "Successful decisions lose their context", "adopt", "Durable confirmation, deliberate advance to the next item, and a route back to what was just decided.", "1j"],
+  ["P1-7", "Evidence loading is visually silent", "adopt", "Five explicit states. A claim label with nothing under it is the worst possible outcome for evidence.", "1i"],
+  ["P1-8", "Selection is border color only", "adopt", "Leading selection bar plus a fill step; survives Differentiate Without Color.", "1e"],
+  ["P1-10", "No manual or foreground refresh", "adopt", "Pull to refresh, toolbar refresh, Command-R, refresh on activation, and a visible last-updated.", "1k"],
+  ["P2-1", "Titles duplicated", "adopt", "On iPhone the navigation title orients and the card opens on the ask.", "1c"],
+  ["P2-2", "Normal and open badges add noise", "adopt", "Show urgent and high; always show unusual lifecycle states; drop normal and open inside the Open scope.", "1e"],
+  ["P2-3", "Machine IDs compete with meaning", "adopt", "Human project and work-unit names in the scanning layer; identifiers to Details, tooltips, and copy menus.", "1e"],
+  ["P2-4", "Absolute time less useful than urgency", "adopt", "Lead with waiting, due, or blocked duration; the exact timestamp lives one layer down.", "1e"],
+  ["P2-8", "Run rows squeeze one line", "adopt", "Stage and hold on two lines, watches in a wrapping chip row.", "1l"],
+  ["P2-11", "Menu bar has no route back", "adopt", "Open Freeside and Show Inbox at the top; daemon lifecycle in its own section.", "1k"],
+  ["P3-1", "Empty macOS pane is passive", "adopt", "A quiet operational summary is cheap, and it answers the question the operator actually opened the app with.", "1g"],
+  ["P3-2", "Primary path under-emphasized", "adopt", "One prominent action per card; everything else bordered or in an overflow menu.", "1d"],
+
+  ["P0-2", "Semantic colors fail contrast", "mod", "Split each semantic into text / wash / border and add Increased Contrast cuts. Keep wax and water as the palette; refuse the system-red substitution.", "1b"],
+  ["P1-5", "Card types too generic", "mod", "Four compositions now — ready for final review, execution failure, dispute, review yield. System health and blocked are fact-module reshuffles and can wait for the shell to settle.", "1h"],
+  ["P1-9", "No native destructive semantics", "mod", "Destructive role and confirmation on system-owned surfaces only; wax stays the content color.", "1d"],
+  ["P2-5", "Filters lack counts", "mod", "Quiet counts on every scope, but the urgent summary appears only when an urgent item exists — a permanent zero is badge inflation with extra steps.", "1e"],
+  ["P2-7", "macOS wastes its width", "mod", "Two columns for the card, and facts, bindings, and attachments in a toggleable inspector rather than a permanent third column.", "1g"],
+  ["P2-9", "Pairing code entry unoptimized", "mod", "One-time-code semantics, grouped field, paste, prefilled device name, and the host being paired. Numeric keypad only if the daemon's codes are numeric — today they are not.", "1l"],
+  ["P2-10", "macOS lacks keyboard efficiency", "mod", "Take the command set, but Return fires only a validated primary action, and Space stays with the system rather than being bound to disclosure.", "1k"],
+  ["P2-12", "Help is almost absent", "mod", "Inline copy for load-bearing concepts and macOS tooltips for the mono state register. No TipKit until the card compositions settle — teaching a layout we are about to replace.", "1c"],
+  ["P3-3", "Could use more SF Symbols", "mod", "Icons only where the label alone is ambiguous. Never icon-only, and never an icon on the recommended action, which should read as words.", "1d"],
+
+  ["P2-6", "Search is absent", "later", "Right call, wrong moment. A seven-item inbox does not earn an index, and search built before the row recomposition would search the strings we are about to demote. Reserve Command-F now; build it after 1e ships.", "1k"]
+];
+
+class Component extends DCLogic {
+  rows(kind) {
+    return ROWS.filter(r => r[2] === kind).map(r => ({
+      id: r[0], finding: r[1], position: r[3], ex: r[4], href: "#" + r[4]
+    }));
+  }
+  renderVals() {
+    return {
+      showLedger: this.props.showLedger ?? true,
+      showDeclined: this.props.showDeclined ?? true,
+      showNotes: this.props.showNotes ?? true,
+      adopt: this.rows("adopt"),
+      mod: this.rows("mod"),
+      later: this.rows("later")
+    };
+  }
+}
+</script>
+</body>
+</html>

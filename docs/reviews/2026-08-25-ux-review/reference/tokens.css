@@ -1,0 +1,45 @@
+/* Freeside design tokens — light = Freeside (day), dark = Straylight (dusk).
+   Modes follow the viewer's system; override with [data-theme]. */
+:root {
+  --ground: #ede7d6;
+  --ground-2: #f3eee1;
+  --ground-3: #e4ddc7;
+  --rule: #d6cdb2;
+  --text: #2b2416;
+  --text-dim: #6e6450;
+  --text-faint: #94896e;
+  --accent: #8f6b14;      /* bronze */
+  --accent-dim: #b99a4a;
+  --wax: #8a2d1c;         /* seal moments only */
+  --water: #6f9ea3;       /* pool */
+  --mark-frame-w: 3.5;    /* signet box stroke widths (viewBox units) */
+  --mark-inlay-w: 2.6;
+  --serif: "Source Serif Pro", "Source Serif 4", "Iowan Old Style", Palatino, Georgia, serif;
+  --sans: "IBM Plex Sans", "Avenir Next", "Helvetica Neue", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #16120e; --ground-2: #1e1812; --ground-3: #292117; --rule: #322a1e;
+    --text: #eae3cf; --text-dim: #b3a88e; --text-faint: #7d7460;
+    --accent: #c2912e; /* tawny */ --accent-dim: #8a6a26;
+    --wax: #9a3520; --water: #5d8489; /* mere */
+    --mark-frame-w: 3.2; --mark-inlay-w: 2.4; /* irradiation compensation */
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #16120e; --ground-2: #1e1812; --ground-3: #292117; --rule: #322a1e;
+  --text: #eae3cf; --text-dim: #b3a88e; --text-faint: #7d7460;
+  --accent: #c2912e; --accent-dim: #8a6a26;
+  --wax: #9a3520; --water: #5d8489;
+  --mark-frame-w: 3.2; --mark-inlay-w: 2.4;
+}
+:root[data-theme="light"] {
+  --ground: #ede7d6; --ground-2: #f3eee1; --ground-3: #e4ddc7; --rule: #d6cdb2;
+  --text: #2b2416; --text-dim: #6e6450; --text-faint: #94896e;
+  --accent: #8f6b14; --accent-dim: #b99a4a;
+  --wax: #8a2d1c; --water: #6f9ea3;
+  --mark-frame-w: 3.5; --mark-inlay-w: 2.6;
+}
+/* Semantic reminder: green belongs to success/go and never brands anything;
+   success is quiet (shape + neutral tick); failure uses --wax; attention uses --accent. */
