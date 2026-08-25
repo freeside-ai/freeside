@@ -34,11 +34,11 @@ Mac and iOS match on every line unless a line says otherwise.
 
 | Screen | Status | Notes |
 | --- | --- | --- |
-| Pairing | Done | §15 styling: serif title on iOS, wax failure label, accent button. |
+| Pairing | Done | One-time code semantics and grouping, editable system device-name prefill, host/expiry/connection slots, and helper copy naming the host Devices list and per-decision audit record. No credential-like grant value renders. §15 styling: serif title on iOS, wax failure label, accent button. |
 | Inbox | Done | §15 styling: card rows, bordered priority and status chips. Rebuilds fully once a missed notification is detected; today the 15-second heartbeat detects it, and a refresh on return to foreground is Not yet (plan §5.14). |
 | Decision detail | Done | Generic layout; per-card layouts are tracked under Cards. §15 styling: bordered action buttons, quiet-neutral applied banner, dashed claims section. |
 | Freshness banner | Done | §15 styling: tinted wash with a mono keyword; unreachable and sync-failing take the accent, revoked takes wax. |
-| Run list | Done | Filter by project; shows attached watches and deadlines. §15 styling: outcome chips (ready is quiet, in progress water, blocked accent, failed wax, not observed dashed). |
+| Run list | Done | Filter by project; two semantic lines separate stage/round from the current hold or milestone, and attached watch chips wrap without truncation. §15 styling: outcome chips (ready is quiet, in progress water, blocked accent, failed wax, not observed dashed). |
 | Run timeline | Done | §15 styling: accent-washed hold card, milestone rail, invocation status chips. |
 | Mac menu bar | Done | Mono key template icon with the badge dot top-right; state line, facts, and explanation first, actions and Quit grouped last. Daemon readiness today; doctor results and 1B.1 signals come later (plan §10). |
 | Conversation / Discuss | Not yet | API exists (`getConversation`, `uploadAttachment`); no UI. Plan §5.14. |

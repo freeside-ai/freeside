@@ -26,6 +26,7 @@ Launch arguments also pin the presentation per launch (`LaunchInputs`), so scree
 
 - `-FreesideColorScheme light|dark`: force an appearance without touching the system setting; unset follows the system.
 - `-FreesideContrast standard|increased`: force accessibility contrast without touching the system setting; unset follows the system.
+- `-FreesideDynamicType x-small|small|medium|large|x-large|xx-large|xxx-large|ax1|ax2|ax3|ax4|ax5`: force a Dynamic Type size without touching the system setting; unset follows the system.
 - `-FreesideSelect <item-id>`: select the given inbox item at launch. `AttentionFixtures.defaultInboxItemIDs()` is the source of truth for the accepted values, today the default mock inbox's ids: `item-spec_approval`, `item-execution_failure`, `item-agent_question`, `item-review_diminishing_returns`, `item-review_dispute`, `item-review_contradiction`, `item-review_configuration`, `item-finding_adjudication`, `item-ready_for_final_review`, `item-publish_blocked`, `item-run_proposal`, `item-system_health`, `item-blocked`. An unknown id is ignored with a note on stderr.
 - `-FreesideInboxScope open|resolved|all`: select the inbox scope for a screenshot or automation launch.
 - `-FreesideProject <project-id>`: select the inbox project filter for a screenshot or automation launch.

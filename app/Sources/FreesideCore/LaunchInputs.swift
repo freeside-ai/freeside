@@ -32,6 +32,10 @@ public struct LaunchInputs {
     /// follows the system accessibility contrast.
     public let contrast: Contrast?
 
+    /// `-FreesideDynamicType <size>`; unset or unrecognized follows the
+    /// system. The accepted names mirror the documented screenshot inputs.
+    public let dynamicTypeSize: DynamicTypeSize?
+
     /// `-FreesideSelect <item-id>`: the inbox item selected at launch.
     /// `AttentionFixtures.defaultInboxItemIDs()` is the canonical value
     /// list. An unknown id is ignored with a stderr note, never a
@@ -47,7 +51,8 @@ public struct LaunchInputs {
     public init(
         colorSchemeRaw: String?, contrastRaw: String? = nil, selectionRaw: String?,
         inboxScopeRaw: String? = nil, projectIDRaw: String? = nil,
-        detailsExpanded: Bool = false, screenRaw: String? = nil
+        detailsExpanded: Bool = false, screenRaw: String? = nil,
+        dynamicTypeSizeRaw: String? = nil
     ) {
         screen = Screen(rawValue: screenRaw ?? "") ?? .inbox
         colorScheme =
@@ -57,6 +62,7 @@ public struct LaunchInputs {
             default: nil
             }
         contrast = Contrast(rawValue: contrastRaw ?? "")
+        dynamicTypeSize = Self.dynamicTypeSize(rawValue: dynamicTypeSizeRaw)
         let knownSelections =
             screen == .runs
             ? RunFixtures.defaultRunIDs() : AttentionFixtures.defaultInboxItemIDs()
@@ -83,10 +89,29 @@ public struct LaunchInputs {
             inboxScopeRaw: defaults.string(forKey: "FreesideInboxScope"),
             projectIDRaw: defaults.string(forKey: "FreesideProject"),
             detailsExpanded: defaults.bool(forKey: "FreesideDetailsExpanded"),
-            screenRaw: defaults.string(forKey: "FreesideScreen"))
+            screenRaw: defaults.string(forKey: "FreesideScreen"),
+            dynamicTypeSizeRaw: defaults.string(forKey: "FreesideDynamicType"))
     }
 
     static func accessibilityContrastOverride(defaults: UserDefaults = .standard) -> Contrast? {
         Contrast(rawValue: defaults.string(forKey: "FreesideContrast") ?? "")
+    }
+
+    private static func dynamicTypeSize(rawValue: String?) -> DynamicTypeSize? {
+        switch rawValue {
+        case "x-small": .xSmall
+        case "small": .small
+        case "medium": .medium
+        case "large": .large
+        case "x-large": .xLarge
+        case "xx-large": .xxLarge
+        case "xxx-large": .xxxLarge
+        case "ax1": .accessibility1
+        case "ax2": .accessibility2
+        case "ax3": .accessibility3
+        case "ax4": .accessibility4
+        case "ax5": .accessibility5
+        default: nil
+        }
     }
 }

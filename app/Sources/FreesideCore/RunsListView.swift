@@ -87,48 +87,41 @@ struct RunsListView: View {
 /// One run as a ground-2 card; the selected row's border turns
 /// accent-dim in place of the platform selection highlight.
 private struct RunRowView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let run: Components.Schemas.Run
     let schedules: [Components.Schemas.ScheduleSnapshot]
     var isSelected = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(run.project_id)
-                    .font(FreesideFont.itemTitle)
-                    .foregroundStyle(Color.ink)
-                Spacer()
-                RunOutcomeBadge(outcome: run.outcome)
-            }
-            Text(run.id)
-                .font(FreesideFont.monoCaption)
-                .foregroundStyle(Color.inkDim)
-            if let campaign = RunDisplay.campaign(run) {
-                Text(campaign)
-                    .font(FreesideFont.monoCaption)
-                    .foregroundStyle(Color.inkDim)
-            }
-            HStack(spacing: 8) {
-                if let stage = run.stages.last {
-                    Label(stage.name.capitalized, systemImage: "square.stack.3d.up")
-                    if let round = RunDisplay.round(stage) {
-                        Text(round)
-                    }
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 7) {
+                    primaryLine
+                    RunOutcomeBadge(outcome: run.outcome)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
-                if let milestone = run.latest_milestone?.value1 {
-                    Text(RunDisplay.label(milestone))
+            } else {
+                HStack(alignment: .firstTextBaseline) {
+                    primaryLine
+                    Spacer()
+                    RunOutcomeBadge(outcome: run.outcome)
                 }
-                if let hold = run.hold_reason?.value1 {
+            }
+            Group {
+                switch RunDisplay.secondaryLine(run) {
+                case .hold(let label):
                     // A hold is attention; on a failed or lost run it
                     // reads as part of the failure and keeps wax.
-                    Label(RunDisplay.label(hold), systemImage: "pause.circle.fill")
+                    Label(label, systemImage: "pause.circle.fill")
                         .foregroundStyle(holdIsFailure ? Color.waxText : Color.accentText)
+                case .milestone(let label):
+                    Text(label)
+                        .foregroundStyle(Color.inkDim)
                 }
             }
             .font(FreesideFont.caption)
-            .foregroundStyle(Color.inkDim)
             if !schedules.isEmpty {
-                HStack(spacing: 6) {
+                WrappingHStack(horizontalSpacing: 6, verticalSpacing: 6) {
                     ForEach(schedules, id: \.schedule.id) { snapshot in
                         ScheduleBadge(schedule: snapshot.schedule)
                     }
@@ -138,6 +131,12 @@ private struct RunRowView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .freesideCard(border: isSelected ? .accentBorder : .rule)
+    }
+
+    private var primaryLine: some View {
+        Text(RunDisplay.primaryLine(run))
+            .font(FreesideFont.itemTitle)
+            .foregroundStyle(Color.ink)
     }
 
     private var holdIsFailure: Bool {
@@ -195,6 +194,11 @@ private struct ScheduleBadge: View {
 }
 
 enum RunDisplay {
+    enum SecondaryLine: Equatable {
+        case hold(String)
+        case milestone(String)
+    }
+
     static func sortedRuns(
         _ runs: [Components.Schemas.RunSnapshot]
     ) -> [Components.Schemas.RunSnapshot] {
@@ -217,6 +221,27 @@ enum RunDisplay {
     static func round(_ stage: Components.Schemas.Stage) -> String? {
         guard !stage.attempts.isEmpty else { return nil }
         return "Round \(stage.attempts.count)"
+    }
+
+    static func primaryLine(_ run: Components.Schemas.Run) -> String {
+        var parts = [run.project_id]
+        if let stage = run.stages.last {
+            parts.append(stage.name.capitalized)
+            if let round = round(stage) {
+                parts.append(round)
+            }
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    static func secondaryLine(_ run: Components.Schemas.Run) -> SecondaryLine {
+        if let hold = run.hold_reason?.value1 {
+            return .hold(label(hold))
+        }
+        if let milestone = run.latest_milestone?.value1 {
+            return .milestone(label(milestone))
+        }
+        return .milestone("No milestone recorded")
     }
 
     static func campaign(_ run: Components.Schemas.Run) -> String? {

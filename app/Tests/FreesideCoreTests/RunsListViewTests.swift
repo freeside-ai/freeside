@@ -15,6 +15,23 @@ import Testing
         #expect(run.parent_run_id == "run-freeside-656")
     }
 
+    @Test func rowLinesSeparateIdentityFromTheCurrentHold() {
+        let active = RunFixtures.defaultRuns().first {
+            $0.run.id == RunFixtures.activeRunID
+        }!.run
+        let ready = RunFixtures.defaultRuns().first {
+            $0.run.id == RunFixtures.readyRunID
+        }!.run
+        let legacy = RunFixtures.defaultRuns().first {
+            $0.run.id == RunFixtures.legacyRunID
+        }!.run
+
+        #expect(RunDisplay.primaryLine(active) == "freeside · Implementation · Round 2")
+        #expect(RunDisplay.secondaryLine(active) == .hold("Verification Findings"))
+        #expect(RunDisplay.secondaryLine(ready) == .milestone("Publication Ready"))
+        #expect(RunDisplay.secondaryLine(legacy) == .milestone("No milestone recorded"))
+    }
+
     @Test func ordersByActivityFallbackAndID() {
         let first = Date(timeIntervalSinceReferenceDate: 100)
         let second = Date(timeIntervalSinceReferenceDate: 200)

@@ -2,6 +2,7 @@ import FreesideAPI
 import SwiftUI
 
 public struct FreesideRootView: View {
+    @Environment(\.dynamicTypeSize) private var systemDynamicTypeSize
     @State private var session: AppSession
     @State private var screen: LaunchInputs.Screen
     @State private var attentionSelection: String?
@@ -10,6 +11,7 @@ public struct FreesideRootView: View {
     private let launchInboxScope: InboxStore.Scope?
     private let launchProjectID: String?
     private let launchDetailsExpanded: Bool
+    private let launchDynamicTypeSize: DynamicTypeSize?
 
     @MainActor
     public init(session: AppSession, launchInputs: LaunchInputs = .standard()) {
@@ -25,6 +27,7 @@ public struct FreesideRootView: View {
         launchInboxScope = launchInputs.inboxScope
         launchProjectID = launchInputs.projectID
         launchDetailsExpanded = launchInputs.detailsExpanded
+        launchDynamicTypeSize = launchInputs.dynamicTypeSize
     }
 
     /// Composes from launch arguments (see AppSession.fromEnvironment
@@ -46,6 +49,7 @@ public struct FreesideRootView: View {
                 synced(coordinator)
             }
         }
+        .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
         .preferredColorScheme(launchColorScheme)
         .background(Color.ground)
         .tint(.accentText)
