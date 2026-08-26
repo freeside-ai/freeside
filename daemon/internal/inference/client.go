@@ -84,6 +84,34 @@ func New(cfg Config) (*Client, error) {
 			annotation.SecondAdjudicationRules = append([]SecondAdjudicationRule(nil), annotation.SecondAdjudicationRules...)
 			site.Annotation = &annotation
 		}
+		if site.Adjudication != nil {
+			adjudication := *site.Adjudication
+			adjudication.GoalRelationships = append([]string(nil), adjudication.GoalRelationships...)
+			adjudication.ProposedCompatibilities = append(
+				[]string(nil), adjudication.ProposedCompatibilities...,
+			)
+			adjudication.Routes = append([]string(nil), adjudication.Routes...)
+			adjudication.Rows = make([]AdjudicationRow, len(adjudication.Rows))
+			for index, row := range site.Adjudication.Rows {
+				adjudication.Rows[index] = row
+				if row.ProposedCompatibility != nil {
+					compatibility := *row.ProposedCompatibility
+					adjudication.Rows[index].ProposedCompatibility = &compatibility
+				}
+			}
+			adjudication.Confidence = append([]string(nil), adjudication.Confidence...)
+			adjudication.ReducesWork = append([]string(nil), adjudication.ReducesWork...)
+			adjudication.SeverityMappings = append(
+				[]SeverityMapping(nil), adjudication.SeverityMappings...,
+			)
+			adjudication.NormalizedSeverityCeilings = append(
+				[]SeverityCeiling(nil), adjudication.NormalizedSeverityCeilings...,
+			)
+			adjudication.SecondAdjudicationRules = append(
+				[]SecondAdjudicationRule(nil), adjudication.SecondAdjudicationRules...,
+			)
+			site.Adjudication = &adjudication
+		}
 		sites[site.ID] = site
 	}
 	ledger, err := openLedger(cfg.StatePath, cfg.AnchorPath, cfg.Now)
@@ -94,6 +122,17 @@ func New(cfg Config) (*Client, error) {
 		binding: cfg.Binding, sites: sites, ledger: ledger, advisory: cfg.Advisory,
 		now: cfg.Now, inFlight: map[string]bool{},
 	}, nil
+}
+
+// SupportsSite reports whether the composition registered siteID. Callers use
+// it to keep optional inference sites fail-safe when a narrower registry is
+// deliberately composed.
+func (c *Client) SupportsSite(siteID string) bool {
+	if c == nil {
+		return false
+	}
+	_, ok := c.sites[siteID]
+	return ok
 }
 
 // Call enforces the site allowlist, sensitivity declaration, redaction,
