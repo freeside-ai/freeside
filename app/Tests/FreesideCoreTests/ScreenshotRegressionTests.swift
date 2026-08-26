@@ -37,7 +37,14 @@
 
         @Test func surfacesMatchRecordedPixels() async throws {
             _ = FreesideFont.registration
-            let expected = try loadManifest()
+            let recording =
+                ProcessInfo.processInfo.environment["FREESIDE_RECORD_SCREENSHOTS"] == "1"
+            let overrides = try loadOverrides()
+            if recording {
+                try validateRecordingOperatingSystem(
+                    operatingSystemKey, overrideKeys: Set(overrides.keys))
+            }
+            let expected = try loadManifest(overrides: overrides)
             var actual: [String: String] = [:]
 
             for size in textSizes {
@@ -52,9 +59,7 @@
                         if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
                             _ = try dump(image, named: key)
                         }
-                        if ProcessInfo.processInfo.environment["FREESIDE_RECORD_SCREENSHOTS"] != "1",
-                            expected[key] != actual[key]
-                        {
+                        if !recording, expected[key] != actual[key] {
                             let dump = try dump(image, named: key)
                             let expectedDigest = expected[key] ?? "missing"
                             let actualDigest = actual[key] ?? "missing"
@@ -67,13 +72,20 @@
                 }
             }
 
-            if ProcessInfo.processInfo.environment["FREESIDE_RECORD_SCREENSHOTS"] == "1" {
+            if recording {
                 try writeManifest(actual)
             } else {
                 #expect(actual.count == expected.count)
                 #expect(
                     Set(actual.values).count > 45,
                     "The six-size matrix must exercise more than the prior two-state rendering")
+            }
+        }
+
+        @Test func recordingRequiresABaselineOperatingSystem() {
+            #expect(throws: ScreenshotError.self) {
+                try validateRecordingOperatingSystem(
+                    "macOS-26.5", overrideKeys: ["macOS-26.5"])
             }
         }
 
@@ -264,22 +276,36 @@
             return SHA256.hash(data: input).map { String(format: "%02x", $0) }.joined()
         }
 
-        private func loadManifest() throws -> [String: String] {
+        private func loadManifest(
+            overrides: [String: [String: String]]
+        ) throws -> [String: String] {
             guard
                 let url = Bundle.module.url(
                     forResource: "ScreenshotDigests", withExtension: "json")
             else { throw ScreenshotError.missingManifest }
             let baseline = try JSONDecoder().decode(
                 [String: String].self, from: Data(contentsOf: url))
+            return baseline.merging(overrides[operatingSystemKey] ?? [:]) { _, override in
+                override
+            }
+        }
+
+        private func loadOverrides() throws -> [String: [String: String]] {
             guard
                 let overridesURL = Bundle.module.url(
                     forResource: "ScreenshotDigestOverrides", withExtension: "json")
-            else { return baseline }
-            let overrides = try JSONDecoder().decode(
+            else { return [:] }
+            return try JSONDecoder().decode(
                 [String: [String: String]].self,
                 from: Data(contentsOf: overridesURL))
-            return baseline.merging(overrides[operatingSystemKey] ?? [:]) { _, override in
-                override
+        }
+
+        private func validateRecordingOperatingSystem(
+            _ key: String,
+            overrideKeys: Set<String>
+        ) throws {
+            guard !overrideKeys.contains(key) else {
+                throw ScreenshotError.recordingRequiresBaselineOperatingSystem(key)
             }
         }
 
@@ -321,6 +347,7 @@
         case missingGMT
         case missingManifest
         case pngEncodingFailed
+        case recordingRequiresBaselineOperatingSystem(String)
         case renderFailed
     }
 #endif
