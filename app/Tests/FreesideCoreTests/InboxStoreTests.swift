@@ -79,6 +79,7 @@ import Testing
 
         store.scope = .resolved
         #expect(Set(store.rows.map(\.item.id)) == [resolved.item.id, dismissed.item.id])
+        #expect(store.urgentCount(in: .resolved) == 1)
 
         store.scope = .all
         #expect(store.rows.count == snapshots.count)
@@ -91,12 +92,21 @@ import Testing
 
         store.apply(resolved)
         #expect(store.rows.contains { $0.item.id == resolved.item.id })
+        #expect(store.openSnapshots.contains { $0.item.id == resolved.item.id })
+        #expect(store.openSnapshots.count == store.count(in: .open))
+        #expect(
+            OperationalSummary(
+                openSnapshots: store.openSnapshots,
+                runs: [],
+                freshness: .fresh
+            ).openCount == store.count(in: .open))
         store.scope = .resolved
         #expect(!store.rows.contains { $0.item.id == resolved.item.id })
 
         store.replaceAll(with: Array(store.snapshotsByID.values))
         store.scope = .open
         #expect(!store.rows.contains { $0.item.id == resolved.item.id })
+        #expect(!store.openSnapshots.contains { $0.item.id == resolved.item.id })
         store.scope = .resolved
         #expect(store.rows.contains { $0.item.id == resolved.item.id })
     }
@@ -148,8 +158,10 @@ import Testing
         #expect(store.projects == ["proj-a", "proj-b"])
         store.projectID = "proj-a"
         #expect(store.rows.map(\.item.id) == [third.item.id])
+        #expect(Set(store.openSnapshots.map(\.item.id)) == [first.item.id, third.item.id])
         store.scope = .resolved
         #expect(store.rows.map(\.item.id) == [second.item.id])
+        #expect(store.urgentCount(in: .resolved) == 1)
         store.scope = .all
         #expect(Set(store.rows.map(\.item.id)) == [second.item.id, third.item.id])
     }

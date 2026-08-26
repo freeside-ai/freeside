@@ -16,7 +16,7 @@ public struct LaunchInputs {
         case increased
     }
 
-    public enum Screen: String {
+    public enum Screen: String, Hashable {
         case inbox
         case runs
     }

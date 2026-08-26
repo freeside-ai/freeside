@@ -161,7 +161,7 @@ public final class InboxStore {
     /// combined, urgent-to-low within a status, server order as the stable
     /// tiebreak.
     public var rows: [Components.Schemas.AttentionItemSnapshot] {
-        filteredRows(in: scope).sorted { lhs, rhs in
+        filteredRows(in: scope, projectID: projectID).sorted { lhs, rhs in
             let (lhsKey, rhsKey) = (
                 sortKey(
                     lhs.1, index: lhs.0,
@@ -174,12 +174,19 @@ public final class InboxStore {
         }.map(\.1)
     }
 
+    /// All rows whose status was open at the last full list rebuild. This
+    /// projection deliberately ignores the interactive project filter so
+    /// top-level app summaries cannot contradict the retained Open state.
+    public var openSnapshots: [Components.Schemas.AttentionItemSnapshot] {
+        filteredRows(in: .open, projectID: nil).map(\.1)
+    }
+
     public func count(in scope: Scope) -> Int {
-        filteredRows(in: scope).count
+        filteredRows(in: scope, projectID: projectID).count
     }
 
     public func urgentCount(in scope: Scope) -> Int {
-        filteredRows(in: scope).count { $0.1.item.priority == .urgent }
+        filteredRows(in: scope, projectID: projectID).count { $0.1.item.priority == .urgent }
     }
 
     /// Rebuilds the inbox from the canonical list (plan §5.14 sync test 3:
@@ -477,7 +484,8 @@ public final class InboxStore {
     }
 
     private func filteredRows(
-        in scope: Scope
+        in scope: Scope,
+        projectID: String?
     ) -> [(Int, Components.Schemas.AttentionItemSnapshot)] {
         serverOrder.enumerated().compactMap { index, id in
             snapshotsByID[id].map { (index, $0) }
