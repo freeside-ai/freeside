@@ -18,6 +18,7 @@ struct DecisionDetailView: View {
     }
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var model: DecisionModel
     @State private var proposalEditor: ProposalEditor?
     @State private var pendingConfirmation: PendingConfirmation?
@@ -50,11 +51,15 @@ struct DecisionDetailView: View {
             Group {
                 if let snapshot = model.snapshot {
                     ScrollView {
-                        card(snapshot.item, accessibilityLayout: isAccessibilityLayout)
-                            .padding(14)
-                            .freesideCard()
-                            .padding()
-                            .frame(maxWidth: 560, alignment: .leading)
+                        card(
+                            snapshot.item,
+                            accessibilityLayout: isAccessibilityLayout,
+                            compactLayout: horizontalSizeClass == .compact
+                        )
+                        .padding(14)
+                        .freesideCard()
+                        .padding()
+                        .frame(maxWidth: 560, alignment: .leading)
                     }
                     .coordinateSpace(name: "decision-card-scroll")
                 } else {
@@ -161,7 +166,8 @@ struct DecisionDetailView: View {
     private func card(
         _ item: Components.Schemas.AttentionItem,
         rendersInteractiveControls: Bool = true,
-        accessibilityLayout: Bool
+        accessibilityLayout: Bool,
+        compactLayout: Bool
     ) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             header(item, accessibilityLayout: accessibilityLayout)
@@ -176,7 +182,9 @@ struct DecisionDetailView: View {
             {
                 recommendationBlock(recommendation, item: item)
             }
-            actions(item, accessibilityLayout: accessibilityLayout)
+            actions(
+                item,
+                stackedLayout: accessibilityLayout || compactLayout)
 
             cardSection("Context") {
                 Text(item.reason)
@@ -273,12 +281,14 @@ struct DecisionDetailView: View {
     @ViewBuilder
     func screenshotCard(
         _ item: Components.Schemas.AttentionItem,
-        at dynamicTypeSize: DynamicTypeSize
+        at dynamicTypeSize: DynamicTypeSize,
+        compactLayout: Bool = false
     ) -> some View {
         card(
             item,
             rendersInteractiveControls: false,
-            accessibilityLayout: dynamicTypeSize >= .accessibility1
+            accessibilityLayout: dynamicTypeSize >= .accessibility1,
+            compactLayout: compactLayout
         )
         .padding(14)
         .freesideCard()
@@ -694,7 +704,7 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func actions(
         _ item: Components.Schemas.AttentionItem,
-        accessibilityLayout: Bool
+        stackedLayout: Bool
     ) -> some View {
         let ranking = actionRanking(item)
         VStack(alignment: .leading, spacing: 8) {
@@ -708,15 +718,19 @@ struct DecisionDetailView: View {
             }
 
             if !ranking.principal.isEmpty {
-                let layout =
-                    accessibilityLayout
-                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-                    : AnyLayout(HStackLayout(alignment: .top, spacing: 8))
-                layout {
-                    // Keyed by position: requested_decision does not enforce
-                    // uniqueness, and duplicate identities may not drop a button.
-                    ForEach(Array(ranking.principal.enumerated()), id: \.offset) { _, action in
-                        actionButton(action, item: item, tone: .neutral)
+                // Keyed by position: requested_decision does not enforce
+                // uniqueness, and duplicate identities may not drop a button.
+                if stackedLayout {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(ranking.principal.enumerated()), id: \.offset) { _, action in
+                            actionButton(action, item: item, tone: .neutral)
+                        }
+                    }
+                } else {
+                    HStack(alignment: .top, spacing: 8) {
+                        ForEach(Array(ranking.principal.enumerated()), id: \.offset) { _, action in
+                            actionButton(action, item: item, tone: .neutral)
+                        }
                     }
                 }
             }

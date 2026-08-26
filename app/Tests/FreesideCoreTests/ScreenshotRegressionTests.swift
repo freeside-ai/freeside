@@ -10,7 +10,14 @@
     @Suite(.serialized) @MainActor struct ScreenshotRegressionTests {
         private struct Surface {
             let name: String
+            let width: CGFloat?
             let view: AnyView
+
+            init(name: String, width: CGFloat? = nil, view: AnyView) {
+                self.name = name
+                self.width = width
+                self.view = view
+            }
         }
 
         private struct TextSize {
@@ -37,7 +44,10 @@
                 try await FreesideFont.$screenshotDynamicTypeSize.withValue(size.value) {
                     for surface in try makeSurfaces(at: size.value) {
                         let key = "\(surface.name)-\(size.name)"
-                        let image = try render(surface.view, at: size.value)
+                        let image = try render(
+                            surface.view,
+                            at: size.value,
+                            width: surface.width ?? canvasWidth)
                         actual[key] = try digest(image)
                         if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
                             _ = try dump(image, named: key)
@@ -98,6 +108,18 @@
                         name: "decision-\(snapshot.item._type.rawValue)",
                         view: AnyView(
                             detail.screenshotCard(snapshot.item, at: dynamicTypeSize))))
+
+                if snapshot.item._type == .review_diminishing_returns {
+                    surfaces.append(
+                        Surface(
+                            name: "decision-review_diminishing_returns-phone",
+                            width: 390,
+                            view: AnyView(
+                                detail.screenshotCard(
+                                    snapshot.item,
+                                    at: dynamicTypeSize,
+                                    compactLayout: true))))
+                }
             }
 
             let adjudication = AttentionFixtures.fixture(type: .finding_adjudication).item
@@ -193,7 +215,11 @@
             return surfaces
         }
 
-        private func render(_ view: AnyView, at size: DynamicTypeSize) throws -> CGImage {
+        private func render(
+            _ view: AnyView,
+            at size: DynamicTypeSize,
+            width: CGFloat
+        ) throws -> CGImage {
             guard let timeZone = TimeZone(secondsFromGMT: 0) else {
                 throw ScreenshotError.missingGMT
             }
@@ -204,11 +230,11 @@
                 .environment(\.locale, Locale(identifier: "en_US_POSIX"))
                 .environment(\.calendar, Calendar(identifier: .gregorian))
                 .environment(\.timeZone, timeZone)
-                .frame(width: canvasWidth, alignment: .topLeading)
+                .frame(width: width, alignment: .topLeading)
                 .fixedSize(horizontal: false, vertical: true)
                 .background(Color.ground)
             let renderer = ImageRenderer(content: root)
-            renderer.proposedSize = ProposedViewSize(width: canvasWidth, height: nil)
+            renderer.proposedSize = ProposedViewSize(width: width, height: nil)
             renderer.scale = 1
             guard let image = renderer.cgImage else {
                 throw ScreenshotError.renderFailed
