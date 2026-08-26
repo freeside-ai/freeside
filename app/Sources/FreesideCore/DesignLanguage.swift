@@ -372,8 +372,8 @@ struct KeywordLabel: View {
     }
 }
 
-/// The full-width bordered action button: job-specific border and text
-/// colors, 6pt radius, no fill; disabled drops to 45% opacity.
+/// The full-width action button: filled for primary, outlined for secondary
+/// and destructive, with disabled controls at 45% opacity.
 struct FreesideActionButtonStyle: ButtonStyle {
     enum Tone {
         case primary
@@ -382,7 +382,7 @@ struct FreesideActionButtonStyle: ButtonStyle {
 
         var labelColor: Color {
             switch self {
-            case .primary: .accentText
+            case .primary: .ground2
             case .neutral: .inkDim
             case .destructive: .waxText
             }
@@ -413,7 +413,7 @@ struct FreesideActionButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(configuration.isPressed ? Color.ground3 : Color.ground2)
+                    .fill(fillColor(isPressed: configuration.isPressed))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
@@ -421,6 +421,13 @@ struct FreesideActionButtonStyle: ButtonStyle {
             )
             .opacity(isEnabled ? 1 : 0.45)
             .contentShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func fillColor(isPressed: Bool) -> Color {
+        switch tone {
+        case .primary: .accentText
+        case .neutral, .destructive: isPressed ? .ground3 : .ground2
+        }
     }
 }
 

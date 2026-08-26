@@ -55,6 +55,7 @@ import Testing
         text("inkDim", FreesidePalette.inkDim, on: "waxWash", FreesidePalette.waxWash),
         text(
             "inkDim", FreesidePalette.inkDim, on: "neutralWash", FreesidePalette.neutralWash),
+        text("ground2", FreesidePalette.ground2, on: "accentText", FreesidePalette.accentText),
 
         // Semantic text appears on ordinary grounds, pressed-button fills,
         // and its own wash. The own-wash pair is intrinsic even when a
