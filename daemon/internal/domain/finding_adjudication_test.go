@@ -3,6 +3,7 @@ package domain_test
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -444,6 +445,26 @@ func validAdjudicationFixture(t *testing.T) domain.FindingAdjudication {
 	return artifact
 }
 
+func successorAdjudicationFixture(t *testing.T) domain.FindingAdjudication {
+	t.Helper()
+	prior := validAdjudicationFixture(t)
+	entries := slices.Clone(prior.Entries)
+	entries[1].Rationale = "feedback identified the governing exception"
+	successor, err := domain.NewSuccessorFindingAdjudication(
+		prior,
+		domain.AdjudicationFeedback{
+			InvocationID: "invocation-discuss-1", ConversationID: "conversation-adjudication-1",
+			ThroughSequence: 2, PrefixDigest: adjDigest("conversation-prefix"),
+		},
+		entries,
+		time.Date(2026, 8, 21, 15, 5, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("successor adjudication: %v", err)
+	}
+	return successor
+}
+
 func TestFindingAdjudicationRoundTripAndDigestStability(t *testing.T) {
 	t.Parallel()
 	artifact := validAdjudicationFixture(t)
@@ -471,12 +492,102 @@ func TestFindingAdjudicationRoundTripAndDigestStability(t *testing.T) {
 	if decoded.Digest != artifact.Digest {
 		t.Fatalf("digest changed across round-trip: %q vs %q", decoded.Digest, artifact.Digest)
 	}
+	if decoded.Revision != 1 || decoded.PredecessorDigest != nil || decoded.Feedback != nil {
+		t.Fatalf("legacy initial normalized to %+v, want revision 1 without provenance", decoded)
+	}
 	recomputed, err := decoded.ComputeDigest()
 	if err != nil {
 		t.Fatalf("recompute: %v", err)
 	}
 	if recomputed != artifact.Digest {
 		t.Fatalf("recomputed digest %q, want %q", recomputed, artifact.Digest)
+	}
+}
+
+func TestFindingAdjudicationSuccessorRoundTrip(t *testing.T) {
+	t.Parallel()
+	successor := successorAdjudicationFixture(t)
+	prior := validAdjudicationFixture(t)
+	if successor.Revision != 2 || successor.PredecessorDigest == nil ||
+		*successor.PredecessorDigest != prior.Digest || successor.Feedback == nil {
+		t.Fatalf("successor provenance = %+v", successor)
+	}
+	body, err := successor.Encode()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	decoded, err := domain.DecodeFindingAdjudication(body)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if decoded.Digest != successor.Digest || decoded.Revision != 2 ||
+		decoded.PredecessorDigest == nil || *decoded.PredecessorDigest != prior.Digest ||
+		decoded.Feedback == nil || *decoded.Feedback != *successor.Feedback {
+		t.Fatalf("decoded successor = %+v, want %+v", decoded, successor)
+	}
+}
+
+func TestFindingAdjudicationRevisionRules(t *testing.T) {
+	t.Parallel()
+	initial := validAdjudicationFixture(t)
+	digest := adjDigest("predecessor")
+	feedback := domain.AdjudicationFeedback{
+		InvocationID: "invocation-1", ConversationID: "conversation-1",
+		ThroughSequence: 1, PrefixDigest: adjDigest("prefix"),
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*domain.FindingAdjudication)
+	}{
+		{"non-positive revision", func(a *domain.FindingAdjudication) { a.Revision = 0 }},
+		{"initial predecessor", func(a *domain.FindingAdjudication) { a.PredecessorDigest = &digest }},
+		{"initial feedback", func(a *domain.FindingAdjudication) { a.Feedback = &feedback }},
+		{"successor missing predecessor", func(a *domain.FindingAdjudication) { a.Revision = 2; a.Feedback = &feedback }},
+		{"successor invalid predecessor", func(a *domain.FindingAdjudication) {
+			a.Revision = 2
+			bad := domain.Digest("not-a-digest")
+			a.PredecessorDigest, a.Feedback = &bad, &feedback
+		}},
+		{"successor missing feedback", func(a *domain.FindingAdjudication) { a.Revision = 2; a.PredecessorDigest = &digest }},
+		{"feedback missing invocation", func(a *domain.FindingAdjudication) {
+			a.Revision, a.PredecessorDigest = 2, &digest
+			bad := feedback
+			bad.InvocationID = ""
+			a.Feedback = &bad
+		}},
+		{"feedback missing conversation", func(a *domain.FindingAdjudication) {
+			a.Revision, a.PredecessorDigest = 2, &digest
+			bad := feedback
+			bad.ConversationID = ""
+			a.Feedback = &bad
+		}},
+		{"feedback non-positive sequence", func(a *domain.FindingAdjudication) {
+			a.Revision, a.PredecessorDigest = 2, &digest
+			bad := feedback
+			bad.ThroughSequence = 0
+			a.Feedback = &bad
+		}},
+		{"feedback invalid prefix digest", func(a *domain.FindingAdjudication) {
+			a.Revision, a.PredecessorDigest = 2, &digest
+			bad := feedback
+			bad.PrefixDigest = "invalid"
+			a.Feedback = &bad
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			artifact := initial
+			tc.mutate(&artifact)
+			if err := artifact.Validate(); err == nil {
+				t.Fatal("Validate succeeded, want revision-shape rejection")
+			}
+		})
+	}
+
+	changed := slices.Clone(initial.Entries[:1])
+	if _, err := domain.NewSuccessorFindingAdjudication(
+		initial, feedback, changed, initial.CreatedAt.Add(time.Minute),
+	); !errors.Is(err, domain.ErrFindingAdjudicationInconsistent) {
+		t.Fatalf("changed finding batch = %v, want ErrFindingAdjudicationInconsistent", err)
 	}
 }
 
@@ -561,6 +672,12 @@ func TestFindingAdjudicationGolden(t *testing.T) {
 	}
 	golden.Assert(t, "finding_adjudication", append(body, '\n'))
 
+	successorBody, err := json.MarshalIndent(successorAdjudicationFixture(t), "", "  ")
+	if err != nil {
+		t.Fatalf("marshal successor artifact: %v", err)
+	}
+	golden.Assert(t, "finding_adjudication_successor", append(successorBody, '\n'))
+
 	model := fixture.Entries[1]
 	entryBody, err := json.MarshalIndent(model, "", "  ")
 	if err != nil {
@@ -591,5 +708,33 @@ func TestFindingAdjudicationDecodeRejects(t *testing.T) {
 	// Trailing data is rejected.
 	if _, err := domain.DecodeFindingAdjudication(append(body, '!')); err == nil {
 		t.Fatalf("trailing data: want error, got nil")
+	}
+
+	// The compatibility decoder uses raw messages to distinguish absent
+	// revision fields from explicit nulls. Nested feedback remains strict: an
+	// unknown member must not disappear before digest recomputation.
+	successorBody, err := successorAdjudicationFixture(t).Encode()
+	if err != nil {
+		t.Fatalf("encode successor: %v", err)
+	}
+	var successorFields map[string]json.RawMessage
+	if err := json.Unmarshal(successorBody, &successorFields); err != nil {
+		t.Fatalf("decode successor fields: %v", err)
+	}
+	var feedbackFields map[string]json.RawMessage
+	if err := json.Unmarshal(successorFields["feedback"], &feedbackFields); err != nil {
+		t.Fatalf("decode feedback fields: %v", err)
+	}
+	feedbackFields["unexpected"] = json.RawMessage(`true`)
+	successorFields["feedback"], err = json.Marshal(feedbackFields)
+	if err != nil {
+		t.Fatalf("encode feedback fields: %v", err)
+	}
+	unknownFeedbackBody, err := json.Marshal(successorFields)
+	if err != nil {
+		t.Fatalf("encode successor with unknown feedback: %v", err)
+	}
+	if _, err := domain.DecodeFindingAdjudication(unknownFeedbackBody); err == nil {
+		t.Fatal("unknown feedback field: want error, got nil")
 	}
 }

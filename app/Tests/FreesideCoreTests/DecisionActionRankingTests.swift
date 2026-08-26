@@ -72,6 +72,16 @@ import Testing
         #expect(overflow.overflow.isEmpty)
     }
 
+    @Test func undisplayedRecommendationRemainsADecidingAction() {
+        let ranking = DecisionActionRanking(
+            requested: [.approve, .retry],
+            recommendedAction: .approve,
+            reservesRecommendedAction: false)
+
+        #expect(ranking.recommended == nil)
+        #expect(ranking.principal == [.approve, .retry])
+    }
+
     @Test func allFilteredDecisionRendersCapabilityMismatch() {
         let ranking = DecisionActionRanking(
             requested: [.discuss, .request_changes, .answer_and_retry])

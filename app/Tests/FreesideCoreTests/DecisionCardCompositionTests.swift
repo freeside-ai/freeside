@@ -16,12 +16,12 @@ import Testing
     @Test func fourSpecializedCardsAreOnlyModuleOrderings() {
         #expect(
             DecisionCardComposition.forType(.ready_for_final_review).modules == [
-                .checklist, .factBlock, .yieldChart, .recommendation, .claims, .evidence,
+                .recommendation, .checklist, .factBlock, .yieldChart, .claims, .evidence,
                 .details,
             ])
         #expect(
             DecisionCardComposition.forType(.execution_failure).modules == [
-                .stageRail, .claims, .recommendation, .factBlock, .claims, .evidence, .details,
+                .recommendation, .stageRail, .claims, .factBlock, .claims, .evidence, .details,
             ])
         #expect(
             DecisionCardComposition.forType(.review_dispute).modules == [
@@ -29,18 +29,24 @@ import Testing
             ])
         #expect(
             DecisionCardComposition.forType(.review_diminishing_returns).modules == [
-                .yieldChart, .recommendation, .factBlock, .claims, .evidence, .details,
+                .recommendation, .yieldChart, .factBlock, .claims, .evidence, .details,
             ])
         #expect(
             !DecisionCardComposition.forType(.review_dispute).modules.contains(.recommendation))
+        let ready = DecisionCardComposition.forType(.ready_for_final_review)
+        #expect(ready.actionInsertionIndex == ready.modules.firstIndex(of: .claims))
+        #expect(ready.reviewingActionInsertionIndex == ready.modules.firstIndex(of: .details))
+        #expect(
+            DecisionCardComposition.forType(.execution_failure)
+                .reviewingActionInsertionIndex == nil)
         let execution = DecisionCardComposition.forType(.execution_failure)
         let executionClaims = AttentionFixtures.fixture(type: .execution_failure).item.agent_claims
         let diagnosticIndex = executionClaims.firstIndex { $0.label == "Likely cause (unverified)" }
-        #expect(execution.claimsAreProminent(at: 1))
+        #expect(execution.claimsAreProminent(at: 2))
         #expect(!execution.claimsAreProminent(at: 4))
         #expect(
             execution.claims(
-                from: executionClaims, at: 1, prominentClaimIndex: diagnosticIndex
+                from: executionClaims, at: 2, prominentClaimIndex: diagnosticIndex
             ).map(\.label) == ["Likely cause (unverified)"])
         #expect(
             execution.claims(
@@ -48,7 +54,7 @@ import Testing
             ).map(\.label) == ["screenshot"])
         #expect(
             execution.claims(
-                from: executionClaims, at: 1, prominentClaimIndex: nil
+                from: executionClaims, at: 2, prominentClaimIndex: nil
             ).isEmpty)
         #expect(
             execution.claims(
@@ -62,6 +68,10 @@ import Testing
         #expect(Set(composition.modules).isSubset(of: Set(DecisionCardComposition.sharedModuleSet)))
         #expect(composition.actionInsertionIndex >= 0)
         #expect(composition.actionInsertionIndex <= composition.modules.count)
+        if let reviewingActionInsertionIndex = composition.reviewingActionInsertionIndex {
+            #expect(reviewingActionInsertionIndex >= 0)
+            #expect(reviewingActionInsertionIndex <= composition.modules.count)
+        }
     }
 
     @Test func checklistUsesNeutralSuccessAndFailureOnlyWhereTheFactFails() throws {

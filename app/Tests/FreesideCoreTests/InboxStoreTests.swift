@@ -5,6 +5,18 @@ import Testing
 
 @MainActor
 @Suite struct InboxStoreTests {
+    @Test func scopeBarStacksFromXXXLargeThroughAccessibilitySizes() {
+        #expect(!InboxView.stacksScopeBar(at: .xxLarge))
+        #expect(InboxView.stacksScopeBar(at: .xxxLarge))
+        #expect(InboxView.stacksScopeBar(at: .accessibility1))
+        #expect(InboxView.stacksScopeBar(at: .accessibility5))
+
+        #expect(!InboxRowView.stacksHeader(at: .xxLarge))
+        #expect(InboxRowView.stacksHeader(at: .xxxLarge))
+        #expect(InboxRowView.stacksHeader(at: .accessibility1))
+        #expect(InboxRowView.stacksHeader(at: .accessibility5))
+    }
+
     @Test func refreshReconstructsTheInboxFromTheCanonicalList() async {
         let store = await makeStore(server: MockServer())
         #expect(store.loadState == .loaded)
@@ -87,6 +99,39 @@ import Testing
         #expect(!store.rows.contains { $0.item.id == resolved.item.id })
         store.scope = .resolved
         #expect(store.rows.contains { $0.item.id == resolved.item.id })
+    }
+
+    @Test func countsShareTheRowsScopeProjectAndCapturedStatusPredicate() async throws {
+        let store = await makeStore(server: MockServer())
+        var snapshots = Array(store.snapshotsByID.values)
+        for index in snapshots.indices {
+            snapshots[index].item.project_id = index.isMultiple(of: 2) ? "proj-a" : "proj-b"
+            if index.isMultiple(of: 4) {
+                snapshots[index].item.status = .resolved
+            }
+        }
+        store.replaceAll(with: snapshots)
+
+        var locallyResolved = try #require(
+            store.rows.first(where: { $0.item.status == .open }))
+        locallyResolved.item.status = .resolved
+        store.apply(locallyResolved)
+
+        for projectID in [String?.none, "proj-a", "proj-b"] {
+            store.projectID = projectID
+            for scope in InboxStore.Scope.allCases {
+                store.scope = scope
+                #expect(store.count(in: scope) == store.rows.count)
+                #expect(
+                    store.urgentCount(in: scope)
+                        == store.rows.count { $0.item.priority == .urgent })
+            }
+        }
+
+        store.projectID = nil
+        store.scope = .open
+        #expect(store.rows.contains { $0.item.id == locallyResolved.item.id })
+        #expect(store.count(in: .open) == store.rows.count)
     }
 
     @Test func projectFilterIsSortedDeduplicatedAndComposesWithScope() async throws {

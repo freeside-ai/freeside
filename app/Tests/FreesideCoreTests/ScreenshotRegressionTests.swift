@@ -11,11 +11,18 @@
         private struct Surface {
             let name: String
             let width: CGFloat?
+            let colorScheme: ColorScheme
             let view: AnyView
 
-            init(name: String, width: CGFloat? = nil, view: AnyView) {
+            init(
+                name: String,
+                width: CGFloat? = nil,
+                colorScheme: ColorScheme = .light,
+                view: AnyView
+            ) {
                 self.name = name
                 self.width = width
+                self.colorScheme = colorScheme
                 self.view = view
             }
         }
@@ -27,6 +34,7 @@
 
         private let canvasWidth: CGFloat = 960
         private let baselineOperatingSystemKey = "macOS-26.6"
+        private let screenshotNow = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
         private let textSizes = [
             TextSize(name: "xsmall", value: .xSmall),
             TextSize(name: "large", value: .large),
@@ -52,10 +60,11 @@
                 try await FreesideFont.$screenshotDynamicTypeSize.withValue(size.value) {
                     for surface in try makeSurfaces(at: size.value) {
                         let key = "\(surface.name)-\(size.name)"
-                        let image = try render(
+                        let image = try await render(
                             surface.view,
                             at: size.value,
-                            width: surface.width ?? canvasWidth)
+                            width: surface.width ?? canvasWidth,
+                            colorScheme: surface.colorScheme)
                         actual[key] = try digest(image)
                         if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
                             _ = try dump(image, named: key)
@@ -76,10 +85,11 @@
                         try await makeImageAttachmentSurface(at: size.value),
                     ] {
                         let key = "\(supplemental.name)-\(size.name)"
-                        let image = try render(
+                        let image = try await render(
                             supplemental.view,
                             at: size.value,
-                            width: supplemental.width ?? canvasWidth)
+                            width: supplemental.width ?? canvasWidth,
+                            colorScheme: supplemental.colorScheme)
                         actual[key] = try digest(image)
                         if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
                             _ = try dump(image, named: key)
@@ -131,9 +141,64 @@
                             selection: .constant(inbox.first?.item.id),
                             launchScope: nil,
                             launchProjectID: nil
-                        ).screenshotContent()
+                        ).screenshotContent(now: screenshotNow)
                     ))
             ]
+
+            if let selected = inbox.first?.item {
+                surfaces.append(
+                    Surface(
+                        name: "inbox-selected-differentiate-without-color",
+                        width: 560,
+                        view: AnyView(
+                            VStack(spacing: 8) {
+                                InboxRowView(
+                                    item: selected,
+                                    now: screenshotNow,
+                                    differentiateWithoutColorOverride: true
+                                )
+                                InboxRowView(
+                                    item: selected,
+                                    isSelected: true,
+                                    now: screenshotNow,
+                                    differentiateWithoutColorOverride: true
+                                )
+                            }
+                            .padding()
+                        )))
+                surfaces.append(
+                    Surface(
+                        name: "inbox-selected-differentiate-without-color-dark",
+                        width: 560,
+                        colorScheme: .dark,
+                        view: AnyView(
+                            VStack(spacing: 8) {
+                                InboxRowView(
+                                    item: selected,
+                                    now: screenshotNow,
+                                    differentiateWithoutColorOverride: true
+                                )
+                                InboxRowView(
+                                    item: selected,
+                                    isSelected: true,
+                                    now: screenshotNow,
+                                    differentiateWithoutColorOverride: true
+                                )
+                            }
+                            .padding()
+                        )))
+            }
+
+            var concludedDegraded = AttentionFixtures.degradedReady().item
+            concludedDegraded.status = .resolved
+            surfaces.append(
+                Surface(
+                    name: "inbox-concluded-degraded",
+                    width: 320,
+                    view: AnyView(
+                        InboxRowView(item: concludedDegraded, now: screenshotNow)
+                            .padding()
+                    )))
 
             for snapshot in inbox {
                 let graphics = graphicPresentations(for: snapshot.item)
@@ -355,28 +420,41 @@
         private func render(
             _ view: AnyView,
             at size: DynamicTypeSize,
-            width: CGFloat
-        ) throws -> CGImage {
+            width: CGFloat,
+            colorScheme: ColorScheme
+        ) async throws -> CGImage {
             guard let timeZone = TimeZone(secondsFromGMT: 0) else {
                 throw ScreenshotError.missingGMT
             }
             let root =
                 view
                 .environment(\.dynamicTypeSize, size)
-                .environment(\.colorScheme, .light)
+                .environment(\.colorScheme, colorScheme)
                 .environment(\.locale, Locale(identifier: "en_US_POSIX"))
                 .environment(\.calendar, Calendar(identifier: .gregorian))
                 .environment(\.timeZone, timeZone)
                 .frame(width: width, alignment: .topLeading)
                 .fixedSize(horizontal: false, vertical: true)
                 .background(Color.ground)
-            let renderer = ImageRenderer(content: root)
-            renderer.proposedSize = ProposedViewSize(width: width, height: nil)
-            renderer.scale = 1
-            guard let image = renderer.cgImage else {
-                throw ScreenshotError.renderFailed
+            // ImageRenderer can transiently return an incomplete glyph raster
+            // under CI load. Baselines must come from a settled frame, and an
+            // unstable surface fails closed instead of blessing random pixels.
+            var priorDigest: String?
+            for _ in 0..<3 {
+                let renderer = ImageRenderer(content: root)
+                renderer.proposedSize = ProposedViewSize(width: width, height: nil)
+                renderer.scale = 1
+                guard let image = renderer.cgImage else {
+                    throw ScreenshotError.renderFailed
+                }
+                let currentDigest = try digest(image)
+                if currentDigest == priorDigest {
+                    return image
+                }
+                priorDigest = currentDigest
+                await Task.yield()
             }
-            return image
+            throw ScreenshotError.unstableRender
         }
 
         private func digest(_ image: CGImage) throws -> String {
@@ -476,5 +554,6 @@
         case pngEncodingFailed
         case recordingRequiresBaselineOperatingSystem(expected: String, actual: String)
         case renderFailed
+        case unstableRender
     }
 #endif

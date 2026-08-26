@@ -16,6 +16,7 @@ enum DecisionCardModule: String, CaseIterable {
 struct DecisionCardComposition: Equatable {
     let modules: [DecisionCardModule]
     let actionInsertionIndex: Int
+    let reviewingActionInsertionIndex: Int?
 
     func claimsAreProminent(at moduleIndex: Int) -> Bool {
         guard let claimsIndex = modules.firstIndex(of: .claims),
@@ -47,30 +48,35 @@ struct DecisionCardComposition: Equatable {
         case .ready_for_final_review:
             return .init(
                 modules: [
-                    .checklist, .factBlock, .yieldChart, .recommendation, .claims, .evidence,
+                    .recommendation, .checklist, .factBlock, .yieldChart, .claims, .evidence,
                     .details,
                 ],
-                actionInsertionIndex: 4)
+                actionInsertionIndex: 4,
+                reviewingActionInsertionIndex: 6)
         case .execution_failure:
             return .init(
                 modules: [
-                    .stageRail, .claims, .recommendation, .factBlock, .claims, .evidence, .details,
+                    .recommendation, .stageRail, .claims, .factBlock, .claims, .evidence, .details,
                 ],
-                actionInsertionIndex: 3)
+                actionInsertionIndex: 3,
+                reviewingActionInsertionIndex: nil)
         case .review_dispute:
             return .init(
                 modules: [.comparison, .factBlock, .claims, .evidence, .details],
-                actionInsertionIndex: 2)
+                actionInsertionIndex: 2,
+                reviewingActionInsertionIndex: nil)
         case .review_diminishing_returns:
             return .init(
-                modules: [.yieldChart, .recommendation, .factBlock, .claims, .evidence, .details],
-                actionInsertionIndex: 2)
+                modules: [.recommendation, .yieldChart, .factBlock, .claims, .evidence, .details],
+                actionInsertionIndex: 2,
+                reviewingActionInsertionIndex: nil)
         case .spec_approval, .review_contradiction, .review_configuration,
             .finding_adjudication, .agent_question, .publish_blocked, .run_proposal,
             .system_health, .blocked:
             return .init(
                 modules: [.recommendation, .factBlock, .claims, .evidence, .details],
-                actionInsertionIndex: 1)
+                actionInsertionIndex: 1,
+                reviewingActionInsertionIndex: nil)
         }
     }
 }

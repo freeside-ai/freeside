@@ -1,11 +1,28 @@
 import FreesideAPI
 import SwiftUI
 
+struct TechnicalDetailsRevealRequest: Equatable {
+    let itemID: String
+    let nonce: UUID
+
+    func retained(for selectedItemID: String?) -> Self? {
+        itemID == selectedItemID ? self : nil
+    }
+
+    func consuming(_ consumedNonce: UUID) -> Self? {
+        nonce == consumedNonce ? nil : self
+    }
+}
+
 /// One item's self-contained decision card: header, reason, evidence,
 /// labeled agent claims, the bindings the decision will commit against,
 /// and exactly the item's requested actions. Actions stay disabled until
 /// the model's revalidation of current state succeeds.
 struct DecisionDetailView: View {
+    private enum ScrollTarget: Hashable {
+        case technicalDetails
+    }
+
     private struct PendingConfirmation {
         let action: Components.Schemas.Action
         let reviewedSnapshot: Components.Schemas.AttentionItemSnapshot
@@ -32,20 +49,29 @@ struct DecisionDetailView: View {
     private let graphics: DecisionGraphicPresentations
     private let loadsAttachments: Bool
     private let showsValidationProgress: Bool
+    private let itemID: String
+    private let detailsRevealRequest: TechnicalDetailsRevealRequest?
+    private let onConsumeDetailsRevealRequest: (UUID) -> Void
 
     @MainActor
     init(
         store: InboxStore,
         itemID: String,
         detailsExpanded: Bool = false,
+        detailsRevealRequest: TechnicalDetailsRevealRequest? = nil,
+        onConsumeDetailsRevealRequest: @escaping (UUID) -> Void = { _ in },
         recommendation: DecisionRecommendationPresentation? = nil,
         graphics: DecisionGraphicPresentations = .init(),
         loadsAttachments: Bool = true,
         showsValidationProgress: Bool = true
     ) {
         _model = State(initialValue: DecisionModel(store: store, itemID: itemID))
-        _detailsExpanded = State(initialValue: detailsExpanded)
+        _detailsExpanded = State(
+            initialValue: detailsExpanded || detailsRevealRequest?.itemID == itemID)
         attachments = store.attachments
+        self.itemID = itemID
+        self.detailsRevealRequest = detailsRevealRequest
+        self.onConsumeDetailsRevealRequest = onConsumeDetailsRevealRequest
         self.recommendation = recommendation
         self.graphics = graphics
         self.loadsAttachments = loadsAttachments
@@ -56,18 +82,26 @@ struct DecisionDetailView: View {
         platformBody(
             Group {
                 if let snapshot = model.snapshot {
-                    ScrollView {
-                        card(
-                            snapshot.item,
-                            accessibilityLayout: isAccessibilityLayout,
-                            compactLayout: horizontalSizeClass == .compact
-                        )
-                        .padding(14)
-                        .freesideCard()
-                        .padding()
-                        .frame(maxWidth: 560, alignment: .leading)
+                    ScrollViewReader { scrollProxy in
+                        ScrollView {
+                            card(
+                                snapshot.item,
+                                accessibilityLayout: isAccessibilityLayout,
+                                compactLayout: horizontalSizeClass == .compact
+                            )
+                            .padding(14)
+                            .freesideCard()
+                            .padding()
+                            .frame(maxWidth: 560, alignment: .leading)
+                        }
+                        .coordinateSpace(name: "decision-card-scroll")
+                        .onChange(of: detailsRevealRequest) {
+                            revealTechnicalDetailsIfRequested(using: scrollProxy)
+                        }
+                        .onAppear {
+                            revealTechnicalDetailsIfRequested(using: scrollProxy)
+                        }
                     }
-                    .coordinateSpace(name: "decision-card-scroll")
                 } else {
                     ContentUnavailableView(
                         "Item unavailable",
@@ -125,6 +159,15 @@ struct DecisionDetailView: View {
                 pendingConfirmation = nil
             }
         )
+    }
+
+    private func revealTechnicalDetailsIfRequested(using scrollProxy: ScrollViewProxy) {
+        guard let detailsRevealRequest, detailsRevealRequest.itemID == itemID else { return }
+        detailsExpanded = true
+        withAnimation {
+            scrollProxy.scrollTo(ScrollTarget.technicalDetails, anchor: .top)
+        }
+        onConsumeDetailsRevealRequest(detailsRevealRequest.nonce)
     }
 
     @ViewBuilder
@@ -198,7 +241,11 @@ struct DecisionDetailView: View {
                 if index + 1 == composition.actionInsertionIndex {
                     actions(
                         item,
-                        stackedLayout: accessibilityLayout || compactLayout)
+                        stackedLayout: accessibilityLayout || compactLayout,
+                        includesReviewing: composition.reviewingActionInsertionIndex == nil)
+                }
+                if index + 1 == composition.reviewingActionInsertionIndex {
+                    reviewingAction(item)
                 }
             }
         }
@@ -404,6 +451,7 @@ struct DecisionDetailView: View {
                 }
             }
         }
+        .id(ScrollTarget.technicalDetails)
         .font(FreesideFont.caption)
         .foregroundStyle(Color.inkDim)
         .textSelection(.enabled)
@@ -841,7 +889,8 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func actions(
         _ item: Components.Schemas.AttentionItem,
-        stackedLayout: Bool
+        stackedLayout: Bool,
+        includesReviewing: Bool
     ) -> some View {
         let ranking = actionRanking(item)
         VStack(alignment: .leading, spacing: 8) {
@@ -872,7 +921,7 @@ struct DecisionDetailView: View {
                 }
             }
 
-            if let reviewing = ranking.reviewing {
+            if includesReviewing, let reviewing = ranking.reviewing {
                 actionButton(reviewing, item: item, tone: .neutral)
             }
 
@@ -894,12 +943,21 @@ struct DecisionDetailView: View {
         }
     }
 
+    @ViewBuilder
+    private func reviewingAction(_ item: Components.Schemas.AttentionItem) -> some View {
+        if let reviewing = actionRanking(item).reviewing {
+            actionButton(reviewing, item: item, tone: .neutral)
+        }
+    }
+
     private func actionRanking(
         _ item: Components.Schemas.AttentionItem
     ) -> DecisionActionRanking {
-        DecisionActionRanking(
+        let composition = DecisionCardComposition.forType(item._type)
+        return DecisionActionRanking(
             requested: item.requested_decision,
-            recommendedAction: recommendation?.action)
+            recommendedAction: recommendation?.action,
+            reservesRecommendedAction: composition.modules.contains(.recommendation))
     }
 
     @ViewBuilder
