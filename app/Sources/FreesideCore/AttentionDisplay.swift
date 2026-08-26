@@ -129,9 +129,23 @@ enum AttentionDisplay {
         }
     }
 
-    static func confirmationConsequence(_ action: Components.Schemas.Action) -> String? {
+    static func confirmationConsequence(
+        _ action: Components.Schemas.Action,
+        for item: Components.Schemas.AttentionItem
+    ) -> String? {
         switch action {
         case .stop:
+            switch item._type {
+            case .finding_adjudication:
+                return "The run stays parked without accepting or choosing an adjudication route."
+            case .review_configuration:
+                return "The run concludes as a configuration failure; no replacement review configuration is adopted."
+            case .spec_approval, .review_diminishing_returns, .review_dispute,
+                .review_contradiction, .execution_failure, .agent_question,
+                .publish_blocked, .ready_for_final_review, .run_proposal,
+                .system_health, .blocked:
+                break
+            }
             return "The current invocation is discarded. Work already exported stays; the round in flight does not."
         case .stop_unattended:
             return "New unattended work will not start until unattended operation is resumed."

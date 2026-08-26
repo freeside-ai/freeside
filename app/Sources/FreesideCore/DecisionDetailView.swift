@@ -109,7 +109,8 @@ struct DecisionDetailView: View {
             } message: {
                 if let confirmation = pendingConfirmation,
                     let consequence = AttentionDisplay.confirmationConsequence(
-                        confirmation.action)
+                        confirmation.action,
+                        for: confirmation.reviewedSnapshot.item)
                 {
                     Text(consequence)
                 }
@@ -131,8 +132,9 @@ struct DecisionDetailView: View {
                     actionButton(
                         recommendation.action,
                         item: item,
-                        tone: AttentionDisplay.confirmationConsequence(recommendation.action) == nil
-                            ? .primary : .destructive,
+                        tone: AttentionDisplay.confirmationConsequence(
+                            recommendation.action,
+                            for: item) == nil ? .primary : .destructive,
                         showsIcon: false
                     )
                     .padding(.horizontal)
@@ -540,8 +542,9 @@ struct DecisionDetailView: View {
             actionButton(
                 recommendation.action,
                 item: item,
-                tone: AttentionDisplay.confirmationConsequence(recommendation.action) == nil
-                    ? .primary : .destructive,
+                tone: AttentionDisplay.confirmationConsequence(
+                    recommendation.action,
+                    for: item) == nil ? .primary : .destructive,
                 showsIcon: false
             )
             .padding(.top, 4)
@@ -772,10 +775,10 @@ struct DecisionDetailView: View {
     ) -> some View {
         if !actions.isEmpty {
             let ordinary = actions.filter {
-                AttentionDisplay.confirmationConsequence($0) == nil
+                AttentionDisplay.confirmationConsequence($0, for: item) == nil
             }
             let consequential = actions.filter {
-                AttentionDisplay.confirmationConsequence($0) != nil
+                AttentionDisplay.confirmationConsequence($0, for: item) != nil
             }
             Menu {
                 ForEach(Array(ordinary.enumerated()), id: \.offset) { _, action in
@@ -845,7 +848,7 @@ struct DecisionDetailView: View {
         _ action: Components.Schemas.Action,
         item: Components.Schemas.AttentionItem
     ) {
-        if AttentionDisplay.confirmationConsequence(action) != nil {
+        if AttentionDisplay.confirmationConsequence(action, for: item) != nil {
             guard let snapshot = model.snapshot,
                 snapshot.item.id == item.id,
                 snapshot.item.item_version == item.item_version

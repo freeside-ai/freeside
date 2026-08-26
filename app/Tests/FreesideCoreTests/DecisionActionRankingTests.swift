@@ -87,16 +87,17 @@ import Testing
     }
 
     @Test func confirmationsAreLimitedToConsequentialActions() {
+        let item = AttentionFixtures.fixture(type: .execution_failure).item
         let confirmed: [Components.Schemas.Action] = [
             .stop, .stop_unattended, .decline, .dismiss,
         ]
         for action in AttentionFixtures.phase1Actions {
             #expect(
-                (AttentionDisplay.confirmationConsequence(action) != nil)
+                (AttentionDisplay.confirmationConsequence(action, for: item) != nil)
                     == confirmed.contains(action))
         }
-        #expect(AttentionDisplay.confirmationConsequence(.approve) == nil)
-        #expect(AttentionDisplay.confirmationConsequence(.snooze) == nil)
+        #expect(AttentionDisplay.confirmationConsequence(.approve, for: item) == nil)
+        #expect(AttentionDisplay.confirmationConsequence(.snooze, for: item) == nil)
     }
 
     @Test func iconsAreLimitedToNavigationRetryAndLossRisk() {

@@ -24,6 +24,22 @@ import Testing
         #expect(AttentionDisplay.label(Components.Schemas.Action.open_pr) == "View PR")
     }
 
+    @Test func stopConfirmationsDescribeTheItemsActualOutcome() {
+        let finding = AttentionFixtures.fixture(type: .finding_adjudication).item
+        let configuration = AttentionFixtures.fixture(type: .review_configuration).item
+        let failure = AttentionFixtures.fixture(type: .execution_failure).item
+
+        #expect(
+            AttentionDisplay.confirmationConsequence(.stop, for: finding)
+                == "The run stays parked without accepting or choosing an adjudication route.")
+        #expect(
+            AttentionDisplay.confirmationConsequence(.stop, for: configuration)
+                == "The run concludes as a configuration failure; no replacement review configuration is adopted.")
+        #expect(
+            AttentionDisplay.confirmationConsequence(.stop, for: failure)
+                == "The current invocation is discarded. Work already exported stays; the round in flight does not.")
+    }
+
     @Test func healthPostureLabelsAreExplicit() {
         #expect(AttentionDisplay.label(Components.Schemas.HealthPosture.blocking) == "Blocking")
         #expect(AttentionDisplay.label(Components.Schemas.HealthPosture.advisory) == "Advisory")
