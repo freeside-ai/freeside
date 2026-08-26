@@ -43,17 +43,24 @@ Inputs below).
    copy. This replaces the shipped "Actions carrying discussion or
    parameters arrive with later units" presentation.
 3. **P1-2 disposition (the review's unsupported-actions finding), a
-   hybrid.** Of the ten actions `ActionOutcome` classifies `pending`:
+   hybrid.** Of the eight actions the daemon's `actionOutcome` classifies
+   `outcomePending`:
    `continue_under_policy` lands with Wave 6 #844;
    `choose_alternate_profile` gets its own Wave 7 publication-profile
    transaction (#936, not #869's alternate-agent retry); `adjudicate` is
    likely vestigial
    (superseded by `accept_recommended_route` / `choose_alternative_route`)
    and the contract unit must retire it or reassign it to an executable
-   `review_dispute` transaction before client adoption; `discuss`,
-   `request_changes`, `answer_and_retry`, `answer_without_retry`,
-   `return_to_agent`, and `retry_with_capabilities` get Wave 7
-   transaction units; `convert_to_policy` alone is carved out of the 1B
+   `review_dispute` transaction before client adoption;
+   `answer_and_retry`, `answer_without_retry`, `return_to_agent`, and
+   `retry_with_capabilities` get Wave 7 transaction units. (Corrected by
+   #943: `discuss` and spec-approval `request_changes` were already
+   implemented before this note's grounding, `applyDiscuss` in `811f5405`
+   and the concluding request-changes outcome in `ee975b32`.) The
+   provisional Swift `ActionOutcome` and mock server still classify both as
+   `pending`; their convergence with daemon execution remains part of Wave 7
+   client adoption, not transaction implementation.
+   `convert_to_policy` alone is carved out of the 1B
    phone-decidability claim, because §4 already routes it through the
    deferred control-plane proposal surface and the diminishing-returns
    card stays decidable without it. Rejected: implementing every
