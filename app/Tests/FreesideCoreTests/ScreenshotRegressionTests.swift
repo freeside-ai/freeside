@@ -26,6 +26,7 @@
         }
 
         private let canvasWidth: CGFloat = 960
+        private let baselineOperatingSystemKey = "macOS-26.6"
         private let textSizes = [
             TextSize(name: "xsmall", value: .xSmall),
             TextSize(name: "large", value: .large),
@@ -42,7 +43,7 @@
             let overrides = try loadOverrides()
             if recording {
                 try validateRecordingOperatingSystem(
-                    operatingSystemKey, overrideKeys: Set(overrides.keys))
+                    operatingSystemKey, baselineKey: baselineOperatingSystemKey)
             }
             let expected = try loadManifest(overrides: overrides)
             var actual: [String: String] = [:]
@@ -82,10 +83,12 @@
             }
         }
 
-        @Test func recordingRequiresABaselineOperatingSystem() {
+        @Test func recordingRequiresTheDesignatedBaselineOperatingSystem() throws {
+            try validateRecordingOperatingSystem(
+                "macOS-26.6", baselineKey: "macOS-26.6")
             #expect(throws: ScreenshotError.self) {
                 try validateRecordingOperatingSystem(
-                    "macOS-26.5", overrideKeys: ["macOS-26.5"])
+                    "macOS-26.5", baselineKey: "macOS-26.6")
             }
         }
 
@@ -302,10 +305,11 @@
 
         private func validateRecordingOperatingSystem(
             _ key: String,
-            overrideKeys: Set<String>
+            baselineKey: String
         ) throws {
-            guard !overrideKeys.contains(key) else {
-                throw ScreenshotError.recordingRequiresBaselineOperatingSystem(key)
+            guard key == baselineKey else {
+                throw ScreenshotError.recordingRequiresBaselineOperatingSystem(
+                    expected: baselineKey, actual: key)
             }
         }
 
@@ -347,7 +351,7 @@
         case missingGMT
         case missingManifest
         case pngEncodingFailed
-        case recordingRequiresBaselineOperatingSystem(String)
+        case recordingRequiresBaselineOperatingSystem(expected: String, actual: String)
         case renderFailed
     }
 #endif
