@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -387,6 +388,12 @@ type FindingAdjudication struct {
 	EncodingVersion int   `json:"encoding_version"`
 	RunID           RunID `json:"run_id"`
 	Round           int   `json:"round"`
+	// Revision is the positive, per-round position in the immutable adjudication
+	// chain. Revision 1 is encoded in the legacy byte shape for upgrade
+	// compatibility; successors carry it explicitly with their provenance.
+	Revision          int                   `json:"revision"`
+	PredecessorDigest *Digest               `json:"predecessor_digest"`
+	Feedback          *AdjudicationFeedback `json:"feedback"`
 	// FindingBatchDigest is the content address of the sorted entry finding-ID
 	// list, so the "exact batch" binding is itself checkable.
 	FindingBatchDigest        Digest                     `json:"finding_batch_digest"`
@@ -396,6 +403,34 @@ type FindingAdjudication struct {
 	Entries                   []FindingAdjudicationEntry `json:"entries"`
 	CreatedAt                 time.Time                  `json:"created_at"`
 	Digest                    Digest                     `json:"digest"`
+}
+
+// AdjudicationFeedback binds a successor revision to the accepted agent turn
+// and exact immutable conversation prefix that caused it. The store re-gates
+// every copied value against the persisted invocation and conversation.
+type AdjudicationFeedback struct {
+	InvocationID    InvocationID   `json:"invocation_id"`
+	ConversationID  ConversationID `json:"conversation_id"`
+	ThroughSequence int            `json:"through_sequence"`
+	PrefixDigest    Digest         `json:"prefix_digest"`
+}
+
+// Validate reports whether the feedback binding is structurally complete.
+// Persistence is the authority for whether these copied values are true.
+func (f AdjudicationFeedback) Validate() error {
+	if f.InvocationID == "" {
+		return fmt.Errorf("adjudication feedback invocation_id: %w", ErrEmptyID)
+	}
+	if f.ConversationID == "" {
+		return fmt.Errorf("adjudication feedback conversation_id: %w", ErrEmptyID)
+	}
+	if f.ThroughSequence < 1 {
+		return fmt.Errorf("adjudication feedback through_sequence %d: %w", f.ThroughSequence, ErrNonPositiveSeq)
+	}
+	if !contentaddr.Valid(string(f.PrefixDigest)) {
+		return fmt.Errorf("adjudication feedback prefix_digest %q: %w", f.PrefixDigest, ErrFindingAdjudicationInconsistent)
+	}
+	return nil
 }
 
 type canonicalFindingAdjudication struct {
@@ -408,6 +443,50 @@ type canonicalFindingAdjudication struct {
 	ResolvedPolicyDigest      Digest                     `json:"resolved_policy_digest"`
 	Entries                   []FindingAdjudicationEntry `json:"entries"`
 	CreatedAt                 time.Time                  `json:"created_at"`
+}
+
+type canonicalSuccessorFindingAdjudication struct {
+	EncodingVersion           int                        `json:"encoding_version"`
+	RunID                     RunID                      `json:"run_id"`
+	Round                     int                        `json:"round"`
+	Revision                  int                        `json:"revision"`
+	PredecessorDigest         *Digest                    `json:"predecessor_digest"`
+	Feedback                  *AdjudicationFeedback      `json:"feedback"`
+	FindingBatchDigest        Digest                     `json:"finding_batch_digest"`
+	ApprovedSpecDigest        Digest                     `json:"approved_spec_digest"`
+	InstructionSnapshotDigest Digest                     `json:"instruction_snapshot_digest"`
+	ResolvedPolicyDigest      Digest                     `json:"resolved_policy_digest"`
+	Entries                   []FindingAdjudicationEntry `json:"entries"`
+	CreatedAt                 time.Time                  `json:"created_at"`
+}
+
+type encodedFindingAdjudication struct {
+	EncodingVersion           int                        `json:"encoding_version"`
+	RunID                     RunID                      `json:"run_id"`
+	Round                     int                        `json:"round"`
+	FindingBatchDigest        Digest                     `json:"finding_batch_digest"`
+	ApprovedSpecDigest        Digest                     `json:"approved_spec_digest"`
+	InstructionSnapshotDigest Digest                     `json:"instruction_snapshot_digest"`
+	ResolvedPolicyDigest      Digest                     `json:"resolved_policy_digest"`
+	Entries                   []FindingAdjudicationEntry `json:"entries"`
+	CreatedAt                 time.Time                  `json:"created_at"`
+	Digest                    Digest                     `json:"digest"`
+}
+
+type encodedSuccessorFindingAdjudication struct {
+	EncodingVersion           int                        `json:"encoding_version"`
+	RunID                     RunID                      `json:"run_id"`
+	Round                     int                        `json:"round"`
+	Revision                  int                        `json:"revision"`
+	PredecessorDigest         *Digest                    `json:"predecessor_digest"`
+	Feedback                  *AdjudicationFeedback      `json:"feedback"`
+	FindingBatchDigest        Digest                     `json:"finding_batch_digest"`
+	ApprovedSpecDigest        Digest                     `json:"approved_spec_digest"`
+	InstructionSnapshotDigest Digest                     `json:"instruction_snapshot_digest"`
+	ResolvedPolicyDigest      Digest                     `json:"resolved_policy_digest"`
+	Entries                   []FindingAdjudicationEntry `json:"entries"`
+	CreatedAt                 time.Time                  `json:"created_at"`
+	Digest                    Digest                     `json:"digest"`
 }
 
 // NewFindingAdjudication builds one round's adjudication artifact. It sorts the
@@ -432,10 +511,67 @@ func NewFindingAdjudication(
 		EncodingVersion:           FindingAdjudicationEncodingVersion,
 		RunID:                     runID,
 		Round:                     round,
+		Revision:                  1,
 		FindingBatchDigest:        batchDigest,
 		ApprovedSpecDigest:        approvedSpecDigest,
 		InstructionSnapshotDigest: instructionSnapshotDigest,
 		ResolvedPolicyDigest:      resolvedPolicyDigest,
+		Entries:                   sorted,
+		CreatedAt:                 createdAt,
+	}
+	digest, err := artifact.ComputeDigest()
+	if err != nil {
+		return FindingAdjudication{}, err
+	}
+	artifact.Digest = digest
+	if err := artifact.Validate(); err != nil {
+		return FindingAdjudication{}, err
+	}
+	return artifact, nil
+}
+
+// NewSuccessorFindingAdjudication builds the next immutable adjudication for a
+// review round after Discuss feedback. It preserves every version binding and
+// requires the exact finding set of its predecessor.
+func NewSuccessorFindingAdjudication(
+	prior FindingAdjudication,
+	feedback AdjudicationFeedback,
+	entries []FindingAdjudicationEntry,
+	createdAt time.Time,
+) (FindingAdjudication, error) {
+	if err := prior.Validate(); err != nil {
+		return FindingAdjudication{}, fmt.Errorf("finding adjudication predecessor: %w", err)
+	}
+	if prior.Revision == math.MaxInt {
+		return FindingAdjudication{}, fmt.Errorf("finding adjudication revision overflow: %w", ErrFindingAdjudicationInconsistent)
+	}
+	if err := feedback.Validate(); err != nil {
+		return FindingAdjudication{}, err
+	}
+	sorted := slices.Clone(entries)
+	slices.SortFunc(sorted, func(a, b FindingAdjudicationEntry) int {
+		return strings.Compare(string(a.FindingID), string(b.FindingID))
+	})
+	batchDigest, err := computeFindingBatchDigest(sorted)
+	if err != nil {
+		return FindingAdjudication{}, err
+	}
+	if batchDigest != prior.FindingBatchDigest {
+		return FindingAdjudication{}, fmt.Errorf("finding adjudication successor batch %q, predecessor has %q: %w",
+			batchDigest, prior.FindingBatchDigest, ErrFindingAdjudicationInconsistent)
+	}
+	predecessor := prior.Digest
+	artifact := FindingAdjudication{
+		EncodingVersion:           FindingAdjudicationEncodingVersion,
+		RunID:                     prior.RunID,
+		Round:                     prior.Round,
+		Revision:                  prior.Revision + 1,
+		PredecessorDigest:         &predecessor,
+		Feedback:                  &feedback,
+		FindingBatchDigest:        batchDigest,
+		ApprovedSpecDigest:        prior.ApprovedSpecDigest,
+		InstructionSnapshotDigest: prior.InstructionSnapshotDigest,
+		ResolvedPolicyDigest:      prior.ResolvedPolicyDigest,
 		Entries:                   sorted,
 		CreatedAt:                 createdAt,
 	}
@@ -478,6 +614,21 @@ func (a FindingAdjudication) Validate() error {
 	}
 	if a.Round < 1 {
 		return fmt.Errorf("finding adjudication round %d: %w", a.Round, ErrNonPositive)
+	}
+	if a.Revision < 1 {
+		return fmt.Errorf("finding adjudication revision %d: %w", a.Revision, ErrFindingAdjudicationInconsistent)
+	}
+	if a.Revision == 1 {
+		if a.PredecessorDigest != nil || a.Feedback != nil {
+			return fmt.Errorf("finding adjudication initial revision provenance: %w", ErrFindingAdjudicationInconsistent)
+		}
+	} else {
+		if a.PredecessorDigest == nil || !contentaddr.Valid(string(*a.PredecessorDigest)) || a.Feedback == nil {
+			return fmt.Errorf("finding adjudication successor revision provenance: %w", ErrFindingAdjudicationInconsistent)
+		}
+		if err := a.Feedback.Validate(); err != nil {
+			return err
+		}
 	}
 	for label, digest := range map[string]Digest{
 		"approved_spec_digest":        a.ApprovedSpecDigest,
@@ -561,8 +712,8 @@ func (a FindingAdjudication) AuthorizesFinalDisposition(
 		findingID, ErrInvalidDispositionAdjudication)
 }
 
-func (a FindingAdjudication) canonical() canonicalFindingAdjudication {
-	return canonicalFindingAdjudication{
+func (a FindingAdjudication) canonical() any {
+	initial := canonicalFindingAdjudication{
 		EncodingVersion:           a.EncodingVersion,
 		RunID:                     a.RunID,
 		Round:                     a.Round,
@@ -573,6 +724,91 @@ func (a FindingAdjudication) canonical() canonicalFindingAdjudication {
 		Entries:                   a.Entries,
 		CreatedAt:                 a.CreatedAt,
 	}
+	if a.Revision == 1 && a.PredecessorDigest == nil && a.Feedback == nil {
+		return initial
+	}
+	return canonicalSuccessorFindingAdjudication{
+		EncodingVersion:           a.EncodingVersion,
+		RunID:                     a.RunID,
+		Round:                     a.Round,
+		Revision:                  a.Revision,
+		PredecessorDigest:         a.PredecessorDigest,
+		Feedback:                  a.Feedback,
+		FindingBatchDigest:        a.FindingBatchDigest,
+		ApprovedSpecDigest:        a.ApprovedSpecDigest,
+		InstructionSnapshotDigest: a.InstructionSnapshotDigest,
+		ResolvedPolicyDigest:      a.ResolvedPolicyDigest,
+		Entries:                   a.Entries,
+		CreatedAt:                 a.CreatedAt,
+	}
+}
+
+// MarshalJSON preserves the pre-revision byte shape for revision 1. Successors
+// carry revision identity and feedback provenance explicitly.
+func (a FindingAdjudication) MarshalJSON() ([]byte, error) {
+	if a.Revision == 1 && a.PredecessorDigest == nil && a.Feedback == nil {
+		return json.Marshal(encodedFindingAdjudication{
+			EncodingVersion: a.EncodingVersion, RunID: a.RunID, Round: a.Round,
+			FindingBatchDigest: a.FindingBatchDigest, ApprovedSpecDigest: a.ApprovedSpecDigest,
+			InstructionSnapshotDigest: a.InstructionSnapshotDigest, ResolvedPolicyDigest: a.ResolvedPolicyDigest,
+			Entries: a.Entries, CreatedAt: a.CreatedAt, Digest: a.Digest,
+		})
+	}
+	return json.Marshal(encodedSuccessorFindingAdjudication(a))
+}
+
+// UnmarshalJSON accepts the legacy revision-1 encoding only when all revision
+// fields are absent. Explicit zero or null revision fields remain malformed and
+// fail Validate rather than being silently upgraded.
+func (a *FindingAdjudication) UnmarshalJSON(body []byte) error {
+	type wireFindingAdjudication struct {
+		EncodingVersion           int                        `json:"encoding_version"`
+		RunID                     RunID                      `json:"run_id"`
+		Round                     int                        `json:"round"`
+		Revision                  json.RawMessage            `json:"revision"`
+		PredecessorDigest         json.RawMessage            `json:"predecessor_digest"`
+		Feedback                  json.RawMessage            `json:"feedback"`
+		FindingBatchDigest        Digest                     `json:"finding_batch_digest"`
+		ApprovedSpecDigest        Digest                     `json:"approved_spec_digest"`
+		InstructionSnapshotDigest Digest                     `json:"instruction_snapshot_digest"`
+		ResolvedPolicyDigest      Digest                     `json:"resolved_policy_digest"`
+		Entries                   []FindingAdjudicationEntry `json:"entries"`
+		CreatedAt                 time.Time                  `json:"created_at"`
+		Digest                    Digest                     `json:"digest"`
+	}
+	var wire wireFindingAdjudication
+	if err := strictjson.Decode(body, &wire, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+		return err
+	}
+	*a = FindingAdjudication{
+		EncodingVersion: wire.EncodingVersion, RunID: wire.RunID, Round: wire.Round,
+		FindingBatchDigest: wire.FindingBatchDigest, ApprovedSpecDigest: wire.ApprovedSpecDigest,
+		InstructionSnapshotDigest: wire.InstructionSnapshotDigest, ResolvedPolicyDigest: wire.ResolvedPolicyDigest,
+		Entries: wire.Entries, CreatedAt: wire.CreatedAt, Digest: wire.Digest,
+	}
+	if len(wire.Revision) == 0 && len(wire.PredecessorDigest) == 0 && len(wire.Feedback) == 0 {
+		a.Revision = 1
+		return nil
+	}
+	if len(wire.Revision) > 0 {
+		if err := json.Unmarshal(wire.Revision, &a.Revision); err != nil {
+			return fmt.Errorf("finding adjudication revision: %w", err)
+		}
+	}
+	if len(wire.PredecessorDigest) > 0 {
+		if err := json.Unmarshal(wire.PredecessorDigest, &a.PredecessorDigest); err != nil {
+			return fmt.Errorf("finding adjudication predecessor_digest: %w", err)
+		}
+	}
+	if len(wire.Feedback) > 0 {
+		var feedback AdjudicationFeedback
+		if err := strictjson.Decode(wire.Feedback, &feedback,
+			strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+			return fmt.Errorf("finding adjudication feedback: %w", err)
+		}
+		a.Feedback = &feedback
+	}
+	return nil
 }
 
 // ComputeDigest hashes the explicit-version canonical encoding, which excludes
