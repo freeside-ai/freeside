@@ -30,6 +30,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -186,6 +187,7 @@ type productionPublicationWorkflow struct {
 	remediationPromptPackage        domain.Digest
 	shadowReviewSource              exec.ReviewSource
 	findingAdjudicator              findingAdjudicator
+	signet                          *signet.Service
 	inference                       *inference.Client
 	reviewRecovery                  func(context.Context) error
 	reviewRecoveryPending           bool

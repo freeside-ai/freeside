@@ -35,6 +35,27 @@ type AdjudicationDissent struct {
 	Evidence   string             `json:"evidence"`
 }
 
+// AdjudicationFeedback is the exact immutable Discuss prefix that requests a
+// successor proposal. ConversationPrefix is the canonical domain encoding, not
+// live conversation state, and PrefixDigest lets the durable successor re-bind
+// the same bytes at persistence.
+type AdjudicationFeedback struct {
+	InvocationID       domain.InvocationID      `json:"invocation_id"`
+	ConversationID     domain.ConversationID    `json:"conversation_id"`
+	ThroughSequence    int                      `json:"through_sequence"`
+	PrefixDigest       domain.Digest            `json:"prefix_digest"`
+	ConversationPrefix json.RawMessage          `json:"conversation_prefix"`
+	Attachments        []AdjudicationAttachment `json:"attachments"`
+}
+
+// AdjudicationAttachment is a bounded, digest-verified text attachment from
+// the immutable Discuss prefix. Opaque binary attachments fail closed because
+// the direct inference driver has no artifact tools or multimodal channel.
+type AdjudicationAttachment struct {
+	Digest  domain.Digest `json:"digest"`
+	Content string        `json:"content"`
+}
+
 // FindingAdjudicationInput is the allowlisted input to one batch proposal.
 // It intentionally carries no implementer reasoning history.
 type FindingAdjudicationInput struct {
@@ -48,7 +69,9 @@ type FindingAdjudicationInput struct {
 	DeclaredPaths             []string
 	Findings                  []AdjudicationFinding
 	PriorDispositions         []domain.ReviewDispositionRecord
+	PriorEntries              []domain.FindingAdjudicationEntry
 	Dissent                   *AdjudicationDissent
+	Feedback                  *AdjudicationFeedback
 }
 
 type adjudicatorOutput struct {
@@ -202,7 +225,9 @@ func AdjudicatorSite(budget Budget) Site {
 			{Name: "declared_paths", Sensitivity: SensitivityRepository},
 			{Name: "findings", Sensitivity: SensitivityRepository},
 			{Name: "prior_disposition_history", Sensitivity: SensitivityRepository},
+			{Name: "prior_adjudication", Sensitivity: SensitivityRepository},
 			{Name: "dissent", Sensitivity: SensitivityRepository},
+			{Name: "conversation_feedback", Sensitivity: SensitivityRepository},
 		},
 		FailSafe: `{"entries":[]}`, Retention: 30 * 24 * time.Hour, Timeout: 30 * time.Second,
 		MaxInputBytes: 2 << 20, MaxOutputBytes: domain.MaxFindingAdjudicationBytes,
@@ -296,7 +321,15 @@ func (c *Client) AdjudicateFindings(
 	if err != nil {
 		return nil, err
 	}
+	priorEntries, err := adjudicationJSON(input.PriorEntries)
+	if err != nil {
+		return nil, err
+	}
 	dissent, err := adjudicationJSON(input.Dissent)
+	if err != nil {
+		return nil, err
+	}
+	feedback, err := adjudicationJSON(input.Feedback)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +344,9 @@ func (c *Client) AdjudicateFindings(
 		"declared_paths":              {Value: declaredPaths, Sensitivity: SensitivityRepository},
 		"findings":                    {Value: findings, Sensitivity: SensitivityRepository},
 		"prior_disposition_history":   {Value: dispositions, Sensitivity: SensitivityRepository},
+		"prior_adjudication":          {Value: priorEntries, Sensitivity: SensitivityRepository},
 		"dissent":                     {Value: dissent, Sensitivity: SensitivityRepository},
+		"conversation_feedback":       {Value: feedback, Sensitivity: SensitivityRepository},
 	})
 	if err != nil {
 		return nil, err

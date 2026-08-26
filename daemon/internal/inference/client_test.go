@@ -27,6 +27,12 @@ func testBudget(calls int64) inference.Budget {
 }
 
 func testClient(t *testing.T, driver inference.Driver, calls int64) (*inference.Client, *advisory.Store, string) {
+	return testClientWithCredential(t, driver, calls, "token-value")
+}
+
+func testClientWithCredential(
+	t *testing.T, driver inference.Driver, calls int64, credential string,
+) (*inference.Client, *advisory.Store, string) {
 	t.Helper()
 	dir := t.TempDir()
 	now := func() time.Time { return time.Unix(100, 0).UTC() }
@@ -43,7 +49,7 @@ func testClient(t *testing.T, driver inference.Driver, calls int64) (*inference.
 	statePath := filepath.Join(dir, "ledger.json")
 	client, err := inference.New(inference.Config{
 		StatePath: statePath,
-		Binding:   inference.Binding{Provider: "fake", Model: "test", Credential: "token-value", Driver: driver},
+		Binding:   inference.Binding{Provider: "fake", Model: "test", Credential: inference.Secret(credential), Driver: driver},
 		Sites:     []inference.Site{classifier, adjudicator, diagnostic}, Advisory: store,
 		Now: now,
 	})

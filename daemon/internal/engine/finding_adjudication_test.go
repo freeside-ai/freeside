@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,15 +25,17 @@ import (
 )
 
 type scriptedFindingAdjudicator struct {
-	entries []domain.FindingAdjudicationEntry
-	err     error
-	calls   int
+	entries  []domain.FindingAdjudicationEntry
+	err      error
+	calls    int
+	requests []findingAdjudicationRequest
 }
 
 func (f *scriptedFindingAdjudicator) Adjudicate(
-	_ context.Context, _ findingAdjudicationRequest,
+	_ context.Context, request findingAdjudicationRequest,
 ) ([]domain.FindingAdjudicationEntry, error) {
 	f.calls++
+	f.requests = append(f.requests, request)
 	return append([]domain.FindingAdjudicationEntry(nil), f.entries...), f.err
 }
 
@@ -41,7 +44,9 @@ type findingAdjudicationFixture struct {
 	store     *store.Store
 	workflow  *productionPublicationWorkflow
 	artifacts *findingAdjudicationArtifactStore
+	blobs     *signet.BlobStore
 	driver    *fake.Driver
+	signet    *signet.Service
 	task      productionPublicationTask
 	binding   productionBinding
 	record    domain.ReviewRecord
@@ -54,8 +59,20 @@ type findingAdjudicationArtifactStore struct {
 	bodies map[domain.Digest][]byte
 }
 
-func (s *findingAdjudicationArtifactStore) Put(domain.Digest, io.Reader) (bool, error) {
-	return false, errors.New("unexpected finding-adjudication artifact write")
+func (s *findingAdjudicationArtifactStore) Put(digest domain.Digest, reader io.Reader) (bool, error) {
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		return false, err
+	}
+	if domain.Digest(contentaddr.Sum(body)) != digest {
+		return false, domain.ErrParentKeyMismatch
+	}
+	if _, ok := s.bodies[digest]; ok {
+		return false, nil
+	} else {
+		s.bodies[digest] = append([]byte(nil), body...)
+		return true, nil
+	}
 }
 
 func (s *findingAdjudicationArtifactStore) Open(digest domain.Digest) (io.ReadCloser, error) {
@@ -135,6 +152,11 @@ func newFindingAdjudicationFixtureWithNote(
 		t.Fatal(err)
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutDevice(ctx, domain.Device{
+			ID: "device-test", DisplayName: "Test operator", Status: domain.DeviceActive, PairedAt: createdAt,
+		}); err != nil {
+			return err
+		}
 		if err := tx.PutRun(ctx, run); err != nil {
 			return err
 		}
@@ -184,12 +206,18 @@ func newFindingAdjudicationFixtureWithNote(
 	if err != nil {
 		t.Fatal(err)
 	}
+	blobs, err := signet.NewBlobStore(filepath.Join(dir, "blobs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signetService := signet.NewService(st, signet.WithBlobStore(blobs), signet.WithClock(func() time.Time { return now }))
 	workflow := &productionPublicationWorkflow{
-		store: st, attention: signet.NewService(st), now: func() time.Time { return now },
-		inference: client,
+		store: st, attention: signetService, signet: signetService,
+		now: func() time.Time { return now }, inference: client,
 	}
 	return &findingAdjudicationFixture{
 		ctx: ctx, store: st, workflow: workflow, artifacts: artifacts, driver: driver,
+		signet: signetService, blobs: blobs,
 		task: productionPublicationTask{
 			RunID: runID, ProjectID: run.ProjectID, HeadSHA: record.HeadSHA,
 		},
@@ -229,7 +257,8 @@ func TestProductionFindingAdjudicatorUsesBoundBodiesAndEngineFacts(t *testing.T)
 	if !strings.Contains(fields["findings"], `"remediation_surface":"daemon/a.go"`) ||
 		!strings.Contains(fields["findings"], `"compatibility":"allowed"`) ||
 		!strings.Contains(fields["findings"], `"version":1`) ||
-		fields["prior_disposition_history"] != "[]" || fields["dissent"] != "null" {
+		fields["prior_disposition_history"] != "[]" || fields["prior_adjudication"] != "null" ||
+		fields["dissent"] != "null" {
 		t.Fatalf("engine-derived fields = %#v", fields)
 	}
 	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
@@ -278,6 +307,452 @@ func TestProductionFindingAdjudicatorRetainsEngineAllowedRemediation(t *testing.
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFindingAdjudicationDiscussCreatesAuthenticatedSuccessor(t *testing.T) {
+	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
+	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
+	f.writePath(t, f.headRoot)
+	adjudicator := &scriptedFindingAdjudicator{entries: []domain.FindingAdjudicationEntry{
+		modelRouteEntry(t, f.finding.ID, domain.RouteParkRevision, domain.ConfidenceHigh),
+	}}
+	f.workflow.findingAdjudicator = adjudicator
+	dissent := findingAdjudicationDissent{
+		Kind: findingDissentRemediatorPushback, FindingIDs: []domain.FindingID{f.finding.ID},
+		Evidence: "The remediator reported that the requested change conflicts with the bound instructions.",
+	}
+	state, err := f.workflow.reenterFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot, dissent)
+	if err != nil || state != productionReviewPending {
+		t.Fatalf("initial adjudication = %d, %v", state, err)
+	}
+	f.workflow.artifacts = f.blobs
+	attachmentBody := []byte("The cited repository rule is superseded by the bound specification.")
+	attachmentDigest := domain.Digest(contentaddr.Sum(attachmentBody))
+	if _, err := f.blobs.Put(attachmentDigest, bytes.NewReader(attachmentBody)); err != nil {
+		t.Fatal(err)
+	}
+	initialItemID := productionFindingAdjudicationItemID(f.task.RunID, 1, 1)
+	var initial domain.AttentionItem
+	var initialSnapshot store.Snapshot
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		var err error
+		initial, initialSnapshot, err = tx.GetAttentionItemSnapshot(f.ctx, initialItemID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.signet.Submit(f.ctx, signet.ClientCommand{
+		CommandID: "revise-adjudication", DeviceID: "device-test",
+		ExpectedEntityVersion: initialSnapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: initial.ID, Action: domain.ActionDiscuss, ItemVersion: initial.ItemVersion,
+			PRHeadSHA: initial.PRHeadSHA, ArtifactDigests: initial.ArtifactDigests,
+			Message:     "The finding belongs in a separate follow-up unit.",
+			Attachments: []domain.Digest{attachmentDigest},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	adjudicator.entries = []domain.FindingAdjudicationEntry{
+		modelRouteEntry(t, f.finding.ID, domain.RouteParkSeparateWork, domain.ConfidenceHigh),
+	}
+	state, err = f.workflow.reenterFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot, dissent)
+	if err != nil || state != productionReviewPending {
+		t.Fatalf("revised adjudication = %d, %v", state, err)
+	}
+	if adjudicator.calls != 2 || len(adjudicator.requests) != 2 ||
+		adjudicator.requests[1].Feedback == nil || len(adjudicator.requests[1].PriorEntries) != 1 ||
+		adjudicator.requests[1].PriorEntries[0].Route != domain.RouteParkRevision {
+		t.Fatalf("adjudicator requests = %#v", adjudicator.requests)
+	}
+	feedback := adjudicator.requests[1].Feedback
+	if feedback.InvocationID != "inv-revise-adjudication" ||
+		feedback.ConversationID != domain.ConversationID("conv-"+string(initialItemID)) ||
+		feedback.ThroughSequence != 1 || len(feedback.ConversationPrefix) == 0 ||
+		adjudicator.requests[1].ApprovedSpecDigest != f.binding.run.SpecDigest ||
+		adjudicator.requests[1].InstructionSnapshotDigest != f.record.InstructionDigest ||
+		adjudicator.requests[1].ResolvedPolicyDigest != f.binding.resolvedPolicy.Digest {
+		t.Fatalf("feedback = %#v", feedback)
+	}
+	if len(feedback.Attachments) != 1 || feedback.Attachments[0].Digest != attachmentDigest ||
+		feedback.Attachments[0].Content != string(attachmentBody) {
+		t.Fatalf("materialized feedback attachments = %#v", feedback.Attachments)
+	}
+	replayedDissent := adjudicator.requests[1].Dissent
+	if replayedDissent == nil || replayedDissent.Kind != dissent.Kind ||
+		len(replayedDissent.FindingIDs) != 1 || replayedDissent.FindingIDs[0] != f.finding.ID ||
+		replayedDissent.Evidence != dissent.Evidence {
+		t.Fatalf("replayed dissent = %#v", replayedDissent)
+	}
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		history, err := tx.ListFindingAdjudications(f.ctx, f.task.RunID)
+		if err != nil {
+			return err
+		}
+		if len(history) != 2 || history[1].Revision != 2 ||
+			history[1].PredecessorDigest == nil || *history[1].PredecessorDigest != history[0].Digest ||
+			history[1].Feedback == nil || history[1].Feedback.PrefixDigest != feedback.PrefixDigest ||
+			history[1].Entries[0].Route != domain.RouteParkSeparateWork {
+			t.Fatalf("adjudication history = %#v", history)
+		}
+		oldItem, err := tx.GetAttentionItem(f.ctx, initialItemID)
+		if err != nil {
+			return err
+		}
+		newItem, err := tx.GetAttentionItem(
+			f.ctx, productionFindingAdjudicationItemID(f.task.RunID, 1, 2))
+		if err != nil {
+			return err
+		}
+		if oldItem.Status != domain.StatusSuperseded || newItem.Status != domain.StatusOpen ||
+			newItem.ConversationID != nil || newItem.FindingAdjudication == nil ||
+			newItem.FindingAdjudication.AdjudicationDigest != history[1].Digest {
+			t.Fatalf("successor items = old %#v new %#v", oldItem, newItem)
+		}
+		if _, err := tx.GetFindingDisposition(f.ctx, f.finding.ID, 1); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("discussion executed a route: %v", err)
+		}
+		dispatched, err := tx.ListDispatchedOutbox(f.ctx, string(domain.AgentInvocationRequestedKind))
+		if err != nil || len(dispatched) != 1 {
+			t.Fatalf("dispatched discussion = %#v, %v", dispatched, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	successorID := productionFindingAdjudicationItemID(f.task.RunID, 1, 2)
+	var successor domain.AttentionItem
+	var successorSnapshot store.Snapshot
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		var err error
+		successor, successorSnapshot, err = tx.GetAttentionItemSnapshot(f.ctx, successorID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	binaryBody := []byte{0xff, 0xfe}
+	binaryDigest := domain.Digest(contentaddr.Sum(binaryBody))
+	if _, err := f.blobs.Put(binaryDigest, bytes.NewReader(binaryBody)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.signet.Submit(f.ctx, signet.ClientCommand{
+		CommandID: "unsupported-adjudication-evidence", DeviceID: "device-test",
+		ExpectedEntityVersion: successorSnapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: successor.ID, Action: domain.ActionDiscuss, ItemVersion: successor.ItemVersion,
+			PRHeadSHA: successor.PRHeadSHA, ArtifactDigests: successor.ArtifactDigests,
+			Message: "Review this opaque evidence.", Attachments: []domain.Digest{binaryDigest},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for pass := 1; pass <= 2; pass++ {
+		state, err = f.workflow.reenterFindingAdjudication(
+			f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot, dissent)
+		if err != nil || state != productionReviewPending {
+			t.Fatalf("unsupported attachment pass %d = %d, %v", pass, state, err)
+		}
+	}
+	if adjudicator.calls != 2 {
+		t.Fatalf("unsupported attachment retried adjudicator: calls = %d, want 2", adjudicator.calls)
+	}
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		pending, err := tx.ListPendingOutbox(f.ctx, string(domain.AgentInvocationRequestedKind))
+		if err != nil {
+			return err
+		}
+		for _, entry := range pending {
+			if entry.IdempotencyKey == "inv-unsupported-adjudication-evidence" {
+				t.Fatalf("unavailable discussion remained pending: %#v", entry)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		var err error
+		successor, successorSnapshot, err = tx.GetAttentionItemSnapshot(f.ctx, successorID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	retryBody := []byte("The relevant evidence is text-only on retry.")
+	retryDigest := domain.Digest(contentaddr.Sum(retryBody))
+	if _, err := f.blobs.Put(retryDigest, bytes.NewReader(retryBody)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.signet.Submit(f.ctx, signet.ClientCommand{
+		CommandID: "retry-adjudication-evidence", DeviceID: "device-test",
+		ExpectedEntityVersion: successorSnapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: successor.ID, Action: domain.ActionDiscuss, ItemVersion: successor.ItemVersion,
+			PRHeadSHA: successor.PRHeadSHA, ArtifactDigests: successor.ArtifactDigests,
+			Message: "Use this bounded replacement evidence.", Attachments: []domain.Digest{retryDigest},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state, err = f.workflow.reenterFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot, dissent)
+	if err != nil || state != productionReviewPending {
+		t.Fatalf("replacement attachment = %d, %v", state, err)
+	}
+	if adjudicator.calls != 3 || len(adjudicator.requests) != 3 {
+		t.Fatalf("replacement attachment calls = %d, requests = %d", adjudicator.calls, len(adjudicator.requests))
+	}
+	retryFeedback := adjudicator.requests[2].Feedback
+	if retryFeedback == nil || len(retryFeedback.Attachments) != 1 ||
+		retryFeedback.Attachments[0].Digest != retryDigest ||
+		retryFeedback.Attachments[0].Content != string(retryBody) {
+		t.Fatalf("replacement feedback = %#v", retryFeedback)
+	}
+}
+
+func TestFindingAdjudicationDiscussRecoversAcceptedCompletion(t *testing.T) {
+	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
+	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
+	f.writePath(t, f.headRoot)
+	adjudicator := &scriptedFindingAdjudicator{entries: []domain.FindingAdjudicationEntry{
+		modelRouteEntry(t, f.finding.ID, domain.RouteParkRevision, domain.ConfidenceHigh),
+	}}
+	f.workflow.findingAdjudicator = adjudicator
+	if _, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot); err != nil {
+		t.Fatal(err)
+	}
+	f.workflow.artifacts = f.blobs
+	itemID := productionFindingAdjudicationItemID(f.task.RunID, 1, 1)
+	var item domain.AttentionItem
+	var itemSnapshot store.Snapshot
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		var err error
+		item, itemSnapshot, err = tx.GetAttentionItemSnapshot(f.ctx, itemID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.signet.Submit(f.ctx, signet.ClientCommand{
+		CommandID: "recover-adjudication", DeviceID: "device-test", ExpectedEntityVersion: itemSnapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionDiscuss, ItemVersion: item.ItemVersion,
+			PRHeadSHA: item.PRHeadSHA, ArtifactDigests: item.ArtifactDigests,
+			Message: "Please reconsider this route.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	adjudicator.entries = []domain.FindingAdjudicationEntry{
+		modelRouteEntry(t, f.finding.ID, domain.RouteAttentionHumanDecision, domain.ConfidenceHigh),
+	}
+	injected := false
+	f.workflow.transitionHook = func(transition DurableTransition, side DurableTransitionSide) error {
+		if !injected && transition == DurableTransitionFindingAdjudication && side == DurableTransitionBefore {
+			injected = true
+			return errors.New("injected process loss after accepted completion")
+		}
+		return nil
+	}
+	if _, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot); err == nil || !injected {
+		t.Fatalf("revision did not interrupt after completion: %v", err)
+	}
+	if adjudicator.calls != 2 {
+		t.Fatalf("adjudicator calls before recovery = %d, want 2", adjudicator.calls)
+	}
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		var err error
+		item, itemSnapshot, err = tx.GetAttentionItemSnapshot(f.ctx, itemID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.signet.Submit(f.ctx, signet.ClientCommand{
+		CommandID: "skip-unconsumed-adjudication", DeviceID: "device-test",
+		ExpectedEntityVersion: itemSnapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionDiscuss, ItemVersion: item.ItemVersion,
+			PRHeadSHA: item.PRHeadSHA, ArtifactDigests: item.ArtifactDigests,
+			Message: "Do not skip the accepted reply.",
+		},
+	})
+	if !errors.Is(err, signet.ErrAgentReplyPending) {
+		t.Fatalf("second Discuss before successor = %v, want ErrAgentReplyPending", err)
+	}
+	f.workflow.transitionHook = nil
+	if _, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot); err != nil {
+		t.Fatal(err)
+	}
+	if adjudicator.calls != 2 {
+		t.Fatalf("recovery re-invoked model: calls = %d", adjudicator.calls)
+	}
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		history, err := tx.ListFindingAdjudications(f.ctx, f.task.RunID)
+		if err != nil {
+			return err
+		}
+		if len(history) != 2 || history[1].Revision != 2 ||
+			history[1].Entries[0].Route != domain.RouteAttentionHumanDecision {
+			t.Fatalf("recovered ordered successor = %#v", history)
+		}
+		intent, err := tx.GetOutbox(f.ctx, "inv-recover-adjudication")
+		if err != nil || !intent.Dispatched() {
+			t.Fatalf("recovered invocation intent = %#v, %v", intent, err)
+		}
+		if _, err := tx.GetCommand(f.ctx, "skip-unconsumed-adjudication"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("rejected second Discuss persisted: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFindingAdjudicationDiscussReconsidersEngineEntries(t *testing.T) {
+	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
+	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "high", "high")
+	f.writePath(t, f.headRoot)
+	allowed := domain.CompatibilityAllowed
+	engineEntry, err := domain.NewEngineAdjudicationEntry(
+		f.finding.ID, domain.GoalRequired, &allowed, domain.RouteRemediate,
+		"engine-derived containment", nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior, err := domain.NewFindingAdjudication(
+		f.record.RunID, f.record.Round, f.binding.run.SpecDigest, f.record.InstructionDigest,
+		f.binding.resolvedPolicy.Digest, []domain.FindingAdjudicationEntry{engineEntry}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	residue, err := f.workflow.findingAdjudicationRevisionInputs(
+		f.ctx, f.binding, f.record, prior, f.baseRoot, f.headRoot, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(residue) != 1 || residue[0].Finding.ID != f.finding.ID ||
+		residue[0].Compatibility != domain.CompatibilityAllowed {
+		t.Fatalf("engine challenge residue = %#v", residue)
+	}
+}
+
+func TestFindingAdjudicationCompletionResultRevalidatesTrustBoundary(t *testing.T) {
+	allowed := domain.CompatibilityAllowed
+	engineEntry, err := domain.NewEngineAdjudicationEntry(
+		"finding-engine", domain.GoalRequired, &allowed, domain.RouteRemediate,
+		"engine-derived containment", nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorModel := modelRouteEntry(
+		t, "finding-model", domain.RouteParkRevision, domain.ConfidenceHigh)
+	prior, err := domain.NewFindingAdjudication(
+		"run-result", 1, adjudicationDigest("a"), adjudicationDigest("b"), adjudicationDigest("c"),
+		[]domain.FindingAdjudicationEntry{engineEntry, priorModel}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisedModel := modelRouteEntry(
+		t, "finding-model", domain.RouteParkSeparateWork, domain.ConfidenceHigh)
+	revisedEngine, err := domain.NewEngineModelAdjudicationEntry(
+		engineEntry.FindingID, domain.GoalRequired, domain.ConfidenceHigh,
+		"the challenged finding still requires the engine-contained fix", nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := []domain.FindingAdjudicationEntry{revisedEngine, revisedModel}
+	resultArtifacts := &findingAdjudicationArtifactStore{bodies: make(map[domain.Digest][]byte)}
+	workflow := &productionPublicationWorkflow{artifacts: resultArtifacts}
+	replyFor := func(result findingAdjudicationResult) domain.Message {
+		body, marshalErr := json.Marshal(result)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		digest := domain.Digest(contentaddr.Sum(body))
+		if _, putErr := resultArtifacts.Put(digest, bytes.NewReader(body)); putErr != nil {
+			t.Fatal(putErr)
+		}
+		return domain.Message{
+			Body:        findingAdjudicationReplySummary(prior, result.Entries),
+			Attachments: []domain.Digest{digest},
+		}
+	}
+	validResult := findingAdjudicationResult{
+		Version: findingAdjudicationResultVersion, PredecessorDigest: prior.Digest, Entries: valid,
+	}
+	residue := []findingAdjudicationInput{
+		{Finding: domain.Finding{ID: engineEntry.FindingID}, Compatibility: domain.CompatibilityAllowed},
+		{Finding: domain.Finding{ID: priorModel.FindingID}, Compatibility: domain.CompatibilityUnknown},
+	}
+	if got, err := workflow.loadFindingAdjudicationResult(
+		prior, replyFor(validResult), residue, domain.DispatchThresholdHigh); err != nil || len(got) != 2 {
+		t.Fatalf("valid result = %#v, %v", got, err)
+	}
+	unavailableResult := findingAdjudicationResult{
+		Version: findingAdjudicationResultVersion, PredecessorDigest: prior.Digest,
+		Unavailable: true, Entries: []domain.FindingAdjudicationEntry{},
+	}
+	if _, err := workflow.loadFindingAdjudicationResult(
+		prior, replyFor(unavailableResult), residue, domain.DispatchThresholdHigh,
+	); !errors.Is(err, inference.ErrAdjudicationNotAvailable) {
+		t.Fatalf("unavailable result = %v", err)
+	}
+	for _, malformed := range []domain.Message{
+		{},
+		{Attachments: []domain.Digest{adjudicationDigest("d"), adjudicationDigest("e")}},
+		{Attachments: []domain.Digest{adjudicationDigest("f")}},
+	} {
+		if _, err := workflow.loadFindingAdjudicationResult(
+			prior, malformed, residue, domain.DispatchThresholdHigh); err == nil {
+			t.Fatalf("malformed completion %#v was accepted", malformed)
+		}
+	}
+	lowConfidence := modelRouteEntry(
+		t, "finding-model", domain.RouteParkSeparateWork, domain.ConfidenceMedium)
+	foreign := modelRouteEntry(
+		t, "finding-foreign", domain.RouteParkSeparateWork, domain.ConfidenceHigh)
+	for _, tc := range []struct {
+		name   string
+		result findingAdjudicationResult
+	}{
+		{name: "foreign predecessor", result: findingAdjudicationResult{
+			Version: findingAdjudicationResultVersion, PredecessorDigest: adjudicationDigest("f"), Entries: valid,
+		}},
+		{name: "unreconsidered engine fact", result: findingAdjudicationResult{
+			Version: findingAdjudicationResultVersion, PredecessorDigest: prior.Digest,
+			Entries: []domain.FindingAdjudicationEntry{engineEntry, revisedModel},
+		}},
+		{name: "below threshold", result: findingAdjudicationResult{
+			Version: findingAdjudicationResultVersion, PredecessorDigest: prior.Digest,
+			Entries: []domain.FindingAdjudicationEntry{revisedEngine, lowConfidence},
+		}},
+		{name: "foreign finding", result: findingAdjudicationResult{
+			Version: findingAdjudicationResultVersion, PredecessorDigest: prior.Digest,
+			Entries: []domain.FindingAdjudicationEntry{revisedEngine, foreign},
+		}},
+		{name: "unavailable result with entries", result: findingAdjudicationResult{
+			Version: findingAdjudicationResultVersion, PredecessorDigest: prior.Digest,
+			Unavailable: true, Entries: valid,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := workflow.loadFindingAdjudicationResult(
+				prior, replyFor(tc.result), residue, domain.DispatchThresholdHigh); err == nil {
+				t.Fatal("tampered result was accepted")
+			}
+		})
+	}
+	notAllowed := append([]findingAdjudicationInput(nil), residue...)
+	notAllowed[0].Compatibility = domain.CompatibilityUnknown
+	if _, err := workflow.loadFindingAdjudicationResult(
+		prior, replyFor(validResult), notAllowed, domain.DispatchThresholdHigh); err == nil {
+		t.Fatal("mixed-origin result without fresh allowed compatibility was accepted")
 	}
 }
 
@@ -637,6 +1112,46 @@ func TestFindingAdjudicationFailClosedAndNotAcceptedParkWithoutArtifact(t *testi
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestFindingAdjudicationFailSafeParkingStopsInferenceRetry(t *testing.T) {
+	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
+	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
+	f.writePath(t, f.headRoot)
+	adjudicator := &scriptedFindingAdjudicator{err: errors.New("driver unavailable")}
+	f.workflow.findingAdjudicator = adjudicator
+	for pass := 1; pass <= 2; pass++ {
+		state, err := f.workflow.reconcileFindingAdjudication(
+			f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot)
+		if err != nil || state != productionReviewPending {
+			t.Fatalf("fail-safe replay pass %d = %d, %v", pass, state, err)
+		}
+	}
+	if adjudicator.calls != 1 {
+		t.Fatalf("fail-safe parking invoked adjudicator %d times, want 1", adjudicator.calls)
+	}
+}
+
+func TestFindingAdjudicationAttachmentMaterializationRejectsUntrustedBytes(t *testing.T) {
+	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, nil, "low", "high")
+	body := []byte("trusted attachment")
+	digest := domain.Digest(contentaddr.Sum(body))
+	f.workflow.artifacts = &findingAdjudicationArtifactStore{bodies: map[domain.Digest][]byte{
+		digest: []byte("different bytes"),
+	}}
+	message, err := domain.NewMessage(
+		"msg-attachment", "conv-attachment", domain.AuthorUser, "consider this evidence",
+		[]domain.Digest{digest}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, _ := (domain.Conversation{
+		ID: "conv-attachment", Status: domain.ConversationAwaitingAgent,
+	}).Append(message)
+	if _, err := f.workflow.materializeFindingAdjudicationAttachments(
+		conversation, 1); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("untrusted attachment bytes = %v", err)
 	}
 }
 

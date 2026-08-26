@@ -175,6 +175,7 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 			return nil, errors.New("new engine: active production admission has no delivery validator")
 		}
 		e.productionPublication.inference = e.inference
+		e.productionPublication.signet = e.signet
 		if e.inference.SupportsSite(inference.AdjudicatorSiteID) {
 			e.productionPublication.findingAdjudicator = &productionFindingAdjudicator{
 				client: e.inference, store: e.store, artifacts: e.productionPublication.artifacts,

@@ -157,7 +157,7 @@ func (c *Client) Call(ctx context.Context, siteID, project, root string, fields 
 		}
 		value := field.Value
 		if secret := c.binding.Credential.Reveal(); secret != "" {
-			value = strings.ReplaceAll(value, secret, "[REDACTED]")
+			value = redactCredential(value, secret)
 		}
 		outbound[name] = value
 	}
@@ -228,6 +228,16 @@ func (c *Client) Call(ctx context.Context, siteID, project, root string, fields 
 		return c.fallback(site, "audit persistence failed"), err
 	}
 	return result, nil
+}
+
+func redactCredential(value, secret string) string {
+	value = strings.ReplaceAll(value, secret, "[REDACTED]")
+	encoded, err := json.Marshal(secret)
+	if err != nil || len(encoded) < 2 {
+		return value
+	}
+	escaped := string(encoded[1 : len(encoded)-1])
+	return strings.ReplaceAll(value, escaped, "[REDACTED]")
 }
 
 func (c *Client) beginDriver(siteID string) bool {

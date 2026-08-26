@@ -158,6 +158,14 @@ func (s *Service) applyDiscuss(ctx context.Context, tx *store.WriteTx, command d
 	if conversation.Status == domain.ConversationAwaitingAgent {
 		return &AgentPendingError{CommandID: command.CommandID, Item: item, Snapshot: snap}
 	}
+	completionPending, err := findingAdjudicationCompletionPending(
+		ctx, tx, item, conversation, command.CommandID)
+	if err != nil {
+		return err
+	}
+	if completionPending {
+		return &AgentPendingError{CommandID: command.CommandID, Item: item, Snapshot: snap}
+	}
 
 	// The user and agent namespaces carry distinct fixed prefixes: message
 	// identity derives from a client-chosen command_id here but from the
@@ -212,4 +220,54 @@ func (s *Service) applyDiscuss(ctx context.Context, tx *store.WriteTx, command d
 		return err
 	}
 	return nil
+}
+
+func findingAdjudicationCompletionPending(
+	ctx context.Context, tx *store.WriteTx, item domain.AttentionItem,
+	conversation domain.Conversation, currentCommandID string,
+) (bool, error) {
+	if item.Type != domain.AttentionFindingAdjudication {
+		return false, nil
+	}
+	commands, err := tx.ListCommandsForItem(ctx, item.ID)
+	if err != nil {
+		return false, err
+	}
+	for _, command := range commands {
+		if command.Action != domain.ActionDiscuss || command.CommandID == currentCommandID {
+			continue
+		}
+		invocationID := domain.InvocationID("inv-" + command.CommandID)
+		intent, err := tx.GetOutbox(ctx, string(invocationID))
+		if err != nil {
+			return false, err
+		}
+		request, err := domain.DecodeConversationInvocationIntent(intent.Payload)
+		if err != nil {
+			return false, err
+		}
+		invocation, err := tx.GetAgentInvocation(ctx, invocationID)
+		if err != nil {
+			return false, err
+		}
+		if intent.Kind != kindAgentInvocationRequested || intent.IdempotencyKey != string(invocationID) ||
+			request.InvocationID != invocationID || request.ItemID != item.ID ||
+			request.ConversationID != conversation.ID || invocation.ConversationID == nil ||
+			*invocation.ConversationID != conversation.ID ||
+			invocation.ThroughSequence != request.ItemVersion-1 {
+			return false, domain.ErrParentKeyMismatch
+		}
+		if invocation.ThroughSequence >= len(conversation.Messages) {
+			continue
+		}
+		reply := conversation.Messages[invocation.ThroughSequence]
+		if reply.ID != domain.MessageID("msg-agent-"+string(invocationID)) ||
+			reply.Author != domain.AuthorAgent || reply.Sequence != invocation.ThroughSequence+1 {
+			return false, domain.ErrParentKeyMismatch
+		}
+		if !intent.Dispatched() && !intent.Quarantined() {
+			return true, nil
+		}
+	}
+	return false, nil
 }

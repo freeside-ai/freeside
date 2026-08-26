@@ -2,6 +2,7 @@ package inference_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -122,14 +123,15 @@ func TestAdjudicatorAllowlistConvertsValidatedProposal(t *testing.T) {
 		t.Fatalf("entries = %#v", entries)
 	}
 	requests := driver.Requests()
-	if len(requests) != 1 || len(requests[0].Fields) != 11 {
+	if len(requests) != 1 || len(requests[0].Fields) != 13 {
 		t.Fatalf("requests = %#v", requests)
 	}
 	fields := requests[0].Fields
 	if fields["approved_spec"] != "approved [REDACTED] specification" ||
 		fields["instruction_snapshot"] != "repository [REDACTED] instructions" ||
 		!strings.Contains(fields["findings"], "[REDACTED] should never leave") ||
-		!strings.Contains(fields["dissent"], "[REDACTED] evidence") {
+		!strings.Contains(fields["dissent"], "[REDACTED] evidence") ||
+		fields["prior_adjudication"] != "null" {
 		t.Fatalf("redacted fields = %#v", fields)
 	}
 	if _, present := fields["implementer_reasoning"]; present {
@@ -137,6 +139,76 @@ func TestAdjudicatorAllowlistConvertsValidatedProposal(t *testing.T) {
 	}
 	if requests[0].InputDigest != contentaddr.Sum(mustJSON(t, fields)) {
 		t.Fatal("input digest does not bind adjudicator fields")
+	}
+}
+
+func TestAdjudicatorAllowlistCarriesBoundConversationFeedback(t *testing.T) {
+	driver := fake.New()
+	driver.Script(inference.AdjudicatorSiteID, fake.Script{Response: inference.Response{
+		Output: []byte(acceptedAdjudicatorOutput), ComputeUnits: 4,
+	}})
+	client, _, _ := testClient(t, driver, 10)
+	input := adjudicatorInput()
+	compatibility := domain.ProposedWorkUnitRevision
+	prior, err := domain.NewModelAdjudicationEntry(
+		"finding-1", domain.GoalRequired, &compatibility,
+		domain.RouteParkRevision, domain.ConfidenceHigh, "original recommendation",
+		nil, []string{"repository rule"}, []string{"scope is fixed"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.PriorEntries = []domain.FindingAdjudicationEntry{prior}
+	input.Feedback = &inference.AdjudicationFeedback{
+		InvocationID: "inv-feedback", ConversationID: "conv-feedback", ThroughSequence: 1,
+		PrefixDigest:       "sha256:" + domain.Digest(strings.Repeat("d", 64)),
+		ConversationPrefix: json.RawMessage(`{"version":"freeside.conversation.prefix/v1","messages":[{"body":"scope correction"}]}`),
+		Attachments: []inference.AdjudicationAttachment{{
+			Digest:  "sha256:" + domain.Digest(strings.Repeat("e", 64)),
+			Content: "token-value attachment evidence",
+		}},
+	}
+	if _, err := client.AdjudicateFindings(context.Background(), "project-1", "run-1", input); err != nil {
+		t.Fatal(err)
+	}
+	requests := driver.Requests()
+	if len(requests) != 1 ||
+		!strings.Contains(requests[0].Fields["conversation_feedback"], `"invocation_id":"inv-feedback"`) ||
+		!strings.Contains(requests[0].Fields["conversation_feedback"], `"body":"scope correction"`) ||
+		!strings.Contains(requests[0].Fields["prior_adjudication"], `"rationale":"original recommendation"`) ||
+		!strings.Contains(requests[0].Fields["prior_adjudication"], `"cited_rules":["repository rule"]`) ||
+		!strings.Contains(requests[0].Fields["conversation_feedback"], `"content":"[REDACTED] attachment evidence"`) {
+		t.Fatalf("conversation feedback = %#v", requests)
+	}
+}
+
+func TestAdjudicatorRedactsJSONEscapedCredential(t *testing.T) {
+	driver := fake.New()
+	driver.Script(inference.AdjudicatorSiteID, fake.Script{Response: inference.Response{
+		Output: []byte(acceptedAdjudicatorOutput), ComputeUnits: 4,
+	}})
+	redactionValue := strings.Join([]string{"token", `"value<&`, "\n"}, "")
+	client, _, _ := testClientWithCredential(t, driver, 10, redactionValue)
+	input := adjudicatorInput()
+	input.Feedback = &inference.AdjudicationFeedback{
+		InvocationID: "inv-feedback", ConversationID: "conv-feedback", ThroughSequence: 1,
+		PrefixDigest:       "sha256:" + domain.Digest(strings.Repeat("d", 64)),
+		ConversationPrefix: json.RawMessage(`{"version":"freeside.conversation.prefix/v1","messages":[]}`),
+		Attachments: []inference.AdjudicationAttachment{{
+			Digest: "sha256:" + domain.Digest(strings.Repeat("e", 64)), Content: redactionValue,
+		}},
+	}
+	if _, err := client.AdjudicateFindings(context.Background(), "project-1", "run-1", input); err != nil {
+		t.Fatal(err)
+	}
+	field := driver.Requests()[0].Fields["conversation_feedback"]
+	encoded, err := json.Marshal(redactionValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	escaped := string(encoded[1 : len(encoded)-1])
+	if !strings.Contains(field, `"content":"[REDACTED]"`) ||
+		strings.Contains(field, redactionValue) || strings.Contains(field, escaped) {
+		t.Fatalf("escaped credential was not redacted: %q", field)
 	}
 }
 

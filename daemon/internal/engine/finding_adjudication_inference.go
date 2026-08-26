@@ -2,8 +2,10 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
@@ -72,6 +74,21 @@ func (a *productionFindingAdjudicator) Adjudicate(
 			Evidence:   request.Dissent.Evidence,
 		}
 	}
+	var feedback *inference.AdjudicationFeedback
+	if request.Feedback != nil {
+		attachments := make([]inference.AdjudicationAttachment, 0, len(request.Feedback.Attachments))
+		for _, attachment := range request.Feedback.Attachments {
+			attachments = append(attachments, inference.AdjudicationAttachment{
+				Digest: attachment.Digest, Content: attachment.Content,
+			})
+		}
+		feedback = &inference.AdjudicationFeedback{
+			InvocationID: request.Feedback.InvocationID, ConversationID: request.Feedback.ConversationID,
+			ThroughSequence: request.Feedback.ThroughSequence, PrefixDigest: request.Feedback.PrefixDigest,
+			ConversationPrefix: json.RawMessage(append([]byte(nil), request.Feedback.ConversationPrefix...)),
+			Attachments:        attachments,
+		}
+	}
 	return a.client.AdjudicateFindings(ctx, string(run.ProjectID), string(request.RunID),
 		inference.FindingAdjudicationInput{
 			RunID: request.RunID, Round: request.Round,
@@ -79,6 +96,8 @@ func (a *productionFindingAdjudicator) Adjudicate(
 			InstructionSnapshotDigest: request.InstructionSnapshotDigest,
 			InstructionSnapshot:       string(instructions), ResolvedPolicyDigest: request.ResolvedPolicyDigest,
 			DeclaredPaths: append([]string(nil), request.DeclaredPaths...), Findings: findings,
-			PriorDispositions: dispositions, Dissent: dissent,
+			PriorDispositions: dispositions,
+			PriorEntries:      slices.Clone(request.PriorEntries),
+			Dissent:           dissent, Feedback: feedback,
 		})
 }
