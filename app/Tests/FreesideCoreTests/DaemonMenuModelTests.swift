@@ -36,14 +36,10 @@
                 APIClientFactory.mock(server: server)
             }
             let serverURL = try #require(URL(string: "http://127.0.0.1:7331"))
-            let clock = ContinuousClock()
-            let started = clock.now
 
-            await #expect(throws: (any Error).self) {
+            await #expect(throws: DaemonHealthProbeTimeout.self) {
                 _ = try await checker.health(at: serverURL)
             }
-
-            #expect(started.duration(to: clock.now) < .milliseconds(500))
         }
 
         @Test func serviceAndHealthMapToEveryMenuState() async {

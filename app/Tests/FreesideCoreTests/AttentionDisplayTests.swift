@@ -1,3 +1,4 @@
+import Foundation
 import FreesideAPI
 import Testing
 
@@ -18,6 +19,196 @@ import Testing
         item.reason = "free text that must not become the ask"
 
         #expect(AttentionDisplay.ask(item) == "How should this failed execution continue?")
+    }
+
+    @Test func rowSummariesAreSentenceCasedTypeSpecificAndNotFreeTextReasons() {
+        for type in AttentionFixtures.phase1Types {
+            let item = AttentionFixtures.fixture(type: type).item
+            let summary = AttentionDisplay.rowSummary(item)
+
+            #expect(!summary.isEmpty)
+            #expect(summary.first?.isUppercase == true)
+            #expect(summary.hasSuffix("."))
+            #expect(summary != item.reason)
+        }
+        #expect(
+            AttentionDisplay.rowSummary(
+                AttentionFixtures.fixture(type: .finding_adjudication).item)
+                == "Review round 3 has findings to adjudicate.")
+        #expect(
+            AttentionDisplay.rowSummary(AttentionFixtures.degradedReady().item)
+                == "Verification is degraded and needs final review.")
+
+        var legacyReady = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        legacyReady.readiness = nil
+        #expect(
+            AttentionDisplay.rowSummary(legacyReady)
+                == "Verification status is unavailable; final review is requested.")
+    }
+
+    @Test func mechanicalRowSummariesPreserveDistinctDaemonFacts() {
+        var systemHealth = AttentionFixtures.fixture(type: .system_health).item
+        systemHealth.reason = "Doctor check backup_age is unhealthy: checkpoint is stale"
+        #expect(
+            AttentionDisplay.rowSummary(systemHealth)
+                == "Doctor check backup_age is unhealthy: checkpoint is stale.")
+
+        systemHealth.reason = "credential integrity probe failed."
+        #expect(
+            AttentionDisplay.rowSummary(systemHealth)
+                == "Credential integrity probe failed.")
+
+        var blocked = AttentionFixtures.fixture(type: .blocked).item
+        blocked.reason = "waiting on external reviewer"
+        #expect(AttentionDisplay.rowSummary(blocked) == "Waiting on external reviewer.")
+
+        blocked.reason = "the run has waited 18h on an external reviewer"
+        let firstSummary = AttentionDisplay.rowSummary(blocked)
+        blocked.reason = "the run has waited 2d on an external reviewer"
+        #expect(firstSummary == "The run is waiting on an external reviewer.")
+        #expect(AttentionDisplay.rowSummary(blocked) == firstSummary)
+    }
+
+    @Test func concludedRowSummariesAreNeutralAcrossEveryTypeAndStatus() {
+        let statuses: [Components.Schemas.ItemStatus] = [
+            .resolved, .superseded, .dismissed, .expired,
+        ]
+        for type in AttentionFixtures.phase1Types {
+            guard type != .system_health else { continue }
+            for status in statuses {
+                var item = AttentionFixtures.fixture(type: type).item
+                item.status = status
+
+                #expect(
+                    AttentionDisplay.rowSummary(item)
+                        == "This \(AttentionDisplay.title(type).lowercased()) item is "
+                        + "\(AttentionDisplay.label(status).lowercased()).")
+            }
+        }
+
+        var firstHealth = AttentionFixtures.fixture(type: .system_health).item
+        firstHealth.status = .resolved
+        firstHealth.reason = "Doctor check backup_age is unhealthy: checkpoint is stale"
+        var secondHealth = firstHealth
+        secondHealth.reason = "Credential integrity probe failed."
+        #expect(
+            AttentionDisplay.rowSummary(firstHealth)
+                == "Resolved: Doctor check backup_age is unhealthy: checkpoint is stale.")
+        #expect(
+            AttentionDisplay.rowSummary(secondHealth)
+                == "Resolved: Credential integrity probe failed.")
+    }
+
+    @Test func relativeRowTimesUseCoarseUnitsBlockedWordingAndDeadlinePrecedence() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        var ordinary = AttentionFixtures.fixture(type: .spec_approval).item
+        ordinary.created_at = now.addingTimeInterval(-59 * 60)
+        #expect(AttentionDisplay.relativeRowTime(ordinary, now: now) == "59m")
+
+        ordinary.created_at = now.addingTimeInterval(-18 * 3_600)
+        #expect(AttentionDisplay.relativeRowTime(ordinary, now: now) == "18h")
+
+        ordinary.created_at = now.addingTimeInterval(-3 * 86_400)
+        #expect(AttentionDisplay.relativeRowTime(ordinary, now: now) == "3d")
+
+        var blocked = AttentionFixtures.fixture(type: .blocked).item
+        blocked.created_at = now.addingTimeInterval(-18 * 3_600)
+        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "blocked 18h")
+
+        let actualWaitStart = now.addingTimeInterval(-2 * 86_400)
+        blocked.created_at = now.addingTimeInterval(-60)
+        blocked.reason =
+            "Specification approval has been waiting since "
+            + "\(actualWaitStart.formatted(.iso8601))."
+        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "blocked 2d")
+        #expect(
+            AttentionDisplay.exactRowTimestamp(blocked, now: now)
+                == actualWaitStart.formatted(.iso8601))
+
+        blocked.expires_when = now.addingTimeInterval(2 * 3_600)
+        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "due in 2h")
+        #expect(
+            AttentionDisplay.exactRowTimestamp(blocked, now: now)
+                == blocked.expires_when?.formatted(.iso8601))
+
+        blocked.expires_when = now.addingTimeInterval(30)
+        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "due now")
+
+        blocked.expires_when = now.addingTimeInterval(-30)
+        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "due now")
+
+        blocked.expires_when = now.addingTimeInterval(-2 * 3_600)
+        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "overdue 2h")
+        #expect(
+            AttentionDisplay.exactRowTimestamp(blocked, now: now)
+                == blocked.expires_when?.formatted(.iso8601))
+
+        blocked.created_at = now.addingTimeInterval(-18 * 3_600)
+        blocked.status = .resolved
+        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "18h")
+        #expect(
+            AttentionDisplay.exactRowTimestamp(blocked, now: now)
+                == blocked.created_at?.formatted(.iso8601))
+
+        ordinary.created_at = nil
+        ordinary.expires_when = nil
+        #expect(AttentionDisplay.relativeRowTime(ordinary, now: now) == nil)
+    }
+
+    @Test func rowContextPrefersNamesAndFallsBackToIdentifiers() {
+        let run = AttentionFixtures.fixture(type: .execution_failure).item
+
+        #expect(
+            AttentionDisplay.rowContext(run)
+                == .init(
+                    project: .init(value: "proj-1", isIdentifier: true),
+                    workUnit: .init(value: "run-execution_failure", isIdentifier: true)
+                ))
+        #expect(
+            AttentionDisplay.rowContext(
+                run, projectName: "Freeside", workUnitName: "Inbox scanning")
+                == .init(
+                    project: .init(value: "Freeside", isIdentifier: false),
+                    workUnit: .init(value: "Inbox scanning", isIdentifier: false)
+                ))
+
+        let system = AttentionFixtures.fixture(type: .system_health).item
+        #expect(AttentionDisplay.rowContext(system).workUnit == nil)
+    }
+
+    @Test func copyableSubjectReferencesMatchTheirContractSubject() {
+        let run = AttentionFixtures.fixture(type: .execution_failure).item
+        #expect(
+            AttentionDisplay.copyableSubjectReference(run)
+                == .init(label: "Copy run reference", value: "run-execution_failure"))
+
+        let proposal = AttentionFixtures.fixture(type: .run_proposal).item
+        #expect(
+            AttentionDisplay.copyableSubjectReference(proposal)
+                == .init(label: "Copy proposal batch reference", value: "batch-run_proposal"))
+
+        let system = AttentionFixtures.fixture(type: .system_health).item
+        #expect(AttentionDisplay.copyableSubjectReference(system) == nil)
+    }
+
+    @Test func rowBadgePolicyKeepsOnlyExceptionalStates() {
+        #expect(AttentionDisplay.showsPriorityBadge(.urgent))
+        #expect(AttentionDisplay.showsPriorityBadge(.high))
+        #expect(!AttentionDisplay.showsPriorityBadge(.normal))
+        #expect(!AttentionDisplay.showsPriorityBadge(.low))
+
+        #expect(!AttentionDisplay.showsLifecycleBadge(.open))
+        #expect(AttentionDisplay.showsLifecycleBadge(.resolved))
+        #expect(AttentionDisplay.showsLifecycleBadge(.superseded))
+        #expect(AttentionDisplay.showsLifecycleBadge(.dismissed))
+        #expect(AttentionDisplay.showsLifecycleBadge(.expired))
+
+        #expect(
+            !AttentionDisplay.showsDegradedBadge(
+                AttentionFixtures.fixture(type: .ready_for_final_review).item))
+        let degraded = AttentionFixtures.degradedReady().item
+        #expect(AttentionDisplay.showsDegradedBadge(degraded))
+        #expect(AttentionDisplay.title(degraded._type) == "Ready for final review")
     }
 
     @Test func existingPullRequestActionUsesViewLanguage() {
@@ -74,6 +265,16 @@ import Testing
         #expect(rows.contains(.init(label: "Claim digest", value: digest)))
     }
 
+    @Test func contextMenuEvidenceDigestsAreUniqueAndStable() {
+        var item = AttentionFixtures.fixture(type: .spec_approval).item
+        let first = item.evidence_snapshot[0]
+        item.evidence_snapshot.append(first)
+
+        let digests = AttentionDisplay.uniqueEvidenceDigests(item)
+
+        #expect(digests == item.evidence_snapshot.dropLast().map(\.digest))
+    }
+
     @Test func detailBindingsKeepDistinctLabelsThatShareAValue() {
         let item = AttentionFixtures.fixture(type: .review_contradiction).item
 
@@ -81,6 +282,24 @@ import Testing
 
         #expect(rows.contains(.init(label: "PR head", value: "cafebabe")))
         #expect(rows.contains(.init(label: "Head", value: "cafebabe")))
+    }
+
+    @Test func detailBindingsExposeExactCreatedAndDueTimestamps() {
+        var item = AttentionFixtures.fixture(type: .blocked).item
+        item.expires_when = item.created_at?.addingTimeInterval(7_200)
+
+        let rows = AttentionDisplay.detailBindingRows(item)
+
+        #expect(rows.contains(.init(label: "Created", value: "2026-01-02T03:04:05Z")))
+        #expect(rows.contains(.init(label: "Due", value: "2026-01-02T05:04:05Z")))
+    }
+
+    @Test func detailBindingsPreserveUnscopedSubjectIdentifiers() {
+        let item = AttentionFixtures.fixture(type: .system_health).item
+
+        let rows = AttentionDisplay.detailBindingRows(item)
+
+        #expect(rows.contains(.init(label: "Subject", value: "system")))
     }
 
     @Test func proposalBindingSurvivesMatchingAttachmentDigest() {

@@ -161,19 +161,7 @@ public final class InboxStore {
     /// combined, urgent-to-low within a status, server order as the stable
     /// tiebreak.
     public var rows: [Components.Schemas.AttentionItemSnapshot] {
-        let ordered = serverOrder.enumerated().compactMap {
-            index, id in snapshotsByID[id].map { (index, $0) }
-        }
-        return ordered.filter { _, snapshot in
-            let status = statusAtOrderRebuild[snapshot.item.id] ?? snapshot.item.status
-            let isInScope =
-                switch scope {
-                case .open: status == .open
-                case .resolved: status != .open
-                case .all: true
-                }
-            return isInScope && (projectID == nil || snapshot.item.project_id == projectID)
-        }.sorted { lhs, rhs in
+        filteredRows(in: scope).sorted { lhs, rhs in
             let (lhsKey, rhsKey) = (
                 sortKey(
                     lhs.1, index: lhs.0,
@@ -184,6 +172,14 @@ public final class InboxStore {
             )
             return lhsKey < rhsKey
         }.map(\.1)
+    }
+
+    public func count(in scope: Scope) -> Int {
+        filteredRows(in: scope).count
+    }
+
+    public func urgentCount(in scope: Scope) -> Int {
+        filteredRows(in: scope).count { $0.1.item.priority == .urgent }
     }
 
     /// Rebuilds the inbox from the canonical list (plan §5.14 sync test 3:
@@ -478,5 +474,22 @@ public final class InboxStore {
         case .low: priorityRank = 3
         }
         return (statusRank, priorityRank, index)
+    }
+
+    private func filteredRows(
+        in scope: Scope
+    ) -> [(Int, Components.Schemas.AttentionItemSnapshot)] {
+        serverOrder.enumerated().compactMap { index, id in
+            snapshotsByID[id].map { (index, $0) }
+        }.filter { _, snapshot in
+            let status = statusAtOrderRebuild[snapshot.item.id] ?? snapshot.item.status
+            let isInScope =
+                switch scope {
+                case .open: status == .open
+                case .resolved: status != .open
+                case .all: true
+                }
+            return isInScope && (projectID == nil || snapshot.item.project_id == projectID)
+        }
     }
 }

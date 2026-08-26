@@ -52,7 +52,7 @@
         }
     }
 
-    private struct DaemonHealthProbeTimeout: Error {}
+    struct DaemonHealthProbeTimeout: Error {}
 
     public enum DaemonMenuState: Equatable, Sendable {
         case checking
