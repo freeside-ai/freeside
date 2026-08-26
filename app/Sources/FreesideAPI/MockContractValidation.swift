@@ -283,6 +283,16 @@ enum MockContractValidation {
                     {
                         return "finding_adjudication engine proposal is not the deterministic fast path"
                     }
+                case .engine_model:
+                    if proposal.confidence == nil {
+                        return "finding_adjudication mixed-origin proposal lacks confidence"
+                    }
+                    if proposal.goal_relationship != .required
+                        || proposal.compatibility?.value1 != .allowed
+                        || proposal.route != .remediate
+                    {
+                        return "finding_adjudication mixed-origin proposal is not allowed remediation"
+                    }
                 }
                 var alternativeRoutes = Set<Components.Schemas.AdjudicationRoute>()
                 for alternative in proposal.offered_alternatives {

@@ -371,7 +371,23 @@ public enum AttentionFixtures {
                                     consequence:
                                         "Escalate the contract conflict to a human before routing the finding.")
                             ]
-                        )
+                        ),
+                        .init(
+                            finding_id: "review-finding-18",
+                            producer: .engine_model,
+                            goal_relationship: .required,
+                            compatibility: .init(value1: .allowed),
+                            route: .remediate,
+                            rationale:
+                                "The model judged this finding required, and the daemon verified that remediation stays inside the declared paths.",
+                            cited_rules: [
+                                "Issue contract: preserve declared-path authority"
+                            ],
+                            assumptions: [],
+                            open_questions: [],
+                            confidence: .init(value1: .high),
+                            offered_alternatives: []
+                        ),
                     ]
                 ))
             : nil
