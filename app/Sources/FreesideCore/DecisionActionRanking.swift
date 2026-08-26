@@ -19,13 +19,17 @@ struct DecisionActionRanking: Equatable {
 
     init(
         requested: [Components.Schemas.Action],
-        recommendedAction: Components.Schemas.Action? = nil
+        recommendedAction: Components.Schemas.Action? = nil,
+        reservesRecommendedAction: Bool = true
     ) {
         unavailable = requested.filter { ActionOutcome.of($0) == .pending }
         let available = requested.filter { ActionOutcome.of($0) != .pending }
-        let authoritativeRecommendation = recommendedAction.flatMap { recommendation in
-            available.contains(recommendation) ? recommendation : nil
-        }
+        let authoritativeRecommendation =
+            reservesRecommendedAction
+            ? recommendedAction.flatMap { recommendation in
+                available.contains(recommendation) ? recommendation : nil
+            }
+            : nil
         recommended = authoritativeRecommendation
 
         let secondaryActions = available.filter { $0 != authoritativeRecommendation }

@@ -170,40 +170,22 @@ struct RunTimelineView: View {
     }
 
     private func timelineSection(_ timeline: Components.Schemas.RunTimeline) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Stage, Round & Decision History")
-                .font(FreesideFont.title)
-            ForEach(Array(timeline.milestones.enumerated()), id: \.offset) { index, milestone in
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(spacing: 0) {
-                        Circle()
-                            .fill(index == timeline.milestones.count - 1 ? Color.accentBorder : Color.milestonePrior)
-                            .frame(width: 10, height: 10)
-                        if index < timeline.milestones.count - 1 {
-                            Rectangle()
-                                .fill(Color.milestoneConnector)
-                                .frame(width: 2, height: 44)
-                        }
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(RunDisplay.label(milestone.kind))
-                            .font(FreesideFont.sans(.headline, weight: .semibold))
-                        if let detail = milestoneDetail(milestone) {
-                            Text(detail)
-                                .font(FreesideFont.sans(.subheadline, weight: .medium))
-                        }
-                        if let context = attemptContext(invocationID: milestone.invocation_id) {
-                            Text(context)
-                                .font(FreesideFont.subheadline)
-                                .foregroundStyle(Color.inkDim)
-                        }
-                        Text(milestone.recorded_at.formatted(date: .abbreviated, time: .shortened))
-                            .font(FreesideFont.monoCaption)
-                            .foregroundStyle(Color.inkDim)
-                    }
-                }
-            }
+        let entries = timeline.milestones.enumerated().map { index, milestone in
+            DecisionStageRailPresentation.Entry(
+                id: "\(index)-\(milestone.kind.rawValue)-\(milestone.recorded_at.timeIntervalSince1970)",
+                title: RunDisplay.label(milestone.kind),
+                detail: milestoneDetail(milestone),
+                context: attemptContext(invocationID: milestone.invocation_id),
+                timestamp: milestone.recorded_at.formatted(
+                    date: .abbreviated, time: .shortened),
+                state: index == timeline.milestones.count - 1 ? .current : .completed)
         }
+        return StageRail(
+            title: "Stage, Round & Decision History",
+            presentation: .timeline(entries: entries),
+            axis: .vertical,
+            showsSummaryText: false,
+            accessibilityStyle: .entries)
     }
 
     private func invocationSection(_ timeline: Components.Schemas.RunTimeline) -> some View {
