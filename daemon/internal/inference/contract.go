@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 )
 
@@ -126,6 +127,31 @@ type AnnotationContract struct {
 	SecondAdjudicationRules    []SecondAdjudicationRule
 }
 
+// AdjudicationContract is the inspectable behavioral lattice and ceilings for
+// the finding-adjudicator annotation site. ProposedCompatibilities deliberately
+// excludes the engine-only `allowed` value.
+type AdjudicationContract struct {
+	GoalRelationships          []string
+	ProposedCompatibilities    []string
+	Routes                     []string
+	Rows                       []AdjudicationRow
+	Confidence                 []string
+	ReducesWork                []string
+	SeverityMappings           []SeverityMapping
+	UnknownSeverityFallback    string
+	NormalizedSeverityCeilings []SeverityCeiling
+	SecondAdjudicationRules    []SecondAdjudicationRule
+}
+
+// AdjudicationRow is one valid goal/compatibility/route cell in the
+// adjudicator's allowed-free proposal lattice. ProposedCompatibility is nil
+// exactly for non-required goals.
+type AdjudicationRow struct {
+	GoalRelationship      string
+	ProposedCompatibility *string
+	Route                 string
+}
+
 // Site is the complete authority and resource contract for one call site.
 type Site struct {
 	ID              string
@@ -140,6 +166,7 @@ type Site struct {
 	Budget          Budget
 	AuditEvery      int64
 	Annotation      *AnnotationContract
+	Adjudication    *AdjudicationContract
 	ValidateOutput  func([]byte) error
 }
 
@@ -163,11 +190,24 @@ func (s Site) validate() error {
 		}
 	}
 	if s.Authority == AuthorityAnnotate {
-		if err := s.Annotation.validate(); err != nil {
-			return err
+		contracts := 0
+		if s.Annotation != nil {
+			contracts++
+			if err := s.Annotation.validate(); err != nil {
+				return err
+			}
 		}
-	} else if s.Annotation != nil {
-		return errors.New("non-annotation site carries annotation contract")
+		if s.Adjudication != nil {
+			contracts++
+			if err := s.Adjudication.validate(); err != nil {
+				return err
+			}
+		}
+		if contracts != 1 {
+			return errors.New("annotation site must carry exactly one authority contract")
+		}
+	} else if s.Annotation != nil || s.Adjudication != nil {
+		return errors.New("non-annotation site carries annotation authority contract")
 	}
 	return nil
 }
@@ -220,6 +260,64 @@ func (c *AnnotationContract) validate() error {
 		}
 	}
 	return nil
+}
+
+func (c *AdjudicationContract) validate() error {
+	if c == nil || len(c.GoalRelationships) == 0 || len(c.ProposedCompatibilities) == 0 ||
+		len(c.Routes) == 0 || len(c.Rows) == 0 || len(c.Confidence) == 0 || len(c.ReducesWork) == 0 ||
+		len(c.SeverityMappings) == 0 || c.UnknownSeverityFallback == "" ||
+		len(c.NormalizedSeverityCeilings) == 0 || len(c.SecondAdjudicationRules) == 0 {
+		return errors.New("invalid adjudication contract")
+	}
+	for name, values := range map[string][]string{
+		"goal relationship":      c.GoalRelationships,
+		"proposed compatibility": c.ProposedCompatibilities,
+		"route":                  c.Routes,
+		"confidence":             c.Confidence,
+	} {
+		seen := make(map[string]bool, len(values))
+		for _, value := range values {
+			if value == "" || seen[value] {
+				return fmt.Errorf("invalid adjudication %s lattice", name)
+			}
+			seen[value] = true
+		}
+	}
+	routes := make(map[string]bool, len(c.Routes))
+	for _, route := range c.Routes {
+		routes[route] = true
+	}
+	for _, route := range c.ReducesWork {
+		if !routes[route] {
+			return errors.New("work-reducing output is outside adjudication lattice")
+		}
+	}
+	if slices.Contains(c.ProposedCompatibilities, "allowed") {
+		return errors.New("adjudication proposal lattice includes engine-only allowed compatibility")
+	}
+	if !equalAdjudicationRows(c.Rows, adjudicatorRows()) {
+		return errors.New("adjudication rows diverge from allowed-free domain lattice")
+	}
+	classifier := ClassifierSite(Budget{}).Annotation
+	if !slices.Equal(c.SeverityMappings, classifier.SeverityMappings) ||
+		c.UnknownSeverityFallback != classifier.UnknownSeverityFallback ||
+		!slices.Equal(c.NormalizedSeverityCeilings, classifier.NormalizedSeverityCeilings) ||
+		!slices.Equal(c.SecondAdjudicationRules, classifier.SecondAdjudicationRules) {
+		return errors.New("adjudication severity ceilings diverge from classifier")
+	}
+	return nil
+}
+
+func equalAdjudicationRows(left, right []AdjudicationRow) bool {
+	return slices.EqualFunc(left, right, func(a, b AdjudicationRow) bool {
+		if a.GoalRelationship != b.GoalRelationship || a.Route != b.Route {
+			return false
+		}
+		if a.ProposedCompatibility == nil || b.ProposedCompatibility == nil {
+			return a.ProposedCompatibility == nil && b.ProposedCompatibility == nil
+		}
+		return *a.ProposedCompatibility == *b.ProposedCompatibility
+	})
 }
 
 // InputField carries a value and the sensitivity the caller assigned it.

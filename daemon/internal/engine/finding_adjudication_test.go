@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	mrand "math/rand"
 	"os"
 	"path/filepath"
@@ -11,9 +14,11 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/advisory"
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	"github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -32,15 +37,33 @@ func (f *scriptedFindingAdjudicator) Adjudicate(
 }
 
 type findingAdjudicationFixture struct {
-	ctx      context.Context
-	store    *store.Store
-	workflow *productionPublicationWorkflow
-	task     productionPublicationTask
-	binding  productionBinding
-	record   domain.ReviewRecord
-	finding  domain.Finding
-	baseRoot string
-	headRoot string
+	ctx       context.Context
+	store     *store.Store
+	workflow  *productionPublicationWorkflow
+	artifacts *findingAdjudicationArtifactStore
+	driver    *fake.Driver
+	task      productionPublicationTask
+	binding   productionBinding
+	record    domain.ReviewRecord
+	finding   domain.Finding
+	baseRoot  string
+	headRoot  string
+}
+
+type findingAdjudicationArtifactStore struct {
+	bodies map[domain.Digest][]byte
+}
+
+func (s *findingAdjudicationArtifactStore) Put(domain.Digest, io.Reader) (bool, error) {
+	return false, errors.New("unexpected finding-adjudication artifact write")
+}
+
+func (s *findingAdjudicationArtifactStore) Open(digest domain.Digest) (io.ReadCloser, error) {
+	body, ok := s.bodies[digest]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return io.NopCloser(bytes.NewReader(body)), nil
 }
 
 func adjudicationDigest(seed string) domain.Digest {
@@ -68,6 +91,13 @@ func newFindingAdjudicationFixtureWithNote(
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	runID := domain.RunID("run-adjudication")
+	specification := []byte("approved work-unit specification")
+	instructions := []byte("trusted repository instructions")
+	specDigest := domain.Digest(contentaddr.Sum(specification))
+	instructionDigest := domain.Digest(contentaddr.Sum(instructions))
+	artifacts := &findingAdjudicationArtifactStore{bodies: map[domain.Digest][]byte{
+		specDigest: specification, instructionDigest: instructions,
+	}}
 	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{
 		{Key: "paths", Value: "daemon/**", Provenance: domain.KeyProvenance{
 			Source: domain.ProvenancePreset, Digest: adjudicationDigest("a"),
@@ -84,7 +114,7 @@ func newFindingAdjudicationFixtureWithNote(
 	}
 	run := domain.Run{
 		ID: runID, ProjectID: "project-adjudication",
-		SpecDigest: adjudicationDigest("d"), PolicyDigest: policy.Digest,
+		SpecDigest: specDigest, PolicyDigest: policy.Digest,
 	}
 	createdAt := time.Date(2026, 8, 24, 3, 0, 0, 0, time.UTC)
 	finding := domain.Finding{
@@ -96,7 +126,7 @@ func newFindingAdjudicationFixtureWithNote(
 		InvocationID: "review-a", RunID: runID, Round: 1,
 		Provider: "codex", ModelConfiguration: "test",
 		ConfigurationDigest: adjudicationDigest("e"),
-		InstructionDigest:   adjudicationDigest("f"),
+		InstructionDigest:   instructionDigest,
 		CostOwner:           "test", BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40),
 		CompletedAt: createdAt, CompletionEvidence: adjudicationDigest("9"),
 		Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
@@ -138,13 +168,17 @@ func newFindingAdjudicationFixtureWithNote(
 	limits := inference.Limits{
 		Calls: 10, ComputeUnits: 100_000, AttentionItems: 10, Starvation: time.Hour,
 	}
+	driver := fake.New()
+	budget := inference.Budget{
+		Window: time.Hour, Site: limits, Project: limits, Global: limits,
+		MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
+	}
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(dir, "inference.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "test"},
-		Sites: []inference.Site{inference.ClassifierSite(inference.Budget{
-			Window: time.Hour, Site: limits, Project: limits, Global: limits,
-			MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
-		})},
+		Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: driver},
+		Sites: []inference.Site{
+			inference.ClassifierSite(budget), inference.AdjudicatorSite(budget),
+		},
 		Advisory: advisoryStore, Now: func() time.Time { return now },
 	})
 	if err != nil {
@@ -155,12 +189,61 @@ func newFindingAdjudicationFixtureWithNote(
 		inference: client,
 	}
 	return &findingAdjudicationFixture{
-		ctx: ctx, store: st, workflow: workflow,
+		ctx: ctx, store: st, workflow: workflow, artifacts: artifacts, driver: driver,
 		task: productionPublicationTask{
 			RunID: runID, ProjectID: run.ProjectID, HeadSHA: record.HeadSHA,
 		},
 		binding: productionBinding{run: run, resolvedPolicy: policy}, record: record,
 		finding: finding, baseRoot: baseRoot, headRoot: headRoot,
+	}
+}
+
+func TestProductionFindingAdjudicatorUsesBoundBodiesAndEngineFacts(t *testing.T) {
+	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
+	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
+	f.writePath(t, f.headRoot)
+	f.driver.Script(inference.AdjudicatorSiteID, fake.Script{Response: inference.Response{
+		Output:       []byte(`{"entries":[{"finding_id":"finding-a","goal_relationship":"adjacent","compatibility":null,"route":"defer","confidence":"high","rationale":"outside the accepted outcome","evidence":["daemon/a.go:1"],"cited_rules":["declared work-unit scope"],"assumptions":[],"alternatives":["revise the work unit"],"open_questions":[]}]}`),
+		ComputeUnits: 5,
+	}})
+	f.workflow.findingAdjudicator = &productionFindingAdjudicator{
+		client: f.workflow.inference, store: f.store, artifacts: f.artifacts,
+	}
+	state, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot)
+	if err != nil || state != productionReviewPassed {
+		t.Fatalf("production inference adjudication = %d, %v", state, err)
+	}
+	requests := f.driver.Requests()
+	if len(requests) != 1 || requests[0].SiteID != inference.AdjudicatorSiteID {
+		t.Fatalf("requests = %#v", requests)
+	}
+	fields := requests[0].Fields
+	if fields["approved_spec"] != "approved work-unit specification" ||
+		fields["instruction_snapshot"] != "trusted repository instructions" ||
+		fields["approved_spec_digest"] != string(f.binding.run.SpecDigest) ||
+		fields["instruction_snapshot_digest"] != string(f.record.InstructionDigest) ||
+		fields["resolved_policy_digest"] != string(f.binding.resolvedPolicy.Digest) {
+		t.Fatalf("version-bound fields = %#v", fields)
+	}
+	if !strings.Contains(fields["findings"], `"remediation_surface":"daemon/a.go"`) ||
+		!strings.Contains(fields["findings"], `"compatibility":"allowed"`) ||
+		!strings.Contains(fields["findings"], `"version":1`) ||
+		fields["prior_disposition_history"] != "[]" || fields["dissent"] != "null" {
+		t.Fatalf("engine-derived fields = %#v", fields)
+	}
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		artifact, err := tx.GetFindingAdjudicationForRound(f.ctx, f.record.RunID, f.record.Round)
+		if err != nil {
+			return err
+		}
+		if len(artifact.Entries) != 1 || artifact.Entries[0].Route != domain.RouteDefer ||
+			artifact.Entries[0].Producer != domain.AdjudicationProducerModel {
+			t.Fatalf("artifact entries = %#v", artifact.Entries)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -524,35 +607,50 @@ func TestFindingAdjudicationFailClosedAndNotAcceptedParkWithoutArtifact(t *testi
 }
 
 func TestFindingAdjudicationCriticalFinalDispositionRequiresAttention(t *testing.T) {
-	for _, route := range []domain.AdjudicationRoute{domain.RouteDecline, domain.RouteDefer} {
-		t.Run(string(route), func(t *testing.T) {
-			location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
-			f := newFindingAdjudicationFixture(t, domain.FindingSeverityP0, location, "low", "high")
-			f.writePath(t, f.headRoot)
-			f.workflow.findingAdjudicator = &scriptedFindingAdjudicator{entries: []domain.FindingAdjudicationEntry{
-				modelRouteEntry(t, f.finding.ID, route, domain.ConfidenceHigh),
-			}}
-			state, err := f.workflow.reconcileFindingAdjudication(
-				f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot)
-			if err != nil || state != productionReviewPending {
-				t.Fatalf("critical %s = %d, %v", route, state, err)
-			}
-			if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
-				if _, err := tx.GetFindingDisposition(f.ctx, f.finding.ID, 1); !errors.Is(err, store.ErrNotFound) {
-					t.Fatalf("critical %s disposition = %v", route, err)
+	for _, severity := range []domain.FindingSeverity{domain.FindingSeverityP0, domain.FindingSeverityP1} {
+		for _, route := range []domain.AdjudicationRoute{domain.RouteDecline, domain.RouteDefer} {
+			t.Run(string(severity)+"/"+string(route), func(t *testing.T) {
+				location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
+				f := newFindingAdjudicationFixture(t, severity, location, "low", "high")
+				goal := domain.GoalContradictory
+				if route == domain.RouteDefer {
+					goal = domain.GoalAdjacent
 				}
-				item, err := tx.GetAttentionItem(f.ctx, productionReviewItemID(f.task.RunID, 1))
-				if err != nil {
-					return err
+				f.driver.Script(inference.AdjudicatorSiteID, fake.Script{Response: inference.Response{
+					Output: []byte(fmt.Sprintf(`{"entries":[{"finding_id":"finding-a","goal_relationship":%q,"compatibility":null,"route":%q,"confidence":"high","rationale":"model reduction requires the severity ceiling","evidence":[],"cited_rules":[],"assumptions":[],"alternatives":[],"open_questions":[]}]}`,
+						goal, route)),
+					ComputeUnits: 1,
+				}})
+				f.workflow.findingAdjudicator = &productionFindingAdjudicator{
+					client: f.workflow.inference, store: f.store, artifacts: f.artifacts,
 				}
-				if item.Type != domain.AttentionReviewDispute {
-					t.Fatalf("critical item type = %q", item.Type)
+				f.writePath(t, f.headRoot)
+				state, err := f.workflow.reconcileFindingAdjudication(
+					f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot)
+				if err != nil || state != productionReviewPending {
+					t.Fatalf("critical %s = %d, %v", route, state, err)
 				}
-				return nil
-			}); err != nil {
-				t.Fatal(err)
-			}
-		})
+				requests := f.driver.Requests()
+				if len(requests) != 1 || requests[0].SiteID != inference.AdjudicatorSiteID {
+					t.Fatalf("critical requests = %#v", requests)
+				}
+				if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+					if _, err := tx.GetFindingDisposition(f.ctx, f.finding.ID, 1); !errors.Is(err, store.ErrNotFound) {
+						t.Fatalf("critical %s disposition = %v", route, err)
+					}
+					item, err := tx.GetAttentionItem(f.ctx, productionReviewItemID(f.task.RunID, 1))
+					if err != nil {
+						return err
+					}
+					if item.Type != domain.AttentionReviewDispute {
+						t.Fatalf("critical item type = %q", item.Type)
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }
 

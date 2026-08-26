@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
@@ -41,6 +42,7 @@ type findingAdjudicationRequest struct {
 type findingAdjudicationInput struct {
 	Finding        domain.Finding
 	Classification *domain.Classification
+	Surface        string
 	Compatibility  domain.WorkUnitCompatibility
 }
 
@@ -218,8 +220,13 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 			entries = append(entries, entry)
 			continue
 		}
+		surfacePath := ""
+		if surface != nil && finding.Location != nil {
+			surfacePath = finding.Location.Path
+		}
 		residue = append(residue, findingAdjudicationInput{
-			Finding: finding, Classification: classification, Compatibility: compatibility,
+			Finding: finding, Classification: classification,
+			Surface: surfacePath, Compatibility: compatibility,
 		})
 	}
 
@@ -287,10 +294,25 @@ func (w *productionPublicationWorkflow) parkUnacceptedFindingBatch(
 	reason := fmt.Sprintf(
 		"Review found %d issue(s); deterministic routing could not accept the complete adjudication batch.",
 		len(record.FindingIDs))
+	if err := w.reserveFindingAdjudicationAttention(task, record); err != nil {
+		return productionReviewPending, err
+	}
 	if err := w.putReviewAttention(ctx, task, record, reason, domain.AttentionReviewDispute); err != nil {
 		return productionReviewPending, err
 	}
 	return productionReviewPending, nil
+}
+
+func (w *productionPublicationWorkflow) reserveFindingAdjudicationAttention(
+	task productionPublicationTask, record domain.ReviewRecord,
+) error {
+	if w.inference == nil || w.findingAdjudicator == nil {
+		return nil
+	}
+	return w.inference.ReserveAttention(
+		inference.AdjudicatorSiteID, string(task.ProjectID), string(task.RunID),
+		string(productionReviewItemID(task.RunID, record.Round)),
+	)
 }
 
 func (w *productionPublicationWorkflow) reviewRoundDispositionComplete(
@@ -640,6 +662,9 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		if item != nil {
 			return productionReviewPending, nil
 		}
+		if err := w.reserveFindingAdjudicationAttention(task, record); err != nil {
+			return productionReviewPending, err
+		}
 		if err := w.putReviewAttention(ctx, task, record,
 			"Adjudication requires a second decision before a critical or high finding can be declined or deferred.",
 			domain.AttentionReviewDispute); err != nil {
@@ -648,6 +673,9 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		return productionReviewPending, nil
 	}
 	if needsFindingAttention && item == nil {
+		if err := w.reserveFindingAdjudicationAttention(task, record); err != nil {
+			return productionReviewPending, err
+		}
 		if err := w.putFindingAdjudicationAttention(ctx, task, record, artifact); err != nil {
 			return productionReviewPending, err
 		}
