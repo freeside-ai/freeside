@@ -1400,11 +1400,12 @@ func TestJanitorSessionReportsEveryMissingCoverageCause(t *testing.T) {
 	}
 }
 
-func TestBackupPayloadExtractorsIncludeElaborationMarkers(t *testing.T) {
+func TestBackupPayloadExtractorsIncludeAgentWorkflowMarkers(t *testing.T) {
 	extractors := backupPayloadExtractors()
 	for _, kind := range []string{
 		engine.KindElaborationInvocationRequested,
 		engine.KindElaborationImplementationClaim,
+		engine.KindRemediationInvocationRequested,
 	} {
 		if extractors[kind] == nil {
 			t.Errorf("backup payload extractor %q is not registered", kind)

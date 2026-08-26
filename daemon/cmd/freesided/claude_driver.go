@@ -55,12 +55,11 @@ type claudeDriverConfig struct {
 	StateDir          string
 	RigTokenFile      string
 	ProviderEndpoints []string
-	// PromptPackageFile and ElaborationPromptPackageFile are the trusted
-	// implementation- and elaboration-stage prompt files. The daemon ingests
-	// their bytes into the artifact blob store and derives both digests rather
-	// than taking either digest on trust.
+	// The prompt-package files are trusted implementation, elaboration, and
+	// remediation inputs. The daemon derives every digest from ingested bytes.
 	PromptPackageFile            string
 	ElaborationPromptPackageFile string
+	RemediationPromptPackageFile string
 	VendorInstructions           string
 	Repo                         string
 	RepositoryID                 int64
@@ -111,6 +110,8 @@ func (c claudeDriverConfig) validate() error {
 		return fmt.Errorf("-prompt-package is required in claude driver mode")
 	case c.ElaborationPromptPackageFile == "":
 		return fmt.Errorf("-elaboration-prompt-package is required in claude driver mode")
+	case c.RemediationPromptPackageFile == "":
+		return fmt.Errorf("-remediation-prompt-package is required in claude driver mode")
 	case c.VendorInstructions == "":
 		return fmt.Errorf("-vendor-instructions is required in claude driver mode")
 	case c.Repo == "" || c.RepositoryID <= 0 || c.BaseRef == "" || c.BaseSHA == "":
@@ -516,8 +517,8 @@ func (a storeAdmissionAuthority) authenticateInvocationStart(
 	if err != nil || elaboration {
 		return err
 	}
-	_, _, err = a.authenticateProductionCommitAuthorForStart(
-		ctx, id, admission.OperatingMode, repo,
+	_, _, err = a.authenticateInvocationCommitAuthorForStart(
+		ctx, id, admission, repo,
 	)
 	return err
 }
@@ -663,8 +664,8 @@ func (a storeAdmissionAuthority) invocationImportAuthor(
 	if err != nil || elaboration {
 		return engine.ProductionCommitAuthor{}, false, err
 	}
-	return a.authenticateProductionCommitAuthorRevalidated(
-		ctx, id, admission.OperatingMode, repo,
+	return a.authenticateInvocationCommitAuthorRevalidated(
+		ctx, id, admission, repo,
 	)
 }
 
@@ -675,7 +676,7 @@ func (a storeAdmissionAuthority) invocationImportRecordAuthor(
 	if err != nil || elaboration {
 		return engine.ProductionCommitAuthor{}, false, err
 	}
-	return a.productionCommitAuthor(ctx, id, admission.OperatingMode)
+	return a.invocationCommitAuthor(ctx, id, admission)
 }
 
 func (a storeAdmissionAuthority) fallbackCommitMessage(
@@ -782,6 +783,89 @@ func (a storeAdmissionAuthority) productionCommitAuthor(
 		return engine.ProductionCommitAuthor{}, false, nil
 	}
 	return publication.CommitAuthor, true, nil
+}
+
+// invocationCommitAuthor authenticates the durable marker for either an
+// initial production invocation or a remediation invocation. Remediation
+// inherits only the original production request's commit-author claim after
+// the complete review/adjudication transition is reconstructed in this same
+// store snapshot.
+func (a storeAdmissionAuthority) invocationCommitAuthor(
+	ctx context.Context,
+	id domain.InvocationID,
+	admission domain.ExecutionAdmission,
+) (engine.ProductionCommitAuthor, bool, error) {
+	var (
+		entry       store.QueueEntry
+		publication engine.ProductionPublication
+		remediation bool
+	)
+	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetOutbox(ctx, string(id))
+		if err != nil {
+			return err
+		}
+		if entry.Kind != engine.KindRemediationInvocationRequested {
+			return nil
+		}
+		remediation = true
+		publication, err = engine.AuthenticateRemediationInvocationTransition(
+			ctx, tx, entry, admission.RunID, admission.StageID,
+		)
+		return err
+	})
+	if remediation {
+		if err != nil {
+			return engine.ProductionCommitAuthor{}, false,
+				fmt.Errorf("authenticate remediation commit author: %w", err)
+		}
+		return publication.CommitAuthor, true, nil
+	}
+	if err != nil && (admission.OperatingMode == domain.ModeUnattended ||
+		!errors.Is(err, store.ErrNotFound)) {
+		return engine.ProductionCommitAuthor{}, false, fmt.Errorf(
+			"load invocation commit author: %w", err)
+	}
+	return a.productionCommitAuthor(ctx, id, admission.OperatingMode)
+}
+
+func (a storeAdmissionAuthority) authenticateInvocationCommitAuthorForStart(
+	ctx context.Context,
+	id domain.InvocationID,
+	admission domain.ExecutionAdmission,
+	repo string,
+) (engine.ProductionCommitAuthor, bool, error) {
+	claimed, production, err := a.invocationCommitAuthor(ctx, id, admission)
+	if err != nil || !production {
+		return claimed, production, err
+	}
+	binding := productionCommitAuthorAuthenticationBinding{
+		repo: repo, appSlug: claimed.AppSlug, botUserID: claimed.BotUserID,
+	}
+	err = a.authenticatedStartAuthors.authenticate(id, binding, func() error {
+		return a.authenticateProductionCommitAuthorClaim(ctx, repo, claimed, false)
+	})
+	if err != nil {
+		return engine.ProductionCommitAuthor{}, false, err
+	}
+	return claimed, true, nil
+}
+
+func (a storeAdmissionAuthority) authenticateInvocationCommitAuthorRevalidated(
+	ctx context.Context,
+	id domain.InvocationID,
+	admission domain.ExecutionAdmission,
+	repo string,
+) (engine.ProductionCommitAuthor, bool, error) {
+	claimed, production, err := a.invocationCommitAuthor(ctx, id, admission)
+	if err != nil || !production {
+		return claimed, production, err
+	}
+	if err := a.authenticateProductionCommitAuthorClaim(ctx, repo, claimed, true); err != nil {
+		return engine.ProductionCommitAuthor{}, false, err
+	}
+	return claimed, true, nil
 }
 
 func (a storeAdmissionAuthority) authenticateProductionCommitAuthor(
@@ -1166,6 +1250,7 @@ type claudeComposition struct {
 	containerBin                    string
 	env                             engine.AdmissionEnvironment
 	elaborationPromptPackage        domain.Digest
+	remediationPromptPackage        domain.Digest
 	derive                          engine.AdmissionDerivation
 	runConformance                  func(context.Context) error
 	closer                          sessionCloser
@@ -1280,6 +1365,15 @@ func composeClaudeDriver(
 	if err := claude.ValidatePromptPackageRoles(
 		promptPackageBody, elaborationPromptPackageBody); err != nil {
 		return nil, fmt.Errorf("prompt package roles: %w", err)
+	}
+	remediationPromptPackage, remediationPromptPackageBody, err := ingestPromptPackage(
+		blobs, cfg.RemediationPromptPackageFile)
+	if err != nil {
+		return nil, err
+	}
+	if err := claude.ValidatePromptPackageRoles(
+		promptPackageBody, remediationPromptPackageBody); err != nil {
+		return nil, fmt.Errorf("remediation prompt package roles: %w", err)
 	}
 	// Resolve the workspace-hydration command before any network-touching
 	// composition, so a base/image misconfiguration fails at startup. Only the
@@ -1561,6 +1655,7 @@ func composeClaudeDriver(
 		reviewHostInstructions:   reviewHostInstructions,
 		env:                      env,
 		elaborationPromptPackage: elaborationPromptPackage,
+		remediationPromptPackage: remediationPromptPackage,
 		derive:                   claudeAdmissionDerivation(cfg),
 		runConformance: func(runCtx context.Context) error {
 			return runClaudeConformance(
@@ -2105,17 +2200,30 @@ func productionMaterializer(blobs *signet.BlobStore) (*exec.Materializer, error)
 func productionElaborationDeliveryValidator(
 	materializer *exec.Materializer,
 ) func(context.Context, exec.StartSpec) error {
+	return productionPromptDeliveryValidator(materializer, engine.ErrElaborationInputUndeliverable)
+}
+
+func productionImplementationDeliveryValidator(
+	materializer *exec.Materializer,
+) func(context.Context, exec.StartSpec) error {
+	return productionPromptDeliveryValidator(materializer, engine.ErrProductionInputUndeliverable)
+}
+
+func productionPromptDeliveryValidator(
+	materializer *exec.Materializer,
+	undeliverable error,
+) func(context.Context, exec.StartSpec) error {
 	return func(ctx context.Context, spec exec.StartSpec) error {
 		inputs, err := materializer.Materialize(ctx, spec)
 		if err != nil {
 			if errors.Is(err, exec.ErrInputTooLarge) {
-				return fmt.Errorf("%w: %w", engine.ErrElaborationInputUndeliverable, err)
+				return fmt.Errorf("%w: %w", undeliverable, err)
 			}
 			return err
 		}
 		if err := claude.ValidatePromptInputs(inputs); err != nil {
 			if errors.Is(err, claude.ErrUnsupportedStart) {
-				return fmt.Errorf("%w: %w", engine.ErrElaborationInputUndeliverable, err)
+				return fmt.Errorf("%w: %w", undeliverable, err)
 			}
 			return err
 		}

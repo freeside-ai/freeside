@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	sqlite "modernc.org/sqlite"
 
 	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -30,6 +33,110 @@ func productionEntry(payload string) store.QueueEntry {
 		IdempotencyKey: "inv-implement-run-1",
 		Kind:           KindProductionInvocationRequested,
 		Payload:        []byte(payload),
+	}
+}
+
+func TestProductionDeliveryRefusalRecordsStandardOutcome(t *testing.T) {
+	ctx := t.Context()
+	runID := domain.RunID("run-delivery-refusal")
+	invocationID := remediationInvocationID(runID, 1)
+	stageID := remediationStageID(runID, 1)
+	identity := domain.AuthIdentity{
+		ID: "auth-delivery-refusal", Provider: "claude", AuthStoreMutationLease: true,
+		MaxParallelExecutions: 1,
+		Interim: domain.InterimClientFacts{
+			AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand,
+		},
+	}
+	identityID := identity.ID
+	run := domain.Run{
+		ID: runID, ProjectID: "project-delivery-refusal",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+		Stages: []domain.Stage{{
+			ID: stageID, RunID: runID, Name: productionStageName,
+			Attempts: []domain.Attempt{{
+				ID: attemptIDFor(invocationID), StageID: stageID,
+				Number: 1, InvocationID: invocationID,
+			}},
+		}},
+	}
+	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: invocationID, RunID: runID, StageID: stageID,
+		AttemptID:      attemptIDFor(invocationID),
+		Backend:        string(domain.BackendFreshVMReadOnlyVolumeHandoff),
+		Capabilities:   domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		OperatingMode:  domain.ModeAttendedDev,
+		CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile:  domain.EgressProviderOnly,
+		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
+		SpecDigest:     run.SpecDigest, PolicyDigest: run.PolicyDigest, InputDigest: "sha256:input",
+		Base: domain.BaseRevision{
+			Repo: "owner/repo", RepositoryID: 42,
+			BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
+		},
+		Workspace: "ws-delivery-refusal", AuthIdentityID: &identityID,
+		AdmittedAt: time.Date(2026, 8, 25, 1, 2, 3, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "delivery-refusal.db"), store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		if err := tx.RecordAuthIdentity(ctx, identity, admission.AdmittedAt); err != nil {
+			return err
+		}
+		if _, _, err := tx.EnqueueOutbox(
+			ctx, string(invocationID), KindRemediationInvocationRequested, []byte(`{}`),
+		); err != nil {
+			return err
+		}
+		return tx.RecordExecutionAdmission(ctx, admission)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e := &Engine{store: st, signet: signet.NewService(st)}
+	if err := e.recordProductionDeliveryRefusal(
+		ctx, run, run.Stages[0], invocationID, "rendered prompt exceeds limit",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		outcome, err := tx.GetExecutionOutcomeRecord(ctx, invocationID)
+		if err != nil {
+			return err
+		}
+		if outcome.Status != domain.ExecutionOutcomeFailed || outcome.AdmissionID != admission.ID {
+			return fmt.Errorf("delivery refusal outcome = %#v", outcome)
+		}
+		active, err := tx.ActiveIdentityExecutionCount(ctx, identity.ID)
+		if err != nil {
+			return err
+		}
+		if active != 0 {
+			return fmt.Errorf("active executions after terminal refusal = %d", active)
+		}
+		marker, err := tx.GetOutbox(ctx, string(invocationID))
+		if err != nil {
+			return err
+		}
+		if !marker.Dispatched() {
+			return errors.New("delivery refusal marker remained pending")
+		}
+		_, err = tx.GetAttentionItem(ctx, domain.ItemID("execution-failure-"+string(invocationID)))
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -644,8 +751,9 @@ func TestProductionOwnershipReGatesTheMarkerPayload(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			e, st := newQuarantineEngine(t, ctx)
+			run := productionOwnershipRun(tc.runID)
+			seedProductionOwnershipRun(t, ctx, st, run)
 			seedProductionMarker(t, ctx, st, tc.runID, tc.payload)
-			run := domain.Run{ID: tc.runID, ProjectID: "project-1"}
 
 			owned, err := e.ownsProductionRun(ctx, run)
 			if err != nil {
@@ -693,8 +801,9 @@ func TestProductionQuarantineLeavesADecidedNoticeAlone(t *testing.T) {
 	ctx := context.Background()
 	e, st := newQuarantineEngine(t, ctx)
 	runID := domain.RunID("run-decided")
+	run := productionOwnershipRun(runID)
+	seedProductionOwnershipRun(t, ctx, st, run)
 	seedProductionMarker(t, ctx, st, runID, `{"run_id":"run-decided"}`)
-	run := domain.Run{ID: runID, ProjectID: "project-1"}
 
 	if owned, err := e.ownsProductionRun(ctx, run); owned || err != nil {
 		t.Fatalf("ownership = %v, %v", owned, err)
@@ -789,6 +898,225 @@ func TestProductionQuarantineSkipsUnrelatedFailures(t *testing.T) {
 	requireNoQuarantineItem(t, ctx, st, "run-unrelated")
 }
 
+func TestRemediationSourceOperationalStoreReadsRemainRetryable(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	var expired *store.ReadTx
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		expired = tx
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		read func() error
+	}{
+		{
+			name: "checkpoint",
+			read: func() error {
+				_, err := expired.GetInbox(ctx, "checkpoint")
+				return err
+			},
+		},
+		{
+			name: "authorization",
+			read: func() error {
+				_, err := expired.GetCandidateAuthorization(ctx, "sha256:authorization")
+				return err
+			},
+		},
+		{
+			name: "image",
+			read: func() error {
+				_, err := expired.GetProjectImage(ctx, "sha256:image")
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			readErr := tc.read()
+			if !errors.Is(readErr, sql.ErrTxDone) {
+				t.Fatalf("%s store read = %v, want sql.ErrTxDone", tc.name, readErr)
+			}
+			classified := remediationSourceReadError(ctx, readErr)
+			if errors.Is(classified, errRemediationSourceIdentity) ||
+				!productionPublicationRetryableFailure(classified) {
+				t.Fatalf("%s read = %v, want untagged retryable failure", tc.name, classified)
+			}
+		})
+	}
+}
+
+func TestRemediationSourceSQLiteReadFailureRemainsRetryable(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	st, err := store.Open(ctx, dbPath, store.Options{BusyTimeout: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = conn.ExecContext(context.Background(), "ROLLBACK") })
+
+	readErr := st.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetInbox(ctx, "checkpoint")
+		return err
+	})
+	var sqliteErr *sqlite.Error
+	if !errors.As(readErr, &sqliteErr) {
+		t.Fatalf("locked store read = %v, want SQLite operational error", readErr)
+	}
+	classified := remediationSourceReadError(ctx, readErr)
+	if errors.Is(classified, errRemediationSourceIdentity) ||
+		!productionPublicationRetryableFailure(classified) {
+		t.Fatalf("locked store read = %v, want untagged retryable failure", classified)
+	}
+}
+
+// TestCheckpointArtifactVerifyRetryableUnlessDeterministic proves the #911
+// re-review fix: a transient open/read/close fault while verifying a
+// daemon-authored checkpoint blob stays retryable and untagged, while a digest
+// mismatch terminalizes with the caller's durable sentinel. Both the remediation
+// source-tree and durable production-checkpoint authenticators route their
+// verifyFakePublicationBlob failures through retryableOrTerminal, so a transient
+// I/O blip no longer converts an otherwise valid run into a permanent dispute.
+func TestCheckpointArtifactVerifyRetryableUnlessDeterministic(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	artifact := domain.Artifact{
+		ID: "artifact-1", Digest: domain.Digest("sha256:" + strings.Repeat("0", 64)),
+	}
+	transientOpen := &os.PathError{Op: "open", Path: "checkpoint-blob", Err: errors.New("input/output error")}
+
+	for _, sentinel := range []error{errRemediationSourceIdentity, domain.ErrParentKeyMismatch} {
+		operational := verifyFakePublicationBlob(remediationArtifactStore{openErr: transientOpen}, artifact)
+		if operational == nil {
+			t.Fatal("expected an operational blob-open failure")
+		}
+		if classified := retryableOrTerminal(ctx, operational, sentinel); errors.Is(classified, sentinel) ||
+			!productionPublicationRetryableFailure(classified) {
+			t.Fatalf("transient open (sentinel %v) = %v, want untagged retryable", sentinel, classified)
+		}
+
+		deterministic := verifyFakePublicationBlob(remediationArtifactStore{body: []byte("mismatched content")}, artifact)
+		if deterministic == nil {
+			t.Fatal("expected a digest-mismatch failure")
+		}
+		if classified := retryableOrTerminal(ctx, deterministic, sentinel); !errors.Is(classified, sentinel) ||
+			productionPublicationRetryableFailure(classified) {
+			t.Fatalf("digest mismatch (sentinel %v) = %v, want terminal", sentinel, classified)
+		}
+	}
+
+	// A canceled context is preserved, never terminalized as a contradiction.
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	deterministic := verifyFakePublicationBlob(remediationArtifactStore{body: []byte("mismatched content")}, artifact)
+	if got := retryableOrTerminal(canceled, deterministic, errRemediationSourceIdentity); !errors.Is(got, context.Canceled) ||
+		errors.Is(got, errRemediationSourceIdentity) {
+		t.Fatalf("canceled context = %v, want untagged context.Canceled", got)
+	}
+}
+
+func TestRemediationSourceDurableStoreReadFailuresRemainTerminal(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	st, err := store.Open(ctx, dbPath, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, statement := range []string{
+		`INSERT INTO inbox (idempotency_key, kind, payload, status, created_at)
+		 VALUES ('checkpoint', 'production_verification_checkpoint', X'7B7D', 'pending', 'not-a-time')`,
+		`INSERT INTO candidate_authorizations
+		 (id, repo, base_sha, head_sha, trust_profile_digest, created_at, body)
+		 VALUES ('sha256:authorization', 'owner/repo', 'base', 'head', 'sha256:profile', 'now', 'not-json')`,
+		`INSERT INTO project_images
+		 (id, repository, repository_id, commit_sha, recipe_digest, base_image_ref, image_ref, body)
+		 VALUES ('sha256:image', 'owner/repo', 1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+		 'sha256:recipe', 'base-image', 'image-ref', 'not-json')`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("seed malformed source row: %v", err)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		read func(*store.ReadTx) error
+	}{
+		{
+			name: "checkpoint",
+			read: func(tx *store.ReadTx) error {
+				_, err := tx.GetInbox(ctx, "checkpoint")
+				return err
+			},
+		},
+		{
+			name: "authorization",
+			read: func(tx *store.ReadTx) error {
+				_, err := tx.GetCandidateAuthorization(ctx, "sha256:authorization")
+				return err
+			},
+		},
+		{
+			name: "image",
+			read: func(tx *store.ReadTx) error {
+				_, err := tx.GetProjectImage(ctx, "sha256:image")
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			readErr := st.Read(ctx, tc.read)
+			if readErr == nil {
+				t.Fatalf("%s malformed row reconstructed", tc.name)
+			}
+			classified := remediationSourceReadError(ctx, readErr)
+			if !errors.Is(classified, errRemediationSourceIdentity) ||
+				productionPublicationRetryableFailure(classified) {
+				t.Fatalf("%s read = %v, want terminal source identity", tc.name, classified)
+			}
+		})
+	}
+}
+
+func TestRemediationSourceReadPreservesContextCancellation(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := remediationSourceReadError(ctx, errors.New("store read failed"))
+	if !errors.Is(err, context.Canceled) || errors.Is(err, errRemediationSourceIdentity) ||
+		errors.Is(err, errProductionRetryable) {
+		t.Fatalf("canceled source read = %v, want only context cancellation", err)
+	}
+}
+
 func newQuarantineEngine(t *testing.T, ctx context.Context) (*Engine, *store.Store) {
 	t.Helper()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
@@ -797,6 +1125,29 @@ func newQuarantineEngine(t *testing.T, ctx context.Context) (*Engine, *store.Sto
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	return &Engine{store: st, signet: signet.NewService(st)}, st
+}
+
+func productionOwnershipRun(runID domain.RunID) domain.Run {
+	return domain.Run{
+		ID: runID, ProjectID: "project-1",
+		SpecDigest:   domain.Digest("sha256:" + strings.Repeat("a", 64)),
+		PolicyDigest: domain.Digest("sha256:" + strings.Repeat("b", 64)),
+		Stages: []domain.Stage{{
+			ID: productionStageID(runID), RunID: runID,
+			Name: productionStageName, Attempts: []domain.Attempt{},
+		}},
+	}
+}
+
+func seedProductionOwnershipRun(
+	t *testing.T, ctx context.Context, st *store.Store, run domain.Run,
+) {
+	t.Helper()
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutRun(ctx, run)
+	}); err != nil {
+		t.Fatalf("seed production ownership run: %v", err)
+	}
 }
 
 func seedProductionMarker(
@@ -1409,11 +1760,13 @@ func TestProductionQuarantineDiagnosesADowngrade(t *testing.T) {
 	ctx := context.Background()
 	e, st := newQuarantineEngine(t, ctx)
 	runID := domain.RunID("run-downgraded")
+	run := productionOwnershipRun(runID)
+	seedProductionOwnershipRun(t, ctx, st, run)
 	seedProductionMarker(t, ctx, st, runID, `{"version":"freeside.production-invocation/v3",`+
 		`"invocation_id":"inv-implement-run-downgraded","run_id":"run-downgraded",`+
 		`"stage_id":"implement-run-downgraded","review":{"source":"codex"}}`)
 
-	owned, err := e.ownsProductionRun(ctx, domain.Run{ID: runID, ProjectID: "project-1"})
+	owned, err := e.ownsProductionRun(ctx, run)
 	if owned || err != nil {
 		t.Fatalf("ownership = %v, %v", owned, err)
 	}
@@ -1464,6 +1817,33 @@ func validPublicationTask(
 			Title: "Publish the production run", Body: "Produced by a production run.\n",
 			CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside", BotUserID: 42},
 		},
+	}
+}
+
+func TestDecodeProductionPublicationTaskPreservesLegacyRemediationNoop(t *testing.T) {
+	t.Parallel()
+	runID := domain.RunID("run-legacy-remediation-noop")
+	task := validPublicationTask(t, runID, "project-legacy-remediation-noop")
+	task.ProducingInvocationID = remediationInvocationID(runID, 1)
+	task.LegacyRemediationNoop = true
+	task.VerificationID = productionVerificationInvocationIDForProducer(
+		runID, task.ProducingInvocationID,
+	)
+	task.Replay.InvocationID = task.ProducingInvocationID
+	payload, err := json.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeProductionPublicationTask(store.QueueEntry{
+		IdempotencyKey: productionPublicationTaskKey(runID),
+		Kind:           KindProductionPublicationRequested,
+		Payload:        payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.LegacyRemediationNoop {
+		t.Fatal("legacy remediation_noop field was not preserved")
 	}
 }
 

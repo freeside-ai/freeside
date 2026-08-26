@@ -45,16 +45,17 @@ var errReplay = errors.New("engine transition already committed")
 // execution driver. It is safe to call Reconcile repeatedly; the store ledger
 // and deterministic workflow identities collapse retries onto prior work.
 type Engine struct {
-	databaseLock          *daemonlock.Lock
-	reconcileMu           sync.Mutex
-	store                 *store.Store
-	signet                *signet.Service
-	driver                exec.StageDriver
-	publication           *fakePublicationWorkflow
-	fakePublicationPolicy *fakePublicationPolicyRecovery
-	productionPublication *productionPublicationWorkflow
-	elaboration           *elaborationWorkflow
-	inference             *inference.Client
+	databaseLock                *daemonlock.Lock
+	reconcileMu                 sync.Mutex
+	store                       *store.Store
+	signet                      *signet.Service
+	driver                      exec.StageDriver
+	publication                 *fakePublicationWorkflow
+	fakePublicationPolicy       *fakePublicationPolicyRecovery
+	productionPublication       *productionPublicationWorkflow
+	productionDeliveryValidator func(context.Context, exec.StartSpec) error
+	elaboration                 *elaborationWorkflow
+	inference                   *inference.Client
 	// admission is the configured capability gate and durable-record writer
 	// (see WithAdmission); nil leaves dispatch exactly as it was before a
 	// runner backend existed to admit against.
@@ -89,6 +90,21 @@ func WithDaemonLock(lock *daemonlock.Lock) Option {
 // Option configures an optional engine workflow without changing the shared
 // store, signet, or driver contracts.
 type Option func(*Engine) error
+
+// WithProductionDeliveryValidation installs the real stage driver's
+// deterministic materialization and start-time input checks at the admission
+// boundary. The same function is rerun for durable attempt recovery.
+func WithProductionDeliveryValidation(
+	validate func(context.Context, exec.StartSpec) error,
+) Option {
+	return func(e *Engine) error {
+		if validate == nil {
+			return errors.New("production delivery validation: nil validator")
+		}
+		e.productionDeliveryValidator = validate
+		return nil
+	}
+}
 
 // WithLogger installs the reconcile loops' logger. Without it the engine
 // discards its records, which is what every test wants and no unattended
@@ -154,6 +170,10 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 		}
 	}
 	if e.productionPublication != nil {
+		if e.admission != nil && !e.productionPublication.holdOnly &&
+			e.productionDeliveryValidator == nil {
+			return nil, errors.New("new engine: active production admission has no delivery validator")
+		}
 		e.productionPublication.inference = e.inference
 	}
 	return e, nil

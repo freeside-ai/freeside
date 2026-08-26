@@ -54,6 +54,64 @@ func TestProductionElaborationDeliveryValidatorRejectsAggregateOverflow(t *testi
 	}
 }
 
+func TestProductionRemediationDeliveryValidatorRejectsPromptOverflow(t *testing.T) {
+	st, blobs, run, promptDigest := deliveryValidatorFixture(t, true)
+	priorBody := []byte(strings.Repeat("r", 32<<10))
+	putDeliveryArtifact(t, st, blobs, "remediation-prompt-overflow", priorBody)
+	materializer, err := productionMaterializer(blobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = productionImplementationDeliveryValidator(materializer)(t.Context(),
+		deliveryStartSpec(t, run, promptDigest, []domain.Digest{
+			domain.Digest(contentaddr.Sum(priorBody)),
+		}))
+	if !errors.Is(err, engine.ErrProductionInputUndeliverable) ||
+		!errors.Is(err, claude.ErrUnsupportedStart) {
+		t.Fatalf("prompt overflow = %v, want durable undeliverable Claude input", err)
+	}
+}
+
+func TestProductionImplementationDeliveryValidatorRejectsInitialPromptOverflow(t *testing.T) {
+	_, blobs, run, promptDigest := deliveryValidatorFixture(t, false)
+	largeSpec := []byte(strings.Repeat("s", 32<<10))
+	run.SpecDigest = domain.Digest(contentaddr.Sum(largeSpec))
+	if _, err := blobs.Put(run.SpecDigest, bytes.NewReader(largeSpec)); err != nil {
+		t.Fatal(err)
+	}
+	materializer, err := productionMaterializer(blobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = productionImplementationDeliveryValidator(materializer)(t.Context(),
+		deliveryStartSpec(t, run, promptDigest, nil))
+	if !errors.Is(err, engine.ErrProductionInputUndeliverable) ||
+		!errors.Is(err, claude.ErrUnsupportedStart) {
+		t.Fatalf("initial prompt overflow = %v, want durable undeliverable Claude input", err)
+	}
+}
+
+func TestProductionRemediationDeliveryValidatorRejectsAggregateOverflow(t *testing.T) {
+	st, blobs, run, promptDigest := deliveryValidatorFixture(t, true)
+	body := bytes.Repeat([]byte("r"), int(exec.ProductionMaxInputBytes))
+	prior := make([]domain.Digest, 9)
+	for i := range prior {
+		putDeliveryArtifact(t, st, blobs,
+			domain.ArtifactID("remediation-aggregate-"+string(rune('a'+i))), body)
+		prior[i] = domain.Digest(contentaddr.Sum(body))
+	}
+	materializer, err := productionMaterializer(blobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = productionImplementationDeliveryValidator(materializer)(t.Context(),
+		deliveryStartSpec(t, run, promptDigest, prior))
+	if !errors.Is(err, engine.ErrProductionInputUndeliverable) ||
+		!errors.Is(err, exec.ErrInputTooLarge) {
+		t.Fatalf("aggregate overflow = %v, want durable undeliverable materialized input", err)
+	}
+}
+
 func TestStoreAdmissionAuthorityRejectsMissingElaborationMarker(t *testing.T) {
 	st, _, _, _ := deliveryValidatorFixture(t, true)
 	authority := storeAdmissionAuthority{store: st}
