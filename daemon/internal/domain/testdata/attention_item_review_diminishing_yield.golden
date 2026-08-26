@@ -1,0 +1,80 @@
+{
+  "id": "item-diminishing-yield",
+  "project_id": "proj-1",
+  "subject": {
+    "subject_type": "run",
+    "subject_id": "run-1",
+    "run_id": "run-1"
+  },
+  "type": "review_diminishing_returns",
+  "priority": "normal",
+  "reason": "review rounds are surfacing only marginal findings",
+  "requested_decision": [
+    "finish_now",
+    "apply_then_finish"
+  ],
+  "evidence_snapshot": [],
+  "agent_claims": [],
+  "artifact_digests": [],
+  "pr_head_sha": "",
+  "pr_reference": null,
+  "readiness": null,
+  "yield_history": {
+    "rounds": [
+      {
+        "round": 1,
+        "findings_ingested": 2,
+        "new_findings": 2,
+        "recurring_findings": 0,
+        "fixed": 1,
+        "declined": 0,
+        "deferred": 1,
+        "outcome": "findings"
+      },
+      {
+        "round": 2,
+        "findings_ingested": 2,
+        "new_findings": 1,
+        "recurring_findings": 1,
+        "fixed": 1,
+        "declined": 1,
+        "deferred": 0,
+        "outcome": "findings"
+      },
+      {
+        "round": 3,
+        "findings_ingested": 0,
+        "new_findings": 0,
+        "recurring_findings": 0,
+        "fixed": 0,
+        "declined": 0,
+        "deferred": 0,
+        "outcome": "clean"
+      }
+    ],
+    "terminal_outcome": "clean"
+  },
+  "commit_plan_notice": null,
+  "base_freshness": null,
+  "readiness_invalidation": null,
+  "review_recovery_binding": null,
+  "codex_reenrollment_recovery_binding": null,
+  "review_configuration_recovery": null,
+  "finding_adjudication": null,
+  "item_version": 1,
+  "interruption_class": "planned_gate",
+  "conversation_id": null,
+  "timing": {
+    "delivery_count": 0,
+    "first_submitted_at": null,
+    "first_accepted_at": null,
+    "first_opened_at": null,
+    "submit_to_first_open": null
+  },
+  "created_at": "2026-01-02T03:04:05Z",
+  "expires_when": null,
+  "decided_at": null,
+  "posture": null,
+  "blocking_supersession": null,
+  "status": "open"
+}

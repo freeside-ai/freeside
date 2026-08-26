@@ -446,9 +446,10 @@ type AttentionItem struct {
 	// items that never ran Section 6 verification. Once created it is immutable.
 	Readiness *ReadinessSummary `json:"readiness"`
 	// YieldHistory preserves the deterministic per-round routed-review digest
-	// on ready_for_final_review items. Production creators always set it; nil
-	// remains valid for legacy persisted items and fake-mode items. Once created
-	// it is immutable.
+	// on ready_for_final_review and review_diminishing_returns items. Production
+	// ready-item creators always set it, and the diminishing producer will once
+	// it lands; nil remains valid for legacy persisted items, fake-mode items,
+	// and earlier diminishing items. Once created it is immutable.
 	YieldHistory *ReviewYieldHistory `json:"yield_history"`
 	// CommitPlanNotice is the daemon-derived commit-plan notice (plan §5.6;
 	// CommitPlanNoticeReason): set when the reserved plan channel was
@@ -720,7 +721,7 @@ func (i AttentionItem) Validate() error {
 		}
 	}
 	if i.YieldHistory != nil {
-		if i.Type != AttentionReadyForFinalReview {
+		if i.Type != AttentionReadyForFinalReview && i.Type != AttentionReviewDiminishing {
 			return fmt.Errorf("item %s type %q carries yield history: %w",
 				i.ID, i.Type, ErrReviewYieldHistoryInconsistent)
 		}

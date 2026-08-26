@@ -464,6 +464,24 @@ import Testing
             ])
     }
 
+    @Test func diminishingReviewYieldRendersEveryRoundAndTerminalOutcome() {
+        let item = AttentionFixtures.fixture(type: .review_diminishing_returns).item
+
+        #expect(
+            AttentionDisplay.reviewYieldRows(item) == [
+                .init(
+                    label: "Review round 1",
+                    value: "4 findings · 4 new · 0 recurring · 2 fixed · 1 declined · 1 deferred · Findings"),
+                .init(
+                    label: "Review round 2",
+                    value: "3 findings · 1 new · 2 recurring · 1 fixed · 1 declined · 1 deferred · Findings"),
+                .init(
+                    label: "Review round 3",
+                    value: "3 findings · 0 new · 3 recurring · 0 fixed · 2 declined · 1 deferred · Findings"),
+                .init(label: "Terminal review", value: "Findings"),
+            ])
+    }
+
     @Test func legacyReadyItemOmitsReviewYieldRows() {
         var item = AttentionFixtures.fixture(type: .ready_for_final_review).item
         item.yield_history = nil

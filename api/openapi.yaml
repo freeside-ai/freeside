@@ -1846,7 +1846,8 @@ components:
       type: object
       description: >
         The immutable review-yield digest derived from persisted review
-        records and finding dispositions when a candidate becomes ready.
+        records and finding dispositions when review reaches a convergence
+        decision or a candidate becomes ready.
       required: [rounds, terminal_outcome]
       additionalProperties: false
       properties:
@@ -1967,11 +1968,11 @@ components:
             - $ref: "#/components/schemas/ReviewYieldHistory"
           description: >
             The daemon-derived per-round review yield for this
-            ready_for_final_review item (mirrors
-            domain.AttentionItem.YieldHistory). Production-created ready
-            items always carry it; null is tolerated for legacy persisted
-            items and fake-mode items. It is fixed at creation and never
-            client-set.
+            ready_for_final_review or review_diminishing_returns item (mirrors
+            domain.AttentionItem.YieldHistory). Production-created ready items
+            always carry it; null is tolerated for legacy persisted items,
+            fake-mode items, and diminishing items created before their
+            producer lands. It is fixed at creation and never client-set.
         commit_plan_notice:
           nullable: true
           allOf:

@@ -262,6 +262,29 @@
                                     snapshot.item,
                                     at: dynamicTypeSize,
                                     compactLayout: true))))
+
+                    let preferencesSuite = "FreesideScreenshotDiminishingPreferences"
+                    guard let preferencesDefaults = UserDefaults(suiteName: preferencesSuite) else {
+                        throw ScreenshotError.preferencesUnavailable
+                    }
+                    preferencesDefaults.removePersistentDomain(forName: preferencesSuite)
+                    let inspectorPreferences = DecisionSectionPreferences(
+                        defaults: preferencesDefaults)
+                    inspectorPreferences.detailsExpanded = true
+                    let inspectorDetail = DecisionDetailView(
+                        store: store,
+                        itemID: snapshot.item.id,
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        sectionPreferences: inspectorPreferences)
+                    surfaces.append(
+                        Surface(
+                            name: "decision-review_diminishing_returns-inspector",
+                            width: 360,
+                            view: AnyView(
+                                inspectorDetail.screenshotInspector(
+                                    snapshot.item,
+                                    at: dynamicTypeSize))))
                 }
             }
 

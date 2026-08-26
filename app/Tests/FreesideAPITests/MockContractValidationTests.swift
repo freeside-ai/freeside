@@ -119,19 +119,26 @@ import Testing
                 == "readiness on a non-ready_for_final_review item")
     }
 
-    @Test func reviewYieldHistoryIsReadyScopedConsistentAndLegacyOptional() {
+    @Test func reviewYieldHistoryIsTypeScopedConsistentAndLegacyOptional() {
         let ready = AttentionFixtures.fixture(type: .ready_for_final_review).item
         #expect(MockContractValidation.itemValidityBreach(ready) == nil)
+        let diminishing = AttentionFixtures.fixture(type: .review_diminishing_returns).item
+        #expect(MockContractValidation.itemValidityBreach(diminishing) == nil)
 
-        var legacy = ready
-        legacy.yield_history = nil
-        #expect(MockContractValidation.itemValidityBreach(legacy) == nil)
+        for fixture in [ready, diminishing] {
+            var legacy = fixture
+            legacy.yield_history = nil
+            #expect(MockContractValidation.itemValidityBreach(legacy) == nil)
+        }
 
-        var wrongType = AttentionFixtures.fixture(type: .spec_approval).item
-        wrongType.yield_history = ready.yield_history
-        #expect(
-            MockContractValidation.itemValidityBreach(wrongType)
-                == "yield_history on a non-ready_for_final_review item")
+        for type in AttentionFixtures.phase1Types
+        where type != .ready_for_final_review && type != .review_diminishing_returns {
+            var wrongType = AttentionFixtures.fixture(type: type).item
+            wrongType.yield_history = ready.yield_history
+            #expect(
+                MockContractValidation.itemValidityBreach(wrongType)
+                    == "yield_history on an unsupported item type")
+        }
 
         var inconsistent = ready
         inconsistent.yield_history?.value1.rounds[1].recurring_findings = 0
