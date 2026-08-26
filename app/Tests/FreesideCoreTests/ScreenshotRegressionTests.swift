@@ -209,11 +209,41 @@
                     loadsAttachments: false,
                     showsValidationProgress: false
                 )
+                let proposalFacts =
+                    snapshot.item._type == .run_proposal
+                    ? Components.Schemas.RunProposalFactsSnapshot(
+                        as_of_revision: snapshot.as_of_revision,
+                        entity_version: snapshot.entity_version,
+                        item_version: snapshot.item.item_version,
+                        proposal_digest: snapshot.item.evidence_snapshot.first?.digest ?? "",
+                        supersedes: nil,
+                        intent: .implement_subject,
+                        expected_cost_units: 12,
+                        scope: .init(
+                            component_count: 1,
+                            declared_path_count: 3,
+                            touches_control_plane: false))
+                    : nil
                 surfaces.append(
                     Surface(
                         name: "decision-\(snapshot.item._type.rawValue)",
                         view: AnyView(
-                            detail.screenshotCard(snapshot.item, at: dynamicTypeSize))))
+                            detail.screenshotCard(
+                                snapshot.item,
+                                at: dynamicTypeSize,
+                                proposalFacts: proposalFacts))))
+
+                if snapshot.item._type == .ready_for_final_review {
+                    surfaces.append(
+                        Surface(
+                            name: "decision-ready_for_final_review-1200",
+                            width: 1_200,
+                            view: AnyView(
+                                detail.screenshotCard(
+                                    snapshot.item,
+                                    at: dynamicTypeSize,
+                                    detailWidth: 1_200))))
+                }
 
                 if snapshot.item._type == .review_diminishing_returns {
                     surfaces.append(
@@ -240,11 +270,49 @@
                 loadsAttachments: false,
                 showsValidationProgress: false
             )
+            let preferencesSuite = "FreesideScreenshotInspectorPreferences"
+            guard let preferencesDefaults = UserDefaults(suiteName: preferencesSuite) else {
+                throw ScreenshotError.preferencesUnavailable
+            }
+            preferencesDefaults.removePersistentDomain(forName: preferencesSuite)
+            let inspectorPreferences = DecisionSectionPreferences(defaults: preferencesDefaults)
+            inspectorPreferences.claimsExpanded = true
+            inspectorPreferences.evidenceExpanded = true
+            inspectorPreferences.detailsExpanded = true
+            let inspectorDetail = DecisionDetailView(
+                store: store,
+                itemID: adjudication.id,
+                recommendation: .init(
+                    action: .accept_recommended_route,
+                    reason: "This route preserves the evidence-backed finding.",
+                    confidence: "High"
+                ),
+                showsValidationProgress: false,
+                sectionPreferences: inspectorPreferences)
             surfaces.append(
                 Surface(
                     name: "decision-finding_adjudication-recommended",
                     view: AnyView(
                         recommendedDetail.screenshotCard(adjudication, at: dynamicTypeSize))))
+            for width in [CGFloat(900), CGFloat(1_200)] {
+                surfaces.append(
+                    Surface(
+                        name: "decision-finding_adjudication-recommended-\(Int(width))",
+                        width: width,
+                        view: AnyView(
+                            recommendedDetail.screenshotCard(
+                                adjudication,
+                                at: dynamicTypeSize,
+                                detailWidth: width))))
+            }
+            surfaces.append(
+                Surface(
+                    name: "decision-finding_adjudication-inspector",
+                    width: 360,
+                    view: AnyView(
+                        inspectorDetail.screenshotInspector(
+                            adjudication,
+                            at: dynamicTypeSize))))
 
             let question = AttentionFixtures.fixture(type: .agent_question).item
             let destructiveRecommendation = DecisionDetailView(
@@ -294,6 +362,16 @@
                             selection: .constant(activeRun.run.id)
                         ).screenshotContent()
                     )))
+            surfaces.append(
+                Surface(
+                    name: "operational-summary",
+                    width: 640,
+                    view: AnyView(
+                        OperationalSummaryView(
+                            summary: OperationalSummary(
+                                openSnapshots: store.openSnapshots,
+                                runs: runs,
+                                freshness: .fresh)))))
             guard
                 let timeline = RunFixtures.defaultTimelines().first(where: {
                     $0.run_id == activeRun.run.id
@@ -552,6 +630,7 @@
         case missingManifest
         case missingSeededImage
         case pngEncodingFailed
+        case preferencesUnavailable
         case recordingRequiresBaselineOperatingSystem(expected: String, actual: String)
         case renderFailed
         case unstableRender

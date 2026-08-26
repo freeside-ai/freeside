@@ -15,7 +15,24 @@ struct InboxView: View {
     @Binding var selection: String?
     let launchScope: InboxStore.Scope?
     let launchProjectID: String?
-    var onRevealTechnicalDetails: (String) -> Void = { _ in }
+    private let navigationPath: Binding<[String]>?
+    var onRevealTechnicalDetails: (String) -> Void
+
+    init(
+        store: InboxStore,
+        selection: Binding<String?>,
+        launchScope: InboxStore.Scope?,
+        launchProjectID: String?,
+        navigationPath: Binding<[String]>? = nil,
+        onRevealTechnicalDetails: @escaping (String) -> Void = { _ in }
+    ) {
+        self.store = store
+        _selection = selection
+        self.launchScope = launchScope
+        self.launchProjectID = launchProjectID
+        self.navigationPath = navigationPath
+        self.onRevealTechnicalDetails = onRevealTechnicalDetails
+    }
 
     var body: some View {
         Group {
@@ -58,21 +75,43 @@ struct InboxView: View {
                         }
                         .foregroundStyle(Color.inkDim)
                     } else {
-                        List(store.rows, id: \.item.id, selection: $selection) { snapshot in
-                            InboxRowView(
-                                item: snapshot.item,
-                                isSelected: selection == snapshot.item.id,
-                                onRevealTechnicalDetails: {
-                                    selection = snapshot.item.id
-                                    onRevealTechnicalDetails(snapshot.item.id)
+                        #if os(iOS)
+                            List(store.rows, id: \.item.id) { snapshot in
+                                NavigationLink(value: snapshot.item.id) {
+                                    InboxRowView(
+                                        item: snapshot.item,
+                                        onRevealTechnicalDetails: {
+                                            selection = snapshot.item.id
+                                            onRevealTechnicalDetails(snapshot.item.id)
+                                        })
                                 }
-                            )
-                            .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                        }
-                        .listStyle(.plain)
-                        .scrollContentBackground(.hidden)
+                                .listRowInsets(
+                                    EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)
+                                )
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
+                            }
+                            .listStyle(.plain)
+                            .scrollContentBackground(.hidden)
+                        #else
+                            List(store.rows, id: \.item.id, selection: $selection) { snapshot in
+                                InboxRowView(
+                                    item: snapshot.item,
+                                    isSelected: selection == snapshot.item.id,
+                                    onRevealTechnicalDetails: {
+                                        selection = snapshot.item.id
+                                        onRevealTechnicalDetails(snapshot.item.id)
+                                    }
+                                )
+                                .listRowInsets(
+                                    EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)
+                                )
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
+                            }
+                            .listStyle(.plain)
+                            .scrollContentBackground(.hidden)
+                        #endif
                     }
                 }
             }
@@ -156,9 +195,20 @@ struct InboxView: View {
 
     private func repairSelection() {
         guard store.loadState == .loaded else { return }
-        if let selection, !store.rows.contains(where: { $0.item.id == selection }) {
-            self.selection = nil
-        }
+        #if os(iOS)
+            if let path = navigationPath?.wrappedValue {
+                let repairedPath = NavigationModel.repairedPath(
+                    path,
+                    availableIDs: Set(store.rows.map(\.item.id)))
+                if repairedPath != path {
+                    navigationPath?.wrappedValue = repairedPath
+                }
+            }
+        #else
+            if let selection, !store.rows.contains(where: { $0.item.id == selection }) {
+                self.selection = nil
+            }
+        #endif
     }
 
     /// The project-owned row composition without List and Picker, whose

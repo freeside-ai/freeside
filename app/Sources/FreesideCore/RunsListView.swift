@@ -6,6 +6,19 @@ struct RunsListView: View {
     let schedules: [Components.Schemas.ScheduleSnapshot]
     @Binding var selection: String?
     @State private var projectID: String?
+    private let navigationPath: Binding<[String]>?
+
+    init(
+        runs: [Components.Schemas.RunSnapshot],
+        schedules: [Components.Schemas.ScheduleSnapshot],
+        selection: Binding<String?>,
+        navigationPath: Binding<[String]>? = nil
+    ) {
+        self.runs = runs
+        self.schedules = schedules
+        _selection = selection
+        self.navigationPath = navigationPath
+    }
 
     private var projects: [String] {
         Array(Set(runs.map(\.run.project_id))).sorted()
@@ -40,20 +53,43 @@ struct RunsListView: View {
                 }
                 .foregroundStyle(Color.inkDim)
             } else {
-                List(visibleRuns, id: \.run.id, selection: $selection) { snapshot in
-                    RunRowView(
-                        run: snapshot.run,
-                        schedules: schedules.filter {
-                            $0.schedule.run_id == snapshot.run.id && $0.schedule.status == .armed
-                        },
-                        isSelected: selection == snapshot.run.id
-                    )
-                    .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
+                #if os(iOS)
+                    List(visibleRuns, id: \.run.id) { snapshot in
+                        NavigationLink(value: snapshot.run.id) {
+                            RunRowView(
+                                run: snapshot.run,
+                                schedules: schedules.filter {
+                                    $0.schedule.run_id == snapshot.run.id
+                                        && $0.schedule.status == .armed
+                                })
+                        }
+                        .listRowInsets(
+                            EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)
+                        )
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                #else
+                    List(visibleRuns, id: \.run.id, selection: $selection) { snapshot in
+                        RunRowView(
+                            run: snapshot.run,
+                            schedules: schedules.filter {
+                                $0.schedule.run_id == snapshot.run.id
+                                    && $0.schedule.status == .armed
+                            },
+                            isSelected: selection == snapshot.run.id
+                        )
+                        .listRowInsets(
+                            EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)
+                        )
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                #endif
             }
         }
         .navigationTitle("Runs")
@@ -73,14 +109,29 @@ struct RunsListView: View {
             self.projectID = nil
         }
         let effectiveProject = projectID.flatMap { projects.contains($0) ? $0 : nil }
-        if let selection,
-            !runs.contains(where: {
-                $0.run.id == selection
-                    && (effectiveProject == nil || $0.run.project_id == effectiveProject)
-            })
-        {
-            self.selection = nil
-        }
+        #if os(iOS)
+            if let path = navigationPath?.wrappedValue {
+                let availableIDs = Set(
+                    runs.filter {
+                        effectiveProject == nil || $0.run.project_id == effectiveProject
+                    }.map(\.run.id))
+                let repairedPath = NavigationModel.repairedPath(
+                    path,
+                    availableIDs: availableIDs)
+                if repairedPath != path {
+                    navigationPath?.wrappedValue = repairedPath
+                }
+            }
+        #else
+            if let selection,
+                !runs.contains(where: {
+                    $0.run.id == selection
+                        && (effectiveProject == nil || $0.run.project_id == effectiveProject)
+                })
+            {
+                self.selection = nil
+            }
+        #endif
     }
 
     /// The project-owned row composition without List and Picker, whose

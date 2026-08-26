@@ -39,9 +39,9 @@ struct DecisionDetailView: View {
     @State private var model: DecisionModel
     @State private var proposalEditor: ProposalEditor?
     @State private var pendingConfirmation: PendingConfirmation?
-    @State private var detailsExpanded: Bool
-    @State private var claimsExpanded = false
-    @State private var evidenceExpanded = false
+    @State private var sectionPreferences: DecisionSectionPreferences
+    @State private var inspectorPresented: Bool
+    @State private var detailWidth: CGFloat = 0
     @State private var recommendationVisible = true
     @State private var alternativeSelections: [String: Components.Schemas.AdjudicationRoute] = [:]
     private let attachments: AttachmentLoader
@@ -63,11 +63,17 @@ struct DecisionDetailView: View {
         recommendation: DecisionRecommendationPresentation? = nil,
         graphics: DecisionGraphicPresentations = .init(),
         loadsAttachments: Bool = true,
-        showsValidationProgress: Bool = true
+        showsValidationProgress: Bool = true,
+        sectionPreferences: DecisionSectionPreferences? = nil
     ) {
         _model = State(initialValue: DecisionModel(store: store, itemID: itemID))
-        _detailsExpanded = State(
-            initialValue: detailsExpanded || detailsRevealRequest?.itemID == itemID)
+        let revealsTechnicalDetails =
+            detailsExpanded || detailsRevealRequest?.itemID == itemID
+        _sectionPreferences = State(
+            initialValue: sectionPreferences
+                ?? DecisionSectionPreferences(
+                    detailsExpandedOverride: revealsTechnicalDetails ? true : nil))
+        _inspectorPresented = State(initialValue: revealsTechnicalDetails)
         attachments = store.attachments
         self.itemID = itemID
         self.detailsRevealRequest = detailsRevealRequest
@@ -86,15 +92,24 @@ struct DecisionDetailView: View {
                         ScrollView {
                             card(
                                 snapshot.item,
+                                proposalFacts: model.proposalFacts,
                                 accessibilityLayout: isAccessibilityLayout,
-                                compactLayout: horizontalSizeClass == .compact
+                                compactLayout: horizontalSizeClass == .compact,
+                                wideLayout: usesWideLayout
                             )
                             .padding(14)
                             .freesideCard()
                             .padding()
-                            .frame(maxWidth: 560, alignment: .leading)
+                            .frame(
+                                maxWidth: usesWideLayout ? 1_040 : 560,
+                                alignment: .topLeading)
                         }
                         .coordinateSpace(name: "decision-card-scroll")
+                        .onGeometryChange(for: CGFloat.self) { geometry in
+                            geometry.size.width
+                        } action: { width in
+                            detailWidth = width
+                        }
                         .onChange(of: detailsRevealRequest) {
                             revealTechnicalDetailsIfRequested(using: scrollProxy)
                         }
@@ -163,12 +178,29 @@ struct DecisionDetailView: View {
 
     private func revealTechnicalDetailsIfRequested(using scrollProxy: ScrollViewProxy) {
         guard let detailsRevealRequest, detailsRevealRequest.itemID == itemID else { return }
-        detailsExpanded = true
-        withAnimation {
-            scrollProxy.scrollTo(ScrollTarget.technicalDetails, anchor: .top)
-        }
-        onConsumeDetailsRevealRequest(detailsRevealRequest.nonce)
+        detailsExpanded.wrappedValue = true
+        #if os(macOS)
+            inspectorPresented = true
+        #else
+            withAnimation {
+                scrollProxy.scrollTo(ScrollTarget.technicalDetails, anchor: .top)
+            }
+            onConsumeDetailsRevealRequest(detailsRevealRequest.nonce)
+        #endif
     }
+
+    #if os(macOS)
+        private func revealTechnicalDetailsInInspectorIfRequested(
+            using scrollProxy: ScrollViewProxy
+        ) {
+            guard let detailsRevealRequest, detailsRevealRequest.itemID == itemID else { return }
+            detailsExpanded.wrappedValue = true
+            withAnimation {
+                scrollProxy.scrollTo(ScrollTarget.technicalDetails, anchor: .top)
+            }
+            onConsumeDetailsRevealRequest(detailsRevealRequest.nonce)
+        }
+    #endif
 
     @ViewBuilder
     private func platformBody<Content: View>(_ content: Content) -> some View {
@@ -193,11 +225,52 @@ struct DecisionDetailView: View {
             }
         #else
             content
+                .inspector(isPresented: $inspectorPresented) {
+                    if let item = model.snapshot?.item {
+                        ScrollViewReader { scrollProxy in
+                            ScrollView {
+                                inspectorContent(item)
+                                    .padding()
+                            }
+                            .onChange(of: detailsRevealRequest) {
+                                revealTechnicalDetailsInInspectorIfRequested(using: scrollProxy)
+                            }
+                            .onAppear {
+                                revealTechnicalDetailsInInspectorIfRequested(using: scrollProxy)
+                            }
+                        }
+                        .background(Color.sidebarGround)
+                        .inspectorColumnWidth(min: 280, ideal: 340, max: 440)
+                    } else {
+                        ContentUnavailableView(
+                            "No decision selected",
+                            systemImage: "sidebar.trailing",
+                            description: Text("Select an item to inspect its facts."))
+                    }
+                }
+                .toolbar {
+                    ToolbarItem {
+                        Button {
+                            inspectorPresented.toggle()
+                        } label: {
+                            Label("Inspector", systemImage: "sidebar.trailing")
+                        }
+                        .help(inspectorPresented ? "Hide Inspector" : "Show Inspector")
+                    }
+                }
         #endif
     }
 
     private var isAccessibilityLayout: Bool {
         dynamicTypeSize >= .accessibility1
+    }
+
+    private var usesWideLayout: Bool {
+        #if os(macOS)
+            detailWidth >= 1_000 && !isAccessibilityLayout
+        #else
+            false
+        #endif
     }
 
     private var confirmationIsPresented: Binding<Bool> {
@@ -216,9 +289,11 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func card(
         _ item: Components.Schemas.AttentionItem,
+        proposalFacts: Components.Schemas.RunProposalFactsSnapshot?,
         rendersInteractiveControls: Bool = true,
         accessibilityLayout: Bool,
-        compactLayout: Bool
+        compactLayout: Bool,
+        wideLayout: Bool
     ) -> some View {
         let composition = DecisionCardComposition.forType(item._type)
         VStack(alignment: .leading, spacing: 16) {
@@ -229,27 +304,119 @@ struct DecisionDetailView: View {
                 .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
 
-            ForEach(Array(composition.modules.enumerated()), id: \.offset) {
-                index, module in
-                cardModule(
-                    module,
-                    moduleIndex: index,
-                    item: item,
-                    composition: composition,
-                    rendersInteractiveControls: rendersInteractiveControls,
-                    accessibilityLayout: accessibilityLayout)
-                if index + 1 == composition.actionInsertionIndex {
-                    actions(
-                        item,
-                        stackedLayout: accessibilityLayout || compactLayout,
-                        includesReviewing: composition.reviewingActionInsertionIndex == nil)
+            #if os(macOS)
+                if !composition.modules.contains(.checklist),
+                    let notice = item.commit_plan_notice?.value1
+                {
+                    cardSection("Facts") {
+                        factRow("Commit plan", value: AttentionDisplay.label(notice))
+                    }
                 }
-                if index + 1 == composition.reviewingActionInsertionIndex {
-                    reviewingAction(item)
+                if let proposalFacts {
+                    cardSection("Authenticated proposal") {
+                        proposalRows(proposalFacts)
+                    }
                 }
-            }
+                if wideLayout {
+                    HStack(alignment: .top, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            ForEach(Array(composition.modules.enumerated()), id: \.offset) {
+                                index, module in
+                                cardModule(
+                                    module,
+                                    moduleIndex: index,
+                                    item: item,
+                                    composition: composition,
+                                    proposalFacts: proposalFacts,
+                                    rendersInteractiveControls: rendersInteractiveControls,
+                                    accessibilityLayout: accessibilityLayout)
+                                if index + 1 == composition.reviewingActionInsertionIndex {
+                                    reviewingAction(item)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: 560, alignment: .topLeading)
+
+                        actionRegion(
+                            item,
+                            stackedLayout: accessibilityLayout || compactLayout,
+                            includesReviewing: composition.reviewingActionInsertionIndex == nil
+                        )
+                        .frame(width: 360, alignment: .topLeading)
+                    }
+                } else {
+                    ForEach(Array(composition.modules.enumerated()), id: \.offset) {
+                        index, module in
+                        cardModule(
+                            module,
+                            moduleIndex: index,
+                            item: item,
+                            composition: composition,
+                            proposalFacts: proposalFacts,
+                            rendersInteractiveControls: rendersInteractiveControls,
+                            accessibilityLayout: accessibilityLayout)
+                        if index + 1 == composition.actionInsertionIndex {
+                            actionRegion(
+                                item,
+                                stackedLayout: accessibilityLayout || compactLayout,
+                                includesReviewing: composition.reviewingActionInsertionIndex == nil)
+                        }
+                        if index + 1 == composition.reviewingActionInsertionIndex {
+                            reviewingAction(item)
+                        }
+                    }
+                }
+            #else
+                ForEach(Array(composition.modules.enumerated()), id: \.offset) {
+                    index, module in
+                    cardModule(
+                        module,
+                        moduleIndex: index,
+                        item: item,
+                        composition: composition,
+                        proposalFacts: proposalFacts,
+                        rendersInteractiveControls: rendersInteractiveControls,
+                        accessibilityLayout: accessibilityLayout)
+                    if index + 1 == composition.actionInsertionIndex {
+                        actions(
+                            item,
+                            stackedLayout: accessibilityLayout || compactLayout,
+                            includesReviewing: composition.reviewingActionInsertionIndex == nil)
+                    }
+                    if index + 1 == composition.reviewingActionInsertionIndex {
+                        reviewingAction(item)
+                    }
+                }
+            #endif
         }
     }
+
+    #if os(macOS)
+        @ViewBuilder
+        private func actionRegion(
+            _ item: Components.Schemas.AttentionItem,
+            stackedLayout: Bool,
+            includesReviewing: Bool
+        ) -> some View {
+            VStack(alignment: .leading, spacing: 16) {
+                if let recommendation,
+                    actionRanking(item).recommended == recommendation.action
+                {
+                    recommendationBlock(recommendation, item: item)
+                }
+                let summaryClaims = item.agent_claims.filter { $0.text != nil }
+                if !summaryClaims.isEmpty {
+                    cardSection("Agent claims (unverified)", dashed: true) {
+                        claimRows(summaryClaims)
+                    }
+                }
+                actions(
+                    item,
+                    stackedLayout: stackedLayout,
+                    includesReviewing: includesReviewing)
+            }
+        }
+    #endif
 
     @ViewBuilder
     private func cardModule(
@@ -257,16 +424,19 @@ struct DecisionDetailView: View {
         moduleIndex: Int,
         item: Components.Schemas.AttentionItem,
         composition: DecisionCardComposition,
+        proposalFacts: Components.Schemas.RunProposalFactsSnapshot?,
         rendersInteractiveControls: Bool,
         accessibilityLayout: Bool
     ) -> some View {
         switch module {
         case .recommendation:
-            if let recommendation,
-                actionRanking(item).recommended == recommendation.action
-            {
-                recommendationBlock(recommendation, item: item)
-            }
+            #if os(iOS)
+                if let recommendation,
+                    actionRanking(item).recommended == recommendation.action
+                {
+                    recommendationBlock(recommendation, item: item)
+                }
+            #endif
         case .checklist:
             if let presentation = DecisionChecklistPresentation(item) {
                 DecisionChecklistModuleView(presentation: presentation)
@@ -291,22 +461,41 @@ struct DecisionDetailView: View {
                     showsBars: graphics.diminishingYield != nil)
             }
         case .factBlock:
-            factBlocks(
-                item,
-                includesCommitPlan: !composition.modules.contains(.checklist),
-                rendersInteractiveControls: rendersInteractiveControls)
+            #if os(macOS)
+                factBlocks(
+                    item,
+                    includesCommitPlan: false,
+                    proposalFacts: nil,
+                    rendersInteractiveControls: rendersInteractiveControls)
+            #else
+                factBlocks(
+                    item,
+                    includesCommitPlan: !composition.modules.contains(.checklist),
+                    proposalFacts: proposalFacts,
+                    rendersInteractiveControls: rendersInteractiveControls)
+            #endif
         case .claims:
-            claims(
-                composition.claims(
-                    from: item.agent_claims,
-                    at: moduleIndex,
-                    prominentClaimIndex: graphics.prominentClaimIndex),
-                accessibilityLayout: accessibilityLayout,
-                prominent: composition.claimsAreProminent(at: moduleIndex))
+            #if os(iOS)
+                claims(
+                    composition.claims(
+                        from: item.agent_claims,
+                        at: moduleIndex,
+                        prominentClaimIndex: graphics.prominentClaimIndex),
+                    accessibilityLayout: accessibilityLayout,
+                    prominent: composition.claimsAreProminent(at: moduleIndex))
+            #endif
         case .evidence:
-            evidence(item, accessibilityLayout: accessibilityLayout)
+            #if os(macOS)
+                if composition.reviewingActionInsertionIndex != nil {
+                    evidence(item, accessibilityLayout: accessibilityLayout)
+                }
+            #else
+                evidence(item, accessibilityLayout: accessibilityLayout)
+            #endif
         case .details:
-            details(item, accessibilityLayout: accessibilityLayout)
+            #if os(iOS)
+                details(item, accessibilityLayout: accessibilityLayout)
+            #endif
         }
     }
 
@@ -314,6 +503,7 @@ struct DecisionDetailView: View {
     private func factBlocks(
         _ item: Components.Schemas.AttentionItem,
         includesCommitPlan: Bool,
+        proposalFacts: Components.Schemas.RunProposalFactsSnapshot?,
         rendersInteractiveControls: Bool
     ) -> some View {
         if let changeSummary = graphics.changeSummary {
@@ -358,7 +548,7 @@ struct DecisionDetailView: View {
             }
         }
 
-        if let facts = model.proposalFacts {
+        if let facts = proposalFacts {
             cardSection("Authenticated proposal") {
                 factRow("Intent", value: facts.intent.rawValue)
                 factRow("Expected cost", value: "\(facts.expected_cost_units) units")
@@ -390,7 +580,7 @@ struct DecisionDetailView: View {
             } else {
                 lowerSection(
                     "Agent claims (unverified)",
-                    isExpanded: $claimsExpanded,
+                    isExpanded: claimsExpanded,
                     accessibilityLayout: accessibilityLayout,
                     dashed: true
                 ) {
@@ -423,7 +613,7 @@ struct DecisionDetailView: View {
         if !item.evidence_snapshot.isEmpty {
             lowerSection(
                 "Evidence",
-                isExpanded: $evidenceExpanded,
+                isExpanded: evidenceExpanded,
                 accessibilityLayout: accessibilityLayout
             ) {
                 ForEach(item.evidence_snapshot, id: \.id) { artifact in
@@ -442,7 +632,7 @@ struct DecisionDetailView: View {
     ) -> some View {
         lowerSection(
             "Details",
-            isExpanded: $detailsExpanded,
+            isExpanded: detailsExpanded,
             accessibilityLayout: accessibilityLayout
         ) {
             VStack(alignment: .leading, spacing: 6) {
@@ -457,25 +647,136 @@ struct DecisionDetailView: View {
         .textSelection(.enabled)
     }
 
+    #if os(macOS)
+        @ViewBuilder
+        private func inspectorContent(_ item: Components.Schemas.AttentionItem) -> some View {
+            VStack(alignment: .leading, spacing: 12) {
+                if let notice = item.commit_plan_notice?.value1 {
+                    inspectorSection("Facts", isExpanded: factsExpanded) {
+                        factRow("Commit plan", value: AttentionDisplay.label(notice))
+                    }
+                }
+                if let facts = model.proposalFacts {
+                    inspectorSection("Authenticated proposal", isExpanded: proposalExpanded) {
+                        proposalRows(facts)
+                    }
+                }
+                let attachmentClaims = item.agent_claims.filter { $0.text == nil }
+                if !attachmentClaims.isEmpty {
+                    inspectorSection(
+                        "Agent claims (unverified)",
+                        isExpanded: claimsExpanded,
+                        dashed: true
+                    ) {
+                        claimRows(attachmentClaims)
+                    }
+                }
+                if !item.evidence_snapshot.isEmpty {
+                    inspectorSection("Evidence", isExpanded: evidenceExpanded) {
+                        ForEach(item.evidence_snapshot, id: \.id) { artifact in
+                            AttachmentRow(
+                                label: artifact._type.rawValue,
+                                digest: artifact.digest,
+                                attachments: attachments,
+                                loadsAttachments: loadsAttachments)
+                        }
+                    }
+                }
+                inspectorSection("Details", isExpanded: detailsExpanded) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
+                            factRow(row.label, value: row.value, monospaced: true)
+                        }
+                    }
+                }
+                .id(ScrollTarget.technicalDetails)
+                .font(FreesideFont.caption)
+                .foregroundStyle(Color.inkDim)
+                .textSelection(.enabled)
+            }
+            .environment(\.dynamicTypeSize, dynamicTypeSize)
+        }
+    #endif
+
+    @ViewBuilder
+    private func proposalRows(_ facts: Components.Schemas.RunProposalFactsSnapshot) -> some View {
+        factRow("Intent", value: facts.intent.rawValue)
+        factRow("Expected cost", value: "\(facts.expected_cost_units) units")
+        factRow("Components", value: "\(facts.scope.component_count)")
+        factRow("Declared paths", value: "\(facts.scope.declared_path_count)")
+        factRow("Control plane", value: facts.scope.touches_control_plane ? "Yes" : "No")
+        if let prior = facts.supersedes?.value1 {
+            Divider()
+            Text("Revision context")
+                .font(FreesideFont.sans(.caption, weight: .semibold))
+            proposalRevisionRows(prior)
+        }
+    }
+
+    private var factsExpanded: Binding<Bool> {
+        preferenceBinding(\.factsExpanded)
+    }
+
+    private var proposalExpanded: Binding<Bool> {
+        preferenceBinding(\.proposalExpanded)
+    }
+
+    private var claimsExpanded: Binding<Bool> {
+        preferenceBinding(\.claimsExpanded)
+    }
+
+    private var evidenceExpanded: Binding<Bool> {
+        preferenceBinding(\.evidenceExpanded)
+    }
+
+    private var detailsExpanded: Binding<Bool> {
+        preferenceBinding(\.detailsExpanded)
+    }
+
+    private func preferenceBinding(
+        _ keyPath: ReferenceWritableKeyPath<DecisionSectionPreferences, Bool>
+    ) -> Binding<Bool> {
+        Binding(
+            get: { sectionPreferences[keyPath: keyPath] },
+            set: { sectionPreferences[keyPath: keyPath] = $0 })
+    }
+
     /// The project-owned card content without navigation and presentation
     /// containers that ImageRenderer cannot draw off-screen on macOS.
     @ViewBuilder
     func screenshotCard(
         _ item: Components.Schemas.AttentionItem,
         at dynamicTypeSize: DynamicTypeSize,
-        compactLayout: Bool = false
+        proposalFacts: Components.Schemas.RunProposalFactsSnapshot? = nil,
+        compactLayout: Bool = false,
+        detailWidth: CGFloat = 560
     ) -> some View {
+        let wideLayout = detailWidth >= 1_000 && dynamicTypeSize < .accessibility1
         card(
             item,
+            proposalFacts: proposalFacts,
             rendersInteractiveControls: false,
             accessibilityLayout: dynamicTypeSize >= .accessibility1,
-            compactLayout: compactLayout
+            compactLayout: compactLayout,
+            wideLayout: wideLayout
         )
         .padding(14)
         .freesideCard()
         .padding()
-        .frame(maxWidth: 560, alignment: .leading)
+        .frame(maxWidth: wideLayout ? 1_040 : 560, alignment: .topLeading)
     }
+
+    #if os(macOS)
+        func screenshotInspector(
+            _ item: Components.Schemas.AttentionItem,
+            at dynamicTypeSize: DynamicTypeSize
+        ) -> some View {
+            inspectorContent(item)
+                .padding()
+                .frame(width: 360, alignment: .topLeading)
+                .background(Color.sidebarGround)
+        }
+    #endif
 
     @ViewBuilder
     private func findingAdjudication(
@@ -784,6 +1085,25 @@ struct DecisionDetailView: View {
                 content()
             }
         }
+    }
+
+    private func inspectorSection<Content: View>(
+        _ title: String,
+        isExpanded: Binding<Bool>,
+        dashed: Bool = false,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        DisclosureGroup(isExpanded: isExpanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                content()
+            }
+            .padding(.top, 8)
+        } label: {
+            KeywordLabel(text: title)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .freesideCard(dashed: dashed)
     }
 
     private func factRow(
