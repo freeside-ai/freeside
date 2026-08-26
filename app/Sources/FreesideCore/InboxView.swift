@@ -1,12 +1,21 @@
+import Foundation
 import FreesideAPI
 import SwiftUI
 
+#if os(macOS)
+    import AppKit
+#elseif os(iOS)
+    import UIKit
+#endif
+
 /// The attention inbox, scoped to open work by default.
 struct InboxView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let store: InboxStore
     @Binding var selection: String?
     let launchScope: InboxStore.Scope?
     let launchProjectID: String?
+    var onRevealTechnicalDetails: (String) -> Void = { _ in }
 
     var body: some View {
         Group {
@@ -21,14 +30,9 @@ struct InboxView: View {
                 }
             case .loaded:
                 VStack(spacing: 0) {
-                    Picker("Scope", selection: Bindable(store).scope) {
-                        ForEach(InboxStore.Scope.allCases) { scope in
-                            Text(scope.label).tag(scope)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
+                    scopeBar
+                        .padding(.horizontal)
+                        .padding(.bottom, 8)
 
                     Picker("Project", selection: projectSelection) {
                         Text("All projects").tag(String?.none)
@@ -55,10 +59,17 @@ struct InboxView: View {
                         .foregroundStyle(Color.inkDim)
                     } else {
                         List(store.rows, id: \.item.id, selection: $selection) { snapshot in
-                            InboxRowView(item: snapshot.item, isSelected: selection == snapshot.item.id)
-                                .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(Color.clear)
+                            InboxRowView(
+                                item: snapshot.item,
+                                isSelected: selection == snapshot.item.id,
+                                onRevealTechnicalDetails: {
+                                    selection = snapshot.item.id
+                                    onRevealTechnicalDetails(snapshot.item.id)
+                                }
+                            )
+                            .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                         }
                         .listStyle(.plain)
                         .scrollContentBackground(.hidden)
@@ -89,6 +100,39 @@ struct InboxView: View {
         .onChange(of: store.rows.map(\.item.id)) { repairSelection() }
     }
 
+    @ViewBuilder
+    private var scopeBar: some View {
+        let urgentCount = store.urgentCount(in: store.scope)
+        if Self.stacksScopeBar(at: dynamicTypeSize) {
+            VStack(alignment: .leading, spacing: 8) {
+                scopePicker
+                urgentChip(count: urgentCount)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            HStack(spacing: 8) {
+                scopePicker
+                urgentChip(count: urgentCount)
+            }
+        }
+    }
+
+    private var scopePicker: some View {
+        Picker("Scope", selection: Bindable(store).scope) {
+            ForEach(InboxStore.Scope.allCases) { scope in
+                Text("\(scope.label) \(store.count(in: scope))").tag(scope)
+            }
+        }
+        .pickerStyle(.segmented)
+    }
+
+    @ViewBuilder
+    private func urgentChip(count: Int) -> some View {
+        if count > 0 {
+            StateChip(label: "\(count) urgent", color: .waxText)
+        }
+    }
+
     private var projectSelection: Binding<String?> {
         Binding(
             get: { store.projectID },
@@ -106,6 +150,10 @@ struct InboxView: View {
         if let projectID { store.applyLaunchProjectFilter(projectID) }
     }
 
+    static func stacksScopeBar(at dynamicTypeSize: DynamicTypeSize) -> Bool {
+        dynamicTypeSize >= .xxxLarge
+    }
+
     private func repairSelection() {
         guard store.loadState == .loaded else { return }
         if let selection, !store.rows.contains(where: { $0.item.id == selection }) {
@@ -116,55 +164,201 @@ struct InboxView: View {
     /// The project-owned row composition without List and Picker, whose
     /// AppKit-backed controls ImageRenderer cannot draw off-screen.
     @ViewBuilder
-    func screenshotContent() -> some View {
+    func screenshotContent(now: Date) -> some View {
         VStack(spacing: 8) {
             ForEach(Array(store.rows.prefix(5)), id: \.item.id) { snapshot in
-                InboxRowView(item: snapshot.item, isSelected: selection == snapshot.item.id)
+                InboxRowView(
+                    item: snapshot.item,
+                    isSelected: selection == snapshot.item.id,
+                    now: now
+                )
             }
         }
         .padding()
     }
 }
 
-/// One inbox row as a ground-2 card; the selected row's border turns
-/// accent-dim in place of the platform selection highlight.
+/// One inbox row as a ground-2 card. Selection adds geometry as well as
+/// color, so Differentiate Without Color retains a visible state change.
 struct InboxRowView: View {
     let item: Components.Schemas.AttentionItem
     var isSelected = false
+    var now: Date?
+    var onRevealTechnicalDetails: () -> Void = {}
+    var differentiateWithoutColorOverride: Bool?
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        let subject = AttentionDisplay.subject(item)
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(AttentionDisplay.title(item))
-                    .font(FreesideFont.itemTitle)
-                    .foregroundStyle(Color.ink)
-                Spacer()
-                PriorityBadge(priority: item.priority)
-            }
-            Text(item.reason)
-                .font(FreesideFont.subheadline)
-                .foregroundStyle(Color.inkDim)
-                .lineLimit(2)
-            HStack(spacing: 8) {
-                Text(subject.lead)
-                    .font(FreesideFont.caption)
-                    .foregroundStyle(Color.inkDim)
-                if let identifier = subject.identifier {
-                    Text(identifier)
-                        .font(FreesideFont.monoCaption)
-                        .foregroundStyle(Color.inkDim)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                if item.status != .open {
-                    StatusBadge(status: item.status)
+        Group {
+            if let now {
+                row(at: now)
+            } else {
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    row(at: context.date)
                 }
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .freesideCard(border: isSelected ? .accentBorder : .rule)
+        .contextMenu { contextMenu }
+    }
+
+    private func row(at now: Date) -> some View {
+        let context = AttentionDisplay.rowContext(item)
+        return HStack(spacing: 0) {
+            if isSelected {
+                Rectangle()
+                    .fill(Color.accentText)
+                    .frame(width: 4)
+                    .accessibilityHidden(true)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                if Self.stacksHeader(at: dynamicTypeSize) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        rowTitle
+                        if hasBadges {
+                            rowBadges
+                        }
+                    }
+                } else {
+                    HStack(alignment: .firstTextBaseline) {
+                        rowTitle
+                        Spacer()
+                        rowBadges
+                    }
+                }
+                Text(AttentionDisplay.rowSummary(item))
+                    .font(FreesideFont.subheadline)
+                    .foregroundStyle(Color.inkDim)
+                    .lineLimit(2)
+                HStack(spacing: 6) {
+                    contextSegment(context.project)
+                    if let workUnit = context.workUnit {
+                        separator
+                        contextSegment(workUnit)
+                    }
+                    if let relativeTime = AttentionDisplay.relativeRowTime(item, now: now) {
+                        separator
+                        timeText(relativeTime, now: now)
+                    }
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(
+                    isSelected
+                        ? (effectiveDifferentiateWithoutColor ? Color.accentWash : .accentWashSoft)
+                        : .ground2)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(isSelected ? Color.accentBorder : .rule, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var rowTitle: some View {
+        Text(AttentionDisplay.title(item._type))
+            .font(FreesideFont.itemTitle)
+            .foregroundStyle(Color.ink)
+    }
+
+    private var rowBadges: some View {
+        HStack(spacing: 5) {
+            if AttentionDisplay.showsPriorityBadge(item.priority) {
+                PriorityBadge(priority: item.priority)
+            }
+            if AttentionDisplay.showsLifecycleBadge(item.status) {
+                StatusBadge(status: item.status)
+            }
+            if AttentionDisplay.showsDegradedBadge(item) {
+                StateChip(label: "Degraded", color: .waxText)
+            }
+        }
+    }
+
+    private var hasBadges: Bool {
+        AttentionDisplay.showsPriorityBadge(item.priority)
+            || AttentionDisplay.showsLifecycleBadge(item.status)
+            || AttentionDisplay.showsDegradedBadge(item)
+    }
+
+    static func stacksHeader(at dynamicTypeSize: DynamicTypeSize) -> Bool {
+        dynamicTypeSize >= .xxxLarge
+    }
+
+    private var effectiveDifferentiateWithoutColor: Bool {
+        differentiateWithoutColorOverride ?? differentiateWithoutColor
+    }
+
+    private var separator: some View {
+        Text("·")
+            .font(FreesideFont.caption)
+            .foregroundStyle(Color.inkDim)
+            .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private func contextSegment(_ segment: AttentionDisplay.RowContext.Segment) -> some View {
+        let text = Text(segment.value)
+            .font(segment.isIdentifier ? FreesideFont.monoCaption : FreesideFont.caption)
+            .foregroundStyle(Color.inkDim)
+            .lineLimit(1)
+            .truncationMode(.middle)
+        #if os(macOS)
+            text.help(segment.value)
+        #else
+            text
+        #endif
+    }
+
+    @ViewBuilder
+    private func timeText(_ relativeTime: String, now: Date) -> some View {
+        let text = Text(relativeTime)
+            .font(FreesideFont.caption)
+            .foregroundStyle(Color.inkDim)
+            .lineLimit(1)
+        #if os(macOS)
+            if let exact = AttentionDisplay.exactRowTimestamp(item, now: now) {
+                text.help(exact)
+            } else {
+                text
+            }
+        #else
+            text
+        #endif
+    }
+
+    @ViewBuilder
+    private var contextMenu: some View {
+        let evidenceDigests = AttentionDisplay.uniqueEvidenceDigests(item)
+        Button("Copy item ID") { copy(item.id) }
+        if let subject = AttentionDisplay.copyableSubjectReference(item) {
+            Button(subject.label) { copy(subject.value) }
+        }
+        if evidenceDigests.count == 1, let digest = evidenceDigests.first {
+            Button("Copy evidence digest") { copy(digest) }
+        } else if evidenceDigests.count > 1 {
+            Menu("Copy evidence digest") {
+                ForEach(evidenceDigests, id: \.self) { digest in
+                    Button(digest) { copy(digest) }
+                }
+            }
+        }
+        Divider()
+        Button("Reveal in Technical details") { onRevealTechnicalDetails() }
+    }
+
+    private func copy(_ value: String) {
+        #if os(macOS)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(value, forType: .string)
+        #elseif os(iOS)
+            UIPasteboard.general.string = value
+        #endif
     }
 }
 

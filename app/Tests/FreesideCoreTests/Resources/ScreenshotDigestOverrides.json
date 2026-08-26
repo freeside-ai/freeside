@@ -1,11 +1,12 @@
 {
   "macOS-26.5" : {
-    "decision-execution_failure-xsmall" : "c072563f87f86027205e67563f59e1741120c25b55f3df8ca690bc73aef5882d",
-    "decision-finding_adjudication-xsmall" : "6555f2e8349b6c8139cdeb4e6587bf5b576f3a6ed4c337c6012b42ddfdc27b0a",
-    "decision-ready_for_final_review-large" : "6f80bd9ec9e44034c368696714aa9e6c0e319a5b8931745aaaaa342ddc9bb0e6",
-    "decision-ready_for_final_review-xsmall" : "73f02f1a8efec77e773b449ea62c6e53e1077e9e9910b2222189ef129e93dffb",
-    "decision-spec_approval-xsmall" : "2aebed52b3ed9c62f1dc731c4ba54f672df49594ba36001ce979a02d311b5697",
-    "inbox-xsmall" : "a01182f429727778c81eecb483db583ba15071ce7ebaa1bfa1962564da3017ce",
+    "decision-execution_failure-xsmall" : "7332e4e94e518a90135409c6f63f681b6660bf06aea9a9e0bc3d934a7018f066",
+    "decision-finding_adjudication-xsmall" : "36013f04852d28f38afea5ba1485497f3098e4faaa0ef10b81f23c2cacb3f565",
+    "decision-ready_for_final_review-large" : "1177ca70ff08ab3f9bff7967330d5c04e0a649c740205027bb1859fc77965947",
+    "decision-ready_for_final_review-xsmall" : "9812227564cd3c89dfdcea8e9def1fc4c0f88ef7a25e04b4dc2d1d6db01ab885",
+    "decision-spec_approval-xsmall" : "da657b64012acf04cb6a2e0e63aee9708d4fdfd09b79b79e83ab54e4bb03d852",
+    "inbox-selected-differentiate-without-color-xsmall" : "be793e93a5f088d60278823f89e4f75003f1982222544724f129968922deade8",
+    "inbox-xsmall" : "a09dc2a01eb0241899e9eb4b2113d1b6eb3e6bce2ae13d4928f490144343968d",
     "run-timeline-ax1" : "64ef1c8cd62156e2966704a4138a0c1eee4ff059539fbd3cb5a1097a86fd5854",
     "run-timeline-ax3" : "1d05cf5964ace02a5fa8f833746034f99a6c7558b490ff2b2437e45c77466ce7",
     "run-timeline-ax5" : "e9c705e41df099ad1ae8043873ee6de16faa0be007911c2172356d200a962aa7",
