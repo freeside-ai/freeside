@@ -1,6 +1,12 @@
 import FreesideAPI
 import SwiftUI
 
+#if os(iOS)
+    import UIKit
+#elseif os(macOS)
+    import AppKit
+#endif
+
 /// One item's self-contained decision card: header, reason, evidence,
 /// labeled agent claims, the bindings the decision will commit against,
 /// and exactly the item's requested actions. Actions stay disabled until
@@ -242,7 +248,8 @@ struct DecisionDetailView: View {
                     ForEach(Array(item.agent_claims.enumerated()), id: \.offset) { _, claim in
                         AttachmentRow(
                             label: claim.label, digest: claim.digest,
-                            attachments: attachments, text: claim.text)
+                            attachments: attachments, text: claim.text,
+                            rendersInteractiveControls: rendersInteractiveControls)
                     }
                 }
             }
@@ -256,7 +263,8 @@ struct DecisionDetailView: View {
                     ForEach(item.evidence_snapshot, id: \.id) { artifact in
                         AttachmentRow(
                             label: artifact._type.rawValue, digest: artifact.digest,
-                            attachments: attachments)
+                            attachments: attachments,
+                            rendersInteractiveControls: rendersInteractiveControls)
                     }
                 }
             }
@@ -615,17 +623,22 @@ struct DecisionDetailView: View {
         DecisionFactRow(label: label, value: value, monospaced: monospaced)
     }
 
-    /// One labeled attachment row. Plan §9's presentation layers supersede
-    /// the earlier digest-leading choice: content stays in the evidence layer,
-    /// while its binding digest appears once in the card's collapsed details.
+    /// One labeled attachment row. Content leads in the evidence layer and its
+    /// binding digest stays a subordinate, copyable caption in every state.
     /// A text claim renders its daemon-verified inline content directly;
-    /// otherwise fetched image bytes render inline and a failed fetch gets a
-    /// placeholder. Attachment bytes remain memory-only.
-    private struct AttachmentRow: View {
+    /// otherwise the fetched bytes render in an explicit attachment state.
+    /// Attachment bytes remain memory-only.
+    struct AttachmentRow: View {
         let label: String
         let digest: String
         let attachments: AttachmentLoader
         var text: Components.Schemas.ClaimText? = nil
+        var rendersInteractiveControls = true
+        @State private var showsImagePreview = false
+        @State private var showsNonImagePreview = false
+        @State private var nonImagePreview: NonImagePreview?
+        @State private var previewRequestID: UUID?
+        @State private var isDisplayingAttachment = false
 
         var body: some View {
             VStack(alignment: .leading, spacing: 6) {
@@ -642,6 +655,30 @@ struct DecisionDetailView: View {
                     fetchedAttachment
                         .task(id: digest) { await attachments.load(digest) }
                 }
+                digestCaption
+            }
+            .onAppear {
+                guard rendersInteractiveControls else { return }
+                isDisplayingAttachment = true
+                attachments.beginDisplaying(digest)
+            }
+            .onChange(of: digest) { oldDigest, newDigest in
+                previewRequestID = nil
+                nonImagePreview = nil
+                showsImagePreview = false
+                showsNonImagePreview = false
+                guard rendersInteractiveControls, isDisplayingAttachment else { return }
+                attachments.endDisplaying(oldDigest)
+                attachments.beginDisplaying(newDigest)
+            }
+            .onDisappear {
+                previewRequestID = nil
+                nonImagePreview = nil
+                showsImagePreview = false
+                showsNonImagePreview = false
+                guard rendersInteractiveControls, isDisplayingAttachment else { return }
+                isDisplayingAttachment = false
+                attachments.endDisplaying(digest)
             }
         }
 
@@ -664,20 +701,211 @@ struct DecisionDetailView: View {
         private var fetchedAttachment: some View {
             switch attachments.phase(for: digest) {
             case .image(let image):
-                platformImage(image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: 320, alignment: .leading)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .accessibilityLabel("\(label) attachment image")
+                if rendersInteractiveControls {
+                    Button {
+                        showsImagePreview = true
+                    } label: {
+                        platformImage(image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 320, alignment: .leading)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open \(label) attachment image")
+                    .sheet(isPresented: $showsImagePreview) {
+                        ZoomableAttachmentSheet(label: label, image: image)
+                    }
+                } else {
+                    platformImage(image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 320, alignment: .leading)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+            case .notImage(let bytes, let observedByteCount):
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Not an image", systemImage: "doc")
+                        .accessibilityLabel("\(label) attachment, not an image")
+                    Text(byteCount(observedByteCount))
+                        .foregroundStyle(Color.inkDim)
+                    if rendersInteractiveControls {
+                        Button("Open attachment") { openNonImage(bytes) }
+                    } else {
+                        Label("Open attachment", systemImage: "arrow.up.forward.app")
+                    }
+                }
+                .font(FreesideFont.caption)
+                .sheet(
+                    isPresented: $showsNonImagePreview,
+                    onDismiss: { nonImagePreview = nil },
+                    content: {
+                        if let nonImagePreview {
+                            NonImageAttachmentSheet(label: label, preview: nonImagePreview)
+                        }
+                    }
+                )
             case .unavailable:
-                Label("Attachment unavailable", systemImage: "photo.badge.exclamationmark")
-                    .font(FreesideFont.caption)
-                    .foregroundStyle(Color.inkDim)
-            case .loading, .notImage, nil:
-                EmptyView()
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Unavailable", systemImage: "photo.badge.exclamationmark")
+                        .font(FreesideFont.sans(.caption, weight: .semibold))
+                    Text("The attachment bytes could not be fetched")
+                        .font(FreesideFont.caption)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.waxWash, in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(
+                    "\(label) attachment unavailable. The attachment bytes could not be fetched"
+                )
+            case .tooLarge(let reason):
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Too large here", systemImage: "arrow.up.left.and.arrow.down.right")
+                        .font(FreesideFont.sans(.caption, weight: .semibold))
+                    switch reason {
+                    case .download(let bytesSeenAtLeast, _):
+                        Text("At least \(byteCount(bytesSeenAtLeast))")
+                    case .image(let width, let height, _),
+                        .imageBudget(let width, let height, _):
+                        Text("\(width) × \(height) pixels")
+                    }
+                    #if os(iOS)
+                        Text(iOSTooLargeRecovery(reason))
+                    #elseif os(macOS)
+                        switch reason {
+                        case .download(_, let limit):
+                            Text("Exceeds the \(byteCount(limit)) inline preview limit")
+                        case .image(_, _, let pixelLimit):
+                            Text("Exceeds the \(pixelLimit.formatted())-pixel inline preview limit")
+                        case .imageBudget(_, _, let pixelLimit):
+                            Text(
+                                "Would exceed the \(pixelLimit.formatted())-pixel active inline image budget"
+                            )
+                        }
+                    #endif
+                }
+                .font(FreesideFont.caption)
+                .foregroundStyle(Color.inkDim)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(tooLargeAccessibilityLabel(reason))
+            case .loading, nil:
+                HStack(spacing: 8) {
+                    if rendersInteractiveControls {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                    Text("fetching by digest…")
+                }
+                .font(FreesideFont.caption)
+                .foregroundStyle(Color.inkDim)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(label) attachment loading")
             }
         }
+
+        private var digestCaption: some View {
+            HStack(spacing: 8) {
+                Text("Digest \(digest)")
+                    .font(FreesideFont.mono(.caption2))
+                    .foregroundStyle(Color.inkDim)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                Spacer(minLength: 0)
+                if rendersInteractiveControls {
+                    Button(action: copyDigest) {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Copy digest")
+                    .accessibilityLabel("Copy \(label) attachment digest")
+                } else {
+                    Image(systemName: "doc.on.doc")
+                }
+            }
+        }
+
+        private func copyDigest() {
+            #if os(iOS)
+                UIPasteboard.general.string = digest
+            #elseif os(macOS)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(digest, forType: .string)
+            #endif
+        }
+
+        private func openNonImage(_ bytes: Data?) {
+            if let bytes {
+                previewRequestID = nil
+                nonImagePreview = NonImagePreview(bytes: bytes)
+                showsNonImagePreview = true
+                return
+            }
+            let requestID = UUID()
+            let requestedDigest = digest
+            previewRequestID = requestID
+            Task {
+                guard
+                    let loadedBytes = await attachments.nonImageBytes(for: requestedDigest),
+                    previewRequestID == requestID
+                else { return }
+                previewRequestID = nil
+                nonImagePreview = NonImagePreview(bytes: loadedBytes)
+                showsNonImagePreview = true
+            }
+        }
+
+        private func byteCount(_ count: Int) -> String {
+            ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .file)
+        }
+
+        private func tooLargeAccessibilityLabel(
+            _ reason: AttachmentLoader.Phase.TooLargeReason
+        ) -> String {
+            let size: String
+            switch reason {
+            case .download(let bytesSeenAtLeast, _):
+                size = "at least \(byteCount(bytesSeenAtLeast))"
+            case .image(let width, let height, _),
+                .imageBudget(let width, let height, _):
+                size = "\(width) by \(height) pixels"
+            }
+            #if os(iOS)
+                return "\(label) attachment too large here, \(size). \(iOSTooLargeRecovery(reason))"
+            #elseif os(macOS)
+                let boundary: String
+                switch reason {
+                case .download(_, let byteLimit):
+                    boundary =
+                        "exceeding the \(byteCount(byteLimit)) inline preview limit"
+                case .image(_, _, let pixelLimit):
+                    boundary =
+                        "exceeding the \(pixelLimit.formatted())-pixel inline preview limit"
+                case .imageBudget(_, _, let pixelLimit):
+                    boundary =
+                        "exceeding the \(pixelLimit.formatted())-pixel active inline image budget"
+                }
+                return "\(label) attachment too large here, \(size), \(boundary)"
+            #endif
+        }
+
+        #if os(iOS)
+            private func iOSTooLargeRecovery(
+                _ reason: AttachmentLoader.Phase.TooLargeReason
+            ) -> String {
+                guard
+                    case .image(let width, let height, _) = reason,
+                    !AttachmentLoader.imageFitsPixelLimit(
+                        width: width,
+                        height: height,
+                        maxPixels: AttachmentLoader.macOSMaxImagePixels)
+                else { return "Open on the Mac" }
+                return "Too large to preview on the Mac"
+            }
+        #endif
 
         private func platformImage(_ image: PlatformImage) -> Image {
             #if canImport(UIKit)
@@ -685,6 +913,155 @@ struct DecisionDetailView: View {
             #elseif canImport(AppKit)
                 Image(nsImage: image)
             #endif
+        }
+    }
+
+    struct NonImagePreview: Equatable {
+        static let textByteLimit = 64 << 10
+
+        let byteCount: Int
+        let text: String?
+        let isTruncated: Bool
+
+        init(bytes: Data) {
+            byteCount = bytes.count
+            var prefix = Data(bytes.prefix(Self.textByteLimit))
+            var decoded = String(data: prefix, encoding: .utf8)
+            if decoded == nil, bytes.count > prefix.count {
+                // A valid scalar may straddle the display cutoff. UTF-8 uses
+                // at most four bytes, so trim only that incomplete tail.
+                for _ in 0..<3 where decoded == nil && !prefix.isEmpty {
+                    prefix.removeLast()
+                    decoded = String(data: prefix, encoding: .utf8)
+                }
+            }
+            text = decoded
+            isTruncated = bytes.count > prefix.count
+        }
+    }
+
+    private struct ZoomableAttachmentSheet: View {
+        let label: String
+        let image: PlatformImage
+        @Environment(\.dismiss) private var dismiss
+        @State private var scale: CGFloat = 1
+        @State private var committedScale: CGFloat = 1
+        @State private var offset: CGSize = .zero
+        @State private var committedOffset: CGSize = .zero
+
+        var body: some View {
+            NavigationStack {
+                GeometryReader { _ in
+                    platformImage(image)
+                        .resizable()
+                        .scaledToFit()
+                        .scaleEffect(scale)
+                        .offset(offset)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .gesture(zoomAndPan)
+                        .accessibilityLabel("\(label) attachment preview")
+                }
+                .background(Color.ground)
+                .navigationTitle(label)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
+                }
+            }
+            #if os(macOS)
+                .frame(
+                    minWidth: 480, idealWidth: 720,
+                    minHeight: 360, idealHeight: 600)
+            #endif
+        }
+
+        private var zoomAndPan: some Gesture {
+            SimultaneousGesture(
+                MagnifyGesture()
+                    .onChanged { value in
+                        scale = min(max(committedScale * value.magnification, 1), 6)
+                    }
+                    .onEnded { _ in
+                        committedScale = scale
+                        if scale == 1 {
+                            offset = .zero
+                            committedOffset = .zero
+                        }
+                    },
+                DragGesture()
+                    .onChanged { value in
+                        guard scale > 1 else { return }
+                        offset = CGSize(
+                            width: committedOffset.width + value.translation.width,
+                            height: committedOffset.height + value.translation.height)
+                    }
+                    .onEnded { _ in committedOffset = offset }
+            )
+        }
+
+        private func platformImage(_ image: PlatformImage) -> Image {
+            #if os(iOS)
+                Image(uiImage: image)
+            #elseif os(macOS)
+                Image(nsImage: image)
+            #endif
+        }
+    }
+
+    private struct NonImageAttachmentSheet: View {
+        let label: String
+        let preview: NonImagePreview
+        @Environment(\.dismiss) private var dismiss
+
+        var body: some View {
+            NavigationStack {
+                Group {
+                    if let text = preview.text {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if preview.isTruncated {
+                                Text(
+                                    "Showing the first \(byteCount(NonImagePreview.textByteLimit)) of \(byteCount(preview.byteCount))"
+                                )
+                                .font(FreesideFont.caption)
+                                .foregroundStyle(Color.inkDim)
+                                .padding(.horizontal)
+                            }
+                            ScrollView {
+                                Text(text)
+                                    .font(.system(.body, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding()
+                            }
+                        }
+                    } else {
+                        ContentUnavailableView(
+                            "Preview unavailable",
+                            systemImage: "doc",
+                            description: Text(
+                                "This \(byteCount(preview.byteCount)) attachment is not text."
+                            )
+                        )
+                    }
+                }
+                .navigationTitle(label)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
+                }
+            }
+            #if os(macOS)
+                .frame(
+                    minWidth: 480, idealWidth: 720,
+                    minHeight: 360, idealHeight: 600)
+            #endif
+        }
+
+        private func byteCount(_ count: Int) -> String {
+            ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .file)
         }
     }
 
