@@ -408,6 +408,26 @@ import Testing
             ])
     }
 
+    @Test(arguments: [
+        (Components.Schemas.AdjudicationProducer.engine, "Daemon recommendation", false),
+        (Components.Schemas.AdjudicationProducer.model, "Model proposal (unverified)", true),
+        (
+            Components.Schemas.AdjudicationProducer.engine_model,
+            "Model judgment with engine-authorized remediation",
+            true
+        ),
+    ])
+    func findingAdjudicationProducerLabelsDistinguishProvenance(
+        producer: Components.Schemas.AdjudicationProducer,
+        label: String,
+        modelBacked: Bool
+    ) {
+        let presentation = AttentionDisplay.adjudicationProducerPresentation(producer)
+
+        #expect(presentation.label == label)
+        #expect(presentation.modelBacked == modelBacked)
+    }
+
     @Test func readyClassesRenderDistinctlyWithTheirEvaluationSet() {
         let clean = AttentionFixtures.fixture(type: .ready_for_final_review).item
         let degraded = AttentionFixtures.degradedReady().item

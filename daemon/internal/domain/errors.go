@@ -187,7 +187,8 @@ var (
 	ErrAdjudicationAxisMismatch          = errors.New("finding-adjudication axes and route do not form a valid §7 row")
 	ErrModelEntryMintsAllowed            = errors.New("model-residue adjudication entry cannot mint allowed compatibility")
 	ErrEngineEntryNonDeterministicRow    = errors.New("engine fast-path adjudication entry must carry the required/allowed remediation row")
-	ErrAdjudicationConfidenceMisplaced   = errors.New("proposal confidence must be present exactly on model-residue adjudication entries")
+	ErrEngineModelEntryNonRemediationRow = errors.New("engine-model adjudication entry must carry the required/allowed remediation row")
+	ErrAdjudicationConfidenceMisplaced   = errors.New("proposal confidence must be present exactly on model-backed adjudication entries")
 	ErrFindingAdjudicationInconsistent   = errors.New("finding adjudication fields are internally inconsistent")
 	ErrFindingAdjudicationDigestMismatch = errors.New("finding adjudication digest does not match its canonical content")
 

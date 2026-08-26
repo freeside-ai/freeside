@@ -32,10 +32,12 @@ const (
 // checked. Compatibility is present exactly when the goal relationship is
 // `required` — the only row where remediating here is on the table. And the
 // producer distinguishes an engine fast-path routing fact (`engine`, no
-// proposal confidence) from a model-residue proposal (`model`, self-assessed
-// confidence present): only an engine entry may carry `allowed`, and a model
-// entry never can, because its constructor takes a ProposedCompatibility, whose
-// widening has no `allowed` image.
+// proposal confidence), a model-residue proposal (`model`, self-assessed
+// confidence present), and their explicit composition (`engine_model`): the
+// model supplies the goal judgment and confidence while the engine supplies
+// `allowed` compatibility and remediation authority. A pure model entry can
+// never carry `allowed`, because its constructor takes a ProposedCompatibility,
+// whose widening has no `allowed` image.
 type FindingAdjudicationEntry struct {
 	FindingID        FindingID            `json:"finding_id"`
 	Producer         AdjudicationProducer `json:"producer"`
@@ -49,15 +51,17 @@ type FindingAdjudicationEntry struct {
 	Assumptions   []string               `json:"assumptions"`
 	Alternatives  []string               `json:"alternatives"`
 	OpenQuestions []string               `json:"open_questions"`
-	// Confidence is non-nil exactly on `model` entries (plan §7). Its ordinal
-	// value is engine-judged against the dispatch threshold by Accepted; a
-	// below-threshold value is a not-accepted proposal, not an invalid entry.
+	// Confidence is non-nil exactly on model-backed (`model` or `engine_model`)
+	// entries (plan §7). Its ordinal value is engine-judged against the dispatch
+	// threshold by Accepted; a below-threshold value is a not-accepted proposal,
+	// not an invalid entry.
 	Confidence *AdjudicationConfidence `json:"confidence"`
 }
 
-// NewEngineAdjudicationEntry builds a fast-path routing fact. Only an engine
-// entry may carry `allowed`; it never carries proposal confidence. compat is
-// non-nil exactly when goal is `required`.
+// NewEngineAdjudicationEntry builds a pure-engine fast-path routing fact. It may
+// carry `allowed` but never proposal confidence; the separate engine-model
+// constructor represents the confidence-gated composed shape. compat is non-nil
+// exactly when goal is `required`.
 func NewEngineAdjudicationEntry(
 	findingID FindingID,
 	goal GoalRelationship,
@@ -116,6 +120,33 @@ func NewModelAdjudicationEntry(
 	return entry, nil
 }
 
+// NewEngineModelAdjudicationEntry composes a model-produced goal judgment and
+// confidence with the engine's independently derived allowed-remediation
+// authority. The engine-owned half is deliberately not parameterized: this
+// constructor can represent only the required/allowed/remediate row, while the
+// pure model constructor's ProposedCompatibility input remains allowed-free.
+func NewEngineModelAdjudicationEntry(
+	findingID FindingID,
+	goal GoalRelationship,
+	confidence AdjudicationConfidence,
+	rationale string,
+	evidence, citedRules, assumptions, alternatives, openQuestions []string,
+) (FindingAdjudicationEntry, error) {
+	allowed := CompatibilityAllowed
+	c := confidence
+	entry := FindingAdjudicationEntry{
+		FindingID: findingID, Producer: AdjudicationProducerEngineModel,
+		GoalRelationship: goal, Compatibility: &allowed, Route: RouteRemediate,
+		Confidence: &c,
+		Rationale:  rationale, Evidence: evidence, CitedRules: citedRules,
+		Assumptions: assumptions, Alternatives: alternatives, OpenQuestions: openQuestions,
+	}
+	if err := entry.Validate(); err != nil {
+		return FindingAdjudicationEntry{}, err
+	}
+	return entry, nil
+}
+
 // Validate is the structural and trust-boundary backstop for one entry,
 // including reconstructed values that bypassed a constructor.
 func (e FindingAdjudicationEntry) Validate() error {
@@ -161,9 +192,18 @@ func (e FindingAdjudicationEntry) Validate() error {
 			return fmt.Errorf("adjudication entry %q: %w", e.FindingID, ErrEngineEntryNonDeterministicRow)
 		}
 	}
-	// Proposal confidence is present exactly on model entries.
+	// The mixed provenance is just as narrow as the pure engine fast path, but
+	// remains confidence-gated because its goal relationship came from the model.
+	if e.Producer == AdjudicationProducerEngineModel {
+		remediation := e.GoalRelationship == GoalRequired && e.Compatibility != nil &&
+			*e.Compatibility == CompatibilityAllowed && e.Route == RouteRemediate
+		if !remediation {
+			return fmt.Errorf("adjudication entry %q: %w", e.FindingID, ErrEngineModelEntryNonRemediationRow)
+		}
+	}
+	// Proposal confidence is present exactly on model-backed entries.
 	switch e.Producer {
-	case AdjudicationProducerModel:
+	case AdjudicationProducerModel, AdjudicationProducerEngineModel:
 		if e.Confidence == nil {
 			return fmt.Errorf("adjudication entry %q: %w", e.FindingID, ErrAdjudicationConfidenceMisplaced)
 		}
@@ -247,18 +287,18 @@ func validAdjudicationRow(goal GoalRelationship, compat *WorkUnitCompatibility, 
 }
 
 // Accepted reports whether the entry's proposal is accepted at the dispatch
-// threshold. An engine entry is always accepted (it is an engine fact). A model
-// entry is accepted iff its confidence meets the threshold; a below-threshold
-// confidence is the not-accepted case (plan §7). An invalid threshold is an
-// error.
+// threshold. An engine entry is always accepted (it is an engine fact). A
+// model-backed entry is accepted iff its confidence meets the threshold; a
+// below-threshold confidence is the not-accepted case (plan §7). An invalid
+// threshold is an error.
 //
 // Accepted is authority-bearing: a true result routes the finding to dispatch,
 // so it re-runs the full entry validation and fails closed before deciding.
 // Otherwise a caller-supplied or decoded entry that bypassed a constructor —
 // a model-minted `allowed`, a forged engine row, an out-of-scale confidence —
 // would be accepted here even though Validate rejects it upstream. After
-// Validate a model entry always carries a valid confidence, so the ordinal
-// comparison is total.
+// Validate a model-backed entry always carries a valid confidence, so the
+// ordinal comparison is total.
 func (e FindingAdjudicationEntry) Accepted(threshold DispatchThreshold) (bool, error) {
 	if err := e.Validate(); err != nil {
 		return false, err
@@ -269,7 +309,7 @@ func (e FindingAdjudicationEntry) Accepted(threshold DispatchThreshold) (bool, e
 	switch e.Producer {
 	case AdjudicationProducerEngine:
 		return true, nil
-	case AdjudicationProducerModel:
+	case AdjudicationProducerModel, AdjudicationProducerEngineModel:
 		return e.Confidence.meets(threshold), nil
 	}
 	return false, fmt.Errorf("adjudication accept producer %q: %w", e.Producer, ErrInvalidAdjudicationProducer)

@@ -1,0 +1,17 @@
+{
+  "finding_id": "finding-mixed",
+  "producer": "engine_model",
+  "goal_relationship": "required",
+  "compatibility": "allowed",
+  "route": "remediate",
+  "rationale": "the model judged the finding required and the engine kept remediation in scope",
+  "evidence": [
+    "declared-path containment",
+    "approved spec §2"
+  ],
+  "cited_rules": null,
+  "assumptions": null,
+  "alternatives": null,
+  "open_questions": null,
+  "confidence": "medium"
+}

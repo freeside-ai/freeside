@@ -483,10 +483,10 @@ struct DecisionDetailView: View {
         rendersInteractiveControls: Bool
     ) -> some View {
         ForEach(binding.proposals, id: \.finding_id) { proposal in
+            let producer = AttentionDisplay.adjudicationProducerPresentation(proposal.producer)
             cardSection(
-                proposal.producer == .model
-                    ? "Model proposal (unverified)" : "Daemon recommendation",
-                dashed: proposal.producer == .model
+                producer.label,
+                dashed: producer.modelBacked
             ) {
                 factRow("Finding", value: proposal.finding_id)
                 factRow("Recommended route", value: AttentionDisplay.label(proposal.route))

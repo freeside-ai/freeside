@@ -560,6 +560,17 @@ enum AttentionDisplay {
         }
     }
 
+    static func adjudicationProducerPresentation(
+        _ producer: Components.Schemas.AdjudicationProducer
+    ) -> (label: String, modelBacked: Bool) {
+        switch producer {
+        case .engine: return ("Daemon recommendation", false)
+        case .model: return ("Model proposal (unverified)", true)
+        case .engine_model:
+            return ("Model judgment with engine-authorized remediation", true)
+        }
+    }
+
     static func label(_ compatibility: Components.Schemas.WorkUnitCompatibility?) -> String {
         guard let compatibility else { return "Not assessed" }
         switch compatibility {

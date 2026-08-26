@@ -46,6 +46,18 @@ func adjudicationEngineEntry(t *testing.T, id domain.FindingID) domain.FindingAd
 	return entry
 }
 
+func adjudicationEngineModelEntry(t *testing.T, id domain.FindingID) domain.FindingAdjudicationEntry {
+	t.Helper()
+	entry, err := domain.NewEngineModelAdjudicationEntry(
+		id, domain.GoalRequired, domain.ConfidenceHigh,
+		"model-required finding remains within the engine-derived declared scope",
+		nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("engine-model entry %q: %v", id, err)
+	}
+	return entry
+}
+
 func ptrCompat(c domain.WorkUnitCompatibility) *domain.WorkUnitCompatibility { return &c }
 
 func newAdjudication(
@@ -320,6 +332,39 @@ func TestFindingAdjudicationRoundTripAndReplay(t *testing.T) {
 	}
 }
 
+func TestFindingAdjudicationEngineModelEntryRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	runID := domain.RunID("run-engine-model")
+	at := time.Date(2026, 8, 26, 14, 0, 0, 0, time.UTC)
+	findings := []domain.Finding{adjudicationFinding("finding-a", runID, "daemon/a.go", at)}
+	st := seedReviewRound(t, runID, 1, findings, at)
+	artifact, err := domain.NewFindingAdjudication(
+		runID, 1, adjSpecDigest, adjInstructionDigest, adjPolicyDigest,
+		[]domain.FindingAdjudicationEntry{adjudicationEngineModelEntry(t, "finding-a")}, at)
+	if err != nil {
+		t.Fatalf("new adjudication: %v", err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutFindingAdjudication(ctx, artifact)
+	}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetFindingAdjudication(ctx, artifact.Digest)
+		if err != nil {
+			return err
+		}
+		if len(got.Entries) != 1 || got.Entries[0].Producer != domain.AdjudicationProducerEngineModel ||
+			got.Entries[0].Confidence == nil || *got.Entries[0].Confidence != domain.ConfidenceHigh {
+			t.Fatalf("round-tripped entry = %+v", got.Entries)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+}
+
 func TestFindingAdjudicationImmutableConflict(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -358,7 +403,12 @@ func TestFindingAdjudicationRevisionHistoryAndReplay(t *testing.T) {
 	conversationTwo := adjudicationConversation(t, "conversation-revisions-2", []string{"second"}, at)
 	invocationOne, feedbackOne := adjudicationFeedback(t, conversationOne, "invocation-revision-2", 1)
 	invocationTwo, feedbackTwo := adjudicationFeedback(t, conversationTwo, "invocation-revision-3", 1)
-	initial := newAdjudication(t, runID, 1, []domain.FindingID{"finding-a"}, at)
+	initial, err := domain.NewFindingAdjudication(
+		runID, 1, adjSpecDigest, adjInstructionDigest, adjPolicyDigest,
+		[]domain.FindingAdjudicationEntry{adjudicationEngineModelEntry(t, "finding-a")}, at)
+	if err != nil {
+		t.Fatalf("new mixed-origin adjudication: %v", err)
+	}
 	revisionTwo := successorAdjudication(t, initial, feedbackOne, "first revision", at.Add(time.Minute))
 	revisionThree := successorAdjudication(t, revisionTwo, feedbackTwo, "second revision", at.Add(2*time.Minute))
 
@@ -697,7 +747,12 @@ func TestFindingAdjudicationRevisionHistorySurvivesRestore(t *testing.T) {
 	conversationTwo := adjudicationConversation(t, "conversation-restore-2", []string{"second"}, at)
 	invocationOne, feedbackOne := adjudicationFeedback(t, conversationOne, "invocation-restore-1", 1)
 	invocationTwo, feedbackTwo := adjudicationFeedback(t, conversationTwo, "invocation-restore-2", 1)
-	initial := newAdjudication(t, runID, 1, []domain.FindingID{"finding-a"}, at)
+	initial, err := domain.NewFindingAdjudication(
+		runID, 1, adjSpecDigest, adjInstructionDigest, adjPolicyDigest,
+		[]domain.FindingAdjudicationEntry{adjudicationEngineModelEntry(t, "finding-a")}, at)
+	if err != nil {
+		t.Fatalf("new mixed-origin adjudication: %v", err)
+	}
 	revisionTwo := successorAdjudication(t, initial, feedbackOne, "before checkpoint", at.Add(time.Minute))
 	revisionThree := successorAdjudication(t, revisionTwo, feedbackTwo, "after checkpoint", at.Add(2*time.Minute))
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
@@ -737,6 +792,9 @@ func TestFindingAdjudicationRevisionHistorySurvivesRestore(t *testing.T) {
 		}
 		if len(history) != 2 || history[0].Digest != initial.Digest || history[1].Digest != revisionTwo.Digest {
 			t.Fatalf("restored history = %+v", history)
+		}
+		if history[0].Entries[0].Producer != domain.AdjudicationProducerEngineModel {
+			t.Fatalf("restored mixed-origin producer = %q", history[0].Entries[0].Producer)
 		}
 		for _, artifact := range history {
 			if _, err := tx.GetFindingAdjudication(ctx, artifact.Digest); err != nil {

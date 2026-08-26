@@ -344,7 +344,7 @@ import Testing
             .finding_adjudication!.value1
         var proposals = binding.proposals
         var untouched = proposals[0]
-        untouched.finding_id = "review-finding-18"
+        untouched.finding_id = "review-finding-19"
         proposals.append(untouched)
         let multiFinding = Components.Schemas.FindingAdjudicationBinding(
             run_id: binding.run_id,
