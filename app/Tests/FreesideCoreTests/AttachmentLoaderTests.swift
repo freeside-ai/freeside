@@ -221,6 +221,27 @@ private struct StreamingAttachmentTransport: ClientTransport {
                 width: Int.max, height: Int.max, maxPixels: Int.max))
     }
 
+    @Test func macOSFallbackRequiresTheKnownByteAndPixelBoundsToFit() {
+        let byteLimit = AttachmentLoader.macOSMaxBytes
+        #expect(
+            AttachmentLoader.macOSCanPreview(
+                .download(bytesSeenAtLeast: byteLimit, limit: 8 << 20)))
+        #expect(
+            !AttachmentLoader.macOSCanPreview(
+                .download(bytesSeenAtLeast: byteLimit + 1, limit: 8 << 20)))
+
+        let pixelLimit = AttachmentLoader.macOSMaxImagePixels
+        #expect(
+            AttachmentLoader.macOSCanPreview(
+                .image(width: pixelLimit, height: 1, pixelLimit: 4_194_304)))
+        #expect(
+            !AttachmentLoader.macOSCanPreview(
+                .image(width: pixelLimit + 1, height: 1, pixelLimit: 4_194_304)))
+        #expect(
+            AttachmentLoader.macOSCanPreview(
+                .imageBudget(width: 2_048, height: 2_048, pixelLimit: 4_194_304)))
+    }
+
     @Test func aMultiFrameContainerDecodesOnlyTheValidatedFirstFrame() async throws {
         let firstFrame = try makeImage(width: 1, height: 1)
         let laterFrame = try makeImage(width: 2, height: 2)

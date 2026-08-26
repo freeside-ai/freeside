@@ -1106,14 +1106,9 @@ struct DecisionDetailView: View {
             private func iOSTooLargeRecovery(
                 _ reason: AttachmentLoader.Phase.TooLargeReason
             ) -> String {
-                guard
-                    case .image(let width, let height, _) = reason,
-                    !AttachmentLoader.imageFitsPixelLimit(
-                        width: width,
-                        height: height,
-                        maxPixels: AttachmentLoader.macOSMaxImagePixels)
-                else { return "Open on the Mac" }
-                return "Too large to preview on the Mac"
+                AttachmentLoader.macOSCanPreview(reason)
+                    ? "Open on the Mac"
+                    : "Too large to preview on the Mac"
             }
         #endif
 

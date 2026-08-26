@@ -27,11 +27,12 @@ import Observation
 @MainActor
 @Observable
 public final class AttachmentLoader {
+    public static let macOSMaxBytes = 64 << 20
     public static let macOSMaxImagePixels = 16_777_216
 
     #if os(macOS)
         /// The Mac is the bounded larger-viewer fallback named by the iOS UI.
-        public static let defaultMaxBytes = 64 << 20
+        public static let defaultMaxBytes = macOSMaxBytes
         public static let defaultMaxImagePixels = macOSMaxImagePixels
     #else
         public static let defaultMaxBytes = 8 << 20
@@ -460,6 +461,19 @@ public final class AttachmentLoader {
         maxPixels: Int
     ) -> Bool {
         width > 0 && height > 0 && maxPixels > 0 && width <= maxPixels / height
+    }
+
+    static func macOSCanPreview(_ reason: Phase.TooLargeReason) -> Bool {
+        switch reason {
+        case .download(let bytesSeenAtLeast, _):
+            return bytesSeenAtLeast <= macOSMaxBytes
+        case .image(let width, let height, _),
+            .imageBudget(let width, let height, _):
+            return imageFitsPixelLimit(
+                width: width,
+                height: height,
+                maxPixels: macOSMaxImagePixels)
+        }
     }
 
     private func store(
