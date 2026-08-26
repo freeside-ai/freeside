@@ -3072,8 +3072,11 @@ components:
 
     AdjudicationProducer:
       type: string
-      description: The authority that produced the adjudication proposal.
-      enum: [engine, model]
+      description: >
+        The proposal's judgment and authority provenance. engine_model means
+        the goal judgment and confidence came from the model while the engine
+        independently derived the allowed remediation authority.
+      enum: [engine, model, engine_model]
 
     AdjudicationConfidence:
       type: string

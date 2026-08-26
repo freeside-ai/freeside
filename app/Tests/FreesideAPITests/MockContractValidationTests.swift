@@ -303,6 +303,7 @@ import Testing
     @Test func findingAdjudicationBindingIsExactAndTypeScoped() {
         let fixture = AttentionFixtures.fixture(type: .finding_adjudication).item
         #expect(MockContractValidation.itemValidityBreach(fixture) == nil)
+        #expect(fixture.finding_adjudication?.value1.proposals[1].producer == .engine_model)
 
         var missing = fixture
         missing.finding_adjudication = nil
@@ -368,6 +369,21 @@ import Testing
             MockContractValidation.itemValidityBreach(engineOutsideFastPath)
                 == "finding_adjudication engine proposal is not the deterministic fast path")
 
+        var mixedWithoutConfidence = fixture
+        mixedWithoutConfidence.finding_adjudication?.value1.proposals[1].confidence = nil
+        #expect(
+            MockContractValidation.itemValidityBreach(mixedWithoutConfidence)
+                == "finding_adjudication mixed-origin proposal lacks confidence")
+
+        var mixedOutsideRemediation = fixture
+        mixedOutsideRemediation.finding_adjudication?.value1.proposals[1].goal_relationship =
+            .adjacent
+        mixedOutsideRemediation.finding_adjudication?.value1.proposals[1].compatibility = nil
+        mixedOutsideRemediation.finding_adjudication?.value1.proposals[1].route = ._defer
+        #expect(
+            MockContractValidation.itemValidityBreach(mixedOutsideRemediation)
+                == "finding_adjudication mixed-origin proposal is not allowed remediation")
+
         var noAlternatives = fixture
         noAlternatives.finding_adjudication?.value1.proposals[0].offered_alternatives = []
         #expect(
@@ -396,6 +412,18 @@ import Testing
         #expect(
             MockContractValidation.itemValidityBreach(blankConsequence)
                 == "finding_adjudication alternative has an empty consequence")
+    }
+
+    @Test func findingAdjudicationMixedOriginProducerRoundTrips() throws {
+        let binding = AttentionFixtures.fixture(type: .finding_adjudication).item
+            .finding_adjudication!.value1
+
+        let encoded = try JSONEncoder().encode(binding)
+        let decoded = try JSONDecoder().decode(
+            Components.Schemas.FindingAdjudicationBinding.self, from: encoded)
+
+        #expect(decoded == binding)
+        #expect(decoded.proposals[1].producer == .engine_model)
     }
 
     // The text-claim carrier (#217): the daemon recomputes the claim digest

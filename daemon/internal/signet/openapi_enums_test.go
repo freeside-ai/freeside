@@ -10,11 +10,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// TestOpenAPIRunObservationEnumsMatchDomain pins the cross-language
-// registration seam: Swift's generated CaseIterable enums come from this
-// OpenAPI set, so any Go vocabulary change must update the wire contract and
-// regenerated client in the same unit.
-func TestOpenAPIRunObservationEnumsMatchDomain(t *testing.T) {
+// TestOpenAPIEnumsMatchDomain pins the cross-language registration seam:
+// Swift's generated CaseIterable enums come from this OpenAPI set, so any Go
+// vocabulary change must update the wire contract and regenerated client in
+// the same unit.
+func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 	body, err := os.ReadFile("../../../api/openapi.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -30,9 +30,10 @@ func TestOpenAPIRunObservationEnumsMatchDomain(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string][]string{
-		"RunMilestoneKind": enumStrings(domain.AllRunMilestoneKinds),
-		"RunHoldReason":    enumStrings(domain.AllRunHoldReasons),
-		"RunOutcome":       enumStrings(domain.AllRunOutcomes),
+		"RunMilestoneKind":     enumStrings(domain.AllRunMilestoneKinds),
+		"RunHoldReason":        enumStrings(domain.AllRunHoldReasons),
+		"RunOutcome":           enumStrings(domain.AllRunOutcomes),
+		"AdjudicationProducer": enumStrings(domain.AllAdjudicationProducers),
 	}
 	for name, expected := range want {
 		got := slices.Clone(document.Components.Schemas[name].Enum)

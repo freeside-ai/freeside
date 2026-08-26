@@ -1492,25 +1492,27 @@ func (r AdjudicationRoute) valid() bool {
 	}
 }
 
-// AdjudicationProducer names the origin of a FindingAdjudication entry: an
-// `engine` fast-path routing fact (no proposal, no confidence) or a `model`
-// residue proposal, which additionally records a self-assessed confidence
-// (plan §7). The zero value is invalid by design.
+// AdjudicationProducer names the provenance of a FindingAdjudication entry: an
+// `engine` fast-path routing fact (no proposal, no confidence), a `model`
+// residue proposal, or an `engine_model` composition whose goal judgment and
+// confidence are model-produced while its allowed-remediation authority is
+// engine-derived (plan §7). The zero value is invalid by design.
 type AdjudicationProducer string
 
 const (
-	AdjudicationProducerEngine AdjudicationProducer = "engine"
-	AdjudicationProducerModel  AdjudicationProducer = "model"
+	AdjudicationProducerEngine      AdjudicationProducer = "engine"
+	AdjudicationProducerModel       AdjudicationProducer = "model"
+	AdjudicationProducerEngineModel AdjudicationProducer = "engine_model"
 )
 
 // AllAdjudicationProducers lists every valid AdjudicationProducer.
 var AllAdjudicationProducers = []AdjudicationProducer{
-	AdjudicationProducerEngine, AdjudicationProducerModel,
+	AdjudicationProducerEngine, AdjudicationProducerModel, AdjudicationProducerEngineModel,
 }
 
 func (p AdjudicationProducer) valid() bool {
 	switch p {
-	case AdjudicationProducerEngine, AdjudicationProducerModel:
+	case AdjudicationProducerEngine, AdjudicationProducerModel, AdjudicationProducerEngineModel:
 		return true
 	default:
 		return false
