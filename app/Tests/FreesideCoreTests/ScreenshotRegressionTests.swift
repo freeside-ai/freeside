@@ -34,24 +34,26 @@
             var actual: [String: String] = [:]
 
             for size in textSizes {
-                for surface in try makeSurfaces(at: size.value) {
-                    let key = "\(surface.name)-\(size.name)"
-                    let image = try render(surface.view, at: size.value)
-                    actual[key] = try digest(image)
-                    if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
-                        _ = try dump(image, named: key)
+                try await FreesideFont.$screenshotDynamicTypeSize.withValue(size.value) {
+                    for surface in try makeSurfaces(at: size.value) {
+                        let key = "\(surface.name)-\(size.name)"
+                        let image = try render(surface.view, at: size.value)
+                        actual[key] = try digest(image)
+                        if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
+                            _ = try dump(image, named: key)
+                        }
+                        if ProcessInfo.processInfo.environment["FREESIDE_RECORD_SCREENSHOTS"] != "1",
+                            expected[key] != actual[key]
+                        {
+                            let dump = try dump(image, named: key)
+                            let expectedDigest = expected[key] ?? "missing"
+                            let actualDigest = actual[key] ?? "missing"
+                            Issue.record(
+                                "Screenshot mismatch for \(key): expected \(expectedDigest), got \(actualDigest); inspect \(dump.path) and record only after review."
+                            )
+                        }
+                        await Task.yield()
                     }
-                    if ProcessInfo.processInfo.environment["FREESIDE_RECORD_SCREENSHOTS"] != "1",
-                        expected[key] != actual[key]
-                    {
-                        let dump = try dump(image, named: key)
-                        let expectedDigest = expected[key] ?? "missing"
-                        let actualDigest = actual[key] ?? "missing"
-                        Issue.record(
-                            "Screenshot mismatch for \(key): expected \(expectedDigest), got \(actualDigest); inspect \(dump.path) and record only after review."
-                        )
-                    }
-                    await Task.yield()
                 }
             }
 
@@ -59,6 +61,9 @@
                 try writeManifest(actual)
             } else {
                 #expect(actual.count == expected.count)
+                #expect(
+                    Set(actual.values).count > 45,
+                    "The six-size matrix must exercise more than the prior two-state rendering")
             }
         }
 

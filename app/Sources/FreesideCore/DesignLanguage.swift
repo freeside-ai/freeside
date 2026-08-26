@@ -155,6 +155,11 @@ extension Color {
 /// Serif carries screen and item titles only; Plex Sans is the chrome;
 /// Plex Mono is the evidence register for every stated fact.
 enum FreesideFont {
+    /// A screenshot-only bridge for exercising iOS Dynamic Type metrics in
+    /// macOS ImageRenderer. Production never sets this task-local value and
+    /// continues to use the platform's native text sizing below.
+    @TaskLocal static var screenshotDynamicTypeSize: DynamicTypeSize?
+
     /// Registers the bundled faces with CoreText. Idempotent: a repeat
     /// registration of the same file reports an error CoreText already
     /// tolerates, so the result is deliberately not asserted on.
@@ -172,7 +177,10 @@ enum FreesideFont {
     /// applies the user's Dynamic Type scaling afterwards.
     static func size(of style: Font.TextStyle) -> CGFloat {
         #if canImport(AppKit)
-            NSFont.preferredFont(forTextStyle: platformStyle(style)).pointSize
+            if let screenshotDynamicTypeSize {
+                return iOSPointSize(of: style, at: screenshotDynamicTypeSize)
+            }
+            return NSFont.preferredFont(forTextStyle: platformStyle(style)).pointSize
         #elseif canImport(UIKit)
             UIFont.preferredFont(
                 forTextStyle: platformStyle(style),
@@ -182,6 +190,55 @@ enum FreesideFont {
     }
 
     #if canImport(AppKit)
+        /// Apple HIG iOS/iPadOS Dynamic Type point sizes for the six
+        /// categories exercised by the screenshot regression matrix.
+        private static func iOSPointSize(
+            of style: Font.TextStyle,
+            at dynamicTypeSize: DynamicTypeSize
+        ) -> CGFloat {
+            let sizes:
+                (
+                    xSmall: CGFloat, large: CGFloat, xxxLarge: CGFloat,
+                    accessibility1: CGFloat, accessibility3: CGFloat,
+                    accessibility5: CGFloat
+                ) =
+                    switch style {
+                    case .largeTitle, .extraLargeTitle, .extraLargeTitle2:
+                        (31, 34, 40, 44, 52, 60)
+                    case .title:
+                        (25, 28, 34, 38, 48, 58)
+                    case .title2:
+                        (19, 22, 28, 30, 38, 46)
+                    case .title3:
+                        (17, 20, 26, 28, 34, 40)
+                    case .headline, .body:
+                        (14, 17, 23, 25, 31, 37)
+                    case .callout:
+                        (13, 16, 22, 24, 30, 36)
+                    case .subheadline:
+                        (12, 15, 21, 23, 28, 34)
+                    case .footnote:
+                        (12, 13, 19, 21, 25, 29)
+                    case .caption:
+                        (11, 12, 18, 20, 24, 28)
+                    case .caption2:
+                        (11, 11, 17, 18, 22, 26)
+                    @unknown default:
+                        (14, 17, 23, 25, 31, 37)
+                    }
+
+            return switch dynamicTypeSize {
+            case .xSmall: sizes.xSmall
+            case .large: sizes.large
+            case .xxxLarge: sizes.xxxLarge
+            case .accessibility1: sizes.accessibility1
+            case .accessibility3: sizes.accessibility3
+            case .accessibility5: sizes.accessibility5
+            default:
+                preconditionFailure("Unsupported screenshot Dynamic Type size")
+            }
+        }
+
         private static func platformStyle(_ style: Font.TextStyle) -> NSFont.TextStyle {
             switch style {
             case .largeTitle: .largeTitle
@@ -244,21 +301,21 @@ enum FreesideFont {
     }
 
     // The platform text styles, in the language's faces.
-    static let title = serif(.title2)
-    static let largeTitle = serif(.largeTitle)
-    static let itemTitle = serif(.headline, scale: 1.1)
-    static let sectionTitle = serif(.title3)
-    static let body = sans(.body)
-    static let callout = sans(.callout)
-    static let subheadline = sans(.subheadline)
-    static let caption = sans(.caption)
-    static let monoCallout = mono(.callout)
-    static let monoCaption = mono(.caption)
+    static var title: Font { serif(.title2) }
+    static var largeTitle: Font { serif(.largeTitle) }
+    static var itemTitle: Font { serif(.headline, scale: 1.1) }
+    static var sectionTitle: Font { serif(.title3) }
+    static var body: Font { sans(.body) }
+    static var callout: Font { sans(.callout) }
+    static var subheadline: Font { sans(.subheadline) }
+    static var caption: Font { sans(.caption) }
+    static var monoCallout: Font { mono(.callout) }
+    static var monoCaption: Font { mono(.caption) }
     /// Small-caps mono keyword used by banners and section headers.
-    static let keyword = mono(.caption2, weight: .medium)
+    static var keyword: Font { mono(.caption2, weight: .medium) }
     /// Medium, not regular: the compact all-caps register stays readable
     /// without asking semantic color to compensate for a light face.
-    static let chip = mono(.caption2, weight: .medium)
+    static var chip: Font { mono(.caption2, weight: .medium) }
 }
 
 /// A bordered state chip: mono, lowercase, 1px border and text in the

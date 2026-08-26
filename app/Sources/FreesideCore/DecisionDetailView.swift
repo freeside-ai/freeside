@@ -126,7 +126,8 @@ struct DecisionDetailView: View {
                     actionButton(
                         recommendation.action,
                         item: item,
-                        tone: .primary,
+                        tone: AttentionDisplay.confirmationConsequence(recommendation.action) == nil
+                            ? .primary : .destructive,
                         showsIcon: false
                     )
                     .padding(.horizontal)
