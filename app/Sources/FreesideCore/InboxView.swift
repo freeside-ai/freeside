@@ -15,7 +15,11 @@ struct InboxView: View {
     @Binding var selection: String?
     let launchScope: InboxStore.Scope?
     let launchProjectID: String?
+    private let interactiveSelection: Binding<String?>?
     private let navigationPath: Binding<[String]>?
+    private let onFilterChange: () -> Void
+    private let onRefresh: @MainActor () async -> Void
+    private let lastUpdatedAt: Date?
     var onRevealTechnicalDetails: (String) -> Void
 
     init(
@@ -23,14 +27,22 @@ struct InboxView: View {
         selection: Binding<String?>,
         launchScope: InboxStore.Scope?,
         launchProjectID: String?,
+        interactiveSelection: Binding<String?>? = nil,
         navigationPath: Binding<[String]>? = nil,
+        onFilterChange: @escaping () -> Void = {},
+        lastUpdatedAt: Date? = nil,
+        onRefresh: @escaping @MainActor () async -> Void = {},
         onRevealTechnicalDetails: @escaping (String) -> Void = { _ in }
     ) {
         self.store = store
         _selection = selection
         self.launchScope = launchScope
         self.launchProjectID = launchProjectID
+        self.interactiveSelection = interactiveSelection
         self.navigationPath = navigationPath
+        self.onFilterChange = onFilterChange
+        self.onRefresh = onRefresh
+        self.lastUpdatedAt = lastUpdatedAt
         self.onRevealTechnicalDetails = onRevealTechnicalDetails
     }
 
@@ -94,7 +106,10 @@ struct InboxView: View {
                             .listStyle(.plain)
                             .scrollContentBackground(.hidden)
                         #else
-                            List(store.rows, id: \.item.id, selection: $selection) { snapshot in
+                            List(
+                                store.rows, id: \.item.id,
+                                selection: interactiveSelection ?? $selection
+                            ) { snapshot in
                                 InboxRowView(
                                     item: snapshot.item,
                                     isSelected: selection == snapshot.item.id,
@@ -113,6 +128,12 @@ struct InboxView: View {
                             .scrollContentBackground(.hidden)
                         #endif
                     }
+                    #if os(iOS)
+                        LastUpdatedLabel(lastUpdatedAt: lastUpdatedAt)
+                            .padding(.horizontal)
+                            .padding(.vertical, 6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    #endif
                 }
             }
         }
@@ -137,6 +158,9 @@ struct InboxView: View {
             }
         }
         .onChange(of: store.rows.map(\.item.id)) { repairSelection() }
+        #if os(iOS)
+            .refreshable { await onRefresh() }
+        #endif
     }
 
     @ViewBuilder
@@ -157,7 +181,7 @@ struct InboxView: View {
     }
 
     private var scopePicker: some View {
-        Picker("Scope", selection: Bindable(store).scope) {
+        Picker("Scope", selection: scopeSelection) {
             ForEach(InboxStore.Scope.allCases) { scope in
                 Text("\(scope.label) \(store.count(in: scope))").tag(scope)
             }
@@ -175,7 +199,22 @@ struct InboxView: View {
     private var projectSelection: Binding<String?> {
         Binding(
             get: { store.projectID },
-            set: { store.selectProjectFilter($0) }
+            set: { projectID in
+                guard store.projectID != projectID else { return }
+                onFilterChange()
+                store.selectProjectFilter(projectID)
+            }
+        )
+    }
+
+    private var scopeSelection: Binding<InboxStore.Scope> {
+        Binding(
+            get: { store.scope },
+            set: { scope in
+                guard store.scope != scope else { return }
+                onFilterChange()
+                store.scope = scope
+            }
         )
     }
 

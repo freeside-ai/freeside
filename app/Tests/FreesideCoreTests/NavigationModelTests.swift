@@ -17,6 +17,16 @@ import Testing
         #expect(navigation.inboxPath.isEmpty)
     }
 
+    @Test func launchExpandedDetailsAlsoOpensTheSharedInspector() {
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(
+                colorSchemeRaw: nil,
+                selectionRaw: "item-spec_approval",
+                detailsExpanded: true))
+
+        #expect(navigation.inspectorPresented)
+    }
+
     @Test func routingSelectsThenPushesWithoutDiscardingTheOtherTab() {
         let navigation = NavigationModel(
             launchInputs: LaunchInputs(
@@ -52,5 +62,154 @@ import Testing
 
         #expect(navigation.inboxPath.isEmpty)
         #expect(navigation.runsPath == [RunFixtures.activeRunID])
+    }
+
+    @Test func conclusionAdvancesByInboxPriorityThenRendersInboxClear() async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(
+                colorSchemeRaw: nil,
+                selectionRaw: "item-spec_approval"))
+        let expectedNext = try #require(
+            store.rows.first { $0.item.id != "item-spec_approval" }?.item.id)
+
+        #expect(
+            navigation.advanceAfterConclusion(
+                itemID: "item-spec_approval",
+                expectedOperatorNavigationRevision: navigation.operatorNavigationRevision,
+                store: store) == .advanced)
+        #expect(navigation.attentionSelection == expectedNext)
+
+        let only = try #require(store.snapshotsByID["item-spec_approval"])
+        store.replaceAll(with: [only])
+        navigation.route(to: .attentionItem("item-spec_approval"))
+        #expect(
+            navigation.advanceAfterConclusion(
+                itemID: "item-spec_approval",
+                expectedOperatorNavigationRevision: navigation.operatorNavigationRevision,
+                store: store) == .inboxClear)
+        #expect(navigation.selectedTab == .inbox)
+        #expect(navigation.attentionSelection == nil)
+        #expect(navigation.inboxPath.isEmpty)
+    }
+
+    @Test func conclusionDoesNotOverrideManualNavigationDuringTheDelay() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(
+                colorSchemeRaw: nil,
+                selectionRaw: "item-spec_approval"))
+
+        let expectedRevision = navigation.operatorNavigationRevision
+        navigation.route(to: .attentionItem("item-blocked"))
+        #expect(
+            navigation.advanceAfterConclusion(
+                itemID: "item-spec_approval",
+                expectedOperatorNavigationRevision: expectedRevision,
+                store: store) == .cancelled)
+        #expect(navigation.attentionSelection == "item-blocked")
+
+        let runExpectedRevision = navigation.operatorNavigationRevision
+        navigation.route(to: .run(RunFixtures.activeRunID))
+        #expect(
+            navigation.advanceAfterConclusion(
+                itemID: "item-spec_approval",
+                expectedOperatorNavigationRevision: runExpectedRevision,
+                store: store) == .cancelled)
+        #expect(navigation.selectedTab == .runs)
+    }
+
+    @Test func macSelectionSynchronizesItsPathBeforeConclusionAdvance() async {
+        let store = await makeStore(server: MockServer())
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(
+                colorSchemeRaw: nil,
+                selectionRaw: "item-spec_approval"))
+
+        navigation.selectAttentionItem("item-blocked")
+        let expectedRevision = navigation.operatorNavigationRevision
+
+        #expect(navigation.attentionSelection == "item-blocked")
+        #expect(navigation.inboxPath == ["item-blocked"])
+        #expect(
+            navigation.advanceAfterConclusion(
+                itemID: "item-blocked",
+                expectedOperatorNavigationRevision: expectedRevision,
+                store: store) == .advanced)
+    }
+
+    @Test func conclusionDoesNotOverrideBackNavigationAfterItemDisappears() async {
+        let store = await makeStore(server: MockServer())
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(
+                colorSchemeRaw: nil,
+                selectionRaw: "item-spec_approval"))
+        let expectedRevision = navigation.operatorNavigationRevision
+
+        navigation.setInboxPath([])
+        navigation.attentionSelection = nil
+
+        #expect(
+            navigation.advanceAfterConclusion(
+                itemID: "item-spec_approval",
+                expectedOperatorNavigationRevision: expectedRevision,
+                store: store) == .cancelled)
+    }
+
+    @Test func conclusionDoesNotOverrideFilterDrivenNavigationRepair() async {
+        let store = await makeStore(server: MockServer())
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(
+                colorSchemeRaw: nil,
+                selectionRaw: "item-spec_approval"))
+        let expectedRevision = navigation.operatorNavigationRevision
+
+        navigation.recordOperatorNavigation()
+        navigation.inboxPath = []
+        navigation.attentionSelection = nil
+
+        #expect(
+            navigation.advanceAfterConclusion(
+                itemID: "item-spec_approval",
+                expectedOperatorNavigationRevision: expectedRevision,
+                store: store) == .cancelled)
+    }
+
+    @Test func conclusionDoesNotOverrideAnAwayAndBackNavigationSequence() async {
+        let store = await makeStore(server: MockServer())
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(
+                colorSchemeRaw: nil,
+                selectionRaw: "item-spec_approval"))
+        let expectedRevision = navigation.operatorNavigationRevision
+
+        navigation.route(to: .attentionItem("item-blocked"))
+        navigation.route(to: .attentionItem("item-spec_approval"))
+
+        #expect(
+            navigation.advanceAfterConclusion(
+                itemID: "item-spec_approval",
+                expectedOperatorNavigationRevision: expectedRevision,
+                store: store) == .cancelled)
+    }
+
+    @Test func automaticDisappearanceStillAllowsConclusionAdvance() async {
+        let store = await makeStore(server: MockServer())
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(
+                colorSchemeRaw: nil,
+                selectionRaw: "item-spec_approval"))
+        let expectedRevision = navigation.operatorNavigationRevision
+
+        navigation.inboxPath = []
+        navigation.attentionSelection = nil
+
+        #expect(
+            navigation.advanceAfterConclusion(
+                itemID: "item-spec_approval",
+                expectedOperatorNavigationRevision: expectedRevision,
+                store: store) == .advanced)
     }
 }

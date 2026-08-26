@@ -7,17 +7,20 @@ struct RunsListView: View {
     @Binding var selection: String?
     @State private var projectID: String?
     private let navigationPath: Binding<[String]>?
+    private let onRefresh: @MainActor () async -> Void
 
     init(
         runs: [Components.Schemas.RunSnapshot],
         schedules: [Components.Schemas.ScheduleSnapshot],
         selection: Binding<String?>,
-        navigationPath: Binding<[String]>? = nil
+        navigationPath: Binding<[String]>? = nil,
+        onRefresh: @escaping @MainActor () async -> Void = {}
     ) {
         self.runs = runs
         self.schedules = schedules
         _selection = selection
         self.navigationPath = navigationPath
+        self.onRefresh = onRefresh
     }
 
     private var projects: [String] {
@@ -102,6 +105,9 @@ struct RunsListView: View {
         .onChange(of: runs.map(\.run.id)) {
             repairFilterAndSelection()
         }
+        #if os(iOS)
+            .refreshable { await onRefresh() }
+        #endif
     }
 
     private func repairFilterAndSelection() {

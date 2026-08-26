@@ -226,7 +226,11 @@ import Testing
     @Test func lostSubmissionEntersTheLedgerAndRetriesWithTheSameCommandID() async {
         let server = MockServer()
         let store = await makeStore(server: server)
-        let model = DecisionModel(store: store, itemID: "item-agent_question")
+        var conclusions: [DecisionConclusion] = []
+        let model = DecisionModel(
+            store: store,
+            itemID: "item-agent_question",
+            onConclusion: { conclusions.append($0) })
         await model.validate()
 
         await server.setBeforeRespond { operationID in
@@ -247,6 +251,147 @@ import Testing
         #expect(model.phase == .applied)
         #expect(model.appliedRecord?.command_id == minted)
         #expect(model.pendingCommand == nil)
+        #expect(conclusions.count == 1)
+        #expect(conclusions.first?.resultingStatus == .resolved)
+    }
+
+    @Test func recoveredSnoozeAdvancesTheObservedRevisionBeforeConclusion() async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        var observedRevisions: [Int64] = []
+        store.revisionObserver = { observedRevisions.append($0) }
+        var conclusions: [DecisionConclusion] = []
+        let model = DecisionModel(
+            store: store,
+            itemID: "item-run_proposal",
+            onConclusion: { conclusions.append($0) })
+        await model.validate()
+        observedRevisions.removeAll()
+
+        let lostResponses = InjectedFailures(times: 2)
+        await server.setAfterRespond { operationID in
+            if operationID == "submitCommand" { try await lostResponses.consume() }
+        }
+        await model.snooze(until: Date(timeIntervalSince1970: 1_786_506_245))
+        #expect(model.canRetryLostResponse)
+        #expect(observedRevisions.isEmpty)
+        let snoozedRevision = try #require(
+            await server.snapshot(itemID: "item-run_proposal")?.as_of_revision)
+
+        await model.retryLostResponse()
+
+        #expect(observedRevisions == [snoozedRevision])
+        #expect(conclusions.count == 1)
+        #expect(model.snapshot == nil)
+    }
+
+    @Test func snoozeReplayThatFirstCommitsUsesAPostReplayCanonicalRead() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        var conclusions: [DecisionConclusion] = []
+        let model = DecisionModel(
+            store: store,
+            itemID: "item-run_proposal",
+            onConclusion: { conclusions.append($0) })
+        await model.validate()
+
+        let failedFirstSubmit = InjectedFailures(times: 1)
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" { try await failedFirstSubmit.consume() }
+        }
+        await model.snooze(until: Date(timeIntervalSince1970: 1_786_506_245))
+
+        #expect(model.pendingCommand == nil)
+        #expect(!model.canRetryLostResponse)
+        #expect(model.snapshot == nil)
+        #expect(conclusions.count == 1)
+        #expect(conclusions.first?.actionLabel == "Snooze")
+    }
+
+    @Test func commandResultMustMatchTheSubmittedCommandBeforeItIsTrusted() {
+        let command = makeCommand(itemID: "item-spec_approval")
+        let valid = Components.Schemas.CommandResult(
+            record: .init(
+                command_id: command.command_id,
+                device_id: command.device_id,
+                item_id: command.payload.item_id,
+                item_version: command.payload.item_version,
+                pr_head_sha: command.payload.pr_head_sha,
+                artifact_digests: [],
+                action: command.payload.action,
+                message: "",
+                attachments: []
+            ),
+            revision: 2
+        )
+        #expect(DecisionModel.commandResultIsValid(valid, for: command))
+
+        var invalid = valid
+        invalid.revision = 0
+        #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
+
+        invalid = valid
+        invalid.record.command_id = "other-command"
+        #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
+        invalid = valid
+        invalid.record.device_id = "other-device"
+        #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
+        invalid = valid
+        invalid.record.item_id = "other-item"
+        #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
+        invalid = valid
+        invalid.record.item_version += 1
+        #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
+        invalid = valid
+        invalid.record.pr_head_sha = "other-head"
+        #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
+        invalid = valid
+        invalid.record.artifact_digests = ["sha256:other"]
+        #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
+        invalid = valid
+        invalid.record.action = .decline
+        #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
+        invalid = valid
+        invalid.record.message = "unexpected"
+        #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
+        invalid = valid
+        invalid.record.attachments = ["sha256:other"]
+        #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
+    }
+
+    @Test func mismatchedCommandResultKeepsTheDurableRetrySlot() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        var observedRevisions: [Int64] = []
+        store.revisionObserver = { observedRevisions.append($0) }
+        var conclusions: [DecisionConclusion] = []
+        let model = DecisionModel(
+            store: store,
+            itemID: "item-spec_approval",
+            onConclusion: { conclusions.append($0) })
+        await model.validate()
+        observedRevisions.removeAll()
+
+        await server.setCommandResultTransform { result in
+            var mismatched = result
+            mismatched.record.item_id = "other-item"
+            mismatched.revision = .max
+            return mismatched
+        }
+        await model.submit(.approve)
+
+        #expect(model.appliedRecord == nil)
+        #expect(model.canRetryLostResponse)
+        #expect(model.pendingCommand != nil)
+        #expect(!observedRevisions.contains(.max))
+        #expect(conclusions.isEmpty)
+
+        await server.setCommandResultTransform(nil)
+        await model.retryLostResponse()
+
+        #expect(model.appliedRecord?.action == .approve)
+        #expect(model.pendingCommand == nil)
+        #expect(conclusions.count == 1)
     }
 
     @Test func transientServerErrorSettlesByImmediateReplay() async {
@@ -265,7 +410,11 @@ import Testing
         )
         let store = InboxStore(client: client)
         await store.refresh()
-        let model = DecisionModel(store: store, itemID: "item-spec_approval")
+        var conclusions: [DecisionConclusion] = []
+        let model = DecisionModel(
+            store: store,
+            itemID: "item-spec_approval",
+            onConclusion: { conclusions.append($0) })
         await model.validate()
 
         await model.submit(.approve)
@@ -273,6 +422,7 @@ import Testing
         #expect(model.appliedRecord?.action == .approve)
         #expect(model.pendingCommand == nil)
         #expect(model.snapshot?.item.status == .resolved)
+        #expect(conclusions.count == 1)
     }
 
     @Test func pendingActionIsRefusedLocallyWithoutARequest() async {
@@ -421,7 +571,11 @@ import Testing
     @Test func runProposalSnoozeControlSubmitsTypedInstant() async {
         let server = MockServer()
         let store = await makeStore(server: server)
-        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        var conclusions: [DecisionConclusion] = []
+        let model = DecisionModel(
+            store: store,
+            itemID: "item-run_proposal",
+            onConclusion: { conclusions.append($0) })
         await model.validate()
 
         await model.snooze(until: Date(timeIntervalSince1970: 1_786_506_245))
@@ -431,6 +585,186 @@ import Testing
         #expect(model.validation == .validated)
         #expect(model.submissionError == nil)
         #expect(!model.actionsEnabled)
+        #expect(conclusions.count == 1)
+        #expect(conclusions.first?.actionLabel == "Snooze")
+        #expect(conclusions.first?.resultingStatus == nil)
+
+        await model.validate()
+        #expect(conclusions.count == 1)
+    }
+
+    @Test func snoozeAbsenceRequiresTheRecordedCommandToSurviveRestore() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        var conclusions: [DecisionConclusion] = []
+        let model = DecisionModel(
+            store: store,
+            itemID: "item-run_proposal",
+            onConclusion: { conclusions.append($0) })
+        await model.validate()
+
+        let submitCalls = Counter()
+        await server.setAfterRespond { operationID in
+            guard operationID == "submitCommand",
+                await submitCalls.incrementAndGet() == 1
+            else { return }
+            // The first 200 was already constructed. Restore before its
+            // read-your-write so both the proposal and command disappear.
+            await server.restoreAttentionState(items: [], revision: 1)
+        }
+
+        await model.snooze(until: Date(timeIntervalSince1970: 1_786_506_245))
+
+        #expect(await submitCalls.count == 2)
+        #expect(model.appliedRecord == nil)
+        #expect(model.pendingCommand == nil)
+        #expect(conclusions.isEmpty)
+        #expect(model.submissionError == "the decision was not recorded")
+    }
+
+    @Test func expiredSnoozeCannotClaimAnotherOperatorsResolution() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        var conclusions: [DecisionConclusion] = []
+        let model = DecisionModel(
+            store: store,
+            itemID: "item-run_proposal",
+            onConclusion: { conclusions.append($0) })
+        await model.validate()
+
+        let failedRefetch = InjectedFailures(times: 1)
+        await server.setBeforeRespond { operationID in
+            if operationID == "getAttentionItem" { try await failedRefetch.consume() }
+        }
+        let snoozeUntil = Date(timeIntervalSince1970: 1_786_506_245)
+        await model.snooze(until: snoozeUntil)
+        #expect(model.appliedRecord == nil)
+        #expect(model.canRetryLostResponse)
+        #expect(conclusions.isEmpty)
+
+        await server.advanceTime(to: snoozeUntil.addingTimeInterval(1))
+        await model.validate()
+        #expect(model.snapshot?.item.status == .open)
+        #expect(model.appliedRecord == nil)
+        #expect(conclusions.isEmpty)
+
+        let otherStore = await makeStore(server: server)
+        let otherOperator = DecisionModel(store: otherStore, itemID: "item-run_proposal")
+        await otherOperator.validate()
+        await otherOperator.submit(.start)
+        await model.validate()
+
+        #expect(model.snapshot?.item.status == .resolved)
+        #expect(conclusions.isEmpty)
+    }
+
+    @Test func expiredSnoozeCannotClaimAResolutionWhenTheOpenIntervalWasMissed() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        var conclusions: [DecisionConclusion] = []
+        let model = DecisionModel(
+            store: store,
+            itemID: "item-run_proposal",
+            onConclusion: { conclusions.append($0) })
+        await model.validate()
+
+        let failedRefetch = InjectedFailures(times: 1)
+        await server.setBeforeRespond { operationID in
+            if operationID == "getAttentionItem" { try await failedRefetch.consume() }
+        }
+        let snoozeUntil = Date(timeIntervalSince1970: 1_786_506_245)
+        await model.snooze(until: snoozeUntil)
+        #expect(model.appliedRecord == nil)
+        #expect(model.canRetryLostResponse)
+        #expect(conclusions.isEmpty)
+
+        await server.advanceTime(to: snoozeUntil.addingTimeInterval(1))
+        let otherStore = await makeStore(server: server)
+        let otherOperator = DecisionModel(store: otherStore, itemID: "item-run_proposal")
+        await otherOperator.validate()
+        await otherOperator.submit(.start)
+
+        // This client never validated the reopened proposal. Its first
+        // authoritative read after the outage sees only the later decision.
+        await model.validate()
+
+        #expect(model.snapshot?.item.status == .resolved)
+        #expect(model.appliedRecord == nil)
+        #expect(conclusions.isEmpty)
+    }
+
+    @Test func failedSnoozeRefetchRetainsReplayAcrossALaterRestore() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        var conclusions: [DecisionConclusion] = []
+        let model = DecisionModel(
+            store: store,
+            itemID: "item-run_proposal",
+            onConclusion: { conclusions.append($0) })
+        await model.validate()
+
+        let failedRefetch = InjectedFailures(times: 1)
+        await server.setBeforeRespond { operationID in
+            if operationID == "getAttentionItem" { try await failedRefetch.consume() }
+        }
+        await model.snooze(until: Date(timeIntervalSince1970: 1_786_506_245))
+        #expect(model.appliedRecord == nil)
+        #expect(model.canRetryLostResponse)
+
+        await server.restoreAttentionState(items: [], revision: 1)
+        await model.validate()
+
+        #expect(model.appliedRecord == nil)
+        #expect(model.pendingCommand == nil)
+        #expect(conclusions.isEmpty)
+        #expect(model.submissionError == "the decision was not recorded")
+    }
+
+    @Test func canceledSnoozeReconciliationReturnsTheCommandToRetry() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        await model.validate()
+
+        let failedRefetch = InjectedFailures(times: 1)
+        await server.setBeforeRespond { operationID in
+            if operationID == "getAttentionItem" { try await failedRefetch.consume() }
+        }
+        await model.snooze(until: Date(timeIntervalSince1970: 1_786_506_245))
+
+        await server.setBeforeRespond { operationID in
+            if operationID == "getAttentionItem" { throw CancellationError() }
+        }
+        await model.retryLostResponse()
+
+        #expect(model.appliedRecord == nil)
+        #expect(store.pendingCommandsByItemID["item-run_proposal"]?.state == .unresolved)
+        #expect(model.canRetryLostResponse)
+        #expect(model.phase == .idle)
+    }
+
+    @Test func epochChurnDuringSnoozeReconciliationReturnsTheCommandToRetry() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        await model.validate()
+
+        let failedRefetch = InjectedFailures(times: 1)
+        await server.setBeforeRespond { operationID in
+            if operationID == "getAttentionItem" { try await failedRefetch.consume() }
+        }
+        await model.snooze(until: Date(timeIntervalSince1970: 1_786_506_245))
+
+        await server.setBeforeRespond(nil)
+        await server.setAfterRespond { operationID in
+            if operationID == "getAttentionItem" { await store.discardSnapshots() }
+        }
+        await model.retryLostResponse()
+
+        #expect(model.appliedRecord == nil)
+        #expect(store.pendingCommandsByItemID["item-run_proposal"]?.state == .unresolved)
+        #expect(model.canRetryLostResponse)
+        #expect(model.phase == .idle)
     }
 
     @Test func selectedRunProposalRevalidatesWhenItsSnapshotTupleAdvances() async {
@@ -895,6 +1229,8 @@ import Testing
         let store = await makeStore(server: server)
         let model = DecisionModel(store: store, itemID: "item-system_health")
         await model.validate()
+        var observedRevisions: [Int64] = []
+        store.revisionObserver = { observedRevisions.append($0) }
 
         let failedRefetch = InjectedFailures(times: 1)
         await server.setBeforeRespond { operationID in
@@ -904,6 +1240,7 @@ import Testing
         #expect(model.appliedRecord?.action == .acknowledge)
         #expect(model.phase == .applied)
         #expect(!model.actionsEnabled)
+        #expect(observedRevisions.count == 1)
 
         await model.validate()
         #expect(model.validation == .validated)
@@ -1179,5 +1516,46 @@ import Testing
         #expect(model.validation == .validated)
         #expect(model.actionsEnabled)
         #expect(model.snapshot?.entity_version == 3)
+    }
+
+    @Test func aVerifiedResolutionEmitsOneConclusionReceipt() async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        var conclusions: [DecisionConclusion] = []
+        let model = DecisionModel(
+            store: store,
+            itemID: "item-spec_approval",
+            onConclusion: { conclusions.append($0) })
+        await model.validate()
+
+        await model.submit(.approve)
+
+        let conclusion = try #require(conclusions.first)
+        #expect(conclusions.count == 1)
+        #expect(conclusion.itemID == "item-spec_approval")
+        #expect(conclusion.actionLabel == "Approve")
+        #expect(conclusion.resultingStatus == .resolved)
+        #expect(model.snapshot?.item.status == .resolved)
+    }
+
+    @Test func anUncertainSubmissionNeverEmitsAConclusion() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        var conclusions: [DecisionConclusion] = []
+        let model = DecisionModel(
+            store: store,
+            itemID: "item-agent_question",
+            onConclusion: { conclusions.append($0) })
+        await model.validate()
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" { throw InjectedFailure() }
+        }
+
+        await model.submit(.stop)
+
+        #expect(conclusions.isEmpty)
+        #expect(model.phase == .idle)
+        #expect(model.canRetryLostResponse)
+        #expect(model.pendingCommand != nil)
     }
 }

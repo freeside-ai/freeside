@@ -166,6 +166,21 @@ import Testing
         #expect(Set(store.rows.map(\.item.id)) == [second.item.id, third.item.id])
     }
 
+    @Test func conclusionAdvanceStaysInsideTheSelectedProject() async throws {
+        let store = await makeStore(server: MockServer())
+        var current = try #require(store.snapshotsByID["item-spec_approval"])
+        current.item.project_id = "proj-a"
+        var sameProject = try #require(store.snapshotsByID["item-agent_question"])
+        sameProject.item.project_id = "proj-a"
+        var otherProject = try #require(store.snapshotsByID["item-execution_failure"])
+        otherProject.item.project_id = "proj-b"
+        otherProject.item.priority = .urgent
+        store.replaceAll(with: [current, sameProject, otherProject])
+        store.projectID = "proj-a"
+
+        #expect(store.nextOpenItemID(excluding: current.item.id) == sameProject.item.id)
+    }
+
     @Test func projectFilterRepairsWhenItsProjectDisappears() async throws {
         let store = await makeStore(server: MockServer())
         let surviving = try #require(store.snapshotsByID["item-spec_approval"])

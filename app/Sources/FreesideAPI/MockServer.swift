@@ -15,6 +15,8 @@ public actor MockServer {
     /// Test hook run before every response; suspend it to hold a response
     /// open, throw to fail the request.
     public typealias BeforeRespond = @Sendable (_ operationID: String) async throws -> Void
+    public typealias CommandResultTransform =
+        @Sendable (Components.Schemas.CommandResult) -> Components.Schemas.CommandResult
 
     /// Thrown from a `beforeRespond` hook to make the mock answer with a
     /// specific HTTP status and a generic error-shaped body, modelling a
@@ -95,6 +97,7 @@ public actor MockServer {
     private var healthAvailable = true
     private var beforeRespond: BeforeRespond?
     private var afterRespond: BeforeRespond?
+    private var commandResultTransform: CommandResultTransform?
     /// The trusted approved-recipe set the evidence gate re-runs
     /// against; policy state owned by the server, never by the rows.
     private let approvedRecipes: Set<String>
@@ -256,6 +259,12 @@ public actor MockServer {
         afterRespond = hook
     }
 
+    /// Mutates only the returned command result, never the server's stored
+    /// record, so clients can exercise returned-object trust boundaries.
+    public func setCommandResultTransform(_ transform: CommandResultTransform?) {
+        commandResultTransform = transform
+    }
+
     /// Controls the mock process boundary independently of synchronized
     /// state, so liveness clients can exercise running, outage, and restart.
     public func setHealthAvailable(_ available: Bool) {
@@ -323,6 +332,19 @@ public actor MockServer {
                 timelinesByRunID[id]?.as_of_revision = revision
             }
         }
+    }
+
+    /// Replaces the durable attention frontier and drops write history,
+    /// modelling a restore whose snapshot predates some items and commands.
+    public func restoreAttentionState(
+        items: [Components.Schemas.AttentionItemSnapshot], revision restored: Int64
+    ) {
+        rotateEpoch(revision: restored)
+        itemsByID = Dictionary(uniqueKeysWithValues: items.map { ($0.item.id, $0) })
+        commandsByID.removeAll()
+        resultsByCommandID.removeAll()
+        proposalFactsByItemID.removeAll()
+        proposalSnoozesByItemID.removeAll()
     }
 
     // MARK: - Devices and pairing
@@ -902,7 +924,7 @@ public actor MockServer {
             else {
                 throw ImmutableConflictError(commandID: command.command_id)
             }
-            return .ok(recorded)
+            return .ok(commandResultTransform?(recorded) ?? recorded)
         }
         let payload = command.payload
         guard let current = itemsByID[payload.item_id] else {
@@ -1160,7 +1182,7 @@ public actor MockServer {
             throw UnsupportedActionError(
                 commandID: command.command_id, action: payload.action)
         }
-        let recordedMessage = try Self.recordedMessage(payload)
+        let recordedMessage = try CommandResultTrust.recordedMessage(payload)
         let result = Components.Schemas.CommandResult(
             record: .init(
                 command_id: command.command_id,
@@ -1183,39 +1205,7 @@ public actor MockServer {
         commandsByID[command.command_id] = NormalizedCommand(
             command, message: recordedMessage)
         resultsByCommandID[command.command_id] = result
-        return .ok(result)
-    }
-
-    private static func recordedMessage(
-        _ payload: Components.Schemas.DecisionPayload
-    ) throws -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        switch payload.action {
-        case .start_with_changes:
-            guard let revision = payload.run_proposal_revision?.value1 else {
-                return payload.message ?? ""
-            }
-            let touchesControlPlane = revision.scope.touches_control_plane ? "true" : "false"
-            return "{\"intent\":\"\(revision.intent.rawValue)\","
-                + "\"expected_cost_units\":\(revision.expected_cost_units),"
-                + "\"scope\":{\"component_count\":\(revision.scope.component_count),"
-                + "\"declared_path_count\":\(revision.scope.declared_path_count),"
-                + "\"touches_control_plane\":\(touchesControlPlane)}}"
-        case .snooze:
-            guard let until = payload.snooze_until else { return payload.message ?? "" }
-            return try RFC3339DateTranscoder().encode(until)
-        case .choose_alternative_route:
-            guard let choices = payload.alternative_choices else {
-                return payload.message ?? ""
-            }
-            return String(
-                decoding: try encoder.encode(choices.sorted { $0.finding_id < $1.finding_id }),
-                as: UTF8.self
-            )
-        default:
-            return payload.message ?? ""
-        }
+        return .ok(commandResultTransform?(result) ?? result)
     }
 
     /// Reconstruct the body Signet compares on command-id replay. A valid
@@ -1228,7 +1218,7 @@ public actor MockServer {
         let message: String
         do {
             try MockContractValidation.validateActionInput(command)
-            message = try recordedMessage(command.payload)
+            message = try CommandResultTrust.recordedMessage(command.payload)
         } catch {
             message = command.payload.message ?? ""
         }

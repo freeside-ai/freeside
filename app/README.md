@@ -6,7 +6,7 @@ The SwiftUI multiplatform client: the macOS + iOS attention inbox, decision deta
 
 - **Toolchain:** Xcode / Swift Package Manager.
 - **Scope boundary:** client-side code only. The daemon/client contract is defined in `api/`; client code consuming it lives here, never in `api/`. No JS toolchain enters this component.
-- **Status:** the inbox and per-type decision cards run against an in-process stateful mock of the contract (idempotent commands, conflict-with-replacement, sync envelope, device pairing and revocation, digest-addressed attachment reads), rendering image attachments inline on the card by digest (plan §4; a missing or failed attachment shows a placeholder with the digest still visible, and bytes stay memory-only, never in the disk cache), with the §5.14 client cache semantics (separate full-snapshot and observed cursors, bootstrap on revision gap, epoch-change discard), a persisted disposable cache (carrying the pending-command ledger, so an unresolved decision's retry affordance survives a relaunch), Keychain-held device credentials, the pairing flow, and the freshness banner. The Mac app also owns the local daemon's registered lifecycle and reports its health, version, and observed restarts from a menu-bar presence. The client halves of §5.14 sync tests 1, 2, 8, 11, and 13–16 also converge against a real daemon process (`FreesideConvergenceTests`, env-gated): `bash scripts/run-convergence.sh` at the repo root builds and launches the `freeside-signet-dev` harness and runs the suite against it (#72); the conversation-path tests join with #68.
+- **Status:** the inbox and per-type decision cards run against an in-process stateful mock of the contract (idempotent commands, conflict-with-replacement, sync envelope, device pairing and revocation, digest-addressed attachment reads), rendering image attachments inline on the card by digest (plan §4; a missing or failed attachment shows a placeholder with the digest still visible, and bytes stay memory-only, never in the disk cache), with the §5.14 client cache semantics (separate full-snapshot and observed cursors, bootstrap on revision gap, epoch-change discard), coalesced manual/foreground/reachability refresh, a persisted disposable cache (carrying the pending-command ledger, so an unresolved decision's retry affordance survives a relaunch), Keychain-held device credentials, the pairing flow, visible last-updated state, and durable post-decision receipts with delayed advance. The Mac app also owns the local daemon's registered lifecycle, reports its health, version, and observed restarts from a menu-bar presence, and exposes the keyboard command set below. The client halves of §5.14 sync tests 1, 2, 8, 11, and 13–16 also converge against a real daemon process (`FreesideConvergenceTests`, env-gated): `bash scripts/run-convergence.sh` at the repo root builds and launches the `freeside-signet-dev` harness and runs the suite against it (#72); the conversation-path tests join with #68.
 
 ## Running
 
@@ -31,6 +31,13 @@ Launch arguments also pin the presentation per launch (`LaunchInputs`), so scree
 - `-FreesideInboxScope open|resolved|all`: select the inbox scope for a screenshot or automation launch.
 - `-FreesideProject <project-id>`: select the inbox project filter for a screenshot or automation launch.
 - `-FreesideDetailsExpanded YES`: open the selected decision card's Details disclosure at launch.
+
+## macOS Keyboard Commands
+
+- ⌘1 shows Inbox; ⌘2 shows Runs; ⌘R refreshes; ⌥⌘I toggles the inspector.
+- J selects the next inbox item and K the previous one; the arrow keys keep their native list behavior.
+- Return takes only a validated authoritative recommendation. Esc dismisses pending action UI without resolving the item. Space is unbound.
+- ⌘F is reserved and disabled until search ships.
 
 ## Installing the Operator Client
 
