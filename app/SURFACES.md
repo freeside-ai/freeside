@@ -24,8 +24,9 @@ Mac and iOS match on every line unless a line says otherwise.
   plus the shared ask-first decision shell, recommendation slot, action
   hierarchy, and the recommendation-led finding-adjudication card and typed
   route picker.
-- **Generic:** eleven of the fourteen card types use the shared decision shell,
-  but none has a card-specific layout yet.
+- **Generic:** seven of the fourteen card types use only the shared decision
+  shell; four additional types compose card-specific orderings from the shared
+  graphic module set.
 - **Not yet:** one card type (`effect_proposal`), conversations, the evidence
   and spec viewers, proposal batches, the
   initiative view, the remaining blocked-reason and waiver readiness display,
@@ -62,15 +63,15 @@ lists open issues that will change the card.
 | Card | What you can do | Status | Coming |
 | --- | --- | --- | --- |
 | `spec_approval` | approve, request changes, discuss, stop | Generic | #710; spec and diff viewer |
-| `review_diminishing_returns` | finish now, apply then finish, continue under policy, convert to policy | Generic | #724 |
-| `review_dispute` | adjudicate, discuss, stop | Generic | #724, #855 |
+| `review_diminishing_returns` | finish now, apply then finish, continue under policy, convert to policy | Done for the shared yield-chart module; production chart facts remain data-gated | #724, #844 |
+| `review_dispute` | adjudicate, discuss, stop | Done for the equal-position and daemon-fact composition; production position facts remain data-gated | #724, #855, #917 |
 | `finding_adjudication` | accept the recommended route, pick an alternative, discuss, stop (§7 widens this to answering questions, challenging assumptions, and asking for more detail) | Done for the proposal, daemon facts, typed route actions, and alternatives; Discuss UI is Not yet | #840 executes the chosen route; Conversation / Discuss under Screens |
 | `review_contradiction` | recover the exact contradiction, or leave parked | Generic (recovery details shown) | |
 | `review_configuration` | adopt the configuration, discuss, stop | Generic (recovery details shown) | |
-| `execution_failure` | retry, retry with capabilities, discuss, stop | Generic | #869 adds "retry with another provider profile" for quota, expiry, and capacity failures: a profile picker, with cost owner and review independence shown before confirming |
+| `execution_failure` | retry, retry with capabilities, discuss, stop | Done for the shared stage-rail and diagnostic-claim composition; production stage and timing facts remain data-gated | #869 adds "retry with another provider profile" for quota, expiry, and capacity failures: a profile picker, with cost owner and review independence shown before confirming; #917 supplies typed stage and timing facts |
 | `agent_question` | answer and retry, answer without retry, stop | Generic | #724 |
 | `publish_blocked` | rerun trust check, choose another profile, inspect the failure, stop | Generic | |
-| `ready_for_final_review` | view PR, return to agent, mark seen, dismiss, stop | Generic (clean/degraded title, evaluation-set details, and per-round review-yield history shown) | #724; remaining readiness display below |
+| `ready_for_final_review` | view PR, return to agent, mark seen, dismiss, stop | Done for the readiness checklist and per-round yield composition; change summary remains data-gated | #724, #917; remaining readiness display below |
 | `run_proposal` | start, start with changes, decline, snooze | Done for actions and facts; the full proposal artifact and the revised-digest diff are Not yet | Batch grouping (see Screens) |
 | `effect_proposal` | approve, approve with changes, decline, snooze; target picked from a daemon-supplied list | Not yet | Lands with the §5.13 effect registry in 1B |
 | `system_health` | acknowledge, run doctor, stop or resume unattended, resolve re-enrollment | Generic (posture badge and re-enrollment details shown) | #868 (account-probe items), #867 (retired-identity items) |

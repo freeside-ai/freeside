@@ -80,6 +80,15 @@ import Testing
         #expect(claim.map { item.artifact_digests.contains($0.digest) } == true)
     }
 
+    @Test func executionFailureFixtureLabelsItsDiagnosticAsAClaim() {
+        let item = AttentionFixtures.fixture(type: .execution_failure).item
+        let claim = item.agent_claims.first { $0.label == "Likely cause (unverified)" }
+
+        #expect(claim?.text?.content.contains("likely failed") == true)
+        #expect(claim?.text?.content.contains("**build**") == true)
+        #expect(claim.map { item.artifact_digests.contains($0.digest) } == true)
+    }
+
     /// Pins the literal ids so the `-FreesideSelect` value list mirrored
     /// in app/README.md cannot drift silently: renaming a type or
     /// reordering the inbox must show up here as a doc-sync signal.

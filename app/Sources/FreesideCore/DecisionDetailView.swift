@@ -52,6 +52,8 @@ struct DecisionDetailView: View {
     @State private var alternativeSelections: [String: Components.Schemas.AdjudicationRoute] = [:]
     private let attachments: AttachmentLoader
     private let recommendation: DecisionRecommendationPresentation?
+    private let graphics: DecisionGraphicPresentations
+    private let loadsAttachments: Bool
     private let showsValidationProgress: Bool
     private let itemID: String
     private let detailsRevealRequest: TechnicalDetailsRevealRequest?
@@ -65,6 +67,8 @@ struct DecisionDetailView: View {
         detailsRevealRequest: TechnicalDetailsRevealRequest? = nil,
         onConsumeDetailsRevealRequest: @escaping (UUID) -> Void = { _ in },
         recommendation: DecisionRecommendationPresentation? = nil,
+        graphics: DecisionGraphicPresentations = .init(),
+        loadsAttachments: Bool = true,
         showsValidationProgress: Bool = true
     ) {
         _model = State(initialValue: DecisionModel(store: store, itemID: itemID))
@@ -75,6 +79,8 @@ struct DecisionDetailView: View {
         self.detailsRevealRequest = detailsRevealRequest
         self.onConsumeDetailsRevealRequest = onConsumeDetailsRevealRequest
         self.recommendation = recommendation
+        self.graphics = graphics
+        self.loadsAttachments = loadsAttachments
         self.showsValidationProgress = showsValidationProgress
     }
 
@@ -220,6 +226,7 @@ struct DecisionDetailView: View {
         accessibilityLayout: Bool,
         compactLayout: Bool
     ) -> some View {
+        let composition = DecisionCardComposition.forType(item._type)
         VStack(alignment: .leading, spacing: 16) {
             header(item, accessibilityLayout: accessibilityLayout)
             banner
@@ -228,106 +235,247 @@ struct DecisionDetailView: View {
                 .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
 
+            ForEach(Array(composition.modules.enumerated()), id: \.offset) {
+                index, module in
+                cardModule(
+                    module,
+                    moduleIndex: index,
+                    item: item,
+                    composition: composition,
+                    rendersInteractiveControls: rendersInteractiveControls,
+                    accessibilityLayout: accessibilityLayout)
+                if index + 1 == composition.actionInsertionIndex {
+                    actions(
+                        item,
+                        stackedLayout: accessibilityLayout || compactLayout,
+                        includesReviewing: composition.reviewingActionInsertionIndex == nil)
+                }
+                if index + 1 == composition.reviewingActionInsertionIndex {
+                    reviewingAction(item)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func cardModule(
+        _ module: DecisionCardModule,
+        moduleIndex: Int,
+        item: Components.Schemas.AttentionItem,
+        composition: DecisionCardComposition,
+        rendersInteractiveControls: Bool,
+        accessibilityLayout: Bool
+    ) -> some View {
+        switch module {
+        case .recommendation:
             if let recommendation,
                 actionRanking(item).recommended == recommendation.action
             {
                 recommendationBlock(recommendation, item: item)
             }
-            actions(
+        case .checklist:
+            if let presentation = DecisionChecklistPresentation(item) {
+                DecisionChecklistModuleView(presentation: presentation)
+            }
+        case .stageRail:
+            if let presentation = graphics.stageRail {
+                cardSection("Failure stage") {
+                    StageRail(
+                        title: nil,
+                        presentation: presentation,
+                        axis: accessibilityLayout ? .vertical : .horizontal)
+                }
+            }
+        case .comparison:
+            if let presentation = graphics.comparison {
+                DecisionComparisonModuleView(presentation: presentation)
+            }
+        case .yieldChart:
+            if let presentation = graphics.diminishingYield ?? DecisionYieldPresentation(item) {
+                DecisionYieldChartModuleView(
+                    presentation: presentation,
+                    showsBars: graphics.diminishingYield != nil)
+            }
+        case .factBlock:
+            factBlocks(
                 item,
-                stackedLayout: accessibilityLayout || compactLayout)
+                includesCommitPlan: !composition.modules.contains(.checklist),
+                rendersInteractiveControls: rendersInteractiveControls)
+        case .claims:
+            claims(
+                composition.claims(
+                    from: item.agent_claims,
+                    at: moduleIndex,
+                    prominentClaimIndex: graphics.prominentClaimIndex),
+                accessibilityLayout: accessibilityLayout,
+                prominent: composition.claimsAreProminent(at: moduleIndex),
+                rendersInteractiveControls: rendersInteractiveControls)
+        case .evidence:
+            evidence(
+                item,
+                accessibilityLayout: accessibilityLayout,
+                rendersInteractiveControls: rendersInteractiveControls)
+        case .details:
+            details(item, accessibilityLayout: accessibilityLayout)
+        }
+    }
 
-            cardSection("Context") {
-                Text(item.reason)
+    @ViewBuilder
+    private func factBlocks(
+        _ item: Components.Schemas.AttentionItem,
+        includesCommitPlan: Bool,
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        if let changeSummary = graphics.changeSummary {
+            cardSection("Change summary (unverified)", dashed: true) {
+                Text(changeSummary.text)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(changeSummary.summary))
+        }
 
-            if let adjudication = item.finding_adjudication?.value1 {
-                findingAdjudication(
-                    adjudication,
-                    rendersInteractiveControls: rendersInteractiveControls)
+        cardSection("Context") {
+            Text(item.reason)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        if let adjudication = item.finding_adjudication?.value1 {
+            findingAdjudication(
+                adjudication,
+                rendersInteractiveControls: rendersInteractiveControls)
+        }
+
+        if includesCommitPlan, let notice = item.commit_plan_notice?.value1 {
+            cardSection("Facts") {
+                factRow("Commit plan", value: AttentionDisplay.label(notice))
             }
+        }
 
-            // Daemon-derived commit-plan notice (plan §5.6): the reserved
-            // plan channel was consumed without structuring the import, and
-            // that must never be silent.
-            if let notice = item.commit_plan_notice?.value1 {
-                cardSection("Facts") {
-                    factRow("Commit plan", value: AttentionDisplay.label(notice))
+        if let comparison = graphics.comparison, !comparison.verifiableFacts.isEmpty {
+            cardSection("What the daemon can verify") {
+                ForEach(comparison.verifiableFacts) { fact in
+                    factRow(fact.label, value: fact.value)
                 }
             }
+        }
 
-            if let facts = model.proposalFacts {
-                cardSection("Authenticated proposal") {
-                    factRow("Intent", value: facts.intent.rawValue)
-                    factRow("Expected cost", value: "\(facts.expected_cost_units) units")
-                    factRow("Components", value: "\(facts.scope.component_count)")
-                    factRow("Declared paths", value: "\(facts.scope.declared_path_count)")
-                    factRow(
-                        "Control plane", value: facts.scope.touches_control_plane ? "Yes" : "No")
-                    if let prior = facts.supersedes?.value1 {
-                        Divider()
-                        Text("Revision context")
-                            .font(FreesideFont.sans(.caption, weight: .semibold))
-                        proposalRevisionRows(prior)
-                    }
+        if let attemptTimings = graphics.attemptTimings {
+            cardSection(attemptTimings.title) {
+                ForEach(attemptTimings.facts) { fact in
+                    factRow(fact.label, value: fact.value)
                 }
             }
+        }
 
-            if !item.agent_claims.isEmpty {
-                // Dashed: a claim must read as a claim (plan §9).
+        if let facts = model.proposalFacts {
+            cardSection("Authenticated proposal") {
+                factRow("Intent", value: facts.intent.rawValue)
+                factRow("Expected cost", value: "\(facts.expected_cost_units) units")
+                factRow("Components", value: "\(facts.scope.component_count)")
+                factRow("Declared paths", value: "\(facts.scope.declared_path_count)")
+                factRow(
+                    "Control plane", value: facts.scope.touches_control_plane ? "Yes" : "No")
+                if let prior = facts.supersedes?.value1 {
+                    Divider()
+                    Text("Revision context")
+                        .font(FreesideFont.sans(.caption, weight: .semibold))
+                    proposalRevisionRows(prior)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func claims(
+        _ claims: [Components.Schemas.AgentClaim],
+        accessibilityLayout: Bool,
+        prominent: Bool,
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        if !claims.isEmpty {
+            if prominent {
+                cardSection("Agent claims (unverified)", dashed: true) {
+                    claimRows(
+                        claims,
+                        rendersInteractiveControls: rendersInteractiveControls)
+                }
+            } else {
                 lowerSection(
                     "Agent claims (unverified)",
                     isExpanded: $claimsExpanded,
                     accessibilityLayout: accessibilityLayout,
                     dashed: true
                 ) {
-                    Text("Written by the agent, not checked by the daemon.")
-                        .foregroundStyle(Color.inkDim)
-                    // Keyed by position: the daemon permits two claims on
-                    // the same artifact under different labels, so no
-                    // claim field is unique on its own and an id-keyed
-                    // ForEach could drop a row the user must review.
-                    ForEach(Array(item.agent_claims.enumerated()), id: \.offset) { _, claim in
-                        AttachmentRow(
-                            label: claim.label, digest: claim.digest,
-                            attachments: attachments, text: claim.text,
-                            rendersInteractiveControls: rendersInteractiveControls)
-                    }
+                    claimRows(
+                        claims,
+                        rendersInteractiveControls: rendersInteractiveControls)
                 }
             }
+        }
+    }
 
-            if !item.evidence_snapshot.isEmpty {
-                lowerSection(
-                    "Evidence",
-                    isExpanded: $evidenceExpanded,
-                    accessibilityLayout: accessibilityLayout
-                ) {
-                    ForEach(item.evidence_snapshot, id: \.id) { artifact in
-                        AttachmentRow(
-                            label: artifact._type.rawValue, digest: artifact.digest,
-                            attachments: attachments,
-                            rendersInteractiveControls: rendersInteractiveControls)
-                    }
-                }
-            }
+    @ViewBuilder
+    private func claimRows(
+        _ claims: [Components.Schemas.AgentClaim],
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        Text("Written by the agent, not checked by the daemon.")
+            .foregroundStyle(Color.inkDim)
+        // Position is the only stable identity: two claims may bind the same
+        // artifact under different labels and neither field is unique.
+        ForEach(Array(claims.enumerated()), id: \.offset) { _, claim in
+            AttachmentRow(
+                label: claim.label, digest: claim.digest,
+                attachments: attachments,
+                loadsAttachments: loadsAttachments,
+                text: claim.text,
+                rendersInteractiveControls: rendersInteractiveControls)
+        }
+    }
 
+    @ViewBuilder
+    private func evidence(
+        _ item: Components.Schemas.AttentionItem,
+        accessibilityLayout: Bool,
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        if !item.evidence_snapshot.isEmpty {
             lowerSection(
-                "Details",
-                isExpanded: $detailsExpanded,
+                "Evidence",
+                isExpanded: $evidenceExpanded,
                 accessibilityLayout: accessibilityLayout
             ) {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
-                        factRow(row.label, value: row.value, monospaced: true)
-                    }
+                ForEach(item.evidence_snapshot, id: \.id) { artifact in
+                    AttachmentRow(
+                        label: artifact._type.rawValue, digest: artifact.digest,
+                        attachments: attachments,
+                        loadsAttachments: loadsAttachments,
+                        rendersInteractiveControls: rendersInteractiveControls)
                 }
             }
-            .id(ScrollTarget.technicalDetails)
-            .font(FreesideFont.caption)
-            .foregroundStyle(Color.inkDim)
-            .textSelection(.enabled)
         }
+    }
+
+    private func details(
+        _ item: Components.Schemas.AttentionItem,
+        accessibilityLayout: Bool
+    ) -> some View {
+        lowerSection(
+            "Details",
+            isExpanded: $detailsExpanded,
+            accessibilityLayout: accessibilityLayout
+        ) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
+                    factRow(row.label, value: row.value, monospaced: true)
+                }
+            }
+        }
+        .id(ScrollTarget.technicalDetails)
+        .font(FreesideFont.caption)
+        .foregroundStyle(Color.inkDim)
+        .textSelection(.enabled)
     }
 
     /// The project-owned card content without navigation and presentation
@@ -676,6 +824,7 @@ struct DecisionDetailView: View {
         let label: String
         let digest: String
         let attachments: AttachmentLoader
+        let loadsAttachments: Bool
         var text: Components.Schemas.ClaimText? = nil
         var rendersInteractiveControls = true
         @State private var showsImagePreview = false
@@ -697,7 +846,9 @@ struct DecisionDetailView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     fetchedAttachment
-                        .task(id: digest) { await attachments.load(digest) }
+                        .task(id: digest) {
+                            if loadsAttachments { await attachments.load(digest) }
+                        }
                 }
                 digestCaption
             }
@@ -1128,7 +1279,8 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func actions(
         _ item: Components.Schemas.AttentionItem,
-        stackedLayout: Bool
+        stackedLayout: Bool,
+        includesReviewing: Bool
     ) -> some View {
         let ranking = actionRanking(item)
         VStack(alignment: .leading, spacing: 8) {
@@ -1159,7 +1311,7 @@ struct DecisionDetailView: View {
                 }
             }
 
-            if let reviewing = ranking.reviewing {
+            if includesReviewing, let reviewing = ranking.reviewing {
                 actionButton(reviewing, item: item, tone: .neutral)
             }
 
@@ -1181,12 +1333,21 @@ struct DecisionDetailView: View {
         }
     }
 
+    @ViewBuilder
+    private func reviewingAction(_ item: Components.Schemas.AttentionItem) -> some View {
+        if let reviewing = actionRanking(item).reviewing {
+            actionButton(reviewing, item: item, tone: .neutral)
+        }
+    }
+
     private func actionRanking(
         _ item: Components.Schemas.AttentionItem
     ) -> DecisionActionRanking {
-        DecisionActionRanking(
+        let composition = DecisionCardComposition.forType(item._type)
+        return DecisionActionRanking(
             requested: item.requested_decision,
-            recommendedAction: recommendation?.action)
+            recommendedAction: recommendation?.action,
+            reservesRecommendedAction: composition.modules.contains(.recommendation))
     }
 
     @ViewBuilder
