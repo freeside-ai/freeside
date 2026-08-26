@@ -628,6 +628,180 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	); err != nil || production || author != (engine.ProductionCommitAuthor{}) {
 		t.Fatalf("legacy production author = %#v, production=%v, err=%v", author, production, err)
 	}
+	remediationID, remediationAdmission := seedRemediationAuthorityFixture(
+		t, ctx, st, authorityRunID,
+	)
+	remediationResolver := &countingProductionCommitAuthorResolver{identity: publish.AppBotIdentity{
+		AppSlug: "freeside-test", BotUserID: 12345,
+	}}
+	authority.commitAuthors = remediationResolver
+	authority.authenticatedStartAuthors = newProductionCommitAuthorAuthenticationCache()
+	if err := authority.authenticateInvocationStart(
+		ctx, remediationID, remediationAdmission, "example/repo",
+	); err != nil {
+		t.Fatalf("authenticate remediation start: %v", err)
+	}
+	wantRemediationAuthor := engine.ProductionCommitAuthor{
+		AppSlug: "freeside-test", BotUserID: 12345,
+	}
+	author, production, err = authority.invocationImportAuthor(
+		ctx, remediationID, remediationAdmission, "example/repo",
+	)
+	if err != nil || !production || author != wantRemediationAuthor {
+		t.Fatalf("authenticate remediation live import = %#v, production=%t, err=%v",
+			author, production, err)
+	}
+	author, production, err = authority.invocationImportRecordAuthor(
+		ctx, remediationID, remediationAdmission,
+	)
+	if err != nil || !production || author != wantRemediationAuthor {
+		t.Fatalf("authenticate remediation replay import = %#v, production=%t, err=%v",
+			author, production, err)
+	}
+	if remediationResolver.resolveCalls != 1 || remediationResolver.revalidateCalls != 1 {
+		t.Fatalf("remediation author authentication made %d resolve and %d revalidate calls, want 1 each",
+			remediationResolver.resolveCalls, remediationResolver.revalidateCalls)
+	}
+}
+
+func seedRemediationAuthorityFixture(
+	t *testing.T,
+	ctx context.Context,
+	st *store.Store,
+	runID domain.RunID,
+) (domain.InvocationID, domain.ExecutionAdmission) {
+	t.Helper()
+	digest := func(body string) domain.Digest {
+		return domain.Digest(contentaddr.Sum([]byte(body)))
+	}
+	at := time.Date(2026, 8, 24, 15, 0, 0, 0, time.UTC)
+	baseSHA := strings.Repeat("1", 40)
+	headSHA := strings.Repeat("2", 40)
+	reviewID := engine.ProductionReviewInvocationID(runID, 1)
+	finding := domain.Finding{
+		ID: "finding-remediation-authority", RunID: runID, Source: "codex_local",
+		Severity: domain.FindingSeverityP1,
+		Location: &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1},
+		Message:  "repair the trust boundary", RawText: "repair the trust boundary", CreatedAt: at,
+	}
+	record, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: reviewID, RunID: runID, Round: 1,
+		Provider: "codex", ModelConfiguration: "test",
+		ConfigurationDigest: digest("review configuration"),
+		InstructionDigest:   digest("review instructions"),
+		CostOwner:           "test", BaseSHA: baseSHA, HeadSHA: headSHA, CompletedAt: at,
+		CompletionEvidence: digest("review completion"), Outcome: domain.ReviewFindings,
+		FindingIDs: []domain.FindingID{finding.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compatibility := domain.CompatibilityAllowed
+	entry, err := domain.NewEngineAdjudicationEntry(
+		finding.ID, domain.GoalRequired, &compatibility, domain.RouteRemediate,
+		"remediate", []string{"daemon/a.go"}, nil, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var run domain.Run
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(ctx, runID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	adjudication, err := domain.NewFindingAdjudication(
+		runID, 1, run.SpecDigest, record.InstructionDigest, run.PolicyDigest,
+		[]domain.FindingAdjudicationEntry{entry}, at,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remediationID := domain.InvocationID("inv-remediate-1-" + string(runID))
+	stageID := domain.StageID("remediate-1-" + string(runID))
+	inputArtifactID := domain.ArtifactID("remediation-input-1-" + string(runID))
+	inputDigest := digest("remediation input envelope")
+	inputArtifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: inputArtifactID, Type: domain.ArtifactKindEvidence, Digest: inputDigest,
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: reviewID,
+			HeadBinding: domain.HeadBound, SourceHeadSHA: headSHA,
+			SensitivityClass: domain.SensitivityNormal,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := func() (domain.AgentInvocation, error) {
+		var invocation domain.AgentInvocation
+		err := st.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			invocation, err = tx.GetAgentInvocation(ctx, domain.InvocationID("inv-implement-"+string(runID)))
+			return err
+		})
+		return invocation, err
+	}()
+	if err != nil {
+		t.Fatal(err)
+	}
+	remediationInvocation, err := domain.NewAgentInvocation(
+		remediationID, []domain.ArtifactID{initial.InputIDs[0], inputArtifactID}, nil, 0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(struct {
+		Version             string              `json:"version"`
+		InvocationID        domain.InvocationID `json:"invocation_id"`
+		RunID               domain.RunID        `json:"run_id"`
+		StageID             domain.StageID      `json:"stage_id"`
+		Round               int                 `json:"round"`
+		ReviewInvocationID  domain.InvocationID `json:"review_invocation_id"`
+		AdjudicationDigest  domain.Digest       `json:"adjudication_digest"`
+		InputArtifactID     domain.ArtifactID   `json:"input_artifact_id"`
+		InputArtifactDigest domain.Digest       `json:"input_artifact_digest"`
+		BaseSHA             string              `json:"base_sha"`
+		HeadSHA             string              `json:"head_sha"`
+		FindingIDs          []domain.FindingID  `json:"finding_ids"`
+	}{
+		Version: "freeside.remediation-request/v1", InvocationID: remediationID,
+		RunID: runID, StageID: stageID, Round: 1, ReviewInvocationID: reviewID,
+		AdjudicationDigest: adjudication.Digest, InputArtifactID: inputArtifactID,
+		InputArtifactDigest: inputDigest, BaseSHA: baseSHA, HeadSHA: headSHA,
+		FindingIDs: []domain.FindingID{finding.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Stages = append(run.Stages, domain.Stage{ID: stageID, RunID: runID, Name: "implement"})
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		if err := tx.PutReviewRecord(ctx, record, []domain.Finding{finding}); err != nil {
+			return err
+		}
+		if err := tx.PutFindingAdjudication(ctx, adjudication); err != nil {
+			return err
+		}
+		if err := tx.PutArtifact(ctx, inputArtifact); err != nil {
+			return err
+		}
+		if err := tx.PutAgentInvocation(ctx, remediationInvocation); err != nil {
+			return err
+		}
+		_, _, err := tx.EnqueueOutbox(
+			ctx, string(remediationID), engine.KindRemediationInvocationRequested, payload,
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return remediationID, domain.ExecutionAdmission{
+		RunID: runID, StageID: stageID, OperatingMode: domain.ModeUnattended,
+	}
 }
 
 func TestSubmitCommandReplaysMatchingPreElaborationProductionRun(t *testing.T) {

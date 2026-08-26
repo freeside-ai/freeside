@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	sqlite "modernc.org/sqlite"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -37,8 +40,10 @@ const (
 	// exact replay through verification and execution-bound publication.
 	KindProductionPublicationRequested   = "production_publication_requested"
 	productionPublicationTaskVersion     = "freeside.production-publication/v1"
-	productionVerificationVersion        = "freeside.production-verification/v1"
+	productionVerificationVersionV1      = "freeside.production-verification/v1"
+	productionVerificationVersion        = "freeside.production-verification/v2"
 	productionVerificationCheckpointKind = "production_verification_checkpoint"
+	productionPublicationSupersedingKind = "production_publication_superseding"
 	defaultProductionRecipeReadTimeout   = 2 * time.Minute
 	defaultProductionHoldRetryInterval   = 30 * time.Second
 	productionBlockRecipeRevoked         = domain.PublicationBlockRecipeRevoked
@@ -51,8 +56,9 @@ const (
 )
 
 var (
-	errProductionCrashSeam = errors.New("injected production crash seam")
-	errProductionRetryable = errors.New("production publication retryable failure")
+	errProductionCrashSeam       = errors.New("injected production crash seam")
+	errProductionRetryable       = errors.New("production publication retryable failure")
+	errRemediationSourceIdentity = errors.New("remediation source tree identity is unavailable")
 )
 
 // ProductionReplay is the immutable-admission-reconstructed, directory-free
@@ -84,6 +90,9 @@ type ProductionPublicationConfig struct {
 	ApprovedRecipes map[domain.Digest]bool
 	NewRoom         func(domain.ProjectImage) (ProductionVerificationRoom, error)
 	ReviewSource    exec.ReviewSource
+	// RemediationPromptPackageDigest selects the trusted prompt package for
+	// implementation-role invocations created by finding adjudication.
+	RemediationPromptPackageDigest domain.Digest
 	// ShadowReviewSource is optional. When present, every other shadow field
 	// is required and the source remains observation-only: it cannot satisfy
 	// routed review, advance rounds, or authorize publication.
@@ -138,10 +147,13 @@ func WithProductionPublication(cfg ProductionPublicationConfig) Option {
 }
 
 type productionPublicationTask struct {
-	Version               string                `json:"version"`
-	RunID                 domain.RunID          `json:"run_id"`
-	ProjectID             domain.ProjectID      `json:"project_id"`
-	ProducingInvocationID domain.InvocationID   `json:"producing_invocation_id"`
+	Version               string              `json:"version"`
+	RunID                 domain.RunID        `json:"run_id"`
+	ProjectID             domain.ProjectID    `json:"project_id"`
+	ProducingInvocationID domain.InvocationID `json:"producing_invocation_id"`
+	// LegacyRemediationNoop preserves v1 task decoding and byte-identical
+	// recorded replay. It is never consulted for change classification.
+	LegacyRemediationNoop bool                  `json:"remediation_noop,omitempty"`
 	VerificationID        domain.InvocationID   `json:"verification_invocation_id"`
 	PublicationID         domain.InvocationID   `json:"publication_invocation_id"`
 	HeadSHA               string                `json:"head_sha"`
@@ -154,6 +166,7 @@ type productionPublicationTask struct {
 type productionVerificationCheckpoint struct {
 	Version       string                        `json:"version"`
 	TaskKey       string                        `json:"task_key"`
+	HeadSHA       string                        `json:"head_sha"`
 	ProjectImage  domain.Digest                 `json:"project_image"`
 	Imported      importer.Result               `json:"imported"`
 	Authorization domain.CandidateAuthorization `json:"authorization"`
@@ -170,6 +183,7 @@ type productionPublicationWorkflow struct {
 	approvedRecipes                 map[domain.Digest]bool
 	newRoom                         func(domain.ProjectImage) (ProductionVerificationRoom, error)
 	reviewSource                    exec.ReviewSource
+	remediationPromptPackage        domain.Digest
 	shadowReviewSource              exec.ReviewSource
 	findingAdjudicator              findingAdjudicator
 	inference                       *inference.Client
@@ -277,8 +291,9 @@ func newProductionPublicationWorkflow(
 		transport: cfg.Transport, publisher: cfg.Publisher, artifacts: cfg.Artifacts,
 		approvedRecipes: mapsClone(cfg.ApprovedRecipes),
 		newRoom:         cfg.NewRoom, reviewSource: cfg.ReviewSource,
-		shadowReviewSource: cfg.ShadowReviewSource,
-		reviewRecovery:     cfg.ReviewRecovery, reviewRecoveryPending: true,
+		remediationPromptPackage: cfg.RemediationPromptPackageDigest,
+		shadowReviewSource:       cfg.ShadowReviewSource,
+		reviewRecovery:           cfg.ReviewRecovery, reviewRecoveryPending: true,
 		reviewConfigurationDigest:       cfg.ReviewConfigurationDigest,
 		shadowReviewConfigurationDigest: cfg.ShadowReviewConfigurationDigest,
 		shadowReviewCostOwner:           cfg.ShadowReviewCostOwner,
@@ -328,8 +343,8 @@ func productionRunIDFromPublicationTaskKey(key string) (domain.RunID, bool) {
 	return domain.RunID(runID), true
 }
 
-func productionVerificationCheckpointKey(runID domain.RunID) string {
-	return "production-verification/" + string(runID)
+func productionVerificationCheckpointKey(runID domain.RunID, headSHA string) string {
+	return "production-verification/" + string(runID) + "/" + headSHA
 }
 
 func productionReadyItemID(runID domain.RunID) domain.ItemID {
@@ -395,10 +410,60 @@ func (w *productionPublicationWorkflow) hasQueuedCompletion(
 		}
 		return true, nil
 	}
-	if task.RunID != run.ID || task.ProjectID != run.ProjectID ||
-		task.ProducingInvocationID != invocationID {
+	if task.RunID != run.ID || task.ProjectID != run.ProjectID {
 		return false, fmt.Errorf("queued production completion disagrees with run: %w",
 			domain.ErrParentKeyMismatch)
+	}
+	if task.ProducingInvocationID != invocationID {
+		currentRound, currentIsRemediation := remediationRoundForInvocation(
+			run.ID, task.ProducingInvocationID)
+		priorRound, priorIsRemediation := remediationRoundForInvocation(run.ID, invocationID)
+		priorIsInitial := invocationID == productionInvocationID(run.ID)
+		if currentIsRemediation && (priorIsInitial || priorIsRemediation && priorRound < currentRound) {
+			var (
+				admission domain.ExecutionAdmission
+				exported  domain.ExecutionExport
+			)
+			if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+				var err error
+				admission, err = tx.GetExecutionAdmissionRecord(ctx, invocationID)
+				if err != nil {
+					return err
+				}
+				exported, err = tx.GetExecutionExportRecord(ctx, invocationID)
+				return err
+			}); err != nil {
+				return false, err
+			}
+			stage, ok := productionStageForInvocation(run, invocationID)
+			if !ok || admission.RunID != run.ID || admission.StageID != stage.ID ||
+				exported.InvocationID != invocationID || exported.ObservedBaseSHA != task.Replay.ObservedBaseSHA {
+				return false, domain.ErrParentKeyMismatch
+			}
+			return true, nil
+		}
+		round, remediation := remediationRoundForInvocation(run.ID, invocationID)
+		if !remediation {
+			return false, fmt.Errorf("queued production completion disagrees with run: %w",
+				domain.ErrParentKeyMismatch)
+		}
+		var requestEntry store.QueueEntry
+		if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			requestEntry, err = tx.GetOutbox(ctx, string(invocationID))
+			return err
+		}); err != nil {
+			return false, err
+		}
+		request, err := decodeRemediationRequest(requestEntry)
+		if err != nil || !requestEntry.Dispatched() || request.Round != round ||
+			task.HeadSHA != request.HeadSHA {
+			return false, errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+		if priorRound, prior := remediationRoundForInvocation(run.ID, task.ProducingInvocationID); task.ProducingInvocationID != productionInvocationID(run.ID) && (!prior || priorRound >= round) {
+			return false, domain.ErrImmutableTransition
+		}
+		return false, nil
 	}
 	if entry.Dispatched() {
 		// The caller read the inbox in an earlier transaction, and the lane
@@ -495,7 +560,8 @@ func (w *productionPublicationWorkflow) authenticatesTerminal(
 	if err := validateProductionPublicationCompletion(run, task, terminal); err != nil {
 		return false, err
 	}
-	if admission.RunID != task.RunID || admission.StageID != productionStageID(task.RunID) ||
+	stage, stageFound := productionStageForInvocation(run, task.ProducingInvocationID)
+	if admission.RunID != task.RunID || !stageFound || admission.StageID != stage.ID ||
 		executionExport.AdmissionID != admission.ID ||
 		executionExport.InvocationID != task.ProducingInvocationID ||
 		executionExport.HeadSHA != task.HeadSHA ||
@@ -603,8 +669,13 @@ func RecordProductionExecutionExport(
 	}
 
 	var (
-		admission domain.ExecutionAdmission
-		run       domain.Run
+		admission       domain.ExecutionAdmission
+		run             domain.Run
+		publication     ProductionPublication
+		remediation     *remediationInvocationRequest
+		previousTask    *productionPublicationTask
+		alreadyReplaced bool
+		legacyNoop      bool
 	)
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -613,18 +684,85 @@ func RecordProductionExecutionExport(
 			return err
 		}
 		run, err = tx.GetRun(ctx, admission.RunID)
-		return err
+		if err != nil {
+			return err
+		}
+		if round, ok := remediationRoundForInvocation(run.ID, executionExport.InvocationID); ok {
+			entry, err := tx.GetOutbox(ctx, string(executionExport.InvocationID))
+			if err != nil {
+				return err
+			}
+			verified, err := authenticateRemediationInvocationTransition(
+				ctx, tx, entry, run.ID, admission.StageID,
+			)
+			if err != nil || verified.request.Round != round {
+				return errors.Join(err, domain.ErrParentKeyMismatch)
+			}
+			request := verified.request
+			latestReview, err := tx.LatestReviewRecord(ctx, run.ID)
+			if err != nil || latestReview.InvocationID != request.ReviewInvocationID ||
+				latestReview.Round != request.Round || latestReview.Outcome != domain.ReviewFindings {
+				return errors.Join(err, domain.ErrParentKeyMismatch)
+			}
+			remediation = &request
+			taskEntry, err := tx.GetOutbox(ctx, productionPublicationTaskKey(run.ID))
+			if err != nil {
+				return err
+			}
+			current, err := decodeProductionPublicationTask(taskEntry)
+			if err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(current.Publication, verified.publication) {
+				return domain.ErrParentKeyMismatch
+			}
+			publication = verified.publication
+			switch current.ProducingInvocationID {
+			case executionExport.InvocationID:
+				alreadyReplaced = true
+				legacyNoop = current.LegacyRemediationNoop
+			case productionInvocationID(run.ID):
+				previous := current
+				previousTask = &previous
+			default:
+				if priorRound, ok := remediationRoundForInvocation(run.ID, current.ProducingInvocationID); !ok || priorRound >= round {
+					return domain.ErrImmutableTransition
+				}
+				previous := current
+				previousTask = &previous
+			}
+			return nil
+		}
+		entry, err := tx.GetOutbox(ctx, string(productionInvocationID(run.ID)))
+		if err != nil {
+			return err
+		}
+		request, err := authenticateProductionMarker(entry, run.ID)
+		if err != nil {
+			return err
+		}
+		if request.Legacy {
+			return fmt.Errorf("legacy production invocation %q has no publication authority: %w",
+				executionExport.InvocationID, domain.ErrParentKeyMismatch)
+		}
+		publication = request.Publication
+		return nil
 	}); err != nil {
 		return err
 	}
-	w := &productionPublicationWorkflow{store: st}
-	request, err := w.loadProductionRequest(ctx, run)
-	if err != nil {
-		return err
-	}
-	if request.Legacy {
-		return fmt.Errorf("legacy production invocation %q has no publication authority: %w",
-			executionExport.InvocationID, domain.ErrParentKeyMismatch)
+	if remediation != nil {
+		if admission.StageID != remediation.StageID ||
+			remediation.BaseSHA != replay.ObservedBaseSHA {
+			return fmt.Errorf("remediation export disagrees with its request: %w", domain.ErrParentKeyMismatch)
+		}
+		if previousTask != nil && (previousTask.HeadSHA != remediation.HeadSHA ||
+			previousTask.Replay.ObservedBaseSHA != remediation.BaseSHA) {
+			return fmt.Errorf("remediation export does not supersede the current candidate: %w",
+				domain.ErrParentKeyMismatch)
+		}
+	} else if admission.StageID != productionStageID(run.ID) ||
+		executionExport.InvocationID != productionInvocationID(run.ID) {
+		return fmt.Errorf("production export disagrees with its initial stage: %w", domain.ErrParentKeyMismatch)
 	}
 	artifacts := make([]domain.Digest, 0, len(replay.Evidence.Entries))
 	for _, entry := range replay.Evidence.Entries {
@@ -633,10 +771,12 @@ func RecordProductionExecutionExport(
 	task := productionPublicationTask{
 		Version: productionPublicationTaskVersion, RunID: run.ID, ProjectID: run.ProjectID,
 		ProducingInvocationID: executionExport.InvocationID,
-		VerificationID:        productionVerificationInvocationID(run.ID),
-		PublicationID:         productionPublicationInvocationID(run.ID),
-		HeadSHA:               executionExport.HeadSHA, Artifacts: artifacts,
-		Replay: replay, Publication: request.Publication,
+		LegacyRemediationNoop: legacyNoop,
+		VerificationID: productionVerificationInvocationIDForProducer(
+			run.ID, executionExport.InvocationID),
+		PublicationID: productionPublicationInvocationID(run.ID),
+		HeadSHA:       executionExport.HeadSHA, Artifacts: artifacts,
+		Replay: replay, Publication: publication,
 		Summary: fmt.Sprintf("Imported candidate %s over base %s.",
 			executionExport.HeadSHA, executionExport.ObservedBaseSHA),
 	}
@@ -647,19 +787,21 @@ func RecordProductionExecutionExport(
 	if err != nil {
 		return err
 	}
+	w := &productionPublicationWorkflow{store: st}
 	return w.store.Write(ctx, func(tx *store.WriteTx) error {
 		currentAdmission, err := tx.GetExecutionAdmissionRecord(ctx, task.ProducingInvocationID)
 		if err != nil {
 			return err
 		}
-		if currentAdmission.ID != admission.ID || currentAdmission.RunID != task.RunID ||
-			currentAdmission.StageID != productionStageID(task.RunID) {
-			return fmt.Errorf("production publication admission disagrees with task: %w",
-				domain.ErrParentKeyMismatch)
-		}
 		currentRun, err := tx.GetRun(ctx, task.RunID)
 		if err != nil {
 			return err
+		}
+		expectedStage, stageFound := productionStageForInvocation(currentRun, task.ProducingInvocationID)
+		if currentAdmission.ID != admission.ID || currentAdmission.RunID != task.RunID ||
+			!stageFound || currentAdmission.StageID != expectedStage.ID {
+			return fmt.Errorf("production publication admission disagrees with task: %w",
+				domain.ErrParentKeyMismatch)
 		}
 		if currentRun.ProjectID != task.ProjectID {
 			return fmt.Errorf("production publication run disagrees with task: %w",
@@ -693,14 +835,63 @@ func RecordProductionExecutionExport(
 		if err := publish.ClaimInvocation(ctx, tx, reservation); err != nil {
 			return err
 		}
-		entry, _, err := tx.EnqueueOutbox(
-			ctx, productionPublicationTaskKey(task.RunID), KindProductionPublicationRequested, payload,
-		)
+		key := productionPublicationTaskKey(task.RunID)
+		if remediation == nil {
+			entry, _, err := tx.EnqueueOutbox(
+				ctx, key, KindProductionPublicationRequested, payload)
+			if err != nil {
+				return err
+			}
+			if entry.Kind != KindProductionPublicationRequested || !bytes.Equal(entry.Payload, payload) {
+				return fmt.Errorf("production publication task disagrees with stored row: %w",
+					domain.ErrImmutableTransition)
+			}
+			return nil
+		}
+		requestEntry, err := tx.GetOutbox(ctx, string(remediation.InvocationID))
 		if err != nil {
 			return err
 		}
-		if entry.Kind != KindProductionPublicationRequested || !bytes.Equal(entry.Payload, payload) {
-			return fmt.Errorf("production publication task disagrees with stored row: %w", domain.ErrImmutableTransition)
+		currentRequest, err := decodeRemediationRequest(requestEntry)
+		if err != nil || !reflect.DeepEqual(currentRequest, *remediation) || !requestEntry.Dispatched() {
+			return errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+		latestReview, err := tx.LatestReviewRecord(ctx, task.RunID)
+		if err != nil || latestReview.InvocationID != remediation.ReviewInvocationID ||
+			latestReview.Round != remediation.Round || latestReview.Outcome != domain.ReviewFindings {
+			return errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+		currentEntry, err := tx.GetOutbox(ctx, key)
+		if err != nil {
+			return err
+		}
+		if alreadyReplaced {
+			if currentEntry.Kind != KindProductionPublicationRequested ||
+				!bytes.Equal(currentEntry.Payload, payload) {
+				return domain.ErrImmutableTransition
+			}
+			return nil
+		}
+		if previousTask == nil || currentEntry.Dispatched() {
+			return domain.ErrImmutableTransition
+		}
+		previousPayload, err := json.Marshal(previousTask)
+		if err != nil || !bytes.Equal(currentEntry.Payload, previousPayload) {
+			return errors.Join(err, domain.ErrImmutableTransition)
+		}
+		if _, promoted, err := tx.PromoteOutbox(
+			ctx, key, KindProductionPublicationRequested, productionPublicationSupersedingKind,
+			previousPayload, previousPayload,
+		); err != nil || !promoted {
+			return errors.Join(err, domain.ErrImmutableTransition)
+		}
+		entry, promoted, err := tx.PromoteOutbox(
+			ctx, key, productionPublicationSupersedingKind, KindProductionPublicationRequested,
+			previousPayload, payload,
+		)
+		if err != nil || !promoted || entry.Kind != KindProductionPublicationRequested ||
+			!bytes.Equal(entry.Payload, payload) {
+			return errors.Join(err, domain.ErrImmutableTransition)
 		}
 		return nil
 	})
@@ -759,55 +950,75 @@ func (w *productionPublicationWorkflow) holdUnreadableTask(
 	return nil
 }
 
-// quarantineTaskMarker reports whether this task's run is held out of the lane
-// by its ownership marker. reconcileTask re-gates its own authority from the
-// store and never reads the marker, so without this the publication lane would
-// publish a run the dispatch and acceptance paths have already quarantined.
-// A task whose marker reads again retires the marker's notice, the same
-// release the ownership scan performs.
-func (w *productionPublicationWorkflow) quarantineTaskMarker(
+// quarantineTaskMarkers reports whether this task's run is held out of the
+// lane by either ownership marker in its production transition. The active
+// remediation transition comes from the run's durable stages, not from the
+// producer currently carried by the publication task: before remediation
+// export that task deliberately still names the prior producer. A task whose
+// complete marker chain reads again retires each marker's notice.
+func (w *productionPublicationWorkflow) quarantineTaskMarkers(
 	ctx context.Context, task productionPublicationTask,
 ) (bool, error) {
-	var entry store.QueueEntry
+	var (
+		run        domain.Run
+		transition authenticatedProductionRunTransition
+	)
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		entry, err = tx.GetOutbox(ctx, string(productionInvocationID(task.RunID)))
-		return err
-	})
-	if errors.Is(err, store.ErrNotFound) {
-		// Marker presence is not this lane's gate; the task carries its own
-		// authority. Leave the pre-existing behaviour of a missing row alone,
-		// but retire the notice first: removing the bad row is one way an
-		// operator repairs the marker, and this task is about to publish.
-		return false, releaseProductionQuarantine(
-			ctx, w.store, w.attention, productionMarkerQuarantinePrefix, task.RunID)
-	}
-	if err != nil {
-		return false, err
-	}
-	if _, authErr := authenticateProductionMarker(entry, task.RunID); authErr != nil {
-		// The project comes from the run row, not from the task payload: the
-		// notice must not be filed under a project a decoded field claims.
-		var run domain.Run
-		if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
-			var err error
-			run, err = tx.GetRun(ctx, task.RunID)
+		transition, err = authenticateProductionRunTransition(ctx, tx, task.RunID)
+		run = transition.run
+		if err != nil || transition.remediation == nil {
 			return err
-		}); err != nil {
-			return false, errors.Join(authErr, err)
 		}
+		verified := transition.remediation
+		if verified.request.BaseSHA != task.Replay.ObservedBaseSHA ||
+			!reflect.DeepEqual(verified.publication, task.Publication) {
+			return classifyRemediationMarkerError(domain.ErrParentKeyMismatch)
+		}
+		if task.ProducingInvocationID == verified.request.InvocationID {
+			return nil
+		}
+		producerRound, priorRemediation := remediationRoundForInvocation(
+			task.RunID, task.ProducingInvocationID)
+		priorProducer := task.ProducingInvocationID == productionInvocationID(task.RunID) ||
+			priorRemediation && producerRound < verified.request.Round
+		if !priorProducer || task.HeadSHA != verified.request.HeadSHA {
+			return classifyRemediationMarkerError(domain.ErrParentKeyMismatch)
+		}
+		return nil
+	})
+	if err == nil {
+		err = authenticateProductionRunInput(w.artifacts, transition)
+	}
+	if _, markerFailure := productionQuarantineReason(err); markerFailure {
 		quarantined, quarantineErr := quarantineProductionMarker(
-			ctx, w.store, w.attention, run.ID, run.ProjectID, authErr)
+			ctx, w.store, w.attention, run.ID, run.ProjectID, err)
 		if quarantineErr != nil {
-			return false, errors.Join(authErr, quarantineErr)
+			return false, errors.Join(err, quarantineErr)
 		}
 		if quarantined {
 			return true, nil
 		}
-		return false, authErr
+		return false, err
+	}
+	if errors.Is(err, errRemediationMarkerUnreadable) {
+		if quarantineErr := recordProductionQuarantine(
+			ctx, w.store, w.attention, remediationMarkerQuarantinePrefix,
+			run.ID, run.ProjectID, remediationQuarantineUnreadable,
+		); quarantineErr != nil {
+			return false, errors.Join(err, quarantineErr)
+		}
+		return true, nil
+	}
+	if err != nil {
+		return false, err
 	}
 	if err := releaseProductionQuarantine(
 		ctx, w.store, w.attention, productionMarkerQuarantinePrefix, task.RunID); err != nil {
+		return false, err
+	}
+	if err := releaseProductionQuarantine(
+		ctx, w.store, w.attention, remediationMarkerQuarantinePrefix, task.RunID); err != nil {
 		return false, err
 	}
 	return false, nil
@@ -834,9 +1045,12 @@ func (w *productionPublicationWorkflow) loadProductionRequest(
 }
 
 func (t productionPublicationTask) validate() error {
+	_, remediationProducer := remediationRoundForInvocation(t.RunID, t.ProducingInvocationID)
+	validProducer := t.ProducingInvocationID == productionInvocationID(t.RunID) || remediationProducer
 	if t.Version != productionPublicationTaskVersion || t.RunID == "" || t.ProjectID == "" ||
-		t.ProducingInvocationID != productionInvocationID(t.RunID) ||
-		t.VerificationID != productionVerificationInvocationID(t.RunID) ||
+		!validProducer ||
+		(t.LegacyRemediationNoop && !remediationProducer) ||
+		t.VerificationID != productionVerificationInvocationIDForProducer(t.RunID, t.ProducingInvocationID) ||
 		t.PublicationID != productionPublicationInvocationID(t.RunID) ||
 		!validCommitSHA(t.HeadSHA) {
 		return fmt.Errorf("invalid production publication task: %w", domain.ErrParentKeyMismatch)
@@ -993,10 +1207,12 @@ func ProductionPublicationCompletion(
 func validateProductionPublicationCompletion(
 	run domain.Run, task productionPublicationTask, terminal productionTerminalRecord,
 ) error {
+	stage, stageFound := productionStageForInvocation(run, task.ProducingInvocationID)
 	if run.ID != task.RunID || run.ProjectID != task.ProjectID ||
+		!stageFound ||
 		terminal.Status != exec.StatusCompleted ||
 		terminal.InvocationID != task.ProducingInvocationID || terminal.RunID != task.RunID ||
-		terminal.StageID != productionStageID(task.RunID) || terminal.HeadSHA != task.HeadSHA ||
+		terminal.StageID != stage.ID || terminal.HeadSHA != task.HeadSHA ||
 		!slices.Equal(terminal.Artifacts, task.Artifacts) || terminal.Summary != task.Summary {
 		return fmt.Errorf("production terminal disagrees with durable publication task: %w",
 			domain.ErrParentKeyMismatch)
@@ -1076,7 +1292,7 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 		// marker, so without this check a run whose marker stopped
 		// authenticating would still import, verify, and open a real pull
 		// request while its notice claims it is held out of the lane.
-		markerQuarantined, err := w.quarantineTaskMarker(ctx, task)
+		markerQuarantined, err := w.quarantineTaskMarkers(ctx, task)
 		if err != nil {
 			joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, err))
 			continue
@@ -1194,14 +1410,18 @@ func productionPublicationRetryableFailure(err error) bool {
 	var networkError net.Error
 	var pathError *os.PathError
 	var gitError *publish.TransportGitError
+	var sqliteError *sqlite.Error
 	return errors.Is(err, errProductionRetryable) ||
 		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, sql.ErrConnDone) ||
+		errors.Is(err, sql.ErrTxDone) ||
 		errors.Is(err, publish.ErrGitHubAPI) ||
 		errors.Is(err, publish.ErrJanitorInactive) ||
 		errors.Is(err, publish.ErrInstallationGrantUntrusted) ||
 		errors.As(err, &gitError) ||
 		errors.As(err, &networkError) ||
 		errors.As(err, &pathError) ||
+		errors.As(err, &sqliteError) ||
 		errors.Is(err, os.ErrPermission)
 }
 
@@ -1259,6 +1479,7 @@ type productionBinding struct {
 	replay         ProductionReplay
 	profile        domain.AutomationTrustProfile
 	image          domain.ProjectImage
+	remediation    *authenticatedRemediationTransition
 }
 
 func (w *productionPublicationWorkflow) loadBinding(
@@ -1278,6 +1499,23 @@ func (w *productionPublicationWorkflow) loadBinding(
 		binding.export, err = tx.GetExecutionExportRecord(ctx, task.ProducingInvocationID)
 		if err != nil {
 			return err
+		}
+		if _, remediated := remediationRoundForInvocation(
+			task.RunID, task.ProducingInvocationID,
+		); remediated {
+			entry, err := tx.GetOutbox(ctx, string(task.ProducingInvocationID))
+			if err != nil {
+				return err
+			}
+			verified, err := authenticateRemediationInvocationTransition(
+				ctx, tx, entry, task.RunID, binding.admission.StageID,
+			)
+			if err != nil || !entry.Dispatched() ||
+				verified.request.BaseSHA != task.Replay.ObservedBaseSHA ||
+				!reflect.DeepEqual(verified.publication, task.Publication) {
+				return errors.Join(err, domain.ErrParentKeyMismatch)
+			}
+			binding.remediation = &verified
 		}
 		binding.resolvedPolicy, err = tx.GetResolvedPolicy(ctx, task.RunID)
 		if err != nil {
@@ -1327,10 +1565,11 @@ func (w *productionPublicationWorkflow) loadBinding(
 	}
 	binding.specLoaded = true
 	binding.replay = task.Replay
+	stage, stageFound := productionStageForInvocation(binding.run, task.ProducingInvocationID)
 	if binding.run.ID != task.RunID || binding.run.ProjectID != task.ProjectID ||
 		binding.run.SpecDigest != binding.admission.SpecDigest ||
 		binding.admission.RunID != task.RunID ||
-		binding.admission.StageID != productionStageID(task.RunID) ||
+		!stageFound || binding.admission.StageID != stage.ID ||
 		binding.export.AdmissionID != binding.admission.ID ||
 		binding.export.InvocationID != task.ProducingInvocationID ||
 		binding.export.HeadSHA != task.HeadSHA ||
@@ -1514,8 +1753,36 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		return productionTaskOutcome{}, fmt.Errorf("reconstruct execution export: %w", err)
 	}
 	if imported.CommitSHA != binding.export.HeadSHA || len(imported.Findings) != 0 {
+		if _, remediation := remediationRoundForInvocation(
+			task.RunID, task.ProducingInvocationID,
+		); remediation && imported.CommitSHA == binding.export.HeadSHA {
+			paths := make([]string, 0, len(imported.Findings))
+			allPathRejections := len(imported.Findings) > 0
+			for _, finding := range imported.Findings {
+				if finding.Kind != importer.FindingAllowlistViolation || finding.Path == "" {
+					allPathRejections = false
+					break
+				}
+				paths = append(paths, finding.Path)
+			}
+			if allPathRejections {
+				return w.completeRemediationImportDissent(ctx, task, binding, paths)
+			}
+		}
 		return productionTaskOutcome{}, fmt.Errorf("reconstructed execution export produced head %q with %d findings, want clean %q: %w",
 			imported.CommitSHA, len(imported.Findings), binding.export.HeadSHA, domain.ErrParentKeyMismatch)
+	}
+	if binding.remediation != nil {
+		sourceTree, err := w.loadRemediationSourceTree(ctx, task, binding)
+		if err != nil {
+			if errors.Is(err, errRemediationSourceIdentity) {
+				return w.completeRemediationSourceIdentityDissent(ctx, task, binding, imported)
+			}
+			return productionTaskOutcome{}, err
+		}
+		if imported.TreeSHA == sourceTree {
+			return w.completeRemediationNoop(ctx, task, binding, imported, sourceTree)
+		}
 	}
 
 	checkpoint, found, err := w.loadCheckpoint(ctx, task, binding)
@@ -2073,11 +2340,42 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	if latestRecord != nil && latestRecord.ConfigurationDigest == w.reviewConfigurationDigest &&
 		(latestFailure == nil || latestRecord.Round > latestFailure.Round) {
 		if latestRecord.BaseSHA != binding.admission.Base.BaseSHA || latestRecord.HeadSHA != task.HeadSHA {
-			return productionReviewPending, fmt.Errorf(
-				"latest review record is bound to a different candidate: %w", domain.ErrParentKeyMismatch,
-			)
-		}
-		if latestRecord.InstructionDigest == reviewInstructions.ResultDigest {
+			superseded, err := w.remediationSupersedesReview(ctx, task, *latestRecord)
+			if err != nil {
+				return productionReviewPending, err
+			}
+			if !superseded {
+				return productionReviewPending, fmt.Errorf(
+					"latest review record is bound to a different candidate: %w", domain.ErrParentKeyMismatch,
+				)
+			}
+		} else if latestRecord.InstructionDigest == reviewInstructions.ResultDigest {
+			var remediationOutcome remediationReviewOutcome
+			if _, remediated := remediationRoundForInvocation(
+				task.RunID, task.ProducingInvocationID,
+			); remediated {
+				findings, err := w.reviewRecordFindings(ctx, *latestRecord)
+				if err != nil {
+					return productionReviewPending, err
+				}
+				remediationOutcome, err = w.reconcileRemediationReview(
+					ctx, task, *latestRecord, findings, checkpoint.Imported.Claims)
+				if err != nil {
+					return productionReviewPending, err
+				}
+				if remediationOutcome.attention != "" {
+					if err := w.putReviewAttentionWithActionsAndID(
+						ctx, task, *latestRecord, remediationOutcome.attention,
+						domain.AttentionReviewDispute,
+						productionReviewItemID(task.RunID, latestRecord.Round),
+						[]domain.Action{domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop},
+						remediationOutcome.claims,
+					); err != nil {
+						return productionReviewPending, err
+					}
+					return productionReviewEscalated, nil
+				}
+			}
 			shadowComplete, err := w.reconcileShadowReview(
 				ctx, task, binding, checkpoint, workspace, reviewInstructions, *latestRecord,
 			)
@@ -2099,8 +2397,15 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				if err != nil {
 					return productionReviewPending, err
 				}
-				state, err := w.reconcileFindingAdjudication(
-					ctx, task, binding, *latestRecord, baseWorkspace, candidateWorkspace)
+				var state productionReviewGateState
+				if remediationOutcome.dissent != nil {
+					state, err = w.reenterFindingAdjudication(
+						ctx, task, binding, *latestRecord, baseWorkspace,
+						candidateWorkspace, *remediationOutcome.dissent)
+				} else {
+					state, err = w.reconcileFindingAdjudication(
+						ctx, task, binding, *latestRecord, baseWorkspace, candidateWorkspace)
+				}
 				if err != nil {
 					return productionReviewPending, err
 				}
@@ -2417,6 +2722,11 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	if err != nil {
 		return productionReviewPending, err
 	}
+	remediationOutcome, err := w.reconcileRemediationReview(
+		ctx, task, record, result.Findings, checkpoint.Imported.Claims)
+	if err != nil {
+		return productionReviewPending, err
+	}
 	// The completed record supersedes any pending same-invocation retry for
 	// this run: clear the durable row atomically with the record it writes.
 	if err := runDurableTransitionHook(w.transitionHook,
@@ -2426,6 +2736,11 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutReviewRecord(ctx, record, result.Findings); err != nil {
 			return err
+		}
+		for _, disposition := range remediationOutcome.dispositions {
+			if err := tx.PutFindingDisposition(ctx, disposition); err != nil {
+				return err
+			}
 		}
 		return tx.DeleteReviewRetry(ctx, task.RunID)
 	}); err != nil {
@@ -2444,6 +2759,17 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	if !shadowComplete {
 		return productionReviewPending, nil
 	}
+	if remediationOutcome.attention != "" {
+		if err := w.putReviewAttentionWithActionsAndID(
+			ctx, task, record, remediationOutcome.attention, domain.AttentionReviewDispute,
+			productionReviewItemID(task.RunID, record.Round),
+			[]domain.Action{domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop},
+			remediationOutcome.claims,
+		); err != nil {
+			return productionReviewPending, err
+		}
+		return productionReviewEscalated, nil
+	}
 	if record.Outcome == domain.ReviewFindings {
 		baseWorkspaceID := findingAdjudicationBaseWorkspaceID(id)
 		baseWorkspace, err := w.ensureReviewWorkspace(
@@ -2451,8 +2777,15 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		if err != nil {
 			return productionReviewPending, err
 		}
-		state, err := w.reconcileFindingAdjudication(
-			ctx, task, binding, record, baseWorkspace, reviewWorkspace)
+		var state productionReviewGateState
+		if remediationOutcome.dissent != nil {
+			state, err = w.reenterFindingAdjudication(
+				ctx, task, binding, record, baseWorkspace, reviewWorkspace,
+				*remediationOutcome.dissent)
+		} else {
+			state, err = w.reconcileFindingAdjudication(
+				ctx, task, binding, record, baseWorkspace, reviewWorkspace)
+		}
 		if err != nil {
 			return productionReviewPending, err
 		}
@@ -4418,8 +4751,9 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 	}
 	checkpoint := productionVerificationCheckpoint{
 		Version: productionVerificationVersion,
-		TaskKey: productionPublicationTaskKey(task.RunID), ProjectImage: binding.image.ID,
-		Imported: imported, Authorization: authorization, Artifacts: artifacts,
+		TaskKey: productionPublicationTaskKey(task.RunID), HeadSHA: task.HeadSHA,
+		ProjectImage: binding.image.ID,
+		Imported:     imported, Authorization: authorization, Artifacts: artifacts,
 	}
 	if err := runDurableTransitionHook(w.transitionHook,
 		DurableTransitionVerificationEvidence, DurableTransitionBefore); err != nil {
@@ -4467,7 +4801,7 @@ func (w *productionPublicationWorkflow) persistCheckpoint(
 			return err
 		}
 		entry, _, err := tx.RecordInbox(
-			ctx, productionVerificationCheckpointKey(task.RunID),
+			ctx, productionVerificationCheckpointKey(task.RunID, task.HeadSHA),
 			productionVerificationCheckpointKind, payload,
 		)
 		if err != nil {
@@ -4486,10 +4820,18 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 	task productionPublicationTask,
 	binding productionBinding,
 ) (productionVerificationCheckpoint, bool, error) {
-	var entry store.QueueEntry
+	var (
+		entry  store.QueueEntry
+		legacy bool
+	)
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		entry, err = tx.GetInbox(ctx, productionVerificationCheckpointKey(task.RunID))
+		entry, err = tx.GetInbox(ctx, productionVerificationCheckpointKey(task.RunID, task.HeadSHA))
+		if errors.Is(err, store.ErrNotFound) &&
+			task.ProducingInvocationID == productionInvocationID(task.RunID) {
+			entry, err = tx.GetInbox(ctx, "production-verification/"+string(task.RunID))
+			legacy = err == nil
+		}
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
@@ -4525,7 +4867,12 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 		return productionVerificationCheckpoint{}, false, err
 	}
 	authorization := checkpoint.Authorization
-	if checkpoint.Version != productionVerificationVersion ||
+	versionMatches := !legacy && checkpoint.Version == productionVerificationVersion &&
+		checkpoint.HeadSHA == task.HeadSHA
+	if legacy {
+		versionMatches = checkpoint.Version == productionVerificationVersionV1 && checkpoint.HeadSHA == ""
+	}
+	if !versionMatches ||
 		checkpoint.TaskKey != productionPublicationTaskKey(task.RunID) ||
 		checkpoint.ProjectImage != binding.image.ID || authorization.Validate() != nil ||
 		authorization.Repo != binding.admission.Base.Repo ||
@@ -4541,9 +4888,12 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 	}
 	for _, artifact := range checkpoint.Artifacts {
 		if err := verifyFakePublicationBlob(w.artifacts, artifact); err != nil {
+			// A transient blob fault stays retryable; only a digest mismatch or
+			// an absent blob is a durable checkpoint contradiction. Forcing every
+			// fault terminal would stop a valid run on a transient I/O blip.
 			return productionVerificationCheckpoint{}, false, fmt.Errorf(
 				"verify durable production checkpoint artifact: %w",
-				errors.Join(err, domain.ErrParentKeyMismatch),
+				retryableOrTerminal(ctx, err, domain.ErrParentKeyMismatch),
 			)
 		}
 	}
@@ -4560,6 +4910,152 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 			domain.ErrParentKeyMismatch)
 	}
 	return checkpoint, true, nil
+}
+
+// loadRemediationSourceTree reconstructs the prior reviewed candidate's tree
+// identity from the daemon-authored verification checkpoint. Commit identity
+// is deliberately insufficient here: every stage invocation receives a fresh
+// commit date, so identical content normally reconstructs a different commit.
+func (w *productionPublicationWorkflow) loadRemediationSourceTree(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+) (string, error) {
+	if binding.remediation == nil {
+		return "", errors.Join(errRemediationSourceIdentity, domain.ErrParentKeyMismatch)
+	}
+	request := binding.remediation.request
+	round, ok := remediationRoundForInvocation(task.RunID, task.ProducingInvocationID)
+	if !ok || request.Round != round {
+		return "", errors.Join(errRemediationSourceIdentity, domain.ErrParentKeyMismatch)
+	}
+	var (
+		entry  store.QueueEntry
+		legacy bool
+	)
+	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetInbox(ctx, productionVerificationCheckpointKey(task.RunID, request.HeadSHA))
+		if errors.Is(err, store.ErrNotFound) {
+			entry, err = tx.GetInbox(ctx, "production-verification/"+string(task.RunID))
+			legacy = err == nil
+		}
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return "", errors.Join(errRemediationSourceIdentity, err)
+	}
+	if err != nil {
+		return "", remediationSourceReadError(ctx, err)
+	}
+	if entry.Kind != productionVerificationCheckpointKind {
+		return "", errors.Join(errRemediationSourceIdentity, domain.ErrParentKeyMismatch)
+	}
+	var checkpoint productionVerificationCheckpoint
+	if err := strictjson.Decode(
+		entry.Payload, &checkpoint, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
+	); err != nil {
+		return "", fmt.Errorf("decode remediation source checkpoint: %w",
+			errors.Join(errRemediationSourceIdentity, err, domain.ErrParentKeyMismatch))
+	}
+	importDigest, err := digestJSON(checkpoint.Imported)
+	if err != nil {
+		return "", errors.Join(errRemediationSourceIdentity, err)
+	}
+	evidenceDigest, err := domain.ComputeEvidenceSnapshotDigest(checkpoint.Artifacts)
+	if err != nil {
+		return "", errors.Join(errRemediationSourceIdentity, err)
+	}
+	authorization := checkpoint.Authorization
+	var (
+		storedAuthorization domain.CandidateAuthorization
+		sourceImage         domain.ProjectImage
+	)
+	err = w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		storedAuthorization, err = tx.GetCandidateAuthorization(ctx, authorization.ID)
+		if err != nil {
+			return err
+		}
+		sourceImage, err = tx.GetProjectImage(ctx, checkpoint.ProjectImage)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return "", errors.Join(errRemediationSourceIdentity, err)
+	}
+	if err != nil {
+		return "", remediationSourceReadError(ctx, err)
+	}
+	versionMatches := !legacy && checkpoint.Version == productionVerificationVersion &&
+		checkpoint.HeadSHA == request.HeadSHA
+	if legacy {
+		versionMatches = checkpoint.Version == productionVerificationVersionV1 && checkpoint.HeadSHA == ""
+	}
+	if !versionMatches || checkpoint.TaskKey != productionPublicationTaskKey(task.RunID) ||
+		checkpoint.Imported.CommitSHA != request.HeadSHA ||
+		!validCommitSHA(checkpoint.Imported.TreeSHA) || len(checkpoint.Imported.Findings) != 0 ||
+		authorization.Validate() != nil ||
+		authorization.Repo != binding.admission.Base.Repo ||
+		authorization.BaseSHA != request.BaseSHA || authorization.HeadSHA != request.HeadSHA ||
+		authorization.ImportResultDigest != importDigest ||
+		authorization.EvidenceSnapshotDigest != evidenceDigest ||
+		authorization.VerificationOutcome != domain.VerificationPassed ||
+		!validRemediationSourceVerificationID(task.RunID, round, authorization.InvocationID) ||
+		!reflect.DeepEqual(storedAuthorization, authorization) ||
+		sourceImage.ID != checkpoint.ProjectImage || sourceImage.Repository != authorization.Repo ||
+		sourceImage.RepositoryID != binding.admission.Base.RepositoryID ||
+		sourceImage.RecipeDigest != authorization.VerificationRecipeDigest {
+		return "", errors.Join(errRemediationSourceIdentity, domain.ErrParentKeyMismatch)
+	}
+	for _, artifact := range checkpoint.Artifacts {
+		if err := verifyFakePublicationBlob(w.artifacts, artifact); err != nil {
+			// A transient open/read/close fault on a checkpoint blob is
+			// operational and must stay retryable; only a digest mismatch or an
+			// absent blob is a durable source-identity contradiction. Classify
+			// like the adjacent checkpoint/authorization/image reads above.
+			return "", fmt.Errorf("verify remediation source checkpoint artifact: %w",
+				retryableOrTerminal(ctx, err, errRemediationSourceIdentity))
+		}
+	}
+	return checkpoint.Imported.TreeSHA, nil
+}
+
+// retryableOrTerminal keeps a transient open/read/close fault on a
+// daemon-authored checkpoint blob retryable, while a deterministic contradiction
+// (a digest mismatch, or an absent blob the store reports non-operationally) is
+// terminalized with the caller's durable sentinel. Context cancellation stays
+// the context error. Callers must not force every blob fault to a permanent
+// dispute: a transient I/O blip would otherwise stop an otherwise valid run.
+func retryableOrTerminal(ctx context.Context, err error, sentinel error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if productionPublicationRetryableFailure(err) {
+		return err
+	}
+	return errors.Join(sentinel, err)
+}
+
+func remediationSourceReadError(ctx context.Context, err error) error {
+	return retryableOrTerminal(ctx, err, errRemediationSourceIdentity)
+}
+
+func validRemediationSourceVerificationID(
+	runID domain.RunID,
+	currentRound int,
+	invocationID domain.InvocationID,
+) bool {
+	if invocationID == productionVerificationInvocationID(runID) {
+		return true
+	}
+	for round := 1; round < currentRound; round++ {
+		if invocationID == productionVerificationInvocationIDForProducer(
+			runID, remediationInvocationID(runID, round),
+		) {
+			return true
+		}
+	}
+	return false
 }
 
 func productionCandidate(
@@ -4887,9 +5383,13 @@ func (w *productionPublicationWorkflow) recordCompletedTerminal(
 	run domain.Run,
 	task productionPublicationTask,
 ) (bool, error) {
+	stage, ok := productionStageForInvocation(run, task.ProducingInvocationID)
+	if !ok {
+		return false, domain.ErrParentKeyMismatch
+	}
 	return (&Engine{store: w.store}).recordProductionTerminalWithAuthority(ctx, run, productionTerminalRecord{
 		InvocationID: task.ProducingInvocationID, RunID: task.RunID,
-		StageID: productionStageID(task.RunID), Status: exec.StatusCompleted,
+		StageID: stage.ID, Status: exec.StatusCompleted,
 		HeadSHA: task.HeadSHA, Artifacts: slices.Clone(task.Artifacts), Summary: task.Summary,
 	}, false)
 }

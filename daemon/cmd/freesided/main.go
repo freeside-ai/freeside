@@ -166,6 +166,7 @@ func main() {
 	providerEndpoints := flags.String("provider-endpoints", "api.anthropic.com:443", "comma-separated provider host:port allowlist")
 	promptPackage := flags.String("prompt-package", "", "trusted prompt-package file (ingested into the artifact store at startup)")
 	elaborationPromptPackage := flags.String("elaboration-prompt-package", "", "trusted elaborator prompt-package file (ingested into the artifact store at startup)")
+	remediationPromptPackage := flags.String("remediation-prompt-package", "", "trusted remediator prompt-package file (ingested into the artifact store at startup)")
 	vendorInstructions := flags.String("vendor-instructions", "", "host vendor-instruction file (CLAUDE.md)")
 	repo := flags.String("repo", "", "managed owner/name repository")
 	baseRef := flags.String("base-ref", "", "managed repository base branch")
@@ -282,6 +283,7 @@ func main() {
 			ProviderEndpoints:            strings.Split(*providerEndpoints, ","),
 			PromptPackageFile:            *promptPackage,
 			ElaborationPromptPackageFile: *elaborationPromptPackage,
+			RemediationPromptPackageFile: *remediationPromptPackage,
 			VendorInstructions:           *vendorInstructions,
 			Repo:                         *repo, RepositoryID: id,
 			BaseRef: *baseRef, BaseSHA: *baseSHA,
@@ -733,6 +735,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, fmt.Errorf("compose elaboration delivery validator: %w", err)
 		}
+		engineOptions = append(engineOptions, engine.WithProductionDeliveryValidation(
+			productionImplementationDeliveryValidator(deliveryMaterializer),
+		))
 		engineOptions = append(engineOptions, engine.WithElaboration(engine.ElaborationConfig{
 			Fetcher: researchFetcher, Blobs: blobs, Now: func() time.Time { return time.Now().UTC() },
 			PromptPackageDigest: claudeWiring.elaborationPromptPackage,
@@ -752,6 +757,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			Transport: claudeWiring.publicationTransport,
 			Publisher: claudeWiring.publisher, Artifacts: blobs,
 			ApprovedRecipes:                 cfg.ApprovedRecipes,
+			RemediationPromptPackageDigest:  claudeWiring.remediationPromptPackage,
 			ReviewSource:                    claudeWiring.reviewSource,
 			ShadowReviewSource:              claudeWiring.shadowReviewSource,
 			ReviewRecovery:                  claudeWiring.reviewRecovery,

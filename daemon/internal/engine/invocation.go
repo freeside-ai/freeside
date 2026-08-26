@@ -60,6 +60,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		pending            []store.QueueEntry
 		pendingProduction  []store.QueueEntry
 		pendingElaboration []store.QueueEntry
+		pendingRemediation []store.QueueEntry
 		held               bool
 		holdReason         domain.RunHoldReason
 	)
@@ -107,6 +108,10 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			return err
 		}
 		pendingElaboration, err = tx.ListPendingOutbox(ctx, KindElaborationInvocationRequested)
+		if err != nil {
+			return err
+		}
+		pendingRemediation, err = tx.ListPendingOutbox(ctx, KindRemediationInvocationRequested)
 		return err
 	})
 	if err != nil {
@@ -127,6 +132,33 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			request, binding, err := e.loadElaborationBinding(ctx, entry)
 			if err != nil {
 				quarantined, quarantineErr := e.quarantinePendingElaborationMarker(ctx, entry, err)
+				if quarantineErr != nil {
+					return 0, quarantineErr
+				}
+				if quarantined {
+					continue
+				}
+				return 0, err
+			}
+			if err := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, holdReason); err != nil {
+				return 0, err
+			}
+		}
+		for _, entry := range pendingRemediation {
+			request, err := decodeRemediationRequest(entry)
+			if err != nil {
+				quarantined, quarantineErr := e.quarantinePendingRemediationMarker(ctx, entry, err)
+				if quarantineErr != nil {
+					return 0, quarantineErr
+				}
+				if quarantined {
+					continue
+				}
+				return 0, err
+			}
+			binding, err := e.loadRemediationBinding(ctx, request)
+			if err != nil {
+				quarantined, quarantineErr := e.quarantinePendingRemediationMarker(ctx, entry, err)
 				if quarantineErr != nil {
 					return 0, quarantineErr
 				}
@@ -277,6 +309,67 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			return started, nil
 		}
 	}
+	for _, entry := range pendingRemediation {
+		request, err := decodeRemediationRequest(entry)
+		if err != nil {
+			quarantined, quarantineErr := e.quarantinePendingRemediationMarker(ctx, entry, err)
+			if quarantineErr != nil {
+				return started, quarantineErr
+			}
+			if quarantined {
+				continue
+			}
+			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
+		}
+		binding, err := e.loadRemediationBinding(ctx, request)
+		if err != nil {
+			quarantined, quarantineErr := e.quarantinePendingRemediationMarker(ctx, entry, err)
+			if quarantineErr != nil {
+				return started, quarantineErr
+			}
+			if quarantined {
+				continue
+			}
+			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
+		}
+		if err := releaseProductionQuarantine(
+			ctx, e.store, e.signet, remediationMarkerQuarantinePrefix, binding.run.ID,
+		); err != nil {
+			return started, err
+		}
+		stage, ok := findRemediationStage(binding.run, request.Round)
+		if !ok {
+			return started, fmt.Errorf("intent %q: run %q has no remediation stage",
+				entry.IdempotencyKey, binding.run.ID)
+		}
+		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
+		started += boolCount(startedNow)
+		if err != nil {
+			if errors.Is(err, ErrRemediationInputUndeliverable) {
+				if failureErr := e.recordProductionDeliveryRefusal(
+					ctx, binding.run, stage, request.InvocationID, err.Error(),
+				); failureErr != nil {
+					return started, failureErr
+				}
+				continue
+			}
+			if reason, ok := dispatchHoldReason(err); ok {
+				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason); obsErr != nil {
+					return started, obsErr
+				}
+			}
+			if invocationDispatchHold(err) {
+				continue
+			}
+			if unattendedDispatchRefusal(err) {
+				return started, nil
+			}
+			return started, err
+		}
+		if hold {
+			return started, nil
+		}
+	}
 	for _, entry := range pendingProduction {
 		// The production kind is engine-owned, so a malformed row is broken
 		// owned state, never another workflow's: it is quarantined behind an
@@ -347,6 +440,14 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)
 		if err != nil {
+			if errors.Is(err, ErrProductionInputUndeliverable) {
+				if failureErr := e.recordProductionDeliveryRefusal(
+					ctx, binding.run, stage, request.InvocationID, err.Error(),
+				); failureErr != nil {
+					return started, failureErr
+				}
+				continue
+			}
 			// A classified hold or refusal is operator-visible run state:
 			// record its typed cause before taking the same quiet path as
 			// before (issue #394).
@@ -480,6 +581,17 @@ func (e *Engine) dispatchIntent(
 		}
 		return false, false, err
 	}
+	// A pre-fix daemon may already have recorded a production admission that
+	// exceeds the configured driver's deterministic prompt boundary. Inspect
+	// first: Start can have succeeded before the outbox dispatch bit committed,
+	// and a known invocation's eventual result outranks a replay-time delivery
+	// refusal. Only a driver-proven unknown invocation is still safe to refuse.
+	if bound && fresh == nil {
+		if err := e.validateProductionReplayDelivery(ctx, invocationID, effective); err != nil {
+			return false, false, fmt.Errorf(
+				"intent %q production delivery: %w", entry.IdempotencyKey, err)
+		}
+	}
 	startSpec := exec.StartSpec{RunID: binding.run.ID, StageID: stage.ID}
 	if bound {
 		startSpec = exec.StartSpecFromAdmission(effective)
@@ -588,16 +700,21 @@ func (e *Engine) acceptCompletedInvocations(ctx context.Context) (int, error) {
 			}
 			continue
 		}
-		stage, ok := findProductionStage(run)
-		if !ok {
-			continue
-		}
-		for _, attempt := range stage.Attempts {
-			didAccept, err := e.acceptProductionAttempt(ctx, run, attempt)
-			if err != nil {
-				return accepted, fmt.Errorf("run %q invocation %q: %w", run.ID, attempt.InvocationID, err)
+		for _, stage := range run.Stages {
+			if len(stage.Attempts) == 0 {
+				continue
 			}
-			accepted += boolCount(didAccept)
+			expected, ok := productionStageForInvocation(run, stage.Attempts[0].InvocationID)
+			if !ok || expected.ID != stage.ID {
+				continue
+			}
+			for _, attempt := range stage.Attempts {
+				didAccept, err := e.acceptProductionAttempt(ctx, run, attempt)
+				if err != nil {
+					return accepted, fmt.Errorf("run %q invocation %q: %w", run.ID, attempt.InvocationID, err)
+				}
+				accepted += boolCount(didAccept)
+			}
 		}
 	}
 	return accepted, nil

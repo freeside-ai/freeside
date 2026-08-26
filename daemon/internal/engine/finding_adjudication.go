@@ -47,16 +47,17 @@ type findingAdjudicationInput struct {
 type findingAdjudicationDissentKind string
 
 const (
-	findingDissentImportPathRejected findingAdjudicationDissentKind = "import_path_rejected"
-	findingDissentRemediatorPushback findingAdjudicationDissentKind = "remediator_pushback"
+	findingDissentImportPathRejected   findingAdjudicationDissentKind = "import_path_rejected"
+	findingDissentRemediatorPushback   findingAdjudicationDissentKind = "remediator_pushback"
+	findingDissentRemediationReemitted findingAdjudicationDissentKind = "remediation_reemitted"
 )
 
 // findingAdjudicationDissent is the typed re-entry carrier reserved for #842
 // and #843. Dissent never widens scope itself; it forces a fresh adjudication.
 type findingAdjudicationDissent struct {
-	Kind      findingAdjudicationDissentKind
-	FindingID domain.FindingID
-	Evidence  string
+	Kind       findingAdjudicationDissentKind
+	FindingIDs []domain.FindingID
+	Evidence   string
 }
 
 func resolvedFindingThreshold(policy domain.ResolvedPolicy, keyName string) domain.DispatchThreshold {
@@ -140,7 +141,7 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 	})
 	switch {
 	case err == nil:
-		return w.executeFindingAdjudication(ctx, task, record, artifact)
+		return w.executeFindingAdjudication(ctx, task, record, artifact, candidateRoot)
 	case !errors.Is(err, store.ErrNotFound):
 		return productionReviewPending, err
 	}
@@ -200,7 +201,7 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 			func(patterns []string, path string) bool {
 				return pathfold.MatchAny(patterns, path, false)
 			})
-		fastPath := (dissent == nil || dissent.FindingID != finding.ID) &&
+		fastPath := (dissent == nil || !slices.Contains(dissent.FindingIDs, finding.ID)) &&
 			classification != nil && compatibility == domain.CompatibilityAllowed &&
 			classificationMeets(classification.Materiality, materialityThreshold) &&
 			classificationMeets(classification.Confidence, confidenceThreshold)
@@ -277,7 +278,7 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 		DurableTransitionFindingAdjudication, DurableTransitionAfter); err != nil {
 		return productionReviewPending, err
 	}
-	return w.executeFindingAdjudication(ctx, task, record, artifact)
+	return w.executeFindingAdjudication(ctx, task, record, artifact, candidateRoot)
 }
 
 func (w *productionPublicationWorkflow) parkUnacceptedFindingBatch(
@@ -399,6 +400,107 @@ func (w *productionPublicationWorkflow) putFindingAdjudicationAttention(
 	return w.attention.PutItem(ctx, item)
 }
 
+// productionRemediationUndeliverableItemID identifies the durable escalation
+// raised when a remediation candidate cannot be prepared for delivery. It is
+// deterministic per run and round and deliberately distinct from the round's
+// review item, whose type is immutably bound to the routing decision, so the
+// escalation never collides with a review-dispute or finding-adjudication item.
+func productionRemediationUndeliverableItemID(runID domain.RunID, round int) domain.ItemID {
+	return domain.ItemID(fmt.Sprintf("remediation-undeliverable-%s-%d", runID, round))
+}
+
+// remediationUndeliverableRecorded reports whether a prior reconcile already
+// terminalized a deterministic undeliverable-input refusal for this round. When
+// it has, the caller parks the run rather than re-attempting a preparation that
+// deterministically re-refuses.
+func (w *productionPublicationWorkflow) remediationUndeliverableRecorded(
+	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord,
+) (bool, error) {
+	itemID := productionRemediationUndeliverableItemID(task.RunID, record.Round)
+	recorded := false
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		item, err := tx.GetAttentionItem(ctx, itemID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := verifyRemediationUndeliverableItem(item, task, itemID); err != nil {
+			return err
+		}
+		recorded = true
+		return nil
+	}); err != nil {
+		return false, err
+	}
+	return recorded, nil
+}
+
+// recordRemediationUndeliverable raises the durable per-run escalation for a
+// deterministic pre-invocation preparation refusal. It reuses the execution
+// failure attention type that the dispatch-phase delivery refusal already
+// raises, so both remediation-delivery boundaries terminalize consistently.
+// Like that sibling it writes the item directly and offers only acknowledge:
+// AttentionExecutionFailure's signet action policy excludes acknowledge because
+// retry has no honoring machinery here, so the intake service would reject it
+// (production_workflow.go recordProductionDeliveryRefusal shares this rationale).
+// The get-or-put is idempotent across reconciliations.
+func (w *productionPublicationWorkflow) recordRemediationUndeliverable(
+	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord, cause error,
+) error {
+	itemID := productionRemediationUndeliverableItemID(task.RunID, record.Round)
+	runID := task.RunID
+	reason := "Remediation input for the adjudicated findings cannot be delivered to the remediator."
+	if cause != nil {
+		reason += " " + cause.Error()
+	}
+	return w.store.Write(ctx, func(tx *store.WriteTx) error {
+		existing, err := tx.GetAttentionItem(ctx, itemID)
+		if err == nil {
+			return verifyRemediationUndeliverableItem(existing, task, itemID)
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		createdAt := w.attentionCreatedAt()
+		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+			ID: itemID, ProjectID: task.ProjectID,
+			Subject:           domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+			Type:              domain.AttentionExecutionFailure,
+			Priority:          domain.PriorityHigh,
+			Reason:            reason,
+			RequestedDecision: []domain.Action{domain.ActionAcknowledge},
+			ItemVersion:       1,
+			InterruptionClass: domain.InterruptionExceptional,
+			CreatedAt:         &createdAt,
+			Status:            domain.StatusOpen,
+		}, w.approvedRecipes)
+		if err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
+	})
+}
+
+// verifyRemediationUndeliverableItem fails closed when an existing item at the
+// deterministic identity disagrees with the run it must escalate, matching the
+// parent-key discipline the other production attention writers enforce.
+func verifyRemediationUndeliverableItem(
+	item domain.AttentionItem, task productionPublicationTask, itemID domain.ItemID,
+) error {
+	validSubject := item.Subject.Type == domain.SubjectRun &&
+		item.Subject.ID == domain.SubjectID(task.RunID) &&
+		item.Subject.RunID != nil && *item.Subject.RunID == task.RunID
+	if item.Type != domain.AttentionExecutionFailure ||
+		item.ProjectID != task.ProjectID || !validSubject {
+		return fmt.Errorf(
+			"remediation-undeliverable attention item %q disagrees with run %q: %w",
+			itemID, task.RunID, domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
 type findingAlternativeChoice struct {
 	FindingID domain.FindingID         `json:"finding_id"`
 	Route     domain.AdjudicationRoute `json:"route"`
@@ -460,7 +562,7 @@ func findingRoutesFromDecision(
 
 func (w *productionPublicationWorkflow) executeFindingAdjudication(
 	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord,
-	artifact domain.FindingAdjudication,
+	artifact domain.FindingAdjudication, candidateRoot string,
 ) (productionReviewGateState, error) {
 	itemID := productionReviewItemID(task.RunID, record.Round)
 	var item *domain.AttentionItem
@@ -551,6 +653,34 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		}
 		return productionReviewPending, nil
 	}
+	var remediation *preparedRemediationIntent
+	if w.artifacts != nil {
+		// A deterministic undeliverable-input refusal terminalized on a prior
+		// reconcile parks the run; re-preparing would just re-refuse and re-diff.
+		parked, checkErr := w.remediationUndeliverableRecorded(ctx, task, record)
+		if checkErr != nil {
+			return productionReviewPending, checkErr
+		}
+		if parked {
+			return productionReviewPending, nil
+		}
+		remediation, err = w.prepareRemediationIntent(
+			ctx, task, record, artifact, routes, candidateRoot)
+		if errors.Is(err, ErrRemediationInputUndeliverable) {
+			// A deterministic pre-invocation preparation refusal (for example a
+			// remediation input larger than the deliverable limit) can never
+			// succeed on retry. Terminalize it as a durable per-run escalation so
+			// the production publication lane advances instead of stopping
+			// lane-fatally when reconcileTask propagates the raw error.
+			if putErr := w.recordRemediationUndeliverable(ctx, task, record, err); putErr != nil {
+				return productionReviewPending, putErr
+			}
+			return productionReviewPending, nil
+		}
+		if err != nil {
+			return productionReviewPending, err
+		}
+	}
 
 	if err := runDurableTransitionHook(w.transitionHook,
 		DurableTransitionFindingAdjudication, DurableTransitionBefore); err != nil {
@@ -561,6 +691,11 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		dispositionAt = item.DecidedAt.UTC()
 	}
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		if remediation != nil {
+			if err := remediation.persist(ctx, tx); err != nil {
+				return err
+			}
+		}
 		for _, entry := range artifact.Entries {
 			route := routes[entry.FindingID]
 			var disposition domain.ReviewDisposition
@@ -604,11 +739,18 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 // next units attach it to a newly recorded review round; this unit deliberately
 // grants no transition or scope-widening authority to the carrier itself.
 func validateFindingAdjudicationDissent(dissent findingAdjudicationDissent) error {
-	if dissent.FindingID == "" || strings.TrimSpace(dissent.Evidence) == "" {
+	if len(dissent.FindingIDs) == 0 || !slices.IsSorted(dissent.FindingIDs) ||
+		strings.TrimSpace(dissent.Evidence) == "" {
 		return domain.ErrParentKeyMismatch
 	}
+	for index, findingID := range dissent.FindingIDs {
+		if findingID == "" || (index > 0 && findingID == dissent.FindingIDs[index-1]) {
+			return domain.ErrParentKeyMismatch
+		}
+	}
 	switch dissent.Kind {
-	case findingDissentImportPathRejected, findingDissentRemediatorPushback:
+	case findingDissentImportPathRejected, findingDissentRemediatorPushback,
+		findingDissentRemediationReemitted:
 		return nil
 	}
 	return domain.ErrParentKeyMismatch

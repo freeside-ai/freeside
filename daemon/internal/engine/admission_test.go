@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -15,6 +16,29 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+type replayInspectionDriver struct {
+	inspection exec.Inspection
+	err        error
+}
+
+func (d replayInspectionDriver) Start(context.Context, domain.InvocationID, exec.StartSpec) error {
+	return nil
+}
+
+func (d replayInspectionDriver) Inspect(context.Context, domain.InvocationID) (exec.Inspection, error) {
+	return d.inspection, d.err
+}
+
+func (d replayInspectionDriver) Stream(context.Context, domain.InvocationID) (io.ReadCloser, error) {
+	return nil, exec.ErrUnknownInvocation
+}
+
+func (d replayInspectionDriver) Cancel(context.Context, domain.InvocationID) error { return nil }
+
+func (d replayInspectionDriver) Collect(context.Context, domain.InvocationID) (exec.StageResult, error) {
+	return exec.StageResult{}, exec.ErrResultNotReady
+}
 
 type stageInputBackend struct{}
 
@@ -125,6 +149,41 @@ func TestWithAdmissionRequiresConfigurationBoundUnattendedBackend(t *testing.T) 
 	)
 	if err := option(&Engine{}); err == nil {
 		t.Fatal("WithAdmission accepted an unattended backend with no configuration identity")
+	}
+}
+
+func TestProductionReplayDeliveryDefersToKnownDriverInvocation(t *testing.T) {
+	runID := domain.RunID("run-replay-delivery")
+	invocationID := remediationInvocationID(runID, 1)
+	admission := domain.ExecutionAdmission{
+		InvocationID: invocationID,
+		RunID:        runID,
+		StageID:      remediationStageID(runID, 1),
+	}
+	refusal := errors.Join(ErrProductionInputUndeliverable, exec.ErrInputTooLarge)
+	validationCalls := 0
+	e := &Engine{
+		driver: replayInspectionDriver{
+			inspection: exec.Inspection{Status: exec.StatusRunning, Live: true},
+		},
+		productionDeliveryValidator: func(context.Context, exec.StartSpec) error {
+			validationCalls++
+			return refusal
+		},
+	}
+	if err := e.validateProductionReplayDelivery(t.Context(), invocationID, admission); err != nil {
+		t.Fatalf("known driver invocation = %v", err)
+	}
+	if validationCalls != 0 {
+		t.Fatalf("known driver invocation revalidated delivery %d times", validationCalls)
+	}
+
+	e.driver = replayInspectionDriver{err: exec.ErrUnknownInvocation}
+	if err := e.validateProductionReplayDelivery(t.Context(), invocationID, admission); !errors.Is(err, refusal) {
+		t.Fatalf("unknown driver invocation = %v, want delivery refusal", err)
+	}
+	if validationCalls != 1 {
+		t.Fatalf("unknown driver invocation validation calls = %d, want 1", validationCalls)
 	}
 }
 
@@ -270,6 +329,44 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 	}
 	if got := elaborationAdmission.StageInputs.ImageInputDigests; len(got) != 0 {
 		t.Fatalf("elaboration image inputs claim unsupported attachment delivery: %v", got)
+	}
+	remediationID := domain.InvocationID("inv-remediate-1-run-1")
+	remediationInvocation, err := domain.NewAgentInvocation(
+		remediationID, []domain.ArtifactID{prior.ID}, nil, 0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remediationBinding := binding
+	remediationBinding.invocation = remediationInvocation
+	deliveryRefusal := errors.New("driver rejects rendered prompt")
+	validated := false
+	e.productionPublication = &productionPublicationWorkflow{
+		remediationPromptPackage: digest("8"),
+	}
+	e.productionDeliveryValidator = func(_ context.Context, spec exec.StartSpec) error {
+		validated = spec.RunID == remediationBinding.run.ID &&
+			spec.StageID == remediationStageID(remediationBinding.run.ID, 1) &&
+			spec.StageInputs != nil &&
+			spec.StageInputs.PromptPackageDigest == digest("8")
+		return errors.Join(ErrProductionInputUndeliverable, deliveryRefusal)
+	}
+	if _, admitted, err := e.admitAttempt(ctx, remediationBinding, domain.Stage{
+		ID: remediationStageID(remediationBinding.run.ID, 1), Name: productionStageName,
+	}, remediationID); admitted || !validated ||
+		!errors.Is(err, ErrRemediationInputUndeliverable) ||
+		!errors.Is(err, deliveryRefusal) {
+		t.Fatalf("remediation admission = admitted %t, validated %t, err %v", admitted, validated, err)
+	}
+	e.productionDeliveryValidator = func(context.Context, exec.StartSpec) error {
+		return exec.ErrInputUnavailable
+	}
+	if _, admitted, err := e.admitAttempt(ctx, remediationBinding, domain.Stage{
+		ID: remediationStageID(remediationBinding.run.ID, 1), Name: productionStageName,
+	}, remediationID); admitted || !errors.Is(err, exec.ErrInputUnavailable) ||
+		errors.Is(err, ErrProductionInputUndeliverable) ||
+		errors.Is(err, ErrRemediationInputUndeliverable) {
+		t.Fatalf("transient remediation admission = admitted %t, err %v", admitted, err)
 	}
 	if admission.StageInputs.ConversationDigest == nil {
 		t.Fatal("conversation-bound admission has no conversation digest")
