@@ -70,6 +70,29 @@
                         }
                         await Task.yield()
                     }
+
+                    for supplemental in [
+                        try await makeUnavailableAttachmentSurface(at: size.value),
+                        try await makeImageAttachmentSurface(at: size.value),
+                    ] {
+                        let key = "\(supplemental.name)-\(size.name)"
+                        let image = try render(
+                            supplemental.view,
+                            at: size.value,
+                            width: supplemental.width ?? canvasWidth)
+                        actual[key] = try digest(image)
+                        if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
+                            _ = try dump(image, named: key)
+                        }
+                        if !recording, expected[key] != actual[key] {
+                            let dump = try dump(image, named: key)
+                            let expectedDigest = expected[key] ?? "missing"
+                            let actualDigest = actual[key] ?? "missing"
+                            Issue.record(
+                                "Screenshot mismatch for \(key): expected \(expectedDigest), got \(actualDigest); inspect \(dump.path) and record only after review."
+                            )
+                        }
+                    }
                 }
             }
 
@@ -113,9 +136,12 @@
             ]
 
             for snapshot in inbox {
+                let graphics = graphicPresentations(for: snapshot.item)
                 let detail = DecisionDetailView(
                     store: store,
                     itemID: snapshot.item.id,
+                    graphics: graphics,
+                    loadsAttachments: false,
                     showsValidationProgress: false
                 )
                 surfaces.append(
@@ -146,6 +172,7 @@
                     reason: "This route preserves the evidence-backed finding.",
                     confidence: "High"
                 ),
+                loadsAttachments: false,
                 showsValidationProgress: false
             )
             surfaces.append(
@@ -163,6 +190,7 @@
                     reason: "Stopping avoids applying an unreviewed answer.",
                     confidence: nil
                 ),
+                loadsAttachments: false,
                 showsValidationProgress: false
             )
             surfaces.append(
@@ -228,6 +256,100 @@
                     view: AnyView(PairingView(model: pairing) { _ in }.screenshotContent())
                 ))
             return surfaces
+        }
+
+        private func makeUnavailableAttachmentSurface(
+            at dynamicTypeSize: DynamicTypeSize
+        ) async throws -> Surface {
+            let server = MockServer()
+            let client = APIClientFactory.mock(server: server)
+            let blocked = AttentionFixtures.fixture(type: .blocked)
+            let store = InboxStore(client: client)
+            store.replaceAll(with: [blocked])
+            await store.attachments.load("sha256:img-blocked")
+            #expect(store.attachments.phase(for: "sha256:img-blocked") == .unavailable)
+            let detail = DecisionDetailView(
+                store: store,
+                itemID: blocked.item.id,
+                loadsAttachments: false,
+                showsValidationProgress: false)
+            return Surface(
+                name: "decision-blocked-unavailable",
+                view: AnyView(detail.screenshotCard(blocked.item, at: dynamicTypeSize)))
+        }
+
+        private func makeImageAttachmentSurface(
+            at dynamicTypeSize: DynamicTypeSize
+        ) async throws -> Surface {
+            let server = MockServer()
+            let client = APIClientFactory.mock(server: server)
+            let approval = AttentionFixtures.fixture(type: .spec_approval)
+            let store = InboxStore(client: client)
+            store.replaceAll(with: [approval])
+            await store.attachments.load("sha256:img-spec_approval")
+            guard case .image = store.attachments.phase(for: "sha256:img-spec_approval") else {
+                throw ScreenshotError.missingSeededImage
+            }
+            let detail = DecisionDetailView(
+                store: store,
+                itemID: approval.item.id,
+                loadsAttachments: false,
+                showsValidationProgress: false)
+            return Surface(
+                name: "decision-spec_approval-image",
+                view: AnyView(detail.screenshotCard(approval.item, at: dynamicTypeSize)))
+        }
+
+        private func graphicPresentations(
+            for item: Components.Schemas.AttentionItem
+        ) -> DecisionGraphicPresentations {
+            switch item._type {
+            case .ready_for_final_review:
+                return .init(
+                    changeSummary: .init(
+                        text: "Adds shared card compositions and accessible graphic summaries."))
+            case .execution_failure:
+                return .init(
+                    stageRail: DecisionStageRailPresentation.failure(
+                        stages: ["Import", "Build", "Verify", "Publish"],
+                        failedStageIndex: 1),
+                    attemptTimings: .init(
+                        title: "Attempt timings",
+                        facts: [
+                            .init(label: "Attempt 1", value: "1m 42s"),
+                            .init(label: "Attempt 2", value: "1m 38s"),
+                        ]),
+                    prominentClaimIndex: item.agent_claims.firstIndex {
+                        $0.label == "Likely cause (unverified)"
+                    })
+            case .review_dispute:
+                return .init(
+                    comparison: .init(
+                        positions: [
+                            .init(
+                                title: "Reviewer",
+                                text: "The reconstruction boundary needs a second guard."),
+                            .init(
+                                title: "Agent",
+                                text: "The existing trusted gate makes that state unreachable."),
+                        ],
+                        verifiableFacts: [
+                            .init(label: "Caller", value: "Store reconstruction"),
+                            .init(label: "Current gate", value: "Approved recipe set"),
+                        ]))
+            case .review_diminishing_returns:
+                return .init(
+                    diminishingYield: .init(
+                        rounds: [
+                            .init(number: 1, newFindings: 4, recurringFindings: 0),
+                            .init(number: 2, newFindings: 1, recurringFindings: 2),
+                            .init(number: 3, newFindings: 0, recurringFindings: 3),
+                        ]))
+            case .spec_approval, .review_contradiction, .review_configuration,
+                .finding_adjudication, .agent_question, .publish_blocked,
+                .run_proposal, .system_health, .blocked:
+                return .init()
+            }
         }
 
         private func render(
@@ -350,6 +472,7 @@
         case missingActiveTimeline
         case missingGMT
         case missingManifest
+        case missingSeededImage
         case pngEncodingFailed
         case recordingRequiresBaselineOperatingSystem(expected: String, actual: String)
         case renderFailed
