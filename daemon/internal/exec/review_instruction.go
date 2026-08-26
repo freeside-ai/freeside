@@ -14,7 +14,12 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
-const ReviewInstructionCompositionVersion = "codex_explicit_bundle_v1"
+const (
+	// ReviewInstructionCompositionVersionV1 remains valid only so persisted
+	// bindings can be read, superseded, and included in backup closures.
+	ReviewInstructionCompositionVersionV1 = "codex_explicit_bundle_v1"
+	ReviewInstructionCompositionVersion   = "codex_explicit_bundle_v2"
+)
 
 // ReviewInstructionSource binds one path-scoped repository instruction file
 // from the reviewed repository's exact trusted base.
@@ -37,7 +42,8 @@ type ReviewInstructionBinding struct {
 // persistence. That makes reordering an authority change rather than an
 // alternative encoding of the same request.
 func (b ReviewInstructionBinding) Validate() error {
-	if b.CompositionVersion != ReviewInstructionCompositionVersion ||
+	if (b.CompositionVersion != ReviewInstructionCompositionVersionV1 &&
+		b.CompositionVersion != ReviewInstructionCompositionVersion) ||
 		!contentaddr.Valid(string(b.ResultDigest)) {
 		return fmt.Errorf("review instruction composition: %w", domain.ErrInvalidReviewCompletionEvidence)
 	}
@@ -118,9 +124,10 @@ func ComposeCodexReviewInstructions(
 	var bundle bytes.Buffer
 	bundle.WriteString("# Freeside Explicit Codex Review Instruction Bundle\n\n")
 	bundle.WriteString("Composition: " + ReviewInstructionCompositionVersion + "\n\n")
-	bundle.WriteString("Apply each digest-delimited repository block only within its named path scope. " +
+	bundle.WriteString("Apply each digest-delimited fenced-literal repository block only within its named path scope. " +
 		"The deepest matching repository scope takes precedence among repository blocks. " +
-		"Apply the final operator-host block globally; it takes precedence over every repository block.\n\n" +
+		"Apply the final fenced-literal operator-host block globally; it takes precedence over every repository block. " +
+		"Markdown constructs inside one instruction body do not extend past its enclosing fence.\n\n" +
 		"## Trusted-Base Repository Instructions\n")
 	for i, source := range sources {
 		if !fs.ValidPath(source.Path) || source.Path == "." ||
@@ -139,10 +146,7 @@ func ComposeCodexReviewInstructions(
 		bundle.WriteString("\n\n--- BEGIN REPOSITORY INSTRUCTION ")
 		bundle.WriteString(string(digest))
 		bundle.WriteString(" ---\n")
-		bundle.Write(source.Body)
-		if len(source.Body) == 0 || source.Body[len(source.Body)-1] != '\n' {
-			bundle.WriteByte('\n')
-		}
+		writeReviewInstructionLiteral(&bundle, source.Body)
 		bundle.WriteString("--- END REPOSITORY INSTRUCTION ")
 		bundle.WriteString(string(digest))
 		bundle.WriteString(" ---\n")
@@ -156,10 +160,7 @@ func ComposeCodexReviewInstructions(
 		bundle.WriteString("--- BEGIN OPERATOR-HOST INSTRUCTION ")
 		bundle.WriteString(string(digest))
 		bundle.WriteString(" ---\n")
-		bundle.Write(host.Body)
-		if len(host.Body) == 0 || host.Body[len(host.Body)-1] != '\n' {
-			bundle.WriteByte('\n')
-		}
+		writeReviewInstructionLiteral(&bundle, host.Body)
 		bundle.WriteString("--- END OPERATOR-HOST INSTRUCTION ")
 		bundle.WriteString(string(digest))
 		bundle.WriteString(" ---\n")
@@ -175,6 +176,33 @@ func ComposeCodexReviewInstructions(
 		return nil, ReviewInstructionBinding{}, err
 	}
 	return body, binding, nil
+}
+
+func writeReviewInstructionLiteral(bundle *bytes.Buffer, body []byte) {
+	fenceLength := 3
+	longestRun := 0
+	for _, char := range body {
+		if char == '`' {
+			longestRun++
+			continue
+		}
+		if longestRun >= fenceLength {
+			fenceLength = longestRun + 1
+		}
+		longestRun = 0
+	}
+	if longestRun >= fenceLength {
+		fenceLength = longestRun + 1
+	}
+	fence := strings.Repeat("`", fenceLength)
+	bundle.WriteString(fence)
+	bundle.WriteByte('\n')
+	bundle.Write(body)
+	if len(body) == 0 || body[len(body)-1] != '\n' {
+		bundle.WriteByte('\n')
+	}
+	bundle.WriteString(fence)
+	bundle.WriteByte('\n')
 }
 
 func digestReviewInstruction(body []byte) domain.Digest {
