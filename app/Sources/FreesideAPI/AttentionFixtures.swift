@@ -281,9 +281,10 @@ public enum AttentionFixtures {
                     evaluation_set_digest: "sha256:evaluation-clean"
                 ))
             : nil
-        let yieldHistory: Components.Schemas.AttentionItem.yield_historyPayload? =
-            type == .ready_for_final_review
-            ? .init(
+        let yieldHistory: Components.Schemas.AttentionItem.yield_historyPayload?
+        switch type {
+        case .ready_for_final_review:
+            yieldHistory = .init(
                 value1: .init(
                     rounds: [
                         .init(
@@ -301,7 +302,30 @@ public enum AttentionFixtures {
                     ],
                     terminal_outcome: .clean
                 ))
-            : nil
+        case .review_diminishing_returns:
+            yieldHistory = .init(
+                value1: .init(
+                    rounds: [
+                        .init(
+                            round: 1, findings_ingested: 4, new_findings: 4,
+                            recurring_findings: 0, fixed: 2, declined: 1, deferred: 1,
+                            outcome: .findings),
+                        .init(
+                            round: 2, findings_ingested: 3, new_findings: 1,
+                            recurring_findings: 2, fixed: 1, declined: 1, deferred: 1,
+                            outcome: .findings),
+                        .init(
+                            round: 3, findings_ingested: 3, new_findings: 0,
+                            recurring_findings: 3, fixed: 0, declined: 2, deferred: 1,
+                            outcome: .findings),
+                    ],
+                    terminal_outcome: .findings
+                ))
+        case .spec_approval, .execution_failure, .agent_question, .review_dispute,
+            .review_contradiction, .review_configuration, .finding_adjudication,
+            .publish_blocked, .run_proposal, .system_health, .blocked:
+            yieldHistory = nil
+        }
         let reviewRecoveryBinding: Components.Schemas.AttentionItem.review_recovery_bindingPayload? =
             type == .review_contradiction
             ? .init(

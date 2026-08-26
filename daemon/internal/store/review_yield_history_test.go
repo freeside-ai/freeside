@@ -144,3 +144,93 @@ func TestReadyItemReviewYieldHistorySurvivesRestartAndRejectsDivergence(t *testi
 		})
 	}
 }
+
+func TestDiminishingItemReviewYieldHistorySurvivesRestartAndRejectsDivergence(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	history := domain.ReviewYieldHistory{
+		Rounds: []domain.ReviewYieldRound{
+			{Round: 1, FindingsIngested: 4, NewFindings: 4, Fixed: 2, Declined: 1, Deferred: 1, Outcome: domain.ReviewFindings},
+			{Round: 2, FindingsIngested: 3, NewFindings: 1, RecurringFindings: 2, Fixed: 1, Declined: 1, Deferred: 1, Outcome: domain.ReviewFindings},
+			{Round: 3, FindingsIngested: 3, RecurringFindings: 3, Declined: 2, Deferred: 1, Outcome: domain.ReviewFindings},
+		},
+		TerminalOutcome: domain.ReviewFindings,
+	}
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-yield-diminishing", ProjectID: "project-1",
+		Subject: domain.Subject{Type: domain.SubjectProject, ID: "project-1"},
+		Type:    domain.AttentionReviewDiminishing, Priority: domain.PriorityNormal,
+		Reason:            "review rounds are surfacing only marginal findings",
+		RequestedDecision: []domain.Action{domain.ActionFinishNow, domain.ActionApplyThenFinish},
+		YieldHistory:      &history,
+		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
+		Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := Open(ctx, path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		_ = st.Close()
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err = Open(ctx, path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	var got domain.AttentionItem
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		got, err = tx.GetAttentionItem(ctx, item.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got.YieldHistory == nil || len(got.YieldHistory.Rounds) != 3 ||
+		got.YieldHistory.Rounds[2].RecurringFindings != 3 ||
+		got.YieldHistory.TerminalOutcome != domain.ReviewFindings {
+		t.Fatalf("yield history after restart = %+v", got.YieldHistory)
+	}
+	if got.Readiness != nil || got.PRReference != nil {
+		t.Fatalf("diminishing item gained ready-only fields: readiness=%+v pr_reference=%+v",
+			got.Readiness, got.PRReference)
+	}
+
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE attention_items SET body = json_set(body, '$.yield_history.rounds[0].declined', 0) WHERE id = ?`,
+		item.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, read := range []struct {
+		name string
+		fn   func(*ReadTx) error
+	}{
+		{"get", func(tx *ReadTx) error {
+			_, err := tx.GetAttentionItem(ctx, item.ID)
+			return err
+		}},
+		{"list", func(tx *ReadTx) error {
+			_, err := tx.ListAttentionItems(ctx)
+			return err
+		}},
+	} {
+		t.Run(read.name, func(t *testing.T) {
+			if err := st.Read(ctx, read.fn); !errors.Is(err, errRowInconsistent) {
+				t.Fatalf("read error = %v, want errRowInconsistent", err)
+			}
+		})
+	}
+}

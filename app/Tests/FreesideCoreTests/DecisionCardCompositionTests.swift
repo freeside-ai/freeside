@@ -225,6 +225,20 @@ import Testing
             presentation.summary
                 == "Review yield: Round 1: 2 new, 0 recurring; Round 2: 1 new, 1 recurring; Round 3: 0 new, 0 recurring."
         )
+
+        let diminishing = try #require(
+            DecisionYieldPresentation(
+                AttentionFixtures.fixture(type: .review_diminishing_returns).item))
+        #expect(
+            diminishing.rounds.map(\.text) == [
+                "Round 1: 4 new, 0 recurring",
+                "Round 2: 1 new, 2 recurring",
+                "Round 3: 0 new, 3 recurring",
+            ])
+        #expect(
+            diminishing.summary
+                == "Review yield: Round 1: 4 new, 0 recurring; Round 2: 1 new, 2 recurring; Round 3: 0 new, 3 recurring."
+        )
     }
 
     @Test func comparisonSummaryPreservesBothPositions() {

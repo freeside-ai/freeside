@@ -154,29 +154,44 @@ func TestAttentionItemReadinessSummaryIsReadyScopedAndLegacyOptional(t *testing.
 	}
 }
 
-func TestAttentionItemReviewYieldHistoryIsReadyScopedAndLegacyOptional(t *testing.T) {
-	ready := validItemInput(domain.AttentionReadyForFinalReview)
-	history := validReviewYieldHistory()
-	ready.YieldHistory = &history
-	item, err := domain.NewAttentionItem(ready, nil)
-	if err != nil {
-		t.Fatalf("NewAttentionItem(ready with yield): %v", err)
+func TestAttentionItemReviewYieldHistoryIsTypeScopedAndLegacyOptional(t *testing.T) {
+	allowedTypes := []domain.AttentionType{
+		domain.AttentionReadyForFinalReview,
+		domain.AttentionReviewDiminishing,
 	}
-	ready.YieldHistory.Rounds[0].NewFindings = 0
-	if item.YieldHistory.Rounds[0].NewFindings != 2 {
-		t.Fatal("yield history aliases caller-owned rounds")
+	for _, typ := range allowedTypes {
+		t.Run(string(typ), func(t *testing.T) {
+			in := validItemInput(typ)
+			history := validReviewYieldHistory()
+			in.YieldHistory = &history
+			item, err := domain.NewAttentionItem(in, nil)
+			if err != nil {
+				t.Fatalf("NewAttentionItem(%s with yield): %v", typ, err)
+			}
+			in.YieldHistory.Rounds[0].NewFindings = 0
+			if item.YieldHistory.Rounds[0].NewFindings != 2 {
+				t.Fatal("yield history aliases caller-owned rounds")
+			}
+
+			legacy := validItemInput(typ)
+			if _, err := domain.NewAttentionItem(legacy, nil); err != nil {
+				t.Fatalf("nil yield history rejected: %v", err)
+			}
+		})
 	}
 
-	legacy := validItemInput(domain.AttentionReadyForFinalReview)
-	if _, err := domain.NewAttentionItem(legacy, nil); err != nil {
-		t.Fatalf("legacy nil yield history rejected: %v", err)
-	}
-
-	wrongType := validItemInput(domain.AttentionSpecApproval)
-	history = validReviewYieldHistory()
-	wrongType.YieldHistory = &history
-	if _, err := domain.NewAttentionItem(wrongType, nil); !errors.Is(err, domain.ErrReviewYieldHistoryInconsistent) {
-		t.Fatalf("non-ready yield error = %v, want ErrReviewYieldHistoryInconsistent", err)
+	for _, typ := range domain.AllAttentionTypes {
+		if slices.Contains(allowedTypes, typ) {
+			continue
+		}
+		t.Run("reject_"+string(typ), func(t *testing.T) {
+			in := validItemInput(typ)
+			history := validReviewYieldHistory()
+			in.YieldHistory = &history
+			if _, err := domain.NewAttentionItem(in, nil); !errors.Is(err, domain.ErrReviewYieldHistoryInconsistent) {
+				t.Fatalf("yield history error = %v, want ErrReviewYieldHistoryInconsistent", err)
+			}
+		})
 	}
 }
 

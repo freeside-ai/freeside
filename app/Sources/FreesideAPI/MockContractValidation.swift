@@ -109,8 +109,10 @@ enum MockContractValidation {
             }
         }
         if let history = item.yield_history?.value1 {
-            if item._type != .ready_for_final_review {
-                return "yield_history on a non-ready_for_final_review item"
+            if item._type != .ready_for_final_review
+                && item._type != .review_diminishing_returns
+            {
+                return "yield_history on an unsupported item type"
             }
             if history.rounds.isEmpty { return "empty review yield history" }
             var previousRound = 0

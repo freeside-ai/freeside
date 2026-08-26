@@ -20,9 +20,10 @@ type ReviewYieldRound struct {
 	Outcome           ReviewOutcome `json:"outcome"`
 }
 
-// ReviewYieldHistory is the immutable review-yield digest carried by a
-// ready_for_final_review item. TerminalOutcome deliberately duplicates the
-// final round so consumers can read the terminal result without inferring it.
+// ReviewYieldHistory is the immutable review-yield digest carried by
+// ready_for_final_review and review_diminishing_returns items. TerminalOutcome
+// deliberately duplicates the final round so consumers can read the terminal
+// result without inferring it.
 type ReviewYieldHistory struct {
 	Rounds          []ReviewYieldRound `json:"rounds"`
 	TerminalOutcome ReviewOutcome      `json:"terminal_outcome"`

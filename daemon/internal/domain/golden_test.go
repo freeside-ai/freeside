@@ -139,6 +139,24 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	diminishingItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-diminishing-yield", ProjectID: "proj-1", Subject: subject,
+		Type: domain.AttentionReviewDiminishing, Priority: domain.PriorityNormal,
+		Reason: "review rounds are surfacing only marginal findings",
+		RequestedDecision: []domain.Action{
+			domain.ActionFinishNow, domain.ActionApplyThenFinish,
+		},
+		EvidenceSnapshot:  []domain.Artifact{},
+		AgentClaims:       []domain.AgentClaim{},
+		YieldHistory:      &yieldHistory,
+		ItemVersion:       1,
+		InterruptionClass: domain.InterruptionPlannedGate,
+		CreatedAt:         &ts,
+		Status:            domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
 	degradedItem := item
 	degradedItem.Readiness = &domain.ReadinessSummary{
 		Class: domain.ReadinessReadyDegraded, EvaluationSetDigest: "sha256:evaluation-degraded",
@@ -1144,6 +1162,7 @@ func TestGolden(t *testing.T) {
 		{"schedule_occurrence_consumed", consumedOccurrence},
 		{"schedule_event", scheduleEvent},
 		{"attention_item", item},
+		{"attention_item_review_diminishing_yield", diminishingItem},
 		{"attention_item_readiness_degraded", degradedItem},
 		{"attention_item_blocked", blockedItem},
 		{"attention_item_decided", decidedItem},

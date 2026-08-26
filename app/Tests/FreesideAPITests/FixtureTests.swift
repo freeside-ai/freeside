@@ -72,6 +72,14 @@ import Testing
         #expect(degraded.yield_history == clean.yield_history)
     }
 
+    @Test func diminishingFixtureCarriesReviewYieldHistory() {
+        let item = AttentionFixtures.fixture(type: .review_diminishing_returns).item
+
+        #expect(item.yield_history?.value1.rounds.map(\.new_findings) == [4, 1, 0])
+        #expect(item.yield_history?.value1.rounds.map(\.recurring_findings) == [0, 2, 3])
+        #expect(item.yield_history?.value1.terminal_outcome == .findings)
+    }
+
     @Test func reviewDisputeFixtureCarriesRenderableFindingEvidence() {
         let item = AttentionFixtures.fixture(type: .review_dispute).item
         let claim = item.agent_claims.first { $0.label.hasPrefix("Shadow finding") }
