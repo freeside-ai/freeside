@@ -36,6 +36,44 @@ private struct FailingCredentialStore: DeviceCredentialStore {
         #expect(try credentials.load() == credential)
     }
 
+    @Test func separatorFormattedCodeSubmitsCanonically() async throws {
+        let server = MockServer(authMode: .enforcing, pairingCodes: ["AB011XYZ": .valid])
+        let model = PairingModel(
+            client: APIClientFactory.mock(server: server),
+            credentials: InMemoryCredentialStore(),
+            displayName: "Studio Mac")
+
+        model.applyPairingCodeInput("  ab-oil xyz\n")
+
+        #expect(model.pairingCode == "AB011XYZ")
+        #expect(model.formattedPairingCode == "AB01-1XYZ")
+        #expect(await model.pair() != nil)
+    }
+
+    @Test func deviceNamePrefillRemainsEditable() {
+        let model = PairingModel(
+            client: APIClientFactory.mock(),
+            credentials: InMemoryCredentialStore(),
+            displayName: "Studio Mac")
+
+        #expect(model.displayName == "Studio Mac")
+        model.displayName = "Review iPhone"
+        #expect(model.displayName == "Review iPhone")
+    }
+
+    @Test func failedPrefilledAttemptRemainsReplaceable() async {
+        let model = PairingModel(
+            client: APIClientFactory.mock(server: MockServer(authMode: .enforcing)),
+            credentials: InMemoryCredentialStore(),
+            displayName: "Studio Mac")
+        model.prefillPairingCode("stale-code")
+
+        #expect(await model.pair() == nil)
+        model.prefillPairingCode("fresh-code")
+
+        #expect(model.pairingCode == "FRESHC0DE")
+    }
+
     @Test func malformedSubscriptionNeverBecomesDurableAuthority() async throws {
         for (serverURL, topic) in [
             ("https://publisher-value@ntfy.example", "fs-00000000000000000000000000000001"),
@@ -361,13 +399,13 @@ private struct FailingCredentialStore: DeviceCredentialStore {
         stale.applyReadiness(
             DaemonReadiness(
                 apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "fresh-code"))
-        #expect(staleModel.pairingCode == "fresh-code")
+        #expect(staleModel.pairingCode == "FRESHC0DE")
         stale.applyReadiness(nil)
         #expect(staleModel.pairingCode.isEmpty)
         stale.applyReadiness(
             DaemonReadiness(
                 apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "replacement-code"))
-        #expect(staleModel.pairingCode == "replacement-code")
+        #expect(staleModel.pairingCode == "REP1ACEMENTC0DE")
         staleModel.pairingCode = ""
         stale.applyReadiness(
             DaemonReadiness(
@@ -396,7 +434,7 @@ private struct FailingCredentialStore: DeviceCredentialStore {
         local.applyReadiness(
             DaemonReadiness(
                 apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "later-code"))
-        #expect(localModel.pairingCode == "later-code")
+        #expect(localModel.pairingCode == "1ATERC0DE")
         localModel.pairingCode = "operator-input"
         local.applyReadiness(nil)
         #expect(localModel.pairingCode == "operator-input")

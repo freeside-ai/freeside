@@ -28,6 +28,7 @@ public final class AppSession {
         credentials: any DeviceCredentialStore,
         cache: any CacheStore,
         pairingCode: String = "",
+        displayName: String? = nil,
         deploymentURL: URL? = nil,
         persistServerURL: @escaping (URL) -> Void = AppSession.persistServerURLToDefaults
     ) {
@@ -54,7 +55,8 @@ public final class AppSession {
         } else {
             phase = .needsPairing(
                 PairingModel(
-                    client: client, credentials: credentials, pairingCode: pairingCode))
+                    client: client, credentials: credentials, pairingCode: pairingCode,
+                    displayName: displayName))
         }
     }
 
@@ -294,12 +296,18 @@ public final class AppSession {
     public static func pairingDemo() -> AppSession {
         let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])
         let credentials = InMemoryCredentialStore()
+        #if os(iOS)
+            let displayName = "Review iPhone"
+        #else
+            let displayName = "Studio Mac"
+        #endif
         return AppSession(
             client: APIClientFactory.mock(server: server) {
                 (try? credentials.load())?.token
             },
             credentials: credentials,
-            cache: InMemoryCacheStore()
+            cache: InMemoryCacheStore(),
+            displayName: displayName
         )
     }
 }
