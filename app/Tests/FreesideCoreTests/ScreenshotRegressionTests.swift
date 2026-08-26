@@ -58,7 +58,7 @@
 
             for size in textSizes {
                 try await FreesideFont.$screenshotDynamicTypeSize.withValue(size.value) {
-                    for surface in try makeSurfaces(at: size.value) {
+                    for surface in try await makeSurfaces(at: size.value) {
                         let key = "\(surface.name)-\(size.name)"
                         let image = try await render(
                             surface.view,
@@ -125,12 +125,17 @@
             }
         }
 
-        private func makeSurfaces(at dynamicTypeSize: DynamicTypeSize) throws -> [Surface] {
+        private func makeSurfaces(at dynamicTypeSize: DynamicTypeSize) async throws -> [Surface] {
             let server = MockServer()
             let client = APIClientFactory.mock(server: server)
             let inbox = AttentionFixtures.defaultInbox()
             let store = InboxStore(client: client)
             store.replaceAll(with: inbox)
+            for snapshot in inbox {
+                for digest in snapshot.item.artifact_digests {
+                    await store.attachments.load(digest)
+                }
+            }
 
             var surfaces = [
                 Surface(
@@ -144,6 +149,8 @@
                         ).screenshotContent(now: screenshotNow)
                     ))
             ]
+            surfaces.append(
+                Surface(name: "attachment-states", width: 480, view: await attachmentStates()))
 
             if let selected = inbox.first?.item {
                 surfaces.append(
@@ -399,6 +406,61 @@
                     view: AnyView(PairingView(model: pairing) { _ in }.screenshotContent())
                 ))
             return surfaces
+        }
+
+        private func attachmentStates() async -> AnyView {
+            let digest = "sha256:attachment-state-fixture"
+            let imageLoader = AttachmentLoader(
+                client: APIClientFactory.mock(
+                    server: MockServer(
+                        attachments: [digest: AttentionFixtures.fixtureImagePNG])))
+            let notImageLoader = AttachmentLoader(
+                client: APIClientFactory.mock(
+                    server: MockServer(
+                        attachments: [digest: Data("fixture verification log\n".utf8)])))
+            let unavailableLoader = AttachmentLoader(
+                client: APIClientFactory.mock(server: MockServer(attachments: [:])))
+            let tooLargeLoader = AttachmentLoader(
+                client: APIClientFactory.mock(
+                    server: MockServer(
+                        attachments: [digest: Data(repeating: 0x41, count: 64)])),
+                maxBytes: 16)
+            let loadingLoader = AttachmentLoader(
+                client: APIClientFactory.mock(
+                    server: MockServer(
+                        attachments: [digest: AttentionFixtures.fixtureImagePNG])))
+
+            await imageLoader.load(digest)
+            await notImageLoader.load(digest)
+            await unavailableLoader.load(digest)
+            await tooLargeLoader.load(digest)
+
+            return AnyView(
+                VStack(alignment: .leading, spacing: 18) {
+                    DecisionDetailView.AttachmentRow(
+                        label: "verify_log", digest: digest, attachments: loadingLoader,
+                        loadsAttachments: false,
+                        rendersInteractiveControls: false)
+                    DecisionDetailView.AttachmentRow(
+                        label: "verify_log", digest: digest, attachments: imageLoader,
+                        loadsAttachments: false,
+                        rendersInteractiveControls: false)
+                    DecisionDetailView.AttachmentRow(
+                        label: "verify_log", digest: digest, attachments: notImageLoader,
+                        loadsAttachments: false,
+                        rendersInteractiveControls: false)
+                    DecisionDetailView.AttachmentRow(
+                        label: "verify_log", digest: digest, attachments: unavailableLoader,
+                        loadsAttachments: false,
+                        rendersInteractiveControls: false)
+                    DecisionDetailView.AttachmentRow(
+                        label: "verify_log", digest: digest, attachments: tooLargeLoader,
+                        loadsAttachments: false,
+                        rendersInteractiveControls: false)
+                }
+                .padding(14)
+                .freesideCard()
+                .padding())
         }
 
         private func makeUnavailableAttachmentSurface(

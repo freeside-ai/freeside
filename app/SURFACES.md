@@ -45,7 +45,7 @@ Mac and iOS match on every line unless a line says otherwise.
 | Run timeline | Done | §15 styling: accent-washed hold card, milestone rail, invocation status chips. |
 | Mac menu bar | Done | Mono key template icon with the badge dot top-right; state line, facts, and explanation first, actions and Quit grouped last. Daemon readiness today; doctor results and 1B.1 signals come later (plan §10). |
 | Conversation / Discuss | Not yet | API exists (`getConversation`, `uploadAttachment`); no UI. Plan §5.14. |
-| Evidence packet viewer | Not yet | Detail view shows an evidence section; the full provenance-labeled viewer is missing. Plan §9, §5.15. |
+| Evidence packet viewer | Not yet | Detail attachments render explicit loading, image, non-image, unavailable, and too-large states with copyable digests and memory-only open sheets. The full provenance-labeled packet viewer is missing; #922 adds typed metadata. Plan §9, §5.15. |
 | Spec and diff viewer | Not yet | Diff from last reviewed version, prior comments, claimed addressals. Plan §4, §9. |
 | Proposal batch | Not yet | Several proposals decided one by one in one place. Plan §4. |
 | Initiative view | Not yet | Phase 1B.2. Plan §5.18, §11. |
@@ -84,7 +84,7 @@ lists open issues that will change the card.
 | Anything an agent wrote is visibly labeled as a claim, never shown as fact (plan §9) | Done for the claims section; the contract's text carrier exists, but per-card summaries are neither produced nor laid out yet, #723 |
 | Readiness shows as Blocked, ReadyClean, or ReadyDegraded with waiver IDs and who granted them, never a plain yes/no (plan §6) | Partial: ready final-review items show clean/degraded and the evaluation-set digest; blocked reasons and waiver identities are Not yet |
 | Severity uses one scale: critical, high, medium, low (plan §7) | Not yet |
-| Images load from the artifact store by digest; agent images are labeled claims (plan §4, §5.15) | Done |
+| Images load from the artifact store by digest; agent images are labeled claims (plan §4, §5.15) | Done: every attachment has an explicit bounded state, and images expand into a memory-only zoomable sheet |
 | Evidence from an older head is not shown as current after a remediation head (plan §5.15) | Not yet |
 | Commit-plan notices (fallback, present-but-not-honored) appear as a labeled "Commit plan" fact (plan §5.6) | Done |
 | Fault-class capture at resolution: a suggested value, one tap to correct, allowed to stay unknown (plan §4) | Not yet |
