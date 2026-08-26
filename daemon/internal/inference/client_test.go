@@ -27,6 +27,12 @@ func testBudget(calls int64) inference.Budget {
 }
 
 func testClient(t *testing.T, driver inference.Driver, calls int64) (*inference.Client, *advisory.Store, string) {
+	return testClientWithCredential(t, driver, calls, "token-value")
+}
+
+func testClientWithCredential(
+	t *testing.T, driver inference.Driver, calls int64, credential string,
+) (*inference.Client, *advisory.Store, string) {
 	t.Helper()
 	dir := t.TempDir()
 	now := func() time.Time { return time.Unix(100, 0).UTC() }
@@ -35,14 +41,16 @@ func testClient(t *testing.T, driver inference.Driver, calls int64) (*inference.
 		t.Fatal(err)
 	}
 	classifier := inference.ClassifierSite(testBudget(calls))
+	adjudicator := inference.AdjudicatorSite(testBudget(calls))
 	diagnostic := inference.DiagnosticSite(testBudget(calls))
 	classifier.AuditEvery = 1
+	adjudicator.AuditEvery = 1
 	diagnostic.AuditEvery = 1
 	statePath := filepath.Join(dir, "ledger.json")
 	client, err := inference.New(inference.Config{
 		StatePath: statePath,
-		Binding:   inference.Binding{Provider: "fake", Model: "test", Credential: "token-value", Driver: driver},
-		Sites:     []inference.Site{classifier, diagnostic}, Advisory: store,
+		Binding:   inference.Binding{Provider: "fake", Model: "test", Credential: inference.Secret(credential), Driver: driver},
+		Sites:     []inference.Site{classifier, adjudicator, diagnostic}, Advisory: store,
 		Now: now,
 	})
 	if err != nil {
@@ -55,6 +63,26 @@ func finding(severity string) domain.Finding {
 	return domain.Finding{
 		ID: "finding-1", RunID: "run-1", Source: "codex_local", Severity: domain.FindingSeverity(severity),
 		Location: &domain.FindingLocation{Path: "main.go", StartLine: 1, EndLine: 1}, Message: "token-value should never leave", RawText: "P1 detail", CreatedAt: time.Unix(1, 0).UTC(),
+	}
+}
+
+func TestClientReportsRegisteredSites(t *testing.T) {
+	client, _, _ := testClient(t, nil, 10)
+	for _, siteID := range []string{
+		inference.ClassifierSiteID,
+		inference.AdjudicatorSiteID,
+		inference.DiagnosticSiteID,
+	} {
+		if !client.SupportsSite(siteID) {
+			t.Fatalf("SupportsSite(%q) = false", siteID)
+		}
+	}
+	if client.SupportsSite("unregistered") {
+		t.Fatal("SupportsSite accepted an unregistered site")
+	}
+	var nilClient *inference.Client
+	if nilClient.SupportsSite(inference.AdjudicatorSiteID) {
+		t.Fatal("nil client supports a site")
 	}
 }
 

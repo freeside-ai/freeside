@@ -70,19 +70,20 @@ var ErrAttachmentNotStored = errors.New("referenced attachment is not in the art
 // rather than accepting references it cannot verify.
 var ErrAttachmentsUnavailable = errors.New("attachment store is not configured")
 
-// ErrAgentReplyPending is returned for a discuss against a conversation that
-// is already awaiting the agent (status awaiting_agent): one outstanding
-// agent turn per conversation is the Phase 1 state machine, and mid-turn
-// steering is Phase 3 (plan §5.14). It is carried by an *AgentPendingError
-// holding the current item; match the class with errors.Is and extract the
-// item with errors.As.
-var ErrAgentReplyPending = errors.New("conversation is awaiting the agent's reply")
+// ErrAgentReplyPending is returned for a discuss against a conversation whose
+// prior agent turn is still in flight or, for finding adjudication, whose
+// accepted reply has not yet been consumed into its append-only successor.
+// One outstanding turn per conversation is the Phase 1 state machine, and
+// mid-turn steering is Phase 3 (plan §5.14). It is carried by an
+// *AgentPendingError holding the current item; match the class with errors.Is
+// and extract the item with errors.As.
+var ErrAgentReplyPending = errors.New("conversation has an unconsumed agent turn")
 
 // AgentPendingError reports a discuss submitted while the conversation's
-// agent turn is still in flight, carrying the current item and its sync
-// metadata: the API's 409 renders the same replacement-item shape as
-// staleness, so the client re-renders current state (which shows the
-// awaiting conversation) and retries after the reply lands.
+// preceding agent turn is still in flight or awaiting durable consumption,
+// carrying the current item and its sync metadata. The API's 409 renders the
+// same replacement-item shape as staleness, so the client re-renders current
+// state and retries after the turn is consumed.
 type AgentPendingError struct {
 	CommandID string
 	Item      domain.AttentionItem
@@ -90,7 +91,7 @@ type AgentPendingError struct {
 }
 
 func (e *AgentPendingError) Error() string {
-	return fmt.Sprintf("command %q rejected: conversation for item %q is awaiting the agent's reply",
+	return fmt.Sprintf("command %q rejected: conversation for item %q has an unconsumed agent turn",
 		e.CommandID, e.Item.ID)
 }
 

@@ -84,6 +84,34 @@ func New(cfg Config) (*Client, error) {
 			annotation.SecondAdjudicationRules = append([]SecondAdjudicationRule(nil), annotation.SecondAdjudicationRules...)
 			site.Annotation = &annotation
 		}
+		if site.Adjudication != nil {
+			adjudication := *site.Adjudication
+			adjudication.GoalRelationships = append([]string(nil), adjudication.GoalRelationships...)
+			adjudication.ProposedCompatibilities = append(
+				[]string(nil), adjudication.ProposedCompatibilities...,
+			)
+			adjudication.Routes = append([]string(nil), adjudication.Routes...)
+			adjudication.Rows = make([]AdjudicationRow, len(adjudication.Rows))
+			for index, row := range site.Adjudication.Rows {
+				adjudication.Rows[index] = row
+				if row.ProposedCompatibility != nil {
+					compatibility := *row.ProposedCompatibility
+					adjudication.Rows[index].ProposedCompatibility = &compatibility
+				}
+			}
+			adjudication.Confidence = append([]string(nil), adjudication.Confidence...)
+			adjudication.ReducesWork = append([]string(nil), adjudication.ReducesWork...)
+			adjudication.SeverityMappings = append(
+				[]SeverityMapping(nil), adjudication.SeverityMappings...,
+			)
+			adjudication.NormalizedSeverityCeilings = append(
+				[]SeverityCeiling(nil), adjudication.NormalizedSeverityCeilings...,
+			)
+			adjudication.SecondAdjudicationRules = append(
+				[]SecondAdjudicationRule(nil), adjudication.SecondAdjudicationRules...,
+			)
+			site.Adjudication = &adjudication
+		}
 		sites[site.ID] = site
 	}
 	ledger, err := openLedger(cfg.StatePath, cfg.AnchorPath, cfg.Now)
@@ -94,6 +122,17 @@ func New(cfg Config) (*Client, error) {
 		binding: cfg.Binding, sites: sites, ledger: ledger, advisory: cfg.Advisory,
 		now: cfg.Now, inFlight: map[string]bool{},
 	}, nil
+}
+
+// SupportsSite reports whether the composition registered siteID. Callers use
+// it to keep optional inference sites fail-safe when a narrower registry is
+// deliberately composed.
+func (c *Client) SupportsSite(siteID string) bool {
+	if c == nil {
+		return false
+	}
+	_, ok := c.sites[siteID]
+	return ok
 }
 
 // Call enforces the site allowlist, sensitivity declaration, redaction,
@@ -118,7 +157,7 @@ func (c *Client) Call(ctx context.Context, siteID, project, root string, fields 
 		}
 		value := field.Value
 		if secret := c.binding.Credential.Reveal(); secret != "" {
-			value = strings.ReplaceAll(value, secret, "[REDACTED]")
+			value = redactCredential(value, secret)
 		}
 		outbound[name] = value
 	}
@@ -189,6 +228,16 @@ func (c *Client) Call(ctx context.Context, siteID, project, root string, fields 
 		return c.fallback(site, "audit persistence failed"), err
 	}
 	return result, nil
+}
+
+func redactCredential(value, secret string) string {
+	value = strings.ReplaceAll(value, secret, "[REDACTED]")
+	encoded, err := json.Marshal(secret)
+	if err != nil || len(encoded) < 2 {
+		return value
+	}
+	escaped := string(encoded[1 : len(encoded)-1])
+	return strings.ReplaceAll(value, escaped, "[REDACTED]")
 }
 
 func (c *Client) beginDriver(siteID string) bool {

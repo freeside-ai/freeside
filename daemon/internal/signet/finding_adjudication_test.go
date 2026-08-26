@@ -269,6 +269,53 @@ func TestSubmitFindingAdjudicationDiscussAndStop(t *testing.T) {
 	})
 }
 
+func TestSubmitFindingAdjudicationRejectsDiscussUntilAcceptedReplyConsumed(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	item := seedFindingAdjudicationItem(t, f)
+	first := commandOn(item, "command-first-adjudication-discuss", domain.ActionDiscuss)
+	first.Payload.Message = "First challenge."
+	if _, err := f.service.Submit(ctx, first); err != nil {
+		t.Fatalf("Submit(first discuss): %v", err)
+	}
+	if err := f.service.AcceptAgentCompletion(
+		ctx, "inv-command-first-adjudication-discuss", signet.AgentReply{Body: "Revised recommendation."},
+	); err != nil {
+		t.Fatalf("AcceptAgentCompletion: %v", err)
+	}
+
+	current, snapshot := f.itemSnapshotFor(t, item.ID)
+	second := commandOn(current, "command-second-adjudication-discuss", domain.ActionDiscuss)
+	second.ExpectedEntityVersion = snapshot.EntityVersion
+	second.Payload.Message = "Second challenge."
+	before := f.revision(t)
+	_, err := f.service.Submit(ctx, second)
+	var pending *signet.AgentPendingError
+	if !errors.As(err, &pending) || !errors.Is(err, signet.ErrAgentReplyPending) {
+		t.Fatalf("Submit(second discuss) = %v, want AgentPendingError", err)
+	}
+	if after := f.revision(t); after != before {
+		t.Fatalf("rejected second discuss moved revision %d -> %d", before, after)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetCommand(ctx, second.CommandID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("rejected second command persisted: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.MarkOutboxDispatched(ctx, "inv-command-first-adjudication-discuss")
+	}); err != nil {
+		t.Fatalf("consume first reply: %v", err)
+	}
+	if _, err := f.service.Submit(ctx, second); err != nil {
+		t.Fatalf("Submit(second discuss after consumption): %v", err)
+	}
+}
+
 func TestSubmitFindingAdjudicationStaleAcceptReturnsReplacement(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)

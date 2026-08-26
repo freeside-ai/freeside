@@ -525,7 +525,7 @@ func effectiveFindingRoutesTx(
 	tx *store.ReadTx,
 	artifact domain.FindingAdjudication,
 ) (map[domain.FindingID]domain.AdjudicationRoute, error) {
-	itemID := productionReviewItemID(artifact.RunID, artifact.Round)
+	itemID := productionFindingAdjudicationItemID(artifact.RunID, artifact.Round, artifact.Revision)
 	item, err := tx.GetAttentionItem(ctx, itemID)
 	if errors.Is(err, store.ErrNotFound) {
 		return findingRoutesFromDecision(artifact, nil)

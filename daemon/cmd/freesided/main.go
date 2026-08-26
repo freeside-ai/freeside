@@ -719,7 +719,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			AnchorPath: cfg.DBPath + ".inference-budget-anchor",
 			Binding:    inference.Binding{Provider: "unavailable", Model: "unbound"},
 			Sites: []inference.Site{
-				inference.ClassifierSite(judgmentBudget), inference.DiagnosticSite(judgmentBudget),
+				inference.ClassifierSite(judgmentBudget), inference.AdjudicatorSite(judgmentBudget),
+				inference.DiagnosticSite(judgmentBudget),
 			},
 			Advisory: advisoryWriter, Now: func() time.Time { return time.Now().UTC() },
 		})
