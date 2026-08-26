@@ -171,6 +171,24 @@ import Testing
         #expect(model.actionsEnabled)
     }
 
+    @Test func confirmedActionCannotAcquireReplacementBindings() async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-agent_question")
+        await model.validate()
+        let reviewed = try #require(model.snapshot)
+
+        await server.advance(itemID: reviewed.item.id)
+        let replacement = try #require(await server.snapshot(itemID: reviewed.item.id))
+        #expect(store.apply(replacement))
+
+        await model.submitConfirmed(.stop, reviewedSnapshot: reviewed)
+
+        #expect(await server.snapshot(itemID: reviewed.item.id) == replacement)
+        #expect(model.appliedRecord == nil)
+        #expect(model.pendingCommand == nil)
+    }
+
     // MARK: - Acceptance 3: read-your-write; pending never renders applied
 
     @Test func pendingCommandNeverRendersAppliedAndAppliesOnRelease() async throws {

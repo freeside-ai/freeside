@@ -96,6 +96,40 @@ struct PairingView: View {
         }
     }
 
+    /// The project-owned pairing composition without Form and TextField,
+    /// whose AppKit-backed controls ImageRenderer cannot draw off-screen.
+    @ViewBuilder
+    func screenshotContent() -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Pair with Freeside")
+                .font(FreesideFont.largeTitle)
+            VStack(alignment: .leading, spacing: 6) {
+                KeywordLabel(text: "Pairing code")
+                Text(model.formattedPairingCode)
+                    .font(FreesideFont.monoCallout)
+                Divider()
+                KeywordLabel(text: "Device name")
+                Text(model.displayName)
+                    .font(FreesideFont.body)
+            }
+            .padding(14)
+            .freesideCard()
+            Text(
+                "Run the pairing command on the daemon host and enter its one-time code."
+            )
+            .font(FreesideFont.caption)
+            .foregroundStyle(Color.inkDim)
+            Text("Pair this device")
+                .font(FreesideFont.sans(.body, weight: .semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .freesideCard(border: model.canSubmit ? .accentBorder : .rule)
+        }
+        .padding(24)
+        .frame(maxWidth: 560, alignment: .leading)
+        .foregroundStyle(Color.ink)
+    }
+
     private var pasteButton: some View {
         Button {
             if let value = clipboardString {

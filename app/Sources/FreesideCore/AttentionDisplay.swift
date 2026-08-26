@@ -40,6 +40,37 @@ enum AttentionDisplay {
         return "Ready for final review (degraded)"
     }
 
+    static func ask(_ item: Components.Schemas.AttentionItem) -> String {
+        switch item._type {
+        case .spec_approval:
+            return "Approve this specification for implementation?"
+        case .execution_failure:
+            return "How should this failed execution continue?"
+        case .agent_question:
+            return "How should the agent proceed with this question?"
+        case .review_diminishing_returns:
+            return "How should review conclude after diminishing returns?"
+        case .review_dispute:
+            return "How should this review dispute be resolved?"
+        case .review_contradiction:
+            return "Recover review under the approved execution contract?"
+        case .review_configuration:
+            return "Adopt this reviewer configuration and resume review?"
+        case .finding_adjudication:
+            return "Which disposition should apply to these review findings?"
+        case .ready_for_final_review:
+            return "Is this change ready for final GitHub review?"
+        case .publish_blocked:
+            return "How should publication recover from this trust failure?"
+        case .run_proposal:
+            return "Start this proposed run?"
+        case .system_health:
+            return "How should this system-health condition be handled?"
+        case .blocked:
+            return "What is keeping this run blocked?"
+        }
+    }
+
     static func label(_ action: Components.Schemas.Action) -> String {
         switch action {
         case .approve: return "Approve"
@@ -75,6 +106,63 @@ enum AttentionDisplay {
         case .resolve_reenrollment: return "Resolve re-enrollment"
         case .accept_recommended_route: return "Accept recommended route"
         case .choose_alternative_route: return "Choose selected alternative"
+        }
+    }
+
+    static func systemImage(_ action: Components.Schemas.Action) -> String? {
+        switch action {
+        case .open_pr: return "arrow.up.right.square"
+        case .retry: return "arrow.clockwise"
+        case .snooze: return "clock"
+        case .stop, .stop_unattended: return "stop.fill"
+        case .return_to_agent: return "return"
+        case .approve, .request_changes, .discuss, .finish_now, .apply_then_finish,
+            .continue_under_policy, .convert_to_policy, .adjudicate,
+            .retry_with_capabilities, .answer_and_retry, .answer_without_retry,
+            .rerun_trust_evaluation, .choose_alternate_profile,
+            .inspect_trust_failure, .mark_seen, .dismiss, .start,
+            .start_with_changes, .decline, .acknowledge, .run_doctor,
+            .resume_unattended, .recover_review, .adopt_review_configuration,
+            .resolve_reenrollment, .accept_recommended_route,
+            .choose_alternative_route:
+            return nil
+        }
+    }
+
+    static func confirmationConsequence(
+        _ action: Components.Schemas.Action,
+        for item: Components.Schemas.AttentionItem
+    ) -> String? {
+        switch action {
+        case .stop:
+            switch item._type {
+            case .finding_adjudication:
+                return "The run stays parked without accepting or choosing an adjudication route."
+            case .review_configuration:
+                return "The run concludes as a configuration failure; no replacement review configuration is adopted."
+            case .spec_approval, .review_diminishing_returns, .review_dispute,
+                .review_contradiction, .execution_failure, .agent_question,
+                .publish_blocked, .ready_for_final_review, .run_proposal,
+                .system_health, .blocked:
+                break
+            }
+            return "The current invocation is discarded. Work already exported stays; the round in flight does not."
+        case .stop_unattended:
+            return "New unattended work will not start until unattended operation is resumed."
+        case .decline:
+            return "The proposal is dismissed and no run starts."
+        case .dismiss:
+            return "The item closes without taking the requested action."
+        case .approve, .request_changes, .discuss, .finish_now, .apply_then_finish,
+            .continue_under_policy, .convert_to_policy, .adjudicate, .retry,
+            .retry_with_capabilities, .answer_and_retry, .answer_without_retry,
+            .rerun_trust_evaluation, .choose_alternate_profile,
+            .inspect_trust_failure, .open_pr, .return_to_agent, .mark_seen,
+            .start, .start_with_changes, .snooze, .acknowledge, .run_doctor,
+            .resume_unattended, .recover_review, .adopt_review_configuration,
+            .resolve_reenrollment, .accept_recommended_route,
+            .choose_alternative_route:
+            return nil
         }
     }
 

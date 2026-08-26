@@ -112,6 +112,18 @@ struct InboxView: View {
             self.selection = nil
         }
     }
+
+    /// The project-owned row composition without List and Picker, whose
+    /// AppKit-backed controls ImageRenderer cannot draw off-screen.
+    @ViewBuilder
+    func screenshotContent() -> some View {
+        VStack(spacing: 8) {
+            ForEach(Array(store.rows.prefix(5)), id: \.item.id) { snapshot in
+                InboxRowView(item: snapshot.item, isSelected: selection == snapshot.item.id)
+            }
+        }
+        .padding()
+    }
 }
 
 /// One inbox row as a ground-2 card; the selected row's border turns

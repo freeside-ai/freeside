@@ -70,6 +70,23 @@ struct RunTimelineView: View {
         }
     }
 
+    /// The project-owned timeline composition with fixture data supplied
+    /// directly because ImageRenderer never executes the loading task.
+    @ViewBuilder
+    func screenshotContent(_ timeline: Components.Schemas.RunTimeline) -> some View {
+        VStack(alignment: .leading, spacing: 22) {
+            header
+            if let hold = timeline.hold?.value1 {
+                holdCard(hold)
+            }
+            timelineSection(timeline)
+            invocationSection(timeline)
+        }
+        .padding(24)
+        .frame(maxWidth: 820, alignment: .leading)
+        .foregroundStyle(Color.ink)
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {

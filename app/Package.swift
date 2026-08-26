@@ -49,7 +49,8 @@ var targets: [Target] = [
     targets.append(
         .testTarget(
             name: "FreesideCoreTests",
-            dependencies: ["FreesideCore", "FreesideAPI"]
+            dependencies: ["FreesideCore", "FreesideAPI"],
+            resources: [.copy("Resources")]
         )
     )
     // The §5.14 real-daemon convergence pass (issue #72): every suite is
