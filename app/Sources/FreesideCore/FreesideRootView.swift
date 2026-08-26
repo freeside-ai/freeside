@@ -3,9 +3,13 @@ import SwiftUI
 
 public struct FreesideRootView: View {
     @Environment(\.dynamicTypeSize) private var systemDynamicTypeSize
+    @Environment(\.scenePhase) private var scenePhase
     @State private var session: AppSession
     @State private var navigation: NavigationModel
+    @State private var feedback: DecisionFeedbackModel
+    @State private var flowPreferences: DecisionFlowPreferences
     @State private var technicalDetailsRequest: TechnicalDetailsRevealRequest?
+    @State private var showsInboxClearResult: Bool
     private let launchColorScheme: ColorScheme?
     private let launchInboxScope: InboxStore.Scope?
     private let launchProjectID: String?
@@ -13,12 +17,22 @@ public struct FreesideRootView: View {
     private let launchDynamicTypeSize: DynamicTypeSize?
 
     @MainActor
-    public init(session: AppSession, launchInputs: LaunchInputs = .standard()) {
+    public init(
+        session: AppSession,
+        launchInputs: LaunchInputs = .standard(),
+        navigation: NavigationModel? = nil,
+        flowPreferences: DecisionFlowPreferences? = nil
+    ) {
         FreesideFont.registration
         FreesideNavigationChrome.apply()
         _session = State(initialValue: session)
-        _navigation = State(initialValue: NavigationModel(launchInputs: launchInputs))
+        _navigation = State(
+            initialValue: navigation ?? NavigationModel(launchInputs: launchInputs))
+        _feedback = State(initialValue: DecisionFeedbackModel())
+        _flowPreferences = State(
+            initialValue: flowPreferences ?? DecisionFlowPreferences())
         _technicalDetailsRequest = State(initialValue: nil)
+        _showsInboxClearResult = State(initialValue: false)
         launchColorScheme = launchInputs.colorScheme
         launchInboxScope = launchInputs.inboxScope
         launchProjectID = launchInputs.projectID
@@ -54,21 +68,38 @@ public struct FreesideRootView: View {
     private func synced(_ coordinator: SyncCoordinator) -> some View {
         @Bindable var navigation = navigation
         return VStack(spacing: 0) {
-            FreshnessBanner(freshness: coordinator.store.freshness)
+            FreshnessBanner(
+                freshness: coordinator.store.freshness,
+                lastUpdatedAt: coordinator.lastUpdatedAt)
             platformNavigation(
                 coordinator,
-                selectedTab: $navigation.selectedTab,
-                inboxPath: $navigation.inboxPath,
+                selectedTab: operatorSelectedTabBinding,
+                inboxPath: operatorInboxPathBinding,
                 runsPath: $navigation.runsPath,
-                attentionSelection: $navigation.attentionSelection,
+                attentionSelection: rawAttentionSelectionBinding,
                 runSelection: $navigation.runSelection)
         }
         // The heartbeat is the loss detector (plan §5.14); its first
         // round trip also bootstraps a session with no cursors yet.
-        .task { await coordinator.heartbeatLoop(every: .seconds(15)) }
+        .task {
+            #if os(iOS)
+                coordinator.startReachabilityMonitoring()
+                defer { coordinator.stopReachabilityMonitoring() }
+                await coordinator.heartbeatLoop(every: .seconds(15))
+            #endif
+        }
+        .onChange(of: scenePhase) {
+            guard scenePhase == .active else { return }
+            Task { await coordinator.automaticRefresh() }
+        }
         .onChange(of: navigation.attentionSelection) {
             technicalDetailsRequest = technicalDetailsRequest?.retained(
                 for: navigation.attentionSelection)
+        }
+        .onChange(of: coordinator.store.openSnapshots.map(\.item.id)) {
+            if !coordinator.store.openSnapshots.isEmpty {
+                showsInboxClearResult = false
+            }
         }
     }
 
@@ -90,7 +121,7 @@ public struct FreesideRootView: View {
                             path: inboxPath,
                             selection: attentionSelection)
                     }
-                    .badge(coordinator.store.openSnapshots.count)
+                    .badge(coordinator.store.urgentOpenCount)
 
                     Tab(
                         "Runs", systemImage: "point.3.connected.trianglepath.dotted",
@@ -109,7 +140,7 @@ public struct FreesideRootView: View {
                     )
                     .tabItem { Label("Inbox", systemImage: "tray.full") }
                     .tag(LaunchInputs.Screen.inbox)
-                    .badge(coordinator.store.openSnapshots.count)
+                    .badge(coordinator.store.urgentOpenCount)
 
                     runsStack(coordinator, path: runsPath, selection: runSelection)
                         .tabItem {
@@ -121,37 +152,72 @@ public struct FreesideRootView: View {
         #else
             NavigationSplitView {
                 VStack(spacing: 0) {
-                    Picker("Section", selection: selectedTab) {
-                        Label("Inbox", systemImage: "tray.full").tag(LaunchInputs.Screen.inbox)
-                        Label("Runs", systemImage: "point.3.connected.trianglepath.dotted")
-                            .tag(LaunchInputs.Screen.runs)
+                    HStack(spacing: 8) {
+                        Picker("Section", selection: selectedTab) {
+                            Label("Inbox", systemImage: "tray.full").tag(LaunchInputs.Screen.inbox)
+                            Label("Runs", systemImage: "point.3.connected.trianglepath.dotted")
+                                .tag(LaunchInputs.Screen.runs)
+                        }
+                        .pickerStyle(.segmented)
+                        if coordinator.store.urgentOpenCount > 0 {
+                            StateChip(
+                                label: "\(coordinator.store.urgentOpenCount) urgent",
+                                color: .waxText)
+                        }
                     }
-                    .pickerStyle(.segmented)
                     .padding()
                     switch selectedTab.wrappedValue {
                     case .inbox:
                         InboxView(
                             store: coordinator.store, selection: attentionSelection,
                             launchScope: launchInboxScope, launchProjectID: launchProjectID,
+                            interactiveSelection: operatorAttentionSelectionBinding,
+                            onFilterChange: navigation.recordOperatorNavigation,
+                            lastUpdatedAt: coordinator.lastUpdatedAt,
+                            onRefresh: coordinator.refresh,
                             onRevealTechnicalDetails: revealTechnicalDetails)
                     case .runs:
                         RunsListView(
                             runs: coordinator.runs,
                             schedules: coordinator.schedules,
-                            selection: runSelection)
+                            selection: runSelection,
+                            onRefresh: coordinator.refresh)
                     }
                 }
                 .background(Color.sidebarGround)
                 .navigationSplitViewColumnWidth(min: 280, ideal: 320)
             } detail: {
-                macDetail(
-                    coordinator,
-                    screen: selectedTab.wrappedValue,
-                    attentionSelection: attentionSelection.wrappedValue,
-                    runSelection: runSelection.wrappedValue
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.ground)
+                VStack(spacing: 0) {
+                    DecisionFeedbackBanner(
+                        feedback: feedback,
+                        onView: viewConcludedItem)
+                    macDetail(
+                        coordinator,
+                        screen: selectedTab.wrappedValue,
+                        attentionSelection: attentionSelection.wrappedValue,
+                        runSelection: runSelection.wrappedValue
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.ground)
+                }
+            }
+            .toolbar {
+                ToolbarItemGroup {
+                    Button {
+                        Task { await coordinator.refresh() }
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                    .help("Refresh")
+                    LastUpdatedLabel(lastUpdatedAt: coordinator.lastUpdatedAt)
+                    Button {
+                        navigation.inspectorPresented.toggle()
+                    } label: {
+                        Label("Inspector", systemImage: "sidebar.trailing")
+                    }
+                    .help(
+                        navigation.inspectorPresented ? "Hide Inspector" : "Show Inspector")
+                }
             }
         #endif
     }
@@ -162,22 +228,36 @@ public struct FreesideRootView: View {
             path: Binding<[String]>,
             selection: Binding<String?>
         ) -> some View {
-            NavigationStack(path: path) {
-                InboxView(
-                    store: coordinator.store,
-                    selection: selection,
-                    launchScope: launchInboxScope,
-                    launchProjectID: launchProjectID,
-                    navigationPath: path,
-                    onRevealTechnicalDetails: revealTechnicalDetails
-                )
-                .navigationDestination(for: String.self) { itemID in
-                    DecisionDetailView(
+            VStack(spacing: 0) {
+                DecisionFeedbackBanner(feedback: feedback, onView: viewConcludedItem)
+                NavigationStack(path: path) {
+                    InboxView(
                         store: coordinator.store,
-                        itemID: itemID,
-                        detailsExpanded: launchDetailsExpanded,
-                        detailsRevealRequest: technicalDetailsRequest,
-                        onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest)
+                        selection: selection,
+                        launchScope: launchInboxScope,
+                        launchProjectID: launchProjectID,
+                        navigationPath: rawInboxPathBinding,
+                        onFilterChange: navigation.recordOperatorNavigation,
+                        lastUpdatedAt: coordinator.lastUpdatedAt,
+                        onRefresh: coordinator.refresh,
+                        onRevealTechnicalDetails: revealTechnicalDetails
+                    )
+                    .navigationDestination(for: String.self) { itemID in
+                        DecisionDetailView(
+                            store: coordinator.store,
+                            itemID: itemID,
+                            detailsExpanded: launchDetailsExpanded,
+                            detailsRevealRequest: technicalDetailsRequest,
+                            onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
+                            onConclusion: { conclusion in
+                                handleConclusion(conclusion, coordinator: coordinator)
+                            })
+                    }
+                }
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        decisionFlowMenu
+                    }
                 }
             }
         }
@@ -192,7 +272,8 @@ public struct FreesideRootView: View {
                     runs: coordinator.runs,
                     schedules: coordinator.schedules,
                     selection: selection,
-                    navigationPath: path
+                    navigationPath: path,
+                    onRefresh: coordinator.refresh
                 )
                 .navigationDestination(for: String.self) { runID in
                     if let run = coordinator.runs.first(where: { $0.run.id == runID }) {
@@ -204,6 +285,22 @@ public struct FreesideRootView: View {
                             description: Text("This run is no longer available."))
                     }
                 }
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    decisionFlowMenu
+                }
+            }
+        }
+
+        private var decisionFlowMenu: some View {
+            @Bindable var preferences = flowPreferences
+            return Menu {
+                Toggle(
+                    "Advance after decisions",
+                    isOn: $preferences.advancesAutomatically)
+            } label: {
+                Label("Decision Flow", systemImage: "gearshape")
             }
         }
     #else
@@ -222,9 +319,17 @@ public struct FreesideRootView: View {
                         itemID: attentionSelection,
                         detailsExpanded: launchDetailsExpanded,
                         detailsRevealRequest: technicalDetailsRequest,
-                        onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest
+                        onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
+                        inspectorPresented: Bindable(navigation).inspectorPresented,
+                        onConclusion: { conclusion in
+                            handleConclusion(conclusion, coordinator: coordinator)
+                        }
                     )
                     .id(attentionSelection)
+                } else if showsInboxClearResult {
+                    emptyDetail(
+                        "Inbox clear", systemImage: "checkmark",
+                        description: "There are no open attention items.")
                 } else {
                     OperationalSummaryView(
                         summary: OperationalSummary(
@@ -250,6 +355,66 @@ public struct FreesideRootView: View {
     private func revealTechnicalDetails(_ itemID: String) {
         navigation.route(to: .attentionItem(itemID))
         technicalDetailsRequest = .init(itemID: itemID, nonce: UUID())
+    }
+
+    private func handleConclusion(
+        _ conclusion: DecisionConclusion,
+        coordinator: SyncCoordinator
+    ) {
+        let operatorNavigationRevision = navigation.operatorNavigationRevision
+        feedback.present(
+            conclusion,
+            advancesAutomatically: flowPreferences.advancesAutomatically
+        ) {
+            switch navigation.advanceAfterConclusion(
+                itemID: conclusion.itemID,
+                expectedOperatorNavigationRevision: operatorNavigationRevision,
+                store: coordinator.store)
+            {
+            case .advanced:
+                showsInboxClearResult = false
+            case .inboxClear:
+                showsInboxClearResult = true
+            case .cancelled:
+                break
+            }
+        }
+    }
+
+    private var operatorSelectedTabBinding: Binding<LaunchInputs.Screen> {
+        Binding(
+            get: { navigation.selectedTab },
+            set: { navigation.selectTab($0) })
+    }
+
+    private var operatorInboxPathBinding: Binding<[String]> {
+        Binding(
+            get: { navigation.inboxPath },
+            set: { navigation.setInboxPath($0) })
+    }
+
+    private var rawInboxPathBinding: Binding<[String]> {
+        Binding(
+            get: { navigation.inboxPath },
+            set: { navigation.inboxPath = $0 })
+    }
+
+    private var rawAttentionSelectionBinding: Binding<String?> {
+        Binding(
+            get: { navigation.attentionSelection },
+            set: { navigation.attentionSelection = $0 })
+    }
+
+    private var operatorAttentionSelectionBinding: Binding<String?> {
+        Binding(
+            get: { navigation.attentionSelection },
+            set: { navigation.selectAttentionItem($0) })
+    }
+
+    private func viewConcludedItem(_ itemID: String) {
+        feedback.dismiss()
+        showsInboxClearResult = false
+        navigation.route(to: .attentionItem(itemID))
     }
 
     private func consumeTechnicalDetailsRequest(_ nonce: UUID) {

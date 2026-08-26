@@ -47,6 +47,7 @@ struct DecisionDetailView: View {
     @State private var pendingConfirmation: PendingConfirmation?
     @State private var sectionPreferences: DecisionSectionPreferences
     @State private var inspectorPresented: Bool
+    @State private var keyboardNote: String?
     @State private var detailWidth: CGFloat = 0
     @State private var recommendationVisible = true
     @State private var alternativeSelections: [String: Components.Schemas.AdjudicationRoute] = [:]
@@ -58,6 +59,7 @@ struct DecisionDetailView: View {
     private let itemID: String
     private let detailsRevealRequest: TechnicalDetailsRevealRequest?
     private let onConsumeDetailsRevealRequest: (UUID) -> Void
+    private let externalInspectorPresented: Binding<Bool>?
 
     @MainActor
     init(
@@ -70,9 +72,13 @@ struct DecisionDetailView: View {
         graphics: DecisionGraphicPresentations = .init(),
         loadsAttachments: Bool = true,
         showsValidationProgress: Bool = true,
-        sectionPreferences: DecisionSectionPreferences? = nil
+        sectionPreferences: DecisionSectionPreferences? = nil,
+        inspectorPresented: Binding<Bool>? = nil,
+        onConclusion: @escaping @MainActor (DecisionConclusion) -> Void = { _ in }
     ) {
-        _model = State(initialValue: DecisionModel(store: store, itemID: itemID))
+        _model = State(
+            initialValue: DecisionModel(
+                store: store, itemID: itemID, onConclusion: onConclusion))
         let revealsTechnicalDetails =
             detailsExpanded || detailsRevealRequest?.itemID == itemID
         _sectionPreferences = State(
@@ -80,10 +86,12 @@ struct DecisionDetailView: View {
                 ?? DecisionSectionPreferences(
                     detailsExpandedOverride: revealsTechnicalDetails ? true : nil))
         _inspectorPresented = State(initialValue: revealsTechnicalDetails)
+        _keyboardNote = State(initialValue: nil)
         attachments = store.attachments
         self.itemID = itemID
         self.detailsRevealRequest = detailsRevealRequest
         self.onConsumeDetailsRevealRequest = onConsumeDetailsRevealRequest
+        externalInspectorPresented = inspectorPresented
         self.recommendation = recommendation
         self.graphics = graphics
         self.loadsAttachments = loadsAttachments
@@ -178,15 +186,28 @@ struct DecisionDetailView: View {
             }
             .onChange(of: model.snapshot?.item.item_version) {
                 pendingConfirmation = nil
+                keyboardNote = nil
             }
+            #if os(macOS)
+                .focusedSceneValue(\.decisionCommandActions, focusedDecisionCommandActions)
+                .onExitCommand { cancelPendingAction() }
+                .onKeyPress(.return) {
+                    takeRecommendationFromKeyboard()
+                    return .handled
+                }
+            #endif
         )
+    }
+
+    private var inspectorBinding: Binding<Bool> {
+        externalInspectorPresented ?? $inspectorPresented
     }
 
     private func revealTechnicalDetailsIfRequested(using scrollProxy: ScrollViewProxy) {
         guard let detailsRevealRequest, detailsRevealRequest.itemID == itemID else { return }
         detailsExpanded.wrappedValue = true
         #if os(macOS)
-            inspectorPresented = true
+            inspectorBinding.wrappedValue = true
         #else
             withAnimation {
                 scrollProxy.scrollTo(ScrollTarget.technicalDetails, anchor: .top)
@@ -231,7 +252,7 @@ struct DecisionDetailView: View {
             }
         #else
             content
-                .inspector(isPresented: $inspectorPresented) {
+                .inspector(isPresented: inspectorBinding) {
                     if let item = model.snapshot?.item {
                         ScrollViewReader { scrollProxy in
                             ScrollView {
@@ -252,16 +273,6 @@ struct DecisionDetailView: View {
                             "No decision selected",
                             systemImage: "sidebar.trailing",
                             description: Text("Select an item to inspect its facts."))
-                    }
-                }
-                .toolbar {
-                    ToolbarItem {
-                        Button {
-                            inspectorPresented.toggle()
-                        } label: {
-                            Label("Inspector", systemImage: "sidebar.trailing")
-                        }
-                        .help(inspectorPresented ? "Hide Inspector" : "Show Inspector")
                     }
                 }
         #endif
@@ -305,6 +316,13 @@ struct DecisionDetailView: View {
         VStack(alignment: .leading, spacing: 16) {
             header(item, accessibilityLayout: accessibilityLayout)
             banner
+            if let keyboardNote {
+                bannerLabel(
+                    keyboardNote,
+                    systemImage: "return",
+                    tint: .accentText,
+                    wash: .accentWashSoft)
+            }
             Text(AttentionDisplay.ask(item))
                 .font(FreesideFont.sectionTitle)
                 .foregroundStyle(Color.ink)
@@ -1803,6 +1821,45 @@ struct DecisionDetailView: View {
             Task { await model.submit(action) }
         }
     }
+
+    #if os(macOS)
+        private var focusedDecisionCommandActions: FocusedDecisionCommandActions {
+            FocusedDecisionCommandActions(
+                canTakeRecommendation: canTakeRecommendation,
+                takeRecommendation: takeRecommendationFromKeyboard,
+                cancelPendingAction: cancelPendingAction)
+        }
+
+        private var canTakeRecommendation: Bool {
+            guard let item = model.snapshot?.item else { return false }
+            return DecisionKeyboardGate.canTakeRecommendation(
+                rankedRecommendation: actionRanking(item).recommended,
+                presentedRecommendation: recommendation?.action,
+                actionsEnabled: model.actionsEnabled,
+                isSubmittable: recommendation.map { model.isSubmittable($0.action) } ?? false,
+                inputIsReady: recommendation.map {
+                    actionInputReady($0.action, item: item)
+                } ?? false)
+        }
+
+        private func takeRecommendationFromKeyboard() {
+            guard let item = model.snapshot?.item,
+                let recommendation,
+                canTakeRecommendation
+            else {
+                keyboardNote = "Return is unavailable: there is no validated recommendation."
+                return
+            }
+            keyboardNote = nil
+            trigger(recommendation.action, item: item)
+        }
+
+        private func cancelPendingAction() {
+            proposalEditor = nil
+            pendingConfirmation = nil
+            keyboardNote = nil
+        }
+    #endif
 }
 
 private struct DecisionFactRow: View {

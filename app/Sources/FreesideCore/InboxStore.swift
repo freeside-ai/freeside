@@ -181,6 +181,22 @@ public final class InboxStore {
         filteredRows(in: .open, projectID: nil).map(\.1)
     }
 
+    /// One global urgent-open projection for every top-level navigation
+    /// surface: iOS badge, macOS sidebar, and menu-bar extra.
+    public var urgentOpenCount: Int {
+        filteredRows(in: .open, projectID: nil).count { $0.1.item.priority == .urgent }
+    }
+
+    public func nextOpenItemID(excluding itemID: String) -> String? {
+        filteredRows(in: .open, projectID: projectID)
+            .filter { $0.1.item.id != itemID && $0.1.item.status == .open }
+            .sorted {
+                sortKey($0.1, index: $0.0, status: .open)
+                    < sortKey($1.1, index: $1.0, status: .open)
+            }
+            .first?.1.item.id
+    }
+
     public func count(in scope: Scope) -> Int {
         filteredRows(in: scope, projectID: projectID).count
     }

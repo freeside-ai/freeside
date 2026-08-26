@@ -6,11 +6,32 @@ import SwiftUI
 /// qualifies. Fresh and unvalidated states show nothing.
 struct FreshnessBanner: View {
     let freshness: InboxStore.Freshness
+    let lastUpdatedAt: Date?
+
+    init(freshness: InboxStore.Freshness, lastUpdatedAt: Date? = nil) {
+        self.freshness = freshness
+        self.lastUpdatedAt = lastUpdatedAt
+    }
 
     var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            banner(at: context.date)
+        }
+    }
+
+    @ViewBuilder
+    private func banner(at now: Date) -> some View {
         switch freshness {
         case .fresh, .unvalidated:
-            EmptyView()
+            if let lastUpdatedAt,
+                now.timeIntervalSince(lastUpdatedAt) >= SyncCoordinator.stalenessThreshold
+            {
+                banner(
+                    "The last successful refresh is stale; actions revalidate before use.",
+                    keyword: "Stale",
+                    tint: .waxText,
+                    wash: .waxWash)
+            }
         case .unreachable:
             banner(
                 "Daemon unreachable — showing cached items; actions are disabled.",
@@ -55,5 +76,31 @@ struct FreshnessBanner: View {
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(wash)
+    }
+}
+
+struct LastUpdatedLabel: View {
+    let lastUpdatedAt: Date?
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            HStack(spacing: 4) {
+                Image(systemName: "clock")
+                    .accessibilityHidden(true)
+                if let lastUpdatedAt {
+                    Text("Updated \(lastUpdatedAt, style: .relative)")
+                } else {
+                    Text("Not updated yet")
+                }
+            }
+            .font(FreesideFont.caption)
+            .foregroundStyle(isStale(at: context.date) ? Color.waxText : Color.inkDim)
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func isStale(at now: Date) -> Bool {
+        guard let lastUpdatedAt else { return true }
+        return now.timeIntervalSince(lastUpdatedAt) >= SyncCoordinator.stalenessThreshold
     }
 }

@@ -149,6 +149,32 @@
                         ).screenshotContent(now: screenshotNow)
                     ))
             ]
+            let feedback = DecisionFeedbackModel(
+                announce: { _ in },
+                schedule: { _, _ in Task {} })
+            feedback.present(
+                .init(
+                    itemID: "item-spec_approval",
+                    actionLabel: "Approve",
+                    resultingStatus: .resolved,
+                    at: screenshotNow),
+                advancesAutomatically: false,
+                advance: {})
+            surfaces.append(
+                Surface(
+                    name: "decision-feedback",
+                    width: 640,
+                    view: AnyView(
+                        DecisionFeedbackBanner(feedback: feedback, onView: { _ in })
+                            .padding())))
+            surfaces.append(
+                Surface(
+                    name: "decision-feedback-dark",
+                    width: 640,
+                    colorScheme: .dark,
+                    view: AnyView(
+                        DecisionFeedbackBanner(feedback: feedback, onView: { _ in })
+                            .padding())))
             surfaces.append(
                 Surface(name: "attachment-states", width: 480, view: await attachmentStates()))
 

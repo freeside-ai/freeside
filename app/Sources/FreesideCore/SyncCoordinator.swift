@@ -1,4 +1,6 @@
+import Foundation
 import FreesideAPI
+import Network
 import Observation
 import OpenAPIRuntime
 
@@ -15,6 +17,8 @@ import OpenAPIRuntime
 @MainActor
 @Observable
 public final class SyncCoordinator {
+    public static let stalenessThreshold: TimeInterval = 60
+
     public enum TimelineLoadState: Equatable, Sendable {
         case idle
         case loading
@@ -28,6 +32,7 @@ public final class SyncCoordinator {
     public private(set) var schedules: [Components.Schemas.ScheduleSnapshot] = []
     public private(set) var timelinesByRunID: [String: Components.Schemas.RunTimeline] = [:]
     public private(set) var timelineLoadStates: [String: TimelineLoadState] = [:]
+    public private(set) var lastUpdatedAt: Date?
 
     private let cache: CacheStore
     /// Overlapping sync rounds resolve by recency, as the store's
@@ -44,6 +49,12 @@ public final class SyncCoordinator {
     private var cacheGeneration = 0
     private var runListGeneration = 0
     private var timelineGenerations: [String: Int] = [:]
+    private var heartbeatTask: Task<Void, Never>?
+    private var heartbeatToken: UUID?
+    private var refreshTask: Task<Void, Never>?
+    private var refreshToken: UUID?
+    private var reachabilityMonitor: NWPathMonitor?
+    private var lastReachabilitySatisfied: Bool?
 
     public init(
         client: any APIProtocol,
@@ -119,6 +130,26 @@ public final class SyncCoordinator {
     /// invalidation). An epoch mismatch or a revision past the last
     /// full snapshot resyncs; anything else confirms the cache current.
     public func heartbeat() async {
+        if let heartbeatTask {
+            await heartbeatTask.value
+            return
+        }
+
+        let token = UUID()
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await performHeartbeat()
+        }
+        heartbeatToken = token
+        heartbeatTask = task
+        await task.value
+        if heartbeatToken == token {
+            heartbeatTask = nil
+            heartbeatToken = nil
+        }
+    }
+
+    private func performHeartbeat() async {
         syncGeneration += 1
         let generation = syncGeneration
         do {
@@ -156,6 +187,7 @@ public final class SyncCoordinator {
                         await bootstrap()
                     } else {
                         store.freshness = .fresh
+                        lastUpdatedAt = .now
                     }
                 }
             case .undocumented(let statusCode, _):
@@ -171,9 +203,88 @@ public final class SyncCoordinator {
     /// banner, so the loop itself never exits early.
     public func heartbeatLoop(every interval: Duration) async {
         while !Task.isCancelled {
-            await heartbeat()
+            // Periodic, manual, foreground, and reachability refreshes share
+            // one operation. Otherwise a periodic heartbeat can invalidate
+            // the manual round's generation while that round still reports
+            // completion to its caller.
+            await periodicRefresh()
             try? await Task.sleep(for: interval)
         }
+    }
+
+    func periodicRefresh() async {
+        await refresh()
+    }
+
+    /// One user-visible refresh operation. Concurrent callers join the same
+    /// task, so pull-to-refresh, toolbar, keyboard, and activation triggers
+    /// cannot multiply daemon traffic. Manual callers always start a round
+    /// when none is in flight.
+    public func refresh() async {
+        if let refreshTask {
+            await refreshTask.value
+            return
+        }
+
+        let token = UUID()
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await heartbeat()
+            await refreshRuns()
+            if store.freshness == .unvalidated,
+                let cursors,
+                cursors.highestObservedServerRevision > cursors.lastFullSnapshotRevision
+            {
+                // The run-list partial read can observe a mutation that
+                // committed after the opening heartbeat. Close that gap
+                // before a user-visible refresh reports completion.
+                await heartbeat()
+            }
+        }
+        refreshToken = token
+        refreshTask = task
+        await task.value
+        if refreshToken == token {
+            refreshTask = nil
+            refreshToken = nil
+        }
+    }
+
+    /// Foreground and restored-reachability events always enter the shared
+    /// refresh gateway. Overlapping events join its in-flight task, but a
+    /// recent success never suppresses the first read after an interruption.
+    public func automaticRefresh() async {
+        await refresh()
+    }
+
+    public func isStale(at now: Date = .now) -> Bool {
+        guard let lastUpdatedAt else { return true }
+        return now.timeIntervalSince(lastUpdatedAt) >= Self.stalenessThreshold
+    }
+
+    public func startReachabilityMonitoring() {
+        guard reachabilityMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        reachabilityMonitor = monitor
+        monitor.pathUpdateHandler = { [weak self] path in
+            let isSatisfied = path.status == .satisfied
+            Task { @MainActor [weak self] in
+                self?.observeReachability(isSatisfied)
+            }
+        }
+        monitor.start(queue: DispatchQueue(label: "ai.freeside.reachability"))
+    }
+
+    public func stopReachabilityMonitoring() {
+        reachabilityMonitor?.cancel()
+        reachabilityMonitor = nil
+        lastReachabilitySatisfied = nil
+    }
+
+    func observeReachability(_ isSatisfied: Bool) {
+        defer { lastReachabilitySatisfied = isSatisfied }
+        guard lastReachabilitySatisfied == false, isSatisfied else { return }
+        Task { await automaticRefresh() }
     }
 
     /// A canonical partial read advances only the observed cursor,
@@ -214,7 +325,7 @@ public final class SyncCoordinator {
                     // revision. Confirm it through the revision endpoint so
                     // the client never keeps a stale full cache fresh merely
                     // because no run exists to advance the partial cursor.
-                    await heartbeat()
+                    await performHeartbeat()
                 }
                 persist()
             case .undocumented(let statusCode, _):
@@ -306,6 +417,7 @@ public final class SyncCoordinator {
                 cursors?.highestObservedServerRevision ?? 0, snapshot.revision)
         )
         store.freshness = .fresh
+        lastUpdatedAt = .now
         persist()
         return true
     }

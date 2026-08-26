@@ -1,7 +1,8 @@
 import Foundation
 import FreesideAPI
-import FreesideCore
 import Testing
+
+@testable import FreesideCore
 
 @MainActor
 private func makeCoordinator(
@@ -1052,6 +1053,158 @@ private final class FailingCacheStore: CacheStore, @unchecked Sendable {
         #expect(model.submissionError == nil)
         #expect(model.phase == .applied)
         #expect(coordinator.store.pendingCommandsByItemID.isEmpty)
+    }
+
+    @Test func concurrentManualRefreshesShareOneDaemonRound() async {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        let heartbeatCalls = Counter()
+        let bootstrapCalls = Counter()
+        let runCalls = Counter()
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        await server.setBeforeRespond { operationID in
+            switch operationID {
+            case "getSyncRevision":
+                await heartbeatCalls.increment()
+                await reached.open()
+                await release.wait()
+            case "getSyncBootstrap":
+                await bootstrapCalls.increment()
+            case "listRuns":
+                await runCalls.increment()
+            default:
+                break
+            }
+        }
+
+        let first = Task { await coordinator.refresh() }
+        await reached.wait()
+        let second = Task { await coordinator.refresh() }
+        await release.open()
+        await first.value
+        await second.value
+
+        #expect(await heartbeatCalls.count == 1)
+        #expect(await bootstrapCalls.count == 1)
+        #expect(await runCalls.count == 1)
+        #expect(coordinator.lastUpdatedAt != nil)
+    }
+
+    @Test func periodicAndManualRefreshesShareOneDaemonRound() async {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        let heartbeatCalls = Counter()
+        let bootstrapCalls = Counter()
+        let runCalls = Counter()
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        await server.setBeforeRespond { operationID in
+            switch operationID {
+            case "getSyncRevision":
+                await heartbeatCalls.increment()
+                await reached.open()
+                await release.wait()
+            case "getSyncBootstrap":
+                await bootstrapCalls.increment()
+            case "listRuns":
+                await runCalls.increment()
+            default:
+                break
+            }
+        }
+
+        let periodic = Task { await coordinator.periodicRefresh() }
+        await reached.wait()
+        let manual = Task { await coordinator.refresh() }
+        await release.open()
+        await periodic.value
+        await manual.value
+
+        #expect(await heartbeatCalls.count == 1)
+        #expect(await bootstrapCalls.count == 1)
+        #expect(await runCalls.count == 1)
+    }
+
+    @Test func refreshClosesAGapObservedByTheRunList() async throws {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let before = try #require(coordinator.cursors)
+        let mutation = OneShot()
+        await server.setBeforeRespond { operationID in
+            if operationID == "listRuns", await mutation.fire() {
+                await server.advanceRun(id: RunFixtures.activeRunID)
+            }
+        }
+
+        await coordinator.refresh()
+
+        let converged = try #require(coordinator.cursors)
+        #expect(converged.lastFullSnapshotRevision > before.lastFullSnapshotRevision)
+        #expect(converged.lastFullSnapshotRevision == converged.highestObservedServerRevision)
+        #expect(coordinator.store.freshness == .fresh)
+    }
+
+    @Test func rapidAutomaticRefreshesShareOneDaemonRound() async {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        let heartbeatCalls = Counter()
+        let bootstrapCalls = Counter()
+        let runCalls = Counter()
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        await server.setBeforeRespond { operationID in
+            switch operationID {
+            case "getSyncRevision":
+                await heartbeatCalls.increment()
+                await reached.open()
+                await release.wait()
+            case "getSyncBootstrap":
+                await bootstrapCalls.increment()
+            case "listRuns":
+                await runCalls.increment()
+            default:
+                break
+            }
+        }
+
+        let first = Task { await coordinator.automaticRefresh() }
+        await reached.wait()
+        let second = Task { await coordinator.automaticRefresh() }
+        await release.open()
+        await first.value
+        await second.value
+
+        #expect(await heartbeatCalls.count == 1)
+        #expect(await bootstrapCalls.count == 1)
+        #expect(await runCalls.count == 1)
+    }
+
+    @Test func recentFailedRefreshDoesNotSuppressReachabilityRecovery() async throws {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await server.setBeforeRespond { operationID in
+            if operationID == "listRuns" { throw MockOutage() }
+        }
+
+        await coordinator.refresh()
+        #expect(coordinator.store.freshness == .unreachable)
+        #expect(coordinator.lastUpdatedAt != nil)
+
+        await server.setBeforeRespond(nil)
+        await coordinator.automaticRefresh()
+
+        #expect(coordinator.store.freshness == .fresh)
+    }
+
+    @Test func lastUpdatedTurnsStaleAtTheNamedThreshold() async throws {
+        let coordinator = makeCoordinator(server: MockServer())
+        await coordinator.bootstrap()
+        let updatedAt = try #require(coordinator.lastUpdatedAt)
+
+        #expect(!coordinator.isStale(at: updatedAt.addingTimeInterval(59)))
+        #expect(coordinator.isStale(at: updatedAt.addingTimeInterval(60)))
     }
 }
 

@@ -4,24 +4,33 @@ import Observation
 /// and the platform-specific navigation containers.
 @MainActor
 @Observable
-final class NavigationModel {
-    enum Destination: Equatable {
+public final class NavigationModel {
+    enum ConclusionAdvanceResult: Equatable {
+        case advanced
+        case inboxClear
+        case cancelled
+    }
+
+    public enum Destination: Equatable {
         case attentionItem(String)
         case run(String)
     }
 
-    var selectedTab: LaunchInputs.Screen
-    var inboxPath: [String]
-    var runsPath: [String]
-    var attentionSelection: String?
-    var runSelection: String?
+    public var selectedTab: LaunchInputs.Screen
+    public var inboxPath: [String]
+    public var runsPath: [String]
+    public var attentionSelection: String?
+    public var runSelection: String?
+    public var inspectorPresented: Bool
+    public private(set) var operatorNavigationRevision = 0
 
-    init(launchInputs: LaunchInputs) {
+    public init(launchInputs: LaunchInputs) {
         selectedTab = launchInputs.screen
         inboxPath = []
         runsPath = []
         attentionSelection = nil
         runSelection = nil
+        inspectorPresented = launchInputs.detailsExpanded
 
         guard let selection = launchInputs.selection else { return }
         switch launchInputs.screen {
@@ -34,7 +43,10 @@ final class NavigationModel {
 
     /// Select the destination's top-level section before replacing that
     /// section's stack with the canonical detail route.
-    func route(to destination: Destination) {
+    public func route(to destination: Destination) {
+        // Routing is operator intent even when it targets the currently
+        // rendered item (for example, Reveal Technical Details).
+        operatorNavigationRevision += 1
         switch destination {
         case .attentionItem(let itemID):
             selectedTab = .inbox
@@ -45,6 +57,70 @@ final class NavigationModel {
             runSelection = runID
             runsPath = [runID]
         }
+    }
+
+    public func selectTab(_ screen: LaunchInputs.Screen) {
+        guard selectedTab != screen else { return }
+        operatorNavigationRevision += 1
+        selectedTab = screen
+    }
+
+    public func setInboxPath(_ path: [String]) {
+        guard inboxPath != path else { return }
+        operatorNavigationRevision += 1
+        inboxPath = path
+        attentionSelection = path.last
+    }
+
+    public func selectAttentionItem(_ itemID: String?) {
+        let path = itemID.map { [$0] } ?? []
+        guard attentionSelection != itemID || inboxPath != path else { return }
+        operatorNavigationRevision += 1
+        attentionSelection = itemID
+        inboxPath = path
+    }
+
+    func recordOperatorNavigation() {
+        operatorNavigationRevision += 1
+    }
+
+    func advanceAfterConclusion(
+        itemID: String,
+        expectedOperatorNavigationRevision: Int,
+        store: InboxStore
+    ) -> ConclusionAdvanceResult {
+        // Rebuilding the open scope may remove the concluded item from either
+        // navigation container before the delay expires, so nil remains the
+        // same route. A different concrete destination is deliberate operator
+        // navigation and must win over automatic advance.
+        guard operatorNavigationRevision == expectedOperatorNavigationRevision,
+            selectedTab == .inbox,
+            attentionSelection == nil || attentionSelection == itemID,
+            inboxPath.last == nil || inboxPath.last == itemID
+        else {
+            return .cancelled
+        }
+        if let nextItemID = store.nextOpenItemID(excluding: itemID) {
+            route(to: .attentionItem(nextItemID))
+            return .advanced
+        }
+        selectedTab = .inbox
+        attentionSelection = nil
+        inboxPath = []
+        return .inboxClear
+    }
+
+    public func moveAttentionSelection(by offset: Int, store: InboxStore) {
+        let itemIDs = store.rows.map(\.item.id)
+        guard !itemIDs.isEmpty else { return }
+        let currentIndex = attentionSelection.flatMap(itemIDs.firstIndex(of:))
+        let nextIndex: Int
+        if let currentIndex {
+            nextIndex = min(max(currentIndex + offset, itemIDs.startIndex), itemIDs.index(before: itemIDs.endIndex))
+        } else {
+            nextIndex = offset < 0 ? itemIDs.index(before: itemIDs.endIndex) : itemIDs.startIndex
+        }
+        route(to: .attentionItem(itemIDs[nextIndex]))
     }
 
     static func repairedPath(_ path: [String], availableIDs: Set<String>) -> [String] {

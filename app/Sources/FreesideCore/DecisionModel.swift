@@ -44,10 +44,15 @@ public final class DecisionModel {
 
     private let store: InboxStore
     private let openURL: (URL) async -> Bool
+    private let onConclusion: @MainActor (DecisionConclusion) -> Void
     /// Overlapping validations resolve by recency: only the newest call
     /// may write the outcome, so a stale late failure cannot clobber a
     /// newer success (or vice versa).
     private var validationGeneration = 0
+    /// A recorded command emits at most one receipt, after canonical state
+    /// proves that its item left the active queue. Revalidation and replay
+    /// share this gate so recovery cannot duplicate the receipt.
+    private var concludedCommandID: String?
     /// The store's cache generation at the moment this card last
     /// certified current state. An epoch eviction bumps that generation
     /// (`InboxStore.discardSnapshots`), so a validation that predates the
@@ -59,12 +64,30 @@ public final class DecisionModel {
         self.store = store
         self.itemID = itemID
         openURL = Self.openExternalURL
+        onConclusion = { _ in }
     }
 
-    init(store: InboxStore, itemID: String, openURL: @escaping (URL) async -> Bool) {
+    init(
+        store: InboxStore,
+        itemID: String,
+        onConclusion: @escaping @MainActor (DecisionConclusion) -> Void
+    ) {
+        self.store = store
+        self.itemID = itemID
+        openURL = Self.openExternalURL
+        self.onConclusion = onConclusion
+    }
+
+    init(
+        store: InboxStore,
+        itemID: String,
+        openURL: @escaping (URL) async -> Bool,
+        onConclusion: @escaping @MainActor (DecisionConclusion) -> Void = { _ in }
+    ) {
         self.store = store
         self.itemID = itemID
         self.openURL = openURL
+        self.onConclusion = onConclusion
     }
 
     private static func openExternalURL(_ url: URL) async -> Bool {
@@ -205,6 +228,41 @@ public final class DecisionModel {
         validationGeneration += 1
         let generation = validationGeneration
         validation = .pending
+        var reconciledSnoozeCommandID: String?
+        if let entry = store.pendingCommandsByItemID[itemID],
+            entry.command.payload.action == .snooze,
+            entry.state == .unresolved
+        {
+            reconciledSnoozeCommandID = entry.command.command_id
+            store.setPendingCommandState(
+                itemID: itemID,
+                commandID: entry.command.command_id,
+                state: .inFlight)
+        }
+        defer {
+            if let reconciledSnoozeCommandID,
+                let entry = store.pendingCommandsByItemID[itemID],
+                entry.command.command_id == reconciledSnoozeCommandID,
+                entry.state == .inFlight
+            {
+                // Every non-definitive exit gives the durable command back
+                // to Retry. This includes cancellation, a superseding
+                // validation, epoch churn, and the bounded loop exhausting
+                // its reads.
+                store.setPendingCommandState(
+                    itemID: itemID,
+                    commandID: reconciledSnoozeCommandID,
+                    state: .unresolved)
+                if appliedRecord?.command_id == reconciledSnoozeCommandID {
+                    appliedRecord = nil
+                }
+                phase = .idle
+                if submissionError == nil {
+                    submissionError =
+                        "the snooze was recorded but current state could not be confirmed"
+                }
+            }
+        }
         do {
             // Certify only a snapshot that is actually current. Two
             // hazards, both closed by a bounded re-fetch (#162):
@@ -221,12 +279,57 @@ public final class DecisionModel {
             //     than applying or certifying it.
             for _ in 0..<2 {
                 let generationBefore = store.cacheGeneration
-                let current = try await store.client.getAttentionItem(
-                    path: .init(item_id: itemID)
-                ).ok.body.json
+                if let commandID = reconciledSnoozeCommandID,
+                    let command = pendingCommand,
+                    command.command_id == commandID
+                {
+                    // Replay precedes the certifying read. A resend may be
+                    // the attempt that first commits the snooze, so a
+                    // snapshot fetched before it cannot prove the result.
+                    guard await confirmPendingSnooze(command, since: generationBefore)
+                    else { return }
+                    guard generation == validationGeneration else { return }
+                    guard store.cacheGeneration == generationBefore else { continue }
+                }
+                let output = try await store.client.getAttentionItem(
+                    path: .init(item_id: itemID))
                 guard generation == validationGeneration else { return }
                 guard store.cacheGeneration == generationBefore else { continue }
+                if case .notFound = output, appliedRecord?.action == .snooze {
+                    if let commandID = reconciledSnoozeCommandID {
+                        store.clearPendingCommand(itemID: itemID, commandID: commandID)
+                    } else if appliedRecord?.command_id != concludedCommandID {
+                        validation = .failed(
+                            "the snooze could not be reconfirmed against current daemon state")
+                        return
+                    }
+                    store.removeSnapshot(
+                        itemID: itemID,
+                        atLeastEntityVersion: snapshot?.entity_version ?? 0)
+                    proposalFacts = nil
+                    markValidated()
+                    emitConclusionIfVerified(resultingStatus: nil)
+                    return
+                }
+                let current = try output.ok.body.json
+                if let commandID = reconciledSnoozeCommandID {
+                    // A visible state fetched after the replay proves the
+                    // snooze is no longer active. Settle its durable slot,
+                    // but clear the record so it cannot claim a later
+                    // reopen or another operator's resolution.
+                    store.clearPendingCommand(itemID: itemID, commandID: commandID)
+                    if appliedRecord?.command_id == commandID {
+                        appliedRecord = nil
+                    }
+                }
                 if store.apply(current) {
+                    if appliedRecord?.action == .snooze {
+                        // An active snooze is authoritative absence (404).
+                        // Any visible proposal, whether reopened or already
+                        // decided after the client missed that interval,
+                        // proves this local snooze no longer owns its state.
+                        appliedRecord = nil
+                    }
                     if current.item._type == .run_proposal {
                         let facts = try await store.client.getRunProposalFacts(
                             path: .init(item_id: itemID)
@@ -248,6 +351,7 @@ public final class DecisionModel {
                     if phase == .applied, snapshot?.item.status == .open {
                         phase = .idle
                     }
+                    emitConclusionIfVerified(resultingStatus: current.item.status)
                     return
                 }
                 // Refused within the epoch: the loop re-fetches to converge.
@@ -416,6 +520,14 @@ public final class DecisionModel {
                     return
                 }
                 let result = try ok.body.json
+                guard Self.commandResultIsValid(result, for: command) else {
+                    // A syntactically decoded response is still untrusted:
+                    // only the submitted command's exact durable record and
+                    // a positive server cursor may settle its ledger slot.
+                    await settleAmbiguousOutcome(
+                        command, message: "the daemon returned an invalid command result")
+                    return
+                }
                 // Read-your-write BEFORE settling. Not every action resolves
                 // its item (plan §4: viewing a PR is navigation, acknowledge
                 // means seen, never resolved), so read-your-write is a
@@ -435,14 +547,22 @@ public final class DecisionModel {
                                 command, message: Self.restoredBeforeConfirmed)
                             return
                         }
-                        appliedRecord = result.record
+                        // Absence alone is ambiguous across a daemon
+                        // restore: the restored frontier may predate both
+                        // this command and its proposal. Verbatim replay is
+                        // the durable proof that the 404 means an active
+                        // snooze rather than a rolled-back write.
+                        guard
+                            await confirmPendingSnooze(
+                                command, since: generationBeforeRefetch)
+                        else { return }
+                        store.clearPendingCommand(
+                            itemID: itemID, commandID: command.command_id)
                         store.removeSnapshot(
                             itemID: itemID, atLeastEntityVersion: snapshot.entity_version)
                         proposalFacts = nil
-                        store.clearPendingCommand(
-                            itemID: itemID, commandID: command.command_id)
-                        store.revisionObserver?(result.revision)
                         phase = .applied
+                        emitConclusionIfVerified(resultingStatus: nil)
                         return
                     }
                     refetched = try output.ok.body.json
@@ -456,9 +576,27 @@ public final class DecisionModel {
                     }
                     // The command committed but current state is unknown;
                     // settle the record and fail closed until revalidation.
-                    appliedRecord = result.record
-                    store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
-                    phase = .applied
+                    store.revisionObserver?(result.revision)
+                    if action == .snooze {
+                        // A snooze is not settled until authoritative
+                        // absence and a verbatim replay agree. Keep its
+                        // durable command available across this unknown
+                        // refetch so a later validation cannot mistake a
+                        // post-restore 404 for successful invisibility.
+                        appliedRecord = nil
+                        store.setPendingCommandState(
+                            itemID: itemID,
+                            commandID: command.command_id,
+                            state: .unresolved)
+                        phase = .idle
+                        submissionError =
+                            "the snooze was recorded but current state could not be confirmed"
+                    } else {
+                        appliedRecord = result.record
+                        store.clearPendingCommand(
+                            itemID: itemID, commandID: command.command_id)
+                        phase = .applied
+                    }
                     validation = .failed(String(describing: error))
                     return
                 }
@@ -471,6 +609,7 @@ public final class DecisionModel {
                         command, message: Self.restoredBeforeConfirmed)
                     return
                 }
+                store.revisionObserver?(result.revision)
                 appliedRecord = result.record
                 store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
                 guard store.apply(refetched) else {
@@ -481,6 +620,7 @@ public final class DecisionModel {
                     return
                 }
                 phase = refetched.item.status == .open ? .idle : .applied
+                emitConclusionIfVerified(resultingStatus: refetched.item.status)
             case .conflict(let conflict):
                 // Staleness and closure share this shape (the recorded #65
                 // decision): the replacement is the canonical state, and
@@ -545,6 +685,85 @@ public final class DecisionModel {
             && reviewed.item.artifact_digests == current.item.artifact_digests
     }
 
+    /// Re-gates the external result before its record or cursor can become
+    /// trusted local state. Generated decoding enforces field types, not the
+    /// OpenAPI revision minimum or correlation with the submitted command.
+    static func commandResultIsValid(
+        _ result: Components.Schemas.CommandResult,
+        for command: Components.Schemas.ClientCommand
+    ) -> Bool {
+        CommandResultTrust.accepts(result, for: command)
+    }
+
+    /// Replays a still-durable snooze before either absence or later
+    /// visibility may settle it. The replay is the only proof that a 404 did
+    /// not come from a restored frontier that predates the command.
+    private func confirmPendingSnooze(
+        _ command: Components.Schemas.ClientCommand,
+        since generationBefore: Int
+    ) async -> Bool {
+        switch await replayLostResponse(command, since: generationBefore) {
+        case .recovered:
+            return true
+        case .conflicted(let applied):
+            appliedRecord = nil
+            if applied {
+                phase = .superseded
+                markValidated()
+                submissionError = nil
+            } else {
+                phase = .idle
+                validation = .failed(Self.shadowedByStaleCache)
+            }
+            return false
+        case .rejected:
+            appliedRecord = nil
+            phase = .idle
+            submissionError = "the decision was not recorded"
+            validation = .failed("the snooze is absent from current daemon state")
+            return false
+        case .lost:
+            appliedRecord = nil
+            store.setPendingCommandState(
+                itemID: itemID, commandID: command.command_id, state: .unresolved)
+            phase = .idle
+            submissionError =
+                "the response was lost again; the decision may still be recorded"
+            validation = .failed("the snooze could not be reconfirmed")
+            return false
+        case .displaced:
+            phase = .idle
+            validation = .failed("the snooze changed while it was being reconfirmed")
+            return false
+        }
+    }
+
+    /// Emits only after a recorded command and canonical evidence agree that
+    /// the item left the active queue. A visible `.open` item is record-only
+    /// (or a proposal whose snooze has already expired), so it never advances.
+    private func emitConclusionIfVerified(
+        resultingStatus: Components.Schemas.ItemStatus?
+    ) {
+        guard let record = appliedRecord,
+            record.command_id != concludedCommandID
+        else { return }
+        switch (ActionOutcome.of(record.action), resultingStatus) {
+        case (.snoozesProposal, nil):
+            break
+        case (.records, _), (.pending, _), (_, .some(.open)), (_, nil):
+            return
+        case (_, .some):
+            break
+        }
+        concludedCommandID = record.command_id
+        onConclusion(
+            DecisionConclusion(
+                itemID: itemID,
+                actionLabel: AttentionDisplay.label(record.action),
+                resultingStatus: resultingStatus,
+                at: .now))
+    }
+
     /// A submit failure that proves nothing about commitment (transport
     /// loss, a 5xx): the command's ledger slot, claimed before the send,
     /// stays held, so nothing renders as applied, no new command can be
@@ -561,6 +780,13 @@ public final class DecisionModel {
             itemID: itemID, commandID: command.command_id, state: .unresolved)
         phase = .idle
         submissionError = message
+        if command.payload.action == .snooze {
+            // Snooze validation performs the one immediate replay before
+            // the canonical read that can settle it. The replay may be the
+            // attempt that first commits the command.
+            await validate()
+            return
+        }
         await validate()
         let generationBefore = store.cacheGeneration
         switch await replayLostResponse(command, since: generationBefore) {
@@ -608,6 +834,12 @@ public final class DecisionModel {
         guard canRetryLostResponse, let pending = pendingCommand else { return }
         submissionError = nil
         phase = .submitting(pending.payload.action)
+        if pending.payload.action == .snooze {
+            // validate() claims the unresolved slot and performs replay
+            // before the canonical read that can settle it.
+            await validate()
+            return
+        }
         // The resend is itself in flight; other instances must not offer
         // a concurrent retry while it runs.
         store.setPendingCommandState(
@@ -691,10 +923,16 @@ public final class DecisionModel {
                     return .lost
                 }
                 let result = try ok.body.json
+                guard Self.commandResultIsValid(result, for: command) else {
+                    return .lost
+                }
+                store.revisionObserver?(result.revision)
                 appliedRecord = result.record
                 submissionError = nil
                 phase = .applied
-                store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
+                if command.payload.action != .snooze {
+                    store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
+                }
                 return .recovered
             case .conflict(let conflict):
                 // A recorded command replays as 200 before any state

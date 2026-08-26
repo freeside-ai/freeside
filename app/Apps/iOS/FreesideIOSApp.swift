@@ -4,14 +4,18 @@ import UIKit
 
 @main
 struct FreesideIOSApp: App {
+    @State private var flowPreferences = DecisionFlowPreferences()
     private let launchInputs = LaunchInputs.standard()
 
     var body: some Scene {
         WindowGroup {
-            FreesideRootView(session: .fromEnvironment(), launchInputs: launchInputs)
-                .background(
-                    AccessibilityContrastOverride(contrast: launchInputs.contrast)
-                        .frame(width: 0, height: 0))
+            FreesideRootView(
+                session: .fromEnvironment(), launchInputs: launchInputs,
+                flowPreferences: flowPreferences
+            )
+            .background(
+                AccessibilityContrastOverride(contrast: launchInputs.contrast)
+                    .frame(width: 0, height: 0))
         }
     }
 }
