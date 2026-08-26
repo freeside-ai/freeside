@@ -187,6 +187,82 @@ func TestFindingDispositionsPersistAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestFindingDispositionKeepsSupersededAdjudicationBinding(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openStore(t, store.Options{})
+	at := time.Date(2026, 8, 25, 15, 0, 0, 0, time.UTC)
+	run := domain.Run{
+		ID: "run-superseded-disposition", ProjectID: "project-1",
+		SpecDigest: adjSpecDigest, PolicyDigest: adjPolicyDigest,
+	}
+	finding := domain.Finding{
+		ID: "finding-superseded-disposition", RunID: run.ID, Source: "codex_local",
+		Location: &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1},
+		Message:  "finding", RawText: "finding", CreatedAt: at,
+	}
+	record := dispositionReviewRecord(t, run.ID, 1, []domain.FindingID{finding.ID}, at)
+	initial := finalDispositionAdjudication(t, run.ID, 1,
+		map[domain.FindingID]domain.ReviewDisposition{finding.ID: domain.ReviewDispositionDeclined}, at)
+	conversation := adjudicationConversation(t, "conversation-superseded-disposition", []string{"reconsider"}, at)
+	invocation, feedback := adjudicationFeedback(t, conversation, "invocation-superseded-disposition", 1)
+	entries := slices.Clone(initial.Entries)
+	entries[0].Route = domain.RouteDispute
+	entries[0].Rationale = "feedback now requires operator judgment"
+	successor, err := domain.NewSuccessorFindingAdjudication(
+		initial, feedback, entries, at.Add(time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("successor: %v", err)
+	}
+	disposition := domain.ReviewDispositionRecord{
+		FindingID: finding.ID, RunID: run.ID, Round: 1,
+		Disposition: domain.ReviewDispositionDeclined, Reason: "bound to the original decision",
+		AdjudicationDigest: initial.Digest, CreatedAt: at.Add(2 * time.Minute),
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		if err := tx.PutReviewRecord(ctx, record, []domain.Finding{finding}); err != nil {
+			return err
+		}
+		if err := tx.PutFindingAdjudication(ctx, initial); err != nil {
+			return err
+		}
+		if err := putAdjudicationFeedbackAuthority(
+			t, ctx, tx, initial, conversation, invocation, "item-superseded-disposition", 2,
+		); err != nil {
+			return err
+		}
+		if err := tx.PutFindingAdjudication(ctx, successor); err != nil {
+			return err
+		}
+		return tx.PutFindingDisposition(ctx, disposition)
+	}); err != nil {
+		t.Fatalf("put superseded binding: %v", err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		head, err := tx.GetFindingAdjudicationForRound(ctx, run.ID, 1)
+		if err != nil {
+			return err
+		}
+		if head.Digest != successor.Digest {
+			t.Fatalf("head = %q, want successor %q", head.Digest, successor.Digest)
+		}
+		got, err := tx.GetFindingDisposition(ctx, finding.ID, 1)
+		if err != nil {
+			return err
+		}
+		if got.AdjudicationDigest != initial.Digest {
+			t.Fatalf("disposition rebound to %q, want original %q", got.AdjudicationDigest, initial.Digest)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read superseded binding: %v", err)
+	}
+}
+
 func TestPutFindingDispositionRejectsInvalidAdjudicationBinding(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
