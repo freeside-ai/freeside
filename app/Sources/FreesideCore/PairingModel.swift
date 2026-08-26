@@ -1,5 +1,10 @@
+import Foundation
 import FreesideAPI
 import Observation
+
+#if os(iOS)
+    import UIKit
+#endif
 
 /// The pairing exchange (plan §5.14 devices): a short-lived code read
 /// off the daemon host buys this device its private grant. The token and ntfy
@@ -22,7 +27,7 @@ public final class PairingModel {
             }
         }
     }
-    public var displayName = ""
+    public var displayName: String
     public private(set) var phase: PhaseState = .idle
 
     private let client: any APIProtocol
@@ -33,35 +38,50 @@ public final class PairingModel {
     public init(
         client: any APIProtocol,
         credentials: any DeviceCredentialStore,
-        pairingCode: String = ""
+        pairingCode: String = "",
+        displayName: String? = nil
     ) {
         self.client = client
         self.credentials = credentials
-        self.pairingCode = pairingCode
+        self.pairingCode = Self.canonicalPairingCode(pairingCode)
+        self.displayName = displayName ?? Self.systemDeviceName()
     }
 
     public var canSubmit: Bool {
-        !pairingCode.isEmpty && !displayName.isEmpty && phase != .pairing
+        !Self.canonicalPairingCode(pairingCode).isEmpty && !displayName.isEmpty
+            && phase != .pairing
     }
 
     public func prefillPairingCode(_ code: String) {
         guard !pairingCodeWasEdited else { return }
         isApplyingPairingCodePrefill = true
         defer { isApplyingPairingCodePrefill = false }
-        pairingCode = code
+        pairingCode = Self.canonicalPairingCode(code)
     }
 
     public func clearPairingCodePrefill() {
         prefillPairingCode("")
     }
 
+    public var formattedPairingCode: String {
+        Self.groupPairingCode(Self.canonicalPairingCode(pairingCode))
+    }
+
+    public func applyPairingCodeInput(_ code: String) {
+        pairingCode = Self.canonicalPairingCode(code)
+    }
+
     /// Exchanges the code; on success the credential is already saved.
     public func pair() async -> DeviceCredential? {
         guard canSubmit else { return nil }
+        let canonicalPairingCode = Self.canonicalPairingCode(pairingCode)
+        if pairingCode != canonicalPairingCode {
+            pairingCode = canonicalPairingCode
+        }
         phase = .pairing
         do {
             let output = try await client.pairDevice(
-                body: .json(.init(pairing_code: pairingCode, display_name: displayName)))
+                body: .json(.init(pairing_code: canonicalPairingCode, display_name: displayName)))
             switch output {
             case .created(let created):
                 let grant = try created.body.json
@@ -111,5 +131,48 @@ public final class PairingModel {
         case .active(let active): return active.id
         case .revoked(let revoked): return revoked.id
         }
+    }
+
+    static func canonicalPairingCode(_ typed: String) -> String {
+        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(
+            trimmed.uppercased().compactMap { character in
+                switch character {
+                case "-", " ": nil
+                case "O": "0"
+                case "I", "L": "1"
+                default: character
+                }
+            })
+    }
+
+    static func groupPairingCode(_ canonical: String) -> String {
+        guard !canonical.isEmpty else { return "" }
+        var groups: [String] = []
+        var start = canonical.startIndex
+        while start < canonical.endIndex {
+            let end =
+                canonical.index(start, offsetBy: 4, limitedBy: canonical.endIndex)
+                ?? canonical.endIndex
+            groups.append(String(canonical[start..<end]))
+            start = end
+        }
+        return groups.joined(separator: "-")
+    }
+
+    private static func systemDeviceName() -> String {
+        #if os(iOS)
+            let name = UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            return name.isEmpty ? UIDevice.current.model : name
+        #elseif os(macOS)
+            let name = Host.current().localizedName?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let name, !name.isEmpty {
+                return name
+            }
+            return ProcessInfo.processInfo.hostName
+        #else
+            return ProcessInfo.processInfo.hostName
+        #endif
     }
 }

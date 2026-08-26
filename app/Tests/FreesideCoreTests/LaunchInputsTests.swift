@@ -31,6 +31,25 @@ import Testing
                 == nil)
     }
 
+    @Test func dynamicTypeSizeParsesScreenshotCuts() {
+        #expect(
+            LaunchInputs(
+                colorSchemeRaw: nil, selectionRaw: nil, dynamicTypeSizeRaw: "large"
+            ).dynamicTypeSize == .large)
+        #expect(
+            LaunchInputs(
+                colorSchemeRaw: nil, selectionRaw: nil, dynamicTypeSizeRaw: "ax3"
+            ).dynamicTypeSize == .accessibility3)
+    }
+
+    @Test(arguments: [nil, "AX3", "accessibility3", ""] as [String?])
+    func unrecognizedDynamicTypeSizeFollowsTheSystem(raw: String?) {
+        #expect(
+            LaunchInputs(
+                colorSchemeRaw: nil, selectionRaw: nil, dynamicTypeSizeRaw: raw
+            ).dynamicTypeSize == nil)
+    }
+
     @Test(arguments: AttentionFixtures.defaultInboxItemIDs())
     func everyCanonicalItemIDIsAccepted(id: String) {
         #expect(LaunchInputs(colorSchemeRaw: nil, selectionRaw: id).selection == id)

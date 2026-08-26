@@ -1,6 +1,12 @@
 import FreesideAPI
 import SwiftUI
 
+#if os(macOS)
+    import AppKit
+#elseif os(iOS)
+    import UIKit
+#endif
+
 struct RunTimelineView: View {
     private struct RequestID: Hashable {
         let runID: String
@@ -90,6 +96,12 @@ struct RunTimelineView: View {
                     Text(snapshot.run.id)
                         .font(FreesideFont.monoCallout)
                         .foregroundStyle(Color.inkDim)
+                        .textSelection(.enabled)
+                        .contextMenu {
+                            Button("Copy run ID") {
+                                copyRunID()
+                            }
+                        }
                 }
                 Spacer()
                 RunOutcomeBadge(outcome: snapshot.run.outcome)
@@ -227,6 +239,15 @@ struct RunTimelineView: View {
             }
         }
         return nil
+    }
+
+    private func copyRunID() {
+        #if os(macOS)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(snapshot.run.id, forType: .string)
+        #elseif os(iOS)
+            UIPasteboard.general.string = snapshot.run.id
+        #endif
     }
 
     private func milestoneDetail(_ milestone: Components.Schemas.RunMilestone) -> String? {

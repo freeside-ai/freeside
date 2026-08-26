@@ -338,6 +338,14 @@ only in active-wave state when it lists the unit; in inter-wave state the sole
 title match is the closed prior-wave tracker, which is never reopened or
 mutated. No open containing tracker is a valid zero-work result, not an error.
 
+For post-merge reconciliation, `scripts/trackercollect` may collect the merged
+unit's advisory forge evidence into a stamped `snapshot.json` and compact
+`report.md` before judgment begins. The artifacts replace no live gate or
+freshness check. Before any tracker edit, re-enumerate the open-issue, open-PR,
+and claim identities, then compare every retained object's forge identity and
+`updatedAt` stamp with the snapshot; any inventory or retained-object stamp
+change invalidates the snapshot and requires a fresh collection.
+
 Before final handoff and again immediately before integration, verify every
 `merges-after` prerequisite is merged. A stacked child also remains
 non-mergeable until its base PR merges and the forge retargets the child PR to
