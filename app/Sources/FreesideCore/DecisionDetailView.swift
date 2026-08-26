@@ -956,34 +956,49 @@ struct DecisionDetailView: View {
                 )
             case .tooLarge(let reason):
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("Too large here", systemImage: "arrow.up.left.and.arrow.down.right")
-                        .font(FreesideFont.sans(.caption, weight: .semibold))
-                    switch reason {
-                    case .download(let bytesSeenAtLeast, _):
-                        Text("At least \(byteCount(bytesSeenAtLeast))")
-                    case .image(let width, let height, _),
-                        .imageBudget(let width, let height, _):
-                        Text("\(width) × \(height) pixels")
-                    }
-                    #if os(iOS)
-                        Text(iOSTooLargeRecovery(reason))
-                    #elseif os(macOS)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Too large here", systemImage: "arrow.up.left.and.arrow.down.right")
+                            .font(FreesideFont.sans(.caption, weight: .semibold))
                         switch reason {
-                        case .download(_, let limit):
-                            Text("Exceeds the \(byteCount(limit)) inline preview limit")
-                        case .image(_, _, let pixelLimit):
-                            Text("Exceeds the \(pixelLimit.formatted())-pixel inline preview limit")
-                        case .imageBudget(_, _, let pixelLimit):
-                            Text(
-                                "Would exceed the \(pixelLimit.formatted())-pixel active inline image budget"
-                            )
+                        case .download(let bytesSeenAtLeast, _):
+                            Text("At least \(byteCount(bytesSeenAtLeast))")
+                        case .image(let width, let height, _),
+                            .imageBudget(let width, let height, _):
+                            Text("\(width) × \(height) pixels")
                         }
-                    #endif
+                        #if os(iOS)
+                            Text(iOSTooLargeRecovery(reason))
+                        #elseif os(macOS)
+                            switch reason {
+                            case .download(_, let limit):
+                                Text("Exceeds the \(byteCount(limit)) inline preview limit")
+                            case .image(_, _, let pixelLimit):
+                                Text("Exceeds the \(pixelLimit.formatted())-pixel inline preview limit")
+                            case .imageBudget(_, _, let pixelLimit):
+                                Text(
+                                    "Would exceed the \(pixelLimit.formatted())-pixel active inline image budget"
+                                )
+                            }
+                        #endif
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(tooLargeAccessibilityLabel(reason))
+
+                    if case .imageBudget = reason,
+                        rendersInteractiveControls,
+                        loadsAttachments
+                    {
+                        Button("Load this image") {
+                            Task { await attachments.loadReplacingRetainedImages(digest) }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityLabel(
+                            "Load \(label) attachment image, replacing retained images if needed")
+                    }
                 }
                 .font(FreesideFont.caption)
                 .foregroundStyle(Color.inkDim)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(tooLargeAccessibilityLabel(reason))
             case .loading, nil:
                 HStack(spacing: 8) {
                     if rendersInteractiveControls {

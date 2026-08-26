@@ -124,7 +124,9 @@ public final class AttachmentLoader {
     private var phases: [String: Phase] = [:]
     private var retainedNonImageDigests: [String] = []
     private var retainedNonImageBytes = 0
+    private var retainedImageDigests: [String] = []
     private var retainedImagePixelsByDigest: [String: Int] = [:]
+    private var retainedImageDimensionsByDigest: [String: (width: Int, height: Int)] = [:]
     private var retainedImagePixels = 0
     private var reservedImagePixels = 0
     private var retryReservedImagePixelsByDigest: [String: Int] = [:]
@@ -201,6 +203,37 @@ public final class AttachmentLoader {
     /// retry, and concurrent loads coalesce onto one request.
     public func load(_ digest: String) async {
         _ = await resolvedDownload(for: digest)
+    }
+
+    /// Gives an operator-selected budget-denied image priority over retained
+    /// decoded images. Evicted rows remain explicit budget denials, so each can
+    /// be selected again without exceeding the loader-wide pixel bound.
+    func loadReplacingRetainedImages(_ digest: String) async {
+        guard
+            visibleRows[digest] != nil,
+            inFlight[digest] == nil,
+            case .tooLarge(.imageBudget(let width, let height, _)) = phases[digest],
+            Self.imageFitsPixelLimit(
+                width: width, height: height, maxPixels: maxRetainedImagePixels)
+        else { return }
+
+        let pixels = width * height
+        guard pixels <= maxRetainedImagePixels - reservedImagePixels else { return }
+
+        while pixels > maxRetainedImagePixels - retainedImagePixels - reservedImagePixels,
+            let evictedDigest = retainedImageDigests.first
+        {
+            evictRetainedImageToBudgetDenial(evictedDigest)
+        }
+
+        reservedImagePixels += pixels
+        retryReservedImagePixelsByDigest[digest] = pixels
+        retryImageBudgetReasonsByDigest[digest] = .imageBudget(
+            width: width,
+            height: height,
+            pixelLimit: maxRetainedImagePixels)
+        phases[digest] = nil
+        await load(digest)
     }
 
     /// Returns the coalesced task's value directly, so a concurrent cache
@@ -284,6 +317,7 @@ public final class AttachmentLoader {
         }
         let phase: Phase
         var imagePixelCount: Int?
+        var imageDimensions: (width: Int, height: Int)?
         switch result {
         case .bytes(let bytes):
             let inspection = await Task.detached(priority: .userInitiated) {
@@ -332,6 +366,7 @@ public final class AttachmentLoader {
                 if let decoded {
                     phase = .image(Self.platformImage(from: decoded))
                     imagePixelCount = pixels
+                    imageDimensions = (width, height)
                 } else {
                     phase = .notImage(bytes: bytes, byteCount: bytes.count)
                 }
@@ -348,7 +383,11 @@ public final class AttachmentLoader {
                 phase = .unavailable
             }
         }
-        store(phase, for: digest, imagePixelCount: imagePixelCount)
+        store(
+            phase,
+            for: digest,
+            imagePixelCount: imagePixelCount,
+            imageDimensions: imageDimensions)
         retryVisibleImageBudgetDenials()
         if discardAfterFetch.remove(digest) != nil {
             discardRetainedPayload(for: digest)
@@ -423,10 +462,17 @@ public final class AttachmentLoader {
         width > 0 && height > 0 && maxPixels > 0 && width <= maxPixels / height
     }
 
-    private func store(_ phase: Phase, for digest: String, imagePixelCount: Int? = nil) {
+    private func store(
+        _ phase: Phase,
+        for digest: String,
+        imagePixelCount: Int? = nil,
+        imageDimensions: (width: Int, height: Int)? = nil
+    ) {
         if let previousPixels = retainedImagePixelsByDigest.removeValue(forKey: digest) {
             retainedImagePixels -= previousPixels
         }
+        retainedImageDimensionsByDigest[digest] = nil
+        retainedImageDigests.removeAll { $0 == digest }
         if case .notImage(let previous?, _) = phases[digest] {
             retainedNonImageBytes -= previous.count
             retainedNonImageDigests.removeAll { $0 == digest }
@@ -434,8 +480,12 @@ public final class AttachmentLoader {
         phases[digest] = phase
         if case .image = phase {
             let pixels = imagePixelCount ?? 0
-            precondition(pixels > 0)
+            guard pixels > 0, let imageDimensions else {
+                preconditionFailure("retained images require validated dimensions")
+            }
             retainedImagePixelsByDigest[digest] = pixels
+            retainedImageDimensionsByDigest[digest] = imageDimensions
+            retainedImageDigests.append(digest)
             retainedImagePixels += pixels
         }
         guard case .notImage(let bytes?, _) = phase else { return }
@@ -454,12 +504,32 @@ public final class AttachmentLoader {
         }
     }
 
+    private func evictRetainedImageToBudgetDenial(_ digest: String) {
+        guard
+            let pixels = retainedImagePixelsByDigest[digest],
+            let dimensions = retainedImageDimensionsByDigest[digest]
+        else {
+            preconditionFailure("retained image accounting is incomplete")
+        }
+        retainedImageDigests.removeAll { $0 == digest }
+        retainedImagePixelsByDigest[digest] = nil
+        retainedImageDimensionsByDigest[digest] = nil
+        retainedImagePixels -= pixels
+        phases[digest] = .tooLarge(
+            .imageBudget(
+                width: dimensions.width,
+                height: dimensions.height,
+                pixelLimit: maxRetainedImagePixels))
+    }
+
     private func discardRetainedPayload(for digest: String) {
         switch phases[digest] {
         case .image:
             if let pixels = retainedImagePixelsByDigest.removeValue(forKey: digest) {
                 retainedImagePixels -= pixels
             }
+            retainedImageDimensionsByDigest[digest] = nil
+            retainedImageDigests.removeAll { $0 == digest }
             phases[digest] = nil
             retryVisibleImageBudgetDenials()
         case .notImage(let bytes?, let byteCount):
@@ -630,6 +700,7 @@ public final class AttachmentLoader {
 
     var activeDownloadCountForTesting: Int { activeDownloads }
     var waitingDownloadCountForTesting: Int { downloadWaiters.count }
+    var retainedImagePixelCountForTesting: Int { retainedImagePixels }
 
     nonisolated private static func download(
         _ digest: String,

@@ -304,6 +304,55 @@ private struct StreamingAttachmentTransport: ClientTransport {
         #expect(await counter.count == 3)
     }
 
+    @Test func operatorCanReplaceAnImageHoldingTheActivePixelBudget() async throws {
+        let firstDigest = "sha256:first-replaceable-image"
+        let secondDigest = "sha256:second-replaceable-image"
+        let bytes = try makeTIFF(frames: [makeImage(width: 1, height: 1)])
+        let counter = RequestCounter()
+        let server = MockServer(
+            attachments: [firstDigest: bytes, secondDigest: bytes])
+        await server.setBeforeRespond { operationID in
+            if operationID == "getAttachment" { await counter.record() }
+        }
+        let loader = AttachmentLoader(
+            client: APIClientFactory.mock(server: server),
+            maxImagePixels: 1,
+            maxRetainedImagePixels: 1)
+
+        loader.beginDisplaying(firstDigest)
+        loader.beginDisplaying(secondDigest)
+        await loader.load(firstDigest)
+        await loader.load(secondDigest)
+        guard case .image = loader.phase(for: firstDigest) else {
+            Issue.record("expected the first image to hold the active budget")
+            return
+        }
+        #expect(
+            loader.phase(for: secondDigest)
+                == .tooLarge(.imageBudget(width: 1, height: 1, pixelLimit: 1)))
+
+        await loader.loadReplacingRetainedImages(secondDigest)
+        #expect(
+            loader.phase(for: firstDigest)
+                == .tooLarge(.imageBudget(width: 1, height: 1, pixelLimit: 1)))
+        guard case .image = loader.phase(for: secondDigest) else {
+            Issue.record("expected the selected second image to replace the first")
+            return
+        }
+        #expect(loader.retainedImagePixelCountForTesting == 1)
+
+        await loader.loadReplacingRetainedImages(firstDigest)
+        guard case .image = loader.phase(for: firstDigest) else {
+            Issue.record("expected the first image to remain selectable after eviction")
+            return
+        }
+        #expect(
+            loader.phase(for: secondDigest)
+                == .tooLarge(.imageBudget(width: 1, height: 1, pixelLimit: 1)))
+        #expect(loader.retainedImagePixelCountForTesting == 1)
+        #expect(await counter.count == 4)
+    }
+
     @Test func rapidImageReleasesDoNotOverbookBudgetRetries() async throws {
         let digests = (1...6).map { "sha256:budget-\($0)" }
         let bytes = try makeTIFF(frames: [makeImage(width: 1, height: 1)])
