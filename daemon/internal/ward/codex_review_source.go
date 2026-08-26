@@ -323,6 +323,12 @@ func (s *CodexReviewSource) reconstructReviewInstructions(
 	if err := binding.Validate(); err != nil {
 		return nil, err
 	}
+	if binding.CompositionVersion != exec.ReviewInstructionCompositionVersion {
+		return nil, fmt.Errorf(
+			"review instruction composition version %q cannot launch; current version is %q",
+			binding.CompositionVersion, exec.ReviewInstructionCompositionVersion,
+		)
+	}
 	host := exec.ReviewHostInstructionInput{Present: binding.HostDigest != nil}
 	if binding.HostDigest != nil {
 		body, err := s.readReviewInstructionArtifact(ctx, *binding.HostDigest)

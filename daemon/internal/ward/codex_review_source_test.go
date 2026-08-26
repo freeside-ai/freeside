@@ -207,6 +207,22 @@ func TestCodexReviewSourceReconstructsInstructionClosure(t *testing.T) {
 	}
 }
 
+func TestCodexReviewSourceRejectsPersistedV1InstructionReconstruction(t *testing.T) {
+	_, binding, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.CompositionVersion = exec.ReviewInstructionCompositionVersionV1
+	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
+		InstructionArtifacts: testReviewInstructionArtifacts{},
+	}}
+	_, err = source.reconstructReviewInstructions(t.Context(), binding)
+	if err == nil || !strings.Contains(err.Error(), "cannot launch") ||
+		!strings.Contains(err.Error(), exec.ReviewInstructionCompositionVersionV1) {
+		t.Fatalf("persisted v1 reconstruction error = %v", err)
+	}
+}
+
 func TestCodexReviewSourceReplacesStaleInstructionSnapshot(t *testing.T) {
 	cfg, _ := testCodexReview(t)
 	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{Review: cfg}}
@@ -1813,6 +1829,44 @@ func TestCodexReviewSourcePreservesLegacyRequestThroughRejectedOutcome(t *testin
 	journal.failGetOutcome = ErrCodexReviewOutcomeRejected
 	if err := source.VerifyReviewRequestSupersession(ctx, id, request); !errors.Is(err, exec.ErrLegacyReviewRequest) {
 		t.Fatalf("rejected legacy request outcome = %v, want ErrLegacyReviewRequest", err)
+	}
+}
+
+func TestCodexReviewSourceSupersedesPersistedV1InstructionRequest(t *testing.T) {
+	ctx := context.Background()
+	fx := newHandoffFixture(t)
+	backend := fx.codexReviewLifecycle(t)
+	cfg, requestSpec := testCodexReview(t)
+	id := domain.InvocationID("review-v1-superseded")
+	current := testReviewInstructionBinding()
+	persisted := current
+	persisted.CompositionVersion = exec.ReviewInstructionCompositionVersionV1
+	persisted.ResultDigest = domain.Digest("sha256:" + strings.Repeat("e", 64))
+	request := exec.ReviewRequest{
+		RunID: "run-v1-superseded", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
+		Workspace: "/candidate", Verification: testReviewVerificationEvidence(),
+		Instructions: persisted, RequestedAt: codexReviewEpoch,
+	}
+	expected := request
+	expected.Instructions = current
+	journal := &fakeCodexReviewJournal{
+		requests: map[string]exec.ReviewRequest{string(id): request},
+	}
+	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
+	source, err := NewCodexReviewSource(sourceConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failure *exec.ReviewSourceFailure
+	err = source.VerifyReviewRequestSupersession(ctx, id, expected)
+	if !errors.As(err, &failure) || failure.Class != domain.ReviewFailureTransient ||
+		!errors.Is(err, exec.ErrSupersededReviewRequest) {
+		t.Fatalf("persisted v1 supersession = %v", err)
+	}
+	outcome, ready, outcomeErr := journal.GetCodexReviewOutcome(ctx, string(id))
+	if outcomeErr != nil || !ready || !outcome.AbortRequired {
+		t.Fatalf("persisted v1 rejection outcome = %#v, ready=%v, %v", outcome, ready, outcomeErr)
 	}
 }
 

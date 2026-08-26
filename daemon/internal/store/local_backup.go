@@ -612,7 +612,8 @@ func checkpointArtifactDigests(
 			return artifactClosure{}, errors.New("codex review request instruction closure is invalid")
 		}
 		instructions := request.Instructions
-		if instructions.CompositionVersion != "codex_explicit_bundle_v1" ||
+		if (instructions.CompositionVersion != exec.ReviewInstructionCompositionVersionV1 &&
+			instructions.CompositionVersion != exec.ReviewInstructionCompositionVersion) ||
 			!contentaddr.Valid(string(instructions.ResultDigest)) {
 			_ = reviewRows.Close()
 			return artifactClosure{}, errors.New("codex review request instruction closure is invalid")

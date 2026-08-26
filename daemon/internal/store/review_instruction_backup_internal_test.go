@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -23,11 +24,16 @@ func TestCheckpointArtifactDigestsIncludesCodexReviewInstructionClosure(t *testi
 	host := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	source := domain.Digest("sha256:" + strings.Repeat("b", 64))
 	result := domain.Digest("sha256:" + strings.Repeat("c", 64))
-	body := validReviewRequestBody(t, host, source, result)
-	if _, err := db.ExecContext(ctx, `INSERT INTO codex_review_requests
-		(invocation_id, body_digest, body) VALUES (?, ?, ?)`,
-		"review-1", codexReviewBodyDigest(body), string(body)); err != nil {
-		t.Fatal(err)
+	for i, version := range []string{
+		exec.ReviewInstructionCompositionVersionV1,
+		exec.ReviewInstructionCompositionVersion,
+	} {
+		body := validReviewRequestBody(t, version, host, source, result)
+		if _, err := db.ExecContext(ctx, `INSERT INTO codex_review_requests
+			(invocation_id, body_digest, body) VALUES (?, ?, ?)`,
+			fmt.Sprintf("review-%d", i), codexReviewBodyDigest(body), string(body)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	legacy := []byte(`{"run_id":"legacy-run","round":1}`)
 	if _, err := db.ExecContext(ctx, `INSERT INTO codex_review_requests
@@ -60,7 +66,9 @@ func TestCheckpointArtifactDigestsRejectsUnknownCurrentReviewRequestFields(t *te
 	} {
 		t.Run(name, func(t *testing.T) {
 			var request map[string]any
-			if err := json.Unmarshal(validReviewRequestBody(t, host, source, result), &request); err != nil {
+			if err := json.Unmarshal(validReviewRequestBody(
+				t, exec.ReviewInstructionCompositionVersion, host, source, result,
+			), &request); err != nil {
 				t.Fatal(err)
 			}
 			mutate(request)
@@ -85,13 +93,15 @@ func TestCheckpointArtifactDigestsRejectsUnknownCurrentReviewRequestFields(t *te
 	}
 }
 
-func validReviewRequestBody(t *testing.T, host, source, result domain.Digest) []byte {
+func validReviewRequestBody(
+	t *testing.T, version string, host, source, result domain.Digest,
+) []byte {
 	t.Helper()
 	body, err := json.Marshal(exec.ReviewRequest{
 		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 1, BaseRef: "main",
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/workspace",
 		Verification: exec.ReviewVerificationEvidence{Outcome: domain.VerificationPassed, RecipeDigest: host, EvidenceSnapshotDigest: source, ArtifactDigests: []domain.Digest{result}},
-		Instructions: exec.ReviewInstructionBinding{CompositionVersion: "codex_explicit_bundle_v1", HostDigest: &host, RepositorySources: []exec.ReviewInstructionSource{{Path: "AGENTS.md", Digest: source}}, ResultDigest: result},
+		Instructions: exec.ReviewInstructionBinding{CompositionVersion: version, HostDigest: &host, RepositorySources: []exec.ReviewInstructionSource{{Path: "AGENTS.md", Digest: source}}, ResultDigest: result},
 		RequestedAt:  time.Unix(0, 0).UTC(),
 	})
 	if err != nil {
@@ -103,7 +113,7 @@ func validReviewRequestBody(t *testing.T, host, source, result domain.Digest) []
 func TestCheckpointArtifactDigestsRejectsAmbiguousInstructionField(t *testing.T) {
 	t.Parallel()
 	result := "sha256:" + strings.Repeat("c", 64)
-	valid := `{"composition_version":"codex_explicit_bundle_v1",` +
+	valid := `{"composition_version":"` + exec.ReviewInstructionCompositionVersion + `",` +
 		`"host_digest":null,"repository_sources":[],"result_digest":"` + result + `"}`
 	for _, body := range []string{
 		`{"instructions":null}`,
