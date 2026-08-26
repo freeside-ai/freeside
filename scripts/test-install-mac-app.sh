@@ -16,7 +16,9 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 INSTALLER=${FREESIDE_INSTALLER_UNDER_TEST:-$SCRIPT_DIR/../app/scripts/install-mac-app.sh}
 REAL_SWIFT=$(command -v swift || true)
+REAL_OPENSSL=$(command -v openssl || true)
 export STUB_REAL_SWIFT=$REAL_SWIFT
+export STUB_REAL_OPENSSL=$REAL_OPENSSL
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -45,6 +47,29 @@ case "${1:-}" in
 -extract)
     case "$2" in
     CFBundleIdentifier) printf '%s\n' "${STUB_BUNDLE_ID:-ai.freeside.app.macos}" ;;
+    'com\.apple\.application-identifier' | \
+        'com\.apple\.developer\.team-identifier' | keychain-access-groups.* | \
+        TeamIdentifier.0 | ApplicationIdentifierPrefix.0 | DeveloperCertificates.* | \
+        'Entitlements.com\.apple\.application-identifier' | \
+        'Entitlements.com\.apple\.developer\.team-identifier' | \
+        Entitlements.keychain-access-groups.*)
+        key=${2//\\./.}
+        value=$(awk -F= -v key="$key" '
+            index($0, key "=") == 1 {
+                sub(/^[^=]*=/, "")
+                print
+                found = 1
+                exit
+            }
+            END { exit(found ? 0 : 1) }
+        ' "$target") || exit 1
+        if [[ "${4:-}" == -o && "${5:-}" != - ]]; then
+            printf '%s' "$value" >"$5"
+        else
+            printf '%s\n' "$value"
+        fi
+        exit 0
+        ;;
     ProgramArguments)
         awk '
             /<key>ProgramArguments<\/key>/ { p=1; next }
@@ -187,11 +212,35 @@ case " $* " in
     fi
     [[ ! -e "$target/.invalid-signature" ]]
     ;;
+*" --display --entitlements :- "*)
+    cat "$target/Contents/entitlements.fixture"
+    ;;
 *" --display "*)
     printf '%s\n' '# designated => identifier "ai.freeside.app.macos"' >&2
     ;;
 *" --force --sign "*)
     printf 'called\n' >"${STUB_CASE_DIR:?}/codesign-sign-called"
+    printf '%s\n' "$*" >>"$STUB_CASE_DIR/codesign-sign-calls"
+    if [[ -d "$target/Contents" ]]; then
+        previous=''
+        entitlements=''
+        for argument in "$@"; do
+            if [[ "$previous" == --entitlements ]]; then
+                entitlements=$argument
+                break
+            fi
+            previous=$argument
+        done
+        [[ -n "$entitlements" ]] || exit 1
+        cp "$entitlements" "$target/Contents/entitlements.fixture"
+        if [[ -n "${STUB_CODESIGN_DROP_ENTITLEMENTS:-}" ]]; then
+            sed 's/^keychain-access-groups.0=.*/keychain-access-groups.0=WRONGTEAM0.ai.freeside.app.macos/' \
+                "$target/Contents/entitlements.fixture" \
+                >"$target/Contents/entitlements.fixture.tmp"
+            mv "$target/Contents/entitlements.fixture.tmp" \
+                "$target/Contents/entitlements.fixture"
+        fi
+    fi
     ;;
 *) exit 1 ;;
 esac
@@ -200,6 +249,7 @@ STUB
 cat >"$STUB_BIN/xcodebuild" <<'STUB'
 #!/usr/bin/env bash
 printf 'called\n' >"${STUB_CASE_DIR:?}/xcodebuild-called"
+printf '%s\n' "$@" >"$STUB_CASE_DIR/xcodebuild-args"
 if [[ -n "${STUB_BUILD_SUCCEEDS:-}" ]]; then
     built_app="$STUB_CASE_DIR/Build/Build/Products/Release/FreesideMac.app"
     mkdir -p "$built_app/Contents"
@@ -208,6 +258,42 @@ if [[ -n "${STUB_BUILD_SUCCEEDS:-}" ]]; then
     mkdir -p "$built_app/Contents/Library/LaunchAgents"
     cp "$STUB_AGENT_TEMPLATE" \
         "$built_app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist"
+    team_id=''
+    for argument in "$@"; do
+        case "$argument" in
+        DEVELOPMENT_TEAM=*) team_id=${argument#DEVELOPMENT_TEAM=} ;;
+        esac
+    done
+    signed_team=${STUB_SIGNED_TEAM_ID:-$team_id}
+    signed_application=${STUB_SIGNED_APPLICATION_ID:-$signed_team.ai.freeside.app.macos}
+    signed_group=${STUB_SIGNED_KEYCHAIN_GROUP:-$signed_application}
+    cat >"$built_app/Contents/entitlements.fixture" <<EOF
+com.apple.application-identifier=$signed_application
+com.apple.developer.team-identifier=$signed_team
+keychain-access-groups.0=$signed_group
+EOF
+    profile_team=${STUB_PROFILE_TEAM_ID:-$team_id}
+    profile_prefix=${STUB_PROFILE_APPLICATION_PREFIX:-$profile_team}
+    profile_application=${STUB_PROFILE_APPLICATION_ID:-$profile_prefix.ai.freeside.app.macos}
+    profile_group=${STUB_PROFILE_KEYCHAIN_GROUP:-$profile_application}
+    profile_team_entitlement=${STUB_PROFILE_TEAM_ENTITLEMENT:-$profile_team}
+    profile_certificate=${STUB_PROFILE_CERTIFICATE:-Zml4dHVyZSBjZXJ0aWZpY2F0ZQ==}
+    cat >"$built_app/Contents/embedded.provisionprofile" <<EOF
+TeamIdentifier.0=$profile_team
+ApplicationIdentifierPrefix.0=$profile_prefix
+DeveloperCertificates.0=$profile_certificate
+Entitlements.com.apple.application-identifier=$profile_application
+Entitlements.com.apple.developer.team-identifier=$profile_team_entitlement
+Entitlements.keychain-access-groups.0=$profile_group
+EOF
+    if [[ -n "${STUB_PROFILE_KEYCHAIN_GROUP_1:-}" ]]; then
+        printf 'Entitlements.keychain-access-groups.1=%s\n' \
+            "$STUB_PROFILE_KEYCHAIN_GROUP_1" >>"$built_app/Contents/embedded.provisionprofile"
+    fi
+    if [[ -n "${STUB_PROFILE_CERTIFICATE_1:-}" ]]; then
+        printf 'DeveloperCertificates.1=%s\n' \
+            "$STUB_PROFILE_CERTIFICATE_1" >>"$built_app/Contents/embedded.provisionprofile"
+    fi
     if [[ -n "${STUB_INTERLOPER_AFTER_BUILD:-}" ]]; then
         mkdir -p "$STUB_INTERLOPER_AFTER_BUILD/Contents"
         printf 'interloper after build\n' >"$STUB_INTERLOPER_AFTER_BUILD/Contents/marker"
@@ -283,9 +369,59 @@ STUB
 
 cat >"$STUB_BIN/security" <<'STUB'
 #!/usr/bin/env bash
-# No signing identities. Exit successfully, like an empty keychain query, so
-# the installer's explicit no-identity diagnostic owns the failure.
-exit 0
+case "${1:-}" in
+find-identity)
+    if [[ -n "${FREESIDE_MAC_SIGNING_IDENTITY:-}" && \
+        "$FREESIDE_MAC_SIGNING_IDENTITY" != - && \
+        ! "$FREESIDE_MAC_SIGNING_IDENTITY" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+        printf '  1) 1111111111111111111111111111111111111111 "%s"\n' \
+            "$FREESIDE_MAC_SIGNING_IDENTITY"
+    fi
+    exit 0
+    ;;
+find-certificate)
+    if [[ " $* " == *" -a "* && " $* " == *" -Z "* ]]; then
+        printf 'SHA-1 hash: 1111111111111111111111111111111111111111\n'
+    fi
+    printf '%s\n' "${STUB_SIGNER_CERTIFICATE:-fixture certificate}"
+    ;;
+cms)
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == -i && $# -ge 2 ]]; then
+            cat "$2"
+            exit
+        fi
+        shift
+    done
+    exit 1
+    ;;
+*) exit 1 ;;
+esac
+STUB
+
+cat >"$STUB_BIN/openssl" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${1:-}" == base64 ]]; then
+    [[ -n "${STUB_REAL_OPENSSL:-}" ]] || exit 1
+    exec "$STUB_REAL_OPENSSL" "$@"
+fi
+certificate=$(cat)
+case " $* " in
+*" -outform DER "*)
+    previous=''
+    output=''
+    for argument in "$@"; do
+        if [[ "$previous" == -out ]]; then
+            output=$argument
+            break
+        fi
+        previous=$argument
+    done
+    [[ -n "$output" ]] || exit 1
+    printf '%s' "$certificate" >"$output"
+    ;;
+*) printf '    organizationalUnitName = ABCDE12345\n' ;;
+esac
 STUB
 
 if [[ "${FREESIDE_TEST_REAL_RENAME:-false}" != true ]]; then
@@ -389,6 +525,19 @@ begin_case() {
     unset STUB_TERM_AFTER_MV_SOURCE
     unset STUB_FAIL_VERIFY_CALL
     unset STUB_SIGNING_IDENTITY
+    unset STUB_SIGNED_TEAM_ID
+    unset STUB_SIGNED_APPLICATION_ID
+    unset STUB_SIGNED_KEYCHAIN_GROUP
+    unset STUB_PROFILE_TEAM_ID
+    unset STUB_PROFILE_APPLICATION_PREFIX
+    unset STUB_PROFILE_APPLICATION_ID
+    unset STUB_PROFILE_KEYCHAIN_GROUP
+    unset STUB_PROFILE_KEYCHAIN_GROUP_1
+    unset STUB_PROFILE_TEAM_ENTITLEMENT
+    unset STUB_PROFILE_CERTIFICATE
+    unset STUB_PROFILE_CERTIFICATE_1
+    unset STUB_SIGNER_CERTIFICATE
+    unset STUB_CODESIGN_DROP_ENTITLEMENTS
     unset RUN_HOME
     echo "case: $CASE"
 }
@@ -442,7 +591,7 @@ assert_exists() {
 assert_file_contains() {
     local path=$1
     local text=$2
-    if [[ -f "$path" ]] && grep -Fq "$text" "$path"; then
+    if [[ -f "$path" ]] && grep -Fq -- "$text" "$path"; then
         pass=$((pass + 1))
     else
         report_failure "expected $path to contain: $text"
@@ -452,7 +601,7 @@ assert_file_contains() {
 assert_file_omits() {
     local path=$1
     local text=$2
-    if [[ -f "$path" ]] && ! grep -Fq "$text" "$path"; then
+    if [[ -f "$path" ]] && ! grep -Fq -- "$text" "$path"; then
         pass=$((pass + 1))
     else
         report_failure "expected $path to omit: $text"
@@ -900,10 +1049,10 @@ fi
 begin_case "first install verification failure removes the replacement" 13
 destination=$CASE_DIR/Applications/Freeside.app
 export STUB_BUILD_SUCCEEDS=true
-export STUB_FAIL_VERIFY_CALL=3
+export STUB_FAIL_VERIFY_CALL=4
 run_installer
 assert_rc 1
-assert_contains "the installed app failed signature verification"
+assert_contains "the app failed signature verification: $destination"
 assert_contains "removed the unverified install"
 assert_absent "$destination"
 assert_absent "$destination.install-superseded"
@@ -926,10 +1075,10 @@ superseded=$destination.install-superseded
 make_recovery_app "$destination"
 old_inode=$(inode "$destination")
 export STUB_BUILD_SUCCEEDS=true
-export STUB_FAIL_VERIFY_CALL=3
+export STUB_FAIL_VERIFY_CALL=4
 run_installer
 assert_rc 1
-assert_contains "the installed app failed signature verification"
+assert_contains "the app failed signature verification: $destination"
 assert_contains "restored the previous install"
 assert_exists "$destination/Contents/marker"
 assert_absent "$superseded"
@@ -1002,7 +1151,7 @@ export STUB_BUILD_SUCCEEDS=true
 export STUB_INTERLOPER_ON_VERIFY_DEST=$destination
 run_installer
 assert_rc 1
-assert_contains "the installed app failed signature verification"
+assert_contains "the app failed signature verification: $destination"
 assert_contains "something else now occupies $destination"
 assert_contains "previous install was left at $superseded"
 assert_exists "$destination/marker"
@@ -1109,6 +1258,166 @@ assert_rc 1
 assert_contains "--daemon-path is not an executable file"
 assert_absent "$CASE_DIR/xcodebuild-called"
 
+begin_case "ad-hoc signing is rejected before building" ad-hoc
+export STUB_SIGNING_IDENTITY=-
+run_installer
+assert_rc 1
+assert_contains "ad-hoc signing cannot authorize the Data Protection Keychain access group"
+assert_absent "$CASE_DIR/xcodebuild-called"
+
+begin_case "profile authorization mismatch fails before replacement" profile-mismatch
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_PROFILE_KEYCHAIN_GROUP=ABCDE12345.ai.freeside.other
+run_installer
+assert_rc 1
+assert_contains "the profile-authorized Keychain access group"
+assert_inode "$destination" "$old_inode" \
+    "profile mismatch replaced the existing app"
+
+begin_case "signed macOS application identifier mismatch fails before replacement" signed-app-id-mismatch
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_SIGNED_APPLICATION_ID=ABCDE12345.ai.freeside.other
+run_installer
+assert_rc 1
+assert_contains "the signed application identifier"
+assert_inode "$destination" "$old_inode" \
+    "signed application identifier mismatch replaced the existing app"
+
+begin_case "profile application identifier mismatch fails before replacement" profile-app-id-mismatch
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_PROFILE_APPLICATION_ID=ABCDE12345.ai.freeside.other
+run_installer
+assert_rc 1
+assert_contains "the profile-authorized application identifier"
+assert_inode "$destination" "$old_inode" \
+    "profile application identifier mismatch replaced the existing app"
+
+begin_case "profile team entitlement mismatch fails before replacement" profile-team-mismatch
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_PROFILE_TEAM_ENTITLEMENT=ZXCVB67890
+run_installer
+assert_rc 1
+assert_contains "the profile-authorized team identifier"
+assert_inode "$destination" "$old_inode" \
+    "profile team entitlement mismatch replaced the existing app"
+
+begin_case "profile signer mismatch fails before replacement" profile-signer-mismatch
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_PROFILE_CERTIFICATE=b3RoZXIgY2VydGlmaWNhdGU=
+run_installer
+assert_rc 1
+assert_contains "the selected signing certificate is not authorized"
+assert_inode "$destination" "$old_inode" \
+    "profile signer mismatch replaced the existing app"
+
+begin_case "profile signer allowlist may match after another certificate" profile-signer-second-entry
+destination=$CASE_DIR/Applications/Freeside.app
+export STUB_BUILD_SUCCEEDS=true
+export STUB_PROFILE_CERTIFICATE=b3RoZXIgY2VydGlmaWNhdGU=
+export STUB_PROFILE_CERTIFICATE_1=Zml4dHVyZSBjZXJ0aWZpY2F0ZQ==
+run_installer
+assert_rc 0
+assert_exists "$destination"
+assert_file_contains \
+    "$destination/Contents/embedded.provisionprofile" \
+    'DeveloperCertificates.1=Zml4dHVyZSBjZXJ0aWZpY2F0ZQ=='
+
+begin_case "malformed profile signer fails before replacement" malformed-profile-signer
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_PROFILE_CERTIFICATE='not base64!'
+run_installer
+assert_rc 1
+assert_contains "the profile has a malformed developer certificate at index 0"
+assert_inode "$destination" "$old_inode" \
+    "malformed profile signer replaced the existing app"
+
+begin_case "team wildcard profile authorizes the exact signed group" profile-wildcard
+destination=$CASE_DIR/Applications/Freeside.app
+export STUB_BUILD_SUCCEEDS=true
+export STUB_PROFILE_APPLICATION_ID='ABCDE12345.*'
+export STUB_PROFILE_KEYCHAIN_GROUP='ABCDE12345.*'
+run_installer
+assert_rc 0
+assert_exists "$destination"
+assert_file_contains \
+    "$destination/Contents/embedded.provisionprofile" \
+    'Entitlements.keychain-access-groups.0=ABCDE12345.*'
+
+begin_case "scoped profile wildcards authorize exact signed identifiers" scoped-profile-wildcard
+destination=$CASE_DIR/Applications/Freeside.app
+export STUB_BUILD_SUCCEEDS=true
+export STUB_PROFILE_APPLICATION_ID='ABCDE12345.ai.freeside.*'
+export STUB_PROFILE_KEYCHAIN_GROUP='ABCDE12345.ai.freeside.*'
+run_installer
+assert_rc 0
+assert_exists "$destination"
+assert_file_contains \
+    "$destination/Contents/entitlements.fixture" \
+    'com.apple.application-identifier=ABCDE12345.ai.freeside.app.macos'
+
+begin_case "profile group allowlist may match after an unrelated entry" profile-group-second-entry
+destination=$CASE_DIR/Applications/Freeside.app
+export STUB_BUILD_SUCCEEDS=true
+export STUB_PROFILE_KEYCHAIN_GROUP=com.apple.token
+export STUB_PROFILE_KEYCHAIN_GROUP_1='ABCDE12345.ai.freeside.*'
+run_installer
+assert_rc 0
+assert_exists "$destination"
+assert_file_contains \
+    "$destination/Contents/embedded.provisionprofile" \
+    'Entitlements.keychain-access-groups.1=ABCDE12345.ai.freeside.*'
+
+begin_case "legacy App ID prefix is verified independently of team" legacy-prefix
+destination=$CASE_DIR/Applications/Freeside.app
+export STUB_BUILD_SUCCEEDS=true
+export STUB_PROFILE_APPLICATION_PREFIX=ZXCVB67890
+export STUB_PROFILE_APPLICATION_ID=ZXCVB67890.ai.freeside.app.macos
+export STUB_PROFILE_KEYCHAIN_GROUP='ZXCVB67890.*'
+export STUB_SIGNED_APPLICATION_ID=ZXCVB67890.ai.freeside.app.macos
+export STUB_SIGNED_KEYCHAIN_GROUP=ZXCVB67890.ai.freeside.app.macos
+run_installer
+assert_rc 0
+assert_exists "$destination"
+assert_file_contains \
+    "$destination/Contents/embedded.provisionprofile" \
+    'TeamIdentifier.0=ABCDE12345'
+assert_file_contains \
+    "$destination/Contents/embedded.provisionprofile" \
+    'ApplicationIdentifierPrefix.0=ZXCVB67890'
+assert_file_contains \
+    "$destination/Contents/entitlements.fixture" \
+    'keychain-access-groups.0=ZXCVB67890.ai.freeside.app.macos'
+
+begin_case "post-sign entitlement mismatch fails before replacement" entitlement-mismatch
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_CODESIGN_DROP_ENTITLEMENTS=true
+run_installer
+assert_rc 1
+assert_contains "the signed Keychain access group"
+assert_inode "$destination" "$old_inode" \
+    "post-sign entitlement mismatch replaced the existing app"
+
 begin_case "daemon is bundled and state paths are templated before the final seal" 29
 destination=$CASE_DIR/Applications/Freeside.app
 export STUB_BUILD_SUCCEEDS=true
@@ -1129,6 +1438,16 @@ assert_program_arguments "$agent" \
     -listen 127.0.0.1:7331
 assert_file_contains "$destination/Contents/Resources/freesided" "#!/usr/bin/env bash"
 assert_exists "$CASE_DIR/codesign-sign-called"
+assert_file_contains "$CASE_DIR/xcodebuild-args" "-allowProvisioningUpdates"
+assert_file_contains "$CASE_DIR/xcodebuild-args" "CODE_SIGN_STYLE=Automatic"
+assert_file_contains "$CASE_DIR/xcodebuild-args" "CODE_SIGN_IDENTITY=Apple Development"
+assert_file_contains "$CASE_DIR/xcodebuild-args" "DEVELOPMENT_TEAM=ABCDE12345"
+assert_file_omits "$CASE_DIR/xcodebuild-args" "CODE_SIGN_STYLE=Manual"
+assert_file_contains "$CASE_DIR/codesign-sign-calls" "--entitlements"
+assert_file_contains \
+    "$destination/Contents/entitlements.fixture" \
+    "keychain-access-groups.0=ABCDE12345.ai.freeside.app.macos"
+assert_exists "$destination/Contents/embedded.provisionprofile"
 assert_file_contains \
     "$SCRIPT_DIR/../app/Apps/macOS/LaunchAgents/ai.freeside.daemon.plist" \
     "Contents/Resources/freesided"

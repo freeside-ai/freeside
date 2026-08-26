@@ -4,15 +4,15 @@
 #
 # Usage: install-mac-app.sh --daemon-path <absolute-path> [--server-url <url>] [--launch]
 #
-# Builds the Release product, signs it with a stable identity, and
+# Builds the Release product with automatic provisioning, signs it with a
+# stable Apple Development identity, and
 # installs or replaces Freeside.app at a fixed path. Re-running it after
 # a source change updates the installed app in place without disturbing
-# the Keychain-held device credential: the bundle identifier, install
-# path, and signing identity stay fixed across runs, so the credential
-# item's access control still names the same application and the
-# operator never re-pairs. The script prints the designated requirement
-# and warns loudly when an update changes it, because that change — not
-# the rebuild — is what costs the pairing.
+# the Data Protection Keychain-held device credential: the provisioned App ID
+# prefix and bundle identifier stay fixed across runs, while the Team ID is
+# verified independently. A valid legacy file-based credential is migrated
+# once by the app; that transition may present one final legacy ACL prompt,
+# while later launches are silent.
 #
 # --server-url persists the daemon URL into the installed app's
 # preferences (`AppSession.fromEnvironment` reads `FreesideServerURL`
@@ -23,18 +23,15 @@
 # before the app receives its final code-signature seal.
 #
 # Signing identity, in resolution order:
-#   FREESIDE_MAC_SIGNING_IDENTITY  explicit codesign identity, by name or
-#                                  SHA-1 hash; "-" selects ad-hoc signing
+#   FREESIDE_MAC_SIGNING_IDENTITY  explicit Apple Development identity, by
+#                                  name or SHA-1 hash
 #   otherwise                      the sole "Apple Development:" identity
 #                                  in the login keychain (Xcode's free
 #                                  personal team mints one once an Apple
 #                                  ID is added under Settings > Accounts)
 #
-# Ad-hoc signing stays opt-in rather than a silent fallback: its
-# designated requirement is the code directory hash, which changes on
-# every build, so each update presents as a different application and
-# costs a Keychain prompt or a re-pair. Signing exists here for that
-# stability, not for Gatekeeper.
+# Ad-hoc signing is rejected: it cannot carry the profile-authorized private
+# Keychain access group that the installed operator client requires.
 #
 # Environment:
 #   FREESIDE_MAC_INSTALL_DIR  install root (default: ~/Applications)
@@ -348,23 +345,54 @@ restore_interrupted_install
 
 resolve_identity() {
     if [[ -n "${FREESIDE_MAC_SIGNING_IDENTITY:-}" ]]; then
-        printf '%s' "$FREESIDE_MAC_SIGNING_IDENTITY"
+        if [[ "$FREESIDE_MAC_SIGNING_IDENTITY" == - || \
+            "$FREESIDE_MAC_SIGNING_IDENTITY" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+            printf '%s' "$FREESIDE_MAC_SIGNING_IDENTITY"
+            return
+        fi
+        local matches match_count
+        matches="$(security find-identity -v -p codesigning 2>/dev/null |
+            awk -v want="$FREESIDE_MAC_SIGNING_IDENTITY" '
+                {
+                    hash = $2
+                    name = $0
+                    sub(/^[^"]*"/, "", name)
+                    sub(/"[^"]*$/, "", name)
+                    if (name == want && length(hash) == 40 &&
+                        hash ~ /^[[:xdigit:]]+$/) print hash
+                }
+            ')"
+        match_count=0
+        if [[ -n "$matches" ]]; then
+            match_count=$(printf '%s\n' "$matches" | wc -l | tr -d ' ')
+        fi
+        [[ "$match_count" -eq 1 ]] ||
+            die "the requested signing identity '$FREESIDE_MAC_SIGNING_IDENTITY' did not resolve to exactly one certificate; use its SHA-1 fingerprint"
+        printf '%s' "$matches"
         return
     fi
     local candidates
     candidates="$(security find-identity -v -p codesigning 2>/dev/null |
-        sed -n 's/.*"\(Apple Development: .*\)"$/\1/p')"
+        awk '
+            {
+                hash = $2
+                name = $0
+                sub(/^[^"]*"/, "", name)
+                sub(/"[^"]*$/, "", name)
+                if (name ~ /^Apple Development: / && length(hash) == 40 &&
+                    hash ~ /^[[:xdigit:]]+$/) print hash "\t" name
+            }
+        ')"
     local count=0
     if [[ -n "$candidates" ]]; then
         count="$(printf '%s\n' "$candidates" | wc -l | tr -d ' ')"
     fi
     case "$count" in
-    1) printf '%s' "$candidates" ;;
+    1) printf '%s' "${candidates%%[[:space:]]*}" ;;
     0)
         die "no 'Apple Development' signing identity found. Add an Apple ID in
   Xcode > Settings > Accounts to mint one from the free personal team, or set
-  FREESIDE_MAC_SIGNING_IDENTITY (use '-' for ad-hoc signing, which costs the
-  pairing on every update)."
+  FREESIDE_MAC_SIGNING_IDENTITY to an Apple Development identity."
         ;;
     *)
         die "several 'Apple Development' identities found; set
@@ -372,6 +400,26 @@ resolve_identity() {
 $(printf '%s\n' "$candidates" | sed 's/^/    /')"
         ;;
     esac
+}
+
+identity_certificate() {
+    if [[ "$1" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+        security find-certificate -a -Z -p 2>/dev/null |
+            awk -v want="$1" '
+                /^SHA-1 hash:/ { sel = (toupper($NF) == toupper(want)); next }
+                /^SHA-256 hash:/ { next }
+                sel
+            '
+        return
+    fi
+    security find-certificate -c "$1" -p 2>/dev/null
+}
+
+team_id_of_identity() {
+    identity_certificate "$1" |
+        openssl x509 -noout -subject -nameopt multiline 2>/dev/null |
+        sed -n 's/^[[:space:]]*organizationalUnitName[[:space:]]*=[[:space:]]*//p' |
+        head -1
 }
 
 # codesign prints the requirement on stderr, and marks an implicit one
@@ -382,13 +430,123 @@ designated_requirement() {
         sed -n 's/^#* *designated => //p'
 }
 
+plist_value() {
+    plutil -extract "$2" raw -o - "$1" 2>/dev/null
+}
+
+require_plist_value() {
+    local plist=$1 key=$2 expected=$3 description=$4 actual
+    actual=$(plist_value "$plist" "$key") ||
+        die "$description is missing from $plist"
+    [[ "$actual" == "$expected" ]] ||
+        die "$description is '$actual', expected '$expected'"
+}
+
+profile_authorizes() {
+    local authorization=$1 expected=$2 prefix
+    [[ "$authorization" == "$expected" ]] && return 0
+    [[ "$authorization" == *\* ]] || return 1
+    prefix=${authorization%\*}
+    [[ "$prefix" != *\* && "$expected" == "$prefix"* ]]
+}
+
+require_plist_authorization() {
+    local plist=$1 key=$2 expected=$3 description=$4 actual
+    actual=$(plist_value "$plist" "$key") ||
+        die "$description is missing from $plist"
+    profile_authorizes "$actual" "$expected" ||
+        die "$description is '$actual', which does not authorize '$expected'"
+}
+
+require_plist_array_authorization() {
+    local plist=$1 key=$2 expected=$3 description=$4 actual index=0
+    while actual=$(plist_value "$plist" "$key.$index"); do
+        profile_authorizes "$actual" "$expected" && return 0
+        index=$((index + 1))
+    done
+    ((index > 0)) || die "$description is missing from $plist"
+    die "$description does not authorize '$expected'"
+}
+
+require_profile_signer() {
+    local profile_plist=$1
+    local profile_certificate="$build_dir/FreesideMac.profile-signer.cer"
+    local encoded_certificate index=0
+    while encoded_certificate=$(plist_value \
+        "$profile_plist" "DeveloperCertificates.$index"); do
+        [[ -n "$encoded_certificate" && \
+            "$encoded_certificate" =~ ^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$ ]] ||
+            die "the profile has a malformed developer certificate at index $index"
+        printf '%s' "$encoded_certificate" |
+            openssl base64 -d -A -out "$profile_certificate" 2>/dev/null ||
+            die "the profile has a malformed developer certificate at index $index"
+        cmp -s "$signing_certificate" "$profile_certificate" && return
+        index=$((index + 1))
+    done
+    ((index > 0)) ||
+        die "the profile has no authorized developer certificates: $profile_plist"
+    die "the selected signing certificate is not authorized by $profile_plist"
+}
+
+verify_provisioned_app() {
+    local candidate=$1 entitlements=$2
+    local profile="$candidate/Contents/embedded.provisionprofile"
+    local profile_plist="$build_dir/FreesideMac.verified-profile.plist"
+    local application_prefix application_identifier
+
+    codesign --verify --strict "$candidate" ||
+        die "the app failed signature verification: $candidate"
+    codesign --display --entitlements :- "$candidate" >"$entitlements" 2>/dev/null ||
+        die "could not read the app's signed entitlements: $candidate"
+    [[ -s "$entitlements" ]] ||
+        die "the app has no signed entitlements: $candidate"
+    [[ -f "$profile" ]] ||
+        die "the app has no embedded provisioning profile: $candidate"
+    security cms -D -i "$profile" >"$profile_plist" 2>/dev/null ||
+        die "could not decode the app's embedded provisioning profile: $candidate"
+    require_profile_signer "$profile_plist"
+
+    application_prefix=$(plist_value "$profile_plist" ApplicationIdentifierPrefix.0) ||
+        die "the profile application-identifier prefix is missing from $profile_plist"
+    [[ "$application_prefix" =~ ^[A-Z0-9]{10}$ ]] ||
+        die "the profile application-identifier prefix is '$application_prefix', expected a 10-character identifier"
+    application_identifier="$application_prefix.$bundle_id"
+
+    require_plist_value "$entitlements" 'com\.apple\.application-identifier' \
+        "$application_identifier" "the signed application identifier"
+    require_plist_value "$entitlements" 'com\.apple\.developer\.team-identifier' \
+        "$team_id" "the signed team identifier"
+    require_plist_value "$entitlements" keychain-access-groups.0 \
+        "$application_identifier" "the signed Keychain access group"
+    if plist_value "$entitlements" keychain-access-groups.1 >/dev/null; then
+        die "the app has an unexpected additional Keychain access group"
+    fi
+
+    require_plist_value "$profile_plist" TeamIdentifier.0 \
+        "$team_id" "the profile Team ID"
+    require_plist_value \
+        "$profile_plist" 'Entitlements.com\.apple\.developer\.team-identifier' \
+        "$team_id" "the profile-authorized team identifier"
+    require_plist_authorization \
+        "$profile_plist" 'Entitlements.com\.apple\.application-identifier' \
+        "$application_identifier" \
+        "the profile-authorized application identifier"
+    require_plist_array_authorization \
+        "$profile_plist" Entitlements.keychain-access-groups \
+        "$application_identifier" \
+        "the profile-authorized Keychain access group"
+}
+
 identity="$(resolve_identity)"
 if [[ "$identity" == "-" ]]; then
-    echo "install-mac-app: signing ad-hoc; every update will change the" >&2
-    echo "  designated requirement, so the device must be re-paired." >&2
-else
-    echo "install-mac-app: signing identity: $identity"
+    die "ad-hoc signing cannot authorize the Data Protection Keychain access group.
+  Add an Apple ID in Xcode > Settings > Accounts and use its Apple Development identity."
 fi
+team_id=$(team_id_of_identity "$identity") || team_id=""
+[[ "$team_id" =~ ^[A-Z0-9]{10}$ ]] ||
+    die "could not derive a 10-character Team ID from the '$identity' certificate"
+echo "install-mac-app: signing identity: $identity"
+echo "install-mac-app: signing team: $team_id"
 
 # Never replace a bundle that is not a Freeside client: the install root
 # is the operator's own ~/Applications, and a name collision there is
@@ -446,6 +604,12 @@ mkdir -p "$daemon_state_dir"
 chmod 700 "$daemon_state_dir"
 
 mkdir -p "$build_dir"
+signing_certificate="$build_dir/FreesideMac.selected-signer.cer"
+identity_certificate "$identity" |
+    openssl x509 -outform DER -out "$signing_certificate" 2>/dev/null ||
+    die "could not encode the '$identity' signing certificate"
+[[ -s "$signing_certificate" ]] ||
+    die "the '$identity' signing certificate is empty"
 build_log="$build_dir/xcodebuild.log"
 echo "install-mac-app: building Release (log: $build_log)"
 if ! xcodebuild \
@@ -455,9 +619,10 @@ if ! xcodebuild \
     -destination 'platform=macOS' \
     -skipPackagePluginValidation \
     -derivedDataPath "$build_dir" \
-    CODE_SIGN_STYLE=Manual \
-    CODE_SIGN_IDENTITY="$identity" \
-    PROVISIONING_PROFILE_SPECIFIER="" \
+    -allowProvisioningUpdates \
+    CODE_SIGN_STYLE=Automatic \
+    CODE_SIGN_IDENTITY="Apple Development" \
+    DEVELOPMENT_TEAM="$team_id" \
     build >"$build_log" 2>&1; then
     tail -40 "$build_log" >&2
     die "build failed; full log at $build_log"
@@ -465,6 +630,8 @@ fi
 
 built_app="$build_dir/Build/Products/Release/FreesideMac.app"
 [[ -d "$built_app" ]] || die "build produced no app at $built_app"
+preserved_entitlements="$build_dir/FreesideMac.xcode.entitlements"
+verify_provisioned_app "$built_app" "$preserved_entitlements"
 launch_agent_plist="$built_app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist"
 [[ -f "$launch_agent_plist" ]] ||
     die "the built app contains no bundled LaunchAgent at $launch_agent_plist"
@@ -521,17 +688,18 @@ templated_stderr=$(plutil -extract StandardErrorPath raw -o - "$launch_agent_pli
     die "the templated daemon stderr path does not match the expected value (see #762)"
 
 # Templating changes the outer bundle seal produced by Xcode. Re-sign only
-# after every host-local path is final. The helper gets the same identity first
-# so Service Management can validate it, then the outer seal binds that exact
-# executable before the artifact can replace the installed app.
+# after every host-local path is final, explicitly reusing Xcode's provisioned
+# entitlements. The helper gets the same identity first so Service Management
+# can validate it, then the outer seal binds that exact executable before the
+# artifact can replace the installed app.
 codesign --force --sign "$identity" "$bundled_daemon" ||
     die "the bundled freesided executable could not be signed"
 codesign --verify --strict "$bundled_daemon" ||
     die "the bundled freesided executable failed signature verification"
-codesign --force --sign "$identity" "$built_app" ||
+codesign --force --sign "$identity" --entitlements "$preserved_entitlements" "$built_app" ||
     die "the templated app could not be signed"
-codesign --verify --strict "$built_app" ||
-    die "the built app failed signature verification"
+final_entitlements="$build_dir/FreesideMac.final.entitlements"
+verify_provisioned_app "$built_app" "$final_entitlements"
 
 # A running instance holds the bundle open and would keep serving stale
 # code after the swap. The client's disk cache is written atomically
@@ -662,8 +830,8 @@ mv "$staged" "$destination"
 # copy or the rename fails here, and dropping the backup first would
 # leave the operator an unusable app and nothing to fall back to.
 new_requirement="$(designated_requirement "$destination")"
-codesign --verify --strict "$destination" ||
-    die "the installed app failed signature verification"
+installed_entitlements="$build_dir/FreesideMac.installed.entitlements"
+verify_provisioned_app "$destination" "$installed_entitlements"
 trap - EXIT INT TERM
 rm -rf "$superseded"
 
