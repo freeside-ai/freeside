@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // FindingAdjudicationDecision reconstructs the current adjudication item and
@@ -64,10 +65,11 @@ func (tx *ReadTx) FindingAdjudicationDecision(
 
 const putFindingAdjudicationSQL = `
 INSERT INTO finding_adjudications
-    (run_id, round, content_digest, finding_batch_digest, approved_spec_digest,
-     instruction_snapshot_digest, resolved_policy_digest, created_at, body_digest, body)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (run_id, round) DO NOTHING`
+    (run_id, round, revision, predecessor_digest, content_digest,
+     finding_batch_digest, approved_spec_digest, instruction_snapshot_digest,
+     resolved_policy_digest, created_at, body_digest, body)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (run_id, round, revision) DO NOTHING`
 
 // validateFindingAdjudicationBinding re-runs every authoritative join instead of
 // trusting the artifact's copied keys: the review round must exist, the artifact's
@@ -125,6 +127,144 @@ func (tx *ReadTx) validateFindingAdjudicationBinding(
 	return nil
 }
 
+// validateAdjudicationFeedback re-derives a successor's feedback provenance
+// from persisted state. The invocation's copied conversation binding, the
+// dispatch intent's item binding, and the artifact's copied prefix digest are
+// never trusted. A new successor must follow the one item-version advance and
+// agent message committed by completion acceptance. Historical reconstruction
+// permits later current versions because attention-item versions only advance
+// and their adjudication binding is immutable.
+func (tx *ReadTx) validateAdjudicationFeedback(
+	ctx context.Context, predecessor domain.FindingAdjudication,
+	feedback domain.AdjudicationFeedback, requireCurrentItemVersion bool,
+) error {
+	invocation, err := tx.GetAgentInvocation(ctx, feedback.InvocationID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	if invocation.ConversationID == nil || *invocation.ConversationID != feedback.ConversationID ||
+		invocation.ThroughSequence != feedback.ThroughSequence {
+		return domain.ErrParentKeyMismatch
+	}
+	intent, err := tx.GetOutbox(ctx, string(feedback.InvocationID))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	if intent.Quarantined() || intent.Kind != string(domain.AgentInvocationRequestedKind) ||
+		intent.IdempotencyKey != string(feedback.InvocationID) {
+		return domain.ErrParentKeyMismatch
+	}
+	request, err := domain.DecodeConversationInvocationIntent(intent.Payload)
+	if err != nil || request.InvocationID != feedback.InvocationID ||
+		request.ConversationID != feedback.ConversationID {
+		return domain.ErrParentKeyMismatch
+	}
+	completion, err := tx.GetInbox(ctx, string(feedback.InvocationID))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	if completion.Kind != "agent_completion" ||
+		completion.IdempotencyKey != string(feedback.InvocationID) ||
+		completion.Status != outboxStatusPending {
+		return domain.ErrParentKeyMismatch
+	}
+	var accepted struct {
+		InvocationID domain.InvocationID `json:"invocation_id"`
+		Body         string              `json:"body"`
+		Attachments  []domain.Digest     `json:"attachments"`
+	}
+	if err := strictjson.Decode(completion.Payload, &accepted,
+		strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil ||
+		accepted.InvocationID != feedback.InvocationID {
+		return domain.ErrParentKeyMismatch
+	}
+	item, err := tx.GetAttentionItem(ctx, request.ItemID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	completedItemVersion := request.ItemVersion + 1
+	if completedItemVersion <= request.ItemVersion ||
+		item.Type != domain.AttentionFindingAdjudication || item.FindingAdjudication == nil ||
+		item.ConversationID == nil || *item.ConversationID != request.ConversationID ||
+		item.ItemVersion < completedItemVersion ||
+		(requireCurrentItemVersion &&
+			(item.ItemVersion != completedItemVersion || item.Status != domain.StatusOpen)) ||
+		item.FindingAdjudication.AdjudicationDigest != predecessor.Digest ||
+		item.FindingAdjudication.RunID != predecessor.RunID ||
+		item.FindingAdjudication.Round != predecessor.Round {
+		return domain.ErrParentKeyMismatch
+	}
+	conversation, err := tx.GetConversation(ctx, feedback.ConversationID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	digest, _, err := conversation.PrefixContent(feedback.ThroughSequence)
+	if err != nil {
+		return domain.ErrParentKeyMismatch
+	}
+	if digest != feedback.PrefixDigest {
+		return domain.ErrParentKeyMismatch
+	}
+	replyIndex := feedback.ThroughSequence
+	if replyIndex >= len(conversation.Messages) {
+		return domain.ErrParentKeyMismatch
+	}
+	reply := conversation.Messages[replyIndex]
+	if reply.ID != domain.MessageID("msg-agent-"+string(feedback.InvocationID)) ||
+		reply.Sequence != feedback.ThroughSequence+1 || reply.Author != domain.AuthorAgent ||
+		reply.Body != accepted.Body || !slices.Equal(reply.Attachments, accepted.Attachments) {
+		return domain.ErrParentKeyMismatch
+	}
+	return nil
+}
+
+// validateFindingAdjudicationSuccessor re-runs the append-only chain gate from
+// durable predecessor, invocation, and conversation state.
+func (tx *ReadTx) validateFindingAdjudicationSuccessor(
+	ctx context.Context, artifact domain.FindingAdjudication,
+	requireCurrentItemVersion bool,
+) error {
+	if artifact.Revision == 1 {
+		return nil
+	}
+	if artifact.PredecessorDigest == nil || artifact.Feedback == nil {
+		return domain.ErrParentKeyMismatch
+	}
+	predecessor, err := tx.GetFindingAdjudication(ctx, *artifact.PredecessorDigest)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	if predecessor.RunID != artifact.RunID || predecessor.Round != artifact.Round ||
+		predecessor.Revision+1 != artifact.Revision ||
+		predecessor.FindingBatchDigest != artifact.FindingBatchDigest ||
+		predecessor.ApprovedSpecDigest != artifact.ApprovedSpecDigest ||
+		predecessor.InstructionSnapshotDigest != artifact.InstructionSnapshotDigest ||
+		predecessor.ResolvedPolicyDigest != artifact.ResolvedPolicyDigest {
+		return domain.ErrParentKeyMismatch
+	}
+	return tx.validateAdjudicationFeedback(
+		ctx, predecessor, *artifact.Feedback, requireCurrentItemVersion,
+	)
+}
+
 func (tx *ReadTx) reviewRecordForRound(
 	ctx context.Context, runID domain.RunID, round int,
 ) (domain.ReviewRecord, error) {
@@ -139,11 +279,9 @@ func (tx *ReadTx) reviewRecordForRound(
 	return tx.GetReviewRecord(ctx, domain.InvocationID(invocationID))
 }
 
-// PutFindingAdjudication persists one round's immutable adjudication artifact.
-// It binds the artifact to its review round and requires the entry finding set
-// to equal that round's finding set, then writes write-once by (run_id, round):
-// a byte-identical replay converges, and a differing artifact for the same round
-// is an immutable conflict.
+// PutFindingAdjudication appends one immutable revision to a review round. A
+// byte-identical replay converges; a different artifact at the same revision,
+// a skipped revision, or a stale-parent fork is an immutable conflict.
 func (tx *WriteTx) PutFindingAdjudication(
 	ctx context.Context, artifact domain.FindingAdjudication,
 ) error {
@@ -153,29 +291,67 @@ func (tx *WriteTx) PutFindingAdjudication(
 	if err := tx.validateFindingAdjudicationBinding(ctx, artifact); err != nil {
 		return fmt.Errorf("put finding adjudication %q round %d binding: %w", artifact.RunID, artifact.Round, err)
 	}
-	// A replay must reconstruct the already-persisted row before putImmutable's
-	// byte comparison. Otherwise corruption limited to a copied lookup column
-	// (content_digest, created_at, ...) could be hidden by an unchanged canonical
-	// body, and every later keyed read would then fail its cross-check (mirrors
-	// PutFindingDisposition).
-	if _, err := tx.GetFindingAdjudicationForRound(ctx, artifact.RunID, artifact.Round); err != nil &&
-		!errors.Is(err, ErrNotFound) {
-		return fmt.Errorf("put finding adjudication %q round %d existing row: %w", artifact.RunID, artifact.Round, err)
-	}
 	body, err := encode(artifact)
 	if err != nil {
 		return fmt.Errorf("put finding adjudication %q round %d: %w", artifact.RunID, artifact.Round, err)
 	}
+	// Reconstruct an existing exact revision before replay comparison. Otherwise
+	// corruption in a copied lookup column could hide behind an unchanged body.
+	if _, err := tx.getFindingAdjudicationRevision(ctx, artifact.RunID, artifact.Round, artifact.Revision); err == nil {
+		return tx.putFindingAdjudicationBody(ctx, artifact, body)
+	} else if !errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("put finding adjudication %q round %d revision %d existing row: %w",
+			artifact.RunID, artifact.Round, artifact.Revision, err)
+	}
+
+	head, err := tx.GetFindingAdjudicationForRound(ctx, artifact.RunID, artifact.Round)
+	if artifact.Revision == 1 {
+		if err == nil {
+			return fmt.Errorf("put finding adjudication %q round %d initial after revision %d: %w",
+				artifact.RunID, artifact.Round, head.Revision, ErrImmutableConflict)
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("put finding adjudication %q round %d current head: %w", artifact.RunID, artifact.Round, err)
+		}
+	} else {
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return fmt.Errorf("put finding adjudication %q round %d successor without head: %w",
+					artifact.RunID, artifact.Round, domain.ErrParentKeyMismatch)
+			}
+			return fmt.Errorf("put finding adjudication %q round %d current head: %w", artifact.RunID, artifact.Round, err)
+		}
+		if artifact.PredecessorDigest == nil || *artifact.PredecessorDigest != head.Digest ||
+			artifact.Revision != head.Revision+1 {
+			return fmt.Errorf("put finding adjudication %q round %d revision %d after head revision %d: %w",
+				artifact.RunID, artifact.Round, artifact.Revision, head.Revision, ErrImmutableConflict)
+		}
+		if err := tx.validateFindingAdjudicationSuccessor(ctx, artifact, true); err != nil {
+			return fmt.Errorf("put finding adjudication %q round %d successor binding: %w", artifact.RunID, artifact.Round, err)
+		}
+	}
+	return tx.putFindingAdjudicationBody(ctx, artifact, body)
+}
+
+func (tx *WriteTx) putFindingAdjudicationBody(
+	ctx context.Context, artifact domain.FindingAdjudication, body string,
+) error {
+	var predecessor any
+	if artifact.PredecessorDigest != nil {
+		predecessor = *artifact.PredecessorDigest
+	}
 	if err := tx.putImmutable(ctx, putFindingAdjudicationSQL,
 		[]any{
-			artifact.RunID, artifact.Round, artifact.Digest, artifact.FindingBatchDigest,
+			artifact.RunID, artifact.Round, artifact.Revision, predecessor,
+			artifact.Digest, artifact.FindingBatchDigest,
 			artifact.ApprovedSpecDigest, artifact.InstructionSnapshotDigest,
 			artifact.ResolvedPolicyDigest, formatTime(artifact.CreatedAt),
 			reviewBodyDigest(body), body,
 		},
-		`SELECT body_digest || body FROM finding_adjudications WHERE run_id = ? AND round = ?`,
-		[]any{artifact.RunID, artifact.Round}, reviewBodyAuthority(body)); err != nil {
-		return fmt.Errorf("put finding adjudication %q round %d: %w", artifact.RunID, artifact.Round, err)
+		`SELECT body_digest || body FROM finding_adjudications WHERE run_id = ? AND round = ? AND revision = ?`,
+		[]any{artifact.RunID, artifact.Round, artifact.Revision}, reviewBodyAuthority(body)); err != nil {
+		return fmt.Errorf("put finding adjudication %q round %d revision %d: %w",
+			artifact.RunID, artifact.Round, artifact.Revision, err)
 	}
 	return nil
 }
@@ -185,6 +361,8 @@ func (tx *WriteTx) PutFindingAdjudication(
 type findingAdjudicationRow struct {
 	runID                     string
 	round                     int
+	revision                  int
+	predecessorDigest         sql.NullString
 	contentDigest             string
 	findingBatchDigest        string
 	approvedSpecDigest        string
@@ -195,13 +373,14 @@ type findingAdjudicationRow struct {
 	body                      []byte
 }
 
-const selectFindingAdjudicationColumns = `run_id, round, content_digest,
+const selectFindingAdjudicationColumns = `run_id, round, revision, predecessor_digest, content_digest,
     finding_batch_digest, approved_spec_digest, instruction_snapshot_digest,
     resolved_policy_digest, created_at, body_digest, body`
 
 func scanFindingAdjudicationRow(sc scanner) (findingAdjudicationRow, error) {
 	var row findingAdjudicationRow
-	err := sc.Scan(&row.runID, &row.round, &row.contentDigest, &row.findingBatchDigest,
+	err := sc.Scan(&row.runID, &row.round, &row.revision, &row.predecessorDigest,
+		&row.contentDigest, &row.findingBatchDigest,
 		&row.approvedSpecDigest, &row.instructionSnapshotDigest, &row.resolvedPolicyDigest,
 		&row.createdAt, &row.bodyDigest, &row.body)
 	return row, err
@@ -222,7 +401,7 @@ func (tx *ReadTx) reconstructFindingAdjudication(
 	if err != nil {
 		return domain.FindingAdjudication{}, err
 	}
-	if string(artifact.RunID) != row.runID || artifact.Round != row.round ||
+	if string(artifact.RunID) != row.runID || artifact.Round != row.round || artifact.Revision != row.revision ||
 		string(artifact.Digest) != row.contentDigest ||
 		string(artifact.FindingBatchDigest) != row.findingBatchDigest ||
 		string(artifact.ApprovedSpecDigest) != row.approvedSpecDigest ||
@@ -231,7 +410,14 @@ func (tx *ReadTx) reconstructFindingAdjudication(
 		formatTime(artifact.CreatedAt) != row.createdAt {
 		return domain.FindingAdjudication{}, errRowInconsistent
 	}
+	if (artifact.PredecessorDigest != nil) != row.predecessorDigest.Valid ||
+		(artifact.PredecessorDigest != nil && string(*artifact.PredecessorDigest) != row.predecessorDigest.String) {
+		return domain.FindingAdjudication{}, errRowInconsistent
+	}
 	if err := tx.validateFindingAdjudicationBinding(ctx, artifact); err != nil {
+		return domain.FindingAdjudication{}, err
+	}
+	if err := tx.validateFindingAdjudicationSuccessor(ctx, artifact, false); err != nil {
 		return domain.FindingAdjudication{}, err
 	}
 	return artifact, nil
@@ -254,13 +440,32 @@ func (tx *ReadTx) GetFindingAdjudication(
 	return artifact, nil
 }
 
+func (tx *ReadTx) getFindingAdjudicationRevision(
+	ctx context.Context, runID domain.RunID, round, revision int,
+) (domain.FindingAdjudication, error) {
+	row, err := scanFindingAdjudicationRow(tx.tx.QueryRowContext(ctx,
+		`SELECT `+selectFindingAdjudicationColumns+
+			` FROM finding_adjudications WHERE run_id = ? AND round = ? AND revision = ?`,
+		runID, round, revision))
+	if err != nil {
+		return domain.FindingAdjudication{}, fmt.Errorf("get finding adjudication %q round %d revision %d: %w",
+			runID, round, revision, notFoundOr(err))
+	}
+	artifact, err := tx.reconstructFindingAdjudication(ctx, row)
+	if err != nil {
+		return domain.FindingAdjudication{}, fmt.Errorf("get finding adjudication %q round %d revision %d: %w",
+			runID, round, revision, err)
+	}
+	return artifact, nil
+}
+
 // GetFindingAdjudicationForRound reconstructs the artifact for one review round.
 func (tx *ReadTx) GetFindingAdjudicationForRound(
 	ctx context.Context, runID domain.RunID, round int,
 ) (domain.FindingAdjudication, error) {
 	row, err := scanFindingAdjudicationRow(tx.tx.QueryRowContext(ctx,
 		`SELECT `+selectFindingAdjudicationColumns+
-			` FROM finding_adjudications WHERE run_id = ? AND round = ?`, runID, round))
+			` FROM finding_adjudications WHERE run_id = ? AND round = ? ORDER BY revision DESC LIMIT 1`, runID, round))
 	if err != nil {
 		return domain.FindingAdjudication{}, fmt.Errorf("get finding adjudication %q round %d: %w", runID, round, notFoundOr(err))
 	}
@@ -271,17 +476,17 @@ func (tx *ReadTx) GetFindingAdjudicationForRound(
 	return artifact, nil
 }
 
-// ListFindingAdjudications returns one run's adjudication artifacts in round
-// order. It enumerates the whole table and reconstructs every row before the run
-// filter, so a corrupted copied run key cannot move a row out of all keyed reads
-// and make a run's history look complete by omission (the review-record list
-// pattern).
+// ListFindingAdjudications returns one run's adjudication artifacts in round,
+// revision order. It enumerates the whole table and reconstructs every row
+// before the run filter, so a corrupted copied run key cannot move a row out of
+// all keyed reads and make a run's history look complete by omission (the
+// review-record list pattern).
 func (tx *ReadTx) ListFindingAdjudications(
 	ctx context.Context, runID domain.RunID,
 ) ([]domain.FindingAdjudication, error) {
 	rows, err := tx.tx.QueryContext(ctx,
 		`SELECT `+selectFindingAdjudicationColumns+
-			` FROM finding_adjudications ORDER BY run_id, round`)
+			` FROM finding_adjudications ORDER BY run_id, round, revision`)
 	if err != nil {
 		return nil, fmt.Errorf("list finding adjudications %q: %w", runID, err)
 	}

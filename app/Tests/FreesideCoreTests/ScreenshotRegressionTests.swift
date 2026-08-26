@@ -11,11 +11,18 @@
         private struct Surface {
             let name: String
             let width: CGFloat?
+            let colorScheme: ColorScheme
             let view: AnyView
 
-            init(name: String, width: CGFloat? = nil, view: AnyView) {
+            init(
+                name: String,
+                width: CGFloat? = nil,
+                colorScheme: ColorScheme = .light,
+                view: AnyView
+            ) {
                 self.name = name
                 self.width = width
+                self.colorScheme = colorScheme
                 self.view = view
             }
         }
@@ -27,6 +34,7 @@
 
         private let canvasWidth: CGFloat = 960
         private let baselineOperatingSystemKey = "macOS-26.6"
+        private let screenshotNow = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
         private let textSizes = [
             TextSize(name: "xsmall", value: .xSmall),
             TextSize(name: "large", value: .large),
@@ -55,7 +63,8 @@
                         let image = try render(
                             surface.view,
                             at: size.value,
-                            width: surface.width ?? canvasWidth)
+                            width: surface.width ?? canvasWidth,
+                            colorScheme: surface.colorScheme)
                         actual[key] = try digest(image)
                         if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
                             _ = try dump(image, named: key)
@@ -113,11 +122,66 @@
                             selection: .constant(inbox.first?.item.id),
                             launchScope: nil,
                             launchProjectID: nil
-                        ).screenshotContent()
+                        ).screenshotContent(now: screenshotNow)
                     ))
             ]
             surfaces.append(
                 Surface(name: "attachment-states", width: 480, view: await attachmentStates()))
+
+            if let selected = inbox.first?.item {
+                surfaces.append(
+                    Surface(
+                        name: "inbox-selected-differentiate-without-color",
+                        width: 560,
+                        view: AnyView(
+                            VStack(spacing: 8) {
+                                InboxRowView(
+                                    item: selected,
+                                    now: screenshotNow,
+                                    differentiateWithoutColorOverride: true
+                                )
+                                InboxRowView(
+                                    item: selected,
+                                    isSelected: true,
+                                    now: screenshotNow,
+                                    differentiateWithoutColorOverride: true
+                                )
+                            }
+                            .padding()
+                        )))
+                surfaces.append(
+                    Surface(
+                        name: "inbox-selected-differentiate-without-color-dark",
+                        width: 560,
+                        colorScheme: .dark,
+                        view: AnyView(
+                            VStack(spacing: 8) {
+                                InboxRowView(
+                                    item: selected,
+                                    now: screenshotNow,
+                                    differentiateWithoutColorOverride: true
+                                )
+                                InboxRowView(
+                                    item: selected,
+                                    isSelected: true,
+                                    now: screenshotNow,
+                                    differentiateWithoutColorOverride: true
+                                )
+                            }
+                            .padding()
+                        )))
+            }
+
+            var concludedDegraded = AttentionFixtures.degradedReady().item
+            concludedDegraded.status = .resolved
+            surfaces.append(
+                Surface(
+                    name: "inbox-concluded-degraded",
+                    width: 320,
+                    view: AnyView(
+                        InboxRowView(item: concludedDegraded, now: screenshotNow)
+                            .padding()
+                    )))
 
             for snapshot in inbox {
                 let detail = DecisionDetailView(
@@ -290,7 +354,8 @@
         private func render(
             _ view: AnyView,
             at size: DynamicTypeSize,
-            width: CGFloat
+            width: CGFloat,
+            colorScheme: ColorScheme
         ) throws -> CGImage {
             guard let timeZone = TimeZone(secondsFromGMT: 0) else {
                 throw ScreenshotError.missingGMT
@@ -298,7 +363,7 @@
             let root =
                 view
                 .environment(\.dynamicTypeSize, size)
-                .environment(\.colorScheme, .light)
+                .environment(\.colorScheme, colorScheme)
                 .environment(\.locale, Locale(identifier: "en_US_POSIX"))
                 .environment(\.calendar, Calendar(identifier: .gregorian))
                 .environment(\.timeZone, timeZone)

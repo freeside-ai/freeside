@@ -7,6 +7,7 @@ public struct FreesideRootView: View {
     @State private var screen: LaunchInputs.Screen
     @State private var attentionSelection: String?
     @State private var runSelection: String?
+    @State private var technicalDetailsRequest: TechnicalDetailsRevealRequest?
     private let launchColorScheme: ColorScheme?
     private let launchInboxScope: InboxStore.Scope?
     private let launchProjectID: String?
@@ -23,6 +24,7 @@ public struct FreesideRootView: View {
             initialValue: launchInputs.screen == .inbox ? launchInputs.selection : nil)
         _runSelection = State(
             initialValue: launchInputs.screen == .runs ? launchInputs.selection : nil)
+        _technicalDetailsRequest = State(initialValue: nil)
         launchColorScheme = launchInputs.colorScheme
         launchInboxScope = launchInputs.inboxScope
         launchProjectID = launchInputs.projectID
@@ -74,7 +76,10 @@ public struct FreesideRootView: View {
                     case .inbox:
                         InboxView(
                             store: coordinator.store, selection: $attentionSelection,
-                            launchScope: launchInboxScope, launchProjectID: launchProjectID)
+                            launchScope: launchInboxScope, launchProjectID: launchProjectID,
+                            onRevealTechnicalDetails: { itemID in
+                                technicalDetailsRequest = .init(itemID: itemID, nonce: UUID())
+                            })
                     case .runs:
                         RunsListView(
                             runs: coordinator.runs,
@@ -93,6 +98,10 @@ public struct FreesideRootView: View {
         // The heartbeat is the loss detector (plan §5.14); its first
         // round trip also bootstraps a session with no cursors yet.
         .task { await coordinator.heartbeatLoop(every: .seconds(15)) }
+        .onChange(of: attentionSelection) {
+            technicalDetailsRequest = technicalDetailsRequest?.retained(
+                for: attentionSelection)
+        }
     }
 
     @ViewBuilder
@@ -102,7 +111,11 @@ public struct FreesideRootView: View {
             if let attentionSelection {
                 DecisionDetailView(
                     store: coordinator.store, itemID: attentionSelection,
-                    detailsExpanded: launchDetailsExpanded
+                    detailsExpanded: launchDetailsExpanded,
+                    detailsRevealRequest: technicalDetailsRequest,
+                    onConsumeDetailsRevealRequest: { nonce in
+                        technicalDetailsRequest = technicalDetailsRequest?.consuming(nonce)
+                    }
                 )
                 .id(attentionSelection)
             } else {

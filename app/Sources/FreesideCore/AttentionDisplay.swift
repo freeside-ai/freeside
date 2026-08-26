@@ -15,6 +15,21 @@ enum AttentionDisplay {
         let identifier: String?
     }
 
+    struct RowContext: Equatable {
+        struct Segment: Equatable {
+            let value: String
+            let isIdentifier: Bool
+        }
+
+        let project: Segment
+        let workUnit: Segment?
+    }
+
+    struct CopyableSubjectReference: Equatable {
+        let label: String
+        let value: String
+    }
+
     static func title(_ type: Components.Schemas.AttentionType) -> String {
         switch type {
         case .spec_approval: return "Spec approval"
@@ -68,6 +83,56 @@ enum AttentionDisplay {
             return "How should this system-health condition be handled?"
         case .blocked:
             return "What is keeping this run blocked?"
+        }
+    }
+
+    static func rowSummary(_ item: Components.Schemas.AttentionItem) -> String {
+        if item.status != .open {
+            if item._type == .system_health {
+                return "\(label(item.status)): "
+                    + daemonFactSummary(
+                        item.reason, fallback: "A system-health condition was reported.")
+            }
+            return "This \(title(item._type).lowercased()) item is "
+                + "\(label(item.status).lowercased())."
+        }
+        switch item._type {
+        case .spec_approval:
+            return "A specification is ready for approval."
+        case .execution_failure:
+            return "An execution failed and needs a recovery choice."
+        case .agent_question:
+            return "The agent needs an answer before it can continue."
+        case .review_diminishing_returns:
+            return "Review has reached diminishing returns."
+        case .review_dispute:
+            return "A review finding needs a disposition."
+        case .review_contradiction:
+            return "Review contradicted the approved execution contract."
+        case .review_configuration:
+            return "Reviewer configuration no longer matches approved policy."
+        case .finding_adjudication:
+            if let round = item.finding_adjudication?.value1.round {
+                return "Review round \(round) has findings to adjudicate."
+            }
+            return "Review findings need adjudication."
+        case .ready_for_final_review:
+            guard let readiness = item.readiness?.value1 else {
+                return "Verification status is unavailable; final review is requested."
+            }
+            if readiness._class == .ready_degraded {
+                return "Verification is degraded and needs final review."
+            }
+            return "Verification is clean and ready for final review."
+        case .publish_blocked:
+            return "Publication is blocked by a trust-policy check."
+        case .run_proposal:
+            return "A proposed run is ready to start."
+        case .system_health:
+            return daemonFactSummary(
+                item.reason, fallback: "A system-health condition needs attention.")
+        case .blocked:
+            return blockedFactSummary(item.reason)
         }
     }
 
@@ -210,6 +275,95 @@ enum AttentionDisplay {
         }
     }
 
+    static func rowContext(
+        _ item: Components.Schemas.AttentionItem,
+        projectName: String? = nil,
+        workUnitName: String? = nil
+    ) -> RowContext {
+        let project = RowContext.Segment(
+            value: nonempty(projectName) ?? item.project_id,
+            isIdentifier: nonempty(projectName) == nil
+        )
+        let workUnit: RowContext.Segment?
+        switch item.subject {
+        case .run(let run), .proposal_batch(let run):
+            workUnit = .init(
+                value: nonempty(workUnitName) ?? run.subject_id,
+                isIdentifier: nonempty(workUnitName) == nil
+            )
+        case .project, .system:
+            workUnit = nil
+        }
+        return .init(project: project, workUnit: workUnit)
+    }
+
+    static func copyableSubjectReference(
+        _ item: Components.Schemas.AttentionItem
+    ) -> CopyableSubjectReference? {
+        switch item.subject {
+        case .run(let run):
+            return .init(label: "Copy run reference", value: run.subject_id)
+        case .proposal_batch(let batch):
+            return .init(label: "Copy proposal batch reference", value: batch.subject_id)
+        case .project, .system:
+            return nil
+        }
+    }
+
+    static func relativeRowTime(
+        _ item: Components.Schemas.AttentionItem,
+        now: Date
+    ) -> String? {
+        if item.status == .open, let due = item.expires_when {
+            let remaining = due.timeIntervalSince(now)
+            if abs(remaining) < 60 {
+                return "due now"
+            }
+            if remaining > 0 {
+                return "due in \(relativeDuration(remaining))"
+            }
+            return "overdue \(relativeDuration(-remaining))"
+        }
+        let created = rowTimeOrigin(item)
+        guard let created else { return nil }
+        let duration = relativeDuration(max(0, now.timeIntervalSince(created)))
+        return item.status == .open && item._type == .blocked ? "blocked \(duration)" : duration
+    }
+
+    static func exactRowTimestamp(
+        _ item: Components.Schemas.AttentionItem,
+        now: Date
+    ) -> String? {
+        if item.status == .open, let due = item.expires_when {
+            return due.formatted(.iso8601)
+        }
+        return rowTimeOrigin(item)?.formatted(.iso8601)
+    }
+
+    static func showsPriorityBadge(_ priority: Components.Schemas.Priority) -> Bool {
+        switch priority {
+        case .urgent, .high: return true
+        case .normal, .low: return false
+        }
+    }
+
+    static func showsLifecycleBadge(_ status: Components.Schemas.ItemStatus) -> Bool {
+        status != .open
+    }
+
+    static func showsDegradedBadge(_ item: Components.Schemas.AttentionItem) -> Bool {
+        item.readiness?.value1._class == .ready_degraded
+    }
+
+    static func uniqueEvidenceDigests(
+        _ item: Components.Schemas.AttentionItem
+    ) -> [String] {
+        var seen: Set<String> = []
+        return item.evidence_snapshot.compactMap { artifact in
+            seen.insert(artifact.digest).inserted ? artifact.digest : nil
+        }
+    }
+
     static func attachmentDigestRows(
         _ item: Components.Schemas.AttentionItem
     ) -> [BindingRow] {
@@ -242,7 +396,20 @@ enum AttentionDisplay {
         priorProposalDigest: String? = nil,
         proposalDigest: String? = nil
     ) -> [BindingRow] {
-        var rows = [BindingRow(label: "Item version", value: "\(item.item_version)")]
+        var rows: [BindingRow] = []
+        if let created = item.created_at {
+            rows.append(.init(label: "Created", value: created.formatted(.iso8601)))
+        }
+        if let due = item.expires_when {
+            rows.append(.init(label: "Due", value: due.formatted(.iso8601)))
+        }
+        switch item.subject {
+        case .project(let unscoped), .system(let unscoped):
+            rows.append(.init(label: "Subject", value: unscoped.subject_id))
+        case .run, .proposal_batch:
+            break
+        }
+        rows.append(.init(label: "Item version", value: "\(item.item_version)"))
         if !item.pr_head_sha.isEmpty {
             rows.append(.init(label: "PR head", value: item.pr_head_sha))
         }
@@ -260,6 +427,51 @@ enum AttentionDisplay {
         rows.append(contentsOf: readinessSummaryRows(item))
         rows.append(contentsOf: reviewYieldRows(item))
         return rows
+    }
+
+    private static func nonempty(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return value
+    }
+
+    private static func daemonFactSummary(_ fact: String, fallback: String) -> String {
+        let trimmed = fact.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.first else { return fallback }
+        let sentence = first.uppercased() + trimmed.dropFirst()
+        guard let last = sentence.last, !".!?".contains(last) else { return sentence }
+        return sentence + "."
+    }
+
+    private static func blockedFactSummary(_ fact: String) -> String {
+        let stableFact = fact.replacingOccurrences(
+            of: #"\bhas waited \d+[mhd] on\b"#,
+            with: "is waiting on",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        return daemonFactSummary(stableFact, fallback: "A run is waiting on a blocker.")
+    }
+
+    private static func blockedWaitStart(_ fact: String) -> Date? {
+        guard let marker = fact.range(of: " waiting since ", options: .caseInsensitive)
+        else { return nil }
+        let timestamp = fact[marker.upperBound...]
+            .trimmingCharacters(in: CharacterSet(charactersIn: " ."))
+        return try? Date(timestamp, strategy: .iso8601)
+    }
+
+    private static func rowTimeOrigin(_ item: Components.Schemas.AttentionItem) -> Date? {
+        guard item.status == .open, item._type == .blocked else { return item.created_at }
+        return blockedWaitStart(item.reason) ?? item.created_at
+    }
+
+    private static func relativeDuration(_ interval: TimeInterval) -> String {
+        if interval < 3_600 {
+            return "\(max(1, Int(interval / 60)))m"
+        }
+        if interval < 86_400 {
+            return "\(Int(interval / 3_600))h"
+        }
+        return "\(Int(interval / 86_400))d"
     }
 
     static func reviewYieldRows(
