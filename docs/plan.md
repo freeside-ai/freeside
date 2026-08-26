@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 39
+revision: 40
 status: active
-updated: 2026-08-23
+updated: 2026-08-25
 ---
 
 # Freeside
@@ -231,7 +231,8 @@ and sampled decision audits.
 `id`, `project_id`, immutable `created_at` (nullable only for legacy records),
 `subject {subject_type: run | proposal_batch | project | system, subject_id,
 run_id?}`, `type`, `priority`, `reason`,
-`requested_decision`, `evidence_snapshot`, `agent_claims`, `artifact_digests`,
+`requested_decision`, `recommendation?`, `evidence_snapshot`, `agent_claims`,
+`artifact_digests`,
 `pr_head_sha`, `pr_reference? {repo, number}`, `item_version`,
 `interruption_class`, `conversation_id?`, derived timing aggregates,
 `expires_when`, `review_recovery_binding?`,
@@ -298,6 +299,87 @@ preferred agent from past switches, and a switch is never silent (Section
 2 item 5; Section 14, single-provider execution capacity). Switching the
 review agent opens a new convergence segment (Section 7): the new
 reviewer's first pass is not the old reviewer's next round.
+
+**Recommendation authority.** An item may carry at most one
+`recommendation {action, reason, source, provenance, confidence?}`: it
+selects exactly one action from the item's own `requested_decision` with a
+stated reason, and never widens or reorders the offered set. `source` is
+part of the contract because the card renders judgment differently from
+fact, and its required immutable `provenance` is a closed source-specific
+union: `daemon_policy {rule_digest, input_digest}` for deterministic policy
+computed from canonical state; `agent_judgment {judgment_site,
+invocation_id, artifact_digest}` for the schema-validated output of a
+declared Section 5.13 judgment site; or `project_policy {policy_key,
+resolved_policy_digest, application_digest}` for an explicit human or
+project policy choice.
+
+Recommendation source selection is derived entirely from current authoritative
+state, never from the item or caller. At creation and reconstruction, the
+daemon enumerates every eligible source record whose source-specific
+applicability gate matches the current item decision surface. Eligibility is
+record-granular: two applicable daemon rules, two policy applications, or any
+other pair are multiple records even when their source class matches. Exactly
+one eligible record produces the canonical recommendation; zero or multiple
+eligible records produce an absent recommendation and equally weighted
+actions. There is no precedence, source map, selector policy, ranking, or
+tie-break. The stored optional recommendation must equal the exact derived
+output, including absence. A mismatch makes only the recommendation invalid
+and non-rendering, never the item or its decidable action set; an eligibility
+change can therefore suppress a prior lead safely.
+
+Each authoritative source record commits to a daemon-owned decision-surface
+identity for its containing item, not to `item_version`. This contract fixes
+the identity's required invariants; #942 specifies and tests the exact
+epoch-and-digest mechanism. The identity is **eligibility-independent** —
+adding or removing an applicable source, or a change in which record is
+uniquely eligible under the unique-or-none rule, never advances it, so a
+once-authoritative record is never permanently stranded; **telemetry-stable** —
+delivery, open, timing, status, and actionability never advance it, and general
+`item_version`, row `entity_version`, head, and full-artifact approval and
+command gates are unrelated to it; **surface-distinguishing** — a change to
+`subject`, `requested_decision`, `pr_head_sha`, or the materially presented
+action surface advances it, so two genuinely different presented surfaces never
+share an identity; and **non-cyclic** — no source artifact commits to a digest
+set containing its own final `artifact_digest`. The persisted daemon identity
+is authority: a decoded or caller-supplied value grants none, and
+reconstruction re-verifies the record against the current stored identity and
+fails only the recommendation closed on mismatch.
+
+The rule digest content-addresses the rule semantics and is never reused.
+Each authoritative source record must itself commit to that decision-surface
+identity (mechanism per #942), so a valid source output cannot be replayed onto
+a foreign or newer decision surface. The identity is carried per source kind:
+it is part of `daemon_policy`'s canonical input; the finalized immutable
+`agent_judgment` artifact carries it, while the immutable invocation-to-artifact
+binding proves source authenticity; and `project_policy`'s daemon-authored,
+digest-addressed application record binds it alongside the policy key and
+resolved policy digest. `daemon_policy` and `project_policy` source records are
+not themselves bound artifacts. Pre-invocation inputs cannot carry a decision
+surface whose requested actions are derived from the invocation output, and a
+caller-supplied item digest is never authority.
+
+For the uniquely eligible record, the daemon resolves and authenticates the
+provenance, recomputes the item's full canonical artifact-digest set, requires
+any provenance `artifact_digest` to occur in that full set, and requires the
+source record to carry the current decision-surface identity (mechanism per
+#942). It then rederives the canonical
+`action`, `reason`, and optional `confidence` from the authenticated
+source-and-item pair. Full `AttentionItem.artifact_digests` equality and every
+approval or command binding continue to use the complete set, including the
+source artifact. Item-side binding-set equality therefore proves containment;
+the artifact-side commitment needs item identity and the sibling artifact
+surface, while including its own final content hash would be redundant and
+impossible. A foreign item binding, source mismatch, or payload difference
+rejects the recommendation; an invalid binding never renders.
+An `agent_judgment` recommendation is a
+labeled proposal — the type case is the finding adjudicator's parked batch,
+whose item-level recommendation endorses the accept-the-recommended-route
+action while each finding's own route, rationale, producer, and confidence
+stay in the Section 7 adjudication artifact, never collapsed into this one
+field. `confidence` appears only when the producer supplies it. An item
+without a recommendation offers equally weighted choices: a client never
+infers a recommendation, and the order of `requested_decision` carries no
+endorsement. Section 9 governs the recommendation-led presentation.
 
 ### Lifecycle Rules
 
@@ -1780,7 +1862,26 @@ site declares a fail-safe default; "operable with inference down" means the
 control plane stays available and fails safe — inference-dependent steps
 pause or degrade per declared defaults, never promised to complete; every
 site is budgeted; untrusted-input sites carry sampled-audit telemetry; every
-site has a deterministic fake. Proposal cards separate registers: "the
+site has a deterministic fake. A Section 4 item recommendation is not a
+fifth authority mode: an `agent_judgment` recommendation exists only as the
+schema-validated output of a declared site here and carries that site's
+immutable invocation and artifact binding; a `daemon_policy` recommendation
+binds its content-addressed deterministic rule and canonical input digest;
+and a `project_policy` recommendation binds the applied key and resolved-policy
+digest plus its daemon-authored application record. Each authoritative source
+record commits to the containing item's decision-surface identity under
+Section 4, whose eligibility-independent, telemetry-stable,
+surface-distinguishing, and non-cyclic mechanism #942 specifies. The item
+cannot select that record: creation and
+reconstruction derive the complete eligible-record set from current
+authoritative state and apply Section 4's unique-or-none rule. A separately
+supplied item digest grants no authority. Source labels without their matching
+Section 4 provenance variant are rejected at creation and reconstruction, as
+is a stale or foreign source-to-item binding or any action, reason, or
+confidence that differs from the canonical projection rederived from that
+authenticated pair. A `daemon_policy`
+recommendation is a deterministic card fact like any other. Proposal cards
+separate registers: "the
 proposal requests X" is a daemon fact from the artifact, while agent cost,
 safety, and scope assertions are labeled claims. Section 3.1's "designed
 judgment points" means human judgment points.
@@ -1871,7 +1972,21 @@ a device.
 Every judgment-bearing mutation is:
 
 `ClientCommand {command_id, device_id, expected_entity_version,
-expected_bindings, payload}`
+expected_bindings, decision_action_surface_digest?, payload}`
+
+For an attention decision, the daemon derives and persists the exact action
+surface presented to that device before accepting the command:
+
+`DecisionActionSurface {device_id, item_decision_surface_digest,
+client_capability_digest, actions}`
+
+The record is content-addressed. `actions` is the canonical intersection of
+the item's requested decisions and a daemon-registered client-capability
+contract already bound to the device; a caller-supplied action list or digest
+is never authority. The daemon revalidates the device, current item decision
+surface, capability contract, and selected-action membership before accepting
+a referenced surface. This record is telemetry evidence only: it cannot widen
+the item's actions or authorize a command.
 
 A retry returns the original result.
 
@@ -2707,9 +2822,18 @@ rendering preference.
 A card presents at most four layers, in this order; the per-item-type table
 below governs which layers each type carries:
 
-1. **The ask and the facts**: `requested_decision` plus deterministic card
-   facts (verdicts, diff stats, counts, digests, timing). Daemon-produced
-   only (Section 5.13).
+1. **The ask and the facts**: `requested_decision`, the item's
+   recommendation when one exists (Section 4), and deterministic card facts
+   (verdicts, diff stats, counts, digests, timing). Facts are
+   daemon-produced only (Section 5.13). A recommendation renders in its
+   source register only after its Section 4 source-specific provenance has
+   been revalidated — a `daemon_policy` recommendation as a card fact, an
+   `agent_judgment` recommendation as a labeled proposal, a
+   `project_policy` recommendation citing its exact policy key and digest —
+   and a card that carries one leads with the recommendation and its reason
+   ahead of secondary actions and evidence: the recommendation-led
+   composition specified for `finding_adjudication` below generalizes to
+   every type that carries a recommendation.
 2. **The summary**: what happened, why, and what remains open, with
    uncertainty preserved; absorbable in seconds. A labeled agent claim,
    present only where the card concerns agent work: a purely mechanical card
@@ -2718,6 +2842,15 @@ below governs which layers each type carries:
    precedes any long-form agent text.
 4. **Drill-down**: full artifacts, full specifications and diffs, and
    transcript pointers (Section 8).
+
+A client renders only the requested decisions it can faithfully collect
+and execute. An action outside the client's capability is omitted from the
+action surface and recorded in the drill-down layer, so an audit still
+shows what the daemon asked; when no faithful response is within the
+client's capability, the card states explicitly that the decision cannot
+be taken on this client and that the item stays open. An unimplemented
+action is never rendered as a disabled control, and roadmap language never
+appears in card copy.
 
 Three digests are required wherever their content appears:
 
@@ -2792,6 +2925,15 @@ never an ad hoc rendering choice.
 - Drill-down rate: the fraction of decisions made without opening the
   drill-down layer. A health signal, never a target; it is trivially gamed by
   hiding detail.
+- Recommendation override rate: the fraction of recommendation-bearing
+  decisions resolved by a non-recommended action, by item type and
+  recommendation source. A decision is a forced override only when its
+  revalidated Section 5.14 `DecisionActionSurface` omitted the recommended
+  action; it is stratified separately and never counted in this rate. A
+  decision whose surface is missing or cannot be revalidated is unclassified
+  and excluded from both rates, never inferred as voluntary or forced.
+  A calibration signal on recommendation quality, never a target in
+  either direction.
 - Comprehension-defect count from sampled audits: the target is zero;
   occurrences are recorded; the tolerance is not zero.
 - Normalization by volume and risk: rates are compared against the period's
@@ -3211,6 +3353,12 @@ Exit requires:
 - a low exceptional-interruption rate; and
 - false-ready performance within Section 12.
 
+Approvals decidable from the phone covers every Phase 1 card action except
+turning a recurring diminishing-returns preference into a project-policy
+proposal (`convert_to_policy`), which waits for its deferred control-plane
+proposal surface (Section 4) and is omitted from the client's action
+surface, never rendered disabled, until that surface lands (revision 40).
+
 ### Implementation Coordination (Building Freeside with Agents)
 
 Contracts and fakes coordinate implementation. CI keeps lanes honest.
@@ -3224,8 +3372,14 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **4 (1B.0): the review stage** | Serial | The spine rescopes #406/#407 into review cores and execution remainders, then lands the review-selection contract core, the review ward-topology slice, #405 only if review needs a project-derived image, and #427 — landed PR-anchored under the then-open Section 7 fork (resolved pre-publication in revision 28; the implementation re-anchor is #527, unscheduled). Its close stands the minimal loop; real-backlog use begins. |
 | **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section 5.13 classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section 7 disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section 6 state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section 5.2 contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section 7 finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section 10). 1B.0 exit. |
-| **7 (1B.1): operational closure** | Parallel lanes | Human-gated follow-up filing with the `effect_proposal` card; the doctor credential-integrity probe; the stall heartbeat; the external daemon-liveness probe (Section 5.2); the deferral drain (sweep-eligible open deferrals enumerated at this wave's planning; dormant contract units excluded unless the spine assigns chain positions). The execution tail closes in order: #401 gate 3, the #406/#407 execution remainders, #405 if outstanding, #397 by explicit owner decision on shadow evidence, then #408. Admitted agents (Section 5.4) reshape the tail: the admitted-agent contract unit (schemas, canonical encoding, enrollment and generation records, adapter conformance record, admission encoding, lineup policy keys, legacy reconstruction; `kind:contract`, dormant until cutover) replaces the selection half of #406, which becomes the Codex adapter registration and `starts-after` the contract; guided enrollment (`freesided auth`, Section 10; #867) carries multi-enrollment adoption, the proposed baseline patch, and the two-step cutover and `starts-after` the contract; the Codex probe refresh-safety spike (#866) stays independent and is the template for each adapter's credential proof; the doctor account probe (#868) `starts-after` the contract and #866 and proposes offer diffs; the alternate-agent retry card (#869) `starts-after` the contract and #408; #408 `merges-after` the continuation comparison (#873; Section 5.8); and the pi adapter, enrollment, and elaboration agent unit `starts-after` the contract and #867 (not #408: it is a second consumer, not a successor), with its pre-adoption gates on the #401 pattern run against the pinned build rather than as a prior spike. The deferral drain also carries two sweep-eligible units for the egress floor's first capabilities above it (Sections 5.4, 5.7, Golden Agent and Project Images): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, a `kind:contract` unit because `EgressProfile` is a domain enum carried in the admission record, so the spine assigns its contract-chain position at this wave's planning; and (b) the policy-gated project-image rebuild in the reusable builder, whose gate reads the registry set from the policy field unit (a) declares, so (b) `starts-after` (a). Both build on merged work (#302 proxy enforcement, #334 builder); (a) has no open prerequisite. |
+| **7 (1B.1): operational closure** | Parallel lanes | Human-gated follow-up filing with the `effect_proposal` card; the doctor credential-integrity probe; the stall heartbeat; the external daemon-liveness probe (Section 5.2); the deferral drain (sweep-eligible open deferrals enumerated at this wave's planning; dormant contract units excluded unless the spine assigns chain positions). The execution tail closes in order: #401 gate 3, the #406/#407 execution remainders, #405 if outstanding, #397 by explicit owner decision on shadow evidence, then #408. Admitted agents (Section 5.4) reshape the tail: the admitted-agent contract unit (schemas, canonical encoding, enrollment and generation records, adapter conformance record, admission encoding, lineup policy keys, legacy reconstruction; `kind:contract`, dormant until cutover) replaces the selection half of #406, which becomes the Codex adapter registration and `starts-after` the contract; guided enrollment (`freesided auth`, Section 10; #867) carries multi-enrollment adoption, the proposed baseline patch, and the two-step cutover and `starts-after` the contract; the Codex probe refresh-safety spike (#866) stays independent and is the template for each adapter's credential proof; the doctor account probe (#868) `starts-after` the contract and #866 and proposes offer diffs; the alternate-agent retry card (#869) `starts-after` the contract and #408; #408 `merges-after` the continuation comparison (#873; Section 5.8); and the pi adapter, enrollment, and elaboration agent unit `starts-after` the contract and #867 (not #408: it is a second consumer, not a successor), with its pre-adoption gates on the #401 pattern run against the pinned build rather than as a prior spike. The deferral drain also carries two sweep-eligible units for the egress floor's first capabilities above it (Sections 5.4, 5.7, Golden Agent and Project Images): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, a `kind:contract` unit because `EgressProfile` is a domain enum carried in the admission record, so the spine assigns its contract-chain position at this wave's planning; and (b) the policy-gated project-image rebuild in the reusable builder, whose gate reads the registry set from the policy field unit (a) declares, so (b) `starts-after` (a). Both build on merged work (#302 proxy enforcement, #334 builder); (a) has no open prerequisite. The revision-40 attention-presentation closure also lands here, contract-first: one serialized `kind:contract` unit carrying the Section 4 recommendation shape, the Section 9 typed minimum card facts (with human-readable project and work-unit display names), and the routed `review_dispute` action disposition (#917), which must retire `adjudicate` or reassign it to an executable transaction before client adoption, then its daemon fact producers; transaction closure for the remaining Phase 1 pending actions — discuss (Section 5.14), the agent-question answers and return-to-agent, spec-approval request-changes, and capability-manifest retry — beside the already-scheduled alternate-agent retry card (#869); Section 5.15 evidence-metadata exposure; pairing-surface identity facts (code expiry, host identity, connection mode; Sections 5.14 and 10); and the Section 8/9 comprehension-telemetry contracts the wave-8 exit evaluation reads. |
 | **8 (1B.2): the initiative view** | Integrated | The Section 5.18 frontier projection and the deterministic initiative view. 1B exit evaluation. |
+
+Wave 7's transaction closure also includes the `publish_blocked`
+`choose_alternate_profile` transaction (#936). It binds a selected approved
+publication-profile digest and re-runs trust evaluation; it is distinct from
+#869's alternate-agent retry. The phone-decidability exit therefore cannot
+pass while that action remains pending.
 
 Review bandwidth limits parallel width. Every wave ends with a fresh-context
 adversarial review by an agent given only the repository and its documents,
@@ -3356,58 +3510,65 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 39 ("Admitted agents"):
+Revision 40 ("Recommendation-led attention"):
 
-1. **The agent is an admitted input** (Section 5.4): one operator-authored,
-   content-addressed document of four role-free lines (enrollment, route,
-   adapter, offer with effort), selected by a lineup line per role, admitted
-   in the same five steps every other input is, and recorded with requested,
-   admitted, and observed facts plus a behaviour-only treatment digest.
-   The stage owns the launch, so any stage runs on any adapter whose proved
-   capabilities cover it. New agent × launch pairs start attended; an
-   operator's mark in the tree is the approval. Rejected: per-axis policy
-   keys for harness, model, and effort (an unreviewed join); a qualification
-   ledger with projections and supersession (two proofs suffice); an alias
-   and withdrawal registry (the tree is the active set); a catalogue on the
-   profile (route-specific availability changes on a different cadence).
-   (User; devlog 2026-08-23-0825-admitted-agents.md.)
-2. **One identity, many client enrollments; the profile dissolves**
-   (Section 5.4). `ClientEnrollment` is identity × harness client × route ×
-   auth method with `credential_mode`, each with its own sanitized store and
-   append-only generations; the exact store locator leaves `AuthIdentity`;
-   the lease stays on the identity and fences the exact store by enrollment,
-   generation, locator, and manifest digest. `ProviderProfile`'s approval
-   role moves to agents and lineups; `enabled` and `cost_owner` become
-   identity fields. Changed assumption since revision 36: one harness client
-   per provider account. Rejected: a second identity per client (two leases
-   and two budgets on one subscription); one untyped store for all clients
-   (the lease would no longer name one exact store).
-   (User; devlog 2026-08-23-0825-admitted-agents.md.)
-3. **Never silent, not never automatic** (Sections 2, 4, 14). A project
-   lineup may name the alternate agent per failure class; the switch is a
-   new recorded attempt, carded, with failure-specific eligibility (quota
-   needs a different usage pool; two clients on one subscription are not a
-   hedge). The human gate stays the default. Changed assumption since
-   revision 36: fallback meant an unrecorded swap.
-   (User; devlog 2026-08-23-0825-admitted-agents.md.)
-4. **Review independence reads lineage, by default** (Section 7): the
-   offers' lineage groups differ, at vendor-family granularity, unknown
-   failing closed; a project lineup may relax it with a stated reason and
-   the record carries which rule applied. Supersedes the provider-plus-
-   identity comparison. Switching the review agent opens a new convergence
-   segment.
-   (User; devlog 2026-08-23-0825-admitted-agents.md.)
-5. **pi is the third adapter, via elaboration first** (Sections 5.3, 11),
-   on the ChatGPT subscription the owner records OpenAI as permitting
-   through third-party tools, with no stability commitment on that OAuth
-   interface (the route carries a dated terms basis). Source research on
-   pi 0.84.2 replaced a prior design spike: it hard-fails on a read-only
-   store at refresh, so admission step 4 and the Codex refresh pattern
-   contain it; its severance is flag-complete; its provider ids separate
-   subscription from API key. Its pre-adoption gates run against the pinned
-   build when the adapter exists. Rejected: sequencing pi behind #408 (it
-   is a second consumer of the contract, not a successor).
-   (User; devlog 2026-08-23-0825-admitted-agents.md.)
+1. **A recommendation is contract, never inference** (Sections 4, 5.13, 9):
+   an item may carry at most one
+   `recommendation {action, reason, source, provenance, confidence?}`
+   selecting one of its own requested decisions. The required immutable
+   provenance is source-specific: content-addressed rule digest and input
+   digest for `daemon_policy`; judgment site, invocation, and artifact digest
+   for `agent_judgment` (the finding-adjudicator type case keeps per-finding
+   route provenance in the Section 7 artifact); or policy key,
+   resolved-policy digest, and daemon-authored application digest for
+   `project_policy`. Each authoritative source record commits to the current
+   item's decision-surface identity under Section 4, required to be
+   eligibility-independent, telemetry-stable, surface-distinguishing, and
+   non-cyclic; #942 specifies and tests the exact mechanism after two inline
+   attempts (item-version binding, then an eligibility-coupled own-artifact
+   subtraction) were rejected. Creation and
+   reconstruction derive eligible source records from current
+   authoritative state: exactly one produces the canonical recommendation;
+   zero or multiple produces absence, with no precedence or tie-break. The
+   stored optional recommendation must equal that exact result. For the unique
+   record, the daemon requires its source-to-item association and rederives
+   canonical action, reason, and confidence, rejecting any field, source, or
+   item mismatch without invalidating the item's action set.
+   No recommendation, no
+   block: a client never infers one, and offer order carries no
+   endorsement. Origin: an external UX review of the clients (2026-08-25)
+   and its design response. Rejected: client-side inference from action
+   order; caller-selected source; implicit source precedence; per-type ad hoc
+   recommendation shapes.
+   (User; devlog 2026-08-25-1154-recommendation-led-attention.md.)
+2. **Cards render capability truthfully** (Section 9): a client shows only
+   the requested decisions it can faithfully collect and execute, records
+   filtered actions in drill-down, states not-decidable-here when no
+   faithful response is in its capability, and never renders an
+   unimplemented action as a disabled control or roadmap copy. Rejected:
+   disabled placeholder buttons advertising unbuilt scope.
+   (User; devlog 2026-08-25-1154-recommendation-led-attention.md.)
+3. **`convert_to_policy` leaves the 1B phone-decidability claim**
+   (Section 11): the diminishing-returns card stays decidable via finish
+   now, apply-and-finish, and continue-under-policy; turning a recurring
+   preference into a project-policy proposal waits for its deferred
+   control-plane proposal surface and is hidden, not disabled, until then.
+   Rejected: building that surface inside 1B; keeping dead controls under
+   the exit claim.
+   (User; devlog 2026-08-25-1154-recommendation-led-attention.md.)
+4. **Wave 7 carries the attention-presentation closure** (Section 11),
+   contract-first: the Section 4 recommendation shape and Section 9 typed
+   minimum card facts as one serialized contract unit before producers and
+   client adoption; that contract unit must retire `adjudicate` or reassign
+   it to an executable `review_dispute` transaction before client adoption;
+   transaction closure for the remaining Phase 1 pending actions, including
+   `choose_alternate_profile` under #936 rather than #869's alternate-agent
+   retry;
+   evidence-metadata exposure; pairing identity facts; and the
+   comprehension-telemetry contracts the wave-8 exit evaluation reads.
+   Rejected: deferring missing facts and dead actions to Phase 3, which is
+   advanced interaction, not missing fundamentals.
+   (User; devlog 2026-08-25-1154-recommendation-led-attention.md.)
 
 ## 14. Risks
 
