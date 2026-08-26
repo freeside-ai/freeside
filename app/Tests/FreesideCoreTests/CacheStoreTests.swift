@@ -1,7 +1,9 @@
 import Foundation
 import FreesideAPI
-import FreesideCore
+import Security
 import Testing
+
+@testable import FreesideCore
 
 private func temporaryStore() -> (DiskCacheStore, URL) {
     let directory = FileManager.default.temporaryDirectory
@@ -251,7 +253,125 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
     }
 }
 
-@Suite struct CredentialStoreTests {
+private enum FakeKeychainBackend: Hashable {
+    case dataProtection
+    case legacy
+}
+
+private struct FakeKeychainCall: Equatable {
+    enum Kind: Equatable {
+        case copy
+        case add
+        case delete
+    }
+
+    let kind: Kind
+    let backend: FakeKeychainBackend
+    let service: String
+}
+
+private final class FakeKeychain: @unchecked Sendable {
+    var items: [FakeKeychainBackend: [String: Any]] = [:]
+    var calls: [FakeKeychainCall] = []
+    var addedAttributes: [[String: Any]] = []
+    var copyOverrides: [FakeKeychainBackend: [(OSStatus, Any?)]] = [:]
+    var addStatuses: [OSStatus] = []
+    var deleteStatuses: [FakeKeychainBackend: [OSStatus]] = [:]
+
+    var operations: KeychainSecurityOperations {
+        KeychainSecurityOperations(
+            copyMatching: { [self] query in
+                let backend = backend(for: query)
+                calls.append(call(.copy, backend: backend, query: query))
+                if var overrides = copyOverrides[backend], !overrides.isEmpty {
+                    let result = overrides.removeFirst()
+                    copyOverrides[backend] = overrides
+                    return result
+                }
+                guard let item = items[backend] else {
+                    return (errSecItemNotFound, nil)
+                }
+                return (errSecSuccess, item)
+            },
+            add: { [self] attributes in
+                let backend = backend(for: attributes)
+                calls.append(call(.add, backend: backend, query: attributes))
+                addedAttributes.append(attributes)
+                if !addStatuses.isEmpty {
+                    let status = addStatuses.removeFirst()
+                    if status != errSecSuccess { return status }
+                }
+                if items[backend] != nil { return errSecDuplicateItem }
+                items[backend] = [
+                    kSecAttrAccount as String: attributes[kSecAttrAccount as String] as Any,
+                    kSecValueData as String: attributes[kSecValueData as String] as Any,
+                ]
+                return errSecSuccess
+            },
+            delete: { [self] query in
+                let backend = backend(for: query)
+                calls.append(call(.delete, backend: backend, query: query))
+                if var statuses = deleteStatuses[backend], !statuses.isEmpty {
+                    let status = statuses.removeFirst()
+                    deleteStatuses[backend] = statuses
+                    if status != errSecSuccess && status != errSecItemNotFound {
+                        return status
+                    }
+                }
+                guard items.removeValue(forKey: backend) != nil else {
+                    return errSecItemNotFound
+                }
+                return errSecSuccess
+            })
+    }
+
+    private func backend(for query: [String: Any]) -> FakeKeychainBackend {
+        query[kSecUseDataProtectionKeychain as String] as? Bool == true
+            ? .dataProtection : .legacy
+    }
+
+    private func call(
+        _ kind: FakeKeychainCall.Kind,
+        backend: FakeKeychainBackend,
+        query: [String: Any]
+    ) -> FakeKeychainCall {
+        FakeKeychainCall(
+            kind: kind,
+            backend: backend,
+            service: query[kSecAttrService as String] as? String ?? "")
+    }
+}
+
+private func credential(
+    deviceID: String = "device-1",
+    secretByte: UInt8 = 1,
+    serverURL: String = "https://ntfy.example",
+    topic: String = "fs-00000000000000000000000000000000"
+) throws -> DeviceCredential {
+    let subscription = try #require(
+        DeviceNtfySubscription(serverURL: serverURL, topic: topic))
+    return try #require(
+        DeviceCredential(
+            deviceID: deviceID,
+            token: testDeviceToken(for: deviceID, secretByte: secretByte),
+            ntfySubscription: subscription))
+}
+
+private func storedItem(_ credential: DeviceCredential) throws -> [String: Any] {
+    let data = try JSONSerialization.data(withJSONObject: [
+        "formatVersion": 1,
+        "deviceID": credential.deviceID,
+        "token": credential.token,
+        "ntfyServerURL": credential.ntfySubscription.serverURL,
+        "ntfyTopic": credential.ntfySubscription.topic,
+    ])
+    return [
+        kSecAttrAccount as String: credential.deviceID,
+        kSecValueData as String: data,
+    ]
+}
+
+@Suite(.serialized) struct CredentialStoreTests {
     @Test func inMemoryStoreRoundTrips() throws {
         let store = InMemoryCredentialStore()
         #expect(try store.load() == nil)
@@ -266,34 +386,232 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(try store.load() == nil)
     }
 
-    @Test func keychainStoreRoundTripsUnderAScopedService() throws {
-        // Runs against the real Keychain (FreesideCoreTests are
-        // Apple-platform, developer-machine tests; CI's Linux job never
-        // sees them). The service name is unique per run and the item
-        // is removed either way.
+    @Test func dataProtectionSaveAndLoadUseTheScopedBackend() throws {
+        let fake = FakeKeychain()
         let store = KeychainCredentialStore(
-            service: "ai.freeside.tests.\(UUID().uuidString)")
-        defer { try? store.delete() }
+            service: "ai.freeside.tests.deployment-a", operations: fake.operations)
+        let value = try credential()
 
-        #expect(try store.load() == nil)
-        let first = DeviceCredential(
-            deviceID: "device-1", token: testDeviceToken(for: "device-1"),
-            ntfySubscription: .mock)!
-        try store.save(first)
-        #expect(try store.load() == first)
+        try store.save(value)
+        #expect(try store.load() == value)
+        #expect(fake.items[.legacy] == nil)
+        #expect(fake.items[.dataProtection] != nil)
+        #expect(
+            fake.calls == [
+                FakeKeychainCall(
+                    kind: .delete, backend: .legacy,
+                    service: "ai.freeside.tests.deployment-a"),
+                FakeKeychainCall(
+                    kind: .delete, backend: .dataProtection,
+                    service: "ai.freeside.tests.deployment-a"),
+                FakeKeychainCall(
+                    kind: .add, backend: .dataProtection,
+                    service: "ai.freeside.tests.deployment-a"),
+                FakeKeychainCall(
+                    kind: .copy, backend: .dataProtection,
+                    service: "ai.freeside.tests.deployment-a"),
+                FakeKeychainCall(
+                    kind: .copy, backend: .dataProtection,
+                    service: "ai.freeside.tests.deployment-a"),
+                FakeKeychainCall(
+                    kind: .delete, backend: .legacy,
+                    service: "ai.freeside.tests.deployment-a"),
+            ])
+        let added = try #require(fake.addedAttributes.first)
+        #expect(added[kSecUseDataProtectionKeychain as String] as? Bool == true)
+        #expect(
+            added[kSecAttrAccessible as String] as? String
+                == kSecAttrAccessibleAfterFirstUnlock as String)
+    }
 
-        // A re-pair replaces the whole identity.
-        let secondSubscription = try #require(
-            DeviceNtfySubscription(
-                serverURL: "https://other-ntfy.example",
-                topic: "fs-11111111111111111111111111111111"))
-        let second = DeviceCredential(
-            deviceID: "device-2", token: testDeviceToken(for: "device-2", secretByte: 2),
-            ntfySubscription: secondSubscription)!
-        try store.save(second)
-        #expect(try store.load() == second)
+    @Test func failedLegacyCleanupBeforeReplacementPreservesAuthoritativeItem() throws {
+        let fake = FakeKeychain()
+        let existing = try credential()
+        let existingItem = try storedItem(existing)
+        fake.items[.dataProtection] = existingItem
+        fake.items[.legacy] = existingItem
+        fake.deleteStatuses[.legacy] = [errSecInteractionNotAllowed]
+        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
 
+        do {
+            try store.save(try credential(deviceID: "device-2", secretByte: 2))
+            Issue.record("expected legacy cleanup to fail")
+        } catch let error as KeychainCredentialStore.KeychainError {
+            #expect(error.status == errSecInteractionNotAllowed)
+        }
+
+        #expect(
+            fake.items[.dataProtection]?[kSecValueData as String] as? Data
+                == existingItem[kSecValueData as String] as? Data)
+        #expect(fake.items[.legacy] != nil)
+        #expect(fake.calls.map(\.kind) == [.delete])
+        #expect(fake.calls.map(\.backend) == [.legacy])
+    }
+
+    @Test func platformWithoutDistinctLegacyBackendNeverConsultsIt() throws {
+        let fake = FakeKeychain()
+        let value = try credential()
+        fake.items[.dataProtection] = try storedItem(value)
+        let store = KeychainCredentialStore(
+            service: "service",
+            operations: fake.operations,
+            legacyBackendEnabled: false)
+
+        #expect(try store.load() == value)
+        #expect(try store.load() == value)
         try store.delete()
-        #expect(try store.load() == nil)
+
+        #expect(fake.items[.dataProtection] == nil)
+        #expect(fake.calls.map(\.kind) == [.copy, .copy, .delete])
+        #expect(fake.calls.allSatisfy { $0.backend == .dataProtection })
+    }
+
+    @Test func exactServiceLegacyItemMigratesCopyVerifyDelete() throws {
+        let fake = FakeKeychain()
+        let value = try credential()
+        let legacy = try storedItem(value)
+        fake.items[.legacy] = legacy
+        let store = KeychainCredentialStore(
+            service: "ai.freeside.tests.encoded%2Fpath", operations: fake.operations)
+
+        #expect(try store.load() == value)
+        #expect(fake.items[.legacy] == nil)
+        #expect(fake.items[.dataProtection] != nil)
+        #expect(fake.calls.map(\.kind) == [.copy, .copy, .add, .copy, .delete])
+        #expect(
+            fake.calls.map(\.backend) == [
+                .dataProtection, .legacy, .dataProtection, .dataProtection, .legacy,
+            ])
+        #expect(fake.calls.allSatisfy { $0.service == "ai.freeside.tests.encoded%2Fpath" })
+        #expect(
+            fake.addedAttributes[0][kSecValueData as String] as? Data
+                == legacy[kSecValueData as String] as? Data)
+    }
+
+    @Test func failedLegacyCopyLeavesTheLegacyItemUntouched() throws {
+        let fake = FakeKeychain()
+        fake.items[.legacy] = try storedItem(credential())
+        fake.addStatuses = [errSecAuthFailed]
+        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
+
+        #expect(throws: KeychainCredentialStore.KeychainError.self) {
+            try store.load()
+        }
+        #expect(fake.items[.legacy] != nil)
+        #expect(fake.items[.dataProtection] == nil)
+        #expect(fake.calls.map(\.kind) == [.copy, .copy, .add])
+    }
+
+    @Test func failedLegacyVerificationLeavesTheLegacyItemUntouched() throws {
+        let fake = FakeKeychain()
+        let legacy = try credential()
+        fake.items[.legacy] = try storedItem(legacy)
+        fake.copyOverrides[.dataProtection] = [
+            (errSecItemNotFound, nil),
+            (errSecSuccess, try storedItem(credential(deviceID: "device-2", secretByte: 2))),
+        ]
+        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
+
+        do {
+            _ = try store.load()
+            Issue.record("expected read-back mismatch to fail")
+        } catch let error as KeychainCredentialStore.KeychainError {
+            #expect(error.status == errSecDecode)
+        }
+        #expect(fake.items[.legacy] != nil)
+        #expect(fake.calls.map(\.kind) == [.copy, .copy, .add, .copy])
+    }
+
+    @Test func authoritativeCorruptionFailsClosedWithoutLegacyFallback() throws {
+        let fake = FakeKeychain()
+        fake.items[.dataProtection] = [
+            kSecAttrAccount as String: "device-1",
+            kSecValueData as String: Data("not-json".utf8),
+        ]
+        fake.items[.legacy] = try storedItem(credential())
+        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
+
+        do {
+            _ = try store.load()
+            Issue.record("expected corrupt authoritative item to fail")
+        } catch let error as KeychainCredentialStore.KeychainError {
+            #expect(error.status == errSecDecode)
+        }
+        #expect(fake.calls.map(\.kind) == [.copy])
+        #expect(fake.calls.map(\.backend) == [.dataProtection])
+        #expect(fake.items[.legacy] != nil)
+    }
+
+    @Test func authoritativeErrorFailsClosedWithoutLegacyFallback() throws {
+        let fake = FakeKeychain()
+        fake.items[.legacy] = try storedItem(credential())
+        fake.copyOverrides[.dataProtection] = [(errSecInteractionNotAllowed, nil)]
+        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
+
+        do {
+            _ = try store.load()
+            Issue.record("expected authoritative Keychain error to fail")
+        } catch let error as KeychainCredentialStore.KeychainError {
+            #expect(error.status == errSecInteractionNotAllowed)
+        }
+        #expect(fake.calls.map(\.kind) == [.copy])
+        #expect(fake.calls.map(\.backend) == [.dataProtection])
+    }
+
+    @Test func authoritativeDuplicateWinsAndCleansLegacy() throws {
+        let fake = FakeKeychain()
+        let authoritative = try credential()
+        let conflictingLegacy = try credential(
+            deviceID: "device-2", secretByte: 2,
+            serverURL: "https://other-ntfy.example",
+            topic: "fs-11111111111111111111111111111111")
+        fake.items[.dataProtection] = try storedItem(authoritative)
+        fake.items[.legacy] = try storedItem(conflictingLegacy)
+        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
+
+        #expect(try store.load() == authoritative)
+        #expect(fake.items[.legacy] == nil)
+        #expect(fake.calls.map(\.kind) == [.copy, .delete])
+        #expect(fake.calls.map(\.backend) == [.dataProtection, .legacy])
+    }
+
+    @Test func interruptedCleanupFailsLoudAndRetries() throws {
+        let fake = FakeKeychain()
+        let value = try credential()
+        fake.items[.dataProtection] = try storedItem(value)
+        fake.items[.legacy] = try storedItem(value)
+        fake.deleteStatuses[.legacy] = [errSecInteractionNotAllowed, errSecSuccess]
+        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
+
+        #expect(throws: KeychainCredentialStore.KeychainError.self) {
+            try store.load()
+        }
+        #expect(fake.items[.legacy] != nil)
+        #expect(try store.load() == value)
+        #expect(fake.items[.legacy] == nil)
+    }
+
+    @Test func deleteClearsBothBackendsAndPreservesTheFirstError() throws {
+        let fake = FakeKeychain()
+        let value = try credential()
+        fake.items[.dataProtection] = try storedItem(value)
+        fake.items[.legacy] = try storedItem(value)
+        fake.deleteStatuses[.dataProtection] = [errSecAuthFailed]
+        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
+
+        do {
+            try store.delete()
+            Issue.record("expected the first backend error")
+        } catch let error as KeychainCredentialStore.KeychainError {
+            #expect(error.status == errSecAuthFailed)
+        }
+        #expect(fake.items[.dataProtection] != nil)
+        #expect(fake.items[.legacy] == nil)
+        #expect(fake.calls.map(\.kind) == [.delete, .delete])
+        #expect(fake.calls.map(\.backend) == [.dataProtection, .legacy])
+
+        fake.deleteStatuses[.dataProtection] = [errSecSuccess]
+        try store.delete()
+        #expect(fake.items.isEmpty)
     }
 }
