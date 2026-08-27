@@ -157,6 +157,21 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 		return productionReviewPending, err
 	}
 	if complete {
+		diminishing, state, handled, found, err := w.reconcileExistingReviewDiminishing(
+			ctx, productionReviewDiminishingItemID(task.RunID, record.Round))
+		if err != nil {
+			return productionReviewPending, err
+		}
+		if found {
+			if handled {
+				return state, nil
+			}
+			if diminishing.action == domain.ActionApplyThenFinish ||
+				diminishing.action == domain.ActionContinueUnderPolicy {
+				return productionReviewContinue, nil
+			}
+			return productionReviewPending, domain.ErrTransitionCommandMismatch
+		}
 		return productionReviewPassed, nil
 	}
 
@@ -1309,6 +1324,14 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		}
 		return productionReviewPending, nil
 	}
+	diminishing, diminishingState, handled, err := w.reconcileReviewDiminishing(
+		ctx, task, record, artifact)
+	if err != nil {
+		return productionReviewPending, err
+	}
+	if handled {
+		return diminishingState, nil
+	}
 	var remediation *preparedRemediationIntent
 	if w.artifacts != nil {
 		// A deterministic undeliverable-input refusal terminalized on a prior
@@ -1345,6 +1368,9 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 	dispositionAt := artifact.CreatedAt
 	if item != nil && item.DecidedAt != nil {
 		dispositionAt = item.DecidedAt.UTC()
+	}
+	if diminishing.item != nil && diminishing.item.DecidedAt != nil {
+		dispositionAt = diminishing.item.DecidedAt.UTC()
 	}
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
 		if remediation != nil {
@@ -1386,6 +1412,10 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		return productionReviewPending, err
 	}
 	if complete {
+		if diminishing.action == domain.ActionApplyThenFinish ||
+			diminishing.action == domain.ActionContinueUnderPolicy {
+			return productionReviewContinue, nil
+		}
 		return productionReviewPassed, nil
 	}
 	return productionReviewPending, nil

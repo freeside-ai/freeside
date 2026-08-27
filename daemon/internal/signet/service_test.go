@@ -149,6 +149,57 @@ func TestPutItemRejectsCallerSetDecidedAt(t *testing.T) {
 	}
 }
 
+func TestSubmitContinueUnderPolicyConcludesReviewDiminishingItem(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	history := domain.ReviewYieldHistory{
+		Rounds: []domain.ReviewYieldRound{
+			{Round: 1, FindingsIngested: 1, NewFindings: 1, Outcome: domain.ReviewFindings},
+			{Round: 2, FindingsIngested: 1, RecurringFindings: 1, Outcome: domain.ReviewFindings},
+		},
+		TerminalOutcome: domain.ReviewFindings,
+	}
+	item := f.item
+	item.ID = "item-review-diminishing"
+	item.Type = domain.AttentionReviewDiminishing
+	item.Reason = "review yield is diminishing"
+	item.RequestedDecision = []domain.Action{
+		domain.ActionFinishNow, domain.ActionApplyThenFinish, domain.ActionContinueUnderPolicy,
+	}
+	item.PRReference = nil
+	item.YieldHistory = &history
+	if err := f.service.PutItem(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	command := f.command("cmd-continue-policy", domain.ActionContinueUnderPolicy)
+	command.Payload.ItemID = item.ID
+	command.Payload.ItemVersion = item.ItemVersion
+	command.Payload.PRHeadSHA = item.PRHeadSHA
+	command.Payload.ArtifactDigests = item.ArtifactDigests
+	if _, err := f.service.Submit(ctx, command); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		stored, err := tx.GetAttentionItem(ctx, item.ID)
+		if err != nil {
+			return err
+		}
+		if stored.Status != domain.StatusResolved || stored.DecidedAt == nil {
+			t.Fatalf("stored item = %#v", stored)
+		}
+		commands, err := tx.ListCommandsForItem(ctx, item.ID)
+		if err != nil {
+			return err
+		}
+		if len(commands) != 1 || commands[0].Action != domain.ActionContinueUnderPolicy {
+			t.Fatalf("commands = %#v", commands)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestPutItemActionlessBlocked is #96's acceptance: an actionless blocked
 // item crosses the storage boundary (the plan assigns blocked no action),
 // while an empty set on any other type is still rejected by signet policy
@@ -608,7 +659,7 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 		// this class with #68's conversation transaction (conversation_test.go).
 		before := f.revision(t)
 		pending := []domain.Action{
-			domain.ActionContinueUnderPolicy, domain.ActionConvertToPolicy,
+			domain.ActionConvertToPolicy,
 			domain.ActionAdjudicate, domain.ActionRetryWithCapability,
 			domain.ActionChooseAlternate,
 			domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry,

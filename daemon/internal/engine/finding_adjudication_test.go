@@ -1403,6 +1403,239 @@ func TestFindingAdjudicationStageConsumesAuthenticatedCommand(t *testing.T) {
 	}
 }
 
+func TestFindingAdjudicationRoutesDiminishingReviewActions(t *testing.T) {
+	for _, action := range []domain.Action{
+		domain.ActionFinishNow, domain.ActionApplyThenFinish, domain.ActionContinueUnderPolicy,
+	} {
+		t.Run(string(action), func(t *testing.T) {
+			location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
+			f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
+			record, artifact := seedDiminishingReviewRound(t, f)
+
+			state, err := f.workflow.executeFindingAdjudication(
+				f.ctx, f.task, record, artifact, f.headRoot)
+			if err != nil || state != productionReviewPending {
+				t.Fatalf("initial diminishing gate = %d, %v", state, err)
+			}
+			itemID := productionReviewDiminishingItemID(f.task.RunID, record.Round)
+			var item domain.AttentionItem
+			var itemSnapshot store.Snapshot
+			if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+				var readErr error
+				item, itemSnapshot, readErr = tx.GetAttentionItemSnapshot(f.ctx, itemID)
+				return readErr
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if item.YieldHistory == nil || len(item.YieldHistory.Rounds) != 3 {
+				t.Fatalf("yield history = %#v", item.YieldHistory)
+			}
+			if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+				dispositions, readErr := tx.ListFindingDispositions(f.ctx, f.task.RunID)
+				if readErr != nil {
+					return readErr
+				}
+				if len(dispositions) != 0 {
+					t.Fatalf("pre-decision dispositions = %#v", dispositions)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			command := signet.ClientCommand{
+				CommandID: "command-" + string(action), DeviceID: "device-test",
+				ExpectedEntityVersion: itemSnapshot.EntityVersion,
+				Payload: signet.DecisionPayload{
+					ItemID: item.ID, Action: action, ItemVersion: item.ItemVersion,
+					PRHeadSHA: item.PRHeadSHA, ArtifactDigests: item.ArtifactDigests,
+				},
+			}
+			if _, err := f.signet.Submit(f.ctx, command); err != nil {
+				t.Fatal(err)
+			}
+
+			state, err = f.workflow.executeFindingAdjudication(
+				f.ctx, f.task, record, artifact, f.headRoot)
+			wantState := productionReviewContinue
+			if action == domain.ActionFinishNow {
+				wantState = productionReviewPassed
+			}
+			if err != nil || state != wantState {
+				t.Fatalf("decided diminishing gate = %d, %v, want %d", state, err, wantState)
+			}
+			replayState, err := f.workflow.reconcileFindingAdjudication(
+				f.ctx, f.task, f.binding, record, f.baseRoot, f.headRoot)
+			if err != nil || replayState != wantState {
+				t.Fatalf("reconstructed diminishing gate = %d, %v, want %d",
+					replayState, err, wantState)
+			}
+			if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+				dispositions, readErr := tx.ListFindingDispositions(f.ctx, f.task.RunID)
+				if readErr != nil {
+					return readErr
+				}
+				if len(dispositions) != 1 || dispositions[0].FindingID != record.FindingIDs[0] ||
+					dispositions[0].Disposition != domain.ReviewDispositionDeferred ||
+					dispositions[0].AdjudicationDigest != artifact.Digest {
+					t.Fatalf("post-decision dispositions = %#v", dispositions)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if action == domain.ActionApplyThenFinish {
+				assertFinalReviewFindingsCanFinish(t, f, record)
+			}
+		})
+	}
+}
+
+func assertFinalReviewFindingsCanFinish(
+	t *testing.T, f *findingAdjudicationFixture, prior domain.ReviewRecord,
+) {
+	t.Helper()
+	finding := f.finding
+	finding.ID = "finding-final-review"
+	finding.Message = "finding discovered by final review"
+	finding.RawText = finding.Message
+	finding.CreatedAt = prior.CompletedAt.Add(time.Minute)
+	record, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-final", RunID: f.task.RunID, Round: prior.Round + 1,
+		Provider: prior.Provider, ModelConfiguration: prior.ModelConfiguration,
+		ConfigurationDigest: prior.ConfigurationDigest,
+		InstructionDigest:   prior.InstructionDigest,
+		CostOwner:           prior.CostOwner,
+		BaseSHA:             prior.BaseSHA,
+		HeadSHA:             prior.HeadSHA,
+		CompletedAt:         finding.CreatedAt,
+		CompletionEvidence:  adjudicationDigest("f"),
+		Outcome:             domain.ReviewFindings,
+		FindingIDs:          []domain.FindingID{finding.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := domain.NewFindingAdjudication(
+		f.task.RunID, record.Round, f.binding.run.SpecDigest,
+		record.InstructionDigest, f.binding.resolvedPolicy.Digest,
+		[]domain.FindingAdjudicationEntry{
+			modelRouteEntry(t, finding.ID, domain.RouteDefer, domain.ConfidenceHigh),
+		}, record.CompletedAt.Add(time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(f.ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutReviewRecord(f.ctx, record, []domain.Finding{finding}); err != nil {
+			return err
+		}
+		return tx.PutFindingAdjudication(f.ctx, artifact)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := f.workflow.executeFindingAdjudication(
+		f.ctx, f.task, record, artifact, f.headRoot)
+	if err != nil || state != productionReviewPending {
+		t.Fatalf("final findings gate = %d, %v", state, err)
+	}
+	itemID := productionReviewDiminishingItemID(f.task.RunID, record.Round)
+	var item domain.AttentionItem
+	var snapshot store.Snapshot
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		var readErr error
+		item, snapshot, readErr = tx.GetAttentionItemSnapshot(f.ctx, itemID)
+		return readErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.signet.Submit(f.ctx, signet.ClientCommand{
+		CommandID: "command-finish-final-review", DeviceID: "device-test",
+		ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionFinishNow, ItemVersion: item.ItemVersion,
+			PRHeadSHA: item.PRHeadSHA, ArtifactDigests: item.ArtifactDigests,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state, err = f.workflow.executeFindingAdjudication(
+		f.ctx, f.task, record, artifact, f.headRoot)
+	if err != nil || state != productionReviewPassed {
+		t.Fatalf("finish final findings = %d, %v", state, err)
+	}
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.ReviewDiminishingDecision(
+			f.ctx, productionReviewDiminishingItemID(f.task.RunID, prior.Round),
+		); err != nil {
+			return err
+		}
+		if _, err := tx.ReviewDiminishingDecision(f.ctx, itemID); err != nil {
+			return err
+		}
+		dispositions, err := tx.ListFindingDispositions(f.ctx, f.task.RunID)
+		if err != nil {
+			return err
+		}
+		if len(dispositions) != 2 || dispositions[1].FindingID != finding.ID ||
+			dispositions[1].Disposition != domain.ReviewDispositionDeferred {
+			t.Fatalf("final dispositions = %#v", dispositions)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedDiminishingReviewRound(
+	t *testing.T, f *findingAdjudicationFixture,
+) (domain.ReviewRecord, domain.FindingAdjudication) {
+	t.Helper()
+	findings := make([]domain.Finding, 0, 2)
+	records := make([]domain.ReviewRecord, 0, 2)
+	for round := 2; round <= 3; round++ {
+		finding := f.finding
+		finding.ID = domain.FindingID(fmt.Sprintf("finding-recurring-%d", round))
+		finding.CreatedAt = f.finding.CreatedAt.Add(time.Duration(round) * time.Minute)
+		record, err := domain.NewReviewRecord(domain.ReviewRecord{
+			InvocationID: domain.InvocationID(fmt.Sprintf("review-recurring-%d", round)),
+			RunID:        f.task.RunID, Round: round, Provider: f.record.Provider,
+			ModelConfiguration:  f.record.ModelConfiguration,
+			ConfigurationDigest: f.record.ConfigurationDigest,
+			InstructionDigest:   f.record.InstructionDigest, CostOwner: f.record.CostOwner,
+			BaseSHA: f.record.BaseSHA, HeadSHA: f.record.HeadSHA,
+			CompletedAt:        f.record.CompletedAt.Add(time.Duration(round) * time.Minute),
+			CompletionEvidence: adjudicationDigest(fmt.Sprintf("%d", round)),
+			Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		findings = append(findings, finding)
+		records = append(records, record)
+	}
+	current := records[len(records)-1]
+	entry := modelRouteEntry(t, current.FindingIDs[0], domain.RouteDefer, domain.ConfidenceHigh)
+	artifact, err := domain.NewFindingAdjudication(
+		f.task.RunID, current.Round, f.binding.run.SpecDigest,
+		current.InstructionDigest, f.binding.resolvedPolicy.Digest,
+		[]domain.FindingAdjudicationEntry{entry}, current.CompletedAt.Add(time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(f.ctx, func(tx *store.WriteTx) error {
+		for index, record := range records {
+			if err := tx.PutReviewRecord(f.ctx, record, []domain.Finding{findings[index]}); err != nil {
+				return err
+			}
+		}
+		return tx.PutFindingAdjudication(f.ctx, artifact)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return current, artifact
+}
+
 func TestFindingAdjudicationDecisionRejectsPayloadOnlyRouteAuthority(t *testing.T) {
 	entry := modelRouteEntry(t, "finding-a", domain.RouteDefer, domain.ConfidenceHigh)
 	artifact, err := domain.NewFindingAdjudication(

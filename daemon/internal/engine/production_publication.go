@@ -16,7 +16,6 @@ import (
 	"reflect"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1962,6 +1961,9 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		return w.completeReviewEscalationTask(ctx, task, binding)
 	case productionReviewPassed:
 		// Fall through to the publication path below.
+	case productionReviewContinue:
+		return productionTaskOutcome{}, fmt.Errorf(
+			"review continuation escaped the review gate: %w", domain.ErrParentKeyMismatch)
 	}
 	// Reconstruct the complete §6 verdict immediately before the first
 	// publication effect. The same predicate runs again after recovery from a
@@ -2114,6 +2116,10 @@ const (
 	productionReviewPending productionReviewGateState = iota
 	productionReviewPassed
 	productionReviewEscalated
+	// productionReviewContinue is consumed inside reconcileReviewGate. It asks
+	// the gate to schedule another candidate-bound pass and must never escape to
+	// publication as a passed state.
+	productionReviewContinue
 )
 
 func (w *productionPublicationWorkflow) productionReviewRequest(
@@ -2339,6 +2345,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		// row is still the parked failure, the round machinery below re-gates
 		// the exact-failure adoption binding before advancing past it.
 	}
+	advanceReview := false
 	if latestRecord != nil && latestRecord.ConfigurationDigest == w.reviewConfigurationDigest &&
 		(latestFailure == nil || latestRecord.Round > latestFailure.Round) {
 		if latestRecord.BaseSHA != binding.admission.Base.BaseSHA || latestRecord.HeadSHA != task.HeadSHA {
@@ -2417,36 +2424,41 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				if err := w.removeReviewWorkspace(baseWorkspaceID); err != nil {
 					return productionReviewPending, err
 				}
-				return state, nil
+				if state != productionReviewContinue {
+					return state, nil
+				}
+				advanceReview = true
 			}
-			_, requestAuthority, err := w.productionReviewRequest(
-				task, binding, checkpoint, latestRecord.InvocationID,
-				latestRecord.Round, reviewInstructions,
-			)
-			if err != nil {
-				return productionReviewPending, err
+			if !advanceReview {
+				_, requestAuthority, err := w.productionReviewRequest(
+					task, binding, checkpoint, latestRecord.InvocationID,
+					latestRecord.Round, reviewInstructions,
+				)
+				if err != nil {
+					return productionReviewPending, err
+				}
+				authorityVerifier, ok := w.reviewSource.(exec.ReviewRequestAuthorityVerifier)
+				if !ok {
+					return productionReviewPending, errors.New(
+						"review source cannot re-gate persisted request authority")
+				}
+				if err := authorityVerifier.VerifyRequestAuthority(
+					ctx, latestRecord.InvocationID, requestAuthority,
+				); err != nil {
+					return productionReviewPending, fmt.Errorf(
+						"re-gate persisted review instruction authority: %w", err)
+				}
+				// This clean-pass re-entry is downstream of the record write that
+				// already cleared the durable row; clear its durable twin too so a
+				// crash-recovered pass never leaves an orphan pending retry.
+				if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+					return tx.DeleteReviewRetry(ctx, task.RunID)
+				}); err != nil {
+					return productionReviewPending, err
+				}
+				delete(w.reviewRetryAfter, task.RunID)
+				return productionReviewPassed, nil
 			}
-			authorityVerifier, ok := w.reviewSource.(exec.ReviewRequestAuthorityVerifier)
-			if !ok {
-				return productionReviewPending, errors.New(
-					"review source cannot re-gate persisted request authority")
-			}
-			if err := authorityVerifier.VerifyRequestAuthority(
-				ctx, latestRecord.InvocationID, requestAuthority,
-			); err != nil {
-				return productionReviewPending, fmt.Errorf(
-					"re-gate persisted review instruction authority: %w", err)
-			}
-			// This clean-pass re-entry is downstream of the record write that
-			// already cleared the durable row; clear its durable twin too so a
-			// crash-recovered pass never leaves an orphan pending retry.
-			if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
-				return tx.DeleteReviewRetry(ctx, task.RunID)
-			}); err != nil {
-				return productionReviewPending, err
-			}
-			delete(w.reviewRetryAfter, task.RunID)
-			return productionReviewPassed, nil
 		}
 	}
 
@@ -2797,6 +2809,9 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		if err := w.removeReviewWorkspace(baseWorkspaceID); err != nil {
 			return productionReviewPending, err
 		}
+		if state == productionReviewContinue {
+			return productionReviewPending, nil
+		}
 		return state, nil
 	}
 	if err := w.removeReviewWorkspace(id); err != nil {
@@ -2996,27 +3011,15 @@ func (w *productionPublicationWorkflow) latestReviewState(
 func (w *productionPublicationWorkflow) reviewHardRoundLimit(
 	ctx context.Context, runID domain.RunID,
 ) (int, error) {
-	const defaultHardRoundLimit = 25
-	var policy domain.ResolvedPolicy
+	var policy store.ReviewConvergencePolicy
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		policy, err = tx.GetResolvedPolicy(ctx, runID)
+		policy, err = tx.ReviewConvergencePolicy(ctx, runID)
 		return err
 	}); err != nil {
 		return 0, err
 	}
-	for _, key := range policy.Keys {
-		if key.Key != "review.hard_round_limit" {
-			continue
-		}
-		limit, err := strconv.Atoi(key.Value)
-		if err != nil || limit < 1 {
-			return 0, fmt.Errorf("resolved review.hard_round_limit %q: %w",
-				key.Value, domain.ErrNonPositive)
-		}
-		return limit, nil
-	}
-	return defaultHardRoundLimit, nil
+	return policy.HardRoundLimit, nil
 }
 
 func (w *productionPublicationWorkflow) recordReviewSourceFailure(
