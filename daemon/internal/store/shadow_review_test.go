@@ -138,8 +138,8 @@ func TestShadowReviewRejectsFindingOutsideSourceSchema(t *testing.T) {
 	}{
 		{name: "empty severity", mutate: func(f *domain.Finding) { f.Severity = "" }, want: domain.ErrInvalidFindingSeverity},
 		{name: "missing location", mutate: func(f *domain.Finding) { f.Location = nil }, want: domain.ErrEmptyField},
-		{name: "whole file location", mutate: func(f *domain.Finding) {
-			f.Location = &domain.FindingLocation{Path: "daemon/main.go"}
+		{name: "partial range", mutate: func(f *domain.Finding) {
+			f.Location = &domain.FindingLocation{Path: "daemon/main.go", EndLine: 4}
 		}, want: domain.ErrNonPositive},
 		{name: "empty explanation", mutate: func(f *domain.Finding) { f.Message = "" }, want: domain.ErrEmptyField},
 	} {
@@ -176,6 +176,59 @@ func TestShadowReviewRejectsFindingOutsideSourceSchema(t *testing.T) {
 				t.Fatalf("invalid shadow finding write = %v, want %v", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestShadowReviewPersistsWholeFileFinding is the #855 regression guard at the
+// store trust boundary: a candidate-deleted-file shadow finding carries the
+// whole-file location (0,0), and both persistence boundaries — the
+// PutShadowReviewRecord write and GetShadowReviewRecord's re-validation on read
+// — must admit it in lockstep with the shared ward normalization, not discard
+// the pass as a non-positive range.
+func TestShadowReviewPersistsWholeFileFinding(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	at := time.Date(2026, 8, 24, 1, 30, 0, 0, time.UTC)
+	st := openStore(t, store.Options{})
+	run := domain.Run{
+		ID: "run-shadow-wholefile", ProjectID: "project-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+	}
+	finding := domain.Finding{
+		ID: "finding-shadow-wholefile", RunID: run.ID,
+		Source: string(domain.ShadowReviewClaudeLocal), Severity: domain.FindingSeverityP2,
+		Location: &domain.FindingLocation{Path: "daemon/gone.go"},
+		Message:  "deletes the only caller", RawText: "deletes the only caller", CreatedAt: at,
+	}
+	routed := routedCandidate(t, run.ID, "routed-wholefile-1", 1, nil, at)
+	shadow := shadowRecord(t, run.ID, "shadow-wholefile-1", 1,
+		[]domain.FindingID{finding.ID}, at)
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		if err := tx.PutReviewRecord(ctx, routed, nil); err != nil {
+			return err
+		}
+		return tx.PutShadowReviewRecord(ctx, shadow, []domain.Finding{finding})
+	}); err != nil {
+		t.Fatalf("whole-file shadow finding rejected at persistence: %v", err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetShadowReviewRecord(ctx, shadow.InvocationID); err != nil {
+			return err
+		}
+		got, err := tx.GetFinding(ctx, finding.ID)
+		if err != nil {
+			return err
+		}
+		want := domain.FindingLocation{Path: "daemon/gone.go"}
+		if got.Location == nil || *got.Location != want {
+			t.Fatalf("reconstructed whole-file location = %#v, want %#v", got.Location, want)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -220,7 +220,16 @@ func newEquivalenceReviewSource() *CodexReviewSource {
 // provider-driven normalizeCollection is decision-for-decision identical to the
 // base-commit reconstruction across a fuzzed corpus of exit statuses, structured
 // output shapes (valid, malformed, trailing, duplicate-key, missing, out-of-domain
-// severity, whole-file and inverted line ranges), and request identity fields.
+// severity, unmarked (0,0), and inverted line ranges), and request identity fields.
+//
+// The one surface where the two intentionally diverge is the #855 whole_file
+// location marker: the pre-#872 base struct has no such field, so its strict
+// decode rejects the key as unknown, while the current path admits
+// {whole_file:true} and gives marker-specific rejections for the other tokens.
+// The #872 behavior-preservation property holds only off that surface, so the
+// assertion below skips any input that carries a whole_file marker (that
+// behavior is pinned directly in codex_review_source_test.go). The seeds below
+// exercise the skip so the intended divergence is not reported as a regression.
 func FuzzReviewNormalizeCollectionEquivalence(f *testing.F) {
 	seeds := []struct {
 		exit    int
@@ -235,6 +244,12 @@ func FuzzReviewNormalizeCollectionEquivalence(f *testing.F) {
 		{0, `{"findings":[{"severity":"P9","location":{"path":"a.go","start_line":1,"end_line":1},"explanation":"x"}]}`, "", "", "", "r"},
 		{0, `{"findings":[{"severity":"P0","location":{"path":"a.go","start_line":0,"end_line":0},"explanation":"x"}]}`, "", "", "", "r"},
 		{0, `{"findings":[{"severity":"P1","location":{"path":"a.go","start_line":5,"end_line":2},"explanation":"x"}]}`, "", "", "", "r"},
+		// #855 whole_file marker surface (skipped by the equivalence assertion; the
+		// base reconstruction rejects the unknown key while the current path admits
+		// the true variant and rejects the non-true tokens).
+		{0, `{"findings":[{"severity":"P2","location":{"path":"a.go","whole_file":true},"explanation":"x"}]}`, "", "", "", "r"},
+		{0, `{"findings":[{"severity":"P2","location":{"path":"a.go","whole_file":false,"start_line":1,"end_line":1},"explanation":"x"}]}`, "", "", "", "r"},
+		{0, `{"findings":[{"severity":"P2","location":{"path":"a.go","whole_file":null,"start_line":1,"end_line":1},"explanation":"x"}]}`, "", "", "", "r"},
 		{0, `{"findings":[{"severity":"P3","explanation":"x"}]}`, "", "", "", "r"},
 		{0, `{"findings":[{"severity":"P2","location":{"path":"a.go","start_line":1,"end_line":1},"explanation":"x"}]}extra`, "", "", "", "r"},
 		{0, `{"findings":[{"severity":"P2","location":{"path":"a.go","start_line":1,"end_line":1},"explanation":"x"},"findings":[]}`, "", "", "", "r"},
@@ -257,10 +272,43 @@ func FuzzReviewNormalizeCollectionEquivalence(f *testing.F) {
 		id := domain.InvocationID("review-" + runID)
 		got := source.normalizeCollection(id, req, collection)
 		want := oldNormalizeCollection(source, id, req, collection)
+		if resultCarriesWholeFileMarker(collection.Result) {
+			// #855 divergence surface: the base reconstruction rejects the unknown
+			// whole_file key while the current path handles the marker, so the
+			// equivalence property does not apply here (see the doc comment). The
+			// whole_file behavior itself is pinned in codex_review_source_test.go.
+			return
+		}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("normalizeCollection diverged from base reconstruction\n new: %+v\n base: %+v", got, want)
 		}
 	})
+}
+
+// resultCarriesWholeFileMarker reports whether the structured result decodes to
+// any finding location bearing a whole_file key — the sole input surface on
+// which the #855 change intentionally diverges from the pre-#872 base
+// reconstruction. A lenient decode suffices: any present marker (true, false,
+// null, or a non-boolean) makes the base's strict unknown-field decode and the
+// current marker-aware gate disagree, while every whole_file-free input leaves
+// the two decision-for-decision identical.
+func resultCarriesWholeFileMarker(result []byte) bool {
+	var raw struct {
+		Findings *[]struct {
+			Location *struct {
+				WholeFile json.RawMessage `json:"whole_file"`
+			} `json:"location"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(result, &raw); err != nil || raw.Findings == nil {
+		return false
+	}
+	for _, finding := range *raw.Findings {
+		if finding.Location != nil && len(finding.Location.WholeFile) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // oldBuildReviewAgentSpec is the base-commit (6bf2c8b8) body of

@@ -541,12 +541,30 @@ func TestClaudeReviewCollectionEnvelope(t *testing.T) {
 		t.Errorf("finding = %+v, want one claude_local P1", valid.Result.Findings)
 	}
 
+	// The whole-file variant (a candidate-deleted-file finding, #855) routes
+	// through the same shared normalization, so the Claude provider admits the
+	// domain whole-file (0,0) location under the explicit marker too.
+	wholeFile := source.normalizeCollection(id, req, CodexReviewCollection{
+		Result: []byte(`{"findings":[{"severity":"P2","location":{"path":"old.go","whole_file":true},"explanation":"file removed"}]}`),
+	})
+	if wholeFile.Result == nil || len(wholeFile.Result.Findings) != 1 {
+		t.Fatalf("whole-file Claude envelope produced no result: %+v", wholeFile)
+	}
+	if loc := wholeFile.Result.Findings[0].Location; loc == nil ||
+		loc.Path != "old.go" || loc.StartLine != 0 || loc.EndLine != 0 {
+		t.Errorf("whole-file location = %+v, want {old.go 0 0}", wholeFile.Result.Findings[0].Location)
+	}
+
 	for _, tc := range []struct {
 		name   string
 		result string
 	}{
 		{"out-of-domain severity", `{"findings":[{"severity":"P9","location":{"path":"a.go","start_line":1,"end_line":1},"explanation":"x"}]}`},
-		{"non-concrete range", `{"findings":[{"severity":"P1","location":{"path":"a.go","start_line":0,"end_line":0},"explanation":"x"}]}`},
+		{"unmarked (0,0)", `{"findings":[{"severity":"P1","location":{"path":"a.go","start_line":0,"end_line":0},"explanation":"x"}]}`},
+		{"whole-file marker with a line range", `{"findings":[{"severity":"P1","location":{"path":"a.go","whole_file":true,"start_line":1,"end_line":1},"explanation":"x"}]}`},
+		{"false whole-file marker", `{"findings":[{"severity":"P1","location":{"path":"a.go","whole_file":false,"start_line":1,"end_line":1},"explanation":"x"}]}`},
+		{"explicit null whole-file marker", `{"findings":[{"severity":"P1","location":{"path":"a.go","whole_file":null,"start_line":1,"end_line":1},"explanation":"x"}]}`},
+		{"non-boolean whole-file marker", `{"findings":[{"severity":"P1","location":{"path":"a.go","whole_file":1,"start_line":1,"end_line":1},"explanation":"x"}]}`},
 		{"malformed json", `{"findings":`},
 	} {
 		outcome := source.normalizeCollection(id, req, CodexReviewCollection{Result: []byte(tc.result)})

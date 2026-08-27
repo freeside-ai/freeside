@@ -10,11 +10,21 @@ import (
 
 // reviewFindingsJSONSchema is the provider-neutral structured-output contract
 // every review CLI is constrained to: a findings array over the native P0–P3
-// severity scale, each carrying a concrete file location and an explanation.
-// Codex passes it via --output-schema (from a file); Claude passes it inline
-// via --json-schema. Both providers share this single literal so the two
+// severity scale, each carrying a file location and an explanation. A location
+// is one of two variants (a JSON-Schema anyOf): the concrete new-side line
+// range {path, start_line≥1, end_line≥1}, or the whole-file marker
+// {path, whole_file:true} for a finding on a candidate-deleted file — which has
+// no new-side line — or an otherwise wholly file-level finding (§7, #855). The
+// two variants are mutually exclusive: additionalProperties:false lets each
+// object carry only its own fields. anyOf (not oneOf) is used because it is the
+// union form OpenAI structured outputs supports; the range variant is byte-for-
+// byte the pre-#855 shape, so the common line-range case is unchanged. The
+// schema steers the model; ward normalization is the hard fail-closed gate and
+// admits the domain whole-file (0,0) location only under the explicit marker.
+// Codex passes the schema via --output-schema (from a file); Claude passes it
+// inline via --json-schema. Both providers share this single literal so the two
 // runtimes can never drift on the severity scale or the location shape.
-const reviewFindingsJSONSchema = `{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["P0","P1","P2","P3"]},"location":{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1}},"required":["path","start_line","end_line"],"additionalProperties":false},"explanation":{"type":"string"}},"required":["severity","location","explanation"],"additionalProperties":false}}},"required":["findings"],"additionalProperties":false}`
+const reviewFindingsJSONSchema = `{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["P0","P1","P2","P3"]},"location":{"anyOf":[{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1}},"required":["path","start_line","end_line"],"additionalProperties":false},{"type":"object","properties":{"path":{"type":"string"},"whole_file":{"type":"boolean","enum":[true],"description":"Set true only for a finding on a candidate-deleted file (no new-side line) or an otherwise wholly file-level finding; use the start_line/end_line range for every finding with concrete new-side lines."}},"required":["path","whole_file"],"additionalProperties":false}]},"explanation":{"type":"string"}},"required":["severity","location","explanation"],"additionalProperties":false}}},"required":["findings"],"additionalProperties":false}`
 
 // review_provider.go carries the provider-neutral seam of the review runtime
 // (#872). The Codex ReviewSource and the forthcoming Claude shadow ReviewSource

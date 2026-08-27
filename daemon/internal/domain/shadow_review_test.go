@@ -59,6 +59,14 @@ func TestShadowReviewFindingRequiresRegisteredSourceSchema(t *testing.T) {
 	if err := domain.ValidateShadowReviewFinding(domain.ShadowReviewClaudeLocal, valid); err != nil {
 		t.Fatalf("valid shadow finding rejected: %v", err)
 	}
+	// The #855 whole-file location (0,0) is the shared normalization's
+	// candidate-deleted-file shape; the shadow persistence contract admits it in
+	// lockstep, so a whole-file shadow finding is recorded, not discarded.
+	wholeFile := valid
+	wholeFile.Location = &domain.FindingLocation{Path: "daemon/main.go"}
+	if err := domain.ValidateShadowReviewFinding(domain.ShadowReviewClaudeLocal, wholeFile); err != nil {
+		t.Fatalf("whole-file shadow finding rejected: %v", err)
+	}
 	for _, tc := range []struct {
 		name   string
 		mutate func(*domain.Finding)
@@ -66,9 +74,12 @@ func TestShadowReviewFindingRequiresRegisteredSourceSchema(t *testing.T) {
 	}{
 		{name: "empty severity", mutate: func(f *domain.Finding) { f.Severity = "" }, want: domain.ErrInvalidFindingSeverity},
 		{name: "missing location", mutate: func(f *domain.Finding) { f.Location = nil }, want: domain.ErrEmptyField},
-		{name: "whole file location", mutate: func(f *domain.Finding) {
-			f.Location = &domain.FindingLocation{Path: "daemon/main.go"}
+		{name: "partial range", mutate: func(f *domain.Finding) {
+			f.Location = &domain.FindingLocation{Path: "daemon/main.go", EndLine: 4}
 		}, want: domain.ErrNonPositive},
+		{name: "inverted range", mutate: func(f *domain.Finding) {
+			f.Location = &domain.FindingLocation{Path: "daemon/main.go", StartLine: 5, EndLine: 2}
+		}, want: domain.ErrInvertedRange},
 		{name: "empty message", mutate: func(f *domain.Finding) { f.Message = "" }, want: domain.ErrEmptyField},
 		{name: "empty raw text", mutate: func(f *domain.Finding) { f.RawText = "" }, want: domain.ErrEmptyField},
 		{name: "wrong source", mutate: func(f *domain.Finding) { f.Source = "codex_local" }, want: domain.ErrParentKeyMismatch},

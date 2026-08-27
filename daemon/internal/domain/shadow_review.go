@@ -33,7 +33,15 @@ func (s ShadowReviewSource) valid() bool {
 // ValidateShadowReviewFinding re-applies the registered source's normalized
 // output schema at persistence boundaries. Finding.Validate stays permissive
 // enough for native review observations; a shadow result must preserve the
-// stricter review-source contract that produced its classifier evidence.
+// stricter review-source contract that produced its classifier evidence. The
+// location shape is part of that contract, but it is already enforced by
+// Finding.Validate above (via FindingLocation.Validate), which admits the #855
+// whole-file location (0,0) under the shared ward normalization and rejects a
+// partial, non-positive, or inverted range. Re-narrowing the location here to a
+// concrete line range would discard exactly the candidate-deleted-file finding
+// the shared schema now emits (the Claude shadow source shares that
+// normalization), so the shadow-specific cases add only the required-ness the
+// permissive path omits: a severity, a present location, and an explanation.
 func ValidateShadowReviewFinding(source ShadowReviewSource, finding Finding) error {
 	if !source.valid() {
 		return fmt.Errorf("shadow review finding source %q: %w", source, ErrInvalidShadowReviewSource)
@@ -51,8 +59,6 @@ func ValidateShadowReviewFinding(source ShadowReviewSource, finding Finding) err
 			return fmt.Errorf("shadow review finding severity: %w", ErrInvalidFindingSeverity)
 		case finding.Location == nil:
 			return fmt.Errorf("shadow review finding location: %w", ErrEmptyField)
-		case finding.Location.StartLine < 1:
-			return fmt.Errorf("shadow review finding location: %w", ErrNonPositive)
 		case finding.Message == "" || finding.RawText == "":
 			return fmt.Errorf("shadow review finding explanation: %w", ErrEmptyField)
 		}
