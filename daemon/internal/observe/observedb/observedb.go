@@ -20,9 +20,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 )
@@ -90,6 +92,53 @@ type ReviewYield struct {
 	DecisionAction      *domain.Action       `json:"decision_action,omitempty"`
 }
 
+// AdjudicationDispatch is the bounded, non-prose telemetry projection of one
+// finding's adjudication entry in one round and revision. It carries only the
+// authenticated categorical, id, digest, and boolean axes needed to measure how
+// often critical/high-severity, material, in-surface findings reach deterministic engine
+// dispatch (Producer engine) versus model residue (engine_model or model). It
+// never carries adjudication prose (rationale, evidence, cited rules,
+// assumptions, alternatives, open questions) or the finding's own message or
+// raw text, so no reasoning history or free-form finding text crosses the
+// observation boundary.
+type AdjudicationDispatch struct {
+	AttemptNumber int                         `json:"attempt_number"`
+	Round         int                         `json:"round"`
+	Revision      int                         `json:"revision"`
+	FindingID     domain.FindingID            `json:"finding_id"`
+	Producer      domain.AdjudicationProducer `json:"producer"`
+	Route         domain.AdjudicationRoute    `json:"route"`
+	// AdjudicationConfidence is the entry's model-proposal confidence, present
+	// exactly on model-backed producers (model, engine_model) and nil on a pure
+	// engine fast-path fact. It is the adjudication proposal's self-assessed
+	// confidence and is never the classifier's confidence (ClassifierConfidence).
+	AdjudicationConfidence *domain.AdjudicationConfidence `json:"adjudication_confidence"`
+	// FindingSeverity is the raw reviewer severity; the critical/high severity
+	// axis is FindingSeverity in {P0, P1} — plan §7's credibility ceiling today.
+	// Empty when the finding carries no severity.
+	FindingSeverity domain.FindingSeverity `json:"finding_severity"`
+	// ClassifierMateriality and ClassifierConfidence are the classifier's own
+	// tokens for this finding at the round's classification version, empty when
+	// no classification is recorded. ClassifierConfidence is the classifier's
+	// self-assessed confidence, deliberately distinct from AdjudicationConfidence.
+	ClassifierMateriality string `json:"classifier_materiality"`
+	ClassifierConfidence  string `json:"classifier_confidence"`
+	// InSurface reports whether the finding's location is contained in the run's
+	// resolved-policy declared paths, computed with the engine's own matcher
+	// (CanonicalDeclaredPaths and pathfold.MatchAny, no case fold). It is the
+	// declared-scope containment half of the engine's allowed-compatibility check
+	// and deliberately does not re-derive tree existence (unreachable without a
+	// live worktree), so an in-scope finding whose path is not yet in
+	// either tree still reads InSurface=true — the case the calibration metric
+	// most needs visible. It is therefore an independent property of the finding
+	// location, not a restatement of the entry's allowed compatibility.
+	InSurface bool `json:"in_surface"`
+	// ResolvedPolicyDigest binds the adjudication to the resolved policy the run
+	// was gated under; join ReviewYield to adjudications on (RunID, Round), never
+	// on a digest (ReviewYield.ConfigurationDigest is the reviewer's, not this).
+	ResolvedPolicyDigest domain.Digest `json:"resolved_policy_digest"`
+}
+
 // Snapshot is one transactionally coherent, read-only view of the selected
 // run's observation, production-attempt lineage, open attention, recorded
 // admission identities, and authenticated publication-completion identity.
@@ -103,6 +152,7 @@ type Snapshot struct {
 	ShadowReviews           []domain.ShadowReviewRecord       `json:"shadow_reviews"`
 	ClassifierSamples       []domain.ClassifierAccuracySample `json:"classifier_samples"`
 	ReviewYield             []ReviewYield                     `json:"review_yield"`
+	Adjudications           []AdjudicationDispatch            `json:"adjudications"`
 }
 
 // Open opens the daemon's database at path. Options are empty by design: the
@@ -175,6 +225,7 @@ func (s *Store) ObserveSnapshot(ctx context.Context, runID domain.RunID) (Snapsh
 		snapshot.ShadowReviews = []domain.ShadowReviewRecord{}
 		snapshot.ClassifierSamples = []domain.ClassifierAccuracySample{}
 		snapshot.ReviewYield = []ReviewYield{}
+		snapshot.Adjudications = []AdjudicationDispatch{}
 		snapshot.ShadowReviews, err = tx.ListShadowReviewRecords(ctx, runID)
 		if err != nil {
 			return err
@@ -218,6 +269,53 @@ func (s *Store) ObserveSnapshot(ctx context.Context, runID domain.RunID) (Snapsh
 					projected.DecisionAction = &action
 				}
 				snapshot.ReviewYield = append(snapshot.ReviewYield, projected)
+			}
+		}
+
+		adjudications, err := tx.ListFindingAdjudications(ctx, runID)
+		if err != nil {
+			return err
+		}
+		if len(adjudications) > 0 {
+			// Declared paths come from the run's single resolved policy; a finding
+			// is in-surface when its location is contained in them by the engine's
+			// own matcher. A run with no resolved policy leaves the paths empty, so
+			// every finding reads out-of-surface (fail closed) rather than in.
+			var declaredPaths []string
+			if policy, perr := tx.GetResolvedPolicy(ctx, runID); perr == nil {
+				declaredPaths = domain.CanonicalDeclaredPaths(policy)
+			} else if !errors.Is(perr, store.ErrNotFound) {
+				return perr
+			}
+			for _, artifact := range adjudications {
+				for _, entry := range artifact.Entries {
+					dispatch := AdjudicationDispatch{
+						AttemptNumber: attemptNumber, Round: artifact.Round, Revision: artifact.Revision,
+						FindingID: entry.FindingID, Producer: entry.Producer, Route: entry.Route,
+						ResolvedPolicyDigest: artifact.ResolvedPolicyDigest,
+					}
+					if entry.Confidence != nil {
+						confidence := *entry.Confidence
+						dispatch.AdjudicationConfidence = &confidence
+					}
+					finding, err := tx.GetFinding(ctx, entry.FindingID)
+					if err != nil {
+						return err
+					}
+					dispatch.FindingSeverity = finding.Severity
+					dispatch.InSurface = findingInSurface(finding.Location, declaredPaths)
+					// The classification the round's materiality/confidence gate read
+					// is versioned by the round. An absent classification projects
+					// empty tokens rather than failing the snapshot; any other read
+					// error fails closed.
+					if classification, cerr := tx.GetClassification(ctx, entry.FindingID, artifact.Round); cerr == nil {
+						dispatch.ClassifierMateriality = classification.Materiality
+						dispatch.ClassifierConfidence = classification.Confidence
+					} else if !errors.Is(cerr, store.ErrNotFound) {
+						return cerr
+					}
+					snapshot.Adjudications = append(snapshot.Adjudications, dispatch)
+				}
 			}
 		}
 
@@ -302,6 +400,55 @@ func (s *Store) ObserveSnapshot(ctx context.Context, runID domain.RunID) (Snapsh
 		return Snapshot{}, fmt.Errorf("observe snapshot: %w", err)
 	}
 	return snapshot, nil
+}
+
+// findingInSurface reports whether a finding's location is contained in the
+// run's declared paths, using the engine's own matcher (pathfold.MatchAny with
+// no case fold, matching internal/importer/policy.go and the EngineCompatibility
+// call in internal/engine). It fails closed to false on an absent location, a
+// non-canonical path, or empty declared paths.
+//
+// This is the declared-scope containment half of the engine's
+// allowed-compatibility check, reproducing two of that check's gates: the
+// canonical-repository-path rejection EngineCompatibility applies before
+// containment (so a traversal or absolute path can never be vacuously contained
+// by a broad glob), then pathfold.MatchAny over the declared paths. It
+// deliberately does not re-derive tree existence, which a read-only observer
+// cannot reach, so an in-scope path not yet present in either tree still reads
+// true.
+func findingInSurface(location *domain.FindingLocation, declaredPaths []string) bool {
+	if location == nil || !canonicalRepoPath(location.Path) {
+		return false
+	}
+	return pathfold.MatchAny(declaredPaths, location.Path, false)
+}
+
+// canonicalRepoPath mirrors domain.canonicalRepoPath, which is unexported there
+// and lives in internal/domain, a read-only dependency of this telemetry unit.
+// A canonical repository-relative path is non-empty valid UTF-8 with no C0
+// control character or DEL, no backslash, no leading/trailing/double slash, and
+// no `.` or `..` segment. EngineCompatibility runs containment only over such
+// paths so a traversal or absolute path can never be vacuously contained (plan
+// §7); findingInSurface applies the same gate so the telemetry axis tracks the
+// engine rather than counting a boundary-exiting path a broad glob would match.
+func canonicalRepoPath(p string) bool {
+	if p == "" || !utf8.ValidString(p) {
+		return false
+	}
+	if strings.HasPrefix(p, "/") || strings.Contains(p, "\\") {
+		return false
+	}
+	for _, r := range p {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	for _, segment := range strings.Split(p, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func imageDigest(ref domain.ImageRef) domain.Digest {

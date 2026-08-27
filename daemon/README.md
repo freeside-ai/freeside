@@ -395,6 +395,71 @@ at all.
   observation derive from the timeline. No percentage-complete field exists
   or can be added without a contract change.
 
+### Adjudication Dispatch Telemetry
+
+The machine-readable supervision snapshot (`freesided follow -snapshot`) carries a
+bounded `adjudications` projection: one entry per finding per adjudication round
+and revision, re-gated through the store's `ListFindingAdjudications` accessor
+(every row is reconstructed and its content address, binding, and successor chain
+revalidated before projection). It answers one calibration question without raw
+SQLite access: how often do critical/high-severity, material, in-surface findings reach
+deterministic engine dispatch versus model residue? It is telemetry, never
+authority, and carries no prose — no rationale, evidence, cited rules,
+assumptions, alternatives, open questions, finding message, or raw text.
+
+Each `adjudications[]` entry carries:
+
+- `attempt_number`, `round`, `revision`, `finding_id` — the stable join keys
+  (with the snapshot's own run id). Join `review_yield` to `adjudications` on
+  `(run id, round)`, never on a digest.
+- `producer` — `engine` (a deterministic fast-path routing fact), `model` (a
+  model-residue proposal), or `engine_model` (a model goal judgment composed with
+  the engine's allowed-remediation authority). This is the dispatch axis.
+- `route` — the adjudicated route (`remediate`, `park_separate_work`, …).
+- `adjudication_confidence` — the entry's model-proposal confidence, present
+  exactly on `model`/`engine_model` producers and null on a pure `engine` fact.
+  It is never the classifier's confidence.
+- `finding_severity` — the raw reviewer severity (`P0`…`P3`, empty when absent);
+  the critical/high severity axis is `P0` or `P1`.
+- `classifier_materiality`, `classifier_confidence` — the classifier's own tokens
+  for the finding at the round's classification version, empty when no
+  classification is recorded. `classifier_confidence` is deliberately distinct
+  from `adjudication_confidence`.
+- `in_surface` — whether the finding's location is contained in the run's
+  resolved-policy declared paths, by the engine's own matcher. It is the
+  declared-scope half of the engine's allowed-compatibility check and does not
+  re-check tree existence (unreachable to a read-only observer), so an in-scope
+  finding whose path is not yet in either tree still reads `true` — the
+  case the calibration metric most needs visible. It is an independent property
+  of the finding location, not a restatement of the entry's compatibility.
+- `resolved_policy_digest` — the resolved policy the round was gated under; a
+  change across rounds or attempts is a configuration change.
+
+**Calibration rate.** Over each round's head revision (the entry with the
+greatest `revision` for a given `(round, finding_id)`), take the population of
+findings that are critical/high severity (`finding_severity` in `{P0, P1}` —
+the operative content of plan §7's credibility guard, which today filters
+nothing beyond the critical/high ceiling), material (`classifier_materiality`
+at or above the analyst's chosen materiality bar, e.g. `{medium, high}` — the
+bar is a parameter of the question, a threshold the analyst applies or sweeps,
+not run data), and `in_surface`. The numerator is that population's findings
+with `producer == engine`; the denominator is that population's findings with
+`producer` in `{engine, engine_model}`. A denominator that routinely exceeds
+the numerator is critical/high-severity, material, in-surface work reaching
+model residue rather than the deterministic fast path — the signal an operator
+watches.
+
+Every per-finding input the predicate needs — severity, the classifier
+materiality token, `in_surface`, and `producer` — is a projected field, so
+given a chosen materiality bar the rate is computable without opening the
+database; the analyst's bar is the only non-projected value, and it is a query
+parameter, not run state. The engine's own per-run materiality and confidence
+dispatch thresholds live in the resolved policy that `resolved_policy_digest`
+identifies; they are deliberately not used to define this population, because
+defining "material" by the engine's own bar would be circular and would mask
+the threshold miscalibration this calibration exists to detect (projecting them
+as interpretability context is tracked as #975).
+
 Security limitations, stated for the operator surface:
 
 - **No live writer output.** Monitoring consumes driver inspection
