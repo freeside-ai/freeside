@@ -1446,7 +1446,7 @@ func TestProductionReviewFindingsParkForAdjudicationWithoutReady(t *testing.T) {
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review findings")),
 			Findings: []domain.Finding{{
 				ID: "review-finding-1", RunID: p.runID, Source: "codex_local", Severity: "P1",
-				Location: &domain.FindingLocation{Path: "daemon/main.go", StartLine: 12, EndLine: 12}, Message: "unsafe transition", RawText: "unsafe transition",
+				Location: &domain.FindingLocation{Path: "README.md", StartLine: 1, EndLine: 1}, Message: "unsafe transition", RawText: "unsafe transition",
 				CreatedAt: p.now,
 			}},
 		},
@@ -1475,6 +1475,144 @@ func TestProductionReviewFindingsParkForAdjudicationWithoutReady(t *testing.T) {
 		if item.Type != domain.AttentionReviewDispute || item.PRHeadSHA != p.replay.HeadSHA ||
 			!item.Offers(domain.ActionDiscuss) || !item.Offers(domain.ActionStop) {
 			t.Fatalf("review attention = %#v", item)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestProductionReviewFindingOffReviewedDiffIsContradiction proves the overlap
+// gate fails closed on a routed finding whose location does not resolve into the
+// reviewed base-to-head diff. The reviewed change touches only README.md, so a
+// finding on daemon/main.go is a contradiction rejected before any review
+// record, finding, disposition, or remediation intent is persisted.
+func TestProductionReviewFindingOffReviewedDiffIsContradiction(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	id := engine.ProductionReviewInvocationID(p.runID, 1)
+	p.reviewer.Script(id, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("off-diff finding")),
+			Findings: []domain.Finding{{
+				ID: "review-finding-off-diff", RunID: p.runID, Source: "codex_local", Severity: "P1",
+				Location: &domain.FindingLocation{Path: "daemon/main.go", StartLine: 12, EndLine: 12},
+				Message:  "off the reviewed diff", RawText: "off the reviewed diff", CreatedAt: p.now,
+			}},
+		},
+	})
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil ||
+		result.ReadyItemsCreated != 0 || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("off-diff finding result = %#v, %v", result, err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if failure.Class != domain.ReviewFailureContradiction {
+			t.Fatalf("off-diff finding failure = %#v", failure)
+		}
+		// A rejected result persists no review record, finding, or disposition.
+		if _, err := tx.LatestReviewRecord(p.ctx, p.runID); !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("review record after off-diff contradiction: %w", err)
+		}
+		if _, err := tx.GetFinding(p.ctx, "review-finding-off-diff"); !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("finding persisted after off-diff contradiction: %w", err)
+		}
+		item, err := tx.GetAttentionItem(p.ctx, productionReviewItemIDForTest(p.runID, 1))
+		if err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionReviewContradiction || !item.Offers(domain.ActionRecoverReview) {
+			t.Fatalf("off-diff contradiction item = %#v", item)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestProductionReviewOverlapGateSurvivesCrashBeforeRecord proves the overlap
+// gate runs entirely before the atomic review-record write: a crash injected at
+// the review-result boundary persists nothing, and the retry re-derives the
+// reviewed diff, re-validates the overlapping finding, and only then persists
+// and parks it for adjudication.
+func TestProductionReviewOverlapGateSurvivesCrashBeforeRecord(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	injected := false
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		transitionHook: func(
+			transition engine.DurableTransition, side engine.DurableTransitionSide,
+		) error {
+			if !injected && transition == engine.DurableTransitionReviewResult &&
+				side == engine.DurableTransitionBefore {
+				injected = true
+				return errors.New("injected process loss before review record")
+			}
+			return nil
+		},
+	}, true)
+	reviewID := engine.ProductionReviewInvocationID(p.runID, 1)
+	p.reviewer.Script(reviewID, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("overlap crash")),
+			Findings: []domain.Finding{{
+				ID: "review-finding-overlap", RunID: p.runID, Source: "codex_local", Severity: "P1",
+				Location: &domain.FindingLocation{Path: "README.md", StartLine: 1, EndLine: 1},
+				Message:  "on the reviewed diff", RawText: "on the reviewed diff", CreatedAt: p.now,
+			}},
+		},
+	})
+	p.startAndRecordExport(t)
+	// First pass: the gate accepts the overlapping finding, but the injected crash
+	// fires before the atomic record write, so nothing persists.
+	if _, err := p.reconcileLanes(); err == nil || !injected {
+		t.Fatalf("expected injected crash before the review record write")
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.LatestReviewRecord(p.ctx, p.runID); !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("review record persisted despite crash before write: %w", err)
+		}
+		if _, err := tx.GetFinding(p.ctx, "review-finding-overlap"); !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("finding persisted despite crash before write: %w", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Retry from a fresh engine: the gate re-derives the reviewed diff, re-validates
+	// the overlap, persists the record, and parks it for adjudication.
+	p.restartDurableState(t)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		record, err := tx.LatestReviewRecord(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if record.Outcome != domain.ReviewFindings || len(record.FindingIDs) != 1 {
+			t.Fatalf("re-run review record = %#v", record)
+		}
+		if _, err := tx.GetFinding(p.ctx, "review-finding-overlap"); err != nil {
+			return fmt.Errorf("finding not persisted after re-run: %w", err)
+		}
+		item, err := tx.GetAttentionItem(p.ctx, productionReviewItemIDForTest(p.runID, 1))
+		if err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionReviewDispute {
+			t.Fatalf("re-run adjudication item = %#v", item)
 		}
 		return nil
 	}); err != nil {
@@ -2026,7 +2164,7 @@ func TestProductionClassifierPersistsAnnotationAndEscalatesLowConfidenceP1(t *te
 		CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("classified findings")),
 		Findings: []domain.Finding{{
 			ID: "review-finding-classified", RunID: p.runID, Source: "codex_local", Severity: "P1",
-			Location: &domain.FindingLocation{Path: "daemon/main.go", StartLine: 12, EndLine: 12}, Message: "ambiguous", RawText: "ambiguous", CreatedAt: p.now,
+			Location: &domain.FindingLocation{Path: "README.md", StartLine: 1, EndLine: 1}, Message: "ambiguous", RawText: "ambiguous", CreatedAt: p.now,
 		}},
 	}})
 	p.startAndRecordExport(t)

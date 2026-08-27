@@ -23,9 +23,11 @@ import (
 	sqlite "modernc.org/sqlite"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/diffscope"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/gitrun"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
@@ -2256,6 +2258,82 @@ func (w *productionPublicationWorkflow) removeReviewWorkspace(id domain.Invocati
 	return nil
 }
 
+// reviewedDiffScope renders the trusted `git diff -U0` for the bound
+// base-to-head pair from a daemon-owned candidate checkout and parses it into
+// the diff-overlap scope the routed review-finding gate consults. The engine
+// derives this diff itself and never accepts it from the reviewer, so a routed
+// finding can be admitted only against the exact reviewed change.
+//
+// It mirrors remediationCandidatePatch's gitrun idiom but deliberately forces
+// -U0 and omits --binary/--full-index: diffscope.Parse consumes text hunks with
+// zero context (it rejects a context line outright), and a binary patch carries
+// no new-side line ranges for Overlaps to resolve. --no-renames is likewise
+// deliberate: diffscope keys strictly on the new-side path, so a candidate that
+// deletes a file and adds a similar one would, under git's default rename
+// detection, re-key the deletion under the new path and drop the deleted path
+// from the diff entirely; a whole-file (0,0) finding on that candidate-deleted
+// file (the §7/#855 representation) would then fail closed in the wrong
+// direction. Disabling rename detection renders every touched path as its own
+// delete/add pair, so both endpoints stay resolvable and only genuinely
+// untouched paths are absent (the fail-closed direction is preserved).
+//
+// The -U0 unified diff alone still misses a header-only change: git emits only
+// `diff --git` and metadata (no ---/+++ headers, no hunk) for a file-mode
+// change, a binary-content change, or an empty-file add or delete, so those
+// touched paths never enter diffscope's index. A candidate-deleted *empty* file
+// is the reachable trap: its whole-file (0,0) finding (again the §7/#855
+// representation) would fail closed in the wrong direction. A companion
+// `git diff --name-status -z` pass over the same pair recovers every touched
+// path, so whole-file findings on header-only changes resolve while genuinely
+// untouched paths stay absent; a concrete line finding on such a path still
+// fails to overlap (it carries no new-side range). A failure in either pass is
+// an engine fault (a diff we produce deterministically), not a reviewer
+// contradiction, so the caller takes the retry/pending path rather than burning
+// the review.
+func reviewedDiffScope(
+	ctx context.Context, workDir, candidateRoot, baseSHA, headSHA string,
+) (diffscope.Diff, error) {
+	scratch, err := os.MkdirTemp(workDir, ".review-diffscope-")
+	if err != nil {
+		return diffscope.Diff{}, err
+	}
+	defer os.RemoveAll(scratch) //nolint:errcheck // daemon-owned scratch
+	runner, err := gitrun.New(gitrun.Options{Scratch: scratch})
+	if err != nil {
+		return diffscope.Diff{}, err
+	}
+	if _, err := runner.PinCheckout(ctx, candidateRoot); err != nil {
+		return diffscope.Diff{}, fmt.Errorf("bind reviewed-diff candidate checkout: %w", err)
+	}
+	diff, err := runner.Run(
+		ctx, nil, "diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv",
+		baseSHA, headSHA, "--",
+	)
+	if err != nil {
+		return diffscope.Diff{}, fmt.Errorf("render reviewed diff: %w", err)
+	}
+	scope, err := diffscope.Parse(string(diff))
+	if err != nil {
+		return diffscope.Diff{}, fmt.Errorf("parse reviewed diff: %w", err)
+	}
+	// Seed the touched paths a header-only change omits from the -U0 diff (a
+	// mode, binary, or empty-file add/delete carries no ---/+++ header), so a
+	// whole-file finding on a candidate-deleted empty file resolves instead of
+	// failing closed as a false contradiction. --no-renames matches the diff
+	// above, keeping every touched path keyed 1:1 by its own name.
+	nameStatus, err := runner.Run(
+		ctx, nil, "diff", "--name-status", "-z", "--no-renames", "--no-color",
+		"--no-ext-diff", "--no-textconv", baseSHA, headSHA, "--",
+	)
+	if err != nil {
+		return diffscope.Diff{}, fmt.Errorf("render reviewed name-status diff: %w", err)
+	}
+	if err := scope.MergeNameStatusZ(string(nameStatus)); err != nil {
+		return diffscope.Diff{}, fmt.Errorf("merge reviewed name-status diff: %w", err)
+	}
+	return scope, nil
+}
+
 func (w *productionPublicationWorkflow) reconcileReviewGate(
 	ctx context.Context,
 	task productionPublicationTask,
@@ -2712,6 +2790,41 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				&exec.ReviewSourceFailure{
 					Class: domain.ReviewFailureContradiction,
 					Err:   domain.ErrParentKeyMismatch,
+				},
+			)
+		}
+	}
+	// Fail closed unless every routed finding resolves into the exact reviewed
+	// base-to-head diff. The engine derives that diff itself (never trusting the
+	// reviewer's), so a syntactically valid finding on an untouched path or an
+	// unchanged line is a reviewer contradiction rejected before any review
+	// record, finding, disposition, or remediation intent is persisted. The
+	// routed ward schema always carries a location (a line range, or a whole-file
+	// marker for a candidate-deleted file), so a nil or non-overlapping location
+	// is a contract violation that Overlaps fails closed on. A failure to derive
+	// or parse our own trusted diff is an engine fault, not a reviewer
+	// contradiction, so it takes the retry/pending path instead.
+	if len(result.Findings) > 0 {
+		scope, err := reviewedDiffScope(
+			ctx, w.workDir, reviewWorkspace, binding.admission.Base.BaseSHA, task.HeadSHA)
+		if err != nil {
+			return productionReviewPending, err
+		}
+		for _, finding := range result.Findings {
+			if scope.Overlaps(finding.Location) {
+				continue
+			}
+			locText := "<none>"
+			if finding.Location != nil {
+				locText = finding.Location.String()
+			}
+			return w.recordReviewSourceFailure(ctx, task, id, round,
+				binding.admission.Base.BaseSHA, task.HeadSHA,
+				&exec.ReviewSourceFailure{
+					Class: domain.ReviewFailureContradiction,
+					Err: fmt.Errorf(
+						"review finding %s location %s does not overlap the reviewed diff: %w",
+						finding.ID, locText, domain.ErrParentKeyMismatch),
 				},
 			)
 		}

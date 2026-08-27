@@ -200,6 +200,94 @@ func TestParseGarbageAfterQuotedPath(t *testing.T) {
 	}
 }
 
+// TestMergeNameStatusZResolvesHeaderOnlyPaths proves the name-status seed makes
+// a header-only change (a mode, binary, or empty-file add/delete, which git
+// emits with no ---/+++ header and so Parse never indexes) resolvable for a
+// whole-file finding, without over-accepting a concrete line on it and without
+// clobbering the content ranges Parse already recorded. The candidate-deleted
+// *empty* file is the in-scope trap: its whole-file (0,0) finding must overlap.
+func TestMergeNameStatusZResolvesHeaderOnlyPaths(t *testing.T) {
+	d, err := diffscope.Parse(fixtureDiff)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	// git diff --name-status -z form: <status>NUL<path>NUL, terminating NUL last.
+	// The two content paths from fixtureDiff appear alongside four header-only
+	// paths the unified diff omitted.
+	nameStatus := "M\x00daemon/main.go\x00" +
+		"D\x00daemon/old.go\x00" +
+		"M\x00bin.dat\x00" + // binary content change
+		"D\x00empty-del.txt\x00" + // deleted empty file (the #855 whole-file trap)
+		"A\x00empty-add.txt\x00" + // added empty file
+		"M\x00mode.sh\x00" // file-mode-only change
+	if err := d.MergeNameStatusZ(nameStatus); err != nil {
+		t.Fatalf("MergeNameStatusZ: %v", err)
+	}
+	cases := []struct {
+		name string
+		loc  *domain.FindingLocation
+		want bool
+	}{
+		{"content range survives the merge", loc("daemon/main.go", 12, 12), true},
+		{"content whole-file survives the merge", loc("daemon/main.go", 0, 0), true},
+		{"parsed deleted path stays whole-file only", loc("daemon/old.go", 0, 0), true},
+		{"parsed deleted path rejects a concrete line", loc("daemon/old.go", 2, 2), false},
+		{"deleted empty file whole-file now resolves", loc("empty-del.txt", 0, 0), true},
+		{"deleted empty file rejects a concrete line", loc("empty-del.txt", 1, 1), false},
+		{"binary change whole-file now resolves", loc("bin.dat", 0, 0), true},
+		{"binary change rejects a concrete line", loc("bin.dat", 1, 1), false},
+		{"added empty file whole-file now resolves", loc("empty-add.txt", 0, 0), true},
+		{"mode-only change whole-file now resolves", loc("mode.sh", 0, 0), true},
+		{"untouched path stays absent", loc("untouched.txt", 0, 0), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := d.Overlaps(tc.loc); got != tc.want {
+				t.Errorf("Overlaps(%+v) = %v, want %v", tc.loc, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMergeNameStatusZEmptyInput merges the empty output of a no-change diff:
+// nothing becomes touched, so a finding on any path still fails closed.
+func TestMergeNameStatusZEmptyInput(t *testing.T) {
+	d, err := diffscope.Parse("")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if err := d.MergeNameStatusZ(""); err != nil {
+		t.Fatalf("MergeNameStatusZ(empty): %v", err)
+	}
+	if d.Overlaps(loc("anything.go", 0, 0)) {
+		t.Error("an empty name-status seed overlaps nothing")
+	}
+}
+
+// TestMergeNameStatusZMalformed fails closed on a stream that does not pair a
+// path with every status, rather than silently dropping the dangling path.
+func TestMergeNameStatusZMalformed(t *testing.T) {
+	cases := []struct {
+		name       string
+		nameStatus string
+	}{
+		{"status with no path", "M\x00a\x00D"},
+		{"lone status", "M"},
+		{"empty path field", "M\x00a\x00D\x00\x00"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := diffscope.Parse("")
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if err := d.MergeNameStatusZ(tc.nameStatus); err == nil {
+				t.Errorf("MergeNameStatusZ(%q) = nil error, want error", tc.nameStatus)
+			}
+		})
+	}
+}
+
 func TestParseErrors(t *testing.T) {
 	cases := []struct {
 		name string
