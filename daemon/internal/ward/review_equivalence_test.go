@@ -517,6 +517,215 @@ func FuzzReviewCommandEquivalence(f *testing.F) {
 	})
 }
 
+// FuzzReviewBuildAgentSpecEquivalence measures surface (b) across the full
+// launch-spec and journal-binding decision surface, not just the command: the
+// new provider-driven BuildCodexReviewAgentSpec and the base-commit
+// oldBuildReviewAgentSpec must return a decision-for-decision identical
+// (ContainerSpec, CodexReviewJournalBinding, error) for every generated input
+// that is valid to vary at this pure boundary. It fuzzes the mount (workspace
+// target depth, .agents shadow presence), environment/proxy (proxy URL ->
+// proxy env -> launcher-environment digest), command (model, reasoning effort,
+// prompt), endpoint and credential-binding (auth mode, provider endpoints), and
+// boundary surfaces, together with their invalid and boundary inputs, so an
+// old-vs-new divergence anywhere in mount, environment, or credential
+// derivation surfaces as a failing case rather than escaping the deterministic
+// table.
+//
+// The instruction (AGENTS.md) bytes readCodexReviewInput re-reads under the
+// private-dir / owner / symlink gate are held fixed at the fixture's admitted
+// value rather than mutated per iteration: every binding field *derived* from
+// them (InstructionDigest, HostInstructionDigest, RepositoryInstructionSources,
+// ...) is still compared each iteration, and varying the on-disk bytes per
+// iteration would force file rewrites for no added seam signal (both sides read
+// the identical bytes). The credential (auth.json) bytes are fixed per
+// credential mode rather than mutated per iteration, but the API-key success
+// case swaps in a distinct valid API-key body with its regenerated snapshot
+// observation, so both supported credential modes reach a full build and their
+// derived binding fields (AuthSnapshotDigest, AccessTokenExpiresAt, provider
+// endpoints) are compared on the success path, not only through error branches.
+//
+// Scope of the guard: every codexReviewProvider seam method is a thin
+// pass-through to the same leaf the reconstruction calls, and the final gate is
+// the same validateReviewAgentSpec call, so old and new can differ only where
+// the two separately maintained assembly blocks (oldBuildReviewAgentSpec here
+// vs buildReviewAgentSpec in codex_review.go) drift -- the #872 refactor's
+// actual risk surface. The shared leaves are frozen by sharing, not
+// independently re-verified here. The boundary field is pinned to fresh-start
+// (the only launchable boundary by design); the endpoint and credential-binding
+// fields vary across the subscription and API-key success paths, so those axes
+// are differentially stressed alongside the command, environment, and mount
+// assembly and the auth-inspection decision.
+func FuzzReviewBuildAgentSpecEquivalence(f *testing.F) {
+	// Workspace targets: the leading entries are valid paths of varying depth
+	// that drive the command, the workspace mount target, and the sorted .agents
+	// shadow ancestor set on the success path; the trailing entries are invalid
+	// inputs (empty, root, comma-unsafe, protected-path overlap) that must drive
+	// identical errors.
+	workspaceTargets := []string{
+		"/workspace/project",        // 0 valid, fixture default
+		"/workspace/nested/project", // 1 valid, deep
+		"/w",                        // 2 valid, shallow
+		"/srv/app/svc",              // 3 valid, medium depth
+		"",                          // 4 invalid: empty (not clean-absolute)
+		"/",                         // 5 invalid: root
+		"/bad,comma",                // 6 invalid: comma is not CLI-safe
+		"/etc/nested",               // 7 invalid: overlaps a protected control path
+	}
+	// Proxy URLs: the valid entries keep host 127.0.0.1 so the network
+	// observation re-derives consistently against the fixture gateway, and each
+	// varies the proxy environment and thus the launcher-environment digest; the
+	// invalid entries drive identical ProxyURL errors.
+	proxies := []struct {
+		url   string
+		valid bool
+	}{
+		{"http://127.0.0.1:43123", true},     // 0 fixture default
+		{"http://127.0.0.1:8080", true},      // 1
+		{"http://127.0.0.1:3128", true},      // 2
+		{"http://127.0.0.1:1", true},         // 3
+		{"", false},                          // 4 invalid: empty
+		{"http://127.0.0.1:8080/x", false},   // 5 invalid: path
+		{"https://127.0.0.1:8080", false},    // 6 invalid: scheme
+		{"http://u:p@127.0.0.1:8080", false}, // 7 invalid: userinfo
+	}
+	// Auth cases: subscription and API-key both have supported success paths, so
+	// each is exercised with a credential body that reaches a full build -- the
+	// fixture's token body for subscription, and a swapped-in API-key body
+	// (yielding nil access-token expiry and the api.openai.com endpoint binding)
+	// for API-key. The rest drive identical errors: API-key on the token body
+	// (auth-inspection rejection), the unaccepted setup-token mode, and an
+	// out-of-domain mode.
+	authCases := []struct {
+		mode       CodexAuthMode
+		apiKeyBody bool
+	}{
+		{CodexAuthSubscription, false}, // 0 success (token fixture)
+		{CodexAuthAPIKey, true},        // 1 success (API-key body)
+		{CodexAuthAPIKey, false},       // 2 API-key mode on the token body -> error
+		{CodexAuthSetupToken, false},   // 3 not accepted by the Codex provider
+		{CodexAuthMode("wat"), false},  // 4 invalid
+	}
+	// Boundaries: only fresh-start launches; continuity and resume are valid but
+	// refused, and the last is out of domain.
+	boundaries := []CodexReviewBoundary{
+		CodexReviewFreshStart,      // 0 success
+		CodexReviewContinuity,      // 1 valid but refused
+		CodexReviewResume,          // 2 valid but refused
+		CodexReviewBoundary("wat"), // 3 invalid
+	}
+
+	seeds := []struct {
+		model, effort, prompt string
+		workspace, proxy      uint8
+		agentsPresent         bool
+		auth, boundary        uint8
+		mangleEndpoints       bool
+	}{
+		// Success path, including the deterministic table cases retained as seeds.
+		{"gpt-5.2-codex", "high", "Review the exact candidate head.", 0, 0, true, 0, 0, false},
+		{"gpt-5.2-codex-mini", "low", "Different prompt.", 0, 0, true, 0, 0, false},
+		{"m$o'd\"e l", "hi;gh", "Review \"$1\" & `echo x`", 0, 0, true, 0, 0, false}, // shell metacharacters
+		{"modèl", "éffort", "review the café changes", 0, 0, true, 0, 0, false},      // unicode
+		{"", "", "Empty model and reasoning effort.", 0, 0, true, 0, 0, false},       // empty command values
+		{"gpt-5.2-codex", "high", "Deep workspace.", 1, 0, true, 0, 0, false},        // deep-workspace mount fan-out
+		{"gpt-5.2-codex", "high", "Shallow workspace, alt proxy.", 2, 1, true, 0, 0, false},
+		{"gpt-5.2-codex", "high", "No workspace .agents, alt proxy.", 3, 2, false, 0, 0, false},
+		{"gpt-5.2-codex", "high", "API-key credential success path.", 0, 0, true, 1, 0, false},
+		// Invalid and boundary inputs: identical errors on both sides.
+		{"gpt-5.2-codex", "high", "", 0, 0, true, 0, 0, false}, // empty prompt
+		{"gpt-5.2-codex", "high", "empty workspace target", 4, 0, true, 0, 0, false},
+		{"gpt-5.2-codex", "high", "protected workspace overlap", 7, 0, true, 0, 0, false},
+		{"gpt-5.2-codex", "high", "invalid proxy url", 0, 5, true, 0, 0, false},
+		{"gpt-5.2-codex", "high", "api key on token body", 0, 0, true, 2, 0, false},
+		{"gpt-5.2-codex", "high", "unaccepted auth mode", 0, 0, true, 3, 0, false},
+		{"gpt-5.2-codex", "high", "out-of-domain auth mode", 0, 0, true, 4, 0, false},
+		{"gpt-5.2-codex", "high", "refused boundary", 0, 0, true, 0, 1, false},
+		{"gpt-5.2-codex", "high", "out-of-domain boundary", 0, 0, true, 0, 3, false},
+		{"gpt-5.2-codex", "high", "mangled provider endpoints", 0, 0, true, 0, 0, true},
+	}
+	for _, s := range seeds {
+		f.Add(s.model, s.effort, s.prompt, s.workspace, s.proxy, s.agentsPresent, s.auth, s.boundary, s.mangleEndpoints)
+	}
+
+	f.Fuzz(func(t *testing.T,
+		model, effort, prompt string,
+		workspaceSel, proxySel uint8,
+		agentsPresent bool,
+		authSel, boundarySel uint8,
+		mangleEndpoints bool,
+	) {
+		cfg, req := testCodexReview(t)
+
+		// .agents presence lever: regenerate the workspace observation through the
+		// real observer so req.Workspace stays internally consistent; the two
+		// launchable observations differ only in the observed .agents entry, which
+		// drives the shadow-mount count.
+		if !agentsPresent {
+			req.Workspace = testCodexReviewWorkspaceWithAgents(
+				t, cfg, req.RunID, req.WorkspaceVolume, "2026-08-03T12:00:03Z", codexWorkspaceAgentsAbsent,
+			)
+		}
+
+		// Proxy / environment lever: a valid proxy re-derives the network
+		// observation consistently (its host stays the fixture gateway) and varies
+		// the proxy environment and launcher-environment digest; an invalid proxy
+		// drives an identical ProxyURL error.
+		proxy := proxies[int(proxySel)%len(proxies)]
+		cfg.ProxyURL = proxy.url
+		if proxy.valid {
+			req.Network = testCodexReviewNetwork(t, cfg, req.RunID)
+		}
+
+		// Command levers (free-form) and the workspace target (mount + command).
+		cfg.Model = model
+		cfg.ReasoningEffort = effort
+		req.Prompt = prompt
+		cfg.WorkspaceTarget = workspaceTargets[int(workspaceSel)%len(workspaceTargets)]
+
+		// Credential / endpoint lever: a valid auth mode selects its exact provider
+		// endpoints; an invalid or unaccepted mode drives an identical error. For
+		// the API-key success case, swap the credential fixture to a valid API-key
+		// body (and its matching snapshot observation) so the API-key launch-spec
+		// and binding -- nil access-token expiry, sanitized digest, api.openai.com
+		// endpoint -- receive the old-vs-new comparison, not just the token-body
+		// error path. The swap is a distinct per-mode fixture, not per-iteration
+		// byte mutation.
+		auth := authCases[int(authSel)%len(authCases)]
+		req.AuthMode = auth.mode
+		if auth.mode.valid() {
+			cfg.ProviderEndpoints = auth.mode.providerEndpoints()
+		}
+		if auth.apiKeyBody {
+			apiKeyAuth := []byte(`{"OPENAI_API_KEY":"fixture-review-api-key"}`)
+			req.AuthSnapshot = writeCodexReviewFile(t, cfg.InputRoot, "auth.json", apiKeyAuth)
+			req.Snapshot = testCodexReviewSnapshot(
+				t, cfg, req.RunID, codexReviewSnapshotVolumeName(req.RunID),
+				apiKeyAuth, req.Instructions.Body, "2026-08-03T12:00:02Z",
+			)
+		}
+		if mangleEndpoints {
+			// Break the auth-mode/endpoint binding so the endpoints no longer
+			// match the selected mode, exercising the endpoint-mismatch
+			// validation decision.
+			cfg.ProviderEndpoints = []string{"auth.openai.com:443"}
+		}
+
+		req.Boundary = boundaries[int(boundarySel)%len(boundaries)]
+
+		gotSpec, gotBinding, gotErr := BuildCodexReviewAgentSpec(cfg, req)
+		wantSpec, wantBinding, wantErr := oldBuildReviewAgentSpec(cfg, req)
+		if !sameErr(gotErr, wantErr) {
+			t.Fatalf("build error diverged from base reconstruction\n new: %v\n base: %v", gotErr, wantErr)
+		}
+		if !reflect.DeepEqual(gotSpec, wantSpec) {
+			t.Errorf("container spec diverged from base reconstruction\n new: %+v\n base: %+v", gotSpec, wantSpec)
+		}
+		if !reflect.DeepEqual(gotBinding, wantBinding) {
+			t.Errorf("journal binding diverged from base reconstruction\n new: %+v\n base: %+v", gotBinding, wantBinding)
+		}
+	})
+}
+
 func sameErr(a, b error) bool {
 	if (a == nil) != (b == nil) {
 		return false
