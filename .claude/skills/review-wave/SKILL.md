@@ -169,17 +169,46 @@ text itself.
      phases; and where the canonical table maps none of the affected
      paths, the lane is assigned explicitly with a one-line rationale
      on the issue, never guessed silently or omitted;
-   - post the findings summary as a comment on the tracking issue,
-     and beneath it a proposed remediation plan: a proposal, not a
-     schedule; findings grouped into proposed units in the full
-     work-unit format (Objective, Non-goals, Affected
-     interfaces/contracts, Acceptance referencing the finding issues
-     the unit closes, Scope / declared paths, Dependencies); ordered
-     as a serial
-     `kind:contract` phase first (anything touching
-     `daemon/internal/domain`, `daemon/migrations`, `api/`, or shared
-     interfaces, sequenced by dependency), then parallel per-lane
-     sequential fix phases; explicit deferral proposals with reasons;
+   - write the posted findings summary and remediation plan for a
+     human reader, per AGENTS.md "Writing for humans": bottom line
+     first, plain language, front-loaded headings, layered so the
+     skim carries the decision and the evidence sits beneath it. The
+     dense hunt and disposition vocabulary is the reviewer's working
+     register, not the posted artifact's;
+   - shape the findings summary as: (a) a one-line verdict on whether
+     the wave's written close condition is met and what blocks it;
+     (b) a findings table keyed by issue number, giving the gap in
+     plain terms, severity, current tracking status, and disposition;
+     (c) the blocking-versus-deferrable split stated against the
+     wave's actual written close rule, naming what blocks it as
+     literally written, what the reviewer nonetheless recommends
+     fixing (one-line reason each), and each defensible deferral (its
+     reason and a "revisit when" trigger); then (d) the per-finding
+     detail; and (e) the required risk-class disposition record, kept
+     as a compact table or appendix beneath the summary, never as the
+     lead;
+   - post beneath it a proposed remediation plan (a proposal, not a
+     schedule) modeled on a wave tracker's own Units and Implementation
+     order sections, i.e. the tracking-issue format in
+     `docs/coordination.md`, which the reviewer has: one compact unit
+     line per proposed remediation unit (the filed finding issue it
+     closes, a one-line objective, lane and kind, and its key typed
+     dependency), since the full contract already lives in the filed
+     issue and is not restated; list a `needs-human` finding separately
+     instead, as a short prerequisite line with no lane and no unit
+     line, since it stays fiat-only and outside the schedulable phases
+     until a maintainer acts; then an Implementation order digest
+     (Startable now, Mergeable next, the typed `starts-after`,
+     `merges-after`, `stacked-on`, and `exclusive-with` relationships,
+     and the maximum concurrent fronts); and, when the relationship
+     graph is nontrivial, a Mermaid diagram with the standard legend.
+     Order the contract units as a serial `kind:contract` phase first
+     (anything touching `daemon/internal/domain`, `daemon/migrations`,
+     `api/`, or shared interfaces, sequenced by dependency under the
+     repo-wide contract exclusivity), then parallel per-lane sequential
+     fix phases, with any recommended-optional unit placed last so
+     deferring it stops the chain early; state explicit deferral
+     proposals with reasons;
    - the mandatory decision note: an adversarial audit whose
      confirmed findings change policy or implementation direction is
      on the AGENTS.md mandatory-note list, so when that trigger
