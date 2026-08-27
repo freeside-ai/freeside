@@ -62,10 +62,23 @@ var wantSurface = map[string]bool{
 	"Snapshot.ShadowReviews":                    true,
 	"Snapshot.LastStage":                        true,
 	"Snapshot.PublicationInvocationID":          true,
+	"Snapshot.ReviewYield":                      true,
 	"Store":                                     true,
 	"Store.Close":                               true,
 	"Store.ObserveRun":                          true,
 	"Store.ObserveSnapshot":                     true,
+	"ReviewYield":                               true,
+	"ReviewYield.AttemptNumber":                 true,
+	"ReviewYield.ConfigurationDigest":           true,
+	"ReviewYield.DecisionAction":                true,
+	"ReviewYield.Declined":                      true,
+	"ReviewYield.Deferred":                      true,
+	"ReviewYield.FindingsIngested":              true,
+	"ReviewYield.Fixed":                         true,
+	"ReviewYield.NewFindings":                   true,
+	"ReviewYield.Outcome":                       true,
+	"ReviewYield.RecurringFindings":             true,
+	"ReviewYield.Round":                         true,
 }
 
 func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testing.T) {
@@ -259,6 +272,24 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 	if err != nil {
 		t.Fatalf("NewAttentionItem: %v", err)
 	}
+	reviewFinding := domain.Finding{
+		ID: "finding-snapshot", RunID: run.ID, Source: "codex_local",
+		Location: &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1},
+		Message:  "snapshot finding", RawText: "snapshot finding", CreatedAt: admittedAt,
+	}
+	reviewConfigurationDigest := domain.Digest("sha256:" + strings.Repeat("e", 64))
+	reviewRecord, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-yield-snapshot", RunID: run.ID, Round: 1,
+		Provider: "codex", ModelConfiguration: "test",
+		ConfigurationDigest: reviewConfigurationDigest,
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		CostOwner:           "test", BaseSHA: admission.Base.BaseSHA, HeadSHA: recovery.HeadSHA,
+		CompletedAt: admittedAt, CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{reviewFinding.ID},
+	})
+	if err != nil {
+		t.Fatalf("NewReviewRecord: %v", err)
+	}
 
 	st, _, err := topicstore.Open(ctx, path, store.Options{
 		ApprovedRecipes: staleRecipes,
@@ -330,6 +361,9 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 			return err
 		}
 		if err := tx.PutAttentionItem(ctx, attention); err != nil {
+			return err
+		}
+		if err := tx.PutReviewRecord(ctx, reviewRecord, []domain.Finding{reviewFinding}); err != nil {
 			return err
 		}
 		if err := tx.PutAttentionItem(ctx, staleAttention); err != nil {
@@ -412,6 +446,13 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 	if len(snapshot.AttentionItems) != 1 || snapshot.AttentionItems[0].ID != attention.ID ||
 		snapshot.AttentionItems[0].ReviewConfigurationRecovery == nil {
 		t.Fatalf("attention = %+v", snapshot.AttentionItems)
+	}
+	if len(snapshot.ReviewYield) != 1 || snapshot.ReviewYield[0].AttemptNumber != 2 ||
+		snapshot.ReviewYield[0].Round != 1 || snapshot.ReviewYield[0].NewFindings != 1 ||
+		snapshot.ReviewYield[0].ConfigurationDigest != reviewConfigurationDigest ||
+		snapshot.ReviewYield[0].Outcome != domain.ReviewFindings ||
+		snapshot.ReviewYield[0].DecisionAction != nil {
+		t.Fatalf("review yield = %+v", snapshot.ReviewYield)
 	}
 	elaborationSnapshot, err := observed.ObserveSnapshot(ctx, elaborationRun.ID)
 	if err != nil {
