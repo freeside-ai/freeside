@@ -794,6 +794,13 @@ func (s *CodexReviewSource) normalizeCollection(
 				Path      string `json:"path"`
 				StartLine int    `json:"start_line"`
 				EndLine   int    `json:"end_line"`
+				// WholeFile is the schema's whole-file variant marker
+				// ({path, whole_file:true}); absent in the line-range variant. It is a
+				// json.RawMessage, not a *bool, so an explicit null is distinct from an
+				// absent key (a *bool collapses both to nil). Normalization admits the
+				// whole-file (0,0) location only when the marker is present and exactly
+				// the literal true, and rejects every other present token.
+				WholeFile json.RawMessage `json:"whole_file"`
 			} `json:"location"`
 			Explanation string `json:"explanation"`
 		} `json:"findings"`
@@ -846,11 +853,38 @@ func (s *CodexReviewSource) normalizeCollection(
 		location := domain.FindingLocation{
 			Path: item.Location.Path, StartLine: item.Location.StartLine, EndLine: item.Location.EndLine,
 		}
-		// The ward schema requires a concrete line range (start_line, end_line ≥ 1).
-		// The whole-file location (0,0) is a native-ingest shape a codex review
-		// never emits, so reject it alongside a partial, non-positive, or inverted
-		// range as a contradiction rather than admitting a schema-escaping location.
-		if err := location.Validate(); err != nil || location.StartLine < 1 {
+		// The ward schema offers two location variants (review_provider.go): the
+		// concrete new-side line range, and the {path, whole_file:true} marker for a
+		// finding on a candidate-deleted file — which has no new-side line — or an
+		// otherwise wholly file-level finding (§7, #855). Normalization is the hard
+		// gate, not the schema: the domain whole-file (0,0) location is admitted only
+		// under the explicit marker, so a bare (0,0) can never masquerade as one
+		// (preserving the #679 anti-schema-escape narrowing for the range variant).
+		// The marker is matched by key presence, not decoded truth: whole_file is a
+		// json.RawMessage, so an explicit null (which a *bool would collapse to the
+		// absent-key nil, escaping a value-based gate) is a distinct present token.
+		// Present and exactly the literal true selects the whole-file variant;
+		// absent selects the range variant; any other present token (null, false, a
+		// non-boolean) is a schema-escaping marker the hard gate fails closed on.
+		switch marker := bytes.TrimSpace(item.Location.WholeFile); {
+		case len(marker) == 0:
+			// Range variant: an unmarked (0,0), partial, or non-positive range is a
+			// schema-escaping location, rejected exactly as before #855.
+			if location.StartLine < 1 || location.EndLine < 1 {
+				return contradiction("Codex review returned an invalid finding location")
+			}
+		case bytes.Equal(marker, []byte("true")):
+			// Whole-file marker maps to the domain whole-file (0,0) location. A marker
+			// paired with a concrete line range is contradictory, not whole-file.
+			if location.StartLine != 0 || location.EndLine != 0 {
+				return contradiction("Codex review returned a whole-file finding location with a line range")
+			}
+		default:
+			return contradiction("Codex review returned a non-true whole-file marker")
+		}
+		// Final shape gate: accepts the whole-file (0,0) location and catches an
+		// inverted range (start > end) the branch above does not.
+		if err := location.Validate(); err != nil {
 			return contradiction("Codex review returned an invalid finding location")
 		}
 		identity := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%d\x00%d\x00%s",

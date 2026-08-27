@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/diffscope"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
@@ -2397,6 +2398,67 @@ func TestCodexReviewSourceNormalizesStructuredFindings(t *testing.T) {
 	}
 }
 
+// TestCodexReviewSourceAcceptsWholeFileLocation covers the #855 representation:
+// a finding on a candidate-deleted file emits the schema's whole-file variant
+// ({path, whole_file:true}), normalization admits it as the domain whole-file
+// (0,0) location, and it routes deterministically through diffscope.Overlaps
+// against the candidate-deletion diff (§7). The reject side (unmarked (0,0),
+// marker-with-range) lives in TestCodexReviewSourceRejectsInvalidFindingsEnvelope.
+func TestCodexReviewSourceAcceptsWholeFileLocation(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
+		Review:              CodexReviewConfig{Model: "gpt-codex", ReasoningEffort: "high"},
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		CostOwner:           "subscription:owner", Now: func() time.Time { return now },
+	}}
+	request := exec.ReviewRequest{
+		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
+		Workspace: "/seed/candidate", Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
+		RequestedAt: now.Add(-time.Minute),
+	}
+	collection := CodexReviewCollection{
+		Result: []byte(`{"findings":[{"severity":"P1","location":{"path":"daemon/old.go","whole_file":true},"explanation":"deletes the only caller of gone()"}]}`),
+		Events: []byte("terminal event\n"),
+	}
+	outcome := source.normalizeCollection("review-run-1-1", request, collection)
+	if err := outcome.Validate(); err != nil {
+		t.Fatalf("whole-file outcome failed shape validation: %v", err)
+	}
+	if outcome.Result == nil || len(outcome.Result.Findings) != 1 {
+		t.Fatalf("normalized outcome = %#v", outcome)
+	}
+	loc := outcome.Result.Findings[0].Location
+	if loc == nil || loc.Path != "daemon/old.go" || loc.StartLine != 0 || loc.EndLine != 0 {
+		t.Fatalf("whole-file location = %#v, want {daemon/old.go 0 0}", loc)
+	}
+
+	// §7 round-trip: the normalized whole-file location routes deterministically
+	// against the candidate-deletion diff. Overlaps accepts it because the path is
+	// touched; a concrete new-side range on the same deleted path has no line to
+	// overlap and is rejected.
+	diff, err := diffscope.Parse(
+		"diff --git a/daemon/old.go b/daemon/old.go\n" +
+			"deleted file mode 100644\n" +
+			"index 3333333..0000000 100644\n" +
+			"--- a/daemon/old.go\n" +
+			"+++ /dev/null\n" +
+			"@@ -1,3 +0,0 @@\n" +
+			"-package old\n" +
+			"-\n" +
+			"-func gone() {}\n",
+	)
+	if err != nil {
+		t.Fatalf("parse deletion diff: %v", err)
+	}
+	if !diff.Overlaps(loc) {
+		t.Errorf("Overlaps(%+v) = false, want true for a whole-file location on the deleted path", loc)
+	}
+	if diff.Overlaps(&domain.FindingLocation{Path: "daemon/old.go", StartLine: 2, EndLine: 2}) {
+		t.Error("a concrete line range on the deleted path must not overlap")
+	}
+}
+
 func TestCodexReviewSourceRejectsInvalidFindingsEnvelope(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
@@ -2451,9 +2513,38 @@ func TestCodexReviewSourceRejectsInvalidFindingsEnvelope(t *testing.T) {
 			"invalid finding location",
 		},
 		{
-			"whole-file location rejected for a review",
+			// A bare (0,0) with no whole_file marker stays a schema-escaping
+			// contradiction: the domain whole-file location is admitted only under
+			// the explicit marker (see TestCodexReviewSourceAcceptsWholeFileLocation).
+			"unmarked whole-file (0,0) rejected",
 			`{"findings":[{"severity":"P1","location":{"path":"main.go","start_line":0,"end_line":0},"explanation":"x"}]}`,
 			"invalid finding location",
+		},
+		{
+			"whole-file marker paired with a line range rejected",
+			`{"findings":[{"severity":"P1","location":{"path":"main.go","whole_file":true,"start_line":5,"end_line":5},"explanation":"x"}]}`,
+			"whole-file finding location with a line range",
+		},
+		{
+			// The whole_file marker is matched by key presence: whole_file is
+			// enum:[true], so any present-but-non-true token is schema-escaping and
+			// the gate fails closed rather than admitting the range beside it. The
+			// three tokens below (false, explicit null, non-boolean) all reach the
+			// same rejection; null in particular is distinct from an absent marker
+			// only because whole_file decodes as a json.RawMessage, not a *bool.
+			"false whole-file marker rejected",
+			`{"findings":[{"severity":"P1","location":{"path":"main.go","whole_file":false,"start_line":1,"end_line":1},"explanation":"x"}]}`,
+			"non-true whole-file marker",
+		},
+		{
+			"explicit null whole-file marker rejected",
+			`{"findings":[{"severity":"P1","location":{"path":"main.go","whole_file":null,"start_line":1,"end_line":1},"explanation":"x"}]}`,
+			"non-true whole-file marker",
+		},
+		{
+			"non-boolean whole-file marker rejected",
+			`{"findings":[{"severity":"P1","location":{"path":"main.go","whole_file":1,"start_line":1,"end_line":1},"explanation":"x"}]}`,
+			"non-true whole-file marker",
 		},
 		{
 			"inverted range",
