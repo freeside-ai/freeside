@@ -297,6 +297,109 @@ func TestFollowCommandPrintsBoundedSupervisionSnapshot(t *testing.T) {
 	}
 }
 
+// TestFollowCommandSnapshotProjectsAdjudications asserts the machine-readable
+// snapshot threads the bounded adjudication dispatch projection end to end and
+// leaks no adjudication prose: one engine fast-path entry emits its producer,
+// route, severity, in-surface bit, and resolved-policy digest, while its
+// rationale never appears.
+func TestFollowCommandSnapshotProjectsAdjudications(t *testing.T) {
+	st, path := openFollowStore(t)
+	ctx := context.Background()
+	at := followAt(5)
+	const runID = domain.RunID("run-follow-adjudication")
+	const rationale = "engine fast-path rationale must not reach the snapshot"
+	digest := func(seed string) domain.Digest { return domain.Digest("sha256:" + strings.Repeat(seed, 64)) }
+	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
+		Key: "paths", Value: "daemon/**",
+		Provenance: domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: digest("a")},
+	}})
+	if err != nil {
+		t.Fatalf("NewResolvedPolicy: %v", err)
+	}
+	findingID := domain.FindingID("finding-follow-adjudication")
+	finding := domain.Finding{
+		ID: findingID, RunID: runID, Source: "codex_local", Severity: domain.FindingSeverityP1,
+		Location: &domain.FindingLocation{Path: "daemon/x.go", StartLine: 1, EndLine: 1},
+		Message:  "cli adjudication finding", RawText: "cli adjudication finding", CreatedAt: at,
+	}
+	record, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-follow-adjudication", RunID: runID, Round: 1,
+		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		ConfigurationDigest: digest("c"), InstructionDigest: digest("d"),
+		CostOwner: "owner", BaseSHA: "base", HeadSHA: "head", CompletedAt: at,
+		CompletionEvidence: digest("e"), Outcome: domain.ReviewFindings,
+		FindingIDs: []domain.FindingID{findingID},
+	})
+	if err != nil {
+		t.Fatalf("NewReviewRecord: %v", err)
+	}
+	compat := domain.CompatibilityAllowed
+	entry, err := domain.NewEngineAdjudicationEntry(
+		findingID, domain.GoalRequired, &compat, domain.RouteRemediate, rationale,
+		nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewEngineAdjudicationEntry: %v", err)
+	}
+	artifact, err := domain.NewFindingAdjudication(
+		runID, 1, digest("f"), digest("d"), policy.Digest,
+		[]domain.FindingAdjudicationEntry{entry}, at)
+	if err != nil {
+		t.Fatalf("NewFindingAdjudication: %v", err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: runID, ProjectID: "project-follow",
+			SpecDigest: digest("f"), PolicyDigest: policy.Digest,
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
+			return err
+		}
+		if err := tx.PutReviewRecord(ctx, record, []domain.Finding{finding}); err != nil {
+			return err
+		}
+		if err := tx.PutClassification(ctx, domain.Classification{
+			FindingID: findingID, Version: 1, Materiality: "high", Confidence: "high", Note: "test",
+		}); err != nil {
+			return err
+		}
+		return tx.PutFindingAdjudication(ctx, artifact)
+	}); err != nil {
+		t.Fatalf("seed adjudication: %v", err)
+	}
+
+	output, err := runFollowCLI(t, "-db", path, "-run", string(runID), "-snapshot")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	var got supervisionSnapshot
+	if err := json.Unmarshal([]byte(output), &got); err != nil {
+		t.Fatalf("decode snapshot %q: %v", output, err)
+	}
+	if len(got.Adjudications) != 1 {
+		t.Fatalf("snapshot adjudications = %+v", got.Adjudications)
+	}
+	dispatch := got.Adjudications[0]
+	if dispatch.FindingID != findingID || dispatch.Round != 1 || dispatch.Revision != 1 ||
+		dispatch.Producer != domain.AdjudicationProducerEngine || dispatch.Route != domain.RouteRemediate ||
+		dispatch.AdjudicationConfidence != nil || dispatch.FindingSeverity != domain.FindingSeverityP1 ||
+		dispatch.ClassifierMateriality != "high" || dispatch.ClassifierConfidence != "high" ||
+		!dispatch.InSurface || dispatch.ResolvedPolicyDigest != policy.Digest {
+		t.Fatalf("snapshot adjudication dispatch = %+v", dispatch)
+	}
+	// The emitted JSON must carry the field by its wire name and never the prose.
+	if !strings.Contains(output, `"adjudications"`) || !strings.Contains(output, `"in_surface"`) {
+		t.Fatalf("snapshot missing adjudications wire shape: %s", output)
+	}
+	if strings.Contains(output, rationale) {
+		t.Fatalf("snapshot leaked adjudication rationale: %s", output)
+	}
+	if strings.Count(strings.TrimSpace(output), "\n") != 0 {
+		t.Fatalf("snapshot is not one JSON document line: %q", output)
+	}
+}
+
 func TestFollowCommandReportsPersistedElaborationAsImplementationBound(t *testing.T) {
 	st, path := openFollowStore(t)
 	rootImplementationRunID := domain.RunID("run-follow-implementation")

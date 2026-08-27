@@ -27,58 +27,72 @@ import (
 // surface the load-bearing claim, and a claim in a comment is one a later
 // edit walks past; this pins it.
 var wantSurface = map[string]bool{
-	"Admission":                                 true,
-	"Admission.Base":                            true,
-	"Admission.ImageDigest":                     true,
-	"Admission.ImageRef":                        true,
-	"Admission.InvocationID":                    true,
-	"Admission.ReviewConfigurationDigest":       true,
-	"Admission.Stage":                           true,
-	"Admission.TrustProfileDigest":              true,
-	"AttentionItem":                             true,
-	"AttentionItem.CreatedAt":                   true,
-	"AttentionItem.ID":                          true,
-	"AttentionItem.RequestedDecision":           true,
-	"AttentionItem.ReviewConfigurationRecovery": true,
-	"AttentionItem.Status":                      true,
-	"AttentionItem.Type":                        true,
-	"Lineage":                                   true,
-	"Lineage.ApprovedSpecDigest":                true,
-	"Lineage.AttemptNumber":                     true,
-	"Lineage.CampaignID":                        true,
-	"Lineage.ElaborationRunID":                  true,
-	"Lineage.ImplementationRunID":               true,
-	"Lineage.Kind":                              true,
-	"Lineage.ParentRunID":                       true,
-	"Lineage.PublicationDigest":                 true,
-	"Lineage.SourceDigest":                      true,
-	"Open":                                      true,
-	"Snapshot":                                  true,
-	"Snapshot.Admissions":                       true,
-	"Snapshot.Attempt":                          true,
-	"Snapshot.AttentionItems":                   true,
-	"Snapshot.ClassifierSamples":                true,
-	"Snapshot.Observation":                      true,
-	"Snapshot.ShadowReviews":                    true,
-	"Snapshot.LastStage":                        true,
-	"Snapshot.PublicationInvocationID":          true,
-	"Snapshot.ReviewYield":                      true,
-	"Store":                                     true,
-	"Store.Close":                               true,
-	"Store.ObserveRun":                          true,
-	"Store.ObserveSnapshot":                     true,
-	"ReviewYield":                               true,
-	"ReviewYield.AttemptNumber":                 true,
-	"ReviewYield.ConfigurationDigest":           true,
-	"ReviewYield.DecisionAction":                true,
-	"ReviewYield.Declined":                      true,
-	"ReviewYield.Deferred":                      true,
-	"ReviewYield.FindingsIngested":              true,
-	"ReviewYield.Fixed":                         true,
-	"ReviewYield.NewFindings":                   true,
-	"ReviewYield.Outcome":                       true,
-	"ReviewYield.RecurringFindings":             true,
-	"ReviewYield.Round":                         true,
+	"AdjudicationDispatch":                        true,
+	"AdjudicationDispatch.AdjudicationConfidence": true,
+	"AdjudicationDispatch.AttemptNumber":          true,
+	"AdjudicationDispatch.ClassifierConfidence":   true,
+	"AdjudicationDispatch.ClassifierMateriality":  true,
+	"AdjudicationDispatch.FindingID":              true,
+	"AdjudicationDispatch.FindingSeverity":        true,
+	"AdjudicationDispatch.InSurface":              true,
+	"AdjudicationDispatch.Producer":               true,
+	"AdjudicationDispatch.ResolvedPolicyDigest":   true,
+	"AdjudicationDispatch.Revision":               true,
+	"AdjudicationDispatch.Round":                  true,
+	"AdjudicationDispatch.Route":                  true,
+	"Admission":                                   true,
+	"Admission.Base":                              true,
+	"Admission.ImageDigest":                       true,
+	"Admission.ImageRef":                          true,
+	"Admission.InvocationID":                      true,
+	"Admission.ReviewConfigurationDigest":         true,
+	"Admission.Stage":                             true,
+	"Admission.TrustProfileDigest":                true,
+	"AttentionItem":                               true,
+	"AttentionItem.CreatedAt":                     true,
+	"AttentionItem.ID":                            true,
+	"AttentionItem.RequestedDecision":             true,
+	"AttentionItem.ReviewConfigurationRecovery":   true,
+	"AttentionItem.Status":                        true,
+	"AttentionItem.Type":                          true,
+	"Lineage":                                     true,
+	"Lineage.ApprovedSpecDigest":                  true,
+	"Lineage.AttemptNumber":                       true,
+	"Lineage.CampaignID":                          true,
+	"Lineage.ElaborationRunID":                    true,
+	"Lineage.ImplementationRunID":                 true,
+	"Lineage.Kind":                                true,
+	"Lineage.ParentRunID":                         true,
+	"Lineage.PublicationDigest":                   true,
+	"Lineage.SourceDigest":                        true,
+	"Open":                                        true,
+	"Snapshot":                                    true,
+	"Snapshot.Adjudications":                      true,
+	"Snapshot.Admissions":                         true,
+	"Snapshot.Attempt":                            true,
+	"Snapshot.AttentionItems":                     true,
+	"Snapshot.ClassifierSamples":                  true,
+	"Snapshot.Observation":                        true,
+	"Snapshot.ShadowReviews":                      true,
+	"Snapshot.LastStage":                          true,
+	"Snapshot.PublicationInvocationID":            true,
+	"Snapshot.ReviewYield":                        true,
+	"Store":                                       true,
+	"Store.Close":                                 true,
+	"Store.ObserveRun":                            true,
+	"Store.ObserveSnapshot":                       true,
+	"ReviewYield":                                 true,
+	"ReviewYield.AttemptNumber":                   true,
+	"ReviewYield.ConfigurationDigest":             true,
+	"ReviewYield.DecisionAction":                  true,
+	"ReviewYield.Declined":                        true,
+	"ReviewYield.Deferred":                        true,
+	"ReviewYield.FindingsIngested":                true,
+	"ReviewYield.Fixed":                           true,
+	"ReviewYield.NewFindings":                     true,
+	"ReviewYield.Outcome":                         true,
+	"ReviewYield.RecurringFindings":               true,
+	"ReviewYield.Round":                           true,
 }
 
 func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testing.T) {
@@ -562,6 +576,329 @@ func TestObserveSnapshotProjectsShadowEvidence(t *testing.T) {
 
 func observedShadowDigest(seed string) domain.Digest {
 	return domain.Digest("sha256:" + strings.Repeat(seed, 64))
+}
+
+// adjDigest builds a 64-hex content-address digest from a single-character seed.
+func adjDigest(seed string) domain.Digest {
+	return domain.Digest("sha256:" + strings.Repeat(seed, 64))
+}
+
+// adjResolvedPolicy builds a run-scoped resolved policy declaring one paths glob,
+// so the run's declared surface is reachable to ObserveSnapshot's in-surface join.
+func adjResolvedPolicy(t *testing.T, runID domain.RunID, pathsGlob string) domain.ResolvedPolicy {
+	t.Helper()
+	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
+		Key: "paths", Value: pathsGlob,
+		Provenance: domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: adjDigest("a")},
+	}})
+	if err != nil {
+		t.Fatalf("NewResolvedPolicy(%q): %v", pathsGlob, err)
+	}
+	return policy
+}
+
+// adjReviewRecord builds the round's review record binding the exact finding set
+// the adjudication artifact must match.
+func adjReviewRecord(
+	t *testing.T, runID domain.RunID, round int, instructionDigest domain.Digest,
+	findingIDs []domain.FindingID, at time.Time,
+) domain.ReviewRecord {
+	t.Helper()
+	record, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: domain.InvocationID("review-" + string(runID) + "-1"),
+		RunID:        runID, Round: round, Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		ConfigurationDigest: adjDigest("c"), InstructionDigest: instructionDigest,
+		CostOwner: "owner", BaseSHA: "base", HeadSHA: "head", CompletedAt: at,
+		CompletionEvidence: adjDigest("e"), Outcome: domain.ReviewFindings, FindingIDs: findingIDs,
+	})
+	if err != nil {
+		t.Fatalf("NewReviewRecord: %v", err)
+	}
+	return record
+}
+
+func adjFinding(id domain.FindingID, runID domain.RunID, path string, severity domain.FindingSeverity, at time.Time) domain.Finding {
+	return domain.Finding{
+		ID: id, RunID: runID, Source: "codex_local", Severity: severity,
+		Location: &domain.FindingLocation{Path: path, StartLine: 1, EndLine: 1},
+		Message:  "finding " + string(id), RawText: "finding " + string(id), CreatedAt: at,
+	}
+}
+
+func adjClassification(id domain.FindingID, round int, materiality, confidence string) domain.Classification {
+	return domain.Classification{
+		FindingID: id, Version: round, Materiality: materiality, Confidence: confidence,
+		Note: "producer=deterministic/test; observation",
+	}
+}
+
+func adjEngineEntry(t *testing.T, id domain.FindingID) domain.FindingAdjudicationEntry {
+	t.Helper()
+	compat := domain.CompatibilityAllowed
+	entry, err := domain.NewEngineAdjudicationEntry(
+		id, domain.GoalRequired, &compat, domain.RouteRemediate, "in declared scope",
+		nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("engine entry %q: %v", id, err)
+	}
+	return entry
+}
+
+func adjEngineModelEntry(t *testing.T, id domain.FindingID, confidence domain.AdjudicationConfidence) domain.FindingAdjudicationEntry {
+	t.Helper()
+	entry, err := domain.NewEngineModelAdjudicationEntry(
+		id, domain.GoalRequired, confidence, "model-required, engine-derived allowed remediation",
+		nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("engine-model entry %q: %v", id, err)
+	}
+	return entry
+}
+
+func adjModelSeparateEntry(t *testing.T, id domain.FindingID, confidence domain.AdjudicationConfidence) domain.FindingAdjudicationEntry {
+	t.Helper()
+	compat := domain.ProposedSeparateWork
+	entry, err := domain.NewModelAdjudicationEntry(
+		id, domain.GoalRequired, &compat, domain.RouteParkSeparateWork, confidence,
+		"remediation belongs in separate work outside the declared surface",
+		nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("model entry %q: %v", id, err)
+	}
+	return entry
+}
+
+// seedAdjudicationRun seeds one run with a resolved policy, one review round, an
+// adjudication artifact over the given entries, and one classification per
+// finding, so ObserveSnapshot can project the dispatch telemetry. The seed keeps
+// artifact.ResolvedPolicyDigest == run.PolicyDigest == the resolved policy digest,
+// which the store's binding gate requires and which also makes the run's declared
+// paths the authentic surface the in-surface join reads.
+func seedAdjudicationRun(
+	t *testing.T, ctx context.Context, st *store.Store,
+	runID domain.RunID, pathsGlob string,
+	findings []domain.Finding, classifications []domain.Classification,
+	entries []domain.FindingAdjudicationEntry, at time.Time,
+) domain.Digest {
+	t.Helper()
+	policy := adjResolvedPolicy(t, runID, pathsGlob)
+	specDigest := adjDigest("f")
+	instructionDigest := adjDigest("d")
+	findingIDs := make([]domain.FindingID, 0, len(findings))
+	for _, f := range findings {
+		findingIDs = append(findingIDs, f.ID)
+	}
+	record := adjReviewRecord(t, runID, 1, instructionDigest, findingIDs, at)
+	artifact, err := domain.NewFindingAdjudication(
+		runID, 1, specDigest, instructionDigest, policy.Digest, entries, at)
+	if err != nil {
+		t.Fatalf("NewFindingAdjudication(%q): %v", runID, err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: runID, ProjectID: "project-adjudication",
+			SpecDigest: specDigest, PolicyDigest: policy.Digest,
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
+			return err
+		}
+		if err := tx.PutReviewRecord(ctx, record, findings); err != nil {
+			return err
+		}
+		for _, classification := range classifications {
+			if err := tx.PutClassification(ctx, classification); err != nil {
+				return err
+			}
+		}
+		return tx.PutFindingAdjudication(ctx, artifact)
+	}); err != nil {
+		t.Fatalf("seed adjudication run %q: %v", runID, err)
+	}
+	return policy.Digest
+}
+
+// TestObserveSnapshotProjectsAdjudicationDispatch proves the bounded dispatch
+// projection carries the authenticated axes that answer the revision-31
+// calibration question — how often critical/high severity (P0/P1), material, in-surface
+// findings reach deterministic engine dispatch versus model residue — across the
+// five fixtures the unit specifies: fast-path (engine), model-residue
+// (engine_model), low-confidence, out-of-surface, and configuration-change. The
+// computed calibration numerator and denominator are asserted from the projection
+// alone, with no raw SQLite access.
+func TestObserveSnapshotProjectsAdjudicationDispatch(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	st, err := store.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	at := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+
+	// Run 1 carries the fast-path, model-residue, low-confidence, and
+	// out-of-surface fixtures in one round. Declared scope is daemon/**, so a
+	// daemon/ location is in-surface and an app/ location is not.
+	const run1 = domain.RunID("run-adjudication-calibration")
+	fastID := domain.FindingID("finding-fastpath")
+	residueID := domain.FindingID("finding-residue")
+	lowConfID := domain.FindingID("finding-lowconf")
+	outSurfaceID := domain.FindingID("finding-outsurface")
+	run1Findings := []domain.Finding{
+		adjFinding(fastID, run1, "daemon/fast.go", domain.FindingSeverityP1, at),
+		adjFinding(residueID, run1, "daemon/residue.go", domain.FindingSeverityP0, at),
+		adjFinding(lowConfID, run1, "daemon/lowconf.go", domain.FindingSeverityP1, at),
+		adjFinding(outSurfaceID, run1, "app/outside.swift", domain.FindingSeverityP1, at),
+	}
+	run1Classifications := []domain.Classification{
+		adjClassification(fastID, 1, "high", "high"),
+		adjClassification(residueID, 1, "high", "high"),
+		// The classifier's confidence (medium) differs from the adjudication
+		// proposal's confidence (low), proving the two axes are never conflated.
+		adjClassification(lowConfID, 1, "high", "medium"),
+		adjClassification(outSurfaceID, 1, "high", "high"),
+	}
+	run1Entries := []domain.FindingAdjudicationEntry{
+		adjEngineEntry(t, fastID),
+		adjEngineModelEntry(t, residueID, domain.ConfidenceHigh),
+		adjEngineModelEntry(t, lowConfID, domain.ConfidenceLow),
+		adjModelSeparateEntry(t, outSurfaceID, domain.ConfidenceHigh),
+	}
+	run1PolicyDigest := seedAdjudicationRun(t, ctx, st, run1, "daemon/**", run1Findings, run1Classifications, run1Entries, at)
+
+	// Run 2 is the configuration-change fixture: a different declared scope
+	// (api/**) resolves to a different policy digest, which the projection
+	// surfaces so a consumer detects the change without raw SQLite.
+	const run2 = domain.RunID("run-adjudication-configchange")
+	configID := domain.FindingID("finding-config")
+	run2PolicyDigest := seedAdjudicationRun(t, ctx, st, run2, "api/**",
+		[]domain.Finding{adjFinding(configID, run2, "api/thing.go", domain.FindingSeverityP1, at)},
+		[]domain.Classification{adjClassification(configID, 1, "high", "high")},
+		[]domain.FindingAdjudicationEntry{adjEngineEntry(t, configID)}, at)
+	if run1PolicyDigest == run2PolicyDigest {
+		t.Fatalf("configuration-change fixture did not vary the resolved policy digest: %q", run1PolicyDigest)
+	}
+
+	observed := &Store{store: st}
+	snapshot, err := observed.ObserveSnapshot(ctx, run1)
+	if err != nil {
+		t.Fatalf("ObserveSnapshot(run1): %v", err)
+	}
+	byFinding := map[domain.FindingID]AdjudicationDispatch{}
+	for _, dispatch := range snapshot.Adjudications {
+		if _, dup := byFinding[dispatch.FindingID]; dup {
+			t.Fatalf("duplicate projection for finding %q", dispatch.FindingID)
+		}
+		byFinding[dispatch.FindingID] = dispatch
+		if dispatch.Round != 1 || dispatch.Revision != 1 || dispatch.ResolvedPolicyDigest != run1PolicyDigest {
+			t.Fatalf("dispatch %q round/revision/policy = %+v", dispatch.FindingID, dispatch)
+		}
+	}
+	if len(byFinding) != 4 {
+		t.Fatalf("run1 adjudications = %d, want 4: %+v", len(byFinding), snapshot.Adjudications)
+	}
+
+	fast := byFinding[fastID]
+	if fast.Producer != domain.AdjudicationProducerEngine || fast.Route != domain.RouteRemediate ||
+		fast.AdjudicationConfidence != nil || fast.FindingSeverity != domain.FindingSeverityP1 ||
+		fast.ClassifierMateriality != "high" || fast.ClassifierConfidence != "high" || !fast.InSurface {
+		t.Fatalf("fast-path dispatch = %+v", fast)
+	}
+	residue := byFinding[residueID]
+	if residue.Producer != domain.AdjudicationProducerEngineModel || residue.AdjudicationConfidence == nil ||
+		*residue.AdjudicationConfidence != domain.ConfidenceHigh || residue.FindingSeverity != domain.FindingSeverityP0 ||
+		!residue.InSurface {
+		t.Fatalf("model-residue dispatch = %+v", residue)
+	}
+	lowConf := byFinding[lowConfID]
+	if lowConf.Producer != domain.AdjudicationProducerEngineModel || lowConf.AdjudicationConfidence == nil ||
+		*lowConf.AdjudicationConfidence != domain.ConfidenceLow ||
+		lowConf.ClassifierConfidence != "medium" || !lowConf.InSurface {
+		t.Fatalf("low-confidence dispatch = %+v", lowConf)
+	}
+	outSurface := byFinding[outSurfaceID]
+	if outSurface.Producer != domain.AdjudicationProducerModel || outSurface.InSurface ||
+		outSurface.Route != domain.RouteParkSeparateWork {
+		t.Fatalf("out-of-surface dispatch = %+v", outSurface)
+	}
+
+	// Calibration: among critical/high severity (P0/P1), material, in-surface findings, the
+	// numerator reached deterministic engine dispatch; the denominator reached
+	// engine or engine_model. Both are computed from the projection alone.
+	numerator, denominator := 0, 0
+	for _, dispatch := range snapshot.Adjudications {
+		criticalHigh := dispatch.FindingSeverity == domain.FindingSeverityP0 || dispatch.FindingSeverity == domain.FindingSeverityP1
+		material := dispatch.ClassifierMateriality == "high" || dispatch.ClassifierMateriality == "medium"
+		if !criticalHigh || !material || !dispatch.InSurface {
+			continue
+		}
+		switch dispatch.Producer {
+		case domain.AdjudicationProducerEngine:
+			numerator++
+			denominator++
+		case domain.AdjudicationProducerEngineModel:
+			denominator++
+		case domain.AdjudicationProducerModel:
+			// Pure model residue is visible in the projection but sits outside
+			// this ratio's engine-versus-engine_model contrast.
+		}
+	}
+	if numerator != 1 || denominator != 3 {
+		t.Fatalf("calibration numerator/denominator = %d/%d, want 1/3", numerator, denominator)
+	}
+
+	configSnapshot, err := observed.ObserveSnapshot(ctx, run2)
+	if err != nil {
+		t.Fatalf("ObserveSnapshot(run2): %v", err)
+	}
+	if len(configSnapshot.Adjudications) != 1 ||
+		configSnapshot.Adjudications[0].ResolvedPolicyDigest != run2PolicyDigest ||
+		configSnapshot.Adjudications[0].ResolvedPolicyDigest == run1PolicyDigest ||
+		!configSnapshot.Adjudications[0].InSurface {
+		t.Fatalf("configuration-change dispatch = %+v", configSnapshot.Adjudications)
+	}
+}
+
+// TestFindingInSurfaceRejectsNonCanonicalPaths pins the declared-scope
+// containment half of the engine's allowed-compatibility check: the telemetry
+// axis applies the same canonical-repository-path gate EngineCompatibility runs
+// before containment, so a boundary-exiting path (traversal, absolute,
+// backslash, control character, or a `.`/empty segment) never reads in-surface
+// even against a match-all glob, while a canonical in-scope path still does. It
+// does not re-derive tree existence: a canonical in-scope path reads in-surface
+// whether or not it exists in a tree.
+func TestFindingInSurfaceRejectsNonCanonicalPaths(t *testing.T) {
+	matchAll := []string{"**"}
+	daemonScope := []string{"daemon/**"}
+	tests := []struct {
+		name          string
+		location      *domain.FindingLocation
+		declaredPaths []string
+		want          bool
+	}{
+		{"nil location", nil, matchAll, false},
+		{"empty path", &domain.FindingLocation{Path: ""}, matchAll, false},
+		{"canonical in scope", &domain.FindingLocation{Path: "daemon/observe/x.go"}, daemonScope, true},
+		{"canonical out of scope", &domain.FindingLocation{Path: "app/x.swift"}, daemonScope, false},
+		{"canonical matches match-all", &domain.FindingLocation{Path: "daemon/x.go"}, matchAll, true},
+		{"leading slash", &domain.FindingLocation{Path: "/etc/passwd"}, matchAll, false},
+		{"parent traversal", &domain.FindingLocation{Path: "../secret"}, matchAll, false},
+		{"dotdot segment", &domain.FindingLocation{Path: "daemon/../etc"}, matchAll, false},
+		{"dot segment", &domain.FindingLocation{Path: "daemon/./x"}, matchAll, false},
+		{"backslash", &domain.FindingLocation{Path: `daemon\x`}, matchAll, false},
+		{"double slash", &domain.FindingLocation{Path: "daemon//x"}, matchAll, false},
+		{"trailing slash", &domain.FindingLocation{Path: "daemon/"}, matchAll, false},
+		{"control character", &domain.FindingLocation{Path: "daemon/\x01x"}, matchAll, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := findingInSurface(tc.location, tc.declaredPaths); got != tc.want {
+				t.Fatalf("findingInSurface(%+v, %v) = %v, want %v",
+					tc.location, tc.declaredPaths, got, tc.want)
+			}
+		})
+	}
 }
 
 // TestExportedSurfaceStaysNarrow fails when this package grows an exported
