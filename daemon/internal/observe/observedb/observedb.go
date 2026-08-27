@@ -73,6 +73,23 @@ type Lineage struct {
 	ImplementationRunID domain.RunID                 `json:"implementation_run_id"`
 }
 
+// ReviewYield is the bounded telemetry projection for one completed review
+// round. It carries only counters and durable decision identity, never finding
+// prose or the attention item's human-facing reason.
+type ReviewYield struct {
+	AttemptNumber       int                  `json:"attempt_number"`
+	Round               int                  `json:"round"`
+	ConfigurationDigest domain.Digest        `json:"configuration_digest"`
+	FindingsIngested    int                  `json:"findings_ingested"`
+	NewFindings         int                  `json:"new_findings"`
+	RecurringFindings   int                  `json:"recurring_findings"`
+	Fixed               int                  `json:"fixed"`
+	Declined            int                  `json:"declined"`
+	Deferred            int                  `json:"deferred"`
+	Outcome             domain.ReviewOutcome `json:"outcome"`
+	DecisionAction      *domain.Action       `json:"decision_action,omitempty"`
+}
+
 // Snapshot is one transactionally coherent, read-only view of the selected
 // run's observation, production-attempt lineage, open attention, recorded
 // admission identities, and authenticated publication-completion identity.
@@ -85,6 +102,7 @@ type Snapshot struct {
 	Admissions              []Admission                       `json:"admissions"`
 	ShadowReviews           []domain.ShadowReviewRecord       `json:"shadow_reviews"`
 	ClassifierSamples       []domain.ClassifierAccuracySample `json:"classifier_samples"`
+	ReviewYield             []ReviewYield                     `json:"review_yield"`
 }
 
 // Open opens the daemon's database at path. Options are empty by design: the
@@ -137,6 +155,12 @@ func (s *Store) ObserveSnapshot(ctx context.Context, runID domain.RunID) (Snapsh
 		if err != nil {
 			return err
 		}
+		attemptNumber := run.AttemptNumber
+		if attempt, attemptErr := tx.GetProductionAttemptByRun(ctx, runID); attemptErr == nil {
+			attemptNumber = attempt.AttemptNumber
+		} else if !errors.Is(attemptErr, store.ErrNotFound) {
+			return attemptErr
+		}
 		snapshot.Observation = observation
 		snapshot.LastStage = lastStage(run)
 		publicationInvocationID, completed, err := engine.ProductionPublicationCompletion(ctx, tx, run)
@@ -150,6 +174,7 @@ func (s *Store) ObserveSnapshot(ctx context.Context, runID domain.RunID) (Snapsh
 		snapshot.Admissions = []Admission{}
 		snapshot.ShadowReviews = []domain.ShadowReviewRecord{}
 		snapshot.ClassifierSamples = []domain.ClassifierAccuracySample{}
+		snapshot.ReviewYield = []ReviewYield{}
 		snapshot.ShadowReviews, err = tx.ListShadowReviewRecords(ctx, runID)
 		if err != nil {
 			return err
@@ -157,6 +182,43 @@ func (s *Store) ObserveSnapshot(ctx context.Context, runID domain.RunID) (Snapsh
 		snapshot.ClassifierSamples, err = tx.ListClassifierAccuracySamples(ctx, runID)
 		if err != nil {
 			return err
+		}
+		reviewRecords, err := tx.ListReviewRecords(ctx, runID)
+		if err != nil {
+			return err
+		}
+		if len(reviewRecords) > 0 {
+			history, err := tx.ReviewYieldHistory(ctx, runID)
+			if err != nil {
+				return err
+			}
+			decisions, err := tx.ListReviewDiminishingDecisions(ctx, runID)
+			if err != nil {
+				return err
+			}
+			decisionActions := make(map[int]domain.Action, len(decisions))
+			for _, decision := range decisions {
+				if decision.Command != nil {
+					decisionActions[decision.Binding.Round] = decision.Command.Action
+				}
+			}
+			for index, round := range history.Rounds {
+				if index >= len(reviewRecords) || reviewRecords[index].Round != round.Round {
+					return domain.ErrReviewYieldHistoryInconsistent
+				}
+				projected := ReviewYield{
+					AttemptNumber: attemptNumber, Round: round.Round,
+					ConfigurationDigest: reviewRecords[index].ConfigurationDigest,
+					FindingsIngested:    round.FindingsIngested, NewFindings: round.NewFindings,
+					RecurringFindings: round.RecurringFindings, Fixed: round.Fixed,
+					Declined: round.Declined, Deferred: round.Deferred, Outcome: round.Outcome,
+				}
+				if action, ok := decisionActions[round.Round]; ok {
+					action := action
+					projected.DecisionAction = &action
+				}
+				snapshot.ReviewYield = append(snapshot.ReviewYield, projected)
+			}
 		}
 
 		if run.CampaignID != "" {

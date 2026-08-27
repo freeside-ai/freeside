@@ -97,6 +97,7 @@ type supervisionSnapshot struct {
 	LastAttentionItem *observedb.AttentionItem          `json:"last_attention_item,omitempty"`
 	ShadowReviews     []domain.ShadowReviewRecord       `json:"shadow_reviews"`
 	ClassifierSamples []domain.ClassifierAccuracySample `json:"classifier_samples"`
+	ReviewYield       []observedb.ReviewYield           `json:"review_yield"`
 }
 
 func writeSnapshot(out io.Writer, current observedb.Snapshot) error {
@@ -107,6 +108,7 @@ func writeSnapshot(out io.Writer, current observedb.Snapshot) error {
 		Lineage: current.Attempt, LastStage: current.LastStage,
 		AttentionItems: current.AttentionItems,
 		ShadowReviews:  current.ShadowReviews, ClassifierSamples: current.ClassifierSamples,
+		ReviewYield: current.ReviewYield,
 	}
 	if len(current.AttentionItems) > 0 {
 		last := current.AttentionItems[len(current.AttentionItems)-1]

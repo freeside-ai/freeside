@@ -242,52 +242,73 @@ ON CONFLICT (finding_id, round) DO NOTHING`
 // validateFindingDispositionBinding re-runs the authoritative joins instead
 // of trusting the disposition row's copied keys: the finding must belong to
 // the run and the exact review round must list that finding.
-func (tx *ReadTx) validateFindingDispositionBinding(
+func (tx *ReadTx) validateFindingDispositionBindingWithDiminishing(
 	ctx context.Context, disposition domain.ReviewDispositionRecord,
+	allowDiminishing bool,
 ) error {
-	finding, err := tx.GetFinding(ctx, disposition.FindingID)
+	adjudication, err := tx.validateFindingDispositionScope(ctx, disposition)
 	if err != nil {
 		return err
-	}
-	if finding.RunID != disposition.RunID {
-		return domain.ErrParentKeyMismatch
-	}
-	var invocationID string
-	if err := tx.tx.QueryRowContext(ctx, `SELECT invocation_id FROM review_records
-        WHERE run_id = ? AND round = ?`, disposition.RunID, disposition.Round).Scan(&invocationID); err != nil {
-		return notFoundOr(err)
-	}
-	record, err := tx.GetReviewRecord(ctx, domain.InvocationID(invocationID))
-	if err != nil {
-		return err
-	}
-	if !slices.Contains(record.FindingIDs, disposition.FindingID) {
-		return domain.ErrParentKeyMismatch
 	}
 	if disposition.Disposition == domain.ReviewDispositionFixed {
-		remediation, err := tx.GetReviewRecord(ctx, disposition.RemediationInvocationID)
-		if err != nil {
-			return err
-		}
-		if remediation.RunID != record.RunID || remediation.Round <= record.Round ||
-			remediation.BaseSHA != record.BaseSHA || remediation.HeadSHA == record.HeadSHA {
-			return domain.ErrParentKeyMismatch
-		}
 		return nil
-	}
-	adjudication, err := tx.GetFindingAdjudication(ctx, disposition.AdjudicationDigest)
-	if err != nil {
-		return err
-	}
-	if adjudication.RunID != disposition.RunID || adjudication.Round != disposition.Round {
-		return domain.ErrParentKeyMismatch
 	}
 	if err := adjudication.AuthorizesFinalDisposition(
 		disposition.FindingID, disposition.Disposition,
 	); err != nil {
+		if allowDiminishing && disposition.Disposition == domain.ReviewDispositionDeferred {
+			return tx.validateReviewDiminishingDeferredDisposition(ctx, disposition)
+		}
 		return err
 	}
 	return nil
+}
+
+// validateFindingDispositionScope authenticates the row coordinates without
+// following diminishing-command authority. Decision-time reads use it before
+// excluding rows outside the same-run prior causal slice, which avoids both
+// copied-key filtering and a recursive command re-gate.
+func (tx *ReadTx) validateFindingDispositionScope(
+	ctx context.Context, disposition domain.ReviewDispositionRecord,
+) (domain.FindingAdjudication, error) {
+	finding, err := tx.GetFinding(ctx, disposition.FindingID)
+	if err != nil {
+		return domain.FindingAdjudication{}, err
+	}
+	if finding.RunID != disposition.RunID {
+		return domain.FindingAdjudication{}, domain.ErrParentKeyMismatch
+	}
+	var invocationID string
+	if err := tx.tx.QueryRowContext(ctx, `SELECT invocation_id FROM review_records
+	        WHERE run_id = ? AND round = ?`, disposition.RunID, disposition.Round).Scan(&invocationID); err != nil {
+		return domain.FindingAdjudication{}, notFoundOr(err)
+	}
+	record, err := tx.GetReviewRecord(ctx, domain.InvocationID(invocationID))
+	if err != nil {
+		return domain.FindingAdjudication{}, err
+	}
+	if !slices.Contains(record.FindingIDs, disposition.FindingID) {
+		return domain.FindingAdjudication{}, domain.ErrParentKeyMismatch
+	}
+	if disposition.Disposition == domain.ReviewDispositionFixed {
+		remediation, err := tx.GetReviewRecord(ctx, disposition.RemediationInvocationID)
+		if err != nil {
+			return domain.FindingAdjudication{}, err
+		}
+		if remediation.RunID != record.RunID || remediation.Round <= record.Round ||
+			remediation.BaseSHA != record.BaseSHA || remediation.HeadSHA == record.HeadSHA {
+			return domain.FindingAdjudication{}, domain.ErrParentKeyMismatch
+		}
+		return domain.FindingAdjudication{}, nil
+	}
+	adjudication, err := tx.GetFindingAdjudication(ctx, disposition.AdjudicationDigest)
+	if err != nil {
+		return domain.FindingAdjudication{}, err
+	}
+	if adjudication.RunID != disposition.RunID || adjudication.Round != disposition.Round {
+		return domain.FindingAdjudication{}, domain.ErrParentKeyMismatch
+	}
+	return adjudication, nil
 }
 
 // PutFindingDisposition persists one immutable per-finding round outcome.
@@ -295,11 +316,19 @@ func (tx *ReadTx) validateFindingDispositionBinding(
 func (tx *WriteTx) PutFindingDisposition(
 	ctx context.Context, disposition domain.ReviewDispositionRecord,
 ) error {
+	return tx.putFindingDisposition(ctx, disposition, false)
+}
+
+func (tx *WriteTx) putFindingDisposition(
+	ctx context.Context, disposition domain.ReviewDispositionRecord, allowDiminishing bool,
+) error {
 	if err := disposition.Validate(); err != nil {
 		return fmt.Errorf("put finding disposition %q round %d: %w",
 			disposition.FindingID, disposition.Round, err)
 	}
-	if err := tx.validateFindingDispositionBinding(ctx, disposition); err != nil {
+	if err := tx.validateFindingDispositionBindingWithDiminishing(
+		ctx, disposition, allowDiminishing,
+	); err != nil {
 		return fmt.Errorf("put finding disposition %q round %d binding: %w",
 			disposition.FindingID, disposition.Round, err)
 	}
@@ -371,7 +400,15 @@ func (tx *ReadTx) ListFindingDispositions(
 // loadFindingDispositions reconstructs the complete table before any lookup
 // or run filter is applied. A copied key is untrusted too: selecting by it
 // first would let corruption move an immutable record out of every keyed read.
-func (tx *ReadTx) loadFindingDispositions(ctx context.Context) ([]domain.ReviewDispositionRecord, error) {
+func (tx *ReadTx) loadFindingDispositions(
+	ctx context.Context,
+) ([]domain.ReviewDispositionRecord, error) {
+	return tx.loadFindingDispositionsAtDecision(ctx, "", 0)
+}
+
+func (tx *ReadTx) loadFindingDispositionsAtDecision(
+	ctx context.Context, boundaryRunID domain.RunID, boundaryRound int,
+) ([]domain.ReviewDispositionRecord, error) {
 	type rawDisposition struct {
 		findingID, runID, class, reason, remediationInvocationID, bodyDigest string
 		createdAt                                                            string
@@ -419,7 +456,16 @@ func (tx *ReadTx) loadFindingDispositions(ctx context.Context) ([]domain.ReviewD
 			formatTime(disposition.CreatedAt) != item.createdAt {
 			return nil, fmt.Errorf("row %d: %w", index+1, errRowInconsistent)
 		}
-		if err := tx.validateFindingDispositionBinding(ctx, disposition); err != nil {
+		if _, err := tx.validateFindingDispositionScope(ctx, disposition); err != nil {
+			return nil, fmt.Errorf("row %d scope: %w", index+1, err)
+		}
+		if boundaryRunID != "" && (disposition.RunID != boundaryRunID ||
+			disposition.Round >= boundaryRound) {
+			continue
+		}
+		if err := tx.validateFindingDispositionBindingWithDiminishing(
+			ctx, disposition, true,
+		); err != nil {
 			return nil, fmt.Errorf("row %d binding: %w", index+1, err)
 		}
 		out = append(out, disposition)
