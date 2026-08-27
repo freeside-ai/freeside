@@ -3,8 +3,6 @@ package domain
 import (
 	"fmt"
 	"slices"
-	"strings"
-	"unicode/utf8"
 )
 
 // FindingAdjudicationBinding is the sync-carried projection of one immutable
@@ -61,45 +59,20 @@ func (b FindingAdjudicationBinding) Validate() error {
 			return fmt.Errorf("finding adjudication proposal %q: %w", proposal.FindingID, ErrDuplicate)
 		}
 		seenFindings[proposal.FindingID] = struct{}{}
+		// The proposal is a projection of one artifact entry; reconstruct that
+		// entry — including its digest-bound OfferedAlternatives — and delegate to
+		// the entry's own validation so the offered-set rules live in one place
+		// (#893). The store re-gates the copied fields against the artifact.
 		entry := FindingAdjudicationEntry{
 			FindingID: proposal.FindingID, Producer: proposal.Producer,
 			GoalRelationship: proposal.GoalRelationship, Compatibility: proposal.Compatibility,
 			Route: proposal.Route, Rationale: proposal.Rationale,
 			CitedRules: proposal.CitedRules, Assumptions: proposal.Assumptions,
 			OpenQuestions: proposal.OpenQuestions, Confidence: proposal.Confidence,
+			OfferedAlternatives: proposal.OfferedAlternatives,
 		}
 		if err := entry.Validate(); err != nil {
 			return fmt.Errorf("finding adjudication proposal %q: %w", proposal.FindingID, err)
-		}
-		seenRoutes := make(map[AdjudicationRoute]struct{}, len(proposal.OfferedAlternatives))
-		for _, alternative := range proposal.OfferedAlternatives {
-			if !alternative.Route.valid() {
-				return fmt.Errorf("finding adjudication proposal %q alternative route %q: %w",
-					proposal.FindingID, alternative.Route, ErrInvalidAdjudicationRoute)
-			}
-			if err := validAdjudicationRow(
-				proposal.GoalRelationship, proposal.Compatibility, alternative.Route,
-			); err != nil {
-				return fmt.Errorf("finding adjudication proposal %q alternative route %q: %w",
-					proposal.FindingID, alternative.Route, err)
-			}
-			if alternative.Route == proposal.Route {
-				return fmt.Errorf("finding adjudication proposal %q alternative repeats recommendation: %w",
-					proposal.FindingID, ErrDuplicate)
-			}
-			if _, duplicate := seenRoutes[alternative.Route]; duplicate {
-				return fmt.Errorf("finding adjudication proposal %q alternative route %q: %w",
-					proposal.FindingID, alternative.Route, ErrDuplicate)
-			}
-			seenRoutes[alternative.Route] = struct{}{}
-			if strings.TrimSpace(alternative.Consequence) == "" {
-				return fmt.Errorf("finding adjudication proposal %q alternative consequence: %w",
-					proposal.FindingID, ErrEmptyField)
-			}
-			if !utf8.ValidString(alternative.Consequence) {
-				return fmt.Errorf("finding adjudication proposal %q alternative consequence: %w",
-					proposal.FindingID, ErrFindingAdjudicationInconsistent)
-			}
 		}
 	}
 	return nil

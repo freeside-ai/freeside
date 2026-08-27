@@ -82,6 +82,13 @@ func validateFindingAdjudicationDecision(
 		for _, proposal := range item.FindingAdjudication.Proposals {
 			proposals[proposal.FindingID] = proposal
 		}
+		// The offered set consulted here is authenticated transitively: the
+		// caller loads the item through the store's re-gating snapshot read
+		// (Service.Submit's GetAttentionItemSnapshot, and PutCommand's
+		// GetAttentionItem), which binds proposal.OfferedAlternatives to the
+		// digest-bound artifact (#893). A route present only in a tampered item
+		// payload fails that read before reaching this check, so accepting a route
+		// from the item's offered set cannot authorize an unoffered choice.
 		for _, choice := range choices {
 			proposal, ok := proposals[choice.FindingID]
 			if !ok {

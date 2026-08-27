@@ -969,23 +969,17 @@ func (w *productionPublicationWorkflow) reviewRoundDispositionComplete(
 func findingAdjudicationBinding(artifact domain.FindingAdjudication) domain.FindingAdjudicationBinding {
 	proposals := make([]domain.FindingAdjudicationProposal, 0, len(artifact.Entries))
 	for _, entry := range artifact.Entries {
+		// Copy the digest-bound offered set from the artifact entry; the store
+		// re-gates the item's copied set against this same source, so projecting
+		// anything the entry does not carry would fail closed (#893). The offered
+		// routes and consequences are no longer synthesized here.
 		proposal := domain.FindingAdjudicationProposal{
 			FindingID: entry.FindingID, Producer: entry.Producer,
 			GoalRelationship: entry.GoalRelationship, Compatibility: entry.Compatibility,
 			Route: entry.Route, Rationale: entry.Rationale,
 			CitedRules: slices.Clone(entry.CitedRules), Assumptions: slices.Clone(entry.Assumptions),
 			OpenQuestions: slices.Clone(entry.OpenQuestions), Confidence: entry.Confidence,
-		}
-		if entry.GoalRelationship == domain.GoalContradictory {
-			alternative := domain.RouteDecline
-			consequence := "Record the finding as declined under the artifact-bound contradiction."
-			if entry.Route == domain.RouteDecline {
-				alternative = domain.RouteDispute
-				consequence = "Keep the run parked for human adjudication."
-			}
-			proposal.OfferedAlternatives = []domain.OfferedAlternative{{
-				Route: alternative, Consequence: consequence,
-			}}
+			OfferedAlternatives: slices.Clone(entry.OfferedAlternatives),
 		}
 		proposals = append(proposals, proposal)
 	}

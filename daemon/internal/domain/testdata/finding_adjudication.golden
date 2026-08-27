@@ -1,5 +1,5 @@
 {
-  "encoding_version": 1,
+  "encoding_version": 2,
   "run_id": "run-abc",
   "round": 2,
   "finding_batch_digest": "sha256:e4427f32d78c1000954bb63c7556843567c790a5c32cc9d4eb82147329f31840",
@@ -21,7 +21,8 @@
       "assumptions": null,
       "alternatives": null,
       "open_questions": null,
-      "confidence": null
+      "confidence": null,
+      "offered_alternatives": null
     },
     {
       "finding_id": "finding-0002",
@@ -45,9 +46,15 @@
       "open_questions": [
         "which spec clause governs?"
       ],
-      "confidence": "high"
+      "confidence": "high",
+      "offered_alternatives": [
+        {
+          "route": "dispute",
+          "consequence": "Keep the run parked for human adjudication."
+        }
+      ]
     }
   ],
   "created_at": "2026-08-21T15:00:00Z",
-  "digest": "sha256:31ffdb25908b638a42b40c0c9854b269e90dae16d81bcaeec3e2bed28d73de29"
+  "digest": "sha256:107d6b5fd25fa7e35e717e8e0c3b9a1c396c0bdd9c7fa67ce20f1cd5145ff1f6"
 }

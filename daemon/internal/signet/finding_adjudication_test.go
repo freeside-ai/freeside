@@ -2,7 +2,10 @@ package signet_test
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -79,9 +82,7 @@ func seedFindingAdjudicationItem(t *testing.T, f fixture) domain.AttentionItem {
 			Route: entry.Route, Rationale: entry.Rationale,
 			CitedRules: entry.CitedRules, Assumptions: entry.Assumptions,
 			OpenQuestions: entry.OpenQuestions, Confidence: entry.Confidence,
-			OfferedAlternatives: []domain.OfferedAlternative{{
-				Route: domain.RouteDispute, Consequence: "park for a human decision",
-			}},
+			OfferedAlternatives: slices.Clone(entry.OfferedAlternatives),
 		})
 	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
@@ -237,6 +238,48 @@ func TestSubmitFindingAdjudicationRejectsUnofferedChoice(t *testing.T) {
 	}
 	if after := f.revision(t); after != before {
 		t.Fatalf("rejected choice moved revision %d -> %d", before, after)
+	}
+}
+
+// TestSubmitFindingAdjudicationRejectsRawRowForgedOffer proves raw-row tampering
+// cannot make a non-offered route choosable (#893). The stored item is rewritten
+// so finding-a recommends dispute and appears to offer decline — a
+// self-consistent payload the digest-bound artifact never authorized — then a
+// choose command for that forged route is submitted. Submit loads the item
+// through the re-gating snapshot read, which binds the offered set to the
+// artifact and rejects the divergence before the choice is evaluated.
+func TestSubmitFindingAdjudicationRejectsRawRowForgedOffer(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	item := seedFindingAdjudicationItem(t, f)
+	before := f.revision(t)
+
+	item.FindingAdjudication.Proposals[0].Route = domain.RouteDispute
+	item.FindingAdjudication.Proposals[0].OfferedAlternatives = []domain.OfferedAlternative{{
+		Route: domain.RouteDecline, Consequence: "record the finding as declined instead",
+	}}
+	body, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal forged item: %v", err)
+	}
+	db, err := sql.Open("sqlite", f.dbPath)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.ExecContext(ctx, `UPDATE attention_items SET body = ? WHERE id = ?`, string(body), item.ID); err != nil {
+		t.Fatalf("forge item body: %v", err)
+	}
+
+	command := commandOn(item, "command-forged-offer", domain.ActionChooseAlternativeRoute)
+	command.Payload.AlternativeChoices = []signet.AlternativeChoice{{
+		FindingID: "finding-a", Route: domain.RouteDecline,
+	}}
+	if _, err := f.service.Submit(ctx, command); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("Submit = %v, want ErrParentKeyMismatch", err)
+	}
+	if after := f.revision(t); after != before {
+		t.Fatalf("forged choice moved revision %d -> %d", before, after)
 	}
 }
 

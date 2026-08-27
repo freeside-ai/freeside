@@ -20,5 +20,11 @@
   "open_questions": [
     "which spec clause governs?"
   ],
-  "confidence": "high"
+  "confidence": "high",
+  "offered_alternatives": [
+    {
+      "route": "dispute",
+      "consequence": "Keep the run parked for human adjudication."
+    }
+  ]
 }

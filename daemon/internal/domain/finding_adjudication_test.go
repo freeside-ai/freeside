@@ -835,3 +835,72 @@ func TestFindingAdjudicationDecodeRejects(t *testing.T) {
 		t.Fatal("unknown feedback field: want error, got nil")
 	}
 }
+
+// TestFindingAdjudicationEntryOffersAlternatives locks the digest-bound offered
+// set as the authoritative representation (#893): the constructors derive it
+// from the (goal, route) row so it can be projected and re-gated, and a
+// reconstructed entry carrying a forged offered set fails Validate.
+func TestFindingAdjudicationEntryOffersAlternatives(t *testing.T) {
+	decline, err := domain.NewModelAdjudicationEntry(
+		"finding-a", domain.GoalContradictory, nil, domain.RouteDecline,
+		domain.ConfidenceHigh, "contradicts the approved spec",
+		nil, []string{"AGENTS.md"}, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("decline entry: %v", err)
+	}
+	wantDecline := []domain.OfferedAlternative{{
+		Route: domain.RouteDispute, Consequence: "Keep the run parked for human adjudication.",
+	}}
+	if !slices.Equal(decline.OfferedAlternatives, wantDecline) {
+		t.Fatalf("decline offered = %+v, want %+v", decline.OfferedAlternatives, wantDecline)
+	}
+
+	dispute, err := domain.NewModelAdjudicationEntry(
+		"finding-a", domain.GoalContradictory, nil, domain.RouteDispute,
+		domain.ConfidenceHigh, "contradicts the approved spec",
+		nil, []string{"AGENTS.md"}, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("dispute entry: %v", err)
+	}
+	wantDispute := []domain.OfferedAlternative{{
+		Route: domain.RouteDecline, Consequence: "Record the finding as declined under the artifact-bound contradiction.",
+	}}
+	if !slices.Equal(dispute.OfferedAlternatives, wantDispute) {
+		t.Fatalf("dispute offered = %+v, want %+v", dispute.OfferedAlternatives, wantDispute)
+	}
+
+	// Every single-route row offers nothing.
+	adjacent, err := domain.NewModelAdjudicationEntry(
+		"finding-a", domain.GoalAdjacent, nil, domain.RouteDefer,
+		domain.ConfidenceHigh, "adjacent to the approved work unit",
+		nil, []string{"AGENTS.md"}, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("adjacent entry: %v", err)
+	}
+	if adjacent.OfferedAlternatives != nil {
+		t.Fatalf("adjacent offered = %+v, want nil", adjacent.OfferedAlternatives)
+	}
+	engineModel, err := domain.NewEngineModelAdjudicationEntry(
+		"finding-a", domain.GoalRequired, domain.ConfidenceHigh,
+		"required and allowed", nil, []string{"AGENTS.md"}, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("engine-model entry: %v", err)
+	}
+	if engineModel.OfferedAlternatives != nil {
+		t.Fatalf("engine-model offered = %+v, want nil", engineModel.OfferedAlternatives)
+	}
+
+	// A reconstructed entry whose offered route repeats the recommendation is
+	// rejected by the entry's own validation, not only the binding's.
+	forged := decline
+	forged.OfferedAlternatives = []domain.OfferedAlternative{{
+		Route: domain.RouteDecline, Consequence: "repeats the recommendation",
+	}}
+	if err := forged.Validate(); !errors.Is(err, domain.ErrDuplicate) {
+		t.Fatalf("forged offered Validate = %v, want ErrDuplicate", err)
+	}
+}
