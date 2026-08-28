@@ -28,7 +28,14 @@ const (
 	markerSuffix            = " -->"
 	maxPullRequestBodyBytes = 64 << 10
 	identityDigestBytes     = len("sha256:") + sha256.Size*2
-	maxCandidateBodyBytes   = maxPullRequestBodyBytes - len("\n\n") - len(markerPrefix) - identityDigestBytes - len(markerSuffix)
+	identityMarkerBytes     = len(markerPrefix) + identityDigestBytes + len(markerSuffix)
+	// maxCandidateBodyBytes reserves the worst-case publisher-owned body:
+	// three separators, the identity marker, the fixed advisories ceiling,
+	// and the disposition-history floor. Any prose accepted here therefore
+	// composes within GitHub's body ceiling without truncating that prose;
+	// disposition history may shrink from its 48 KiB ceiling to this floor.
+	maxCandidateBodyBytes = maxPullRequestBodyBytes - 3*len("\n\n") -
+		identityMarkerBytes - maxRenderedAdvisoriesBytes - minRenderedDispositionHistoryBytes
 )
 
 // IdentityInput is the candidate material a publication identity is
@@ -186,7 +193,7 @@ func ValidateCandidateBody(body string) error {
 	}
 	if prose := strings.TrimRight(body, "\n"); prose != "" && len(prose) > maxCandidateBodyBytes {
 		return fmt.Errorf(
-			"candidate body exceeds %d bytes after reserving the publication identity marker",
+			"candidate body exceeds %d bytes after reserving the publisher-owned sections",
 			maxCandidateBodyBytes,
 		)
 	}

@@ -9,23 +9,55 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
-func internalDispositionHistory(t *testing.T, headSHA string) DispositionHistory {
+func oversizedDispositionHistory(t *testing.T, headSHA string) DispositionHistory {
 	t.Helper()
 	digest := domain.Digest("sha256:" + strings.Repeat("a", 64))
-	review, err := domain.NewReviewRecord(domain.ReviewRecord{
-		InvocationID: "review-size-1", RunID: "run-size", Round: 1,
+	const findingCount = 300
+	claim := "x"
+	findingIDs := make([]domain.FindingID, findingCount)
+	findings := make([]domain.Finding, findingCount)
+	dispositions := make([]domain.ReviewDispositionRecord, findingCount)
+	for i := range findingIDs {
+		findingID := domain.FindingID(fmt.Sprintf("finding-%d", i))
+		findingIDs[i] = findingID
+		findings[i] = domain.Finding{
+			ID: findingID, RunID: "run-aggregate-findings",
+			Location:  &domain.FindingLocation{Path: claim},
+			Message:   claim,
+			CreatedAt: time.Date(2026, 8, 11, 13, 0, i, 0, time.UTC),
+		}
+		dispositions[i] = domain.ReviewDispositionRecord{
+			FindingID: findingID, RunID: "run-aggregate-findings", Round: 1,
+			Disposition: domain.ReviewDispositionDeclined, Reason: claim,
+			AdjudicationDigest: digest,
+			CreatedAt:          time.Date(2026, 8, 11, 13, 1, i, 0, time.UTC),
+		}
+	}
+	first, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-aggregate-findings", RunID: "run-aggregate-findings", Round: 1,
 		Provider: "openai", ModelConfiguration: "codex/high",
 		ConfigurationDigest: digest, InstructionDigest: digest, CostOwner: "operator",
-		BaseSHA: "base", HeadSHA: headSHA, CompletedAt: time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC),
+		BaseSHA: "base", HeadSHA: headSHA, CompletedAt: time.Date(2026, 8, 11, 13, 0, 0, 0, time.UTC),
+		CompletionEvidence: digest, Outcome: domain.ReviewFindings, FindingIDs: findingIDs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-aggregate-clean", RunID: "run-aggregate-findings", Round: 2,
+		Provider: "openai", ModelConfiguration: "codex/high",
+		ConfigurationDigest: digest, InstructionDigest: digest, CostOwner: "operator",
+		BaseSHA: "base", HeadSHA: headSHA, CompletedAt: time.Date(2026, 8, 11, 13, 2, 0, 0, time.UTC),
 		CompletionEvidence: digest, Outcome: domain.ReviewClean,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	history, err := newDispositionHistory(dispositionHistoryInput{
-		runID: "run-size", headSHA: headSHA, expectedInstructionDigest: digest,
-		reviews:   []domain.ReviewRecord{review},
-		readiness: domain.ReadinessVerdict{Class: domain.ReadinessReadyClean, EvaluationSetDigest: digest},
+		runID: "run-aggregate-findings", headSHA: headSHA, expectedInstructionDigest: digest,
+		reviews: []domain.ReviewRecord{first, second}, findings: findings,
+		dispositions: dispositions,
+		readiness:    domain.ReadinessVerdict{Class: domain.ReadinessReadyClean, EvaluationSetDigest: digest},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -33,10 +65,10 @@ func internalDispositionHistory(t *testing.T, headSHA string) DispositionHistory
 	return history
 }
 
-func TestDesiredPRContentBudgetsDispositionSectionWithoutTruncation(t *testing.T) {
+func TestDesiredPRContentFitsEveryReservedPublisherSection(t *testing.T) {
 	t.Parallel()
 	head := strings.Repeat("b", 40)
-	history := internalDispositionHistory(t, head)
+	history := oversizedDispositionHistory(t, head)
 	identity, err := DeriveIdentity(IdentityInput{
 		Repo: "freeside-ai/repo", BaseRef: "main", SourceHeadSHA: head,
 		ArtifactDigests: []domain.Digest{"sha256:" + domain.Digest(strings.Repeat("c", 64))},
@@ -44,25 +76,104 @@ func TestDesiredPRContentBudgetsDispositionSectionWithoutTruncation(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	section, err := RenderDispositionHistory(history)
-	if err != nil {
-		t.Fatal(err)
+	advisories := make([]domain.CandidateFinding, maxRenderedAdvisories+5)
+	for i := range advisories {
+		advisory := advisoryFinding("")
+		advisory.Path = fmt.Sprintf("%s/%d/AGENTS.md", strings.Repeat("&", 4096), i)
+		advisory.PathHex = strings.Repeat("&", 4096)
+		advisory.Kind = strings.Repeat("&", 4096)
+		advisory.Detail = strings.Repeat("&", 4096)
+		advisories[i] = advisory
 	}
-	proseBytes := maxPullRequestBodyBytes - len(section) - len(identity.Marker()) - 2*len("\n\n")
 	candidate := Candidate{
-		Title: "Sized body", Body: strings.Repeat("x", proseBytes),
-		RunID: "run-size", HeadSHA: head, DispositionHistory: &history,
+		Title: "Sized body", Body: strings.Repeat("x", maxCandidateBodyBytes),
+		RunID: "run-aggregate-findings", HeadSHA: head, DispositionHistory: &history,
+		Advisories: advisories,
+	}
+	if err := ValidateCandidateBody(candidate.Body); err != nil {
+		t.Fatalf("exact candidate body budget: %v", err)
 	}
 	_, body, err := desiredPRContent(identity, candidate)
 	if err != nil {
-		t.Fatalf("exact body limit: %v", err)
+		t.Fatalf("compose every reserved section: %v", err)
 	}
-	if len(body) != maxPullRequestBodyBytes {
-		t.Fatalf("composed body bytes = %d, want %d", len(body), maxPullRequestBodyBytes)
+	if len(body) > maxPullRequestBodyBytes {
+		t.Fatalf("composed body bytes = %d, want at most %d", len(body), maxPullRequestBodyBytes)
 	}
-	candidate.Body += "x"
-	if _, _, err := desiredPRContent(identity, candidate); err == nil {
-		t.Fatal("oversized composed body was truncated or accepted")
+	start := strings.Index(body, dispositionHistoryOpenMarker)
+	end := strings.Index(body, dispositionHistoryCloseMarker)
+	if start < 0 || end < start {
+		t.Fatal("composed body omitted the disposition-history marker pair")
+	}
+	section := body[start : end+len(dispositionHistoryCloseMarker)]
+	if len(section) < minRenderedDispositionHistoryBytes {
+		advisoriesBytes := len(renderAdvisories(advisories))
+		historyLimit := maxPullRequestBodyBytes - maxCandidateBodyBytes - advisoriesBytes -
+			len(identity.Marker()) - 3*len("\n\n")
+		t.Fatalf(
+			"fitted history bytes = %d under limit %d (advisories %d), want at least %d",
+			len(section), historyLimit, advisoriesBytes, minRenderedDispositionHistoryBytes,
+		)
+	}
+	if !strings.Contains(section, "Disposition history truncated; full rendered digest: <code>sha256:") {
+		t.Fatal("fitted history omitted the complete rendering digest")
+	}
+	if err := ValidateCandidateBody(candidate.Body + "x"); err == nil {
+		t.Fatal("candidate body consumed a publisher-owned section reserve")
+	}
+}
+
+func TestDesiredPRContentUsesFullHistoryWhenSpaceAllows(t *testing.T) {
+	t.Parallel()
+	head := strings.Repeat("b", 40)
+	history := oversizedDispositionHistory(t, head)
+	identity, err := DeriveIdentity(IdentityInput{
+		Repo: "freeside-ai/repo", BaseRef: "main", SourceHeadSHA: head,
+		ArtifactDigests: []domain.Digest{"sha256:" + domain.Digest(strings.Repeat("c", 64))},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := RenderDispositionHistory(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withinCeiling, err := renderDispositionHistoryWithin(history, maxRenderedDispositionHistoryBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withinCeiling != canonical {
+		t.Fatal("ceiling-sized composition changed the canonical history rendering")
+	}
+	_, body, err := desiredPRContent(identity, Candidate{
+		Title: "Full history", Body: "Short operator prose.",
+		RunID: "run-aggregate-findings", HeadSHA: head, DispositionHistory: &history,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, "\n\n"+canonical+"\n\n"+identity.Marker()) {
+		t.Fatal("composition shortened history even though the full bounded section fit")
+	}
+	if _, err := renderDispositionHistoryWithin(history, minRenderedDispositionHistoryBytes-1); err == nil {
+		t.Fatal("composition accepted a history budget below the reserved floor")
+	}
+}
+
+func TestDesiredPRContentKeepsFailClosedBodyCeiling(t *testing.T) {
+	t.Parallel()
+	head := strings.Repeat("b", 40)
+	identity, err := DeriveIdentity(IdentityInput{
+		Repo: "freeside-ai/repo", BaseRef: "main", SourceHeadSHA: head,
+		ArtifactDigests: []domain.Digest{"sha256:" + domain.Digest(strings.Repeat("c", 64))},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := desiredPRContent(identity, Candidate{
+		Title: "Oversized body", Body: strings.Repeat("x", maxPullRequestBodyBytes),
+	}); err == nil {
+		t.Fatal("final composition guard accepted a body above the forge ceiling")
 	}
 }
 
@@ -133,53 +244,7 @@ func TestDesiredPRContentBoundsAggregateDispositionHistory(t *testing.T) {
 	t.Parallel()
 	head := strings.Repeat("b", 40)
 	digest := domain.Digest("sha256:" + strings.Repeat("a", 64))
-	claim := strings.Repeat("x", maxRenderedDispositionClaimBytes)
-	findingIDs := make([]domain.FindingID, 8)
-	findings := make([]domain.Finding, 8)
-	dispositions := make([]domain.ReviewDispositionRecord, 8)
-	for i := range findingIDs {
-		findingID := domain.FindingID(fmt.Sprintf("finding-%d", i))
-		findingIDs[i] = findingID
-		findings[i] = domain.Finding{
-			ID: findingID, RunID: "run-aggregate-findings", Location: &domain.FindingLocation{Path: claim}, Message: claim,
-			CreatedAt: time.Date(2026, 8, 11, 13, 0, i, 0, time.UTC),
-		}
-		dispositions[i] = domain.ReviewDispositionRecord{
-			FindingID: findingID, RunID: "run-aggregate-findings", Round: 1,
-			Disposition: domain.ReviewDispositionDeclined, Reason: claim,
-			AdjudicationDigest: digest,
-			CreatedAt:          time.Date(2026, 8, 11, 13, 1, i, 0, time.UTC),
-		}
-	}
-	first, err := domain.NewReviewRecord(domain.ReviewRecord{
-		InvocationID: "review-aggregate-findings", RunID: "run-aggregate-findings", Round: 1,
-		Provider: "openai", ModelConfiguration: "codex/high",
-		ConfigurationDigest: digest, InstructionDigest: digest, CostOwner: "operator",
-		BaseSHA: "base", HeadSHA: head, CompletedAt: time.Date(2026, 8, 11, 13, 0, 0, 0, time.UTC),
-		CompletionEvidence: digest, Outcome: domain.ReviewFindings, FindingIDs: findingIDs,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := domain.NewReviewRecord(domain.ReviewRecord{
-		InvocationID: "review-aggregate-clean", RunID: "run-aggregate-findings", Round: 2,
-		Provider: "openai", ModelConfiguration: "codex/high",
-		ConfigurationDigest: digest, InstructionDigest: digest, CostOwner: "operator",
-		BaseSHA: "base", HeadSHA: head, CompletedAt: time.Date(2026, 8, 11, 13, 2, 0, 0, time.UTC),
-		CompletionEvidence: digest, Outcome: domain.ReviewClean,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	history, err := newDispositionHistory(dispositionHistoryInput{
-		runID: "run-aggregate-findings", headSHA: head, expectedInstructionDigest: digest,
-		reviews: []domain.ReviewRecord{first, second}, findings: findings,
-		dispositions: dispositions,
-		readiness:    domain.ReadinessVerdict{Class: domain.ReadinessReadyClean, EvaluationSetDigest: digest},
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	history := oversizedDispositionHistory(t, head)
 	section, err := RenderDispositionHistory(history)
 	if err != nil {
 		t.Fatal(err)

@@ -47,18 +47,22 @@ func TestIdentityGolden(t *testing.T) {
 	golden.Assert(t, "publication-identity", append(got, '\n'))
 }
 
-func TestValidateCandidateBodyReservesIdentityMarker(t *testing.T) {
+func TestValidateCandidateBodyReservesPublisherOwnedSections(t *testing.T) {
 	t.Parallel()
-	id, err := publish.DeriveIdentity(fixtureIdentityInput())
-	if err != nil {
-		t.Fatal(err)
+	low, high := 0, 64<<10
+	for low < high {
+		mid := (low + high + 1) / 2
+		if err := publish.ValidateCandidateBody(strings.Repeat("x", mid)); err == nil {
+			low = mid
+		} else {
+			high = mid - 1
+		}
 	}
-	maxProseBytes := (64 << 10) - len("\n\n") - len(id.Marker())
-	if err := publish.ValidateCandidateBody(strings.Repeat("x", maxProseBytes)); err != nil {
+	if err := publish.ValidateCandidateBody(strings.Repeat("x", low)); err != nil {
 		t.Fatalf("exact composed body limit: %v", err)
 	}
-	if err := publish.ValidateCandidateBody(strings.Repeat("x", maxProseBytes+1)); err == nil {
-		t.Fatal("candidate body consumed the identity marker reserve")
+	if err := publish.ValidateCandidateBody(strings.Repeat("x", low+1)); err == nil {
+		t.Fatal("candidate body consumed a publisher-owned section reserve")
 	}
 }
 
