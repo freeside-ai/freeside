@@ -615,15 +615,21 @@ func dispositionCode(value string) string {
 // value remains durable in the finding or disposition record; this only bounds
 // its forge-facing representation.
 func boundedDispositionClaim(value string) string {
+	return boundedClaim(value, maxRenderedDispositionClaimBytes)
+}
+
+// boundedClaim renders value as an escaped code span of at most limit
+// bytes, identifying any omitted bytes by the value's content address.
+func boundedClaim(value string, limit int) string {
 	rendered := dispositionCode(value)
-	if len(rendered) <= maxRenderedDispositionClaimBytes {
+	if len(rendered) <= limit {
 		return rendered
 	}
 
 	digest := contentaddr.Sum([]byte(value))
 	suffix := "</code> (truncated; content digest " + dispositionCode(digest) + ")"
 	prefix := rendered[len("<code>") : len(rendered)-len("</code>")]
-	limit := maxRenderedDispositionClaimBytes - len("<code>") - len(suffix)
+	limit = limit - len("<code>") - len(suffix)
 	for limit > 0 && !utf8.RuneStart(prefix[limit]) {
 		limit--
 	}

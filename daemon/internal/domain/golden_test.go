@@ -553,6 +553,30 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The advisory variant carries the one advisory category (reviewer
+	// instructions, plan §5.8 revision 42): surfaced, never waived, and
+	// authorizing on its own.
+	advisoryAuthorization, err := domain.NewCandidateAuthorization(domain.CandidateAuthorizationInput{
+		Repo: "freeside-ai/demo", BaseSHA: "beefcafe", HeadSHA: "cafebabe",
+		ImportResultDigest:       "sha256:import-result",
+		VerificationRecipeDigest: recipe,
+		EvidenceSnapshotDigest:   "sha256:evidence-snapshot",
+		VerificationOutcome:      domain.VerificationPassed,
+		Findings: []domain.CandidateFinding{
+			{
+				Class: domain.FindingClassControlPlane, Category: &controlPlaneCategory,
+				Origin: domain.FindingOriginImport, Kind: "reviewer_instruction_path",
+				Path: "AGENTS.md", Disposition: domain.DispositionAdvisory,
+			},
+		},
+		TrustProfileDigest: trustProfile.ProfileDigest,
+		InvocationID:       "inv-1",
+		CreatedAt:          ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	attempt := domain.Attempt{ID: "attempt-1", StageID: "stage-1", Number: 1, InvocationID: "inv-1"}
 	stage := domain.Stage{ID: "stage-1", RunID: "run-1", Name: "implementation", Attempts: []domain.Attempt{attempt}}
 	run := domain.Run{
@@ -1212,6 +1236,7 @@ func TestGolden(t *testing.T) {
 		{"workflow_audit", workflowAudit},
 		{"candidate_authorization", authorization},
 		{"candidate_authorization_blocked", blockedAuthorization},
+		{"candidate_authorization_advisory", advisoryAuthorization},
 		{"run", run},
 		{"production_attempt", productionAttempt},
 		{"initiator_config", initiator},

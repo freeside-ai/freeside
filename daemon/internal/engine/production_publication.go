@@ -1755,7 +1755,10 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if err != nil {
 		return productionTaskOutcome{}, fmt.Errorf("reconstruct execution export: %w", err)
 	}
-	if imported.CommitSHA != binding.export.HeadSHA || len(imported.Findings) != 0 {
+	// Advisory findings (plan §5.8, revision 42) are the one class a clean
+	// reconstruction may carry: they never block, and the authorization
+	// built below binds them so the publisher can surface them.
+	if imported.CommitSHA != binding.export.HeadSHA || !importer.AllAdvisory(imported.Findings) {
 		if _, remediation := remediationRoundForInvocation(
 			task.RunID, task.ProducingInvocationID,
 		); remediation && imported.CommitSHA == binding.export.HeadSHA {
@@ -5111,7 +5114,7 @@ func (w *productionPublicationWorkflow) loadRemediationSourceTree(
 	}
 	if !versionMatches || checkpoint.TaskKey != productionPublicationTaskKey(task.RunID) ||
 		checkpoint.Imported.CommitSHA != request.HeadSHA ||
-		!validCommitSHA(checkpoint.Imported.TreeSHA) || len(checkpoint.Imported.Findings) != 0 ||
+		!validCommitSHA(checkpoint.Imported.TreeSHA) || !importer.AllAdvisory(checkpoint.Imported.Findings) ||
 		authorization.Validate() != nil ||
 		authorization.Repo != binding.admission.Base.Repo ||
 		authorization.BaseSHA != request.BaseSHA || authorization.HeadSHA != request.HeadSHA ||
@@ -5190,7 +5193,8 @@ func productionCandidate(
 		Repo: binding.admission.Base.Repo, BaseRef: binding.admission.Base.BaseRef,
 		HeadSHA: task.HeadSHA, Title: task.Publication.Title,
 		Body: task.Publication.Body, DispositionHistory: dispositionHistory,
-		Artifacts: checkpoint.Artifacts, RecipeDigest: &recipe,
+		Advisories: publish.AdvisoryFindings(checkpoint.Authorization.Findings),
+		Artifacts:  checkpoint.Artifacts, RecipeDigest: &recipe,
 		InvocationID: task.PublicationID, RunID: task.RunID,
 		AuthorizationID: &authorization, TrustProfileDigest: &profile,
 		AdoptedTrustProfileDigest: adoptedProfile,

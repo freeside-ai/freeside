@@ -31,9 +31,10 @@ var DefaultAutomationControlPatterns = []string{
 // DefaultReviewerInstructionPatterns is the §5.8 reviewer-instruction
 // path class: AGENTS.md at any depth, AGENTS.override.md, .codex/**,
 // and peers — the vendor instruction, agent-definition, and skill
-// surfaces automated reviewers and coding agents auto-load, which must
-// never be modified by the candidate they govern. A mandatory minimum,
-// never disableable.
+// surfaces automated reviewers and coding agents auto-load. Detection
+// is a mandatory minimum, never disableable; a match lifts as an
+// advisory finding (revision 42) because the launches that matter
+// compose these files from the trusted base, never from the candidate.
 var DefaultReviewerInstructionPatterns = []string{
 	"**/AGENTS.md",
 	"**/AGENTS.override.md",

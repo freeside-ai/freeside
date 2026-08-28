@@ -25,6 +25,73 @@ as material. Section 13 records the current revision, and its linked history
 records every revision. PR bodies and decision notes explain what changed and
 why.
 
+## Contents
+
+- [1. What Freeside is](#1-what-freeside-is)
+  - [The end-to-end workflow](#the-end-to-end-workflow)
+- [2. Goals and non-goals](#2-goals-and-non-goals)
+  - [Goals](#goals)
+  - [Non-goals](#non-goals)
+- [3. Operating principles](#3-operating-principles)
+  - [3.1 Autonomy inside the ward](#31-autonomy-inside-the-ward)
+  - [3.2 The interruption budget](#32-the-interruption-budget)
+  - [3.3 Portability](#33-portability)
+  - [3.4 Simplicity](#34-simplicity)
+  - [3.5 Oversight](#35-oversight)
+- [4. The Attention Model](#4-the-attention-model)
+  - [Core records](#core-records)
+  - [Phase 1 Item Types and Actions](#phase-1-item-types-and-actions)
+  - [Lifecycle Rules](#lifecycle-rules)
+- [5. Architecture](#5-architecture)
+  - [5.1 Overview](#51-overview)
+  - [5.2 The Daemon and Its Supervisor](#52-the-daemon-and-its-supervisor)
+  - [5.3 Execution: StageDriver and ReviewSource](#53-execution-stagedriver-and-reviewsource)
+  - [5.4 Credential modes, egress profiles, and concurrency](#54-credential-modes-egress-profiles-and-concurrency)
+  - [5.5 The CI Trust Boundary](#55-the-ci-trust-boundary)
+  - [5.6 The gauntlet: workspace handoff, import, and clean verification](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)
+  - [5.7 The ward: runners, handoff gate, and operating modes](#57-the-ward-runners-handoff-gate-and-operating-modes)
+  - [5.8 Control-Plane Trust](#58-control-plane-trust)
+  - [5.9 Durability: Effectively Once](#59-durability-effectively-once)
+  - [5.10 Coherent Backup: Encrypted Checkpoints](#510-coherent-backup-encrypted-checkpoints)
+  - [5.11 GitHub integration: reconciliation plus intake](#511-github-integration-reconciliation-plus-intake)
+  - [5.12 Workflow Definition, Initiators, and Artifacts](#512-workflow-definition-initiators-and-artifacts)
+  - [5.13 Deterministic Components, Judgment Calls, and the Effect Registry](#513-deterministic-components-judgment-calls-and-the-effect-registry)
+  - [5.14 Client Synchronization and Conversations](#514-client-synchronization-and-conversations)
+  - [5.15 Evidence and images](#515-evidence-and-images)
+  - [5.16 The Durable Scheduler](#516-the-durable-scheduler)
+  - [5.17 Follow-Up Issue Filing](#517-follow-up-issue-filing)
+  - [5.18 The World Model: Post-Merge Recompute and Frontier Projection](#518-the-world-model-post-merge-recompute-and-frontier-projection)
+  - [5.19 Deferred Subsystems: Provisional Contracts](#519-deferred-subsystems-provisional-contracts)
+- [6. Verification](#6-verification)
+  - [The Verification State Algebra](#the-verification-state-algebra)
+- [7. Review Policy](#7-review-policy)
+  - [Finding Adjudication](#finding-adjudication)
+- [8. Observability and optimization telemetry](#8-observability-and-optimization-telemetry)
+- [9. Comprehension](#9-comprehension)
+  - [Layering](#layering)
+  - [Presentation per Item Type](#presentation-per-item-type)
+  - [Summary Provenance](#summary-provenance)
+  - [Measurement](#measurement)
+  - [Document Change Discipline](#document-change-discipline)
+- [10. Operations and Onboarding](#10-operations-and-onboarding)
+  - [GitHub App Agent Identity](#github-app-agent-identity)
+- [11. Roadmap, Build Order, and Coordination](#11-roadmap-build-order-and-coordination)
+  - [The First Repository Is Deliberately Boring](#the-first-repository-is-deliberately-boring)
+  - [Phase 1A: the secure publish path, in three internal exits](#phase-1a-the-secure-publish-path-in-three-internal-exits)
+  - [Phase 1B: The Useful Workflow, in Three Internal Exits](#phase-1b-the-useful-workflow-in-three-internal-exits)
+  - [Implementation Coordination (Building Freeside with Agents)](#implementation-coordination-building-freeside-with-agents)
+  - [Phase 2: breadth and hardening](#phase-2-breadth-and-hardening)
+  - [Phase 3: Comprehension and Interaction](#phase-3-comprehension-and-interaction)
+  - [Phase 4: generalization](#phase-4-generalization)
+- [12. Exit criteria definitions](#12-exit-criteria-definitions)
+- [13. Decisions Log](#13-decisions-log)
+- [14. Risks](#14-risks)
+- [15. Naming and references](#15-naming-and-references)
+  - [Product and subsystem names](#product-and-subsystem-names)
+  - [Visual identity](#visual-identity)
+  - [Coordination names](#coordination-names)
+  - [Reference shelf](#reference-shelf)
+
 ---
 
 ## 1. What Freeside is
@@ -174,7 +241,8 @@ The following classes are non-waivable:
 
 - GitHub credential separation;
 - CI trust-profile validity;
-- candidate changes to automation-control or reviewer-instruction paths;
+- candidate changes to automation-control paths (a reviewer-instruction
+  edit is advisory, Section 5.8);
 - control-plane modifications;
 - stale-approval rejection;
 - failed runner conformance, including the workspace-handoff gate;
@@ -1062,8 +1130,9 @@ Exactly two channels leave the agent workspace, and they never mix:
    data whose schema only the importer interprets and validates, never as git
    objects.
    It permits regular files only. Symlinks, submodules, special files, unusual
-   modes, automation-control changes (Section 5.5), and reviewer-instruction
-   changes (Section 5.8) are publish-blocking.
+   modes, and automation-control changes (Section 5.5) are publish-blocking;
+   a reviewer-instruction change (Section 5.8) is detected and published as
+   an advisory finding.
 2. The **evidence channel** contains typed, provenance-bearing artifacts under
    Section 5.15.
 
@@ -1469,11 +1538,19 @@ the minimal-writable-state, workspace/config poison, exact-resume,
 fresh-invocation isolation, crash-matrix, and live-race probes before a CLI
 version change may enter the image.
 
-**Reviewer-instruction poisoning is publish-blocking.** In the ordinary
-workflow, Freeside blocks every reviewer-instruction path, including
-`AGENTS.md` at any depth, `AGENTS.override.md`, `.codex/**`, and peers. An
-automatic review is not independent when its PR changes the instructions that
-govern that review. The gauntlet detects these paths mechanically.
+**Reviewer-instruction edits are advisory, never launch authority.** The
+gauntlet detects every reviewer-instruction path mechanically, including
+`AGENTS.md` at any depth, `AGENTS.override.md`, `.codex/**`, and peers; the
+detection is a mandatory minimum a profile can widen but never narrow. A
+detected edit lifts as an advisory finding (revision 42): it never blocks
+publication, never carries a waiver, and the publisher surfaces it in its own
+PR-body section that candidate prose cannot forge. Review independence does
+not rest on a block: the implementing agent and the Freeside-invoked reviewer
+compose their instructions from the exact trusted base, so the candidate's
+copy cannot govern its own review. A merged edit governs later runs, and the
+human merge gate, reading the surfaced advisory, is that judgment point.
+Every other control-plane category stays publish-blocking and non-waivable
+(Section 3.1).
 
 ### 5.9 Durability: Effectively Once
 
@@ -3206,7 +3283,8 @@ GitHub publication → ready item`
 Exit requires:
 
 - containment of malicious fixtures;
-- blocking candidate automation-control and reviewer-instruction paths;
+- blocking candidate automation-control paths and surfacing
+  reviewer-instruction edits as advisories;
 - verification bound to the exact recipe and head;
 - effectively-once PR creation;
 - successful checkpoint restore, with local-only acceptable; and
@@ -3534,44 +3612,29 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 41 ("Wave 7 split"):
+Revision 42 ("Advisory instruction paths"):
 
-1. **Wave 7 splits into four outcome waves** (Section 11): the decision
-   surface (wave 7), operational closure (wave 8), provider diversity
-   (wave 9, split-eligible at planning and realized as numbered waves by
-   plan revision), and the initiative view (wave 10). 1B.1 spans waves 7
-   through 9; 1B.2 is wave 10. The count follows two constraints, not
-   the outcome narrative: contract work serializes repo-wide, so cutting
-   one chain across more waves buys no concurrency, and every wave
-   boundary costs a whole-repository fresh-context audit. Rejected: the
-   single fifteen-workstream row; six waves (two extra audits for zero
-   concurrency); revision 40's one-unit slip of the telemetry contracts
-   as the only remedy.
-   (User; devlog 2026-08-27-2219-wave-seven-split.md.)
-2. **The deferral drain is named per row** (Section 11): each wave drains
-   only its named clusters, and the long tail binds to Phase 2 or to
-   issue triggers. Rejected: an unbounded "sweep-eligible open deferrals"
-   clause, which is what made wave 7 a phase.
-   (User; devlog 2026-08-27-2219-wave-seven-split.md.)
-3. **Operational closure precedes provider diversity** (Section 11): the
-   Codex execution driver, the Section 14 capacity hedge, waits one more
-   wave because unattended daily operation is the exit claim and the
-   adapter is worth building once against the settled vocabulary. #866
-   and #867 have no open prerequisite and may start earlier by fiat.
-   Rejected: providers before operations.
-   (User; devlog 2026-08-27-2219-wave-seven-split.md.)
-4. **#868 moves to the provider wave** with its `starts-after` #406
-   intact, and #869 follows #408 there. Rejected: revising the dependency
-   fields to fit a wave boundary.
-   (User; devlog 2026-08-27-2219-wave-seven-split.md.)
-5. **Four client gaps become contract units bound to rows** (Sections
-   5.4, 5.14, 6, 9): agent and run facts (#979, wave 9), the standing
-   stopped-operation indicator (#980, wave 8), device listing and
-   revocation (#981, wave 8), and readiness rendering (#982, wave 7).
-   Trust-profile review at onboarding stays CLI-only (Section 10), which
-   closes that open client question. Rejected: filing them as unbound
-   deferrals into a queue of over a hundred.
-   (User; devlog 2026-08-27-2219-wave-seven-split.md.)
+1. **Reviewer-instruction edits publish as advisory findings** (Sections
+   3.1, 5.6, 5.8, 11, 14): the gauntlet still detects every
+   reviewer-instruction path as a mandatory, widen-only minimum, but the
+   finding lifts with a third disposition, advisory, which never blocks
+   and never carries a waiver; the publisher renders the advisories in a
+   PR-body section candidate prose cannot forge. The block's independence
+   rationale is already met mechanically: the implementing agent and the
+   Freeside-invoked reviewer compose instructions from the exact trusted
+   base (Sections 5.8, 7; #713), so a candidate's copy cannot govern its
+   own review. What remained was that a merged edit governs later runs,
+   which the human merge gate already judges. The non-waivable block
+   therefore only took routine instruction maintenance out of the loop,
+   which the wave-6 exit run's first real work item showed (#835). Every
+   other control-plane category stays blocking and non-waivable, and
+   advisory is scoped by a domain predicate so a new category must
+   choose. Rejected: a human waiver flow (no waiver producer exists and
+   the block is terminal, so it is a multi-unit build); a per-repository
+   policy key (a trust-profile encoding bump re-records every profile by
+   hand); re-pinning the reviewer to the base (already the design); the
+   operator-authored PR as the only route (the status quo).
+   (User; devlog 2026-08-28-1130-advisory-instruction-paths.md; ADR 0002.)
 
 ## 14. Risks
 
@@ -3580,7 +3643,7 @@ Revision 41 ("Wave 7 split"):
 | Provider credentials in `subscription_contained` | Document the residual; enforce egress floors; let the daemon fetch research for the most exposed stage; provide `api_key_isolated` as the escape. |
 | Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed; admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record; conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path, so a registry that co-hosts a write endpoint accepts an attacker-credentialed publish; exclude such hosts per project where the residual is not acceptable, and provide `api_key_isolated` as the escape for anything wider. |
 | CI privilege crossing | Attest effective authority; block candidate automation changes; fail closed on drift; prohibit the daemon host as a runner. |
-| Reviewer-instruction poisoning | Treat instruction paths as control-plane content and block candidate changes in the ordinary publication path. |
+| Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories the human merge gate reads (Section 5.8). |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section 5.7); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed: review is Freeside-invoked (Section 7), and native review is best-effort extra evidence. |
 | Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section 11); keep selection explicit as a lineup line, never silent (a lineup may name the switch per failure class, Section 4); usage remains observed telemetry (Section 8). |
@@ -3596,7 +3659,7 @@ Revision 41 ("Wave 7 split"):
 | Backup confidentiality | Require encryption policy and exclude credentials by default. |
 | Large Phase 1A scope | Order it into three internal exits. |
 | Reviewer monoculture | Require a fresh-context adversarial review at every implementation wave exit. |
-| Prompt injection, the organizing threat | Keep write credentials out of workspaces; prove handoff; import through the out-of-process two-channel gauntlet; use trusted overlays; block automation and instruction paths; enforce egress floors; fetch research through the daemon; gate irreversible actions; use budgets and brakes. |
+| Prompt injection, the organizing threat | Keep write credentials out of workspaces; prove handoff; import through the out-of-process two-channel gauntlet; use trusted overlays; block automation paths and surface instruction-path edits; enforce egress floors; fetch research through the daemon; gate irreversible actions; use budgets and brakes. |
 
 ## 15. Naming and references
 

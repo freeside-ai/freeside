@@ -1351,3 +1351,42 @@ Revision 40 ("Recommendation-led attention"):
    Rejected: deferring missing facts and dead actions to Phase 3, which is
    advanced interaction, not missing fundamentals.
    (User; devlog 2026-08-25-1154-recommendation-led-attention.md.)
+
+Revision 41 ("Wave 7 split"):
+
+1. **Wave 7 splits into four outcome waves** (Section 11): the decision
+   surface (wave 7), operational closure (wave 8), provider diversity
+   (wave 9, split-eligible at planning and realized as numbered waves by
+   plan revision), and the initiative view (wave 10). 1B.1 spans waves 7
+   through 9; 1B.2 is wave 10. The count follows two constraints, not
+   the outcome narrative: contract work serializes repo-wide, so cutting
+   one chain across more waves buys no concurrency, and every wave
+   boundary costs a whole-repository fresh-context audit. Rejected: the
+   single fifteen-workstream row; six waves (two extra audits for zero
+   concurrency); revision 40's one-unit slip of the telemetry contracts
+   as the only remedy.
+   (User; devlog 2026-08-27-2219-wave-seven-split.md.)
+2. **The deferral drain is named per row** (Section 11): each wave drains
+   only its named clusters, and the long tail binds to Phase 2 or to
+   issue triggers. Rejected: an unbounded "sweep-eligible open deferrals"
+   clause, which is what made wave 7 a phase.
+   (User; devlog 2026-08-27-2219-wave-seven-split.md.)
+3. **Operational closure precedes provider diversity** (Section 11): the
+   Codex execution driver, the Section 14 capacity hedge, waits one more
+   wave because unattended daily operation is the exit claim and the
+   adapter is worth building once against the settled vocabulary. #866
+   and #867 have no open prerequisite and may start earlier by fiat.
+   Rejected: providers before operations.
+   (User; devlog 2026-08-27-2219-wave-seven-split.md.)
+4. **#868 moves to the provider wave** with its `starts-after` #406
+   intact, and #869 follows #408 there. Rejected: revising the dependency
+   fields to fit a wave boundary.
+   (User; devlog 2026-08-27-2219-wave-seven-split.md.)
+5. **Four client gaps become contract units bound to rows** (Sections
+   5.4, 5.14, 6, 9): agent and run facts (#979, wave 9), the standing
+   stopped-operation indicator (#980, wave 8), device listing and
+   revocation (#981, wave 8), and readiness rendering (#982, wave 7).
+   Trust-profile review at onboarding stays CLI-only (Section 10), which
+   closes that open client question. Rejected: filing them as unbound
+   deferrals into a queue of over a hundred.
+   (User; devlog 2026-08-27-2219-wave-seven-split.md.)

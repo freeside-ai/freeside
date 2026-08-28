@@ -395,6 +395,18 @@ func ValidateCandidateBody(body string) error {
 			return errors.New("candidate body contains a publication identity marker")
 		}
 	}
+	// Publisher-owned sections (the disposition history and the
+	// control-plane advisories, by marker or heading) are refused in
+	// candidate prose, mirroring publish.ValidateCandidateBody.
+	lower := strings.ToLower(body)
+	for _, owned := range []string{
+		"freeside:disposition-history", "freeside:control-plane-advisories",
+		"## freeside control-plane advisories",
+	} {
+		if strings.Contains(lower, owned) {
+			return errors.New("candidate body contains a publisher-owned section marker")
+		}
+	}
 	return nil
 }
 

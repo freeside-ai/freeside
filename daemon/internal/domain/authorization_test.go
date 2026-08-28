@@ -314,6 +314,95 @@ func TestNonWaivableClasses(t *testing.T) {
 	}
 }
 
+// TestAdvisoryDisposition: advisory is a category-scoped policy stance
+// (plan §5.8, revision 42): valid only for a control-plane category whose
+// Advisory predicate holds, never paired with a waiver, and never blocking.
+// The table covers every category so a new one must take a stance here.
+func TestAdvisoryDisposition(t *testing.T) {
+	advisory := map[domain.ControlPlaneCategory]bool{
+		domain.ControlPlaneWorkflowConfiguration: false,
+		domain.ControlPlanePromptsAndPolicy:      false,
+		domain.ControlPlaneEgressAndTrust:        false,
+		domain.ControlPlaneVerificationRecipes:   false,
+		domain.ControlPlaneMaterialityRules:      false,
+		domain.ControlPlaneReviewerInstructions:  true,
+	}
+	if len(advisory) != len(domain.AllControlPlaneCategories) {
+		t.Fatalf("advisory table covers %d categories, vocabulary has %d", len(advisory), len(domain.AllControlPlaneCategories))
+	}
+	for _, category := range domain.AllControlPlaneCategories {
+		if got := category.Advisory(); got != advisory[category] {
+			t.Errorf("%s.Advisory() = %v, want %v", category, got, advisory[category])
+		}
+		f := domain.CandidateFinding{
+			Class: domain.FindingClassControlPlane, Category: &category,
+			Origin: domain.FindingOriginImport, Kind: "k", Path: "AGENTS.md",
+			Disposition: domain.DispositionAdvisory,
+		}
+		err := f.Validate()
+		if advisory[category] && err != nil {
+			t.Errorf("advisory %s finding rejected: %v", category, err)
+		}
+		if !advisory[category] && !errors.Is(err, domain.ErrNonAdvisoryFinding) {
+			t.Errorf("advisory %s finding error = %v, want ErrNonAdvisoryFinding", category, err)
+		}
+		// Blocking stays representable for every category, advisory or not.
+		f.Disposition = domain.DispositionBlocking
+		if err := f.Validate(); err != nil {
+			t.Errorf("blocking %s finding rejected: %v", category, err)
+		}
+	}
+	if domain.ControlPlaneCategory("").Advisory() {
+		t.Error("zero-value category is advisory")
+	}
+
+	category := domain.ControlPlaneReviewerInstructions
+	for _, class := range domain.AllCandidateFindingClasses {
+		if class == domain.FindingClassControlPlane {
+			continue
+		}
+		f := domain.CandidateFinding{
+			Class: class, Origin: domain.FindingOriginImport, Kind: "k",
+			Disposition: domain.DispositionAdvisory,
+		}
+		if err := f.Validate(); !errors.Is(err, domain.ErrNonAdvisoryFinding) {
+			t.Errorf("advisory %s finding error = %v, want ErrNonAdvisoryFinding", class, err)
+		}
+	}
+	withWaiver := domain.CandidateFinding{
+		Class: domain.FindingClassControlPlane, Category: &category,
+		Origin: domain.FindingOriginImport, Kind: "k", Path: "AGENTS.md",
+		Disposition: domain.DispositionAdvisory, Waiver: validWaiver(),
+	}
+	if err := withWaiver.Validate(); !errors.Is(err, domain.ErrWaiverInconsistent) {
+		t.Errorf("advisory finding with waiver error = %v, want ErrWaiverInconsistent", err)
+	}
+
+	// An advisory finding alone never withholds authorization; a blocking
+	// sibling still does.
+	input := validAuthorizationInput()
+	input.Findings = []domain.CandidateFinding{{
+		Class: domain.FindingClassControlPlane, Category: &category,
+		Origin: domain.FindingOriginImport, Kind: "reviewer_instruction_path",
+		Path: "AGENTS.md", Disposition: domain.DispositionAdvisory,
+	}}
+	authorization, err := domain.NewCandidateAuthorization(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !authorization.AuthorizesPublication {
+		t.Error("advisory-only finding set withheld authorization")
+	}
+	input.Findings = append(input.Findings, blockingFinding())
+	authorization, err = domain.NewCandidateAuthorization(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorization.AuthorizesPublication {
+		t.Error("blocking sibling of an advisory finding authorized publication")
+	}
+}
+
 // TestWaiverValidation: a waiver is a trusted decision record — identified,
 // attributed to a non-agent author, timestamped, justified, and digest-bound.
 func TestWaiverValidation(t *testing.T) {

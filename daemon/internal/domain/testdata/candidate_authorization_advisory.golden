@@ -1,0 +1,25 @@
+{
+  "id": "sha256:8e05bc8bf40e0af698d7473fdf53899f1a2a88be20d08846ae473e0d6025e7f4",
+  "repo": "freeside-ai/demo",
+  "base_sha": "beefcafe",
+  "head_sha": "cafebabe",
+  "import_result_digest": "sha256:import-result",
+  "verification_recipe_digest": "sha256:recipe-approved",
+  "evidence_snapshot_digest": "sha256:evidence-snapshot",
+  "verification_outcome": "passed",
+  "findings": [
+    {
+      "class": "control_plane",
+      "category": "reviewer_instructions",
+      "origin": "import",
+      "kind": "reviewer_instruction_path",
+      "path": "AGENTS.md",
+      "disposition": "advisory",
+      "waiver": null
+    }
+  ],
+  "trust_profile_digest": "sha256:bed60edca142c75b455ddd75668afdd452cfb5bfe6dfe5bf847815cb816ec436",
+  "invocation_id": "inv-1",
+  "created_at": "2026-01-02T03:04:05Z",
+  "authorizes_publication": true
+}

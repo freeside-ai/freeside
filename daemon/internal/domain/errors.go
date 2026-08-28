@@ -237,6 +237,7 @@ var (
 	ErrPathBoundaryMismatch          = errors.New("resolved run policy's declared paths disagree with the configured containment boundary")
 	ErrStageInputDigestMismatch      = errors.New("stage input snapshot digest does not match its content")
 	ErrNonWaivableFinding            = errors.New("finding class is non-waivable")
+	ErrNonAdvisoryFinding            = errors.New("finding category is not advisory")
 	ErrAgentWaiver                   = errors.New("an agent cannot author a waiver")
 	ErrVerificationFloorRegressed    = errors.New("verification floor or registry generation regressed")
 	ErrWaiverLifecycleInactive       = errors.New("waiver lifecycle is not currently granted")
