@@ -3311,12 +3311,27 @@ behind them, serialized per contract discipline but off the loop's critical
 path. Real-backlog use begins during 1B.0 as soon as the minimal loop
 stands, at the close of wave 4 (this section's coordination table).
 
-#### 1B.1: Operational Closure
+#### 1B.1: Decision, Operational, and Provider Closure
 
-Human-gated follow-up issue filing (Section 5.17), consuming the follow-up
-recommendations recorded by adjudicated deferred dispositions (Section 7);
-the doctor credential-integrity probe (Section 10); the stall heartbeat
-(Section 5.12).
+1B.1 spans waves 7 through 9 of this section's coordination table, the way
+1B.0 spanned waves 3 through 6. Each wave proves one outcome and ends with
+its own audit; the internal exit is evaluated once all three have closed.
+
+- **The decision surface closes (wave 7).** The revision-40
+  attention-presentation contracts, their daemon fact producers, and client
+  adoption: every Phase 1 card action executes on Mac and iPhone, every card
+  is self-contained at its Section 9 altitude, and facts stay distinct from
+  claims.
+- **Operation closes (wave 8).** Human-gated follow-up issue filing (Section
+  5.17), consuming the follow-up recommendations recorded by adjudicated
+  deferred dispositions (Section 7); the doctor credential-integrity probe
+  (Section 10); the stall heartbeat (Section 5.12); the external
+  daemon-liveness probe (Section 5.2); held-work and stopped-operation
+  signals; the clean-machine onboarding proof; the registry egress profile
+  and the policy-gated image rebuild; and re-entry of published-PR activity.
+- **Providers close (wave 9).** One agent vocabulary across execution,
+  review, and daemon judgment (Section 5.4); the Codex execution driver and
+  its enrollment cutover; and pi elaboration.
 
 #### 1B.2: The Initiative View
 
@@ -3372,14 +3387,23 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **4 (1B.0): the review stage** | Serial | The spine rescopes #406/#407 into review cores and execution remainders, then lands the review-selection contract core, the review ward-topology slice, #405 only if review needs a project-derived image, and #427 (landed PR-anchored under the then-open Section 7 fork, resolved pre-publication in revision 28; the implementation re-anchor is #527, unscheduled). Its close stands the minimal loop; real-backlog use begins. |
 | **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section 5.13 classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section 7 disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section 6 state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section 5.2 contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section 7 finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section 10). 1B.0 exit. |
-| **7 (1B.1): operational closure** | Parallel lanes | Human-gated follow-up filing with the `effect_proposal` card; the doctor credential-integrity probe; the stall heartbeat; the external daemon-liveness probe (Section 5.2); the deferral drain (sweep-eligible open deferrals enumerated at this wave's planning; dormant contract units excluded unless the spine assigns chain positions). The execution tail closes in order: #401 gate 3, the #406/#407 execution remainders, #405 if outstanding, #397 by explicit owner decision on shadow evidence, then #408. Admitted agents (Section 5.4) reshape the tail: the admitted-agent contract unit (schemas, canonical encoding, enrollment and generation records, adapter conformance record, admission encoding, lineup policy keys, legacy reconstruction; `kind:contract`, dormant until cutover) replaces the selection half of #406, which becomes the Codex adapter registration and `starts-after` the contract; guided enrollment (`freesided auth`, Section 10; #867) carries multi-enrollment adoption, the proposed baseline patch, and the two-step cutover and `starts-after` the contract; the Codex probe refresh-safety spike (#866) stays independent and is the template for each adapter's credential proof; the doctor account probe (#868) `starts-after` the contract and #866 and proposes offer diffs; the alternate-agent retry card (#869) `starts-after` the contract and #408; #408 `merges-after` the continuation comparison (#873; Section 5.8); and the pi adapter, enrollment, and elaboration agent unit `starts-after` the contract and #867 (not #408: it is a second consumer, not a successor), with its pre-adoption gates on the #401 pattern run against the pinned build rather than as a prior spike. The deferral drain also carries two sweep-eligible units for the egress floor's first capabilities above it (Sections 5.4, 5.7, Golden Agent and Project Images): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, a `kind:contract` unit because `EgressProfile` is a domain enum carried in the admission record, so the spine assigns its contract-chain position at this wave's planning; and (b) the policy-gated project-image rebuild in the reusable builder, whose gate reads the registry set from the policy field unit (a) declares, so (b) `starts-after` (a). Both build on merged work (#302 proxy enforcement, #334 builder); (a) has no open prerequisite. The revision-40 attention-presentation closure also lands here, contract-first: one serialized `kind:contract` unit carrying the Section 4 recommendation shape, the Section 9 typed minimum card facts (with human-readable project and work-unit display names), and the routed `review_dispute` action disposition (#917), which must retire `adjudicate` or reassign it to an executable transaction before client adoption, then its daemon fact producers and client adoption, whose provisional Swift `ActionOutcome` and mock server must converge with the daemon's already-implemented `discuss` and spec-approval `request_changes`; transaction closure for the remaining Phase 1 pending actions (the agent-question answers and return-to-agent, and capability-manifest retry) beside the already-scheduled alternate-agent retry card (#869); Section 5.15 evidence-metadata exposure; pairing-surface identity facts (code expiry, host identity, connection mode; Sections 5.14 and 10); and the Section 8/9 comprehension-telemetry contracts the wave-8 exit evaluation reads. |
-| **8 (1B.2): the initiative view** | Integrated | The Section 5.18 frontier projection and the deterministic initiative view. 1B exit evaluation. |
+| **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, one serialized chain whose positions the spine assigns at planning: the revision-40 attention-presentation cluster (the Section 4 recommendation shape and Section 9 typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921, and `choose_alternate_profile` under #936), then Section 5.15 evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section 8/9 comprehension-telemetry contracts the wave-10 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section 9 summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section 9 altitude; facts stay distinct from claims. |
+| **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. Human-gated follow-up filing with the `effect_proposal` card (Section 5.17); the doctor credential-integrity probe (Section 10); the stall heartbeat (Section 5.12); the external daemon-liveness probe (Section 5.2, #510); the held-work item (#766); the standing stopped-operation indicator (#980); device listing and revocation (#981); the clean-machine onboarding proof (#428); and the egress floor's first capabilities above it (Sections 5.4, 5.7): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters. Exit proof: a clean machine reaches an unattended real run; daemon death, crash loops, stalls, held work, a stopped state, and external review each alert without terminal patrol or manual polling. |
+| **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), whether daemon judgment roles consume lineups (#900, decided before any utility agent exists), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on the wave-6 shadow evidence, then the StageDriver binding (#408, `merges-after` #873; Section 7 keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). Ward fronts with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866) and guided enrollment with the two-step cutover (#867). The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and elaboration agent (#895) `starts-after` #897 and #867, elaboration only, with its pre-adoption gates run against the pinned build. The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because tracker titles must match this section's resolver pattern. Deferral drain: the agent and provider clusters. Exit proof: a real unattended Codex run and a pi elaboration; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. 1B.1 exit evaluation. |
+| **10 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section 5.18 capture records (#884, `exclusive-with` every open contract unit), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
 
 Wave 7's transaction closure also includes the `publish_blocked`
 `choose_alternate_profile` transaction (#936). It binds a selected approved
 publication-profile digest and re-runs trust evaluation; it is distinct from
 #869's alternate-agent retry. The phone-decidability exit therefore cannot
 pass while that action remains pending.
+
+The deferral drain is bounded per row. Waves 7 through 9 each drain the
+clusters their row names and nothing else; a deferral outside them stays in
+the queue. The long tail, including the `kind:fix` items on production paths
+that no 1B exit proof depends on, does not drain in 1B: it binds to Phase
+2's hardening or to the issue's own trigger, and a wave sweep re-examines it
+only when a scheduled unit trips its recorded boundary condition.
 
 Review bandwidth limits parallel width. Every wave ends with a fresh-context
 adversarial review by an agent given only the repository and its documents,
@@ -3510,65 +3534,44 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 40 ("Recommendation-led attention"):
+Revision 41 ("Wave 7 split"):
 
-1. **A recommendation is contract, never inference** (Sections 4, 5.13, 9):
-   an item may carry at most one
-   `recommendation {action, reason, source, provenance, confidence?}`
-   selecting one of its own requested decisions. The required immutable
-   provenance is source-specific: content-addressed rule digest and input
-   digest for `daemon_policy`; judgment site, invocation, and artifact digest
-   for `agent_judgment` (the finding-adjudicator type case keeps per-finding
-   route provenance in the Section 7 artifact); or policy key,
-   resolved-policy digest, and daemon-authored application digest for
-   `project_policy`. Each authoritative source record commits to the current
-   item's decision-surface identity under Section 4, required to be
-   eligibility-independent, telemetry-stable, surface-distinguishing, and
-   non-cyclic; #942 specifies and tests the exact mechanism after two inline
-   attempts (item-version binding, then an eligibility-coupled own-artifact
-   subtraction) were rejected. Creation and
-   reconstruction derive eligible source records from current
-   authoritative state: exactly one produces the canonical recommendation;
-   zero or multiple produces absence, with no precedence or tie-break. The
-   stored optional recommendation must equal that exact result. For the unique
-   record, the daemon requires its source-to-item association and rederives
-   canonical action, reason, and confidence, rejecting any field, source, or
-   item mismatch without invalidating the item's action set.
-   No recommendation, no
-   block: a client never infers one, and offer order carries no
-   endorsement. Origin: an external UX review of the clients (2026-08-25)
-   and its design response. Rejected: client-side inference from action
-   order; caller-selected source; implicit source precedence; per-type ad hoc
-   recommendation shapes.
-   (User; devlog 2026-08-25-1154-recommendation-led-attention.md.)
-2. **Cards render capability truthfully** (Section 9): a client shows only
-   the requested decisions it can faithfully collect and execute, records
-   filtered actions in drill-down, states not-decidable-here when no
-   faithful response is in its capability, and never renders an
-   unimplemented action as a disabled control or roadmap copy. Rejected:
-   disabled placeholder buttons advertising unbuilt scope.
-   (User; devlog 2026-08-25-1154-recommendation-led-attention.md.)
-3. **`convert_to_policy` leaves the 1B phone-decidability claim**
-   (Section 11): the diminishing-returns card stays decidable via finish
-   now, apply-and-finish, and continue-under-policy; turning a recurring
-   preference into a project-policy proposal waits for its deferred
-   control-plane proposal surface and is hidden, not disabled, until then.
-   Rejected: building that surface inside 1B; keeping dead controls under
-   the exit claim.
-   (User; devlog 2026-08-25-1154-recommendation-led-attention.md.)
-4. **Wave 7 carries the attention-presentation closure** (Section 11),
-   contract-first: the Section 4 recommendation shape and Section 9 typed
-   minimum card facts as one serialized contract unit before producers and
-   client adoption; that contract unit must retire `adjudicate` or reassign
-   it to an executable `review_dispute` transaction before client adoption;
-   transaction closure for the remaining Phase 1 pending actions, including
-   `choose_alternate_profile` under #936 rather than #869's alternate-agent
-   retry;
-   evidence-metadata exposure; pairing identity facts; and the
-   comprehension-telemetry contracts the wave-8 exit evaluation reads.
-   Rejected: deferring missing facts and dead actions to Phase 3, which is
-   advanced interaction, not missing fundamentals.
-   (User; devlog 2026-08-25-1154-recommendation-led-attention.md.)
+1. **Wave 7 splits into four outcome waves** (Section 11): the decision
+   surface (wave 7), operational closure (wave 8), provider diversity
+   (wave 9, split-eligible at planning and realized as numbered waves by
+   plan revision), and the initiative view (wave 10). 1B.1 spans waves 7
+   through 9; 1B.2 is wave 10. The count follows two constraints, not
+   the outcome narrative: contract work serializes repo-wide, so cutting
+   one chain across more waves buys no concurrency, and every wave
+   boundary costs a whole-repository fresh-context audit. Rejected: the
+   single fifteen-workstream row; six waves (two extra audits for zero
+   concurrency); revision 40's one-unit slip of the telemetry contracts
+   as the only remedy.
+   (User; devlog 2026-08-27-2219-wave-seven-split.md.)
+2. **The deferral drain is named per row** (Section 11): each wave drains
+   only its named clusters, and the long tail binds to Phase 2 or to
+   issue triggers. Rejected: an unbounded "sweep-eligible open deferrals"
+   clause, which is what made wave 7 a phase.
+   (User; devlog 2026-08-27-2219-wave-seven-split.md.)
+3. **Operational closure precedes provider diversity** (Section 11): the
+   Codex execution driver, the Section 14 capacity hedge, waits one more
+   wave because unattended daily operation is the exit claim and the
+   adapter is worth building once against the settled vocabulary. #866
+   and #867 have no open prerequisite and may start earlier by fiat.
+   Rejected: providers before operations.
+   (User; devlog 2026-08-27-2219-wave-seven-split.md.)
+4. **#868 moves to the provider wave** with its `starts-after` #406
+   intact, and #869 follows #408 there. Rejected: revising the dependency
+   fields to fit a wave boundary.
+   (User; devlog 2026-08-27-2219-wave-seven-split.md.)
+5. **Four client gaps become contract units bound to rows** (Sections
+   5.4, 5.14, 6, 9): agent and run facts (#979, wave 9), the standing
+   stopped-operation indicator (#980, wave 8), device listing and
+   revocation (#981, wave 8), and readiness rendering (#982, wave 7).
+   Trust-profile review at onboarding stays CLI-only (Section 10), which
+   closes that open client question. Rejected: filing them as unbound
+   deferrals into a queue of over a hundred.
+   (User; devlog 2026-08-27-2219-wave-seven-split.md.)
 
 ## 14. Risks
 
