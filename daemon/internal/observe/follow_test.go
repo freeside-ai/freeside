@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	fixtureRun        domain.RunID        = "run-follow"
-	fixtureInvocation domain.InvocationID = "inv-1"
+	fixtureRun                   domain.RunID        = "run-follow"
+	fixtureInvocation            domain.InvocationID = "inv-1"
+	fixturePublicationInvocation domain.InvocationID = "publish-production-run-follow"
 	// testInterval keeps the follow loop's waits negligible; the scenarios
 	// are driven by the scripted reads, never by wall time.
 	testInterval = time.Millisecond
@@ -28,7 +29,12 @@ func at(seconds int) time.Time {
 }
 
 func invocationMilestone(kind domain.RunMilestoneKind, seconds int) domain.RunMilestone {
-	invocation := fixtureInvocation
+	return ownedInvocationMilestone(kind, seconds, fixtureInvocation)
+}
+
+func ownedInvocationMilestone(
+	kind domain.RunMilestoneKind, seconds int, invocation domain.InvocationID,
+) domain.RunMilestone {
 	return domain.RunMilestone{
 		RunID: fixtureRun, Kind: kind, InvocationID: &invocation, RecordedAt: at(seconds),
 	}
@@ -589,9 +595,13 @@ func TestSupervisionStateSeparatesAttentionFromTerminalOutcome(t *testing.T) {
 		{
 			name: "task completion without matching terminal still waits",
 			snapshot: observedb.Snapshot{
-				PublicationInvocationID: fixtureInvocation,
+				ProducingInvocationID:         fixtureInvocation,
+				PublicationInvocationID:       fixturePublicationInvocation,
+				PublicationReadyAuthenticated: true,
 				Observation: domain.RunObservation{Milestones: []domain.RunMilestone{
-					invocationMilestone(domain.MilestonePublicationReady, 20),
+					ownedInvocationMilestone(
+						domain.MilestonePublicationReady, 20, fixturePublicationInvocation,
+					),
 				}},
 			},
 			conclusion: Conclusion{Outcome: OutcomePublished, Final: true},
@@ -600,9 +610,13 @@ func TestSupervisionStateSeparatesAttentionFromTerminalOutcome(t *testing.T) {
 		{
 			name: "terminal from another invocation still waits",
 			snapshot: observedb.Snapshot{
-				PublicationInvocationID: fixtureInvocation,
+				ProducingInvocationID:         fixtureInvocation,
+				PublicationInvocationID:       fixturePublicationInvocation,
+				PublicationReadyAuthenticated: true,
 				Observation: domain.RunObservation{Milestones: []domain.RunMilestone{
-					invocationMilestone(domain.MilestonePublicationReady, 20),
+					ownedInvocationMilestone(
+						domain.MilestonePublicationReady, 20, fixturePublicationInvocation,
+					),
 					func() domain.RunMilestone {
 						m := invocationMilestone(domain.MilestoneTerminalRecorded, 21)
 						foreign := domain.InvocationID("inv-foreign")
@@ -616,11 +630,43 @@ func TestSupervisionStateSeparatesAttentionFromTerminalOutcome(t *testing.T) {
 			want:       SupervisionPublicationReady,
 		},
 		{
-			name: "accepted publication outranks leftover attention",
+			name: "ready from the producing invocation still waits",
 			snapshot: observedb.Snapshot{
-				PublicationInvocationID: fixtureInvocation,
+				ProducingInvocationID:   fixtureInvocation,
+				PublicationInvocationID: fixturePublicationInvocation,
 				Observation: domain.RunObservation{Milestones: func() []domain.RunMilestone {
 					ready := invocationMilestone(domain.MilestonePublicationReady, 20)
+					terminal := invocationMilestone(domain.MilestoneTerminalRecorded, 21)
+					completed := domain.ObservedStatusCompleted
+					terminal.Terminal = &completed
+					return []domain.RunMilestone{ready, terminal}
+				}()},
+			},
+			conclusion: Conclusion{Outcome: OutcomePublished, Final: true},
+			want:       SupervisionPublicationReady,
+		},
+		{
+			name: "milestone without an invocation still waits",
+			snapshot: observedb.Snapshot{
+				ProducingInvocationID:   fixtureInvocation,
+				PublicationInvocationID: fixturePublicationInvocation,
+				Observation: domain.RunObservation{Milestones: []domain.RunMilestone{{
+					RunID: fixtureRun, Kind: domain.MilestonePublicationReady, RecordedAt: at(20),
+				}}},
+			},
+			conclusion: Conclusion{Outcome: OutcomePublished, Final: true},
+			want:       SupervisionPublicationReady,
+		},
+		{
+			name: "ready and terminal under their own invocations is published",
+			snapshot: observedb.Snapshot{
+				ProducingInvocationID:         fixtureInvocation,
+				PublicationInvocationID:       fixturePublicationInvocation,
+				PublicationReadyAuthenticated: true,
+				Observation: domain.RunObservation{Milestones: func() []domain.RunMilestone {
+					ready := ownedInvocationMilestone(
+						domain.MilestonePublicationReady, 20, fixturePublicationInvocation,
+					)
 					terminal := invocationMilestone(domain.MilestoneTerminalRecorded, 21)
 					completed := domain.ObservedStatusCompleted
 					terminal.Terminal = &completed
@@ -630,6 +676,12 @@ func TestSupervisionStateSeparatesAttentionFromTerminalOutcome(t *testing.T) {
 			},
 			conclusion: Conclusion{Outcome: OutcomePublished, Final: true},
 			want:       SupervisionPublished,
+		},
+		{
+			name:       "publication blocked is unaffected by acceptance identities",
+			snapshot:   observedb.Snapshot{},
+			conclusion: Conclusion{Outcome: OutcomeBlocked, Final: true},
+			want:       SupervisionBlocked,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

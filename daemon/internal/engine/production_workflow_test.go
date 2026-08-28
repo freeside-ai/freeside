@@ -1883,6 +1883,19 @@ func TestProductionPublicationCompletionAuthenticatesTaskAndTerminal(t *testing.
 			dispatch: true, wantErr: domain.ErrParentKeyMismatch,
 		},
 		{
+			name: "forged publication invocation",
+			taskPayload: func() []byte {
+				changed := task
+				changed.PublicationID = "publish-production-forged"
+				payload, marshalErr := json.Marshal(changed)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				return payload
+			}(),
+			wantErr: domain.ErrParentKeyMismatch,
+		},
+		{
 			name: "missing terminal", taskPayload: taskPayload,
 			dispatch: true, wantErr: domain.ErrImmutableTransition,
 		},
@@ -1931,14 +1944,20 @@ func TestProductionPublicationCompletionAuthenticatesTaskAndTerminal(t *testing.
 				t.Fatal(err)
 			}
 			if err := st.Read(ctx, func(tx *store.ReadTx) error {
-				invocationID, complete, err := ProductionPublicationCompletion(ctx, tx, run)
+				identity, complete, err := ProductionPublicationCompletion(ctx, tx, run)
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("completion error = %v, want %v", err, tc.wantErr)
 				}
-				if err == nil && (complete != tc.wantComplete ||
-					invocationID != task.ProducingInvocationID) {
-					t.Fatalf("completion = %q, %v, want %q, %v",
-						invocationID, complete, task.ProducingInvocationID, tc.wantComplete)
+				wantIdentity := ProductionPublicationIdentity{}
+				if tc.wantComplete {
+					wantIdentity = ProductionPublicationIdentity{
+						ProducingInvocationID:   task.ProducingInvocationID,
+						PublicationInvocationID: task.PublicationID,
+					}
+				}
+				if err == nil && (complete != tc.wantComplete || identity != wantIdentity) {
+					t.Fatalf("completion = %+v, %v, want %+v, %v",
+						identity, complete, wantIdentity, tc.wantComplete)
 				}
 				return nil
 			}); err != nil {

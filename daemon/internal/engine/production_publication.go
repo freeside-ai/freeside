@@ -1159,52 +1159,63 @@ func decodeProductionPublicationTask(entry store.QueueEntry) (productionPublicat
 	return task, nil
 }
 
+// ProductionPublicationIdentity names the authenticated owners of the final
+// production publication records. The producing invocation owns the terminal;
+// the dedicated publication invocation owns the publication milestones.
+type ProductionPublicationIdentity struct {
+	ProducingInvocationID   domain.InvocationID
+	PublicationInvocationID domain.InvocationID
+}
+
 // ProductionPublicationCompletion authenticates the selected run's final
-// publication-task and terminal records and returns their exact producing
-// invocation. It is the read-only completion boundary used by supervision:
-// absence or a pending task is ordinary incompletion, while a dispatched task
-// with absent or divergent terminal authority fails closed.
+// publication-task and terminal records and returns both exact invocation
+// owners after completion. It is the read-only completion boundary used by
+// supervision: absence or a pending task is ordinary incompletion, while a
+// dispatched task with absent or divergent terminal authority fails closed.
 func ProductionPublicationCompletion(
 	ctx context.Context, tx *store.ReadTx, run domain.Run,
-) (domain.InvocationID, bool, error) {
+) (ProductionPublicationIdentity, bool, error) {
 	entry, err := tx.GetOutbox(ctx, productionPublicationTaskKey(run.ID))
 	if errors.Is(err, store.ErrNotFound) {
-		return "", false, nil
+		return ProductionPublicationIdentity{}, false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return ProductionPublicationIdentity{}, false, err
 	}
 	task, err := decodeProductionPublicationTask(entry)
 	if err != nil {
-		return "", false, err
+		return ProductionPublicationIdentity{}, false, err
 	}
 	if task.RunID != run.ID || task.ProjectID != run.ProjectID {
-		return "", false, fmt.Errorf(
+		return ProductionPublicationIdentity{}, false, fmt.Errorf(
 			"production publication task disagrees with selected run: %w",
 			domain.ErrParentKeyMismatch,
 		)
 	}
 	if !entry.Dispatched() {
-		return task.ProducingInvocationID, false, nil
+		return ProductionPublicationIdentity{}, false, nil
 	}
 	terminalEntry, err := tx.GetInbox(ctx, string(task.ProducingInvocationID))
 	if errors.Is(err, store.ErrNotFound) {
-		return "", false, fmt.Errorf(
+		return ProductionPublicationIdentity{}, false, fmt.Errorf(
 			"dispatched production publication task has no terminal record: %w",
 			domain.ErrImmutableTransition,
 		)
 	}
 	if err != nil {
-		return "", false, err
+		return ProductionPublicationIdentity{}, false, err
 	}
 	terminal, err := decodeProductionTerminal(terminalEntry, run)
 	if err != nil {
-		return "", false, err
+		return ProductionPublicationIdentity{}, false, err
 	}
 	if err := validateProductionPublicationCompletion(run, task, terminal); err != nil {
-		return "", false, err
+		return ProductionPublicationIdentity{}, false, err
 	}
-	return task.ProducingInvocationID, true, nil
+	return ProductionPublicationIdentity{
+		ProducingInvocationID:   task.ProducingInvocationID,
+		PublicationInvocationID: task.PublicationID,
+	}, true, nil
 }
 
 func validateProductionPublicationCompletion(

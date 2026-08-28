@@ -2,8 +2,11 @@ package observedb
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -16,6 +19,8 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 )
@@ -73,6 +78,8 @@ var wantSurface = map[string]bool{
 	"Snapshot.AttentionItems":                     true,
 	"Snapshot.ClassifierSamples":                  true,
 	"Snapshot.Observation":                        true,
+	"Snapshot.ProducingInvocationID":              true,
+	"Snapshot.PublicationReadyAuthenticated":      true,
 	"Snapshot.ShadowReviews":                      true,
 	"Snapshot.LastStage":                          true,
 	"Snapshot.PublicationInvocationID":            true,
@@ -93,6 +100,144 @@ var wantSurface = map[string]bool{
 	"ReviewYield.Outcome":                         true,
 	"ReviewYield.RecurringFindings":               true,
 	"ReviewYield.Round":                           true,
+}
+
+func TestObserveSnapshotProjectsPublicationCompletionIdentities(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	runID := domain.RunID("run-snapshot-publication-completion")
+	projectID := domain.ProjectID("project-snapshot-publication-completion")
+	producingInvocation := domain.InvocationID("inv-implement-" + string(runID))
+	publicationInvocation := domain.InvocationID("publish-production-" + string(runID))
+	verificationInvocation := domain.InvocationID("verify-production-" + string(runID))
+	stageID := domain.StageID("implement-" + string(runID))
+	head := strings.Repeat("a", 40)
+	base := strings.Repeat("b", 40)
+	blob := export.Digest("sha256:" + strings.Repeat("c", 64))
+	mode := "0644"
+	size := int64(3)
+	manifest := export.Manifest{
+		Version: export.ManifestVersion,
+		Entries: []export.Entry{{
+			Path: "README.md", Kind: export.EntryRegular,
+			Mode: &mode, Size: &size, Digest: &blob,
+		}},
+	}
+	manifestBytes, err := manifest.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestDigest := domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(manifestBytes)))
+	taskPayload, err := json.Marshal(struct {
+		Version               string                       `json:"version"`
+		RunID                 domain.RunID                 `json:"run_id"`
+		ProjectID             domain.ProjectID             `json:"project_id"`
+		ProducingInvocationID domain.InvocationID          `json:"producing_invocation_id"`
+		VerificationID        domain.InvocationID          `json:"verification_invocation_id"`
+		PublicationID         domain.InvocationID          `json:"publication_invocation_id"`
+		HeadSHA               string                       `json:"head_sha"`
+		Replay                engine.ProductionReplay      `json:"replay"`
+		Publication           engine.ProductionPublication `json:"publication"`
+	}{
+		Version:               "freeside.production-publication/v1",
+		RunID:                 runID,
+		ProjectID:             projectID,
+		ProducingInvocationID: producingInvocation,
+		VerificationID:        verificationInvocation,
+		PublicationID:         publicationInvocation,
+		HeadSHA:               head,
+		Replay: engine.ProductionReplay{
+			InvocationID: producingInvocation, ObservedBaseSHA: base, HeadSHA: head,
+			Manifest: manifest, ManifestDigest: manifestDigest,
+			ImportOptions: importer.Options{
+				BaseSHA:    base,
+				CommitDate: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+			},
+		},
+		Publication: engine.ProductionPublication{
+			Title: "Publish the production run", Body: "Produced by a production run.\n",
+			CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside", BotUserID: 42},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalPayload, err := json.Marshal(struct {
+		InvocationID domain.InvocationID `json:"invocation_id"`
+		RunID        domain.RunID        `json:"run_id"`
+		StageID      domain.StageID      `json:"stage_id"`
+		Status       string              `json:"status"`
+		HeadSHA      string              `json:"head_sha"`
+	}{
+		InvocationID: producingInvocation, RunID: runID, StageID: stageID,
+		Status: "completed", HeadSHA: head,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, _, err := topicstore.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		run := domain.Run{
+			ID: runID, ProjectID: projectID,
+			SpecDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
+			PolicyDigest: domain.Digest("sha256:" + strings.Repeat("e", 64)),
+			Stages: []domain.Stage{{
+				ID: stageID, RunID: runID, Name: "implement", Attempts: []domain.Attempt{},
+			}},
+		}
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: runID, Kind: domain.MilestoneRunSubmitted,
+			InvocationID: &producingInvocation,
+			RecordedAt:   time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		})
+	}); err != nil {
+		_ = st.Close()
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		key := "production-publication/" + string(runID)
+		if _, _, err := tx.EnqueueOutbox(
+			ctx, key, engine.KindProductionPublicationRequested, taskPayload,
+		); err != nil {
+			return err
+		}
+		if _, _, err := tx.RecordInbox(
+			ctx, string(producingInvocation), "production_stage_terminal", terminalPayload,
+		); err != nil {
+			return err
+		}
+		return tx.MarkOutboxDispatched(ctx, key)
+	}); err != nil {
+		_ = st.Close()
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	observed, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = observed.Close() })
+	snapshot, err := observed.ObserveSnapshot(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ProducingInvocationID != producingInvocation ||
+		snapshot.PublicationInvocationID != publicationInvocation {
+		t.Fatalf("publication identities = %q / %q, want %q / %q",
+			snapshot.ProducingInvocationID, snapshot.PublicationInvocationID,
+			producingInvocation, publicationInvocation)
+	}
 }
 
 func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testing.T) {
@@ -449,8 +594,9 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 		conclusion.Outcome != domain.RunOutcomePublished {
 		t.Fatalf("published observation conclusion = %+v", conclusion)
 	}
-	if snapshot.PublicationInvocationID != "" {
-		t.Fatalf("snapshot projected absent publication completion as %q", snapshot.PublicationInvocationID)
+	if snapshot.ProducingInvocationID != "" || snapshot.PublicationInvocationID != "" {
+		t.Fatalf("snapshot projected absent publication completion as %q / %q",
+			snapshot.ProducingInvocationID, snapshot.PublicationInvocationID)
 	}
 	if len(snapshot.Admissions) != 1 || snapshot.Admissions[0].ImageDigest != "sha256:"+domain.Digest(strings.Repeat("a", 64)) ||
 		snapshot.Admissions[0].ReviewConfigurationDigest == nil ||

@@ -143,16 +143,18 @@ type AdjudicationDispatch struct {
 // run's observation, production-attempt lineage, open attention, recorded
 // admission identities, and authenticated publication-completion identity.
 type Snapshot struct {
-	Observation             domain.RunObservation             `json:"observation"`
-	LastStage               string                            `json:"-"`
-	PublicationInvocationID domain.InvocationID               `json:"-"`
-	Attempt                 *Lineage                          `json:"lineage,omitempty"`
-	AttentionItems          []AttentionItem                   `json:"attention_items"`
-	Admissions              []Admission                       `json:"admissions"`
-	ShadowReviews           []domain.ShadowReviewRecord       `json:"shadow_reviews"`
-	ClassifierSamples       []domain.ClassifierAccuracySample `json:"classifier_samples"`
-	ReviewYield             []ReviewYield                     `json:"review_yield"`
-	Adjudications           []AdjudicationDispatch            `json:"adjudications"`
+	Observation                   domain.RunObservation             `json:"observation"`
+	LastStage                     string                            `json:"-"`
+	ProducingInvocationID         domain.InvocationID               `json:"-"`
+	PublicationInvocationID       domain.InvocationID               `json:"-"`
+	PublicationReadyAuthenticated bool                              `json:"-"`
+	Attempt                       *Lineage                          `json:"lineage,omitempty"`
+	AttentionItems                []AttentionItem                   `json:"attention_items"`
+	Admissions                    []Admission                       `json:"admissions"`
+	ShadowReviews                 []domain.ShadowReviewRecord       `json:"shadow_reviews"`
+	ClassifierSamples             []domain.ClassifierAccuracySample `json:"classifier_samples"`
+	ReviewYield                   []ReviewYield                     `json:"review_yield"`
+	Adjudications                 []AdjudicationDispatch            `json:"adjudications"`
 }
 
 // Open opens the daemon's database at path. Options are empty by design: the
@@ -213,12 +215,19 @@ func (s *Store) ObserveSnapshot(ctx context.Context, runID domain.RunID) (Snapsh
 		}
 		snapshot.Observation = observation
 		snapshot.LastStage = lastStage(run)
-		publicationInvocationID, completed, err := engine.ProductionPublicationCompletion(ctx, tx, run)
+		publicationIdentity, completed, err := engine.ProductionPublicationCompletion(ctx, tx, run)
 		if err != nil {
 			return err
 		}
 		if completed {
-			snapshot.PublicationInvocationID = publicationInvocationID
+			snapshot.ProducingInvocationID = publicationIdentity.ProducingInvocationID
+			snapshot.PublicationInvocationID = publicationIdentity.PublicationInvocationID
+			snapshot.PublicationReadyAuthenticated, err = authenticatePublicationReady(
+				ctx, tx, run, observation, publicationIdentity,
+			)
+			if err != nil {
+				return err
+			}
 		}
 		snapshot.AttentionItems = []AttentionItem{}
 		snapshot.Admissions = []Admission{}
@@ -400,6 +409,44 @@ func (s *Store) ObserveSnapshot(ctx context.Context, runID domain.RunID) (Snapsh
 		return Snapshot{}, fmt.Errorf("observe snapshot: %w", err)
 	}
 	return snapshot, nil
+}
+
+// authenticatePublicationReady re-anchors the structurally decoded milestone
+// to the store-owned ready item and its publication authority. Completion
+// identities authenticate the task and terminal, but cannot make an
+// independently forged milestone authoritative.
+func authenticatePublicationReady(
+	ctx context.Context,
+	tx *store.ReadTx,
+	run domain.Run,
+	observation domain.RunObservation,
+	identity engine.ProductionPublicationIdentity,
+) (bool, error) {
+	ready := false
+	for _, milestone := range observation.Milestones {
+		if milestone.Kind == domain.MilestonePublicationReady &&
+			milestone.InvocationID != nil &&
+			*milestone.InvocationID == identity.PublicationInvocationID {
+			ready = true
+			break
+		}
+	}
+	if !ready {
+		return false, nil
+	}
+	binding, err := tx.GetReadyItemPRBinding(ctx, domain.ProductionReadyItemID(run.ID))
+	if err != nil {
+		return false, fmt.Errorf("authenticate publication-ready milestone: %w", err)
+	}
+	if binding.RunID != run.ID ||
+		binding.ProducingInvocationID != identity.ProducingInvocationID ||
+		binding.PublicationInvocationID != identity.PublicationInvocationID {
+		return false, fmt.Errorf(
+			"publication-ready binding disagrees with completed publication: %w",
+			domain.ErrParentKeyMismatch,
+		)
+	}
+	return true, nil
 }
 
 // findingInSurface reports whether a finding's location is contained in the
