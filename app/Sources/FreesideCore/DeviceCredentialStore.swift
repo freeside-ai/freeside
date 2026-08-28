@@ -276,12 +276,12 @@ struct KeychainSecurityOperations: @unchecked Sendable {
 }
 
 /// The real store: one generic-password item per service name, the device id
-/// as the account and a versioned encoding of the private grant as item data,
-/// stored in the Data Protection Keychain and readable after first unlock so
-/// background work can authenticate and subscribe. On macOS, a valid item in
-/// the legacy file-based Keychain is copied and verified before removal. A
-/// legacy token-only payload fails loud and requires re-pairing; there is no
-/// safe way to reconstruct its one-time subscription.
+/// as the account and a versioned encoding of the private grant as item data.
+/// macOS uses the persistent file-based login Keychain; iOS uses the Data
+/// Protection Keychain with after-first-unlock accessibility. Reads consult
+/// only that platform's authoritative backend. A save best-effort clears a
+/// stale copy from the other macOS backend before replacing the authoritative
+/// item, while explicit deletion attempts both backends and reports failure.
 public struct KeychainCredentialStore: DeviceCredentialStore {
     public struct KeychainError: Error {
         public let status: OSStatus
@@ -343,32 +343,24 @@ public struct KeychainCredentialStore: DeviceCredentialStore {
         self.legacyBackendEnabled = legacyBackendEnabled
     }
 
-    public func load() throws -> DeviceCredential? {
-        if let authoritative = try loadItem(from: .dataProtection) {
-            if legacyBackendEnabled {
-                try delete(from: .legacy)
-            }
-            return authoritative.credential
-        }
+    // The persistent backend for this platform. The Data Protection Keychain
+    // is the iOS-native store, but on macOS it requires a sandbox/app-group
+    // container; a non-sandboxed macOS app's DP add returns errSecSuccess yet
+    // the item vanishes (errSecItemNotFound) within about a second, so the
+    // credential never survives to the next request (#960 regression). The
+    // file-based login keychain persists there, so macOS reads and writes it.
+    private var primaryBackend: Backend {
+        legacyBackendEnabled ? .legacy : .dataProtection
+    }
 
-        guard legacyBackendEnabled else { return nil }
-        guard let legacy = try loadItem(from: .legacy) else { return nil }
-        try add(legacy, to: .dataProtection)
-        guard let copied = try loadItem(from: .dataProtection),
-            copied.credential == legacy.credential,
-            copied.data == legacy.data
-        else {
-            throw KeychainError(status: errSecDecode)
-        }
-        try delete(from: .legacy)
-        return copied.credential
+    public func load() throws -> DeviceCredential? {
+        try loadItem(from: primaryBackend)?.credential
     }
 
     public func save(_ credential: DeviceCredential) throws {
         // Pairing replaces the whole identity (a new pairing is a new
         // device, #64), so save is delete-then-add, not an update of token
-        // bytes under an old account. On macOS, remove legacy material first:
-        // a legacy ACL failure must not delete the usable authoritative item.
+        // bytes under an old account.
         let data: Data
         do {
             data = try JSONEncoder().encode(StoredCredential(credential))
@@ -376,12 +368,18 @@ public struct KeychainCredentialStore: DeviceCredentialStore {
             throw KeychainError(status: errSecParam)
         }
         let item = KeychainItem(credential: credential, data: data)
-        if legacyBackendEnabled {
-            try delete(from: .legacy)
+        // Best-effort clear any copy in the non-authoritative backend so a
+        // stale credential there can never shadow the new one; its failure
+        // must not block the real save into the persistent backend.
+        if primaryBackend != .dataProtection {
+            try? delete(from: .dataProtection)
         }
-        try delete(from: .dataProtection)
-        try add(item, to: .dataProtection)
-        guard let saved = try loadItem(from: .dataProtection),
+        if legacyBackendEnabled && primaryBackend != .legacy {
+            try? delete(from: .legacy)
+        }
+        try delete(from: primaryBackend)
+        try add(item, to: primaryBackend)
+        guard let saved = try loadItem(from: primaryBackend),
             saved.credential == credential,
             saved.data == data
         else {
@@ -436,7 +434,13 @@ public struct KeychainCredentialStore: DeviceCredentialStore {
         var attributes = baseQuery(for: backend)
         attributes[kSecAttrAccount as String] = item.credential.deviceID
         attributes[kSecValueData as String] = item.data
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        // kSecAttrAccessible is a Data Protection Keychain attribute; the
+        // file-based backend uses an ACL (default: trust the creating app) and
+        // ignores or rejects an accessibility class, so scope it to the DP
+        // backend only.
+        if backend == .dataProtection {
+            attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        }
         let status = operations.add(attributes)
         guard status == errSecSuccess else {
             throw KeychainError(status: status)

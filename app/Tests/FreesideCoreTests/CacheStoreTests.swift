@@ -386,10 +386,53 @@ private func storedItem(_ credential: DeviceCredential) throws -> [String: Any] 
         #expect(try store.load() == nil)
     }
 
+    // macOS: the file-based login keychain is the persistent backend (#960); a
+    // save writes there, best-effort clears any stale Data Protection copy, and
+    // never sets kSecAttrAccessible (a Data Protection attribute the file backend
+    // rejects).
+    @Test func fileBackendSaveAndLoadUseTheScopedBackend() throws {
+        let fake = FakeKeychain()
+        let store = KeychainCredentialStore(
+            service: "ai.freeside.tests.deployment-a",
+            operations: fake.operations,
+            legacyBackendEnabled: true)
+        let value = try credential()
+
+        try store.save(value)
+        #expect(try store.load() == value)
+        #expect(fake.items[.dataProtection] == nil)
+        #expect(fake.items[.legacy] != nil)
+        #expect(
+            fake.calls == [
+                FakeKeychainCall(
+                    kind: .delete, backend: .dataProtection,
+                    service: "ai.freeside.tests.deployment-a"),
+                FakeKeychainCall(
+                    kind: .delete, backend: .legacy,
+                    service: "ai.freeside.tests.deployment-a"),
+                FakeKeychainCall(
+                    kind: .add, backend: .legacy,
+                    service: "ai.freeside.tests.deployment-a"),
+                FakeKeychainCall(
+                    kind: .copy, backend: .legacy,
+                    service: "ai.freeside.tests.deployment-a"),
+                FakeKeychainCall(
+                    kind: .copy, backend: .legacy,
+                    service: "ai.freeside.tests.deployment-a"),
+            ])
+        let added = try #require(fake.addedAttributes.first)
+        #expect(added[kSecUseDataProtectionKeychain as String] as? Bool != true)
+        #expect(added[kSecAttrAccessible as String] == nil)
+    }
+
+    // iOS: the Data Protection Keychain is the persistent backend, and the add
+    // scopes kSecAttrAccessible to it.
     @Test func dataProtectionSaveAndLoadUseTheScopedBackend() throws {
         let fake = FakeKeychain()
         let store = KeychainCredentialStore(
-            service: "ai.freeside.tests.deployment-a", operations: fake.operations)
+            service: "ai.freeside.tests.deployment-a",
+            operations: fake.operations,
+            legacyBackendEnabled: false)
         let value = try credential()
 
         try store.save(value)
@@ -398,9 +441,6 @@ private func storedItem(_ credential: DeviceCredential) throws -> [String: Any] 
         #expect(fake.items[.dataProtection] != nil)
         #expect(
             fake.calls == [
-                FakeKeychainCall(
-                    kind: .delete, backend: .legacy,
-                    service: "ai.freeside.tests.deployment-a"),
                 FakeKeychainCall(
                     kind: .delete, backend: .dataProtection,
                     service: "ai.freeside.tests.deployment-a"),
@@ -413,9 +453,6 @@ private func storedItem(_ credential: DeviceCredential) throws -> [String: Any] 
                 FakeKeychainCall(
                     kind: .copy, backend: .dataProtection,
                     service: "ai.freeside.tests.deployment-a"),
-                FakeKeychainCall(
-                    kind: .delete, backend: .legacy,
-                    service: "ai.freeside.tests.deployment-a"),
             ])
         let added = try #require(fake.addedAttributes.first)
         #expect(added[kSecUseDataProtectionKeychain as String] as? Bool == true)
@@ -424,28 +461,45 @@ private func storedItem(_ credential: DeviceCredential) throws -> [String: Any] 
                 == kSecAttrAccessibleAfterFirstUnlock as String)
     }
 
-    @Test func failedLegacyCleanupBeforeReplacementPreservesAuthoritativeItem() throws {
+    // A Data Protection copy left by an earlier build is cleared on save so it
+    // can never shadow the authoritative file-keychain credential.
+    @Test func macOSSaveClearsAStaleDataProtectionCopy() throws {
         let fake = FakeKeychain()
-        let existing = try credential()
-        let existingItem = try storedItem(existing)
-        fake.items[.dataProtection] = existingItem
-        fake.items[.legacy] = existingItem
-        fake.deleteStatuses[.legacy] = [errSecInteractionNotAllowed]
-        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
+        fake.items[.dataProtection] = try storedItem(
+            credential(deviceID: "device-stale", secretByte: 9))
+        let store = KeychainCredentialStore(
+            service: "service", operations: fake.operations, legacyBackendEnabled: true)
+        let value = try credential()
 
-        do {
-            try store.save(try credential(deviceID: "device-2", secretByte: 2))
-            Issue.record("expected legacy cleanup to fail")
-        } catch let error as KeychainCredentialStore.KeychainError {
-            #expect(error.status == errSecInteractionNotAllowed)
-        }
+        try store.save(value)
 
-        #expect(
-            fake.items[.dataProtection]?[kSecValueData as String] as? Data
-                == existingItem[kSecValueData as String] as? Data)
+        #expect(fake.items[.dataProtection] == nil)
         #expect(fake.items[.legacy] != nil)
-        #expect(fake.calls.map(\.kind) == [.delete])
-        #expect(fake.calls.map(\.backend) == [.legacy])
+        #expect(try store.load() == value)
+        #expect(
+            Array(fake.calls.prefix(2)) == [
+                FakeKeychainCall(kind: .delete, backend: .dataProtection, service: "service"),
+                FakeKeychainCall(kind: .delete, backend: .legacy, service: "service"),
+            ])
+    }
+
+    // Clearing the non-authoritative Data Protection backend is best-effort: its
+    // failure must not block the real save into the persistent file backend.
+    @Test func macOSSaveSurvivesADataProtectionClearFailure() throws {
+        let fake = FakeKeychain()
+        fake.items[.dataProtection] = try storedItem(
+            credential(deviceID: "device-stale", secretByte: 9))
+        fake.deleteStatuses[.dataProtection] = [errSecInteractionNotAllowed]
+        let store = KeychainCredentialStore(
+            service: "service", operations: fake.operations, legacyBackendEnabled: true)
+        let value = try credential()
+
+        try store.save(value)
+
+        #expect(try store.load() == value)
+        #expect(fake.items[.legacy] != nil)
+        #expect(fake.calls.first?.kind == .delete)
+        #expect(fake.calls.first?.backend == .dataProtection)
     }
 
     @Test func platformWithoutDistinctLegacyBackendNeverConsultsIt() throws {
@@ -466,70 +520,17 @@ private func storedItem(_ credential: DeviceCredential) throws -> [String: Any] 
         #expect(fake.calls.allSatisfy { $0.backend == .dataProtection })
     }
 
-    @Test func exactServiceLegacyItemMigratesCopyVerifyDelete() throws {
+    // A corrupt authoritative item fails closed; the store never falls back to
+    // the non-authoritative backend.
+    @Test func loadFailsClosedOnCorruptPrimaryItem() throws {
         let fake = FakeKeychain()
-        let value = try credential()
-        let legacy = try storedItem(value)
-        fake.items[.legacy] = legacy
-        let store = KeychainCredentialStore(
-            service: "ai.freeside.tests.encoded%2Fpath", operations: fake.operations)
-
-        #expect(try store.load() == value)
-        #expect(fake.items[.legacy] == nil)
-        #expect(fake.items[.dataProtection] != nil)
-        #expect(fake.calls.map(\.kind) == [.copy, .copy, .add, .copy, .delete])
-        #expect(
-            fake.calls.map(\.backend) == [
-                .dataProtection, .legacy, .dataProtection, .dataProtection, .legacy,
-            ])
-        #expect(fake.calls.allSatisfy { $0.service == "ai.freeside.tests.encoded%2Fpath" })
-        #expect(
-            fake.addedAttributes[0][kSecValueData as String] as? Data
-                == legacy[kSecValueData as String] as? Data)
-    }
-
-    @Test func failedLegacyCopyLeavesTheLegacyItemUntouched() throws {
-        let fake = FakeKeychain()
-        fake.items[.legacy] = try storedItem(credential())
-        fake.addStatuses = [errSecAuthFailed]
-        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
-
-        #expect(throws: KeychainCredentialStore.KeychainError.self) {
-            try store.load()
-        }
-        #expect(fake.items[.legacy] != nil)
-        #expect(fake.items[.dataProtection] == nil)
-        #expect(fake.calls.map(\.kind) == [.copy, .copy, .add])
-    }
-
-    @Test func failedLegacyVerificationLeavesTheLegacyItemUntouched() throws {
-        let fake = FakeKeychain()
-        let legacy = try credential()
-        fake.items[.legacy] = try storedItem(legacy)
-        fake.copyOverrides[.dataProtection] = [
-            (errSecItemNotFound, nil),
-            (errSecSuccess, try storedItem(credential(deviceID: "device-2", secretByte: 2))),
-        ]
-        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
-
-        do {
-            _ = try store.load()
-            Issue.record("expected read-back mismatch to fail")
-        } catch let error as KeychainCredentialStore.KeychainError {
-            #expect(error.status == errSecDecode)
-        }
-        #expect(fake.items[.legacy] != nil)
-        #expect(fake.calls.map(\.kind) == [.copy, .copy, .add, .copy])
-    }
-
-    @Test func authoritativeCorruptionFailsClosedWithoutLegacyFallback() throws {
-        let fake = FakeKeychain()
-        fake.items[.dataProtection] = [
+        fake.items[.legacy] = [
             kSecAttrAccount as String: "device-1",
             kSecValueData as String: Data("not-json".utf8),
         ]
-        fake.items[.legacy] = try storedItem(credential())
-        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
+        fake.items[.dataProtection] = try storedItem(credential())
+        let store = KeychainCredentialStore(
+            service: "service", operations: fake.operations, legacyBackendEnabled: true)
 
         do {
             _ = try store.load()
@@ -538,15 +539,17 @@ private func storedItem(_ credential: DeviceCredential) throws -> [String: Any] 
             #expect(error.status == errSecDecode)
         }
         #expect(fake.calls.map(\.kind) == [.copy])
-        #expect(fake.calls.map(\.backend) == [.dataProtection])
-        #expect(fake.items[.legacy] != nil)
+        #expect(fake.calls.map(\.backend) == [.legacy])
+        #expect(fake.items[.dataProtection] != nil)
     }
 
-    @Test func authoritativeErrorFailsClosedWithoutLegacyFallback() throws {
+    // A Keychain error on the authoritative read propagates; it is never masked
+    // by consulting the other backend.
+    @Test func loadPropagatesAPrimaryKeychainError() throws {
         let fake = FakeKeychain()
-        fake.items[.legacy] = try storedItem(credential())
-        fake.copyOverrides[.dataProtection] = [(errSecInteractionNotAllowed, nil)]
-        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
+        fake.copyOverrides[.legacy] = [(errSecInteractionNotAllowed, nil)]
+        let store = KeychainCredentialStore(
+            service: "service", operations: fake.operations, legacyBackendEnabled: true)
 
         do {
             _ = try store.load()
@@ -555,40 +558,7 @@ private func storedItem(_ credential: DeviceCredential) throws -> [String: Any] 
             #expect(error.status == errSecInteractionNotAllowed)
         }
         #expect(fake.calls.map(\.kind) == [.copy])
-        #expect(fake.calls.map(\.backend) == [.dataProtection])
-    }
-
-    @Test func authoritativeDuplicateWinsAndCleansLegacy() throws {
-        let fake = FakeKeychain()
-        let authoritative = try credential()
-        let conflictingLegacy = try credential(
-            deviceID: "device-2", secretByte: 2,
-            serverURL: "https://other-ntfy.example",
-            topic: "fs-11111111111111111111111111111111")
-        fake.items[.dataProtection] = try storedItem(authoritative)
-        fake.items[.legacy] = try storedItem(conflictingLegacy)
-        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
-
-        #expect(try store.load() == authoritative)
-        #expect(fake.items[.legacy] == nil)
-        #expect(fake.calls.map(\.kind) == [.copy, .delete])
-        #expect(fake.calls.map(\.backend) == [.dataProtection, .legacy])
-    }
-
-    @Test func interruptedCleanupFailsLoudAndRetries() throws {
-        let fake = FakeKeychain()
-        let value = try credential()
-        fake.items[.dataProtection] = try storedItem(value)
-        fake.items[.legacy] = try storedItem(value)
-        fake.deleteStatuses[.legacy] = [errSecInteractionNotAllowed, errSecSuccess]
-        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
-
-        #expect(throws: KeychainCredentialStore.KeychainError.self) {
-            try store.load()
-        }
-        #expect(fake.items[.legacy] != nil)
-        #expect(try store.load() == value)
-        #expect(fake.items[.legacy] == nil)
+        #expect(fake.calls.map(\.backend) == [.legacy])
     }
 
     @Test func deleteClearsBothBackendsAndPreservesTheFirstError() throws {

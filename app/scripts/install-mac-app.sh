@@ -7,12 +7,11 @@
 # Builds the Release product with automatic provisioning, signs it with a
 # stable Apple Development identity, and
 # installs or replaces Freeside.app at a fixed path. Re-running it after
-# a source change updates the installed app in place without disturbing
-# the Data Protection Keychain-held device credential: the provisioned App ID
-# prefix and bundle identifier stay fixed across runs, while the Team ID is
-# verified independently. A valid legacy file-based credential is migrated
-# once by the app; that transition may present one final legacy ACL prompt,
-# while later launches are silent.
+# a source change updates the installed app in place without disturbing the
+# file-based login Keychain credential: the signing identity and bundle
+# identifier stay stable so the item ACL continues to recognize the app. The
+# Data Protection Keychain is not a migration target on macOS because this
+# non-sandboxed app cannot rely on items persisting there.
 #
 # --server-url persists the daemon URL into the installed app's
 # preferences (`AppSession.fromEnvironment` reads `FreesideServerURL`
