@@ -1289,3 +1289,65 @@ Revision 39 ("Admitted agents"):
    build when the adapter exists. Rejected: sequencing pi behind #408 (it
    is a second consumer of the contract, not a successor).
    (User; devlog 2026-08-23-0825-admitted-agents.md.)
+
+## Revision 40
+
+Revision 40 ("Recommendation-led attention"):
+
+1. **A recommendation is contract, never inference** (Sections 4, 5.13, 9):
+   an item may carry at most one
+   `recommendation {action, reason, source, provenance, confidence?}`
+   selecting one of its own requested decisions. The required immutable
+   provenance is source-specific: content-addressed rule digest and input
+   digest for `daemon_policy`; judgment site, invocation, and artifact digest
+   for `agent_judgment` (the finding-adjudicator type case keeps per-finding
+   route provenance in the Section 7 artifact); or policy key,
+   resolved-policy digest, and daemon-authored application digest for
+   `project_policy`. Each authoritative source record commits to the current
+   item's decision-surface identity under Section 4, required to be
+   eligibility-independent, telemetry-stable, surface-distinguishing, and
+   non-cyclic; #942 specifies and tests the exact mechanism after two inline
+   attempts (item-version binding, then an eligibility-coupled own-artifact
+   subtraction) were rejected. Creation and
+   reconstruction derive eligible source records from current
+   authoritative state: exactly one produces the canonical recommendation;
+   zero or multiple produces absence, with no precedence or tie-break. The
+   stored optional recommendation must equal that exact result. For the unique
+   record, the daemon requires its source-to-item association and rederives
+   canonical action, reason, and confidence, rejecting any field, source, or
+   item mismatch without invalidating the item's action set.
+   No recommendation, no
+   block: a client never infers one, and offer order carries no
+   endorsement. Origin: an external UX review of the clients (2026-08-25)
+   and its design response. Rejected: client-side inference from action
+   order; caller-selected source; implicit source precedence; per-type ad hoc
+   recommendation shapes.
+   (User; devlog 2026-08-25-1154-recommendation-led-attention.md.)
+2. **Cards render capability truthfully** (Section 9): a client shows only
+   the requested decisions it can faithfully collect and execute, records
+   filtered actions in drill-down, states not-decidable-here when no
+   faithful response is in its capability, and never renders an
+   unimplemented action as a disabled control or roadmap copy. Rejected:
+   disabled placeholder buttons advertising unbuilt scope.
+   (User; devlog 2026-08-25-1154-recommendation-led-attention.md.)
+3. **`convert_to_policy` leaves the 1B phone-decidability claim**
+   (Section 11): the diminishing-returns card stays decidable via finish
+   now, apply-and-finish, and continue-under-policy; turning a recurring
+   preference into a project-policy proposal waits for its deferred
+   control-plane proposal surface and is hidden, not disabled, until then.
+   Rejected: building that surface inside 1B; keeping dead controls under
+   the exit claim.
+   (User; devlog 2026-08-25-1154-recommendation-led-attention.md.)
+4. **Wave 7 carries the attention-presentation closure** (Section 11),
+   contract-first: the Section 4 recommendation shape and Section 9 typed
+   minimum card facts as one serialized contract unit before producers and
+   client adoption; that contract unit must retire `adjudicate` or reassign
+   it to an executable `review_dispute` transaction before client adoption;
+   transaction closure for the remaining Phase 1 pending actions, including
+   `choose_alternate_profile` under #936 rather than #869's alternate-agent
+   retry;
+   evidence-metadata exposure; pairing identity facts; and the
+   comprehension-telemetry contracts the wave-8 exit evaluation reads.
+   Rejected: deferring missing facts and dead actions to Phase 3, which is
+   advanced interaction, not missing fundamentals.
+   (User; devlog 2026-08-25-1154-recommendation-led-attention.md.)
