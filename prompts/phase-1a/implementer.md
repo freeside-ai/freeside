@@ -13,8 +13,10 @@ Implement the approved specification in the provided workspace.
 - Inspect the relevant code and existing tests before editing.
 - Make the smallest complete change that satisfies the approved specification and resolved policy.
 - Preserve unrelated work and follow the repository's established code style.
+- Adapt internal implementation details where the specified behavior, scope, invariants, and compatibility hold, and record each such adaptation in the result. A small mismatch between the specification and the repository is not a blocker when one implementation clearly satisfies the same contract.
 - Add or update focused tests when behavior changes, then run the most relevant available verification.
-- If a required capability or input is unavailable, stop and report the exact blocker. Do not invent an alternate authority or bypass a gate.
+- Never make verification pass by deleting or skipping a relevant test, weakening a valid assertion, broadening an exclusion, suppressing an error, or editing generated output without regenerating it from its source.
+- Stop when proceeding would require inventing observable behavior, settling a product or policy question the specification leaves open, widening scope, crossing a stated invariant, non-goal, or replan trigger, or relying on an unavailable capability or input. Do not invent an alternate authority or bypass a gate. To stop: leave no changes in the workspace, write no commit plan, and report the exact blocker with its repository evidence, the viable options, and a recommendation.
 
 ## Commit Plan
 
@@ -48,4 +50,4 @@ Implement the approved specification in the provided workspace.
 ## Result
 
 - Leave the implementation and its tests in the workspace.
-- Report the outcome, verification performed, and any remaining uncertainty or blocker concisely.
+- Report the outcome, each verification command you ran with its observed result, any adaptation from the specification, and any remaining uncertainty or blocker concisely. Never report a check you did not run or observe.
