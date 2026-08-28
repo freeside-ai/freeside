@@ -455,9 +455,12 @@ public struct KeychainCredentialStore: DeviceCredentialStore {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
         ]
-        if backend == .dataProtection {
-            query[kSecUseDataProtectionKeychain as String] = true
-        }
+        // Always explicit: on macOS a query that omits this key targets both
+        // keychains (SecItemCategorizeQuery), so a "legacy" delete without it
+        // also removed the authoritative Data Protection item on every load
+        // (#997). `false` scopes the legacy backend to the file-based
+        // Keychain alone; other platforms ignore the key.
+        query[kSecUseDataProtectionKeychain as String] = backend == .dataProtection
         return query
     }
 }
