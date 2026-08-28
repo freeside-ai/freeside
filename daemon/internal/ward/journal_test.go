@@ -576,6 +576,37 @@ func testJournalInstructions() *HandoffJournalInstructions {
 	}
 }
 
+// TestHandoffJournalInstructionsAcceptPersistedCompositionVersions proves the
+// #946 upgrade compatibility: the current v3 and the legacy v2 both validate,
+// so an in-flight run journalled before the fencing upgrade still recovers,
+// while any other version is refused. A full record carrying a legacy-v2
+// instruction binding passes the reconstruction re-gate for the same reason;
+// recovery only validates and dispositions such a binding against the runtime
+// world, never recomposing the pre-fencing bundle.
+func TestHandoffJournalInstructionsAcceptPersistedCompositionVersions(t *testing.T) {
+	for _, version := range []string{
+		instructionCompositionVersionV2,
+		instructionCompositionVersion,
+	} {
+		instructions := testJournalInstructions()
+		instructions.CompositionVersion = version
+		if err := instructions.validate(); err != nil {
+			t.Errorf("validate(%q) = %v, want nil", version, err)
+		}
+		record := testJournalRecord()
+		record.Instructions = instructions
+		if err := record.Validate(); err != nil {
+			t.Errorf("record with %q instructions: Validate() = %v, want nil", version, err)
+		}
+	}
+
+	future := testJournalInstructions()
+	future.CompositionVersion = "claude_explicit_bundle_v4"
+	if err := future.validate(); err == nil {
+		t.Fatal("unknown composition version remained valid")
+	}
+}
+
 // TestSpecDigest pins the digest's two properties: deterministic for equal
 // specs, distinct for any spec difference recovery must not conflate.
 func TestSpecDigest(t *testing.T) {

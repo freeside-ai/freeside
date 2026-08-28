@@ -21,8 +21,13 @@ import (
 )
 
 const (
-	instructionCompositionVersion = "claude_explicit_bundle_v2"
-	instructionSourceAbsent       = "absent"
+	// instructionCompositionVersionV2 is the pre-fencing composition. It
+	// remains valid only so a persisted in-flight binding stays readable
+	// across a binary upgrade: recovery validates it and dispositions the run
+	// against the runtime world, never recomposing or launching it anew.
+	instructionCompositionVersionV2 = "claude_explicit_bundle_v2"
+	instructionCompositionVersion   = "claude_explicit_bundle_v3"
+	instructionSourceAbsent         = "absent"
 )
 
 var errInstructionBudget = errors.New(
@@ -118,10 +123,12 @@ func composeClaudeInstructions(
 	bundle.WriteString("# Freeside Explicit Claude Instruction Bundle\n\n")
 	bundle.WriteString(
 		"Composition: " + instructionCompositionVersion + "\n\n" +
-			"Apply each digest-delimited repository block only within its named " +
-			"path scope. The deepest matching repository scope takes precedence " +
-			"among repository blocks. Apply the final operator-host block " +
-			"globally; it takes precedence over every repository block.\n\n" +
+			"Apply each digest-delimited fenced-literal repository block only " +
+			"within its named path scope. The deepest matching repository scope " +
+			"takes precedence among repository blocks. Apply the final " +
+			"fenced-literal operator-host block globally; it takes precedence " +
+			"over every repository block. Markdown constructs inside one " +
+			"instruction body do not extend past its enclosing fence.\n\n" +
 			"## Trusted-Base Repository Instructions\n",
 	)
 	for _, source := range sources {
@@ -135,10 +142,7 @@ func composeClaudeInstructions(
 		bundle.WriteString("\n\n--- BEGIN REPOSITORY INSTRUCTION sha256:")
 		bundle.WriteString(source.digest)
 		bundle.WriteString(" ---\n")
-		bundle.Write(source.body)
-		if len(source.body) == 0 || source.body[len(source.body)-1] != '\n' {
-			bundle.WriteByte('\n')
-		}
+		writeClaudeInstructionLiteral(&bundle, source.body)
 		bundle.WriteString("--- END REPOSITORY INSTRUCTION sha256:")
 		bundle.WriteString(source.digest)
 		bundle.WriteString(" ---\n")
@@ -150,11 +154,7 @@ func composeClaudeInstructions(
 		bundle.WriteString("--- BEGIN OPERATOR-HOST INSTRUCTION sha256:")
 		bundle.WriteString(hostDigest)
 		bundle.WriteString(" ---\n")
-		bundle.Write(hs.Agent.VendorInstructions.Body)
-		if len(hs.Agent.VendorInstructions.Body) == 0 ||
-			hs.Agent.VendorInstructions.Body[len(hs.Agent.VendorInstructions.Body)-1] != '\n' {
-			bundle.WriteByte('\n')
-		}
+		writeClaudeInstructionLiteral(&bundle, hs.Agent.VendorInstructions.Body)
 		bundle.WriteString("--- END OPERATOR-HOST INSTRUCTION sha256:")
 		bundle.WriteString(hostDigest)
 		bundle.WriteString(" ---\n")
@@ -177,6 +177,44 @@ func composeClaudeInstructions(
 		RepositoryManifestDigest: hex.EncodeToString(manifestHash.Sum(nil)),
 		BundleDigest:             hex.EncodeToString(bundleSum[:]),
 	}, nil
+}
+
+// writeClaudeInstructionLiteral wraps one trusted-base instruction body in a
+// backtick fence one longer than the longest backtick run the body contains
+// (minimum three), so no unclosed or maximal Markdown construct inside an
+// earlier CLAUDE.md can syntactically capture the later path scopes or the
+// operator-host block that follow it in the bundle. The source and manifest
+// digests are still taken over the raw body, upstream of this framing.
+//
+// It is a deliberate mirror of exec.writeReviewInstructionLiteral (#949): that
+// helper is unexported and this unit does not touch the review file (#946
+// Non-goal), so the primitive is duplicated rather than shared. A later
+// rule-of-three refactor may promote one audited copy across exec and ward.
+func writeClaudeInstructionLiteral(bundle *bytes.Buffer, body []byte) {
+	fenceLength := 3
+	longestRun := 0
+	for _, char := range body {
+		if char == '`' {
+			longestRun++
+			continue
+		}
+		if longestRun >= fenceLength {
+			fenceLength = longestRun + 1
+		}
+		longestRun = 0
+	}
+	if longestRun >= fenceLength {
+		fenceLength = longestRun + 1
+	}
+	fence := strings.Repeat("`", fenceLength)
+	bundle.WriteString(fence)
+	bundle.WriteByte('\n')
+	bundle.Write(body)
+	if len(body) == 0 || body[len(body)-1] != '\n' {
+		bundle.WriteByte('\n')
+	}
+	bundle.WriteString(fence)
+	bundle.WriteByte('\n')
 }
 
 // expandRepositoryInstruction resolves standalone Claude @imports from the

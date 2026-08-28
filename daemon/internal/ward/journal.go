@@ -144,7 +144,12 @@ type HandoffJournalInstructions struct {
 }
 
 func (i HandoffJournalInstructions) validate() error {
-	if i.CompositionVersion != instructionCompositionVersion {
+	// The legacy v2 version stays acceptable so a run journalled before the
+	// fencing upgrade recovers on the new binary. Recovery only validates and
+	// dispositions such a binding against the runtime world; it never
+	// recomposes the bundle, so the pre-fencing bytes are never re-emitted.
+	if i.CompositionVersion != instructionCompositionVersionV2 &&
+		i.CompositionVersion != instructionCompositionVersion {
 		return errors.New("handoff journal instruction composition version is invalid")
 	}
 	if i.HostDigest != instructionSourceAbsent &&
