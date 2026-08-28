@@ -1059,10 +1059,10 @@ func prMatchesPublicationCoordinates(
 }
 
 // desiredPRContent is the deterministic PR content for a candidate: operator
-// prose, the optional publisher-owned disposition history, and the identity
-// marker as the final line (plan §5.15 rule 4). The complete body is checked
-// against GitHub's ceiling here, after every publisher-owned section exists;
-// no section is silently truncated.
+// prose, fixed-bounded advisories, disposition history fitted to the remaining
+// reserved space with digest-bound truncation, and the identity marker as the
+// final line (plan §5.15 rule 4). Operator prose is never truncated. The final
+// ceiling check remains a fail-closed guard over the complete composition.
 func desiredPRContent(identity Identity, c Candidate) (title, body string, err error) {
 	prose := strings.TrimRight(c.Body, "\n")
 	parts := make([]string, 0, 4)
@@ -1073,7 +1073,12 @@ func desiredPRContent(identity Identity, c Candidate) (title, body string, err e
 		parts = append(parts, renderAdvisories(c.Advisories))
 	}
 	if c.DispositionHistory != nil {
-		section, err := RenderDispositionHistory(*c.DispositionHistory)
+		historyLimit := maxPullRequestBodyBytes - len(identity.Marker()) -
+			(len(parts)+1)*len("\n\n")
+		for _, part := range parts {
+			historyLimit -= len(part)
+		}
+		section, err := renderDispositionHistoryWithin(*c.DispositionHistory, historyLimit)
 		if err != nil {
 			return "", "", err
 		}

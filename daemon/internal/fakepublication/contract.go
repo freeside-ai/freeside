@@ -28,7 +28,17 @@ const (
 	terminalBindingPrefix   = "<!-- freeside:fake-publication-terminal="
 	terminalBindingSuffix   = " -->"
 	publicationMarkerPrefix = "<!-- freeside:publication-identity="
+	publicationMarkerSuffix = " -->"
 	maxPullRequestBodyBytes = 64 << 10
+	identityDigestBytes     = len("sha256:") + sha256.Size*2
+	identityMarkerBytes     = len(publicationMarkerPrefix) + identityDigestBytes + len(publicationMarkerSuffix)
+	// maxRenderedAdvisoriesBytes mirrors publish.maxRenderedAdvisoriesBytes.
+	maxRenderedAdvisoriesBytes = 8*3*512 + (1 << 10)
+	// minRenderedDispositionHistoryBytes mirrors
+	// publish.minRenderedDispositionHistoryBytes.
+	minRenderedDispositionHistoryBytes = 8 << 10
+	maxCandidateBodyBytes              = maxPullRequestBodyBytes - 3*len("\n\n") -
+		identityMarkerBytes - maxRenderedAdvisoriesBytes - minRenderedDispositionHistoryBytes
 )
 
 // Task is the immutable fake-publication outbox payload.
@@ -378,15 +388,12 @@ func ValidateBranchName(name string) error {
 }
 
 func ValidateCandidateBody(body string) error {
-	const markerSuffixLen = len(" -->")
-	maxCandidateBodyBytes := maxPullRequestBodyBytes - len("\n\n") - len(publicationMarkerPrefix) -
-		(len("sha256:") + sha256.Size*2) - markerSuffixLen
 	if len(body) > maxPullRequestBodyBytes {
 		return fmt.Errorf("candidate body exceeds %d bytes", maxPullRequestBodyBytes)
 	}
 	if prose := strings.TrimRight(body, "\n"); prose != "" && len(prose) > maxCandidateBodyBytes {
 		return fmt.Errorf(
-			"candidate body exceeds %d bytes after reserving the publication identity marker",
+			"candidate body exceeds %d bytes after reserving the publisher-owned sections",
 			maxCandidateBodyBytes,
 		)
 	}
