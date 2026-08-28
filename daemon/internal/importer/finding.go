@@ -30,8 +30,12 @@ const (
 	// GITHUB_TOKEN and OIDC authority even when no secret is named.
 	FindingAutomationControlPath FindingKind = "automation_control_path"
 	// FindingReviewerInstructionPath records a change touching a
-	// reviewer-instruction path (§5.8): auto-review is not independent
-	// review for a PR that modifies the instructions governing it.
+	// reviewer-instruction path (§5.8). Detection is mandatory, but the
+	// finding lifts with the advisory disposition (revision 42): the agent
+	// and the Freeside-invoked reviewer compose their instructions from the
+	// exact trusted base, so the candidate's copy cannot govern its own
+	// review, and the edit publishes as reviewed content that the human
+	// merge gate sees surfaced in the PR body.
 	FindingReviewerInstructionPath FindingKind = "reviewer_instruction_path"
 	// FindingGitMetadataPath records a change touching git metadata that
 	// steers downstream checkout, diff, or submodule behaviour
@@ -189,18 +193,45 @@ func (f Finding) Fatal(profile *FindingProfile) bool {
 	return f.Kind.fatalForProfile(profile)
 }
 
+// Advisory reports whether the finding lifts with the advisory disposition
+// (plan §5.8, revision 42): detected and surfaced, never fatal to the export
+// and never publication-blocking. The stance is the control-plane
+// category's, read from the domain predicate, so this package never names
+// an advisory kind itself.
+func (f Finding) Advisory() bool {
+	return f.Kind.advisory()
+}
+
+// AllAdvisory reports whether every finding is advisory, which is the
+// "clean" bar a publishable import meets; an empty set trivially qualifies.
+func AllAdvisory(findings []Finding) bool {
+	for _, f := range findings {
+		if !f.Advisory() {
+			return false
+		}
+	}
+	return true
+}
+
+func (k FindingKind) advisory() bool {
+	cat, ok := categoryFor(k)
+	return ok && cat.Advisory()
+}
+
 // fatalForProfile dispatches per-profile. A nil (absent) profile is
 // publish-strict. The switch omits default so a new profile must decide its
 // stance; the trailing return fails closed, treating an unknown profile as
 // fully publish-strict.
 func (k FindingKind) fatalForProfile(profile *FindingProfile) bool {
 	if profile == nil {
-		return true
+		return !k.advisory()
 	}
 	switch *profile {
 	case FindingProfilePublishStrict:
-		// Every finding blocks publication of repo-channel content.
-		return true
+		// Every finding blocks publication of repo-channel content except
+		// an advisory one, which the export carries into publication as
+		// surfaced content.
+		return !k.advisory()
 	case FindingProfileSpecification:
 		return k.fatalForSpecification()
 	}
@@ -307,6 +338,13 @@ func (f Finding) Candidate() domain.CandidateFinding {
 		cat, _ := categoryFor(f.Kind)
 		cf.Class = domain.FindingClassControlPlane
 		cf.Category = &cat
+		// The stance is the category's, not this package's: the domain
+		// predicate is the single place that names which control-plane
+		// category surfaces instead of blocking, and Validate rejects an
+		// advisory lift for any other.
+		if f.Kind.advisory() {
+			cf.Disposition = domain.DispositionAdvisory
+		}
 	}
 	return cf
 }

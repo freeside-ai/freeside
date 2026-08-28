@@ -305,11 +305,18 @@ func TestPartitionFindingsByProfile(t *testing.T) {
 		{Kind: importer.FindingSizeViolation, Path: "dist/big.bin"},
 		{Kind: importer.FindingSecret, Path: "config.yaml"},
 	}
-	// A nil profile is the default publish-strict behavior: every finding fatal.
+	// A nil profile is the default publish-strict behavior: every finding
+	// fatal except an advisory one (plan §5.8, revision 42).
 	fatalStrict, tolStrict := partitionFindings(findings, nil)
 	if len(fatalStrict) != 3 || len(tolStrict) != 0 {
 		t.Fatalf("publish-strict partition = %d fatal, %d tolerated; want 3, 0",
 			len(fatalStrict), len(tolStrict))
+	}
+	advisory := importer.Finding{Kind: importer.FindingReviewerInstructionPath, Path: "AGENTS.md"}
+	fatalAdvisory, tolAdvisory := partitionFindings(append(findings, advisory), nil)
+	if len(fatalAdvisory) != 3 || len(tolAdvisory) != 1 || tolAdvisory[0].Path != "AGENTS.md" {
+		t.Fatalf("publish-strict partition with advisory = %d fatal, %+v tolerated; want 3 fatal and the instruction path",
+			len(fatalAdvisory), tolAdvisory)
 	}
 	spec := importer.FindingProfileSpecification
 	fatalSpec, tolSpec := partitionFindings(findings, &spec)
@@ -621,6 +628,25 @@ func TestPublishStrictRejectsAnyFinding(t *testing.T) {
 	}
 	if err := d.validateImportFindings(rejectionIntent(), imported, nil); !errors.Is(err, errDefinitiveExportRejection) {
 		t.Fatalf("publish-strict finding = %v, want definitive rejection", err)
+	}
+}
+
+// TestPublishStrictToleratesAdvisoryFinding: a reviewer-instruction edit is
+// the one finding the default profile carries into publication instead of
+// rejecting the export (plan §5.8, revision 42); a fatal sibling still
+// rejects.
+func TestPublishStrictToleratesAdvisoryFinding(t *testing.T) {
+	t.Parallel()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	advisory := importer.Finding{Kind: importer.FindingReviewerInstructionPath, Path: "AGENTS.md"}
+	imported := importer.Result{CommitSHA: strings.Repeat("c", 40), Findings: []importer.Finding{advisory}}
+	if err := d.validateImportFindings(rejectionIntent(), imported, nil); err != nil {
+		t.Fatalf("advisory-only findings = %v, want tolerated", err)
+	}
+	imported.Findings = append(imported.Findings,
+		importer.Finding{Kind: importer.FindingAutomationControlPath, Path: ".github/workflows/ci.yml"})
+	if err := d.validateImportFindings(rejectionIntent(), imported, nil); !errors.Is(err, errDefinitiveExportRejection) {
+		t.Fatalf("advisory with fatal sibling = %v, want definitive rejection", err)
 	}
 }
 

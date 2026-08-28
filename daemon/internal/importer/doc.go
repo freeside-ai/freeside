@@ -27,10 +27,12 @@
 //     content/media-type magic mismatch, or an oversized evidence
 //     blob). Evidence has no waivable-finding class: it is agent context
 //     that either validates into a claim or fails the import closed.
-//   - Policy violations accumulate as publish-blocking Findings on the
-//     Result: §5.6's non-regular change class, §5.5 automation-control
-//     and §5.8 reviewer-instruction paths, allowlist and size policy,
-//     path collisions, and best-effort secret matches.
+//   - Policy violations accumulate as Findings on the Result: §5.6's
+//     non-regular change class, §5.5 automation-control and §5.8
+//     reviewer-instruction paths, allowlist and size policy, path
+//     collisions, and best-effort secret matches. All lift as
+//     publish-blocking except reviewer-instruction paths, which lift as
+//     advisory (§5.8, revision 42) and publish surfaced in the PR body.
 //
 // Publish-blocking findings still produce the commit when the tree can
 // faithfully represent the candidate: §5.5 routes blocked changes

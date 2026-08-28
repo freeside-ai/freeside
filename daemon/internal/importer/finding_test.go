@@ -76,15 +76,17 @@ func TestFindingProfileValid(t *testing.T) {
 // TestFindingFatalPublishStrict pins that every finding, of every kind, is
 // fatal under the default publish-strict profile — both the explicit member
 // and the nil (absent) profile, since repo-channel content is published so
-// nothing is tolerated.
+// nothing is tolerated — except the advisory reviewer-instruction kind,
+// which publishes surfaced (plan §5.8, revision 42; TestFindingAdvisoryStance).
 func TestFindingFatalPublishStrict(t *testing.T) {
 	strict := FindingProfilePublishStrict
 	for _, k := range AllFindingKinds {
-		if !(Finding{Kind: k}).Fatal(&strict) {
-			t.Errorf("Fatal(%q, publish-strict) = false, want true", k)
+		want := k != FindingReviewerInstructionPath
+		if (Finding{Kind: k}).Fatal(&strict) != want {
+			t.Errorf("Fatal(%q, publish-strict) = %v, want %v", k, !want, want)
 		}
-		if !(Finding{Kind: k}).Fatal(nil) {
-			t.Errorf("Fatal(%q, nil) = false, want true (nil is the strict default)", k)
+		if (Finding{Kind: k}).Fatal(nil) != want {
+			t.Errorf("Fatal(%q, nil) = %v, want %v (nil is the strict default)", k, !want, want)
 		}
 	}
 	// An unknown profile fails closed to fully strict.

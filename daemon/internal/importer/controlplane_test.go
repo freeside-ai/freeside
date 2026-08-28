@@ -101,8 +101,14 @@ func TestFindingCandidateLift(t *testing.T) {
 		if cf.Origin != domain.FindingOriginImport {
 			t.Errorf("%s: origin = %q, want import", k, cf.Origin)
 		}
-		if cf.Disposition != domain.DispositionBlocking {
-			t.Errorf("%s: disposition = %q, want blocking", k, cf.Disposition)
+		// Reviewer instructions are the one advisory kind (plan §5.8,
+		// revision 42); every other kind lifts blocking.
+		wantDisposition := domain.DispositionBlocking
+		if k == FindingReviewerInstructionPath {
+			wantDisposition = domain.DispositionAdvisory
+		}
+		if cf.Disposition != wantDisposition {
+			t.Errorf("%s: disposition = %q, want %q", k, cf.Disposition, wantDisposition)
 		}
 		if cf.Kind != string(k) {
 			t.Errorf("%s: kind token = %q", k, cf.Kind)
@@ -117,6 +123,33 @@ func TestFindingCandidateLift(t *testing.T) {
 		} else if cf.Category != nil {
 			t.Errorf("%s: non-control-plane finding carries category %q", k, *cf.Category)
 		}
+	}
+}
+
+// TestFindingAdvisoryStance: exactly the reviewer-instruction kind is
+// advisory (plan §5.8, revision 42): non-fatal under the default and
+// publish-strict profiles, still fatal under the specification profile, and
+// AllAdvisory is the clean bar an import meets.
+func TestFindingAdvisoryStance(t *testing.T) {
+	strict := FindingProfilePublishStrict
+	spec := FindingProfileSpecification
+	for _, k := range AllFindingKinds {
+		f := Finding{Kind: k, Path: "p/x"}
+		wantAdvisory := k == FindingReviewerInstructionPath
+		if f.Advisory() != wantAdvisory {
+			t.Errorf("%s: Advisory() = %v, want %v", k, f.Advisory(), wantAdvisory)
+		}
+		if f.Fatal(nil) != !wantAdvisory || f.Fatal(&strict) != !wantAdvisory {
+			t.Errorf("%s: Fatal(nil)=%v Fatal(strict)=%v, want %v", k, f.Fatal(nil), f.Fatal(&strict), !wantAdvisory)
+		}
+		if wantAdvisory && !f.Fatal(&spec) {
+			t.Errorf("%s: specification profile must keep the instruction path fatal", k)
+		}
+	}
+	advisory := Finding{Kind: FindingReviewerInstructionPath, Path: "AGENTS.md"}
+	if !AllAdvisory(nil) || !AllAdvisory([]Finding{advisory}) ||
+		AllAdvisory([]Finding{advisory, {Kind: FindingSizeViolation, Path: "big.bin"}}) {
+		t.Error("AllAdvisory: empty and advisory-only sets qualify, a blocking sibling does not")
 	}
 }
 
