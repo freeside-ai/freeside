@@ -84,6 +84,7 @@ struct RunsListView: View {
                             },
                             isSelected: selection == snapshot.run.id
                         )
+                        .hidesSystemListSelection()
                         .listRowInsets(
                             EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)
                         )
