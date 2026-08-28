@@ -661,9 +661,9 @@ func (c controlHandler) seedFindingAdjudicationAuthority(
 			Route: entry.Route, Rationale: entry.Rationale,
 			CitedRules: entry.CitedRules, Assumptions: entry.Assumptions,
 			OpenQuestions: entry.OpenQuestions, Confidence: entry.Confidence,
-			OfferedAlternatives: []domain.OfferedAlternative{{
-				Route: domain.RouteDispute, Consequence: "park for a human decision",
-			}},
+			// Copy the artifact entry's digest-bound offered set so the seeded item
+			// matches the store re-gate; a minted set would now fail closed (#893).
+			OfferedAlternatives: slices.Clone(entry.OfferedAlternatives),
 		}},
 	}, nil
 }

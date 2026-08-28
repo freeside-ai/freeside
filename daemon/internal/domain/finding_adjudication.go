@@ -16,7 +16,10 @@ import (
 const (
 	// FindingAdjudicationEncodingVersion tags the canonical encoding; a change
 	// bumps it so every digest visibly changes rather than silently colliding.
-	FindingAdjudicationEncodingVersion = 1
+	// Version 2 (#893) adds the digest-bound OfferedAlternatives typed set to
+	// each entry; a version-1 body no longer decodes, which is a clean break for
+	// this pre-release artifact type rather than a graceful upgrade.
+	FindingAdjudicationEncodingVersion = 2
 	// MaxFindingAdjudicationBytes bounds a decoded artifact body: a review batch
 	// carries one entry per finding, each with bounded prose, so this cap is
 	// generous headroom, not a design limit.
@@ -26,7 +29,16 @@ const (
 // FindingAdjudicationEntry is the per-finding adjudication of one review finding
 // (plan §7 Finding Adjudication): a recommended route plus its two-axis
 // evidence, rationale, cited repository rules, assumptions, viable alternatives,
-// and open questions. The route is the decision; the axes are its evidence.
+// open questions, and the typed offered-alternative routes with their
+// consequences. The route is the decision; the axes are its evidence.
+//
+// OfferedAlternatives is the durable authority for the executable routes an
+// operator may choose instead of the recommendation, and their consequences
+// (#893). It lives on this digest-bound artifact, not only on the sync-carried
+// item payload, so persistence reconstruction and choose_alternative_route
+// re-gate the item's offered set against a content-addressed source the item
+// creator cannot forge. It is distinct from the free-text Alternatives prose,
+// which stays the §7 viable-alternatives narrative.
 //
 // Two structural rules make the trust boundary unforgeable rather than merely
 // checked. Compatibility is present exactly when the goal relationship is
@@ -56,6 +68,35 @@ type FindingAdjudicationEntry struct {
 	// threshold by Accepted; a below-threshold value is a not-accepted proposal,
 	// not an invalid entry.
 	Confidence *AdjudicationConfidence `json:"confidence"`
+	// OfferedAlternatives is the digest-bound set of executable routes other than
+	// the recommendation, each with the consequence of choosing it (#893). It is
+	// empty on every row whose (goal, compatibility) admits a single route, and
+	// carries the one alternate route on the two-route `contradictory` row.
+	OfferedAlternatives []OfferedAlternative `json:"offered_alternatives"`
+}
+
+// deriveOfferedAlternatives is the deterministic offered-alternative set for one
+// entry's (goal, route) row. It is the single authority that populates the
+// digest-bound OfferedAlternatives at construction (#893), moving the derivation
+// out of the sync projection so the artifact — not the item payload — owns the
+// offered routes and consequences. Only the two-route `contradictory` row offers
+// an alternative: the route the recommendation did not take. Every single-route
+// row offers nothing. A future model-authored offered set is a later contract
+// change; the representation is already its forward-compatible home.
+func deriveOfferedAlternatives(goal GoalRelationship, route AdjudicationRoute) []OfferedAlternative {
+	if goal != GoalContradictory {
+		return nil
+	}
+	if route == RouteDecline {
+		return []OfferedAlternative{{
+			Route:       RouteDispute,
+			Consequence: "Keep the run parked for human adjudication.",
+		}}
+	}
+	return []OfferedAlternative{{
+		Route:       RouteDecline,
+		Consequence: "Record the finding as declined under the artifact-bound contradiction.",
+	}}
 }
 
 // NewEngineAdjudicationEntry builds a pure-engine fast-path routing fact. It may
@@ -75,6 +116,7 @@ func NewEngineAdjudicationEntry(
 		GoalRelationship: goal, Compatibility: compat, Route: route,
 		Rationale: rationale, Evidence: evidence, CitedRules: citedRules,
 		Assumptions: assumptions, Alternatives: alternatives, OpenQuestions: openQuestions,
+		OfferedAlternatives: deriveOfferedAlternatives(goal, route),
 	}
 	if err := entry.Validate(); err != nil {
 		return FindingAdjudicationEntry{}, err
@@ -113,6 +155,7 @@ func NewModelAdjudicationEntry(
 		Confidence: &c,
 		Rationale:  rationale, Evidence: evidence, CitedRules: citedRules,
 		Assumptions: assumptions, Alternatives: alternatives, OpenQuestions: openQuestions,
+		OfferedAlternatives: deriveOfferedAlternatives(goal, route),
 	}
 	if err := entry.Validate(); err != nil {
 		return FindingAdjudicationEntry{}, err
@@ -140,6 +183,7 @@ func NewEngineModelAdjudicationEntry(
 		Confidence: &c,
 		Rationale:  rationale, Evidence: evidence, CitedRules: citedRules,
 		Assumptions: assumptions, Alternatives: alternatives, OpenQuestions: openQuestions,
+		OfferedAlternatives: deriveOfferedAlternatives(goal, RouteRemediate),
 	}
 	if err := entry.Validate(); err != nil {
 		return FindingAdjudicationEntry{}, err
@@ -231,6 +275,57 @@ func (e FindingAdjudicationEntry) Validate() error {
 			if !utf8.ValidString(item) {
 				return fmt.Errorf("adjudication entry %q: %w", e.FindingID, ErrFindingAdjudicationInconsistent)
 			}
+		}
+	}
+	if err := validateOfferedAlternatives(
+		e.FindingID, e.GoalRelationship, e.Compatibility, e.Route, e.OfferedAlternatives,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateOfferedAlternatives is the structural backstop for one entry's
+// digest-bound offered set (#893), including a reconstructed value that bypassed
+// deriveOfferedAlternatives. Each offered route must be a valid route for the
+// entry's (goal, compatibility) row, distinct, and different from the
+// recommendation, and each consequence non-empty valid UTF-8. It does not
+// require the deterministic derivation: the digest is the authority, and a
+// future model-authored offered set stays representable. The binding projection
+// reuses this by validating the entry it reconstructs from each proposal.
+func validateOfferedAlternatives(
+	findingID FindingID,
+	goal GoalRelationship,
+	compat *WorkUnitCompatibility,
+	recommendation AdjudicationRoute,
+	offered []OfferedAlternative,
+) error {
+	seenRoutes := make(map[AdjudicationRoute]struct{}, len(offered))
+	for _, alternative := range offered {
+		if !alternative.Route.valid() {
+			return fmt.Errorf("adjudication entry %q alternative route %q: %w",
+				findingID, alternative.Route, ErrInvalidAdjudicationRoute)
+		}
+		if err := validAdjudicationRow(goal, compat, alternative.Route); err != nil {
+			return fmt.Errorf("adjudication entry %q alternative route %q: %w",
+				findingID, alternative.Route, err)
+		}
+		if alternative.Route == recommendation {
+			return fmt.Errorf("adjudication entry %q alternative repeats recommendation: %w",
+				findingID, ErrDuplicate)
+		}
+		if _, duplicate := seenRoutes[alternative.Route]; duplicate {
+			return fmt.Errorf("adjudication entry %q alternative route %q: %w",
+				findingID, alternative.Route, ErrDuplicate)
+		}
+		seenRoutes[alternative.Route] = struct{}{}
+		if strings.TrimSpace(alternative.Consequence) == "" {
+			return fmt.Errorf("adjudication entry %q alternative consequence: %w",
+				findingID, ErrEmptyField)
+		}
+		if !utf8.ValidString(alternative.Consequence) {
+			return fmt.Errorf("adjudication entry %q alternative consequence: %w",
+				findingID, ErrFindingAdjudicationInconsistent)
 		}
 	}
 	return nil

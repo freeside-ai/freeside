@@ -209,6 +209,11 @@ func TestFindingDispositionKeepsSupersededAdjudicationBinding(t *testing.T) {
 	entries := slices.Clone(initial.Entries)
 	entries[0].Route = domain.RouteDispute
 	entries[0].Rationale = "feedback now requires operator judgment"
+	// The offered set is coupled to the recommendation on the contradictory
+	// row: flipping the route to dispute makes decline the offered alternative.
+	entries[0].OfferedAlternatives = []domain.OfferedAlternative{{
+		Route: domain.RouteDecline, Consequence: "record the finding as declined instead",
+	}}
 	successor, err := domain.NewSuccessorFindingAdjudication(
 		initial, feedback, entries, at.Add(time.Minute),
 	)

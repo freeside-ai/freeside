@@ -508,6 +508,13 @@ func (tx *ReadTx) gateFindingAdjudicationItem(
 	}
 	for _, proposal := range binding.Proposals {
 		entry, ok := entries[proposal.FindingID]
+		// OfferedAlternatives is compared here so an offered route or consequence
+		// introduced or rewritten only in the item payload fails closed against
+		// the digest-bound artifact (#893). OfferedAlternative is a comparable
+		// struct, so sameSlice compares element-wise on route and consequence,
+		// order-sensitive, with the same nil-versus-empty parity as the other
+		// list fields. This single gate covers PutAttentionItem and every
+		// snapshot reconstruction, so restart and raw-row tampering reject too.
 		if !ok || proposal.Producer != entry.Producer ||
 			proposal.GoalRelationship != entry.GoalRelationship ||
 			!sameOptionalComparable(proposal.Compatibility, entry.Compatibility) ||
@@ -516,7 +523,8 @@ func (tx *ReadTx) gateFindingAdjudicationItem(
 			!sameSlice(proposal.CitedRules, entry.CitedRules) ||
 			!sameSlice(proposal.Assumptions, entry.Assumptions) ||
 			!sameSlice(proposal.OpenQuestions, entry.OpenQuestions) ||
-			!sameOptionalComparable(proposal.Confidence, entry.Confidence) {
+			!sameOptionalComparable(proposal.Confidence, entry.Confidence) ||
+			!sameSlice(proposal.OfferedAlternatives, entry.OfferedAlternatives) {
 			return domain.ErrParentKeyMismatch
 		}
 	}

@@ -75,6 +75,7 @@ func bindingFromAdjudication(artifact domain.FindingAdjudication) domain.Finding
 			Route: entry.Route, Rationale: entry.Rationale,
 			CitedRules: slices.Clone(entry.CitedRules), Assumptions: slices.Clone(entry.Assumptions),
 			OpenQuestions: slices.Clone(entry.OpenQuestions), Confidence: entry.Confidence,
+			OfferedAlternatives: slices.Clone(entry.OfferedAlternatives),
 		})
 	}
 	return domain.FindingAdjudicationBinding{
@@ -114,7 +115,16 @@ func TestPutAttentionItemRegatesFindingAdjudicationBinding(t *testing.T) {
 		{"run", func(b *domain.FindingAdjudicationBinding) { b.RunID = "other-run" }},
 		{"round", func(b *domain.FindingAdjudicationBinding) { b.Round++ }},
 		{"finding", func(b *domain.FindingAdjudicationBinding) { b.Proposals[0].FindingID = "other-finding" }},
-		{"route", func(b *domain.FindingAdjudicationBinding) { b.Proposals[0].Route = domain.RouteDispute }},
+		{"route", func(b *domain.FindingAdjudicationBinding) {
+			// The recommendation and its offered set are coupled on the two-route
+			// contradictory row; swap both to a self-consistent shape that still
+			// diverges from the artifact, so the mismatch is caught by the store
+			// re-gate rather than the item's own construction validation.
+			b.Proposals[0].Route = domain.RouteDispute
+			b.Proposals[0].OfferedAlternatives = []domain.OfferedAlternative{{
+				Route: domain.RouteDecline, Consequence: "decline the finding instead",
+			}}
+		}},
 		{"confidence", func(b *domain.FindingAdjudicationBinding) {
 			confidence := domain.ConfidenceMedium
 			b.Proposals[0].Confidence = &confidence
@@ -122,6 +132,7 @@ func TestPutAttentionItemRegatesFindingAdjudicationBinding(t *testing.T) {
 		{"axes", func(b *domain.FindingAdjudicationBinding) {
 			b.Proposals[0].GoalRelationship = domain.GoalUnclear
 			b.Proposals[0].Route = domain.RouteAttentionUnclear
+			b.Proposals[0].OfferedAlternatives = nil
 		}},
 		{"producer", func(b *domain.FindingAdjudicationBinding) {
 			compatibility := domain.CompatibilityAllowed
@@ -130,6 +141,7 @@ func TestPutAttentionItemRegatesFindingAdjudicationBinding(t *testing.T) {
 			b.Proposals[0].Compatibility = &compatibility
 			b.Proposals[0].Route = domain.RouteRemediate
 			b.Proposals[0].Confidence = nil
+			b.Proposals[0].OfferedAlternatives = nil
 		}},
 	}
 	for index, test := range tests {
@@ -270,6 +282,16 @@ func TestPutAttentionItemRejectsIncompleteOrTamperedAdjudicationProjection(t *te
 		{"cited rules", func(b *domain.FindingAdjudicationBinding) { b.Proposals[0].CitedRules = []string{"other rule"} }},
 		{"assumptions", func(b *domain.FindingAdjudicationBinding) { b.Proposals[0].Assumptions = []string{"other assumption"} }},
 		{"open questions", func(b *domain.FindingAdjudicationBinding) { b.Proposals[0].OpenQuestions = []string{"other question"} }},
+		// The offered set is authenticated element-wise against the artifact
+		// (#893): dropping the alternative, or keeping its route while rewriting
+		// the consequence, must both fail closed. finding-a is contradictory with a
+		// decline recommendation, so its digest-bound offer is the dispute route.
+		{"offered removed", func(b *domain.FindingAdjudicationBinding) { b.Proposals[0].OfferedAlternatives = nil }},
+		{"offered consequence", func(b *domain.FindingAdjudicationBinding) {
+			b.Proposals[0].OfferedAlternatives = []domain.OfferedAlternative{{
+				Route: domain.RouteDispute, Consequence: "forged operator-facing consequence",
+			}}
+		}},
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -282,6 +304,121 @@ func TestPutAttentionItemRejectsIncompleteOrTamperedAdjudicationProjection(t *te
 			})
 			if !errors.Is(err, domain.ErrParentKeyMismatch) {
 				t.Fatalf("put = %v, want ErrParentKeyMismatch", err)
+			}
+		})
+	}
+}
+
+// TestPutAttentionItemRegatesOfferedAlternativeNilEmpty proves the offered-set
+// re-gate distinguishes a nil offered set from an empty one (#893): a
+// non-contradictory entry carries no offered alternative, so an item claiming an
+// empty (but non-nil) slice diverges from the digest-bound artifact and fails
+// closed, matching the nil-versus-empty parity the other list fields enforce.
+func TestPutAttentionItemRegatesOfferedAlternativeNilEmpty(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	runID := domain.RunID("run-item-adjudication-nil-empty")
+	at := time.Date(2026, 8, 21, 20, 0, 0, 0, time.UTC)
+	findingID := domain.FindingID("finding-adjacent")
+	st := seedReviewRound(t, runID, 1, []domain.Finding{
+		adjudicationFinding(findingID, runID, "daemon/a.go", at),
+	}, at)
+	entry, err := domain.NewModelAdjudicationEntry(
+		findingID, domain.GoalAdjacent, nil, domain.RouteDefer,
+		domain.ConfidenceHigh, "the finding is adjacent to the approved work unit",
+		nil, []string{"AGENTS.md"}, []string{"the contract is current"}, nil, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.OfferedAlternatives != nil {
+		t.Fatalf("adjacent entry offered = %v, want nil", entry.OfferedAlternatives)
+	}
+	artifact, err := domain.NewFindingAdjudication(
+		runID, 1, adjSpecDigest, adjInstructionDigest, adjPolicyDigest,
+		[]domain.FindingAdjudicationEntry{entry}, at,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutFindingAdjudication(ctx, artifact)
+	}); err != nil {
+		t.Fatalf("put artifact: %v", err)
+	}
+	binding := bindingFromAdjudication(artifact)
+	binding.Proposals[0].OfferedAlternatives = []domain.OfferedAlternative{}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, adjudicationItem(t, "item-nil-empty", binding))
+	}); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("put empty-vs-nil offered = %v, want ErrParentKeyMismatch", err)
+	}
+}
+
+// TestAttentionItemReadsRegateOfferedAlternatives proves a raw-row rewrite of an
+// item's offered consequence fails closed on every snapshot-backed read (#893),
+// so restart and direct database tampering cannot detach the offered set from
+// its digest-bound artifact.
+func TestAttentionItemReadsRegateOfferedAlternatives(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	runID := domain.RunID("run-item-adjudication-offered-reconstruction")
+	at := time.Date(2026, 8, 21, 20, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "store.db")
+	findingID := domain.FindingID("finding-a")
+	st := seedReviewRoundAt(t, path, runID, 1, []domain.Finding{
+		adjudicationFinding(findingID, runID, "daemon/a.go", at),
+	}, at)
+	artifact := modelAdjudication(t, runID, 1, findingID, at)
+	item := adjudicationItem(t, "item-offered-reconstruction", bindingFromAdjudication(artifact))
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutFindingAdjudication(ctx, artifact); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatalf("put fixture: %v", err)
+	}
+
+	item.FindingAdjudication.Proposals[0].OfferedAlternatives[0].Consequence = "forged operator-facing consequence"
+	body, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal forged item: %v", err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.ExecContext(ctx, `UPDATE attention_items SET body = ? WHERE id = ?`, string(body), item.ID); err != nil {
+		t.Fatalf("forge item body: %v", err)
+	}
+
+	reads := []struct {
+		name string
+		read func(*store.ReadTx) error
+	}{
+		{"get snapshot", func(tx *store.ReadTx) error {
+			_, _, err := tx.GetAttentionItemSnapshot(ctx, item.ID)
+			return err
+		}},
+		{"list all", func(tx *store.ReadTx) error {
+			_, err := tx.ListAttentionItems(ctx)
+			return err
+		}},
+		{"list open type", func(tx *store.ReadTx) error {
+			_, err := tx.ListOpenAttentionItems(ctx, domain.AttentionFindingAdjudication)
+			return err
+		}},
+		{"list open run", func(tx *store.ReadTx) error {
+			_, err := tx.ListOpenAttentionItemsForRun(ctx, runID)
+			return err
+		}},
+	}
+	for _, test := range reads {
+		t.Run(test.name, func(t *testing.T) {
+			if err := st.Read(ctx, test.read); !errors.Is(err, domain.ErrParentKeyMismatch) {
+				t.Fatalf("read = %v, want ErrParentKeyMismatch", err)
 			}
 		})
 	}

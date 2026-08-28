@@ -24,6 +24,7 @@ import (
 type fixture struct {
 	service *signet.Service
 	store   *store.Store
+	dbPath  string
 	item    domain.AttentionItem
 	device  domain.Device
 	now     *time.Time
@@ -39,7 +40,8 @@ var testTopicKey = []byte("0123456789abcdef0123456789abcdef")
 func newFixture(t *testing.T) fixture {
 	t.Helper()
 	ctx := context.Background()
-	s, err := store.Open(ctx, t.TempDir()+"/signet.db", store.Options{})
+	dbPath := t.TempDir() + "/signet.db"
+	s, err := store.Open(ctx, dbPath, store.Options{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -86,7 +88,7 @@ func newFixture(t *testing.T) fixture {
 	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutDevice(ctx, device) }); err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
-	return fixture{service: service, store: s, item: item, device: device, now: &now}
+	return fixture{service: service, store: s, dbPath: dbPath, item: item, device: device, now: &now}
 }
 
 // TestPutItemRejectsDisallowedAction exercises the signet item boundary: an
