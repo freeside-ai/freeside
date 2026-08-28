@@ -560,19 +560,25 @@ func deriveSupervisionState(snapshot observedb.Snapshot, conclusion Conclusion) 
 }
 
 // publicationAccepted requires both sides of the publication worker's final
-// durable boundary: a completed terminal for the exact ready invocation and
-// the selected run's publication task marked dispatched. publication_ready
-// alone deliberately remains an outcome for operators, but is not permission
-// for the real-run supervisor to stop the daemon.
+// durable boundary under their authenticated owners: a completed terminal for
+// the producing invocation and publication_ready for the dedicated publication
+// invocation. The selected run's publication task is already authenticated and
+// marked dispatched. publication_ready alone deliberately remains an outcome
+// for operators, but is not permission for the real-run supervisor to stop the
+// daemon.
 func publicationAccepted(snapshot observedb.Snapshot) bool {
-	if snapshot.PublicationInvocationID == "" {
+	if !snapshot.PublicationReadyAuthenticated ||
+		snapshot.ProducingInvocationID == "" || snapshot.PublicationInvocationID == "" {
 		return false
 	}
 	completed := false
 	ready := false
 	for _, milestone := range snapshot.Observation.Milestones {
+		if milestone.InvocationID == nil {
+			continue
+		}
 		if milestone.Kind == domain.MilestoneTerminalRecorded &&
-			*milestone.InvocationID == snapshot.PublicationInvocationID &&
+			*milestone.InvocationID == snapshot.ProducingInvocationID &&
 			milestone.Terminal != nil && *milestone.Terminal == domain.ObservedStatusCompleted {
 			completed = true
 		}

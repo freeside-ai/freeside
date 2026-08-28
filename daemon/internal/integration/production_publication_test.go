@@ -31,9 +31,11 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/observe"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
@@ -1014,6 +1016,131 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 	if p.transport.pushCount() != beforePushes {
 		t.Fatal("converged replay repeated the publication transport")
 	}
+}
+
+func TestProductionPublicationSupervisionTracksSplitInvocationOwners(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterReady: func() error { return errors.New("stop after durable ready item") },
+	}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("ready-item seam did not interrupt reconciliation")
+	}
+	if state := productionSupervisionState(t, p); state != observe.SupervisionPublicationReady {
+		t.Fatalf("pre-terminal supervision state = %q, want %q",
+			state, observe.SupervisionPublicationReady)
+	}
+
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	result, err := p.reconcileLanes()
+	if err != nil || result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
+		t.Fatalf("complete publication = %#v, %v", result, err)
+	}
+	if state := productionSupervisionState(t, p); state != observe.SupervisionPublished {
+		t.Fatalf("completed supervision state = %q, want %q", state, observe.SupervisionPublished)
+	}
+
+	var observation domain.RunObservation
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		observation, err = tx.ObserveRun(p.ctx, p.runID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	producingInvocation := p.invocation
+	publicationInvocation := domain.InvocationID("publish-production-" + string(p.runID))
+	readyOwned := false
+	terminalOwned := false
+	for _, milestone := range observation.Milestones {
+		if milestone.InvocationID == nil {
+			continue
+		}
+		if milestone.Kind == domain.MilestonePublicationReady &&
+			*milestone.InvocationID == publicationInvocation {
+			readyOwned = true
+		}
+		if milestone.Kind == domain.MilestoneTerminalRecorded &&
+			*milestone.InvocationID == producingInvocation {
+			terminalOwned = true
+		}
+	}
+	if !readyOwned || !terminalOwned {
+		t.Fatalf("split milestone ownership: ready=%v terminal=%v", readyOwned, terminalOwned)
+	}
+}
+
+func TestProductionPublicationSupervisionRejectsUnboundReadyMilestone(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	result, err := p.reconcileLanes()
+	if err != nil || result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
+		t.Fatalf("complete publication = %#v, %v", result, err)
+	}
+	if state := productionSupervisionState(t, p); state != observe.SupervisionPublished {
+		t.Fatalf("authenticated supervision state = %q, want %q",
+			state, observe.SupervisionPublished)
+	}
+
+	raw, err := sql.Open("sqlite", p.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultSQL, deleteErr := raw.ExecContext(
+		p.ctx, "DELETE FROM ready_item_pr_bindings WHERE item_id = ?",
+		domain.ProductionReadyItemID(p.runID),
+	)
+	closeErr := raw.Close()
+	if deleteErr != nil || closeErr != nil {
+		t.Fatal(errors.Join(deleteErr, closeErr))
+	}
+	if changed, err := resultSQL.RowsAffected(); err != nil || changed != 1 {
+		t.Fatalf("deleted ready bindings = %d, %v", changed, err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = observe.Run(p.ctx, []string{
+		"-db", p.dbPath,
+		"-run", string(p.runID),
+		"-snapshot",
+		"-approved-recipe", string(p.recipeD),
+	}, &stdout, &stderr)
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("follow forged publication_ready = %v, want ErrNotFound (stderr: %s)",
+			err, stderr.String())
+	}
+}
+
+func productionSupervisionState(
+	t *testing.T, p *productionPublicationHarness,
+) observe.SupervisionState {
+	t.Helper()
+	// The production harness predates the command's topic-key boundary and
+	// opens its isolated test store directly. Supply the sibling key that a
+	// real daemon state directory already carries before exercising follow.
+	if _, err := topicstore.LoadOrCreateKey(p.dbPath, false); err != nil {
+		t.Fatalf("create test topic key: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	err := observe.Run(p.ctx, []string{
+		"-db", p.dbPath,
+		"-run", string(p.runID),
+		"-snapshot",
+		"-approved-recipe", string(p.recipeD),
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("follow -snapshot: %v (stderr: %s)", err, stderr.String())
+	}
+	var snapshot struct {
+		State observe.SupervisionState `json:"state"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &snapshot); err != nil {
+		t.Fatalf("decode supervision snapshot %q: %v", stdout.String(), err)
+	}
+	return snapshot.State
 }
 
 // TestProductionReviewerInstructionEditPublishesAsAdvisory: on the
