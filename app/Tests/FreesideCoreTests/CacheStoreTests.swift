@@ -281,20 +281,31 @@ private final class FakeKeychain: @unchecked Sendable {
     var operations: KeychainSecurityOperations {
         KeychainSecurityOperations(
             copyMatching: { [self] query in
-                let backend = backend(for: query)
-                calls.append(call(.copy, backend: backend, query: query))
-                if var overrides = copyOverrides[backend], !overrides.isEmpty {
-                    let result = overrides.removeFirst()
-                    copyOverrides[backend] = overrides
-                    return result
+                // Mirrors SecItemMergeResults: the Data Protection result wins
+                // when it succeeds, otherwise the file-based result stands.
+                var merged: (OSStatus, Any?) = (errSecItemNotFound, nil)
+                for backend in targets(for: query) {
+                    calls.append(call(.copy, backend: backend, query: query))
+                    let result: (OSStatus, Any?)
+                    if var overrides = copyOverrides[backend], !overrides.isEmpty {
+                        result = overrides.removeFirst()
+                        copyOverrides[backend] = overrides
+                    } else if let item = items[backend] {
+                        result = (errSecSuccess, item)
+                    } else {
+                        result = (errSecItemNotFound, nil)
+                    }
+                    if result.0 == errSecSuccess { return result }
+                    if result.0 != errSecItemNotFound { merged = result }
                 }
-                guard let item = items[backend] else {
-                    return (errSecItemNotFound, nil)
-                }
-                return (errSecSuccess, item)
+                return merged
             },
             add: { [self] attributes in
-                let backend = backend(for: attributes)
+                // SecItemAdd never targets both: only an explicit `true` adds
+                // to the Data Protection Keychain.
+                let backend: FakeKeychainBackend =
+                    attributes[kSecUseDataProtectionKeychain as String] as? Bool == true
+                    ? .dataProtection : .legacy
                 calls.append(call(.add, backend: backend, query: attributes))
                 addedAttributes.append(attributes)
                 if !addStatuses.isEmpty {
@@ -309,25 +320,41 @@ private final class FakeKeychain: @unchecked Sendable {
                 return errSecSuccess
             },
             delete: { [self] query in
-                let backend = backend(for: query)
-                calls.append(call(.delete, backend: backend, query: query))
-                if var statuses = deleteStatuses[backend], !statuses.isEmpty {
-                    let status = statuses.removeFirst()
-                    deleteStatuses[backend] = statuses
-                    if status != errSecSuccess && status != errSecItemNotFound {
-                        return status
+                // A delete runs against every targeted backend; one success is
+                // a success, otherwise the first real error is reported.
+                var merged = errSecItemNotFound
+                for backend in targets(for: query) {
+                    calls.append(call(.delete, backend: backend, query: query))
+                    var status = errSecSuccess
+                    if var statuses = deleteStatuses[backend], !statuses.isEmpty {
+                        status = statuses.removeFirst()
+                        deleteStatuses[backend] = statuses
+                    }
+                    if status == errSecSuccess || status == errSecItemNotFound {
+                        status =
+                            items.removeValue(forKey: backend) != nil
+                            ? errSecSuccess : errSecItemNotFound
+                    }
+                    if status == errSecSuccess {
+                        merged = errSecSuccess
+                    } else if status != errSecItemNotFound && merged != errSecSuccess {
+                        merged = status
                     }
                 }
-                guard items.removeValue(forKey: backend) != nil else {
-                    return errSecItemNotFound
-                }
-                return errSecSuccess
+                return merged
             })
     }
 
-    private func backend(for query: [String: Any]) -> FakeKeychainBackend {
-        query[kSecUseDataProtectionKeychain as String] as? Bool == true
-            ? .dataProtection : .legacy
+    // Mirrors SecItemCategorizeQuery on macOS: an explicit
+    // kSecUseDataProtectionKeychain selects exactly one backend, and a query
+    // that omits it targets both. The store must never issue the latter (a
+    // flag-less delete removed the live credential, #997).
+    private func targets(for query: [String: Any]) -> [FakeKeychainBackend] {
+        switch query[kSecUseDataProtectionKeychain as String] as? Bool {
+        case true?: return [.dataProtection]
+        case false?: return [.legacy]
+        case nil: return [.dataProtection, .legacy]
+        }
     }
 
     private func call(
@@ -422,6 +449,23 @@ private func storedItem(_ credential: DeviceCredential) throws -> [String: Any] 
         #expect(
             added[kSecAttrAccessible as String] as? String
                 == kSecAttrAccessibleAfterFirstUnlock as String)
+    }
+
+    // Regression for the #997 symptom: the legacy cleanup on a successful
+    // read must target only the file-based Keychain. A flag-less delete also
+    // reaches the Data Protection Keychain, so the first load after pairing
+    // deleted the credential it had just returned.
+    @Test func repeatedLoadsKeepTheAuthoritativeItem() throws {
+        let fake = FakeKeychain()
+        let value = try credential()
+        fake.items[.dataProtection] = try storedItem(value)
+        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
+
+        #expect(try store.load() == value)
+        #expect(try store.load() == value)
+        #expect(fake.items[.dataProtection] != nil)
+        #expect(fake.calls.map(\.kind) == [.copy, .delete, .copy, .delete])
+        #expect(fake.calls.map(\.backend) == [.dataProtection, .legacy, .dataProtection, .legacy])
     }
 
     @Test func failedLegacyCleanupBeforeReplacementPreservesAuthoritativeItem() throws {
