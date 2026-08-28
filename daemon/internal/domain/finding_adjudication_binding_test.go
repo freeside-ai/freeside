@@ -20,8 +20,12 @@ func TestFindingAdjudicationBindingRules(t *testing.T) {
 
 	base.FindingAdjudication.Proposals[0].Rationale = "mutated"
 	base.FindingAdjudication.Proposals[0].OfferedAlternatives[0].Consequence = "mutated"
+	base.FindingAdjudication.Proposals[0].Evidence[0] = "mutated"
+	base.FindingAdjudication.Proposals[0].FindingLocation.Path = "mutated"
 	if item.FindingAdjudication.Proposals[0].Rationale == "mutated" ||
-		item.FindingAdjudication.Proposals[0].OfferedAlternatives[0].Consequence == "mutated" {
+		item.FindingAdjudication.Proposals[0].OfferedAlternatives[0].Consequence == "mutated" ||
+		item.FindingAdjudication.Proposals[0].Evidence[0] == "mutated" ||
+		item.FindingAdjudication.Proposals[0].FindingLocation.Path == "mutated" {
 		t.Fatal("constructed item aliases caller-owned finding adjudication binding")
 	}
 
@@ -96,6 +100,15 @@ func TestFindingAdjudicationBindingValidationRejects(t *testing.T) {
 		{"empty consequence", func(b *domain.FindingAdjudicationBinding) {
 			b.Proposals[0].OfferedAlternatives[0].Consequence = "  "
 		}, domain.ErrEmptyField},
+		{"invalid finding location", func(b *domain.FindingAdjudicationBinding) {
+			b.Proposals[0].FindingLocation = &domain.FindingLocation{Path: "x", StartLine: 5, EndLine: 2}
+		}, domain.ErrInvertedRange},
+		{"non-utf8 finding message", func(b *domain.FindingAdjudicationBinding) {
+			b.Proposals[0].FindingMessage = "bad\xffmessage"
+		}, domain.ErrFindingAdjudicationInconsistent},
+		{"non-utf8 evidence", func(b *domain.FindingAdjudicationBinding) {
+			b.Proposals[0].Evidence = []string{"bad\xffevidence"}
+		}, domain.ErrFindingAdjudicationInconsistent},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

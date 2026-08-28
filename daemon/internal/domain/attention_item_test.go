@@ -62,9 +62,13 @@ func validItemInput(typ domain.AttentionType) domain.AttentionItemInput {
 		in.FindingAdjudication = &domain.FindingAdjudicationBinding{
 			RunID: runID, Round: 2, AdjudicationDigest: "sha256:adjudication",
 			Proposals: []domain.FindingAdjudicationProposal{{
-				FindingID: "finding-1", Producer: domain.AdjudicationProducerModel,
+				FindingID:        "finding-1",
+				FindingMessage:   "the finding contradicts the approved work unit",
+				FindingLocation:  &domain.FindingLocation{Path: "daemon/example.go", StartLine: 12, EndLine: 12},
+				Producer:         domain.AdjudicationProducerModel,
 				GoalRelationship: domain.GoalContradictory, Route: domain.RouteDecline,
 				Rationale:     "the finding contradicts the approved work unit",
+				Evidence:      []string{"the reported change lies outside the declared work-unit paths"},
 				CitedRules:    []string{"AGENTS.md: stay focused"},
 				Assumptions:   []string{"the reported path is accurate"},
 				OpenQuestions: []string{"Should this become a follow-up?"},

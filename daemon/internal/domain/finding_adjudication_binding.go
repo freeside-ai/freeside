@@ -3,6 +3,7 @@ package domain
 import (
 	"fmt"
 	"slices"
+	"unicode/utf8"
 )
 
 // FindingAdjudicationBinding is the sync-carried projection of one immutable
@@ -16,14 +17,35 @@ type FindingAdjudicationBinding struct {
 }
 
 // FindingAdjudicationProposal presents one recommended route and the typed
-// alternatives the operator may choose instead.
+// alternatives the operator may choose instead. It also carries the finding
+// context §9 requires the operator to see before committing a durable route:
+// the daemon-authenticated coordinates (FindingMessage, FindingLocation) copied
+// from the immutable stored Finding, and the Evidence copied from the matching
+// artifact entry — daemon-derived for the engine producer's fast path, model-
+// derived otherwise (see Evidence). The store re-gates every copied field
+// against its immutable source at persistence and on actionable reconstruction
+// (#892).
 type FindingAdjudicationProposal struct {
-	FindingID           FindingID               `json:"finding_id"`
-	Producer            AdjudicationProducer    `json:"producer"`
-	GoalRelationship    GoalRelationship        `json:"goal_relationship"`
-	Compatibility       *WorkUnitCompatibility  `json:"compatibility"`
-	Route               AdjudicationRoute       `json:"route"`
-	Rationale           string                  `json:"rationale"`
+	FindingID FindingID `json:"finding_id"`
+	// FindingMessage is the whitespace-normalized finding message and
+	// FindingLocation the finding's source coordinates, both copied from the
+	// immutable stored Finding (message via NormalizeFindingMessage, location
+	// as-is). They are daemon-authenticated facts with no artifact-entry
+	// counterpart, rendered in the daemon-fact register. FindingLocation is nil
+	// for a review-level finding that carries no path.
+	FindingMessage   string                 `json:"finding_message"`
+	FindingLocation  *FindingLocation       `json:"finding_location"`
+	Producer         AdjudicationProducer   `json:"producer"`
+	GoalRelationship GoalRelationship       `json:"goal_relationship"`
+	Compatibility    *WorkUnitCompatibility `json:"compatibility"`
+	Route            AdjudicationRoute      `json:"route"`
+	Rationale        string                 `json:"rationale"`
+	// Evidence is the artifact-digest-bound evidence copied from the matching
+	// FindingAdjudicationEntry. Its provenance follows Producer: the daemon fact
+	// the engine fast path derives (the finding's own containment location) for
+	// AdjudicationProducerEngine, model-authored free text otherwise. It renders
+	// in that same producer's register, never presented as the other's.
+	Evidence            []string                `json:"evidence"`
 	CitedRules          []string                `json:"cited_rules"`
 	Assumptions         []string                `json:"assumptions"`
 	OpenQuestions       []string                `json:"open_questions"`
@@ -60,19 +82,36 @@ func (b FindingAdjudicationBinding) Validate() error {
 		}
 		seenFindings[proposal.FindingID] = struct{}{}
 		// The proposal is a projection of one artifact entry; reconstruct that
-		// entry — including its digest-bound OfferedAlternatives — and delegate to
-		// the entry's own validation so the offered-set rules live in one place
-		// (#893). The store re-gates the copied fields against the artifact.
+		// entry — including its digest-bound OfferedAlternatives and Evidence — and
+		// delegate to the entry's own validation so the offered-set rules and the
+		// evidence UTF-8 guard live in one place (#893, #892). The store re-gates
+		// the copied fields against the artifact and the stored Finding.
 		entry := FindingAdjudicationEntry{
 			FindingID: proposal.FindingID, Producer: proposal.Producer,
 			GoalRelationship: proposal.GoalRelationship, Compatibility: proposal.Compatibility,
-			Route: proposal.Route, Rationale: proposal.Rationale,
+			Route: proposal.Route, Rationale: proposal.Rationale, Evidence: proposal.Evidence,
 			CitedRules: proposal.CitedRules, Assumptions: proposal.Assumptions,
 			OpenQuestions: proposal.OpenQuestions, Confidence: proposal.Confidence,
 			OfferedAlternatives: proposal.OfferedAlternatives,
 		}
 		if err := entry.Validate(); err != nil {
 			return fmt.Errorf("finding adjudication proposal %q: %w", proposal.FindingID, err)
+		}
+		// FindingMessage and FindingLocation are daemon-authenticated coordinates
+		// with no artifact-entry counterpart, so they are structurally validated
+		// here; the store re-gates their authenticity against the stored Finding.
+		// Emptiness is deliberately not rejected: an empty finding message is a
+		// handled degenerate case elsewhere (an unfingerprintable finding is
+		// carried, not refused), so the projection matches whatever the stored
+		// Finding holds and the store re-gate is the sole authority on its content.
+		if !utf8.ValidString(proposal.FindingMessage) {
+			return fmt.Errorf("finding adjudication proposal %q message: %w",
+				proposal.FindingID, ErrFindingAdjudicationInconsistent)
+		}
+		if proposal.FindingLocation != nil {
+			if err := proposal.FindingLocation.Validate(); err != nil {
+				return fmt.Errorf("finding adjudication proposal %q: %w", proposal.FindingID, err)
+			}
 		}
 	}
 	return nil
@@ -95,6 +134,8 @@ func cloneFindingAdjudicationBinding(binding *FindingAdjudicationBinding) *Findi
 	cloned.Proposals = make([]FindingAdjudicationProposal, len(binding.Proposals))
 	for idx, proposal := range binding.Proposals {
 		cloned.Proposals[idx] = proposal
+		cloned.Proposals[idx].FindingLocation = clonePtr(proposal.FindingLocation)
+		cloned.Proposals[idx].Evidence = slices.Clone(proposal.Evidence)
 		cloned.Proposals[idx].Compatibility = clonePtr(proposal.Compatibility)
 		cloned.Proposals[idx].Confidence = clonePtr(proposal.Confidence)
 		cloned.Proposals[idx].CitedRules = slices.Clone(proposal.CitedRules)

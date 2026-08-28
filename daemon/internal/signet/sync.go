@@ -1242,6 +1242,7 @@ func normalizeAttentionItem(item domain.AttentionItem) domain.AttentionItem {
 			binding.Proposals = slices.Clone(binding.Proposals)
 			for idx := range binding.Proposals {
 				proposal := &binding.Proposals[idx]
+				proposal.Evidence = nonNilSlice(proposal.Evidence)
 				proposal.CitedRules = nonNilSlice(proposal.CitedRules)
 				proposal.Assumptions = nonNilSlice(proposal.Assumptions)
 				proposal.OpenQuestions = nonNilSlice(proposal.OpenQuestions)

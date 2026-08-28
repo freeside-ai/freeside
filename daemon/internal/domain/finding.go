@@ -132,6 +132,18 @@ type FindingFingerprint string
 // colliding across versions.
 const findingFingerprintVersion = "fpv1"
 
+// NormalizeFindingMessage collapses a finding message to its cross-round
+// comparison form: leading and trailing whitespace trimmed and every internal
+// whitespace run reduced to a single space, with no case folding. It is the
+// single shared derivation for the whitespace-normalized message, used by
+// Fingerprint (finding identity), the finding-adjudication proposal producer,
+// and the store re-gate, so a message projected into an adjudication proposal
+// and the message recomputed from the stored Finding cannot diverge on cosmetic
+// reflowing alone.
+func NormalizeFindingMessage(message string) string {
+	return strings.Join(strings.Fields(message), " ")
+}
+
 // Fingerprint derives the finding's cross-round semantic identity over the
 // immutable persisted fields that survive remediation: the review Source, the
 // location Path, and the whitespace-normalized Message. Everything that
@@ -156,7 +168,7 @@ func (f Finding) Fingerprint() (FindingFingerprint, error) {
 	if f.Location == nil || f.Location.Path == "" {
 		return "", fmt.Errorf("finding fingerprint: %w", ErrUnfingerprintableFinding)
 	}
-	message := strings.Join(strings.Fields(f.Message), " ")
+	message := NormalizeFindingMessage(f.Message)
 	if message == "" {
 		return "", fmt.Errorf("finding fingerprint: %w", ErrUnfingerprintableFinding)
 	}

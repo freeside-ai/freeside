@@ -10,6 +10,7 @@ import (
 	mrand "math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1338,6 +1339,49 @@ func TestFindingAdjudicationStructuredDissentForcesModelReentry(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFindingAdjudicationProjectsAuthenticatedFindingContext(t *testing.T) {
+	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 3, EndLine: 5}
+	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
+	f.writePath(t, f.headRoot)
+	revision := domain.ProposedWorkUnitRevision
+	entry, err := domain.NewModelAdjudicationEntry(
+		f.finding.ID, domain.GoalRequired, &revision, domain.RouteParkRevision, domain.ConfidenceHigh,
+		"the finding requires a work-unit revision",
+		[]string{"the changed lines fall outside the declared work-unit paths"},
+		nil, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.workflow.findingAdjudicator = newDeterministicFindingAdjudicator(entry)
+	if state, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot,
+	); err != nil || state != productionReviewPending {
+		t.Fatalf("adjudication = %d, %v", state, err)
+	}
+	var item domain.AttentionItem
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		var readErr error
+		item, readErr = tx.GetAttentionItem(f.ctx, productionReviewItemID(f.task.RunID, 1))
+		return readErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The producer projects the daemon-authenticated coordinates from the stored
+	// Finding (message normalized, location as-is) and the evidence from the
+	// artifact entry, so the operator sees the finding before the durable route.
+	proposal := item.FindingAdjudication.Proposals[0]
+	if proposal.FindingMessage != domain.NormalizeFindingMessage(f.finding.Message) {
+		t.Fatalf("finding_message = %q, want %q", proposal.FindingMessage, f.finding.Message)
+	}
+	if proposal.FindingLocation == nil || *proposal.FindingLocation != *location {
+		t.Fatalf("finding_location = %#v, want %#v", proposal.FindingLocation, location)
+	}
+	if !slices.Equal(proposal.Evidence, entry.Evidence) {
+		t.Fatalf("evidence = %#v, want %#v", proposal.Evidence, entry.Evidence)
 	}
 }
 

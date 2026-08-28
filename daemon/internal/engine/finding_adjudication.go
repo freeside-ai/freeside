@@ -452,7 +452,11 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 		if err := tx.PutAttentionItem(ctx, predecessor); err != nil {
 			return err
 		}
-		replacement, err := w.newFindingAdjudicationAttentionItem(task, successor)
+		findings, err := loadAdjudicationFindings(ctx, tx, successor)
+		if err != nil {
+			return err
+		}
+		replacement, err := w.newFindingAdjudicationAttentionItem(task, successor, findings)
 		if err != nil {
 			return err
 		}
@@ -966,17 +970,56 @@ func (w *productionPublicationWorkflow) reviewRoundDispositionComplete(
 	return true, nil
 }
 
-func findingAdjudicationBinding(artifact domain.FindingAdjudication) domain.FindingAdjudicationBinding {
+// findingLookup reads a stored Finding by ID. Both *store.ReadTx and
+// *store.WriteTx satisfy it (WriteTx promotes the ReadTx method), so the
+// producer loads the daemon-authenticated finding coordinates from whichever
+// transaction handle the caller already holds, never opening a nested one.
+type findingLookup interface {
+	GetFinding(ctx context.Context, id domain.FindingID) (domain.Finding, error)
+}
+
+// loadAdjudicationFindings loads the immutable stored Finding for each artifact
+// entry, keyed by finding ID, so findingAdjudicationBinding can project the
+// daemon-authenticated message and location the store re-gate authenticates
+// (#892). Every entry's finding was loaded when the artifact was produced, so a
+// missing one is a store-integrity fault surfaced (GetFinding fails closed)
+// rather than a silently blank projection.
+func loadAdjudicationFindings(
+	ctx context.Context, lookup findingLookup, artifact domain.FindingAdjudication,
+) (map[domain.FindingID]domain.Finding, error) {
+	findings := make(map[domain.FindingID]domain.Finding, len(artifact.Entries))
+	for _, entry := range artifact.Entries {
+		if _, ok := findings[entry.FindingID]; ok {
+			continue
+		}
+		finding, err := lookup.GetFinding(ctx, entry.FindingID)
+		if err != nil {
+			return nil, err
+		}
+		findings[entry.FindingID] = finding
+	}
+	return findings, nil
+}
+
+func findingAdjudicationBinding(
+	artifact domain.FindingAdjudication, findings map[domain.FindingID]domain.Finding,
+) domain.FindingAdjudicationBinding {
 	proposals := make([]domain.FindingAdjudicationProposal, 0, len(artifact.Entries))
 	for _, entry := range artifact.Entries {
-		// Copy the digest-bound offered set from the artifact entry; the store
-		// re-gates the item's copied set against this same source, so projecting
-		// anything the entry does not carry would fail closed (#893). The offered
-		// routes and consequences are no longer synthesized here.
+		finding := findings[entry.FindingID]
+		// Copy the digest-bound offered set and evidence from the artifact entry,
+		// and the daemon-authenticated message and location from the stored
+		// Finding. The store re-gates every copied field against these same
+		// sources, so projecting anything they do not carry fails closed (#893,
+		// #892). The message is whitespace-normalized through the one shared
+		// derivation the re-gate also uses, so the two cannot diverge.
 		proposal := domain.FindingAdjudicationProposal{
-			FindingID: entry.FindingID, Producer: entry.Producer,
+			FindingID:        entry.FindingID,
+			FindingMessage:   domain.NormalizeFindingMessage(finding.Message),
+			FindingLocation:  finding.Location,
+			Producer:         entry.Producer,
 			GoalRelationship: entry.GoalRelationship, Compatibility: entry.Compatibility,
-			Route: entry.Route, Rationale: entry.Rationale,
+			Route: entry.Route, Rationale: entry.Rationale, Evidence: slices.Clone(entry.Evidence),
 			CitedRules: slices.Clone(entry.CitedRules), Assumptions: slices.Clone(entry.Assumptions),
 			OpenQuestions: slices.Clone(entry.OpenQuestions), Confidence: entry.Confidence,
 			OfferedAlternatives: slices.Clone(entry.OfferedAlternatives),
@@ -1000,8 +1043,9 @@ func productionFindingAdjudicationItemID(
 
 func (w *productionPublicationWorkflow) newFindingAdjudicationAttentionItem(
 	task productionPublicationTask, artifact domain.FindingAdjudication,
+	findings map[domain.FindingID]domain.Finding,
 ) (domain.AttentionItem, error) {
-	binding := findingAdjudicationBinding(artifact)
+	binding := findingAdjudicationBinding(artifact, findings)
 	actions := []domain.Action{
 		domain.ActionAcceptRecommendedRoute, domain.ActionDiscuss, domain.ActionStop,
 	}
@@ -1052,7 +1096,15 @@ func (w *productionPublicationWorkflow) putFindingAdjudicationAttention(
 		}
 		return nil
 	}
-	item, err := w.newFindingAdjudicationAttentionItem(task, artifact)
+	var findings map[domain.FindingID]domain.Finding
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		findings, err = loadAdjudicationFindings(ctx, tx, artifact)
+		return err
+	}); err != nil {
+		return err
+	}
+	item, err := w.newFindingAdjudicationAttentionItem(task, artifact, findings)
 	if err != nil {
 		return err
 	}
