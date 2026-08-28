@@ -83,20 +83,40 @@ struct LastUpdatedLabel: View {
     let lastUpdatedAt: Date?
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
+        // Advance only on minute boundaries measured from the last update:
+        // that is when the coarse label (and the stale color) actually
+        // change. During healthy operation `lastUpdatedAt` changes every
+        // heartbeat and drives the re-render itself, so this timeline only
+        // matters once refreshes stop. Anchoring the period at
+        // `lastUpdatedAt` flips the "N min ago" count exactly on the minute.
+        TimelineView(.periodic(from: lastUpdatedAt ?? .now, by: 60)) { context in
             HStack(spacing: 4) {
                 Image(systemName: "clock")
                     .accessibilityHidden(true)
-                if let lastUpdatedAt {
-                    Text("Updated \(lastUpdatedAt, style: .relative)")
-                } else {
-                    Text("Not updated yet")
-                }
+                Text(Self.text(for: lastUpdatedAt, at: context.date))
             }
             .font(FreesideFont.caption)
             .foregroundStyle(isStale(at: context.date) ? Color.waxText : Color.inkDim)
             .accessibilityElement(children: .combine)
         }
+    }
+
+    /// Coarse "last updated" phrasing. While the data is still fresh the
+    /// exact age tells the reader nothing, so it reads "Updated recently";
+    /// once stale it switches to a minute-or-coarser relative time
+    /// ("Updated 2 min ago"). It is deliberately never second-resolution:
+    /// the per-second countdown this replaces only ever counted up to the
+    /// next heartbeat before resetting, motion with nothing to report.
+    static func text(for lastUpdatedAt: Date?, at now: Date) -> String {
+        guard let lastUpdatedAt else { return "Not updated yet" }
+        guard now.timeIntervalSince(lastUpdatedAt) >= SyncCoordinator.stalenessThreshold
+        else { return "Updated recently" }
+        // Only ever asked for intervals at/over the staleness threshold, so
+        // the largest-unit result never falls back to a seconds unit.
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        formatter.dateTimeStyle = .numeric
+        return "Updated \(formatter.localizedString(for: lastUpdatedAt, relativeTo: now))"
     }
 
     private func isStale(at now: Date) -> Bool {
