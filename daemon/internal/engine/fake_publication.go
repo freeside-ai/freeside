@@ -1542,6 +1542,7 @@ func fakePublicationCandidate(
 	return publish.Candidate{
 		Repo: task.Repo, BaseRef: task.BaseRef, HeadSHA: checkpoint.Imported.CommitSHA,
 		Title: task.Title, Body: task.Body, Artifacts: checkpoint.Artifacts,
+		Advisories:   publish.AdvisoryFindings(checkpoint.Authorization.Findings),
 		RecipeDigest: &recipeDigest, InvocationID: task.PublicationInvocationID,
 		RunID:           task.RunID,
 		AuthorizationID: &authorizationID, TrustProfileDigest: &profileDigest,

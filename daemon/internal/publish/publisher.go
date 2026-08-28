@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -36,6 +37,17 @@ type Candidate struct {
 	// requires it; attended and legacy publication paths omit it because they do
 	// not satisfy the §7 independent-review requirement.
 	DispositionHistory *DispositionHistory
+	// Advisories are the authorization's advisory-disposition findings
+	// (plan §5.8, revision 42): control-plane paths the candidate changed
+	// that publish as reviewed content instead of blocking. The publisher
+	// renders them as its own PR-body section, after the prose and before
+	// the disposition history, so the human merge gate sees every
+	// instruction-path edit without reading the diff. The authorization
+	// gate requires this set to equal AdvisoryFindings of the re-validated
+	// authorization, so a caller can neither hide nor invent one. Like the
+	// disposition history, the section never enters the publication
+	// identity.
+	Advisories []domain.CandidateFinding
 	// Artifacts are the evidence artifacts being published. Each is
 	// re-gated against the approved-recipe set before any external
 	// effect.
@@ -820,6 +832,12 @@ func validateAuthorizationCandidate(c Candidate, auth domain.CandidateAuthorizat
 	if !auth.AuthorizesPublication {
 		return fmt.Errorf("authorization %s does not authorize publication: %w", auth.ID, ErrUnauthorizedPublication)
 	}
+	// The advisories the caller asks to render are a claim about the
+	// authorization; under-reporting is the dangerous direction, so the
+	// rendered set must equal what the re-validated record binds.
+	if !reflect.DeepEqual(c.Advisories, AdvisoryFindings(auth.Findings)) {
+		return fmt.Errorf("candidate advisories do not match authorization %s: %w", auth.ID, ErrUnauthorizedPublication)
+	}
 	return nil
 }
 
@@ -1047,9 +1065,12 @@ func prMatchesPublicationCoordinates(
 // no section is silently truncated.
 func desiredPRContent(identity Identity, c Candidate) (title, body string, err error) {
 	prose := strings.TrimRight(c.Body, "\n")
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 4)
 	if prose != "" {
 		parts = append(parts, prose)
+	}
+	if len(c.Advisories) > 0 {
+		parts = append(parts, renderAdvisories(c.Advisories))
 	}
 	if c.DispositionHistory != nil {
 		section, err := RenderDispositionHistory(*c.DispositionHistory)

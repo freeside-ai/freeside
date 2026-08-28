@@ -198,6 +198,9 @@ func ValidateCandidateBody(body string) error {
 	if containsDispositionHistoryMarker(body) {
 		return errors.New("candidate body contains a disposition history marker")
 	}
+	if containsAdvisoriesMarker(body) {
+		return errors.New("candidate body contains a control-plane advisories marker or heading")
+	}
 	return nil
 }
 
