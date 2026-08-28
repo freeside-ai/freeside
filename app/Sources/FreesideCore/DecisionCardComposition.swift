@@ -3,6 +3,7 @@ import SwiftUI
 
 enum DecisionCardModule: String, CaseIterable {
     case factBlock
+    case findingFacts
     case recommendation
     case checklist
     case stageRail
@@ -70,8 +71,20 @@ struct DecisionCardComposition: Equatable {
                 modules: [.recommendation, .yieldChart, .factBlock, .claims, .evidence, .details],
                 actionInsertionIndex: 2,
                 reviewingActionInsertionIndex: nil)
+        case .finding_adjudication:
+            // Section 9's finding_adjudication row leads with two things: the
+            // recommended route as a labeled proposal, and the finding's
+            // daemon-authenticated facts in their own register (#984). Both
+            // live in .findingFacts, so it joins .recommendation ahead of
+            // actionInsertionIndex; the remaining assumptions/cited-rules/
+            // alternatives/gating-questions content stays in .factBlock,
+            // which the §9 "Below" column covers, after the action region.
+            return .init(
+                modules: [.recommendation, .findingFacts, .factBlock, .claims, .evidence, .details],
+                actionInsertionIndex: 2,
+                reviewingActionInsertionIndex: nil)
         case .spec_approval, .review_contradiction, .review_configuration,
-            .finding_adjudication, .agent_question, .publish_blocked, .run_proposal,
+            .agent_question, .publish_blocked, .run_proposal,
             .system_health, .blocked:
             return .init(
                 modules: [.recommendation, .factBlock, .claims, .evidence, .details],

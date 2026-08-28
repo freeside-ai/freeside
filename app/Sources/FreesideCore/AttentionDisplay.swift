@@ -560,6 +560,19 @@ enum AttentionDisplay {
         }
     }
 
+    /// Renders a finding location the way the daemon's canonical location string
+    /// does: "path" for a whole-file location, "path:line" for a single line, and
+    /// "path:start-end" for a range.
+    static func findingLocation(_ location: Components.Schemas.FindingLocation) -> String {
+        if location.start_line == 0 && location.end_line == 0 {
+            return location.path
+        }
+        if location.start_line == location.end_line {
+            return "\(location.path):\(location.start_line)"
+        }
+        return "\(location.path):\(location.start_line)-\(location.end_line)"
+    }
+
     static func adjudicationProducerPresentation(
         _ producer: Components.Schemas.AdjudicationProducer
     ) -> (label: String, modelBacked: Bool) {

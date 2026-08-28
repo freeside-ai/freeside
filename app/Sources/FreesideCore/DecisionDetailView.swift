@@ -489,6 +489,16 @@ struct DecisionDetailView: View {
                     presentation: presentation,
                     showsBars: graphics.diminishingYield != nil)
             }
+        case .findingFacts:
+            // The labeled proposal and the daemon-fact register lead the §9
+            // finding_adjudication card (docs/plan.md §9, #984), so this
+            // module renders ahead of actionInsertionIndex on every layout;
+            // see DecisionCardComposition.forType(.finding_adjudication).
+            if let adjudication = item.finding_adjudication?.value1 {
+                findingAdjudicationLead(
+                    adjudication,
+                    rendersInteractiveControls: rendersInteractiveControls)
+            }
         case .factBlock:
             #if os(macOS)
                 factBlocks(
@@ -557,7 +567,7 @@ struct DecisionDetailView: View {
         }
 
         if let adjudication = item.finding_adjudication?.value1 {
-            findingAdjudication(
+            findingAdjudicationDetail(
                 adjudication,
                 rendersInteractiveControls: rendersInteractiveControls)
         }
@@ -831,8 +841,16 @@ struct DecisionDetailView: View {
         }
     #endif
 
+    // Split across the §9 leads-with/below boundary (#984): the labeled
+    // proposal and the daemon-fact register lead (findingAdjudicationLead,
+    // rendered from the .findingFacts module ahead of actionInsertionIndex),
+    // while assumptions, cited rules, alternatives, and gating questions stay
+    // below the action region (findingAdjudicationDetail, still reached from
+    // .factBlock). Both iterate the same proposals in the same order so a
+    // multi-finding item keeps each finding's lead and detail content
+    // correspondingly ordered.
     @ViewBuilder
-    private func findingAdjudication(
+    private func findingAdjudicationLead(
         _ binding: Components.Schemas.FindingAdjudicationBinding,
         rendersInteractiveControls: Bool
     ) -> some View {
@@ -854,14 +872,68 @@ struct DecisionDetailView: View {
                 }
                 Text(proposal.rationale)
                     .fixedSize(horizontal: false, vertical: true)
+                if !proposal.evidence.isEmpty {
+                    // The engine fast path also populates evidence (the
+                    // finding's own containment location, a daemon fact), so
+                    // the label follows producer.modelBacked like the
+                    // surrounding register instead of always reading
+                    // "model-derived" (#892, #984 review).
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(
+                            producer.modelBacked
+                                ? "Evidence (model-derived)" : "Evidence (daemon-derived)"
+                        )
+                        .font(FreesideFont.sans(.callout, weight: .semibold))
+                        ForEach(Array(proposal.evidence.enumerated()), id: \.offset) { _, value in
+                            Label(value, systemImage: "circle.fill")
+                                .labelStyle(FindingListLabelStyle())
+                        }
+                    }
+                }
             }
 
+            // The finding message and location are daemon-authenticated
+            // coordinates, so they lead the solid daemon-fact register ahead of
+            // the route actions, never mixed into the model-backed section (#892).
             cardSection("Daemon facts") {
+                if !proposal.finding_message.isEmpty {
+                    factRow("Finding message", value: proposal.finding_message)
+                }
+                if let location = proposal.finding_location?.value1 {
+                    factRow(
+                        "Finding location",
+                        value: AttentionDisplay.findingLocation(location), monospaced: true)
+                }
                 factRow("Binding digest", value: binding.adjudication_digest)
                 factRow("Run", value: binding.run_id)
                 factRow("Round", value: "\(binding.round)")
             }
+        }
+    }
 
+    @ViewBuilder
+    private func findingAdjudicationDetail(
+        _ binding: Components.Schemas.FindingAdjudicationBinding,
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        // A single proposal's detail groups need no label: they are the only
+        // candidate. Once findingAdjudicationLead moved ahead of the action
+        // region, a multi-proposal item's detail groups (still one .factBlock
+        // pass per proposal) lost the lead section's adjacency to
+        // "Finding <id>", so a second-plus proposal repeats it here — the
+        // generic "Assumptions"/"Viable alternatives" titles otherwise give no
+        // way to tell which finding a later picker selection applies to
+        // (#984 review).
+        let identifiesEachFinding = binding.proposals.count > 1
+        ForEach(binding.proposals, id: \.finding_id) { proposal in
+            if identifiesEachFinding,
+                !proposal.assumptions.isEmpty || !proposal.cited_rules.isEmpty
+                    || !proposal.offered_alternatives.isEmpty || !proposal.open_questions.isEmpty
+            {
+                Text("Finding \(proposal.finding_id)")
+                    .font(FreesideFont.sans(.caption, weight: .semibold))
+                    .foregroundStyle(Color.inkDim)
+            }
             if !proposal.assumptions.isEmpty {
                 findingList("Assumptions", values: proposal.assumptions)
             }

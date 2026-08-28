@@ -8,9 +8,24 @@ import Testing
     @Test func moduleVocabularyIsClosedAndShared() {
         #expect(
             Set(DecisionCardComposition.sharedModuleSet) == [
-                .factBlock, .recommendation, .checklist, .stageRail, .comparison,
+                .factBlock, .findingFacts, .recommendation, .checklist, .stageRail, .comparison,
                 .yieldChart, .claims, .evidence, .details,
             ])
+    }
+
+    @Test func findingAdjudicationLeadsWithTheLabeledProposalAndDaemonFacts() {
+        // §9's finding_adjudication row leads with the labeled proposal and
+        // the daemon-fact register (both carried by .findingFacts), and puts
+        // assumptions, cited rules, alternatives, and gating questions below
+        // the action region (#984); actionInsertionIndex must therefore land
+        // after .findingFacts, not after .recommendation alone.
+        let composition = DecisionCardComposition.forType(.finding_adjudication)
+        #expect(
+            composition.modules == [
+                .recommendation, .findingFacts, .factBlock, .claims, .evidence, .details,
+            ])
+        #expect(composition.actionInsertionIndex == composition.modules.firstIndex(of: .factBlock))
+        #expect(composition.reviewingActionInsertionIndex == nil)
     }
 
     @Test func fourSpecializedCardsAreOnlyModuleOrderings() {
