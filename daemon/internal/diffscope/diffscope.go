@@ -152,6 +152,59 @@ func Parse(diff string) (Diff, error) {
 	return Diff{files: files}, nil
 }
 
+// MergeNameStatusZ folds the touched paths of a `git diff --name-status -z` pass
+// over the same base..head pair into the parsed diff, recording any path the
+// unified-diff body carried no content hunk for. git omits the ---/+++ file
+// headers (and every hunk) for a header-only change (a file-mode change, a
+// binary-content change, or an empty-file add or delete), so Parse alone never
+// indexes such a path. A whole-file (0,0) finding on a candidate-deleted *empty*
+// file (still the §7/#855 whole-file representation) would then fail Overlaps
+// and read as a false contradiction, parking an otherwise valid review. Seeding
+// the touched paths from name-status keeps every genuinely touched path
+// resolvable while leaving genuinely untouched paths absent, so Overlaps still
+// fails closed on off-diff findings.
+//
+// It never overrides a path Parse already indexed, so a content file keeps its
+// real new-side ranges (and its parsed deleted flag) governing concrete line
+// findings. A header-only path is recorded with no range, so a concrete line
+// finding on it still fails to overlap; only a whole-file finding resolves,
+// which is the sole valid location for a path with no reviewed new-side line.
+//
+// The input is git's NUL-delimited -z form: repeating <status>NUL<path>NUL. With
+// rename and copy detection off (the caller passes --no-renames), every record
+// is one status letter and one path, so a two-path rename/copy record never
+// appears and the fields pair up cleanly. The terminating NUL yields a trailing
+// empty field that is dropped; any other odd or empty field is a malformed
+// stream and returns an error rather than a silently dropped path, matching
+// Parse's fail-closed stance on truncated input.
+func (d *Diff) MergeNameStatusZ(nameStatus string) error {
+	fields := strings.Split(nameStatus, "\x00")
+	if n := len(fields); n > 0 && fields[n-1] == "" {
+		fields = fields[:n-1] // drop the field after the terminating NUL
+	}
+	if len(fields)%2 != 0 {
+		return fmt.Errorf("diffscope: name-status has %d fields, want status/path pairs", len(fields))
+	}
+	if d.files == nil {
+		d.files = map[string]fileChange{}
+	}
+	for i := 0; i < len(fields); i += 2 {
+		status, path := fields[i], fields[i+1]
+		if status == "" || path == "" {
+			return fmt.Errorf("diffscope: empty name-status status or path at field %d", i)
+		}
+		if _, ok := d.files[path]; ok {
+			continue // Parse already recorded this path with its content ranges
+		}
+		// Only a D status removes the new side; A/M/T all leave a new-side file.
+		// The deleted flag is not load-bearing for a header-only path (it carries
+		// no range, so a concrete line finding fails either branch of Overlaps),
+		// but recording it keeps the model honest.
+		d.files[path] = fileChange{deleted: status[0] == 'D'}
+	}
+	return nil
+}
+
 // stripDiffPrefix normalizes a `---`/`+++` path operand: it decodes git's
 // C-style path quoting (core.quotePath default, used for non-ASCII or special
 // bytes), returns "" for the /dev/null sentinel (an added or deleted side), and

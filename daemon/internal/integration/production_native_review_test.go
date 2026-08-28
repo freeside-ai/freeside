@@ -52,7 +52,7 @@ func TestProductionNativeCleanPassNeverSatisfiesReadiness(t *testing.T) {
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review findings")),
 			Findings: []domain.Finding{{
 				ID: "review-finding-1", RunID: p.runID, Source: "codex_local", Severity: "P1",
-				Location: &domain.FindingLocation{Path: "daemon/main.go", StartLine: 12, EndLine: 12}, Message: "unsafe transition", RawText: "unsafe transition",
+				Location: &domain.FindingLocation{Path: "README.md", StartLine: 1, EndLine: 1}, Message: "unsafe transition", RawText: "unsafe transition",
 				CreatedAt: p.now,
 			}},
 		},
