@@ -518,6 +518,7 @@ SLEEP_STUB
     FREESIDE_REAL_RUN_REPOSITORY_ID=1 \
     FREESIDE_REAL_RUN_BASE_REF=main \
     FREESIDE_REAL_RUN_BASE_SHA=0123456789012345678901234567890123456789 \
+    FREESIDE_REAL_RUN_REPOSITORY_CHECKOUT="$CASE_DIR/managed-checkout" \
     FREESIDE_REAL_RUN_PROMPT_PACKAGE="$input_dir/prompts.json" \
     FREESIDE_REAL_RUN_ELABORATION_PROMPT_PACKAGE="$input_dir/elaborator.md" \
     FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE="$input_dir/remediator.md" \
@@ -1061,6 +1062,11 @@ if grep -q -- '-agent-image' "$CASE_DIR/preflight.args" &&
 	grep -q -- '-review-instructions' "$CASE_DIR/preflight.args" &&
 	grep -q -- '-allowed-paths' "$CASE_DIR/preflight.args" &&
 	grep -q -- '-repository-checkout' "$CASE_DIR/preflight.args" &&
+	awk -v expected="$CASE_DIR/managed-checkout" '
+		previous == "-repository-checkout" && $0 == expected { found = 1 }
+		{ previous = $0 }
+		END { exit !found }
+	' "$CASE_DIR/preflight.args" &&
 	grep -q -- '-publication-state-dir' "$CASE_DIR/preflight.args" &&
 	grep -q -- '-auth-volume' "$CASE_DIR/preflight.args" &&
 	grep -q -- '-rig-token-file' "$CASE_DIR/preflight.args"; then

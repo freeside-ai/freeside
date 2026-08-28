@@ -39,6 +39,13 @@
 #   FREESIDE_REAL_RUN_REPOSITORY_ID  canonical numeric repository id
 #   FREESIDE_REAL_RUN_BASE_REF       short base branch name (for example main)
 #   FREESIDE_REAL_RUN_BASE_SHA       exact 40-character base commit
+#   FREESIDE_REAL_RUN_REPOSITORY_CHECKOUT operator's local checkout of the
+#                                    managed repository (FREESIDE_REAL_RUN_REPO)
+#                                    whose origin proves the base and which
+#                                    already contains the exact base commit. The
+#                                    composition preflight verifies its origin
+#                                    and that the base is reachable; it never
+#                                    fetches into it, so keep it current.
 #   FREESIDE_REAL_RUN_PROMPT_PACKAGE trusted prompt-package file
 #   FREESIDE_REAL_RUN_ELABORATION_PROMPT_PACKAGE trusted elaborator prompt-package file
 #   FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE trusted remediator prompt-package file
@@ -112,7 +119,8 @@ required=(
   FREESIDE_REAL_RUN_REVIEW_COST_OWNER
   FREESIDE_REAL_RUN_SEED_ROOT FREESIDE_REAL_RUN_AUTH_IDENTITY FREESIDE_REAL_RUN_AUTH_VOLUME
   FREESIDE_REAL_RUN_REPO FREESIDE_REAL_RUN_REPOSITORY_ID FREESIDE_REAL_RUN_BASE_REF
-  FREESIDE_REAL_RUN_BASE_SHA FREESIDE_REAL_RUN_PROMPT_PACKAGE
+  FREESIDE_REAL_RUN_BASE_SHA FREESIDE_REAL_RUN_REPOSITORY_CHECKOUT
+  FREESIDE_REAL_RUN_PROMPT_PACKAGE
   FREESIDE_REAL_RUN_ELABORATION_PROMPT_PACKAGE FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE
   FREESIDE_REAL_RUN_INSTRUCTIONS
   FREESIDE_REAL_RUN_APPROVED_RECIPE
@@ -431,7 +439,10 @@ preflight_args=(
 	-exporter-image "$FREESIDE_WARD_EXPORTER_IMAGE"
 	-review-image "$FREESIDE_REAL_RUN_REVIEW_IMAGE"
 	-repo "$FREESIDE_REAL_RUN_REPO"
-	-repository-checkout "$repo_root"
+	# The managed repository's own checkout, not this harness's repo: the base
+	# being proved is a commit of FREESIDE_REAL_RUN_REPO, which is absent from the
+	# freeside tree, so repo_root can never satisfy the origin-and-base check.
+	-repository-checkout "$FREESIDE_REAL_RUN_REPOSITORY_CHECKOUT"
 	-repository-id "$FREESIDE_REAL_RUN_REPOSITORY_ID"
 	-base-ref "$FREESIDE_REAL_RUN_BASE_REF"
 	-base-sha "$FREESIDE_REAL_RUN_BASE_SHA"
