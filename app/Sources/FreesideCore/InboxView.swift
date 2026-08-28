@@ -118,6 +118,7 @@ struct InboxView: View {
                                         onRevealTechnicalDetails(snapshot.item.id)
                                     }
                                 )
+                                .hidesSystemListSelection()
                                 .listRowInsets(
                                     EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)
                                 )
