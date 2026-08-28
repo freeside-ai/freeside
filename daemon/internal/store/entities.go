@@ -508,23 +508,43 @@ func (tx *ReadTx) gateFindingAdjudicationItem(
 	}
 	for _, proposal := range binding.Proposals {
 		entry, ok := entries[proposal.FindingID]
-		// OfferedAlternatives is compared here so an offered route or consequence
-		// introduced or rewritten only in the item payload fails closed against
-		// the digest-bound artifact (#893). OfferedAlternative is a comparable
-		// struct, so sameSlice compares element-wise on route and consequence,
-		// order-sensitive, with the same nil-versus-empty parity as the other
-		// list fields. This single gate covers PutAttentionItem and every
-		// snapshot reconstruction, so restart and raw-row tampering reject too.
+		// OfferedAlternatives and Evidence are compared here so an offered route,
+		// consequence, or evidence line introduced or rewritten only in the item
+		// payload fails closed against the digest-bound artifact (#893, #892).
+		// OfferedAlternative is a comparable struct, so sameSlice compares
+		// element-wise on route and consequence, order-sensitive, with the same
+		// nil-versus-empty parity as the other list fields. This single gate covers
+		// PutAttentionItem and every snapshot reconstruction, so restart and raw-row
+		// tampering reject too.
 		if !ok || proposal.Producer != entry.Producer ||
 			proposal.GoalRelationship != entry.GoalRelationship ||
 			!sameOptionalComparable(proposal.Compatibility, entry.Compatibility) ||
 			proposal.Route != entry.Route ||
 			proposal.Rationale != entry.Rationale ||
+			!sameSlice(proposal.Evidence, entry.Evidence) ||
 			!sameSlice(proposal.CitedRules, entry.CitedRules) ||
 			!sameSlice(proposal.Assumptions, entry.Assumptions) ||
 			!sameSlice(proposal.OpenQuestions, entry.OpenQuestions) ||
 			!sameOptionalComparable(proposal.Confidence, entry.Confidence) ||
 			!sameSlice(proposal.OfferedAlternatives, entry.OfferedAlternatives) {
+			return domain.ErrParentKeyMismatch
+		}
+		// The finding message and location are daemon-authenticated coordinates
+		// with no artifact-entry counterpart, so they are re-gated against the
+		// immutable stored Finding rather than the adjudication artifact (#892).
+		// The message is compared through the same normalization the producer
+		// projects with, so cosmetic reflowing never reads as tampering; the
+		// location is compared by value (nil for a review-level finding). A missing
+		// finding fails closed exactly as a mismatch does.
+		finding, err := tx.GetFinding(ctx, proposal.FindingID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return domain.ErrParentKeyMismatch
+			}
+			return err
+		}
+		if proposal.FindingMessage != domain.NormalizeFindingMessage(finding.Message) ||
+			!sameOptionalComparable(proposal.FindingLocation, finding.Location) {
 			return domain.ErrParentKeyMismatch
 		}
 	}

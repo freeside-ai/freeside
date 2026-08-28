@@ -73,14 +73,16 @@ ON CONFLICT (run_id, round, revision) DO NOTHING`
 
 // validateFindingAdjudicationBinding re-runs every authoritative join instead of
 // trusting the artifact's copied keys: the review round must exist, the artifact's
-// entry finding set must equal that round's finding set exactly, its instruction
-// snapshot must equal the round's authoritative instruction binding, and its
-// approved-spec and resolved-policy digests must equal the run's authoritative
-// values. A missing record, a foreign or missing finding, a duplicate entry, or an
+// entry finding set must equal that round's finding set exactly, each engine entry's
+// evidence must equal what the deterministic fast path actually derives, its
+// instruction snapshot must equal the round's authoritative instruction binding, and
+// its approved-spec and resolved-policy digests must equal the run's authoritative
+// values. A missing record, a foreign or missing finding, a duplicate entry, an
+// engine entry whose evidence disagrees with its finding, or an
 // instruction/spec/policy digest that disagrees with its authority fails with
 // ErrParentKeyMismatch. Together these re-gate every caller-supplied trust bit the
-// artifact carries: the finding batch, the instruction snapshot, and the spec and
-// policy the adjudication's routing decisions rest on.
+// artifact carries: the finding batch, each engine entry's evidence, the instruction
+// snapshot, and the spec and policy the adjudication's routing decisions rest on.
 func (tx *ReadTx) validateFindingAdjudicationBinding(
 	ctx context.Context, artifact domain.FindingAdjudication,
 ) error {
@@ -96,6 +98,32 @@ func (tx *ReadTx) validateFindingAdjudicationBinding(
 		}
 		seen[entry.FindingID] = struct{}{}
 		entryIDs = append(entryIDs, entry.FindingID)
+		// Validate's structural backstop confirms an engine entry carries the
+		// one row the fast path can produce, but a hand-built or decoded entry
+		// could still pair that row with arbitrary evidence text: nothing about
+		// the shape catches wrong content. The card presents non-empty engine
+		// evidence as a daemon-verified fact (#892, #984), so a present value
+		// re-derives the fast path's only production invariant — evidence is
+		// the finding's own containment location, and nothing else — against
+		// the immutable stored Finding, exactly as the item-level re-gate does
+		// for the message and location (entities.go's
+		// gateFindingAdjudicationItem). Evidence is optional on the type and
+		// the production fast path never emits it empty, so an absent value
+		// carries nothing for the card to mislabel and is left to the
+		// structural check alone.
+		if entry.Producer == domain.AdjudicationProducerEngine && len(entry.Evidence) > 0 {
+			finding, err := tx.GetFinding(ctx, entry.FindingID)
+			if err != nil {
+				if errors.Is(err, ErrNotFound) {
+					return domain.ErrParentKeyMismatch
+				}
+				return err
+			}
+			if finding.Location == nil ||
+				!slices.Equal(entry.Evidence, []string{finding.Location.String()}) {
+				return domain.ErrParentKeyMismatch
+			}
+		}
 	}
 	recordIDs := slices.Clone(record.FindingIDs)
 	slices.Sort(recordIDs)

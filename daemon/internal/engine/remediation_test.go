@@ -381,7 +381,7 @@ func newRemediationReviewFixtureWithBatch(
 		allowed := domain.CompatibilityAllowed
 		entries[index], err = domain.NewEngineAdjudicationEntry(
 			priors[index].ID, domain.GoalRequired, &allowed, domain.RouteRemediate,
-			"remediate", []string{priors[index].Location.Path}, nil, nil, nil, nil,
+			"remediate", []string{priors[index].Location.String()}, nil, nil, nil, nil,
 		)
 		if err != nil {
 			t.Fatal(err)
