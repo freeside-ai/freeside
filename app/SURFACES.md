@@ -122,13 +122,13 @@ open until a unit answers them; answering is a design decision.
 1. **Editing a proposal before approving.** Today a sheet on `run_proposal`. Is that also right for `effect_proposal` and for batches?
 2. **Where project- and system-level items go.** There is no project or system screen until the deferred ones land.
 3. **Turning a repeated preference into a policy PR.** One action today; no authoring or preview flow is described.
-4. **A standing "unattended stopped" indicator.** A stop is a durable state; one inbox item isn't a persistent signal. Menu bar, banner, or both?
+4. **A standing "unattended stopped" indicator.** A stop is a durable state; one inbox item isn't a persistent signal. Menu bar, banner, or both? Tracked by #980 (plan §11, wave 8).
 5. **Snoozed items.** Where do they go and how do they come back?
 6. **Notification grouping and badges.** No grouping key or badge rule exists; push arrives in Phase 2.
-7. **Device list and revocation.** The API exists; no screen.
-8. **Per-run isolation class, credential mode, and egress profile.** The plan says "report honestly"; the run timeline is the likely home.
+7. **Device list and revocation.** Revocation exists in the API; no list endpoint and no screen. Tracked by #981 (plan §11, wave 8).
+8. **Per-run isolation class, credential mode, and egress profile.** The plan says "report honestly"; the run timeline is the likely home. Tracked by #979 (plan §11, wave 9), which also carries harness, model, effort, cost owner, and the independence rule.
 9. **Daemon unreachable.** The external ntfy alert has no in-app counterpart beyond showing unreachability.
-10. **Trust-profile review at onboarding.** CLI-only today; unclear whether the app ever shows it.
+10. **Trust-profile review at onboarding.** Answered by plan revision 41: CLI-only; the app never shows it.
 11. **Comprehension-defect capture** for sampled decision audits (plan §8, §9).
 12. **Fault-class capture placement.** On the card at resolution, or a follow-up prompt?
 
