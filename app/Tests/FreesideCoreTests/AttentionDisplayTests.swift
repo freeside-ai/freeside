@@ -242,6 +242,18 @@ import Testing
         #expect(AttentionDisplay.label(Components.Schemas.AdjudicationConfidence.high) == "High")
     }
 
+    @Test func findingLocationRendersLikeTheDaemonCanonicalString() {
+        #expect(
+            AttentionDisplay.findingLocation(.init(path: "daemon/a.go", start_line: 0, end_line: 0))
+                == "daemon/a.go")
+        #expect(
+            AttentionDisplay.findingLocation(.init(path: "daemon/a.go", start_line: 12, end_line: 12))
+                == "daemon/a.go:12")
+        #expect(
+            AttentionDisplay.findingLocation(.init(path: "daemon/a.go", start_line: 12, end_line: 18))
+                == "daemon/a.go:12-18")
+    }
+
     @Test func attachmentDigestsKeepTheirEvidenceAndClaimContext() {
         let item = AttentionFixtures.fixture(type: .spec_approval).item
 

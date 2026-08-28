@@ -656,9 +656,15 @@ func (c controlHandler) seedFindingAdjudicationAuthority(
 	return domain.FindingAdjudicationBinding{
 		RunID: runID, Round: 1, AdjudicationDigest: artifact.Digest,
 		Proposals: []domain.FindingAdjudicationProposal{{
-			FindingID: findingID, Producer: entry.Producer,
+			FindingID: findingID,
+			// Project the daemon-authenticated coordinates from the seeded Finding
+			// and the evidence from the artifact entry so the seeded item passes the
+			// extended store re-gate; a minted value would now fail closed (#892).
+			FindingMessage:   domain.NormalizeFindingMessage(finding.Message),
+			FindingLocation:  finding.Location,
+			Producer:         entry.Producer,
 			GoalRelationship: entry.GoalRelationship, Compatibility: entry.Compatibility,
-			Route: entry.Route, Rationale: entry.Rationale,
+			Route: entry.Route, Rationale: entry.Rationale, Evidence: slices.Clone(entry.Evidence),
 			CitedRules: entry.CitedRules, Assumptions: entry.Assumptions,
 			OpenQuestions: entry.OpenQuestions, Confidence: entry.Confidence,
 			// Copy the artifact entry's digest-bound offered set so the seeded item

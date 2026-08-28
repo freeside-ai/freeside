@@ -74,12 +74,20 @@ func seedFindingAdjudicationItem(t *testing.T, f fixture) domain.AttentionItem {
 		t.Fatalf("seed adjudication authority: %v", err)
 	}
 
+	findingsByID := make(map[domain.FindingID]domain.Finding, len(findings))
+	for _, finding := range findings {
+		findingsByID[finding.ID] = finding
+	}
 	proposals := make([]domain.FindingAdjudicationProposal, 0, len(entries))
 	for _, entry := range entries {
+		finding := findingsByID[entry.FindingID]
 		proposals = append(proposals, domain.FindingAdjudicationProposal{
-			FindingID: entry.FindingID, Producer: entry.Producer,
+			FindingID:        entry.FindingID,
+			FindingMessage:   domain.NormalizeFindingMessage(finding.Message),
+			FindingLocation:  finding.Location,
+			Producer:         entry.Producer,
 			GoalRelationship: entry.GoalRelationship, Compatibility: entry.Compatibility,
-			Route: entry.Route, Rationale: entry.Rationale,
+			Route: entry.Route, Rationale: entry.Rationale, Evidence: slices.Clone(entry.Evidence),
 			CitedRules: entry.CitedRules, Assumptions: entry.Assumptions,
 			OpenQuestions: entry.OpenQuestions, Confidence: entry.Confidence,
 			OfferedAlternatives: slices.Clone(entry.OfferedAlternatives),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -130,7 +131,15 @@ func putAdjudicationDispatchAuthority(
 	if err := tx.PutAgentInvocation(ctx, invocation); err != nil {
 		return domain.AttentionItem{}, err
 	}
-	item := adjudicationItem(t, itemID, bindingFromAdjudication(predecessor))
+	findings := make([]domain.Finding, 0, len(predecessor.Entries))
+	for _, entry := range predecessor.Entries {
+		finding, err := tx.GetFinding(ctx, entry.FindingID)
+		if err != nil {
+			return domain.AttentionItem{}, err
+		}
+		findings = append(findings, finding)
+	}
+	item := adjudicationItem(t, itemID, bindingFromAdjudication(predecessor, findings...))
 	item.ItemVersion = itemVersion
 	item.ConversationID = &conversation.ID
 	if err := tx.PutAttentionItem(ctx, item); err != nil {
@@ -882,6 +891,84 @@ func TestFindingAdjudicationDigestBinding(t *testing.T) {
 			})
 			if !errors.Is(err, domain.ErrParentKeyMismatch) {
 				t.Fatalf("%s put = %v, want ErrParentKeyMismatch", tc.name, err)
+			}
+		})
+	}
+}
+
+// TestFindingAdjudicationEngineEvidenceBinding proves the store re-derives a
+// pure-engine entry's evidence against the finding it names — the fast path's
+// only production invariant, evidence is the finding's own containment
+// location and nothing else — instead of trusting a hand-built or decoded
+// value's structurally-valid row (#892, #984 review). The card presents
+// engine evidence as a daemon-verified fact, so a mismatched value must fail
+// closed exactly like the digest bindings above; correct or absent evidence
+// must still round-trip.
+func TestFindingAdjudicationEngineEvidenceBinding(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	at := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+
+	// Each case seeds its own run so an accepted put never collides with
+	// another case's immutable round-1/revision-1 slot.
+	newEngineArtifact := func(t *testing.T, runID domain.RunID, evidence []string) (*store.Store, domain.FindingAdjudication) {
+		t.Helper()
+		findings := []domain.Finding{adjudicationFinding("finding-a", runID, "daemon/a.go", at)}
+		st := seedReviewRound(t, runID, 1, findings, at)
+		allowed := domain.CompatibilityAllowed
+		entry, err := domain.NewEngineAdjudicationEntry(
+			"finding-a", domain.GoalRequired, &allowed, domain.RouteRemediate,
+			"remediate", evidence, nil, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("engine entry: %v", err)
+		}
+		artifact, err := domain.NewFindingAdjudication(
+			runID, 1, adjSpecDigest, adjInstructionDigest, adjPolicyDigest,
+			[]domain.FindingAdjudicationEntry{entry}, at)
+		if err != nil {
+			t.Fatalf("new adjudication: %v", err)
+		}
+		return st, artifact
+	}
+
+	// The finding's own containment location, exactly as the fast path derives
+	// it (daemon/a.go:1, from adjudicationFinding's StartLine/EndLine of 1,1).
+	correct := []string{"daemon/a.go:1"}
+
+	rejected := []struct {
+		name     string
+		evidence []string
+	}{
+		{"path only, missing the line", []string{"daemon/a.go"}},
+		{"different path", []string{"daemon/other.go:1"}},
+		{"extra line beyond the finding", []string{"daemon/a.go:1", "daemon/a.go:2"}},
+	}
+	for i, tc := range rejected {
+		t.Run(tc.name, func(t *testing.T) {
+			st, artifact := newEngineArtifact(t, domain.RunID(fmt.Sprintf("run-engine-evidence-reject-%d", i)), tc.evidence)
+			err := st.Write(ctx, func(tx *store.WriteTx) error {
+				return tx.PutFindingAdjudication(ctx, artifact)
+			})
+			if !errors.Is(err, domain.ErrParentKeyMismatch) {
+				t.Fatalf("%s put = %v, want ErrParentKeyMismatch", tc.name, err)
+			}
+		})
+	}
+
+	accepted := []struct {
+		name     string
+		evidence []string
+	}{
+		{"correct containment location", correct},
+		{"absent evidence", nil},
+	}
+	for i, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			st, artifact := newEngineArtifact(t, domain.RunID(fmt.Sprintf("run-engine-evidence-accept-%d", i)), tc.evidence)
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				return tx.PutFindingAdjudication(ctx, artifact)
+			}); err != nil {
+				t.Fatalf("%s put = %v, want success", tc.name, err)
 			}
 		})
 	}

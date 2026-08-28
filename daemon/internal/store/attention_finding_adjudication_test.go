@@ -66,13 +66,27 @@ func adjudicationItem(
 	return item
 }
 
-func bindingFromAdjudication(artifact domain.FindingAdjudication) domain.FindingAdjudicationBinding {
+// bindingFromAdjudication builds the valid projected binding for artifact,
+// mirroring the engine producer: the daemon-authenticated message and location
+// come from the matching stored Finding (passed alongside so the re-gate's
+// GetFinding join is satisfied) and the evidence from the artifact entry.
+func bindingFromAdjudication(
+	artifact domain.FindingAdjudication, findings ...domain.Finding,
+) domain.FindingAdjudicationBinding {
+	byID := make(map[domain.FindingID]domain.Finding, len(findings))
+	for _, finding := range findings {
+		byID[finding.ID] = finding
+	}
 	proposals := make([]domain.FindingAdjudicationProposal, 0, len(artifact.Entries))
 	for _, entry := range artifact.Entries {
+		finding := byID[entry.FindingID]
 		proposals = append(proposals, domain.FindingAdjudicationProposal{
-			FindingID: entry.FindingID, Producer: entry.Producer,
+			FindingID:        entry.FindingID,
+			FindingMessage:   domain.NormalizeFindingMessage(finding.Message),
+			FindingLocation:  finding.Location,
+			Producer:         entry.Producer,
 			GoalRelationship: entry.GoalRelationship, Compatibility: entry.Compatibility,
-			Route: entry.Route, Rationale: entry.Rationale,
+			Route: entry.Route, Rationale: entry.Rationale, Evidence: slices.Clone(entry.Evidence),
 			CitedRules: slices.Clone(entry.CitedRules), Assumptions: slices.Clone(entry.Assumptions),
 			OpenQuestions: slices.Clone(entry.OpenQuestions), Confidence: entry.Confidence,
 			OfferedAlternatives: slices.Clone(entry.OfferedAlternatives),
@@ -90,9 +104,8 @@ func TestPutAttentionItemRegatesFindingAdjudicationBinding(t *testing.T) {
 	runID := domain.RunID("run-item-adjudication")
 	at := time.Date(2026, 8, 21, 20, 0, 0, 0, time.UTC)
 	findingID := domain.FindingID("finding-a")
-	st := seedReviewRound(t, runID, 1, []domain.Finding{
-		adjudicationFinding(findingID, runID, "daemon/a.go", at),
-	}, at)
+	finding := adjudicationFinding(findingID, runID, "daemon/a.go", at)
+	st := seedReviewRound(t, runID, 1, []domain.Finding{finding}, at)
 	artifact := modelAdjudication(t, runID, 1, findingID, at)
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutFindingAdjudication(ctx, artifact)
@@ -100,7 +113,7 @@ func TestPutAttentionItemRegatesFindingAdjudicationBinding(t *testing.T) {
 		t.Fatalf("put artifact: %v", err)
 	}
 
-	base := bindingFromAdjudication(artifact)
+	base := bindingFromAdjudication(artifact, finding)
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutAttentionItem(ctx, adjudicationItem(t, "item-valid", base))
 	}); err != nil {
@@ -146,7 +159,7 @@ func TestPutAttentionItemRegatesFindingAdjudicationBinding(t *testing.T) {
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			binding := bindingFromAdjudication(artifact)
+			binding := bindingFromAdjudication(artifact, finding)
 			test.mutate(&binding)
 			item := adjudicationItem(t, domain.ItemID(fmt.Sprintf("item-mismatch-%d", index)), binding)
 			err := st.Write(ctx, func(tx *store.WriteTx) error {
@@ -177,11 +190,10 @@ func TestFindingAdjudicationDecisionAuthenticatesCausalCommandHistory(t *testing
 			runID := domain.RunID("run-command-history-" + string(action))
 			at := time.Date(2026, 8, 24, 3, 0, 0, 0, time.UTC)
 			findingID := domain.FindingID("finding-command-history")
-			st := seedReviewRound(t, runID, 1, []domain.Finding{
-				adjudicationFinding(findingID, runID, "daemon/a.go", at),
-			}, at)
+			finding := adjudicationFinding(findingID, runID, "daemon/a.go", at)
+			st := seedReviewRound(t, runID, 1, []domain.Finding{finding}, at)
 			artifact := modelAdjudication(t, runID, 1, findingID, at)
-			item := adjudicationItem(t, "item-command-history", bindingFromAdjudication(artifact))
+			item := adjudicationItem(t, "item-command-history", bindingFromAdjudication(artifact, finding))
 			command, err := domain.NewCommand(domain.CommandInput{
 				CommandID: "command-" + string(action), DeviceID: "device-1",
 				ItemID: item.ID, ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA,
@@ -253,7 +265,8 @@ func TestPutAttentionItemRejectsIncompleteOrTamperedAdjudicationProjection(t *te
 		entry, err := domain.NewModelAdjudicationEntry(
 			finding.ID, domain.GoalContradictory, nil, domain.RouteDecline,
 			domain.ConfidenceHigh, "the finding contradicts the approved work unit",
-			nil, []string{"AGENTS.md"}, []string{"the contract is current"}, nil,
+			[]string{"the reported change lies outside the declared paths", "no contract update accompanies it"},
+			[]string{"AGENTS.md"}, []string{"the contract is current"}, nil,
 			[]string{"is the contract current?"},
 		)
 		if err != nil {
@@ -292,10 +305,27 @@ func TestPutAttentionItemRejectsIncompleteOrTamperedAdjudicationProjection(t *te
 				Route: domain.RouteDispute, Consequence: "forged operator-facing consequence",
 			}}
 		}},
+		// The daemon-authenticated coordinates are re-gated against the stored
+		// Finding (#892): a message or location that diverges from it, and evidence
+		// that diverges from the artifact entry (altered, reordered, or dropped),
+		// must all fail closed.
+		{"finding message", func(b *domain.FindingAdjudicationBinding) {
+			b.Proposals[0].FindingMessage = "forged operator-facing finding message"
+		}},
+		{"finding location", func(b *domain.FindingAdjudicationBinding) {
+			b.Proposals[0].FindingLocation = &domain.FindingLocation{Path: "daemon/forged.go", StartLine: 1, EndLine: 1}
+		}},
+		{"evidence altered", func(b *domain.FindingAdjudicationBinding) {
+			b.Proposals[0].Evidence = []string{"the reported change lies outside the declared paths", "forged second line"}
+		}},
+		{"evidence reordered", func(b *domain.FindingAdjudicationBinding) {
+			b.Proposals[0].Evidence = []string{"no contract update accompanies it", "the reported change lies outside the declared paths"}
+		}},
+		{"evidence removed", func(b *domain.FindingAdjudicationBinding) { b.Proposals[0].Evidence = nil }},
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			binding := bindingFromAdjudication(artifact)
+			binding := bindingFromAdjudication(artifact, findings...)
 			test.mutate(&binding)
 			err := st.Write(ctx, func(tx *store.WriteTx) error {
 				return tx.PutAttentionItem(ctx, adjudicationItem(
@@ -306,6 +336,46 @@ func TestPutAttentionItemRejectsIncompleteOrTamperedAdjudicationProjection(t *te
 				t.Fatalf("put = %v, want ErrParentKeyMismatch", err)
 			}
 		})
+	}
+}
+
+// TestPutAttentionItemRegatesNilFindingLocation proves the daemon-authenticated
+// location re-gate handles the review-level finding that carries no path (#892):
+// a nil-location proposal round-trips against a nil-location finding, while a
+// location minted into the proposal fails closed against the stored finding.
+func TestPutAttentionItemRegatesNilFindingLocation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	runID := domain.RunID("run-item-adjudication-nil-location")
+	at := time.Date(2026, 8, 21, 20, 0, 0, 0, time.UTC)
+	findingID := domain.FindingID("finding-review-level")
+	finding := domain.Finding{
+		ID: findingID, RunID: runID, Source: "codex_local",
+		Message: "a review-level observation with no path",
+		RawText: "a review-level observation with no path", CreatedAt: at,
+	}
+	st := seedReviewRound(t, runID, 1, []domain.Finding{finding}, at)
+	artifact := modelAdjudication(t, runID, 1, findingID, at)
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutFindingAdjudication(ctx, artifact)
+	}); err != nil {
+		t.Fatalf("put artifact: %v", err)
+	}
+	base := bindingFromAdjudication(artifact, finding)
+	if base.Proposals[0].FindingLocation != nil {
+		t.Fatalf("nil-location finding projected location %v", base.Proposals[0].FindingLocation)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, adjudicationItem(t, "item-nil-location", base))
+	}); err != nil {
+		t.Fatalf("put nil-location item: %v", err)
+	}
+	minted := bindingFromAdjudication(artifact, finding)
+	minted.Proposals[0].FindingLocation = &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, adjudicationItem(t, "item-nil-location-minted", minted))
+	}); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("put minted location = %v, want ErrParentKeyMismatch", err)
 	}
 }
 
@@ -346,7 +416,7 @@ func TestPutAttentionItemRegatesOfferedAlternativeNilEmpty(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("put artifact: %v", err)
 	}
-	binding := bindingFromAdjudication(artifact)
+	binding := bindingFromAdjudication(artifact, adjudicationFinding(findingID, runID, "daemon/a.go", at))
 	binding.Proposals[0].OfferedAlternatives = []domain.OfferedAlternative{}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutAttentionItem(ctx, adjudicationItem(t, "item-nil-empty", binding))
@@ -370,7 +440,8 @@ func TestAttentionItemReadsRegateOfferedAlternatives(t *testing.T) {
 		adjudicationFinding(findingID, runID, "daemon/a.go", at),
 	}, at)
 	artifact := modelAdjudication(t, runID, 1, findingID, at)
-	item := adjudicationItem(t, "item-offered-reconstruction", bindingFromAdjudication(artifact))
+	item := adjudicationItem(t, "item-offered-reconstruction",
+		bindingFromAdjudication(artifact, adjudicationFinding(findingID, runID, "daemon/a.go", at)))
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutFindingAdjudication(ctx, artifact); err != nil {
 			return err
@@ -435,7 +506,8 @@ func TestAttentionItemReadsRegateFindingAdjudicationBinding(t *testing.T) {
 		adjudicationFinding(findingID, runID, "daemon/a.go", at),
 	}, at)
 	artifact := modelAdjudication(t, runID, 1, findingID, at)
-	item := adjudicationItem(t, "item-reconstruction", bindingFromAdjudication(artifact))
+	item := adjudicationItem(t, "item-reconstruction",
+		bindingFromAdjudication(artifact, adjudicationFinding(findingID, runID, "daemon/a.go", at)))
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutFindingAdjudication(ctx, artifact); err != nil {
 			return err
@@ -501,7 +573,8 @@ func TestAttentionItemReadsRejectFindingAdjudicationReviewHeadMismatch(t *testin
 		adjudicationFinding(findingID, runID, "daemon/a.go", at),
 	}, at)
 	artifact := modelAdjudication(t, runID, 1, findingID, at)
-	item := adjudicationItem(t, "item-head-reconstruction", bindingFromAdjudication(artifact))
+	item := adjudicationItem(t, "item-head-reconstruction",
+		bindingFromAdjudication(artifact, adjudicationFinding(findingID, runID, "daemon/a.go", at)))
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutFindingAdjudication(ctx, artifact); err != nil {
 			return err

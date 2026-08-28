@@ -100,12 +100,12 @@ func TestNormalizeAttentionItemNormalizesNestedAdjudicationArraysWithoutMutation
 
 	normalized := normalizeAttentionItem(item)
 	proposal := normalized.FindingAdjudication.Proposals[0]
-	if proposal.CitedRules == nil || proposal.Assumptions == nil ||
+	if proposal.Evidence == nil || proposal.CitedRules == nil || proposal.Assumptions == nil ||
 		proposal.OpenQuestions == nil || proposal.OfferedAlternatives == nil {
 		t.Fatalf("normalized proposal retains nil arrays: %+v", proposal)
 	}
 	original := item.FindingAdjudication.Proposals[0]
-	if original.CitedRules != nil || original.Assumptions != nil ||
+	if original.Evidence != nil || original.CitedRules != nil || original.Assumptions != nil ||
 		original.OpenQuestions != nil || original.OfferedAlternatives != nil {
 		t.Fatalf("input proposal mutated: %+v", original)
 	}

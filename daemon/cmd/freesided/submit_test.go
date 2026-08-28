@@ -699,7 +699,7 @@ func seedRemediationAuthorityFixture(
 	compatibility := domain.CompatibilityAllowed
 	entry, err := domain.NewEngineAdjudicationEntry(
 		finding.ID, domain.GoalRequired, &compatibility, domain.RouteRemediate,
-		"remediate", []string{"daemon/a.go"}, nil, nil, nil, nil,
+		"remediate", []string{finding.Location.String()}, nil, nil, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

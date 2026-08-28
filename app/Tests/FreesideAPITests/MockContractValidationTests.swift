@@ -419,6 +419,32 @@ import Testing
         #expect(
             MockContractValidation.itemValidityBreach(blankConsequence)
                 == "finding_adjudication alternative has an empty consequence")
+
+        // finding_message may be empty (an unfingerprintable finding), and the
+        // second proposal carries the nullable review-level location, so both
+        // pass validation; a present finding_location must be well-formed.
+        var emptyMessage = fixture
+        emptyMessage.finding_adjudication?.value1.proposals[0].finding_message = ""
+        #expect(MockContractValidation.itemValidityBreach(emptyMessage) == nil)
+
+        var invalidLocationRange = fixture
+        invalidLocationRange.finding_adjudication?.value1.proposals[0].finding_location = .init(
+            value1: .init(path: "daemon/a.go", start_line: 5, end_line: 2))
+        #expect(
+            MockContractValidation.itemValidityBreach(invalidLocationRange)
+                == "finding_adjudication proposal has an invalid finding location range")
+
+        var emptyLocationPath = fixture
+        emptyLocationPath.finding_adjudication?.value1.proposals[0].finding_location = .init(
+            value1: .init(path: "", start_line: 1, end_line: 1))
+        #expect(
+            MockContractValidation.itemValidityBreach(emptyLocationPath)
+                == "finding_adjudication proposal has an empty finding location path")
+
+        var wholeFileLocation = fixture
+        wholeFileLocation.finding_adjudication?.value1.proposals[0].finding_location = .init(
+            value1: .init(path: "daemon/a.go", start_line: 0, end_line: 0))
+        #expect(MockContractValidation.itemValidityBreach(wholeFileLocation) == nil)
     }
 
     @Test func findingAdjudicationMixedOriginProducerRoundTrips() throws {

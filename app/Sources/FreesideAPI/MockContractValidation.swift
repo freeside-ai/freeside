@@ -257,6 +257,22 @@ enum MockContractValidation {
                 {
                     return "finding_adjudication proposal has an empty required field"
                 }
+                // finding_message may be empty (an unfingerprintable finding), but a
+                // present finding_location must be well-formed exactly as the domain
+                // requires: a non-empty path and either the whole-file marker (0,0) or
+                // a positive, non-inverted range.
+                if let location = proposal.finding_location?.value1 {
+                    if location.path.isEmpty {
+                        return "finding_adjudication proposal has an empty finding location path"
+                    }
+                    let wholeFile = location.start_line == 0 && location.end_line == 0
+                    if !wholeFile
+                        && (location.start_line < 1 || location.end_line < 1
+                            || location.start_line > location.end_line)
+                    {
+                        return "finding_adjudication proposal has an invalid finding location range"
+                    }
+                }
                 if !findingIDs.insert(proposal.finding_id).inserted {
                     return "finding_adjudication has duplicate finding ids"
                 }

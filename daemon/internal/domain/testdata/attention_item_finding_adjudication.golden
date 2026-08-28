@@ -37,11 +37,20 @@
     "proposals": [
       {
         "finding_id": "finding-1",
+        "finding_message": "the finding contradicts the approved work unit",
+        "finding_location": {
+          "path": "daemon/example.go",
+          "start_line": 12,
+          "end_line": 12
+        },
         "producer": "model",
         "goal_relationship": "contradictory",
         "compatibility": null,
         "route": "decline",
         "rationale": "the finding contradicts the approved work unit",
+        "evidence": [
+          "the reported change lies outside the declared work-unit paths"
+        ],
         "cited_rules": [
           "AGENTS.md: stay focused"
         ],
