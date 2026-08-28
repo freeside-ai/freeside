@@ -1064,22 +1064,50 @@ func (c ControlPlaneCategory) valid() bool {
 	}
 }
 
+// Advisory reports whether a candidate change in this category is surfaced
+// as an advisory finding instead of blocking publication (plan §5.8,
+// revision 42). Only reviewer instructions qualify: the coding agent and the
+// Freeside-invoked reviewer load them from the exact trusted base, so a
+// candidate's edit cannot govern its own review, and the edit lands as
+// reviewed repository content behind the human merge gate. Every other
+// category is Freeside-owned configuration and stays publish-blocking. The
+// switch omits default so a new category must decide its stance; the
+// trailing return fails closed for the invalid zero value.
+func (c ControlPlaneCategory) Advisory() bool {
+	switch c {
+	case ControlPlaneReviewerInstructions:
+		return true
+	case ControlPlaneWorkflowConfiguration, ControlPlanePromptsAndPolicy,
+		ControlPlaneEgressAndTrust, ControlPlaneVerificationRecipes,
+		ControlPlaneMaterialityRules:
+		return false
+	}
+	return false
+}
+
 // FindingDisposition is a finding's effective publication stance: blocking
 // until a trusted decision record waives it, and waivable only for classes
-// plan §3.1 does not name non-waivable.
+// plan §3.1 does not name non-waivable. Advisory is the third stance: the
+// finding is surfaced to the human and never blocks, carries no waiver, and
+// is valid only for a control-plane category whose Advisory predicate holds
+// (plan §5.8, revision 42). It is policy the emitting gate assigns, never a
+// decision record.
 type FindingDisposition string
 
 const (
 	DispositionBlocking FindingDisposition = "blocking"
 	DispositionWaived   FindingDisposition = "waived"
+	DispositionAdvisory FindingDisposition = "advisory"
 )
 
 // AllFindingDispositions lists every valid FindingDisposition.
-var AllFindingDispositions = []FindingDisposition{DispositionBlocking, DispositionWaived}
+var AllFindingDispositions = []FindingDisposition{
+	DispositionBlocking, DispositionWaived, DispositionAdvisory,
+}
 
 func (d FindingDisposition) valid() bool {
 	switch d {
-	case DispositionBlocking, DispositionWaived:
+	case DispositionBlocking, DispositionWaived, DispositionAdvisory:
 		return true
 	default:
 		return false

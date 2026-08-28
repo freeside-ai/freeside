@@ -104,7 +104,8 @@ type CandidateFinding struct {
 
 // Validate reports whether the finding is well-formed: a control-plane
 // finding must name its §5.8 category (and only control-plane findings may),
-// and a waived finding must carry a waiver record for a waivable class.
+// a waived finding must carry a waiver record for a waivable class, and an
+// advisory finding must belong to an advisory control-plane category.
 func (f CandidateFinding) Validate() error {
 	if !f.Class.valid() {
 		return fmt.Errorf("finding class %q: %w", f.Class, ErrInvalidFindingClass)
@@ -151,6 +152,17 @@ func (f CandidateFinding) Validate() error {
 	case DispositionBlocking:
 		if f.Waiver != nil {
 			return fmt.Errorf("blocking finding %q carries a waiver: %w", f.Kind, ErrWaiverInconsistent)
+		}
+	case DispositionAdvisory:
+		// Advisory is a category-scoped policy stance, not a decision
+		// record: only a control-plane category whose Advisory predicate
+		// holds may carry it, and it never pairs with a waiver. A stricter
+		// blocking stance stays representable for every category.
+		if f.Class != FindingClassControlPlane || !f.Category.Advisory() {
+			return fmt.Errorf("advisory finding %q class %s: %w", f.Kind, f.Class, ErrNonAdvisoryFinding)
+		}
+		if f.Waiver != nil {
+			return fmt.Errorf("advisory finding %q carries a waiver: %w", f.Kind, ErrWaiverInconsistent)
 		}
 	}
 	return nil
@@ -365,12 +377,13 @@ func computeAuthorizesPublication(outcome VerificationOutcome, findings []Candid
 
 // findingBlocks reports whether a finding's disposition leaves it
 // publication-blocking. Validate has already bound waived to a waivable
-// class and a waiver record, so the disposition alone decides here.
+// class and a waiver record, and advisory to an advisory category, so the
+// disposition alone decides here.
 func findingBlocks(d FindingDisposition) bool {
 	switch d {
 	case DispositionBlocking:
 		return true
-	case DispositionWaived:
+	case DispositionWaived, DispositionAdvisory:
 		return false
 	}
 	return true
