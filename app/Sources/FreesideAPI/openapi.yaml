@@ -3307,15 +3307,34 @@ components:
       description: >
         One finding's recommendation-led projection, with authenticated routing
         axes and the model's rationale, qualifications, and viable alternatives.
+        It also carries the finding context the operator sees before committing
+        a route: the daemon-authenticated message and location copied from the
+        immutable stored finding, and the evidence copied from the matching
+        adjudication entry (see evidence for its producer-dependent
+        provenance). The daemon re-gates every copied field against its
+        immutable source.
       additionalProperties: false
       required:
-        [finding_id, producer, goal_relationship, compatibility, route,
-         rationale, cited_rules, assumptions, open_questions, confidence,
+        [finding_id, finding_message, finding_location, producer,
+         goal_relationship, compatibility, route, rationale, evidence,
+         cited_rules, assumptions, open_questions, confidence,
          offered_alternatives]
       properties:
         finding_id:
           type: string
           minLength: 1
+        finding_message:
+          type: string
+          description: >
+            The whitespace-normalized finding message, a daemon-authenticated
+            fact. Empty only when the stored finding carries no message.
+        finding_location:
+          nullable: true
+          description: >
+            The finding's source location, or null for a review-level finding
+            that carries no path.
+          allOf:
+            - $ref: "#/components/schemas/FindingLocation"
         producer:
           $ref: "#/components/schemas/AdjudicationProducer"
         goal_relationship:
@@ -3329,6 +3348,16 @@ components:
         rationale:
           type: string
           minLength: 1
+        evidence:
+          type: array
+          description: >
+            Artifact-digest-bound evidence copied from the matching
+            adjudication entry. Its provenance follows producer: the daemon
+            fact the engine fast path derives (the finding's own containment
+            location) for producer "engine", model-authored free text
+            otherwise.
+          items:
+            type: string
         cited_rules:
           type: array
           items:
@@ -3361,6 +3390,26 @@ components:
         consequence:
           type: string
           minLength: 1
+
+    FindingLocation:
+      type: object
+      description: >
+        Machine-actionable source location for a review finding: a path plus an
+        inclusive, 1-based line range. A start_line and end_line of 0 with a
+        path is the whole-file location; a null finding_location on a proposal
+        is a review-level finding that carries no path.
+      additionalProperties: false
+      required: [path, start_line, end_line]
+      properties:
+        path:
+          type: string
+          minLength: 1
+        start_line:
+          type: integer
+          minimum: 0
+        end_line:
+          type: integer
+          minimum: 0
 
     AlternativeChoice:
       type: object

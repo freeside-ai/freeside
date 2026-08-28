@@ -373,11 +373,21 @@ public enum AttentionFixtures {
                     proposals: [
                         .init(
                             finding_id: "review-finding-17",
+                            finding_message:
+                                "Command handler retries without preserving the write-once command identity.",
+                            finding_location: .init(
+                                value1: .init(
+                                    path: "daemon/internal/signet/service.go",
+                                    start_line: 214, end_line: 227)),
                             producer: .model,
                             goal_relationship: .contradictory,
                             route: .decline,
                             rationale:
                                 "The finding assumes a retry guarantee the approved work-unit contract explicitly rejects.",
+                            evidence: [
+                                "service.go:214 re-derives the command id on each retry",
+                                "the contract requires a stable command identity",
+                            ],
                             cited_rules: [
                                 "AGENTS.md: fail correctly",
                                 "Issue contract: preserve write-once command identity",
@@ -398,12 +408,18 @@ public enum AttentionFixtures {
                         ),
                         .init(
                             finding_id: "review-finding-18",
+                            finding_message:
+                                "Review-level observation: the change lacks a regression test.",
+                            finding_location: nil,
                             producer: .engine_model,
                             goal_relationship: .required,
                             compatibility: .init(value1: .allowed),
                             route: .remediate,
                             rationale:
                                 "The model judged this finding required, and the daemon verified that remediation stays inside the declared paths.",
+                            evidence: [
+                                "no test file accompanies the changed handler"
+                            ],
                             cited_rules: [
                                 "Issue contract: preserve declared-path authority"
                             ],
