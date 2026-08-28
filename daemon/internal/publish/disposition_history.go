@@ -64,10 +64,11 @@ const (
 	// maxRenderedDispositionClaimBytes keeps one third-party claim from
 	// consuming the forge-facing section budget by itself.
 	maxRenderedDispositionClaimBytes = 4 << 10
-	// maxRenderedDispositionHistoryBytes leaves one quarter of GitHub's PR-body
-	// limit for operator prose and the publisher identity marker. The complete
-	// unbounded rendering remains digest-addressed when the section hits this
-	// aggregate cap.
+	// The disposition-history budget ranges from an 8 KiB floor reserved when
+	// candidate prose is accepted to a 48 KiB ceiling used when the other body
+	// parts leave room. Composition shrinks only this section within that range,
+	// and every truncation remains bound to the complete rendered digest.
+	minRenderedDispositionHistoryBytes = 8 << 10
 	maxRenderedDispositionHistoryBytes = 48 << 10
 )
 
@@ -528,6 +529,31 @@ func (h DispositionHistory) digest() (domain.Digest, error) {
 // disposition reasons are explicitly labeled as recorded claims rather than
 // daemon-authored facts.
 func RenderDispositionHistory(h DispositionHistory) (string, error) {
+	rendered, err := renderDispositionHistoryUnbounded(h)
+	if err != nil {
+		return "", err
+	}
+	return boundedDispositionHistory(rendered, maxRenderedDispositionHistoryBytes), nil
+}
+
+// renderDispositionHistoryWithin renders the canonical history into the
+// composition budget. The floor is reserved before candidate prose is
+// accepted, so a smaller limit indicates a broken publisher invariant.
+func renderDispositionHistoryWithin(h DispositionHistory, limit int) (string, error) {
+	if limit < minRenderedDispositionHistoryBytes {
+		return "", fmt.Errorf(
+			"render disposition history within %d bytes: limit is below %d-byte floor",
+			limit, minRenderedDispositionHistoryBytes,
+		)
+	}
+	rendered, err := renderDispositionHistoryUnbounded(h)
+	if err != nil {
+		return "", err
+	}
+	return boundedDispositionHistory(rendered, min(limit, maxRenderedDispositionHistoryBytes)), nil
+}
+
+func renderDispositionHistoryUnbounded(h DispositionHistory) (string, error) {
 	if err := h.validate(); err != nil {
 		return "", fmt.Errorf("render disposition history: %w", err)
 	}
@@ -602,7 +628,7 @@ func RenderDispositionHistory(h DispositionHistory) (string, error) {
 		}
 	}
 	out.WriteString("\n" + dispositionHistoryCloseMarker)
-	return boundedDispositionHistory(out.String()), nil
+	return out.String(), nil
 }
 
 func dispositionCode(value string) string {
@@ -640,16 +666,16 @@ func boundedClaim(value string, limit int) string {
 // every omitted byte through the digest of the complete canonical rendering.
 // The publisher-owned close marker is always restored outside the bounded
 // prefix, so third-party volume cannot hide or forge the section boundary.
-func boundedDispositionHistory(rendered string) string {
-	if len(rendered) <= maxRenderedDispositionHistoryBytes {
+func boundedDispositionHistory(rendered string, limit int) string {
+	if len(rendered) <= limit {
 		return rendered
 	}
 
 	digest := contentaddr.Sum([]byte(rendered))
 	suffix := "\n- Disposition history truncated; full rendered digest: " +
 		dispositionCode(digest) + "\n\n" + dispositionHistoryCloseMarker
-	limit := maxRenderedDispositionHistoryBytes - len(suffix)
-	prefix := rendered[:limit]
+	prefixLimit := limit - len(suffix)
+	prefix := rendered[:prefixLimit]
 	if newline := strings.LastIndexByte(prefix, '\n'); newline >= 0 {
 		prefix = prefix[:newline]
 	}

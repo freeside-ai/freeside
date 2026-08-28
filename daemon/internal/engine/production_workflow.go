@@ -176,7 +176,8 @@ func (a ProductionCommitAuthor) validate() error {
 }
 
 // Validate rejects metadata that cannot be safely persisted as one GitHub
-// title and body. The publisher appends its identity marker itself.
+// title and body. The body limit reserves every publisher-owned section,
+// including the identity marker, advisories, and disposition history.
 func (p ProductionPublication) Validate() error {
 	if !utf8.ValidString(p.Title) || !utf8.ValidString(p.Body) {
 		return errors.New("production publication metadata is not valid UTF-8")
