@@ -475,6 +475,57 @@ import Testing
         #expect(model.snapshot?.item.status == .superseded)
     }
 
+    @Test func unchangedRunProposalFactsProduceNoRevision() async throws {
+        let store = await makeStore(server: MockServer())
+        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        await model.validate()
+        let facts = try #require(model.proposalFacts)
+
+        #expect(
+            DecisionDetailView.runProposalRevision(
+                from: facts,
+                expectedCost: facts.expected_cost_units,
+                componentCount: facts.scope.component_count,
+                touchesControlPlane: facts.scope.touches_control_plane
+            ) == nil)
+    }
+
+    @Test func runProposalRevisionPreservesAuthenticatedFactsOnMixedEdit() async throws {
+        let store = await makeStore(server: MockServer())
+        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        await model.validate()
+        let facts = try #require(model.proposalFacts)
+
+        let revision = try #require(
+            DecisionDetailView.runProposalRevision(
+                from: facts,
+                expectedCost: facts.expected_cost_units + 1,
+                componentCount: facts.scope.component_count + 1,
+                touchesControlPlane: !facts.scope.touches_control_plane))
+
+        #expect(revision.intent == facts.intent)
+        #expect(revision.expected_cost_units == facts.expected_cost_units + 1)
+        #expect(revision.scope.component_count == facts.scope.component_count + 1)
+        #expect(revision.scope.declared_path_count == facts.scope.declared_path_count)
+        #expect(revision.scope.touches_control_plane == !facts.scope.touches_control_plane)
+    }
+
+    @Test func runProposalRevisionPreservesDeclaredPathsOnPartialEdit() async throws {
+        let store = await makeStore(server: MockServer())
+        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        await model.validate()
+        let facts = try #require(model.proposalFacts)
+
+        let revision = try #require(
+            DecisionDetailView.runProposalRevision(
+                from: facts,
+                expectedCost: facts.expected_cost_units + 1,
+                componentCount: facts.scope.component_count,
+                touchesControlPlane: facts.scope.touches_control_plane))
+
+        #expect(revision.scope.declared_path_count == facts.scope.declared_path_count)
+    }
+
     @Test func findingAlternativeControlSubmitsTypedChoice() async {
         let server = MockServer()
         let store = await makeStore(server: server)

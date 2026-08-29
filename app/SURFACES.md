@@ -72,7 +72,7 @@ lists open issues that will change the card.
 | `agent_question` | answer and retry, answer without retry, stop | Generic | #724 |
 | `publish_blocked` | rerun trust check, choose another profile, inspect the failure, stop | Generic | |
 | `ready_for_final_review` | view PR, return to agent, mark seen, dismiss, stop | Done for the readiness checklist and per-round yield composition; change summary remains data-gated | #724, #917; remaining readiness display below |
-| `run_proposal` | start, start with changes, decline, snooze | Done for actions and facts; the full proposal artifact and the revised-digest diff are Not yet | Batch grouping (see Screens) |
+| `run_proposal` | start, start with changes, decline, snooze | Done for actions and facts, including the declaration-bound path count shown read-only in revisions; the full proposal artifact and the revised-digest diff are Not yet | Batch grouping (see Screens) |
 | `effect_proposal` | approve, approve with changes, decline, snooze; target picked from a daemon-supplied list | Not yet | Lands with the §5.13 effect registry in 1B |
 | `system_health` | acknowledge, run doctor, stop or resume unattended, resolve re-enrollment | Generic (posture badge and re-enrollment details shown) | #868 (account-probe items), #867 (retired-identity items) |
 | `blocked` | read only | Generic | |
