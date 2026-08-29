@@ -173,6 +173,10 @@ public struct FreesideRootView: View {
                             launchScope: launchInboxScope, launchProjectID: launchProjectID,
                             interactiveSelection: operatorAttentionSelectionBinding,
                             onFilterChange: navigation.recordOperatorNavigation,
+                            onMoveSelection: {
+                                navigation.moveAttentionSelection(
+                                    by: $0, store: coordinator.store)
+                            },
                             lastUpdatedAt: coordinator.lastUpdatedAt,
                             onRefresh: coordinator.refresh,
                             onRevealTechnicalDetails: revealTechnicalDetails)

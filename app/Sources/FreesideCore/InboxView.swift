@@ -11,6 +11,9 @@ import SwiftUI
 /// The attention inbox, scoped to open work by default.
 struct InboxView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    #if os(macOS)
+        @FocusedValue(\.decisionCommandActions) private var decisionCommandActions
+    #endif
     let store: InboxStore
     @Binding var selection: String?
     let launchScope: InboxStore.Scope?
@@ -18,6 +21,7 @@ struct InboxView: View {
     private let interactiveSelection: Binding<String?>?
     private let navigationPath: Binding<[String]>?
     private let onFilterChange: () -> Void
+    private let onMoveSelection: (Int) -> Void
     private let onRefresh: @MainActor () async -> Void
     private let lastUpdatedAt: Date?
     var onRevealTechnicalDetails: (String) -> Void
@@ -30,6 +34,7 @@ struct InboxView: View {
         interactiveSelection: Binding<String?>? = nil,
         navigationPath: Binding<[String]>? = nil,
         onFilterChange: @escaping () -> Void = {},
+        onMoveSelection: @escaping (Int) -> Void = { _ in },
         lastUpdatedAt: Date? = nil,
         onRefresh: @escaping @MainActor () async -> Void = {},
         onRevealTechnicalDetails: @escaping (String) -> Void = { _ in }
@@ -41,6 +46,7 @@ struct InboxView: View {
         self.interactiveSelection = interactiveSelection
         self.navigationPath = navigationPath
         self.onFilterChange = onFilterChange
+        self.onMoveSelection = onMoveSelection
         self.onRefresh = onRefresh
         self.lastUpdatedAt = lastUpdatedAt
         self.onRevealTechnicalDetails = onRevealTechnicalDetails
@@ -127,6 +133,20 @@ struct InboxView: View {
                             }
                             .listStyle(.plain)
                             .scrollContentBackground(.hidden)
+                            .onKeyPress(
+                                characters: CharacterSet(charactersIn: "jk"), phases: .down
+                            ) { press in
+                                guard press.modifiers.isEmpty else { return .ignored }
+                                onMoveSelection(press.characters == "j" ? 1 : -1)
+                                return .handled
+                            }
+                            .onKeyPress(.return, phases: .down) { press in
+                                guard press.modifiers.isEmpty,
+                                    decisionCommandActions?.canTakeRecommendation == true
+                                else { return .ignored }
+                                decisionCommandActions?.takeRecommendation()
+                                return .handled
+                            }
                         #endif
                     }
                     #if os(iOS)

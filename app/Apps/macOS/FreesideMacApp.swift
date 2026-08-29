@@ -208,7 +208,7 @@ private struct FreesideAppCommands: Commands {
         CommandMenu("Navigate") {
             ForEach(FreesideCommandDescriptor.all) { descriptor in
                 Button(descriptor.title) { perform(descriptor.id) }
-                    .keyboardShortcut(descriptor.key, modifiers: descriptor.modifiers)
+                    .keyboardShortcut(descriptor.shortcut)
                     .disabled(isDisabled(descriptor.id))
             }
         }
@@ -231,8 +231,6 @@ private struct FreesideAppCommands: Commands {
             decisionActions?.canTakeRecommendation != true
         case .cancelPendingAction:
             decisionActions == nil
-        case .find:
-            true
         }
     }
 
@@ -257,8 +255,6 @@ private struct FreesideAppCommands: Commands {
             decisionActions?.takeRecommendation()
         case .cancelPendingAction:
             decisionActions?.cancelPendingAction()
-        case .find:
-            break
         }
     }
 }
