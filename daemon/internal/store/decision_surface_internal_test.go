@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -17,13 +18,28 @@ type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// seedDecisionSurface writes item's epoch-1 decision surface next to a raw-
-// seeded attention_items row: the state the 0058 backfill leaves every
+// seedDecisionSurface writes item's epoch-1 decision surface and its item-body
+// projection next to a raw-seeded attention_items row: the state the 0059
+// backfill leaves every
 // pre-existing item in, which the reconstruction re-gate requires. A tamper
 // test that rewrites an item's structural fields in place to exercise a later
 // gate uses it to forge the record consistently, since the re-gate refuses
 // the rewritten row first otherwise.
 func seedDecisionSurface(t *testing.T, ctx context.Context, db execer, item domain.AttentionItem) {
+	t.Helper()
+	surface := insertDecisionSurface(t, ctx, db, item)
+	item.DecisionSurface = domain.DecisionSurfaceRef{Epoch: surface.Epoch, Digest: surface.Digest}
+	item.Recommendation = nil
+	itemBody, err := encode(item)
+	if err != nil {
+		t.Fatalf("encode attention item decision surface: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE attention_items SET body = ? WHERE id = ?`, itemBody, item.ID); err != nil {
+		t.Fatalf("seed attention item decision surface: %v", err)
+	}
+}
+
+func insertDecisionSurface(t *testing.T, ctx context.Context, db execer, item domain.AttentionItem) domain.DecisionSurface {
 	t.Helper()
 	surface, err := domain.NewDecisionSurface(item)
 	if err != nil {
@@ -39,6 +55,7 @@ func seedDecisionSurface(t *testing.T, ctx context.Context, db execer, item doma
 		surface.ItemID, surface.Epoch, surface.Digest, body); err != nil {
 		t.Fatalf("seed decision surface: %v", err)
 	}
+	return surface
 }
 
 func decisionSurfaceItem(t *testing.T, id domain.ItemID) domain.AttentionItem {
@@ -388,8 +405,8 @@ func TestAttentionDecisionSurfacesMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 58 {
-		t.Fatalf("schema version = %d, want 58", got)
+	if got := rawVersion(t, db); got != 60 {
+		t.Fatalf("schema version = %d, want 60", got)
 	}
 	want, err := domain.NewDecisionSurface(legacy)
 	if err != nil {
@@ -433,5 +450,212 @@ func TestAttentionDecisionSurfacesMigrationAppliesFromHead(t *testing.T) {
 		}); err == nil {
 			t.Fatalf("read %s succeeded, want the pre-migration refusal", id)
 		}
+	}
+}
+
+// TestAttentionDecisionSurfacesMigrationRetiresLegacyAdjudicate proves an
+// item that was valid at schema 0057 remains readable through both get and
+// list after the decorative action leaves the current enum.
+func TestAttentionDecisionSurfacesMigrationRetiresLegacyAdjudicate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "store.db")
+	db, err := openDB(path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrateThrough(t, ctx, db, "0058_")
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	legacy := decisionSurfaceItem(t, "item-legacy-adjudicate")
+	legacy.Type = domain.AttentionReviewDispute
+	body, err := encode(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO attention_items
+		(id, project_id, conversation_id, item_type, status, subject_run_id,
+		 entity_version, as_of_revision, body)
+		VALUES (?, ?, NULL, ?, ?, ?, 1, 1,
+		        json_set(?, '$.requested_decision',
+		                 json_array('adjudicate', 'discuss', 'stop')))`,
+		legacy.ID, legacy.ProjectID, legacy.Type, legacy.Status,
+		legacy.Subject.RunID, body); err != nil {
+		t.Fatalf("seed legacy adjudicate item: %v", err)
+	}
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate to head: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(ctx, path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		item, err := tx.GetAttentionItem(ctx, legacy.ID)
+		if err != nil {
+			return err
+		}
+		if !slices.Equal(item.RequestedDecision,
+			[]domain.Action{domain.ActionDiscuss, domain.ActionStop}) {
+			t.Fatalf("migrated requested decision = %v", item.RequestedDecision)
+		}
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		if len(items) != 1 || items[0].Value.ID != legacy.ID {
+			t.Fatalf("listed migrated items = %#v", items)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read migrated legacy adjudicate item: %v", err)
+	}
+}
+
+func TestRetireLegacyAdjudicate(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		body        string
+		want        []domain.Action
+		wantChanged bool
+		wantNested  bool
+	}{
+		{
+			name: "spacing indentation and order",
+			body: "{\n  \"requested_decision\": [ \"discuss\", \"adjudicate\", \"stop\" ]\n}",
+			want: []domain.Action{domain.ActionDiscuss, domain.ActionStop}, wantChanged: true,
+		},
+		{
+			name: "duplicates",
+			body: `{"requested_decision":["adjudicate","discuss","adjudicate"]}`,
+			want: []domain.Action{domain.ActionDiscuss}, wantChanged: true,
+		},
+		{
+			name: "case prefix and suffix remain distinct",
+			body: `{"requested_decision":["Adjudicate","adjudicate_now","readjudicate"]}`,
+			want: []domain.Action{"Adjudicate", "adjudicate_now", "readjudicate"},
+		},
+		{
+			name: "nested field is not an action surface",
+			body: `{"requested_decision":["adjudicate"],"metadata":{"requested_decision":["adjudicate"]}}`,
+			want: []domain.Action{}, wantChanged: true, wantNested: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rewritten, changed, err := retireLegacyAdjudicate([]byte(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if changed != tc.wantChanged {
+				t.Fatalf("changed = %v, want %v", changed, tc.wantChanged)
+			}
+			var got struct {
+				RequestedDecision []domain.Action `json:"requested_decision"`
+				Metadata          struct {
+					RequestedDecision []domain.Action `json:"requested_decision"`
+				} `json:"metadata"`
+			}
+			if err := json.Unmarshal(rewritten, &got); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got.RequestedDecision, tc.want) {
+				t.Fatalf("requested_decision = %v, want %v", got.RequestedDecision, tc.want)
+			}
+			if tc.wantNested && !slices.Equal(got.Metadata.RequestedDecision,
+				[]domain.Action{retiredAdjudicateAction}) {
+				t.Fatalf("nested requested_decision = %v", got.Metadata.RequestedDecision)
+			}
+		})
+	}
+}
+
+// TestAttentionDecisionSurfaceBodiesMigrationAppliesFromHead starts at the
+// pre-unit schema head (0058) and proves the item-side identity projection is
+// backfilled without advancing entity_version, after which the ordinary gated
+// read accepts the item. Migration 0060 then joins the same upgrade to head.
+func TestAttentionDecisionSurfaceBodiesMigrationAppliesFromHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "store.db")
+	db, err := openDB(path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrateThrough(t, ctx, db, "0059_")
+	if got := rawVersion(t, db); got != 58 {
+		t.Fatalf("prior schema version = %d, want 58", got)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	item := decisionSurfaceItem(t, "item-body-backfill")
+	body, err := encode(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO attention_items
+        (id, project_id, conversation_id, item_type, status, subject_run_id,
+         entity_version, as_of_revision, body)
+        VALUES (?, ?, NULL, ?, ?, ?, 7, 1, ?)`,
+		item.ID, item.ProjectID, item.Type, item.Status, item.Subject.RunID, body); err != nil {
+		t.Fatal(err)
+	}
+	surface, err := domain.NewDecisionSurface(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	surfaceBody, err := encode(surface)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, insertDecisionSurfaceSQL,
+		surface.ItemID, surface.Epoch, surface.Digest, surfaceBody); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate to head: %v", err)
+	}
+	if got := rawVersion(t, db); got != 60 {
+		t.Fatalf("schema version = %d, want 60", got)
+	}
+	var (
+		storedBody    []byte
+		entityVersion int
+	)
+	if err := db.QueryRowContext(ctx, `SELECT body, entity_version FROM attention_items WHERE id = ?`, item.ID).
+		Scan(&storedBody, &entityVersion); err != nil {
+		t.Fatal(err)
+	}
+	if entityVersion != 7 {
+		t.Fatalf("entity_version = %d, want unchanged 7", entityVersion)
+	}
+	stored, err := decode[domain.AttentionItem](storedBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.DecisionSurface != (domain.DecisionSurfaceRef{Epoch: surface.Epoch, Digest: surface.Digest}) ||
+		stored.Recommendation != nil {
+		t.Fatalf("backfilled derived fields = %#v / %#v", stored.DecisionSurface, stored.Recommendation)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(ctx, path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.GetAttentionItem(ctx, item.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("read backfilled item: %v", err)
 	}
 }

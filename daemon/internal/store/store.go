@@ -37,6 +37,11 @@ type Options struct {
 	// policy resolution is wired (no such source exists yet).
 	ApprovedRecipes map[domain.Digest]bool
 
+	// RecommendationRules registers deterministic daemon-policy rules by the
+	// content address of their semantics. Production supplies none in Phase 1;
+	// the seam exists for conformance tests and the future rule producer.
+	RecommendationRules map[domain.Digest]domain.DaemonPolicyRule
+
 	// AdmissionFloors is the minimum runner capability class current policy
 	// requires of each operating mode (plan §5.7). Every write and read of an
 	// execution admission re-checks the recorded spawn-time snapshot against
@@ -107,6 +112,7 @@ type Store struct {
 	verificationFloorRegistryGeneration uint64
 	waiverGrantApprovals                map[domain.WaiverGrantingAuthority]map[domain.Digest]bool
 	requirementSets                     map[domain.Digest]map[domain.RequirementKey]domain.RequirementDefinition
+	recommendationRules                 map[domain.Digest]domain.DaemonPolicyRule
 }
 
 // Open opens (creating if absent) the database at path, applies the §5.2
@@ -246,6 +252,7 @@ func newStore(
 		verificationFloorRegistryGeneration: verificationGeneration,
 		waiverGrantApprovals:                cloneWaiverGrantApprovals(opts.WaiverGrantApprovals),
 		requirementSets:                     requirementSets,
+		recommendationRules:                 maps.Clone(opts.RecommendationRules),
 	}
 }
 

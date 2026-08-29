@@ -13,6 +13,11 @@
     "acknowledge",
     "run_doctor"
   ],
+  "recommendation": null,
+  "decision_surface": {
+    "epoch": 1,
+    "digest": "sha256:35060a50b9a9af39bbd9b9b05b3fe673fe2e6564cb50cbfa5579f31af30b46f6"
+  },
   "evidence_snapshot": [],
   "agent_claims": [],
   "artifact_digests": [],

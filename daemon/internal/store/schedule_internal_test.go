@@ -417,7 +417,9 @@ func migrationsBeforeScheduleAuthority(t *testing.T) fs.FS {
 			entry.Name() == "0055_attention_yield_history.sql" ||
 			entry.Name() == "0056_shadow_review_configuration_approval.sql" ||
 			entry.Name() == "0057_finding_adjudication_revisions.sql" ||
-			entry.Name() == "0058_attention_decision_surfaces.sql" || entry.IsDir() {
+			entry.Name() == "0058_attention_decision_surfaces.sql" ||
+			entry.Name() == "0059_attention_decision_surface_bodies.sql" ||
+			entry.Name() == "0060_attention_recommendation_sources.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())

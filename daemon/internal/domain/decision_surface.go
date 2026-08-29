@@ -19,14 +19,9 @@ import (
 // the row against itself, so a caller pairing a record with an item must
 // obtain that item through a gated read.
 //
-// Epoch is authenticated only within this record. Matches deliberately
-// compares the structural fields and presented set, not the epoch, because
-// nothing on the item side carries one while the record stays off the item
-// body. A writer able to rewrite the persisted record alone can therefore
-// choose an epoch: rolling one back revives a superseded commitment. Closing
-// that requires binding the epoch to something the item side also carries,
-// which is #917's call when it decides whether this record reaches the item
-// body and the wire.
+// Epoch is also projected onto AttentionItem.DecisionSurface. The store binds
+// that body copy back to this authoritative row on every reconstruction, so a
+// writer able to rewrite only this table cannot choose an epoch.
 //
 // The identity is a sequence, not a content address: Epoch starts at 1 and
 // advances by exactly one each time the item's structural fields (Subject,
@@ -61,6 +56,29 @@ type DecisionSurface struct {
 	// and epoch. Derived by ComputeDigest and enforced by Validate, never
 	// caller-supplied.
 	Digest Digest `json:"digest"`
+}
+
+// DecisionSurfaceRef is the synchronized item-side projection of the
+// authoritative decision-surface row. The zero value is accepted only for an
+// unpersisted item; the store ignores it and writes the derived current value.
+type DecisionSurfaceRef struct {
+	Epoch  int    `json:"epoch"`
+	Digest Digest `json:"digest"`
+}
+
+// Validate accepts either the complete zero value or a positive epoch paired
+// with a content-address digest.
+func (r DecisionSurfaceRef) Validate() error {
+	if r.Epoch == 0 && r.Digest == "" {
+		return nil
+	}
+	if r.Epoch < 1 {
+		return fmt.Errorf("decision surface reference epoch %d: %w", r.Epoch, ErrNonPositive)
+	}
+	if !isSHA256Digest(string(r.Digest)) {
+		return fmt.Errorf("decision surface reference digest %q: %w", r.Digest, ErrInvalidDigest)
+	}
+	return nil
 }
 
 // decisionSurfacePreimage is the digest preimage. Field order is part of the
@@ -163,13 +181,14 @@ func canonicalSet[T ~string](in []T) []T {
 // presents: exactly the digests its presentation slots reference
 // (evidence_snapshot, agent_claims, and the finding_adjudication binding). It
 // is the structural presented-slot predicate of plan §4: an artifact that only a
-// recommendation provenance slot references (#917) is source-only and
-// eligibility-correlated, so it must never be added here, while an artifact
-// referenced by both a presentation slot and a provenance slot is presented.
+// recommendation provenance slot references is source-only and
+// eligibility-correlated, so it must never be added here. This unit has no
+// association envelope for such an artifact, so Recommendation validation also
+// refuses it: every representable provenance artifact is already referenced by
+// a presentation slot and the two sets remain equal.
 // daemon_policy rule and input digests and project_policy application records
 // are not artifacts and never appear. Today the set equals the item's
-// artifact_digests binding set; #917 adds the provenance artifact to the
-// binding set only, so the two diverge there and nowhere else.
+// artifact_digests binding set.
 func PresentedArtifactDigests(item AttentionItem) []Digest {
 	return bindingDigests(item.EvidenceSnapshot, item.AgentClaims, item.FindingAdjudication)
 }

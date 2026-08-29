@@ -13,6 +13,11 @@
     "acknowledge",
     "stop_unattended"
   ],
+  "recommendation": null,
+  "decision_surface": {
+    "epoch": 1,
+    "digest": "sha256:8d9ff9eac184194fb29cd666cd6ff855af71c71d180125bb431d47dfe286d6c1"
+  },
   "evidence_snapshot": [],
   "agent_claims": [],
   "artifact_digests": [],

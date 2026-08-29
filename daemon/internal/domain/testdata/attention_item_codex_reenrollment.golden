@@ -13,6 +13,11 @@
     "acknowledge",
     "resolve_reenrollment"
   ],
+  "recommendation": null,
+  "decision_surface": {
+    "epoch": 1,
+    "digest": "sha256:74027158652a5c82cbb2829066a75757275d120bc7629af3db1f5168be3f5d05"
+  },
   "evidence_snapshot": null,
   "agent_claims": null,
   "artifact_digests": [],

@@ -80,7 +80,7 @@ func TestGoldenRoundTrip(t *testing.T) {
 		{"conversation", f.conversation, func(tx *store.ReadTx) (any, error) { return tx.GetConversation(ctx, f.conversation.ID) }},
 		{"agent_invocation", f.invocation, func(tx *store.ReadTx) (any, error) { return tx.GetAgentInvocation(ctx, f.invocation.ID) }},
 		{"artifact", f.artifact, func(tx *store.ReadTx) (any, error) { return tx.GetArtifact(ctx, f.artifact.ID) }},
-		{"attention_item", f.item, func(tx *store.ReadTx) (any, error) { return tx.GetAttentionItem(ctx, f.item.ID) }},
+		{"attention_item", projectedAttentionItem(t, f.item), func(tx *store.ReadTx) (any, error) { return tx.GetAttentionItem(ctx, f.item.ID) }},
 		{"attention_delivery", f.delivery, func(tx *store.ReadTx) (any, error) {
 			return tx.GetAttentionDelivery(ctx, f.delivery.ItemID, f.delivery.DeviceID, f.delivery.Channel, f.delivery.Attempt)
 		}},

@@ -32,6 +32,8 @@ func applyDataMigration(
 		return rewriteLegacyCodexReenrollmentMarkers(ctx, tx)
 	case version == 58 && name == attentionDecisionSurfacesMigration:
 		return backfillAttentionDecisionSurfaces(ctx, tx)
+	case version == 59 && name == attentionDecisionSurfaceBodiesMigration:
+		return backfillAttentionDecisionSurfaceBodies(ctx, tx)
 	default:
 		return nil
 	}

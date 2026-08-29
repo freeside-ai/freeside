@@ -556,6 +556,49 @@ func (a Action) valid() bool {
 	}
 }
 
+// RecommendationSource identifies the authority behind a recommendation.
+// The zero value is invalid by design.
+type RecommendationSource string
+
+const (
+	RecommendationDaemonPolicy  RecommendationSource = "daemon_policy"
+	RecommendationAgentJudgment RecommendationSource = "agent_judgment"
+	RecommendationProjectPolicy RecommendationSource = "project_policy"
+)
+
+// AllRecommendationSources is the single registration point for recommendation
+// authority kinds.
+var AllRecommendationSources = []RecommendationSource{
+	RecommendationDaemonPolicy, RecommendationAgentJudgment, RecommendationProjectPolicy,
+}
+
+func (s RecommendationSource) valid() bool {
+	switch s {
+	case RecommendationDaemonPolicy, RecommendationAgentJudgment, RecommendationProjectPolicy:
+		return true
+	default:
+		return false
+	}
+}
+
+// JudgmentSite identifies a declared daemon-side judgment site (plan §5.13).
+// Phase 1 registers only the finding adjudicator.
+type JudgmentSite string
+
+const JudgmentSiteFindingAdjudicator JudgmentSite = "finding_adjudicator"
+
+// AllJudgmentSites is the single registration point for judgment sites.
+var AllJudgmentSites = []JudgmentSite{JudgmentSiteFindingAdjudicator}
+
+func (s JudgmentSite) valid() bool {
+	switch s {
+	case JudgmentSiteFindingAdjudicator:
+		return true
+	default:
+		return false
+	}
+}
+
 // Priority orders competing items. Provisional (plan §4 names the field but
 // enumerates no members); flagged for spine review, tightened by a later
 // kind:contract change.

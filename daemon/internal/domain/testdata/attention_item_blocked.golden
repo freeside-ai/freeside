@@ -10,6 +10,11 @@
   "priority": "normal",
   "reason": "waiting on an external dependency",
   "requested_decision": [],
+  "recommendation": null,
+  "decision_surface": {
+    "epoch": 1,
+    "digest": "sha256:b13a043e2963b1f2dc632e4f87ad2407c3ff26a4e3f0c5a5df3a02ca8c7ec433"
+  },
   "evidence_snapshot": [],
   "agent_claims": [],
   "artifact_digests": [],

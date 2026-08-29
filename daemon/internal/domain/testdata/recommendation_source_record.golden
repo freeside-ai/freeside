@@ -1,0 +1,18 @@
+{
+  "item_id": "item-finding-adjudication",
+  "source": "agent_judgment",
+  "provenance": {
+    "daemon_policy": null,
+    "agent_judgment": {
+      "judgment_site": "finding_adjudicator",
+      "invocation_id": "review-run-1-2",
+      "artifact_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "project_policy": null
+  },
+  "action": "accept_recommended_route",
+  "reason": "Accept the adjudicator's recommended route for each finding.",
+  "confidence": null,
+  "decision_surface_digest": "sha256:789af6885f27c7178e6fc22e573365c5e98fbdbec524b1ef4f00b4b766a815fa",
+  "digest": "sha256:b2f9474c477211391588a63aa8dddf04a047b04c77f958d2646ddbbd8548fc50"
+}

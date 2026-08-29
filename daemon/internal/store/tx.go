@@ -46,6 +46,7 @@ type ReadTx struct {
 	verificationFloorRegistryGeneration uint64
 	waiverGrantApprovals                map[domain.WaiverGrantingAuthority]map[domain.Digest]bool
 	requirementSets                     map[domain.Digest]map[domain.RequirementKey]domain.RequirementDefinition
+	recommendationRules                 map[domain.Digest]domain.DaemonPolicyRule
 	// authorizedReviewRecipes carries the run-scoped independent-review
 	// authority a caller has re-derived for this transaction. Independent-review
 	// approval is run-trust-context-scoped (profile plus adoption), so unlike
@@ -189,6 +190,7 @@ func (s *Store) newReadTx(tx *sql.Tx) ReadTx {
 		verificationFloorRegistryGeneration: s.verificationFloorRegistryGeneration,
 		waiverGrantApprovals:                s.waiverGrantApprovals,
 		requirementSets:                     s.requirementSets,
+		recommendationRules:                 s.recommendationRules,
 	}
 }
 

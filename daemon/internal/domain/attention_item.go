@@ -425,8 +425,15 @@ type AttentionItem struct {
 	Priority          Priority      `json:"priority"`
 	Reason            string        `json:"reason"`
 	RequestedDecision []Action      `json:"requested_decision"`
-	EvidenceSnapshot  []Artifact    `json:"evidence_snapshot"`
-	AgentClaims       []AgentClaim  `json:"agent_claims"`
+	// Recommendation is the optional daemon-derived lead. Callers cannot set
+	// it through AttentionItemInput; the store derives it from immutable source
+	// records and suppresses it on any reconstruction mismatch.
+	Recommendation *Recommendation `json:"recommendation"`
+	// DecisionSurface is the item-side copy of the authoritative persisted
+	// epoch and digest. The zero value is valid only before persistence.
+	DecisionSurface  DecisionSurfaceRef `json:"decision_surface"`
+	EvidenceSnapshot []Artifact         `json:"evidence_snapshot"`
+	AgentClaims      []AgentClaim       `json:"agent_claims"`
 	// ArtifactDigests is the item's approval binding set: the canonical (sorted,
 	// deduplicated) union of every digest rendered in EvidenceSnapshot and
 	// AgentClaims. It is derived by NewAttentionItem and enforced by Validate,
@@ -897,6 +904,21 @@ func (i AttentionItem) Validate() error {
 	}
 	if i.ItemVersion < 1 {
 		return fmt.Errorf("item %s item_version %d: %w", i.ID, i.ItemVersion, ErrNonPositive)
+	}
+	if err := i.DecisionSurface.Validate(); err != nil {
+		return fmt.Errorf("item %s: %w", i.ID, err)
+	}
+	if i.Recommendation != nil {
+		if err := i.Recommendation.Validate(); err != nil {
+			return fmt.Errorf("item %s: %w", i.ID, err)
+		}
+		if !i.Offers(i.Recommendation.Action) {
+			return fmt.Errorf("item %s recommendation action %q is not offered: %w", i.ID, i.Recommendation.Action, ErrInvalidAction)
+		}
+		if p := i.Recommendation.Provenance.AgentJudgment; p != nil &&
+			!slices.Contains(i.ArtifactDigests, p.ArtifactDigest) {
+			return fmt.Errorf("item %s recommendation artifact %q is not bound: %w", i.ID, p.ArtifactDigest, ErrBindingMismatch)
+		}
 	}
 	// An empty requested_decision is structurally valid: the read-only blocked
 	// type offers no action (plan §4), and which types must offer at least one

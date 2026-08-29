@@ -1106,6 +1106,11 @@ func TestPutAttentionItemPreNoticeRowConverges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAttentionItem: %v", err)
 	}
+	surface, err := domain.NewDecisionSurface(item)
+	if err != nil {
+		t.Fatalf("NewDecisionSurface: %v", err)
+	}
+	item.DecisionSurface = domain.DecisionSurfaceRef{Epoch: surface.Epoch, Digest: surface.Digest}
 	body, err := encode(item)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -1119,6 +1124,7 @@ func TestPutAttentionItemPreNoticeRowConverges(t *testing.T) {
 		item.ID, item.ProjectID, legacy); err != nil {
 		t.Fatalf("insert legacy row: %v", err)
 	}
+	insertDecisionSurface(t, ctx, db, item)
 
 	if err := s.Write(ctx, func(tx *WriteTx) error {
 		return tx.PutAttentionItem(ctx, item)
@@ -1182,6 +1188,11 @@ func TestPutAttentionItemLegacyOffsetExpiresWhenConverges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAttentionItem: %v", err)
 	}
+	surface, err := domain.NewDecisionSurface(item)
+	if err != nil {
+		t.Fatalf("NewDecisionSurface: %v", err)
+	}
+	item.DecisionSurface = domain.DecisionSurfaceRef{Epoch: surface.Epoch, Digest: surface.Digest}
 	body, err := encode(item)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -1201,7 +1212,7 @@ func TestPutAttentionItemLegacyOffsetExpiresWhenConverges(t *testing.T) {
 		item.ID, item.ProjectID, item.Type, item.Status, legacy); err != nil {
 		t.Fatalf("insert legacy row: %v", err)
 	}
-	seedDecisionSurface(t, ctx, db, item)
+	insertDecisionSurface(t, ctx, db, item)
 	prReferenceBody, err := encode(*item.PRReference)
 	if err != nil {
 		t.Fatalf("encode pr reference: %v", err)

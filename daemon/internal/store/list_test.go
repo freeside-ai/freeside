@@ -100,7 +100,7 @@ func TestBootstrapListsOneSnapshot(t *testing.T) {
 	}{
 		{"run", runs[0].Snapshot, store.Snapshot{EntityVersion: 1, AsOfRevision: revSeed}, runs[0].Value, f.run},
 		{"conversation", conversations[0].Snapshot, store.Snapshot{EntityVersion: 1, AsOfRevision: revSeed}, conversations[0].Value, f.conversation},
-		{"item", items[0].Snapshot, store.Snapshot{EntityVersion: 2, AsOfRevision: revAdvance}, items[0].Value, advanced},
+		{"item", items[0].Snapshot, store.Snapshot{EntityVersion: 2, AsOfRevision: revAdvance}, items[0].Value, projectedAttentionItem(t, advanced)},
 		{"delivery", deliveries[0].Snapshot, store.Snapshot{EntityVersion: 1, AsOfRevision: revItem}, deliveries[0].Value, f.delivery},
 	}
 	for _, tc := range cases {
