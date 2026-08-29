@@ -14,6 +14,10 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
+// Keep in sync with export.SummaryEvidenceLabel without making the storage
+// trust boundary depend on the higher-level evidence-export package.
+const summaryEvidenceLabel = "freeside.summary"
+
 func nullableString(value string) any {
 	if value == "" {
 		return nil
@@ -225,6 +229,7 @@ WHERE kind = ? AND idempotency_key LIKE ?`,
 			Status         string              `json:"status"`
 			SpecArtifactID *domain.ArtifactID  `json:"spec_artifact_id"`
 			ApprovalItemID *domain.ItemID      `json:"approval_item_id"`
+			SummaryDigest  *domain.Digest      `json:"summary_digest"`
 		}
 		if err := json.Unmarshal(terminalEntry.Payload, &terminal); err != nil ||
 			terminal.InvocationID != request.InvocationID || terminal.Iteration != request.Iteration ||
@@ -258,14 +263,13 @@ WHERE kind = ? AND idempotency_key LIKE ?`,
 			item.Subject.RunID == nil || *item.Subject.RunID != attempt.ElaborationRunID ||
 			!slices.Equal(item.RequestedDecision,
 				[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}) ||
-			len(item.EvidenceSnapshot) != 0 || len(item.AgentClaims) != 1 ||
-			!slices.Equal(item.ArtifactDigests, []domain.Digest{attempt.ApprovedSpecDigest}) ||
+			len(item.EvidenceSnapshot) != 0 ||
 			item.PRHeadSHA != "" {
 			continue
 		}
-		claim := item.AgentClaims[0]
-		if claim.Label != "Specification" || claim.Artifact != specification.ID ||
-			claim.Digest != specification.Digest || !reflect.DeepEqual(claim.Provenance, specification.Provenance) {
+		if !authenticatesInitialApprovalClaims(
+			item, specification, terminal.SummaryDigest, attempt.ImplementationRunID, request.Iteration,
+		) {
 			continue
 		}
 		commands, err := tx.ListCommandsForItem(ctx, item.ID)
@@ -293,6 +297,42 @@ WHERE kind = ? AND idempotency_key LIKE ?`,
 		}
 	}
 	return domain.ErrParentKeyMismatch
+}
+
+func authenticatesInitialApprovalClaims(
+	item domain.AttentionItem,
+	specification domain.Artifact,
+	summaryDigest *domain.Digest,
+	implementationRunID domain.RunID,
+	iteration int,
+) bool {
+	if len(item.AgentClaims) != 1 && len(item.AgentClaims) != 2 {
+		return false
+	}
+	claim := item.AgentClaims[0]
+	if claim.Label != "Specification" || claim.Artifact != specification.ID ||
+		claim.Digest != specification.Digest ||
+		!reflect.DeepEqual(claim.Provenance, specification.Provenance) {
+		return false
+	}
+	expectedDigests := []domain.Digest{specification.Digest}
+	if len(item.AgentClaims) == 2 {
+		summary := item.AgentClaims[1]
+		expectedSummaryID := domain.ArtifactID(fmt.Sprintf(
+			"spec-summary-%s-%d", implementationRunID, iteration))
+		if summaryDigest == nil || summary.Digest != *summaryDigest ||
+			summary.Label != summaryEvidenceLabel || summary.Artifact != expectedSummaryID ||
+			summary.Text == nil || summary.Text.MediaType != domain.MediaTypeTextMarkdown ||
+			summary.Provenance != specification.Provenance {
+			return false
+		}
+		expectedDigests = append(expectedDigests, summary.Digest)
+		slices.Sort(expectedDigests)
+		expectedDigests = slices.Compact(expectedDigests)
+	} else if summaryDigest != nil {
+		return false
+	}
+	return slices.Equal(item.ArtifactDigests, expectedDigests)
 }
 
 // PutProductionAttempt records one campaign attempt. A new ordinal must be

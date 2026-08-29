@@ -5258,7 +5258,9 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 		RequestedDecision: []domain.Action{
 			domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionDismiss, domain.ActionStop,
 		},
-		EvidenceSnapshot: checkpoint.Artifacts, AgentClaims: checkpoint.Imported.Claims,
+		EvidenceSnapshot: checkpoint.Artifacts,
+		AgentClaims: normalizeSummaryClaims(
+			checkpoint.Imported.Claims, task.ProducingInvocationID),
 		PRHeadSHA: checkpoint.Imported.CommitSHA,
 		PRReference: &domain.PRReference{
 			Repo: checkpoint.Authorization.Repo, Number: published.PRNumber,
@@ -5325,10 +5327,11 @@ func (w *productionPublicationWorkflow) newBlockedItem(
 		Type:    domain.AttentionPublishBlocked, Priority: domain.PriorityHigh,
 		Reason:            reason,
 		RequestedDecision: actions,
-		EvidenceSnapshot:  artifacts, AgentClaims: imported.Claims,
-		PRHeadSHA:        imported.CommitSHA,
-		CommitPlanNotice: imported.CommitPlanNotice,
-		ItemVersion:      1, InterruptionClass: domain.InterruptionExceptional,
+		EvidenceSnapshot:  artifacts,
+		AgentClaims:       normalizeSummaryClaims(imported.Claims, task.ProducingInvocationID),
+		PRHeadSHA:         imported.CommitSHA,
+		CommitPlanNotice:  imported.CommitPlanNotice,
+		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt: &createdAt,
 		Status:    domain.StatusOpen,
 	}, approvedRecipes)

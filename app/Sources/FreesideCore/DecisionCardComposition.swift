@@ -9,9 +9,16 @@ enum DecisionCardModule: String, CaseIterable {
     case stageRail
     case comparison
     case yieldChart
+    case summary
     case claims
     case evidence
     case details
+}
+
+// Keep in sync with export.SummaryEvidenceLabel in
+// daemon/internal/export/evidence_source.go.
+enum AgentClaimLabels {
+    static let summary = "freeside.summary"
 }
 
 struct DecisionCardComposition: Equatable {
@@ -31,6 +38,9 @@ struct DecisionCardComposition: Equatable {
         at moduleIndex: Int,
         prominentClaimIndex: Int?
     ) -> [Components.Schemas.AgentClaim] {
+        let claims = claims.filter {
+            !($0.label == AgentClaimLabels.summary && $0.text != nil)
+        }
         let claimModuleIndices = modules.indices.filter { modules[$0] == .claims }
         guard claimModuleIndices.count > 1 else { return claims }
         guard let prominentClaimIndex, claims.indices.contains(prominentClaimIndex) else {
@@ -42,6 +52,12 @@ struct DecisionCardComposition: Equatable {
         }
     }
 
+    func summaries(
+        from claims: [Components.Schemas.AgentClaim]
+    ) -> [Components.Schemas.AgentClaim] {
+        claims.filter { $0.label == AgentClaimLabels.summary && $0.text != nil }
+    }
+
     static let sharedModuleSet = DecisionCardModule.allCases
 
     static func forType(_ type: Components.Schemas.AttentionType) -> Self {
@@ -49,26 +65,29 @@ struct DecisionCardComposition: Equatable {
         case .ready_for_final_review:
             return .init(
                 modules: [
-                    .recommendation, .checklist, .factBlock, .yieldChart, .claims, .evidence,
-                    .details,
+                    .recommendation, .checklist, .factBlock, .yieldChart, .summary, .claims,
+                    .evidence, .details,
                 ],
                 actionInsertionIndex: 4,
-                reviewingActionInsertionIndex: 6)
+                reviewingActionInsertionIndex: 7)
         case .execution_failure:
             return .init(
                 modules: [
-                    .recommendation, .stageRail, .claims, .factBlock, .claims, .evidence, .details,
+                    .recommendation, .stageRail, .claims, .factBlock, .summary, .claims, .evidence,
+                    .details,
                 ],
                 actionInsertionIndex: 3,
                 reviewingActionInsertionIndex: nil)
         case .review_dispute:
             return .init(
-                modules: [.comparison, .factBlock, .claims, .evidence, .details],
+                modules: [.comparison, .factBlock, .summary, .claims, .evidence, .details],
                 actionInsertionIndex: 2,
                 reviewingActionInsertionIndex: nil)
         case .review_diminishing_returns:
             return .init(
-                modules: [.recommendation, .yieldChart, .factBlock, .claims, .evidence, .details],
+                modules: [
+                    .recommendation, .yieldChart, .factBlock, .summary, .claims, .evidence, .details,
+                ],
                 actionInsertionIndex: 2,
                 reviewingActionInsertionIndex: nil)
         case .finding_adjudication:
@@ -80,12 +99,19 @@ struct DecisionCardComposition: Equatable {
             // alternatives/gating-questions content stays in .factBlock,
             // which the §9 "Below" column covers, after the action region.
             return .init(
-                modules: [.recommendation, .findingFacts, .factBlock, .claims, .evidence, .details],
+                modules: [
+                    .recommendation, .findingFacts, .factBlock, .summary, .claims, .evidence,
+                    .details,
+                ],
                 actionInsertionIndex: 2,
                 reviewingActionInsertionIndex: nil)
         case .spec_approval, .review_contradiction, .review_configuration,
-            .agent_question, .publish_blocked, .run_proposal,
-            .system_health, .blocked:
+            .agent_question, .publish_blocked, .run_proposal:
+            return .init(
+                modules: [.recommendation, .factBlock, .summary, .claims, .evidence, .details],
+                actionInsertionIndex: 1,
+                reviewingActionInsertionIndex: nil)
+        case .system_health, .blocked:
             return .init(
                 modules: [.recommendation, .factBlock, .claims, .evidence, .details],
                 actionInsertionIndex: 1,

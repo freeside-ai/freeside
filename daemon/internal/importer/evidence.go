@@ -185,24 +185,29 @@ func skipUntilJSONClose(dec *json.Decoder) error {
 // declared media type against the blob's magic bytes (§5.15 rule 3: the daemon
 // validates magic/type/size and treats images as opaque), maps the typed
 // provenance into the domain shape, and derives an invocation-scoped artifact
-// id while retaining the content address in the claim's digest. Any failure
-// returns a typed error and no claims: bad evidence fails the whole import
-// closed, exactly as the repo channel's integrity violations do.
-func buildClaims(em export.EvidenceManifest, blobs map[export.Digest]blobInfo, _ Policy) ([]domain.AgentClaim, error) {
+// id while retaining the content address in the claim's digest. Credential
+// matches return metadata-only findings and omit inline text; any integrity
+// failure returns a typed error and no claims. Bad evidence fails the whole
+// import closed, exactly as the repo channel's integrity violations do.
+func buildClaims(
+	em export.EvidenceManifest, blobs map[export.Digest]blobInfo, pol Policy,
+) ([]domain.AgentClaim, []Finding, error) {
+	pol = pol.withDefaults()
 	claims := make([]domain.AgentClaim, 0, len(em.Entries))
+	var findings []Finding
 	for _, e := range em.Entries {
 		info, ok := blobs[e.Digest]
 		if !ok {
 			// verifyBlobs built the verified set from these same entries, so a
 			// miss is an internal invariant break, not hostile input.
-			return nil, fmt.Errorf("evidence entry %q digest %s has no verified blob: %w", e.Label, e.Digest, ErrMissingBlob)
+			return nil, nil, fmt.Errorf("evidence entry %q digest %s has no verified blob: %w", e.Label, e.Digest, ErrMissingBlob)
 		}
 		if err := validateEvidenceType(e, info.verifiedPath); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		prov, err := mapEvidenceProvenance(e.Provenance)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		claim := domain.AgentClaim{
 			Label:      e.Label,
@@ -210,14 +215,33 @@ func buildClaims(em export.EvidenceManifest, blobs map[export.Digest]blobInfo, _
 			Digest:     domain.Digest(string(e.Digest)),
 			Provenance: prov,
 		}
+		if e.MediaType == "text/markdown" && e.Size <= pol.SecretMaxScanBytes {
+			body, readErr := readScanBlob(info, e.Digest)
+			if readErr != nil {
+				return nil, nil, fmt.Errorf("read evidence entry %q text: %w", e.Label, readErr)
+			}
+			matches := scanText(e.Label, body)
+			findings = append(findings, matches...)
+			// Secret-bearing evidence stays out of both inline attention state
+			// and durable artifact storage: the finding makes the production
+			// profile reject the import before persistEvidence runs. The
+			// scanner reports only rule and line metadata, never matched bytes.
+			if len(matches) == 0 && e.Size <= domain.MaxClaimTextBytes &&
+				prov.SensitivityClass != domain.SensitivityHigh {
+				claim.Text = &domain.ClaimText{
+					MediaType: domain.MediaTypeTextMarkdown,
+					Content:   string(body),
+				}
+			}
+		}
 		// Defense in depth: decode already guarantees agent provenance, but
 		// re-pinning it here fails a mapping bug closed rather than open.
 		if err := claim.Validate(); err != nil {
-			return nil, fmt.Errorf("evidence entry %q: %w", e.Label, err)
+			return nil, nil, fmt.Errorf("evidence entry %q: %w", e.Label, err)
 		}
 		claims = append(claims, claim)
 	}
-	return claims, nil
+	return claims, findings, nil
 }
 
 // agentArtifactID is stable for one complete immutable artifact row. Labels
@@ -317,6 +341,7 @@ const evidenceMagicPeek = 12
 // magic/type/size and treat agent images as opaque blobs. SVG (scriptable XML,
 // an exfiltration/stored-script vector when a claim is rendered) and text/plain
 // (no reliable magic, so any bytes would "match") are excluded by design.
+// text/markdown is handled separately as bounded, non-empty UTF-8 prose.
 var evidenceMediaMagic = map[string]func([]byte) bool{
 	"image/png":  hasPrefix([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}),
 	"image/jpeg": hasPrefix([]byte{0xFF, 0xD8, 0xFF}),
@@ -342,6 +367,17 @@ func hasPrefix(prefix []byte) func([]byte) bool {
 func validateEvidenceType(entry export.EvidenceEntry, verifiedPath string) error {
 	if entry.MediaType == "application/jsonl" {
 		if err := validateJSONLines(verifiedPath, entry.Size); err != nil {
+			if !errors.Is(err, ErrEvidenceMediaMismatch) {
+				return fmt.Errorf("validate evidence entry %q as %q: %w",
+					entry.Label, entry.MediaType, err)
+			}
+			return fmt.Errorf("evidence entry %q content does not match declared media_type %q: %w",
+				entry.Label, entry.MediaType, ErrEvidenceMediaMismatch)
+		}
+		return nil
+	}
+	if entry.MediaType == "text/markdown" {
+		if err := validateUTF8Markdown(verifiedPath, entry.Size); err != nil {
 			if !errors.Is(err, ErrEvidenceMediaMismatch) {
 				return fmt.Errorf("validate evidence entry %q as %q: %w",
 					entry.Label, entry.MediaType, err)
@@ -397,6 +433,34 @@ func validateJSONLines(verifiedPath string, size int64) error {
 		return ErrEvidenceMediaMismatch
 	}
 	return nil
+}
+
+// validateUTF8Markdown checks the complete verified blob without allocating a
+// second buffer proportional to its size. Oversized summaries deliberately
+// stay artifact-only, so validating one must not first read the whole evidence
+// cap into memory merely to decide that its bytes are well-formed.
+func validateUTF8Markdown(verifiedPath string, size int64) error {
+	if size <= 0 {
+		return ErrEvidenceMediaMismatch
+	}
+	f, err := os.Open(verifiedPath) //nolint:gosec // G304: daemon-private verified-snapshot path
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	reader := bufio.NewReader(f)
+	for {
+		r, width, readErr := reader.ReadRune()
+		switch {
+		case errors.Is(readErr, io.EOF):
+			return nil
+		case readErr != nil:
+			return readErr
+		case r == utf8.RuneError && width == 1:
+			return ErrEvidenceMediaMismatch
+		}
+	}
 }
 
 // readEvidenceHeader returns up to evidenceMagicPeek leading bytes of the

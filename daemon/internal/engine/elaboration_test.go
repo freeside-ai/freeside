@@ -26,6 +26,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -535,8 +536,14 @@ func TestElaborationRestartsAcrossDurableBoundaries(t *testing.T) {
 						}
 					}
 					wantDigest := domain.Digest(contentaddr.Sum([]byte(specification)))
+					wantSummary := domain.ClaimText{
+						MediaType: domain.MediaTypeTextMarkdown,
+						Content:   "The implementation contract is ready.",
+					}
 					if approval.Item.ID == "" || approval.Item.Status != domain.StatusOpen ||
-						!slices.Equal(approval.Item.ArtifactDigests, []domain.Digest{wantDigest}) ||
+						!slices.Equal(approval.Item.ArtifactDigests, []domain.Digest{
+							wantDigest, wantSummary.ComputeDigest(),
+						}) ||
 						len(approval.Item.RequestedDecision) == 0 {
 						t.Fatalf("recovered approval = %#v, want one actionable exact-spec item", approval)
 					}
@@ -837,9 +844,15 @@ func TestElaborationResearchApprovalStartsDigestBoundImplementation(t *testing.T
 	if slices.Contains(item.RequestedDecision, domain.ActionDiscuss) {
 		t.Fatalf("approval item offers unsupported discussion: %+v", item.RequestedDecision)
 	}
-	if len(item.AgentClaims) != 1 || item.AgentClaims[0].Text == nil ||
+	if len(item.AgentClaims) != 2 || item.AgentClaims[0].Text == nil ||
 		item.AgentClaims[0].Text.Content != "# Approved Specification\n\nImplement the bounded workflow." {
 		t.Fatalf("approval item does not carry the full specification: %+v", item.AgentClaims)
+	}
+	summary, ok := summaryClaimForInvocation(item.AgentClaims, secondID)
+	if !ok || summary.Label != export.SummaryEvidenceLabel || summary.Text == nil ||
+		summary.Text.Content != "The implementation plan is ready." ||
+		summary.Digest != summary.Text.ComputeDigest() {
+		t.Fatalf("approval item does not carry the bound summary: %+v", item.AgentClaims)
 	}
 	comment := "Document how the research limit is enforced before provider start."
 	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
@@ -1972,6 +1985,52 @@ func TestElaborationClocksCancelActiveWorkAndConsolidateWaiting(t *testing.T) {
 }
 
 func TestElaborationFailureAndGatePolicies(t *testing.T) {
+	t.Run("credential-shaped specification output", func(t *testing.T) {
+		token := "ghp_" + strings.Repeat("A", 36)
+		for _, tc := range []struct {
+			name    string
+			summary string
+			body    string
+		}{
+			{
+				name: "summary", summary: "Token: " + token,
+				body: "# Specification\n\nImplement the bounded workflow.",
+			},
+			{
+				name: "body", summary: "Implement the bounded workflow.",
+				body: "# Specification\n\nToken: " + token,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				f := newElaborationFixture(t, true, 2)
+				driver := f.newDriver(t)
+				id := elaborationInvocationID("elaboration-run", 1)
+				if err := elaboratefake.Script(driver, id, 0, 0, elaborate.Output{
+					Specification: &elaborate.Specification{
+						Summary: tc.summary, Body: tc.body, Addressals: []elaborate.Addressal{},
+					},
+				}); err != nil {
+					t.Fatal(err)
+				}
+				f.submit(t)
+				if _, err := f.newEngine(t, driver).Reconcile(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				item, _ := f.item(t, domain.ItemID("execution-failure-"+string(id)))
+				if !strings.Contains(item.Reason, "credential-shaped content") ||
+					strings.Contains(item.Reason, "ghp_") {
+					t.Fatalf("credential-output failure = %+v", item)
+				}
+				if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+					_, err := tx.GetArtifact(t.Context(), "spec-implementation-run-1")
+					return err
+				}); !errors.Is(err, store.ErrNotFound) {
+					t.Fatalf("credential-bearing specification artifact lookup = %v", err)
+				}
+			})
+		}
+	})
+
 	t.Run("stop concludes without implementation", func(t *testing.T) {
 		f := newElaborationFixture(t, true, 2)
 		driver := f.newDriver(t)
@@ -2165,6 +2224,51 @@ func TestElaborationDecisionCommandsRejectDiscussion(t *testing.T) {
 	}
 	if _, err := elaborationDecisionCommands(commands); !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("discussion command error = %v, want ErrParentKeyMismatch", err)
+	}
+}
+
+func TestVerifyElaborationApprovalClaimsAcceptsLegacyAndCanonicalDigests(t *testing.T) {
+	request := elaborationRequest{
+		InvocationID: "inv-elaborate-run-1", ImplementationRunID: "implementation-run", Iteration: 1,
+	}
+	sharedText := domain.ClaimText{
+		MediaType: domain.MediaTypeTextMarkdown, Content: "# Specification\n\nImplement the bounded workflow.",
+	}
+	specification, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "spec-implementation-run-1", Type: domain.ArtifactKindSpecification,
+		Digest: sharedText.ComputeDigest(),
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerAgent, ProducerInvocationID: request.InvocationID,
+			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := domain.AttentionItem{
+		ID: "spec-approval-implementation-run-1",
+		AgentClaims: []domain.AgentClaim{{
+			Label: "Specification", Artifact: specification.ID, Digest: specification.Digest,
+			Provenance: specification.Provenance,
+		}},
+		ArtifactDigests: []domain.Digest{specification.Digest},
+	}
+	if err := verifyElaborationApprovalClaims(legacy, request, specification, nil); err != nil {
+		t.Fatalf("legacy specification-only approval = %v", err)
+	}
+
+	current := legacy
+	current.AgentClaims = append(current.AgentClaims, domain.AgentClaim{
+		Label: export.SummaryEvidenceLabel, Artifact: "spec-summary-implementation-run-1",
+		Digest: sharedText.ComputeDigest(), Provenance: specification.Provenance, Text: &sharedText,
+	})
+	summaryDigest := sharedText.ComputeDigest()
+	if err := verifyElaborationApprovalClaims(current, request, specification, &summaryDigest); err != nil {
+		t.Fatalf("summary sharing the specification digest = %v", err)
+	}
+	wrongDigest := domain.Digest(contentaddr.Sum([]byte("substituted summary")))
+	if err := verifyElaborationApprovalClaims(current, request, specification, &wrongDigest); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("substituted summary digest error = %v, want ErrParentKeyMismatch", err)
 	}
 }
 

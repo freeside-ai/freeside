@@ -253,8 +253,11 @@ func (tx *ReadTx) reviewDiminishingDecisionUncached(
 		binding.ItemID != ReviewDiminishingItemID(binding.RunID, binding.Round) ||
 		!validSubject || item.PRHeadSHA != binding.HeadSHA || item.YieldHistory == nil ||
 		!slices.Equal(item.RequestedDecision, expectedActions) || len(item.EvidenceSnapshot) != 0 ||
-		len(item.AgentClaims) != 0 || len(item.ArtifactDigests) != 0 {
+		len(item.AgentClaims) > 1 {
 		return ReviewDiminishingDecision{}, domain.ErrParentKeyMismatch
+	}
+	if err := tx.authenticateReviewDiminishingSummary(ctx, item, binding); err != nil {
+		return ReviewDiminishingDecision{}, err
 	}
 	run, err := tx.GetRun(ctx, binding.RunID)
 	if err != nil {
@@ -342,6 +345,55 @@ func (tx *ReadTx) reviewDiminishingDecisionUncached(
 	}
 	command := *terminal
 	return ReviewDiminishingDecision{Item: item, Command: &command, Binding: binding}, nil
+}
+
+// authenticateReviewDiminishingSummary accepts the legacy claim-free shape or
+// the one summary selected from the preceding remediation invocation's
+// immutable claim set. Re-reading that set prevents a coherently rewritten
+// item from inventing summary provenance at reconstruction time.
+func (tx *ReadTx) authenticateReviewDiminishingSummary(
+	ctx context.Context, item domain.AttentionItem, binding ReviewDiminishingBinding,
+) error {
+	if len(item.AgentClaims) == 0 {
+		if len(item.ArtifactDigests) != 0 {
+			return domain.ErrParentKeyMismatch
+		}
+		return nil
+	}
+	if binding.Round < 2 || len(item.ArtifactDigests) != 1 {
+		return domain.ErrParentKeyMismatch
+	}
+
+	invocationID := domain.InvocationID(fmt.Sprintf(
+		"inv-remediate-%d-%s", binding.Round-1, binding.RunID))
+	claims, err := tx.GetAgentClaims(ctx, invocationID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	matched := -1
+	for index := range claims {
+		if claims[index].Label != summaryEvidenceLabel {
+			continue
+		}
+		if matched >= 0 {
+			return domain.ErrParentKeyMismatch
+		}
+		matched = index
+	}
+	if matched < 0 {
+		return domain.ErrParentKeyMismatch
+	}
+	summary := claims[matched]
+	if summary.Text == nil || summary.Text.MediaType != domain.MediaTypeTextMarkdown ||
+		summary.Provenance.ProducerInvocationID != invocationID ||
+		!reflect.DeepEqual(item.AgentClaims[0], summary) ||
+		item.ArtifactDigests[0] != summary.Digest {
+		return domain.ErrParentKeyMismatch
+	}
+	return nil
 }
 
 // ListReviewDiminishingDecisions returns the authenticated decision history in

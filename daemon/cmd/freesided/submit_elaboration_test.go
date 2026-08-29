@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -202,7 +203,9 @@ func testSubmitCommandElaborationDigest(t *testing.T, acceptedBody string, wantS
 		t.Fatalf("implementation/source digest equality = %t, want %t (%q / %q)",
 			gotSame, wantSameDigest, implementationRun.SpecDigest, submitted.SourceDigest)
 	}
-	if len(item.AgentClaims) != 1 || item.AgentClaims[0].Digest != implementationRun.SpecDigest {
+	if len(item.AgentClaims) != 2 || item.AgentClaims[0].Digest != implementationRun.SpecDigest ||
+		item.AgentClaims[1].Label != export.SummaryEvidenceLabel ||
+		item.AgentClaims[1].Text == nil {
 		t.Fatalf("approval claim = %+v, want approved implementation digest %q",
 			item.AgentClaims, implementationRun.SpecDigest)
 	}

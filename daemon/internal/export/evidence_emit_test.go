@@ -111,6 +111,34 @@ func TestEmitEvidenceAbsentDescriptor(t *testing.T) {
 	}
 }
 
+func TestEmitTextMarkdownEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+		wantErr bool
+	}{
+		{name: "valid UTF-8", content: "Changed the retry path; one edge remains open.\n"},
+		{name: "empty", content: "", wantErr: true},
+		{name: "invalid UTF-8", content: "summary \xff", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			mustWrite(t, dir, "README.md", "repo\n")
+			mustWrite(t, dir, export.SummaryEvidencePath, tc.content)
+			mustWrite(t, dir, export.EvidenceDescriptorPath, `{"version":"freeside.export.evidence-source/v1","sources":[`+
+				`{"label":"freeside.summary","media_type":"text/markdown","path":".freeside-evidence/summary.md",`+
+				`"head_binding":"head_independent","sensitivity_class":"sensitive","producer_invocation_id":"inv-summary"}]}`)
+			_, err := export.Export(os.DirFS(dir), t.TempDir(), export.Options{})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Export error = %v, wantErr = %v", err, tc.wantErr)
+			}
+			if tc.wantErr && !errors.Is(err, export.ErrInvalidUTF8) {
+				t.Fatalf("Export error = %v, want ErrInvalidUTF8", err)
+			}
+		})
+	}
+}
+
 // TestEmitEvidenceHostile enumerates malformed or adversarial declarations that
 // must fail the whole export closed rather than emit a partial or lying channel.
 func TestEmitEvidenceHostile(t *testing.T) {

@@ -163,6 +163,50 @@ func TestProductionAttemptAuthenticationRejectsRetryAsElaboration(t *testing.T) 
 	}
 }
 
+func TestInitialApprovalClaimsRequireMarkdownAndCanonicalDigests(t *testing.T) {
+	text := domain.ClaimText{
+		MediaType: domain.MediaTypeTextMarkdown, Content: "# Specification\n\nImplement the bounded workflow.",
+	}
+	provenance := domain.Provenance{
+		ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-elaborate-run-1",
+		HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+	}
+	specification := domain.Artifact{
+		ID: "spec-run-1-1", Type: domain.ArtifactKindSpecification,
+		Digest: text.ComputeDigest(), Provenance: provenance,
+	}
+	item := domain.AttentionItem{
+		AgentClaims: []domain.AgentClaim{
+			{Label: "Specification", Artifact: specification.ID, Digest: specification.Digest, Provenance: provenance},
+			{
+				Label: summaryEvidenceLabel, Artifact: "spec-summary-run-1-1",
+				Digest: text.ComputeDigest(), Provenance: provenance, Text: &text,
+			},
+		},
+		ArtifactDigests: []domain.Digest{specification.Digest},
+	}
+	summaryDigest := text.ComputeDigest()
+	if !authenticatesInitialApprovalClaims(item, specification, &summaryDigest, "run-1", 1) {
+		t.Fatal("canonical duplicate digest was rejected")
+	}
+	substituted := text
+	substituted.Content = "# Specification\n\nSubstitute an unauthenticated summary."
+	item.AgentClaims[1].Text = &substituted
+	item.AgentClaims[1].Digest = substituted.ComputeDigest()
+	if authenticatesInitialApprovalClaims(item, specification, &summaryDigest, "run-1", 1) {
+		t.Fatal("summary not bound to the terminal digest was accepted")
+	}
+	item.AgentClaims[1].Text = &text
+	item.AgentClaims[1].Digest = text.ComputeDigest()
+
+	plain := text
+	plain.MediaType = domain.MediaTypeTextPlain
+	item.AgentClaims[1].Text = &plain
+	if authenticatesInitialApprovalClaims(item, specification, &summaryDigest, "run-1", 1) {
+		t.Fatal("plain-text reserved summary was accepted")
+	}
+}
+
 func TestProductionAttemptReconstructionRejectsCyclicParent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

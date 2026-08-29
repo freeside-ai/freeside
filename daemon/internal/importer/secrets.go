@@ -33,6 +33,14 @@ var secretRules = []secretRule{
 	{"gcp_service_account_key", regexp.MustCompile(`"private_key_id"\s*:\s*"[0-9a-f]{40}"`)},
 }
 
+// ContainsSecret reports whether content matches one of the importer's
+// high-signal credential rules. It deliberately exposes only a boolean so
+// callers can reject agent-written structured text without copying a matched
+// credential into an error, finding, or durable attention record.
+func ContainsSecret(content []byte) bool {
+	return len(scanText("", content)) > 0
+}
+
 // scanSecrets runs the best-effort secret scan over added-or-modified
 // regular content and returns publish-blocking findings. Only content
 // the candidate introduced is scanned (an unchanged base file is not
