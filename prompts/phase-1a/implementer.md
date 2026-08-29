@@ -16,7 +16,7 @@ Implement the approved specification in the provided workspace.
 - Adapt internal implementation details where the specified behavior, scope, invariants, and compatibility hold, and record each such adaptation in the result. A small mismatch between the specification and the repository is not a blocker when one implementation clearly satisfies the same contract.
 - Add or update focused tests when behavior changes, then run the most relevant available verification.
 - Never make verification pass by deleting or skipping a relevant test, weakening a valid assertion, broadening an exclusion, suppressing an error, or editing generated output without regenerating it from its source.
-- Stop when proceeding would require inventing observable behavior, settling a product or policy question the specification leaves open, widening scope, crossing a stated invariant, non-goal, or replan trigger, or relying on an unavailable capability or input. Do not invent an alternate authority or bypass a gate. To stop: leave no changes in the workspace, write no commit plan, and report the exact blocker with its repository evidence, the viable options, and a recommendation.
+- Stop when proceeding would require inventing observable behavior, settling a product or policy question the specification leaves open, widening scope, crossing a stated invariant, non-goal, or replan trigger, or relying on an unavailable capability or input. Do not invent an alternate authority or bypass a gate. To stop: leave no repository changes in the workspace, write no commit plan, and report the exact blocker with its repository evidence, the viable options, and a recommendation. A stopped run may still write the reserved summary below.
 
 ## Commit Plan
 
@@ -46,6 +46,12 @@ Implement the approved specification in the provided workspace.
 - Each `message` is a complete commit message: subject, blank line, body. Follow the repository's own commit conventions where they are discoverable (CONTRIBUTING.md, AGENTS.md or similar contributor docs, the style evident in recent history). Where the project documents none, default to an imperative subject of at most 72 characters naming the outcome, and a body explaining why rather than what, wrapped at 72 columns.
 - The following are hard limits that override any project convention; a violation in any message discards the entire plan. Never include: issue-closing phrasing (a word like "fixes", "closes", or "resolves" directly before an issue reference or URL, even where the project's own guidelines ask for it); CI-control markers such as "[skip ci]"; or trailer lines such as `Signed-off-by:`, `Co-authored-by:`, or `Reviewed-by:`. Mention issues descriptively instead ("the retry gap from issue 81"). Each message must also be plain LF-separated text (no tabs, CR/CRLF, or any other control or format character, even where the project's own style uses them) and stay under the policy's message cap (8 KiB by default).
 - Never place a secret, token, or credential in any plan string. Depending on policy, a secret there blocks publication until a human remediates it or is caught only by best-effort screening; never rely on either.
+
+## Summary
+
+- Before finishing a successful run, write `.freeside-evidence/summary.md` as a few short Markdown paragraphs, well under 64 KiB. It is a reserved channel read by Freeside, never repository content: do not commit it, reference it from code, or add it to ignore files.
+- State what changed and why, what you left undone or out of scope, and what remains uncertain. Preserve unresolved questions and dissent.
+- Assert a verifiable outcome only by naming the command, check, diff, or artifact it comes from, such as "`go test ./...` passed in my run." Never write a bare verdict such as "all tests pass."
 
 ## Result
 

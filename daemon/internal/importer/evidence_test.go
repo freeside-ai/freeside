@@ -302,6 +302,11 @@ func TestValidateEvidenceType(t *testing.T) {
 		{"json lines blank record", "application/jsonl", "{\"type\":\"assistant\"}\n\n", true},
 		{"json lines empty", "application/jsonl", "", true},
 		{"json lines invalid utf8", "application/jsonl", "{\"text\":\"\xff\"}\n", true},
+		{"markdown", "text/markdown", "Changed **one** path.\n", false},
+		{"markdown oversized valid", "text/markdown", strings.Repeat("x", 1<<16+1), false},
+		{"markdown empty", "text/markdown", "", true},
+		{"markdown invalid utf8", "text/markdown", "summary \xff", true},
+		{"markdown invalid utf8 after stream chunk", "text/markdown", strings.Repeat("x", 64<<10) + "\xff", true},
 		{"png declared but script content", "image/png", scriptContent, true},
 		{"json lines declared but png content", "application/jsonl", pngContent, true},
 		{"unlisted media type", "application/zip", pngContent, true},
@@ -321,6 +326,57 @@ func TestValidateEvidenceType(t *testing.T) {
 			}
 			if tc.wantErr && !errors.Is(err, ErrEvidenceMediaMismatch) {
 				t.Fatalf("err = %v, want ErrEvidenceMediaMismatch", err)
+			}
+		})
+	}
+}
+
+func TestBuildClaimsInlinesConformingMarkdown(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		content     string
+		sensitivity export.EvidenceSensitivityClass
+		scanBytes   int64
+		wantText    bool
+		wantSecret  bool
+	}{
+		{name: "normal", content: "Summary with **context**.", sensitivity: export.EvidenceSensitivityNormal, wantText: true},
+		{name: "sensitive", content: "Summary with **context**.", sensitivity: export.EvidenceSensitivitySensitive, wantText: true},
+		{name: "secret stays referenced", content: "token: ghp_" + strings.Repeat("A", 36), sensitivity: export.EvidenceSensitivitySensitive, wantSecret: true},
+		{name: "over secret scan cap stays referenced", content: strings.Repeat("x", 2048), sensitivity: export.EvidenceSensitivitySensitive, scanBytes: 1024},
+		{name: "high sensitivity stays referenced", content: "Summary with **context**.", sensitivity: export.EvidenceSensitivityHigh},
+		{name: "oversized stays referenced", content: strings.Repeat("x", 1<<16+1), sensitivity: export.EvidenceSensitivitySensitive},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "blob")
+			if err := os.WriteFile(p, []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			entry := evidenceEntry(export.SummaryEvidenceLabel, "text/markdown", tc.content)
+			entry.Provenance.SensitivityClass = tc.sensitivity
+			claims, findings, err := buildClaims(evidenceManifest(entry), map[export.Digest]blobInfo{
+				entry.Digest: {size: entry.Size, verifiedPath: p},
+			}, Policy{SecretMaxScanBytes: tc.scanBytes})
+			if err != nil {
+				t.Fatalf("buildClaims: %v", err)
+			}
+			if got := len(findings) == 1 && findings[0].Kind == FindingSecret &&
+				findings[0].Path == export.SummaryEvidenceLabel; got != tc.wantSecret {
+				t.Fatalf("secret findings = %+v, want secret = %v", findings, tc.wantSecret)
+			}
+			if len(claims) != 1 {
+				t.Fatalf("claims = %d, want 1", len(claims))
+			}
+			if (claims[0].Text != nil) != tc.wantText {
+				t.Fatalf("claim text = %#v, want present = %v", claims[0].Text, tc.wantText)
+			}
+			if claims[0].Text != nil {
+				if claims[0].Text.MediaType != "text/markdown" || claims[0].Text.Content != tc.content {
+					t.Fatalf("claim text = %#v", claims[0].Text)
+				}
+				if claims[0].Digest != claims[0].Text.ComputeDigest() {
+					t.Fatalf("claim digest %q does not bind inline text", claims[0].Digest)
+				}
 			}
 		})
 	}
@@ -363,6 +419,37 @@ func TestImportEvidenceCleanEndToEnd(t *testing.T) {
 	goldenResult(t, "import_evidence_result", res)
 }
 
+func TestImportEvidenceSecretBecomesNonInliningFinding(t *testing.T) {
+	clone, base, handoff := evidenceFixture(t, map[string]string{"a.txt": "new\n"})
+	content := "Token: ghp_" + strings.Repeat("A", 36)
+	entry := evidenceEntry(export.SummaryEvidenceLabel, "text/markdown", content)
+	entry.Provenance.SensitivityClass = export.EvidenceSensitivitySensitive
+	body, err := evidenceManifest(entry).Encode()
+	if err != nil {
+		t.Fatalf("encode evidence: %v", err)
+	}
+	writeEvidence(t, handoff, body, blobFor(content))
+
+	res, err := Import(t.Context(), handoff, clone, testImportOptions(base))
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if len(res.Claims) != 1 || res.Claims[0].Text != nil {
+		t.Fatalf("secret-bearing claims = %+v", res.Claims)
+	}
+	if len(res.Findings) != 1 || res.Findings[0].Kind != FindingSecret ||
+		res.Findings[0].Path != export.SummaryEvidenceLabel || res.Findings[0].Rule != "github_token" {
+		t.Fatalf("secret-bearing evidence findings = %+v", res.Findings)
+	}
+	encoded, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("ghp_")) {
+		t.Fatal("import result leaked the matched credential")
+	}
+}
+
 func TestAgentArtifactIdentityIncludesCompleteProvenance(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "same.png")
@@ -373,11 +460,14 @@ func TestAgentArtifactIdentityIncludesCompleteProvenance(t *testing.T) {
 	blobs := map[export.Digest]blobInfo{
 		entry.Digest: {size: entry.Size, verifiedPath: path},
 	}
-	first, err := buildClaims(
+	first, findings, err := buildClaims(
 		evidenceManifest(entry), blobs, Policy{},
 	)
 	if err != nil {
 		t.Fatalf("build first claim: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("build first claim findings: %+v", findings)
 	}
 	for _, tc := range []struct {
 		name   string
@@ -397,9 +487,12 @@ func TestAgentArtifactIdentityIncludesCompleteProvenance(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			changed := entry
 			tc.mutate(&changed.Provenance)
-			second, err := buildClaims(evidenceManifest(changed), blobs, Policy{})
+			second, findings, err := buildClaims(evidenceManifest(changed), blobs, Policy{})
 			if err != nil {
 				t.Fatalf("build changed claim: %v", err)
+			}
+			if len(findings) != 0 {
+				t.Fatalf("build changed claim findings: %+v", findings)
 			}
 			if first[0].Digest != second[0].Digest {
 				t.Fatal("identical evidence bytes produced different content digests")

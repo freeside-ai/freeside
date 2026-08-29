@@ -1,6 +1,7 @@
 package export
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // maxEvidenceDescriptorBytes bounds the descriptor read: it is a small list of
@@ -89,10 +91,43 @@ func resolveEvidence(fsys fs.FS, opts Options) ([]resolvedEvidenceSource, error)
 		if opts.MaxEvidenceTotalBytes > 0 && size > opts.MaxEvidenceTotalBytes-total {
 			return nil, fmt.Errorf("evidence source %q: %w", s.Label, ErrEvidenceBudgetExhausted)
 		}
+		if s.MediaType == "text/markdown" {
+			if err := validateUTF8EvidenceSource(fsys, s.Path, size); err != nil {
+				return nil, fmt.Errorf("evidence source %q content does not match declared media_type %q: %w",
+					s.Label, s.MediaType, err)
+			}
+		}
 		total += size
 		resolved = append(resolved, resolvedEvidenceSource{source: s, size: size})
 	}
 	return resolved, nil
+}
+
+// validateUTF8EvidenceSource checks the only admitted evidence media type
+// without magic bytes. ReadRune validates incrementally, so a caller that
+// disables the evidence byte caps still cannot force a second full-file
+// allocation merely by declaring a large text source.
+func validateUTF8EvidenceSource(fsys fs.FS, sourcePath string, size int64) error {
+	if size <= 0 {
+		return ErrInvalidUTF8
+	}
+	f, err := fsys.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	reader := bufio.NewReader(f)
+	for {
+		r, width, readErr := reader.ReadRune()
+		switch {
+		case errors.Is(readErr, io.EOF):
+			return nil
+		case readErr != nil:
+			return readErr
+		case r == utf8.RuneError && width == 1:
+			return ErrInvalidUTF8
+		}
+	}
 }
 
 // writeEvidence emits the pre-resolved evidence channel (evidence.json plus its

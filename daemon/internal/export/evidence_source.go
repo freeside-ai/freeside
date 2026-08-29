@@ -26,6 +26,15 @@ const EvidenceWorkspaceDir = ".freeside-evidence"
 // with what provenance.
 const EvidenceDescriptorPath = EvidenceWorkspaceDir + "/evidence.json"
 
+// SummaryEvidenceLabel and SummaryEvidencePath reserve the one agent-written
+// summary source that the launcher may declare after the writer exits. The
+// launcher, not the agent, fixes the label, path, media type, provenance, and
+// sensitivity; the agent controls only whether the file exists and its prose.
+const (
+	SummaryEvidenceLabel = "freeside.summary"
+	SummaryEvidencePath  = EvidenceWorkspaceDir + "/summary.md"
+)
+
 // EvidenceSourceVersion identifies the evidence *source descriptor* wire format
 // (the agent-facing input the helper reads), independent of and distinct from
 // the evidence *manifest* the helper emits (EvidenceManifestVersion). Any

@@ -19,6 +19,8 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
@@ -181,6 +183,7 @@ type elaborationTerminal struct {
 	ResearchArtifactIDs []domain.ArtifactID `json:"research_artifact_ids"`
 	SpecArtifactID      *domain.ArtifactID  `json:"spec_artifact_id,omitempty"`
 	ApprovalItemID      *domain.ItemID      `json:"approval_item_id,omitempty"`
+	SummaryDigest       *domain.Digest      `json:"summary_digest,omitempty"`
 }
 
 type elaborationPriorArtifactEnvelope struct {
@@ -1255,18 +1258,14 @@ func verifyElaborationApproval(
 		item.Subject.RunID == nil || *item.Subject.RunID != request.ElaborationRunID ||
 		!slices.Equal(item.RequestedDecision,
 			[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}) ||
-		len(item.EvidenceSnapshot) != 0 || len(item.AgentClaims) != 1 ||
-		!slices.Equal(item.ArtifactDigests, []domain.Digest{specification.Digest}) || item.PRHeadSHA != "" {
+		len(item.EvidenceSnapshot) != 0 ||
+		(len(item.AgentClaims) != 1 && len(item.AgentClaims) != 2) || item.PRHeadSHA != "" {
 		return domain.AttentionItem{}, nil, fmt.Errorf(
 			"elaboration approval item %q is not bound to its run and specification: %w",
 			item.ID, domain.ErrParentKeyMismatch)
 	}
-	claim := item.AgentClaims[0]
-	if claim.Label != "Specification" || claim.Artifact != specification.ID ||
-		claim.Digest != specification.Digest || claim.Provenance != specification.Provenance {
-		return domain.AttentionItem{}, nil, fmt.Errorf(
-			"elaboration approval item %q claim disagrees with specification %q: %w",
-			item.ID, specification.ID, domain.ErrParentKeyMismatch)
+	if err := verifyElaborationApprovalClaims(item, request, specification, terminal.SummaryDigest); err != nil {
+		return domain.AttentionItem{}, nil, err
 	}
 	commands, err := tx.ListCommandsForItem(ctx, item.ID)
 	if err != nil {
@@ -1277,6 +1276,50 @@ func verifyElaborationApproval(
 		return domain.AttentionItem{}, nil, err
 	}
 	return item, commands, nil
+}
+
+func verifyElaborationApprovalClaims(
+	item domain.AttentionItem, request elaborationRequest, specification domain.Artifact,
+	summaryDigest *domain.Digest,
+) error {
+	claim := item.AgentClaims[0]
+	if claim.Label != "Specification" || claim.Artifact != specification.ID ||
+		claim.Digest != specification.Digest || claim.Provenance != specification.Provenance {
+		return fmt.Errorf(
+			"elaboration approval item %q claim disagrees with specification %q: %w",
+			item.ID, specification.ID, domain.ErrParentKeyMismatch)
+	}
+	expectedDigests := []domain.Digest{specification.Digest}
+	if len(item.AgentClaims) == 1 {
+		// Historical specification approvals predate summary claims and the
+		// terminal digest. Their single artifact-backed claim remains valid.
+		if summaryDigest != nil {
+			return fmt.Errorf(
+				"elaboration approval item %q legacy claim carries a summary digest: %w",
+				item.ID, domain.ErrParentKeyMismatch)
+		}
+		if !slices.Equal(item.ArtifactDigests, expectedDigests) {
+			return fmt.Errorf(
+				"elaboration approval item %q legacy claim digests disagree with specification %q: %w",
+				item.ID, specification.ID, domain.ErrParentKeyMismatch)
+		}
+		return nil
+	}
+	summary, ok := summaryClaimForInvocation(item.AgentClaims, request.InvocationID)
+	expectedSummaryID := domain.ArtifactID(fmt.Sprintf(
+		"spec-summary-%s-%d", request.ImplementationRunID, request.Iteration))
+	expectedDigests = append(expectedDigests, summary.Digest)
+	slices.Sort(expectedDigests)
+	expectedDigests = slices.Compact(expectedDigests)
+	if !ok || summaryDigest == nil || summary.Digest != *summaryDigest ||
+		summary.Artifact != expectedSummaryID ||
+		summary.Provenance != specification.Provenance ||
+		!slices.Equal(item.ArtifactDigests, expectedDigests) {
+		return fmt.Errorf(
+			"elaboration approval item %q summary is not bound to invocation %q: %w",
+			item.ID, request.InvocationID, domain.ErrParentKeyMismatch)
+	}
+	return nil
 }
 
 // verifyElaborationChain reconstructs the complete transition history that
@@ -1773,6 +1816,11 @@ func (e *Engine) acceptElaborationAttempt(ctx context.Context, run domain.Run, a
 		}
 		return e.acceptResearchRequests(ctx, run, request, output.FetchRequests, settings)
 	}
+	if importer.ContainsSecret([]byte(output.Specification.Summary)) ||
+		importer.ContainsSecret([]byte(output.Specification.Body)) {
+		return false, e.recordElaborationFailure(ctx, run, request, exec.StatusFailed,
+			fmt.Errorf("%w: specification contains credential-shaped content", elaborate.ErrInvalidOutput).Error())
+	}
 	if err := e.validateSpecificationAddressals(ctx, request, *output.Specification); err != nil {
 		if errors.Is(err, elaborate.ErrInvalidOutput) {
 			return false, e.recordElaborationFailure(ctx, run, request, exec.StatusFailed, err.Error())
@@ -2084,15 +2132,28 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 		return false, err
 	}
 	createdAt := e.elaboration.now().UTC()
+	summaryArtifactID := domain.ArtifactID(fmt.Sprintf(
+		"spec-summary-%s-%d", request.ImplementationRunID, request.Iteration))
+	summaryText := domain.ClaimText{
+		MediaType: domain.MediaTypeTextMarkdown, Content: specification.Summary,
+	}
+	summaryDigest := summaryText.ComputeDigest()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: itemID, ProjectID: run.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID},
 		Type:    domain.AttentionSpecApproval, Priority: domain.PriorityNormal, Reason: reason,
 		RequestedDecision: []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop},
-		AgentClaims: []domain.AgentClaim{{
-			Label: "Specification", Artifact: artifact.ID, Digest: artifact.Digest,
-			Provenance: artifact.Provenance, Text: &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: specification.Body},
-		}},
+		AgentClaims: []domain.AgentClaim{
+			{
+				Label: "Specification", Artifact: artifact.ID, Digest: artifact.Digest,
+				Provenance: artifact.Provenance, Text: &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: specification.Body},
+			},
+			{
+				Label: export.SummaryEvidenceLabel, Artifact: summaryArtifactID,
+				Digest: summaryDigest, Provenance: artifact.Provenance,
+				Text: &summaryText,
+			},
+		},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
 		CreatedAt: &createdAt,
 	}, nil)
@@ -2105,6 +2166,7 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 	}
 	if settings.SpecApproval {
 		terminal.ApprovalItemID = &itemID
+		terminal.SummaryDigest = &summaryDigest
 	}
 	terminalBody, err := encodeElaborationTerminal(terminal)
 	if err != nil {
@@ -2386,11 +2448,14 @@ func (t elaborationTerminal) validate() error {
 		if hasResearch == hasSpec {
 			return fmt.Errorf("completed elaboration terminal must bind research or a specification: %w", domain.ErrParentKeyMismatch)
 		}
-	} else if hasResearch || hasSpec || t.ApprovalItemID != nil {
+	} else if hasResearch || hasSpec || t.ApprovalItemID != nil || t.SummaryDigest != nil {
 		return fmt.Errorf("unsuccessful elaboration terminal carries output: %w", domain.ErrParentKeyMismatch)
 	}
 	if t.ApprovalItemID != nil && !hasSpec {
 		return fmt.Errorf("approval item has no specification: %w", domain.ErrParentKeyMismatch)
+	}
+	if t.SummaryDigest != nil && t.ApprovalItemID == nil {
+		return fmt.Errorf("summary digest has no approval item: %w", domain.ErrParentKeyMismatch)
 	}
 	seen := make(map[domain.ArtifactID]struct{}, len(t.ResearchArtifactIDs))
 	for _, id := range t.ResearchArtifactIDs {
@@ -2407,6 +2472,11 @@ func (t elaborationTerminal) validate() error {
 	}
 	if t.ApprovalItemID != nil && *t.ApprovalItemID == "" {
 		return domain.ErrEmptyID
+	}
+	if t.SummaryDigest != nil {
+		if _, ok := contentaddr.Parse(string(*t.SummaryDigest)); !ok {
+			return fmt.Errorf("invalid summary digest: %w", domain.ErrParentKeyMismatch)
+		}
 	}
 	return nil
 }
@@ -2530,10 +2600,8 @@ func (e *Engine) reconcileElaborationGates(ctx context.Context) (int, int, error
 			if len(commands) == 1 && commands[0].Action == domain.ActionStop {
 				continue
 			}
-			digest := specArtifact.Digest
 			if len(commands) != 1 || commands[0].Action != domain.ActionApprove ||
-				!slices.Equal(commands[0].ArtifactDigests, item.ArtifactDigests) ||
-				!slices.Equal(item.ArtifactDigests, []domain.Digest{digest}) {
+				!slices.Equal(commands[0].ArtifactDigests, item.ArtifactDigests) {
 				return started, blocked, fmt.Errorf("implementation run %q: %w", request.ImplementationRunID, ErrSpecApprovalRequired)
 			}
 			created, err := e.startApprovedImplementation(ctx, request, *terminal.SpecArtifactID)

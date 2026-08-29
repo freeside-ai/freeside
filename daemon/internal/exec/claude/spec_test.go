@@ -170,6 +170,68 @@ func TestPhase1AElaboratorPromptLeavesEnvelopeHeadroom(t *testing.T) {
 	}
 }
 
+func TestPhase1ASummaryPromptContracts(t *testing.T) {
+	t.Parallel()
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate test source")
+	}
+	promptDir := filepath.Join(filepath.Dir(sourceFile), "../../../../prompts/phase-1a")
+	implementer, err := os.ReadFile(filepath.Join(promptDir, "implementer.md")) //nolint:gosec // fixed repository fixture
+	if err != nil {
+		t.Fatal(err)
+	}
+	elaborator, err := os.ReadFile(filepath.Join(promptDir, "elaborator.md")) //nolint:gosec // fixed repository fixture
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		export.SummaryEvidencePath,
+		"State what changed and why, what you left undone or out of scope, and what remains uncertain.",
+		"Assert a verifiable outcome only by naming the command, check, diff, or artifact it comes from",
+	} {
+		if !bytes.Contains(implementer, []byte(required)) {
+			t.Errorf("implementer prompt omits %q", required)
+		}
+	}
+	for _, required := range []string{
+		"intent, key questions, open decisions, uncertainty, and dissent",
+		"Never claim verification",
+	} {
+		if !bytes.Contains(elaborator, []byte(required)) {
+			t.Errorf("elaborator prompt omits %q", required)
+		}
+	}
+	if summaryFixtureConforms("All tests pass.") {
+		t.Fatal("bare verdict fixture passed the summary composition assertion")
+	}
+	if !summaryFixtureConforms("`go test ./...` passed in my run.") {
+		t.Fatal("command-cited verification fixture failed the summary composition assertion")
+	}
+	if summaryFixtureConforms("All tests pass. `note`") {
+		t.Fatal("unrelated inline code passed the summary composition assertion")
+	}
+}
+
+func summaryFixtureConforms(summary string) bool {
+	lower := strings.ToLower(summary)
+	if !strings.Contains(lower, "all tests pass") {
+		return true
+	}
+	for _, origin := range []string{"command", "check", "diff", "artifact", "verification run"} {
+		if strings.Contains(lower, origin) {
+			return true
+		}
+	}
+	parts := strings.Split(summary, "`")
+	for index := 1; index < len(parts); index += 2 {
+		if len(strings.Fields(parts[index])) > 1 || strings.Contains(parts[index], "/") {
+			return true
+		}
+	}
+	return false
+}
+
 func TestValidatePromptPackageRoles(t *testing.T) {
 	t.Parallel()
 	directed := []byte(textPriorPromptPackageDirective + "elaborator")
@@ -379,6 +441,23 @@ func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 	} {
 		if !strings.Contains(script, field) {
 			t.Errorf("transcript descriptor omits %q", field)
+		}
+	}
+	summaryGuard := at("if [ -f '" + export.SummaryEvidencePath + "' ] && [ ! -L '" +
+		export.SummaryEvidencePath + "' ]")
+	if summaryGuard < drop || summaryGuard > marker {
+		t.Error("the summary descriptor is not declared after the writer and before its outcome marker")
+	}
+	for _, field := range []string{
+		`"label":"` + export.SummaryEvidenceLabel + `"`,
+		`"media_type":"text/markdown"`,
+		`"path":"` + export.SummaryEvidencePath + `"`,
+		`"head_binding":"head_independent"`,
+		`"sensitivity_class":"sensitive"`,
+		`"producer_invocation_id":"inv-1"`,
+	} {
+		if !strings.Contains(script[summaryGuard:], field) {
+			t.Errorf("summary descriptor omits %q", field)
 		}
 	}
 }

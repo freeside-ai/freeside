@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -22,6 +24,21 @@ func TestBootstrapReconstructsInboxAfterMissedNotifications(t *testing.T) {
 	second := f.item
 	second.ID = "item-2"
 	second.Reason = "a second decision arrived while the client was offline"
+	summaryText := domain.ClaimText{
+		MediaType: domain.MediaTypeTextMarkdown,
+		Content:   "The implementation is ready; the agent still reports one open assumption.",
+	}
+	second.AgentClaims = append(second.AgentClaims, domain.AgentClaim{
+		Label: export.SummaryEvidenceLabel, Artifact: "summary-artifact",
+		Digest: summaryText.ComputeDigest(), Text: &summaryText,
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-2",
+			HeadBinding: domain.HeadBound, SourceHeadSHA: "cafebabe",
+			SensitivityClass: domain.SensitivityNormal,
+		},
+	})
+	second.ArtifactDigests = append(second.ArtifactDigests, summaryText.ComputeDigest())
+	slices.Sort(second.ArtifactDigests)
 	if err := f.service.PutItem(ctx, second); err != nil {
 		t.Fatalf("PutItem: %v", err)
 	}
@@ -38,6 +55,12 @@ func TestBootstrapReconstructsInboxAfterMissedNotifications(t *testing.T) {
 		bootstrap.AttentionItems[0].Item.ID != "item-1" ||
 		bootstrap.AttentionItems[1].Item.ID != "item-2" {
 		t.Fatalf("bootstrap items = %+v, want item-1 and item-2 in canonical order", bootstrap.AttentionItems)
+	}
+	syncedSummary := bootstrap.AttentionItems[1].Item.AgentClaims[len(second.AgentClaims)-1]
+	if syncedSummary.Label != export.SummaryEvidenceLabel || syncedSummary.Text == nil ||
+		syncedSummary.Text.Content != summaryText.Content ||
+		syncedSummary.Provenance.ProducerInvocationID != "inv-2" {
+		t.Fatalf("synced summary = %+v, want bound reserved summary claim", syncedSummary)
 	}
 	if bootstrap.AttentionDeliveries == nil || bootstrap.Runs == nil || bootstrap.Conversations == nil {
 		t.Fatal("empty bootstrap collections must encode as [] rather than null")

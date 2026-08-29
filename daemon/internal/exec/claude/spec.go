@@ -148,17 +148,29 @@ const (
 // before the outcome marker, so the git-blind export walk never sees it. An
 // empty prepare keeps the attended launch command byte-identical.
 func agentCommand(prompt, sessionID string, invocationID domain.InvocationID, prepare []string) []string {
+	transcriptSource := export.EvidenceSource{
+		Label: "agent-transcript", MediaType: "application/jsonl",
+		Path: transcriptEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+		SensitivityClass:     export.EvidenceSensitivitySensitive,
+		ProducerInvocationID: string(invocationID),
+	}
 	descriptor, err := json.Marshal(export.EvidenceSourceManifest{
+		Version: export.EvidenceSourceVersion, Sources: []export.EvidenceSource{transcriptSource},
+	})
+	if err != nil {
+		panic("marshal fixed Claude transcript descriptor: " + err.Error())
+	}
+	summaryDescriptor, err := json.Marshal(export.EvidenceSourceManifest{
 		Version: export.EvidenceSourceVersion,
-		Sources: []export.EvidenceSource{{
-			Label: "agent-transcript", MediaType: "application/jsonl",
-			Path: transcriptEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+		Sources: []export.EvidenceSource{transcriptSource, {
+			Label: export.SummaryEvidenceLabel, MediaType: "text/markdown",
+			Path: export.SummaryEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
 			SensitivityClass:     export.EvidenceSensitivitySensitive,
 			ProducerInvocationID: string(invocationID),
 		}},
 	})
 	if err != nil {
-		panic("marshal fixed Claude transcript descriptor: " + err.Error())
+		panic("marshal fixed Claude summary descriptor: " + err.Error())
 	}
 	// hydrate runs before the chown sweep; guardPrefix turns the token check
 	// into a two-branch guard that reports the prepare failure and skips the
@@ -194,6 +206,7 @@ func agentCommand(prompt, sessionID string, invocationID domain.InvocationID, pr
 			"--output-format stream-json --verbose --dangerously-skip-permissions "+
 			"--safe-mode --session-id %s --append-system-prompt-file %s "+
 			"> %s 2>&1; status=$?; set -e; unset token; fi; "+
+			"if [ -f %s ] && [ ! -L %s ]; then printf '%%s\\n' %s > %s; fi; "+
 			"rm -rf -- %s; "+
 			"printf '%%s %%s\\n' %s \"$status\" > %s; sync; exit \"$status\"",
 		shellQuote(path.Dir(transcriptPath)), hydrate,
@@ -214,7 +227,10 @@ func agentCommand(prompt, sessionID string, invocationID domain.InvocationID, pr
 		shellQuote(credentialTokenPath), shellQuote(credentialTokenPath),
 		shellQuote(ward.ClaudeConfigRootTarget), agentUID, agentGID, shellQuote(prompt),
 		shellQuote(sessionID), shellQuote(instructionBundlePath),
-		shellQuote(transcriptPath), shellQuote(workspaceDir+"/node_modules"),
+		shellQuote(transcriptPath),
+		shellQuote(export.SummaryEvidencePath), shellQuote(export.SummaryEvidencePath),
+		shellQuote(string(summaryDescriptor)), shellQuote(transcriptDescriptorPath),
+		shellQuote(workspaceDir+"/node_modules"),
 		shellQuote(ward.WriterNoncePlaceholder),
 		shellQuote(writerOutcomePath),
 	)}

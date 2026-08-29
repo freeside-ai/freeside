@@ -144,9 +144,14 @@ func TestProductionReadyItemPreservesReadinessSummary(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	w := &productionPublicationWorkflow{now: func() time.Time { return now }}
-	task := productionPublicationTask{RunID: "run-ready", ProjectID: "project-ready"}
+	task := productionPublicationTask{
+		RunID: "run-ready", ProjectID: "project-ready", ProducingInvocationID: "inv-ready",
+	}
+	summary := summaryClaimFixture(task.ProducingInvocationID, "The candidate is ready for review.")
 	checkpoint := productionVerificationCheckpoint{
-		Imported: importer.Result{CommitSHA: strings.Repeat("a", 40)},
+		Imported: importer.Result{
+			CommitSHA: strings.Repeat("a", 40), Claims: []domain.AgentClaim{summary},
+		},
 		Authorization: domain.CandidateAuthorization{
 			Repo: "owner/repo",
 		},
@@ -184,7 +189,30 @@ func TestProductionReadyItemPreservesReadinessSummary(t *testing.T) {
 			if item.YieldHistory == nil || !reflect.DeepEqual(*item.YieldHistory, yieldHistory) {
 				t.Fatalf("ready item yield history = %+v, want %+v", item.YieldHistory, yieldHistory)
 			}
+			if len(item.AgentClaims) != 1 || item.AgentClaims[0].Text == nil ||
+				item.AgentClaims[0].Provenance.ProducerInvocationID != task.ProducingInvocationID {
+				t.Fatalf("ready item summary claim = %+v", item.AgentClaims)
+			}
 		})
+	}
+}
+
+func TestProductionBlockedItemCarriesInvocationBoundSummary(t *testing.T) {
+	t.Parallel()
+	task := productionPublicationTask{
+		RunID: "run-blocked", ProjectID: "project-blocked", ProducingInvocationID: "inv-blocked",
+	}
+	summary := summaryClaimFixture(task.ProducingInvocationID, "Publication stopped at the trust gate.")
+	w := &productionPublicationWorkflow{now: func() time.Time { return time.Unix(1, 0).UTC() }}
+	item, err := w.blockedItem(task, importer.Result{
+		CommitSHA: strings.Repeat("b", 40), Claims: []domain.AgentClaim{summary},
+	}, nil, "Trust evaluation failed.")
+	if err != nil {
+		t.Fatalf("blockedItem: %v", err)
+	}
+	if len(item.AgentClaims) != 1 || item.AgentClaims[0].Text == nil ||
+		item.AgentClaims[0].Label != export.SummaryEvidenceLabel {
+		t.Fatalf("blocked item summary claim = %+v", item.AgentClaims)
 	}
 }
 

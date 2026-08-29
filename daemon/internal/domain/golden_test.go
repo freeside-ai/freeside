@@ -87,7 +87,7 @@ func TestGolden(t *testing.T) {
 		Content:   "All checks green; the diff touches only docs.",
 	}
 	textClaim := domain.AgentClaim{
-		Label: "change summary", Artifact: "art-3", Digest: claimText.ComputeDigest(),
+		Label: "freeside.summary", Artifact: "art-3", Digest: claimText.ComputeDigest(),
 		Text: &claimText,
 		Provenance: domain.Provenance{
 			ProducerClass:        domain.ProducerAgent,

@@ -1455,6 +1455,18 @@ func TestFindingAdjudicationRoutesDiminishingReviewActions(t *testing.T) {
 			location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 			f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
 			record, artifact := seedDiminishingReviewRound(t, f)
+			producerID := remediationInvocationID(f.task.RunID, record.Round-1)
+			summary := summaryClaimFixture(producerID, "One recurring finding remains open.")
+			if err := f.store.Write(f.ctx, func(tx *store.WriteTx) error {
+				if err := tx.PutAgentInvocation(f.ctx, domain.AgentInvocation{
+					ID: producerID, InputIDs: []domain.ArtifactID{"remediation-summary-input"},
+				}); err != nil {
+					return err
+				}
+				return tx.PutAgentClaims(f.ctx, producerID, []domain.AgentClaim{summary})
+			}); err != nil {
+				t.Fatal(err)
+			}
 
 			state, err := f.workflow.executeFindingAdjudication(
 				f.ctx, f.task, record, artifact, f.headRoot)
@@ -1473,6 +1485,10 @@ func TestFindingAdjudicationRoutesDiminishingReviewActions(t *testing.T) {
 			}
 			if item.YieldHistory == nil || len(item.YieldHistory.Rounds) != 3 {
 				t.Fatalf("yield history = %#v", item.YieldHistory)
+			}
+			if len(item.AgentClaims) != 1 || item.AgentClaims[0].Text == nil ||
+				item.AgentClaims[0].Provenance.ProducerInvocationID != producerID {
+				t.Fatalf("diminishing summary claim = %+v", item.AgentClaims)
 			}
 			if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
 				dispositions, readErr := tx.ListFindingDispositions(f.ctx, f.task.RunID)

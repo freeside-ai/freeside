@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,40 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+func TestPreviousRemediationSummaryClaimsUsesLatestProducer(t *testing.T) {
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "store.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	runID := domain.RunID("run-summary")
+	producerID := remediationInvocationID(runID, 2)
+	summary := summaryClaimFixture(producerID, "One recurring finding remains open.")
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		if err := tx.PutAgentInvocation(t.Context(), domain.AgentInvocation{
+			ID: producerID, InputIDs: []domain.ArtifactID{"remediation-summary-input"},
+		}); err != nil {
+			return err
+		}
+		return tx.PutAgentClaims(t.Context(), producerID, []domain.AgentClaim{summary})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w := productionPublicationWorkflow{store: st}
+	claims, err := w.previousRemediationSummaryClaims(t.Context(), runID, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 1 || claims[0].Text == nil ||
+		claims[0].Provenance.ProducerInvocationID != producerID {
+		t.Fatalf("summary claims = %+v", claims)
+	}
+	absent, err := w.previousRemediationSummaryClaims(t.Context(), runID, 2)
+	if err != nil || len(absent) != 0 {
+		t.Fatalf("absent prior summary = %+v, %v", absent, err)
+	}
+}
 
 func TestEvaluateReviewConvergencePolicy(t *testing.T) {
 	t.Parallel()

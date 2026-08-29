@@ -55,6 +55,10 @@ func (w *productionPublicationWorkflow) reconcileReviewDiminishing(
 	}
 	runID := task.RunID
 	createdAt := w.attentionCreatedAt()
+	summaryClaims, err := w.previousRemediationSummaryClaims(ctx, task.RunID, record.Round)
+	if err != nil {
+		return reviewDiminishingRoute{}, productionReviewPending, true, err
+	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: itemID, ProjectID: task.ProjectID,
 		Subject: domain.Subject{
@@ -64,7 +68,8 @@ func (w *productionPublicationWorkflow) reconcileReviewDiminishing(
 		Reason: reason,
 		RequestedDecision: store.ReviewDiminishingRequestedActions(
 			record.Round, convergence.Policy.HardRoundLimit),
-		PRHeadSHA: record.HeadSHA, YieldHistory: &convergence.History,
+		AgentClaims: summaryClaims,
+		PRHeadSHA:   record.HeadSHA, YieldHistory: &convergence.History,
 		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt: &createdAt, Status: domain.StatusOpen,
 	}, w.approvedRecipes)
@@ -75,6 +80,32 @@ func (w *productionPublicationWorkflow) reconcileReviewDiminishing(
 		return reviewDiminishingRoute{}, productionReviewPending, true, err
 	}
 	return reviewDiminishingRoute{}, productionReviewPending, true, nil
+}
+
+func (w *productionPublicationWorkflow) previousRemediationSummaryClaims(
+	ctx context.Context, runID domain.RunID, reviewRound int,
+) ([]domain.AgentClaim, error) {
+	if reviewRound < 2 {
+		return nil, nil
+	}
+	invocationID := remediationInvocationID(runID, reviewRound-1)
+	var claims []domain.AgentClaim
+	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var readErr error
+		claims, readErr = tx.GetAgentClaims(ctx, invocationID)
+		return readErr
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	summary, ok := summaryClaimForInvocation(claims, invocationID)
+	if !ok {
+		return nil, nil
+	}
+	return []domain.AgentClaim{summary}, nil
 }
 
 func (w *productionPublicationWorkflow) reconcileExistingReviewDiminishing(
