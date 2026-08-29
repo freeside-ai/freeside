@@ -351,3 +351,12 @@ var (
 // vendor/delivery pair that has not passed its native-binding conformance gate.
 var ErrUnsupportedVendorInstructionBinding = errors.New(
 	"vendor instruction delivery binding is unsupported")
+
+// Decision-surface identity (plan §4; decision_surface.go). A mismatch is the
+// per-record refusal #917 maps onto an invalid, non-rendering recommendation;
+// the other two are shape and transition refusals the store fails closed on.
+var (
+	ErrDecisionSurfaceMismatch     = errors.New("decision surface digest does not match the item's current surface")
+	ErrDecisionSurfaceNotCanonical = errors.New("decision surface set field is not sorted and deduplicated")
+	ErrDecisionSurfaceEpoch        = errors.New("decision surface epoch must advance by exactly one per surface change")
+)

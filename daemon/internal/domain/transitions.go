@@ -364,3 +364,51 @@ func timesEqual(a, b *time.Time) bool {
 	}
 	return a.Equal(*b)
 }
+
+// ValidateDecisionSurfaceTransition reports whether updated is a legal
+// successor to the stored record old (plan §4 epoch rule). The item is fixed;
+// the epoch stays when the surface is unchanged and advances by exactly one
+// when it changes, and nothing else: a regressed epoch or a changed surface
+// under the same epoch is a stale write, while a skipped epoch or an advance
+// with no surface change would strand every committed source record for
+// nothing. updated's digest must equal its recomputation.
+func ValidateDecisionSurfaceTransition(old, updated DecisionSurface) error {
+	if err := updated.Validate(); err != nil {
+		return err
+	}
+	if updated.ItemID != old.ItemID {
+		return fmt.Errorf("decision surface %s: item would change from %s: %w",
+			updated.ItemID, old.ItemID, ErrImmutableTransition)
+	}
+	same, err := jsonEqual(decisionSurfaceFields(old), decisionSurfaceFields(updated))
+	if err != nil {
+		return fmt.Errorf("decision surface %s: %w", updated.ItemID, err)
+	}
+	switch {
+	case updated.Epoch < old.Epoch:
+		return fmt.Errorf("decision surface %s: epoch %d regresses stored %d: %w",
+			updated.ItemID, updated.Epoch, old.Epoch, ErrStaleTransition)
+	case updated.Epoch == old.Epoch && !same:
+		return fmt.Errorf("decision surface %s: surface changed without advancing epoch %d: %w",
+			updated.ItemID, old.Epoch, ErrStaleTransition)
+	case updated.Epoch == old.Epoch+1 && same:
+		return fmt.Errorf("decision surface %s: epoch %d advances with no surface change: %w",
+			updated.ItemID, updated.Epoch, ErrDecisionSurfaceEpoch)
+	case updated.Epoch > old.Epoch+1:
+		return fmt.Errorf("decision surface %s: epoch %d skips stored %d: %w",
+			updated.ItemID, updated.Epoch, old.Epoch, ErrDecisionSurfaceEpoch)
+	}
+	return nil
+}
+
+// decisionSurfaceFields projects the fields whose change opens an epoch, so
+// the transition compare ignores the epoch and digest that change with them.
+// Set fields are normalized to non-nil so a legacy null and an empty set
+// compare equal here as they do under Matches.
+func decisionSurfaceFields(s DecisionSurface) DecisionSurface {
+	s.Epoch = 0
+	s.Digest = ""
+	s.RequestedDecision = canonicalActions(s.RequestedDecision)
+	s.PresentedArtifactDigests = canonicalDigests(s.PresentedArtifactDigests)
+	return s
+}

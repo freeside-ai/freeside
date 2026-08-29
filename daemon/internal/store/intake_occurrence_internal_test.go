@@ -349,6 +349,9 @@ func TestIntakeReGateRejectsTamperedItemType(t *testing.T) {
 		if _, err := tx.tx.ExecContext(ctx, `UPDATE attention_items SET body = ? WHERE id = ?`, body, itemID); err != nil {
 			return err
 		}
+		// Forge the decision surface to match, so the intake gate under test
+		// is reached rather than the surface re-gate refusing the row first.
+		seedDecisionSurface(t, ctx, tx.tx, item)
 		if _, err := tx.SupersedeIntakeProposal(ctx, intakeIntRepoID, intakeIntIssue, intakeIntLabel, 1,
 			domain.IntakeSupersededLabelRemoved, domain.IntakeOccurrenceAbsent, intakeIntTS); !errors.Is(err, ErrIntakeAdmissionInconsistent) {
 			return fmt.Errorf("tampered item type not rejected, got %w", err)

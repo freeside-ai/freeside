@@ -129,8 +129,8 @@ func TestAttentionHealthPostureMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 57 {
-		t.Fatalf("schema version = %d, want 57", got)
+	if got := rawVersion(t, db); got != 58 {
+		t.Fatalf("schema version = %d, want 58", got)
 	}
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
 		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id,
@@ -372,6 +372,7 @@ func TestForgedAdmissionColumnsOrBodyCannotLiftABlocker(t *testing.T) {
 	 VALUES ('blocker-1', 'proj-1', NULL, 'system_health', 'open', 'blocking', 1, 1, ?)`, body); err != nil {
 		t.Fatalf("seed truthful row: %v", err)
 	}
+	seedDecisionSurface(t, ctx, db, item)
 	if err := requireAdmissible(); !errors.Is(err, domain.ErrBlockingSystemHealth) {
 		t.Fatalf("admission over an honest blocker = %v, want %v", err, domain.ErrBlockingSystemHealth)
 	}

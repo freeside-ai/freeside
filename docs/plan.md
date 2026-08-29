@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 40
+revision: 43
 status: active
-updated: 2026-08-26
+updated: 2026-08-28
 ---
 
 # Freeside
@@ -299,8 +299,9 @@ telemetry and sampled decision audits.
 `subject {subject_type: run | proposal_batch | project | system, subject_id,
 run_id?}`, `type`, `priority`, `reason`,
 `requested_decision`, `recommendation?`, `evidence_snapshot`, `agent_claims`,
-`artifact_digests`,
-`pr_head_sha`, `pr_reference? {repo, number}`, `item_version`,
+`artifact_digests`, `decision_surface {epoch, digest}` (the daemon-owned
+identity defined under Recommendation sources below; #917 carries it through
+sync), `pr_head_sha`, `pr_reference? {repo, number}`, `item_version`,
 `interruption_class`, `conversation_id?`, derived timing aggregates,
 `expires_when`, `review_recovery_binding?`,
 `codex_reenrollment_recovery_binding?`, `review_configuration_recovery?`, and
@@ -395,30 +396,70 @@ and non-rendering, never the item or its decidable action set; an eligibility
 change can therefore suppress a prior lead safely.
 
 Each authoritative source record commits to a daemon-owned decision-surface
-identity for its containing item, not to `item_version`. This contract sets
-four invariants; #942 specifies and tests the exact epoch-and-digest mechanism:
+identity for its containing item, not to `item_version`. The identity is one
+persisted record per item:
+
+`DecisionSurface {item_id, epoch, subject, requested_decision, pr_head_sha,
+presented_artifact_digests, digest}`
+
+`digest` is the value a source record commits to: the content address of the
+canonical `{item_id, epoch, subject, requested_decision (sorted set),
+pr_head_sha}`. It already names the item and the epoch, and Section 5.14's
+`item_decision_surface_digest` is this digest. `presented_artifact_digests` is
+transition state only and never enters the preimage. The record lives beside
+the item, not on it; #917 projects `decision_surface {epoch, digest}` onto the
+synchronized item. The mechanism satisfies four invariants:
 
 - **Eligibility-independent:** Adding or removing an applicable source never
-  advances the identity. Neither does a change in which record is uniquely
-  eligible under the unique-or-none rule. A once-authoritative record therefore
-  never becomes permanently stranded.
-- **Telemetry-stable:** Delivery, open, timing, status, and actionability never
-  advance the identity. General `item_version`, row `entity_version`, head, and
+  advances the identity, and neither does a change in which record is uniquely
+  eligible under the unique-or-none rule: a source record is never a member of
+  the presented set, so its admission or removal opens no epoch. A
+  once-authoritative record therefore never becomes permanently stranded.
+- **Telemetry-stable:** Delivery, open, timing, status, `decided_at`,
+  `expires_when`, readiness, base freshness, the commit-plan notice, the PR
+  reference, recovery bindings, and the recommendation field never advance the
+  identity. General `item_version`, row `entity_version`, head, and
   full-artifact approval and command gates are unrelated to it.
 - **Surface-distinguishing:** A change to `subject`, `requested_decision`,
-  `pr_head_sha`, or the materially presented action surface advances the
-  identity. Two genuinely different presented surfaces never share one.
-- **Non-cyclic:** No source artifact commits to a digest set containing its own
-  final `artifact_digest`.
+  `pr_head_sha`, or the presented artifact set advances the epoch by exactly
+  one and yields a new digest. Two presented sets on one item are always
+  distinct epochs and two items are always distinct ids, so two genuinely
+  different presented surfaces never share an identity. A reorder of
+  `requested_decision` is not a change, and a field returning to a prior value
+  is a new epoch, never a reuse.
+- **Non-cyclic:** The preimage holds no artifact digest, so no source artifact
+  commits to a digest set containing its own final `artifact_digest`, and the
+  identity of a prospective epoch is computable before the artifact that opens
+  it is finalized: the producer computes the next surface for the prospective
+  item, writes its digest into the artifact, finalizes, and the admitting item
+  write derives the same value.
+
+The epoch starts at 1 when the item is created and is advanced only by the
+store's single item writer, when and only when the item's structural fields or
+its presented artifact set differ from the stored record. An artifact is
+presented if and only if a presentation slot of the item references it:
+`evidence_snapshot`, `agent_claims`, or a type-specific binding such as
+`finding_adjudication.adjudication_digest`. An artifact referenced only by a
+recommendation provenance slot is source-only and eligibility-correlated: it
+never enters the presented set. An artifact referenced by both a presentation
+slot and a provenance slot is presented, so superseding it is a genuine surface
+change (the finding-adjudicator case). `daemon_policy` rule and input digests
+and `project_policy` application records are not artifacts and are never
+members of `artifact_digests` or of the presented set, so the policy axis
+cannot strand a record. Readiness, base freshness, yield history, and other
+rendered facts are not surface members; a source that depends on them binds
+them through its own input digest, never through the identity.
 
 The persisted daemon identity is authority. A decoded or caller-supplied value
-grants none. Reconstruction re-verifies the record against the current stored
-identity and fails only the recommendation closed on mismatch.
+grants none. Item reconstruction fails the item closed when its record is
+missing or when the record's digest, structural fields, or presented set
+disagree with the item. Verifying a source record's committed digest against
+the current record then fails only the recommendation closed on mismatch.
 
 The rule digest content-addresses the rule semantics and is never reused.
 Each authoritative source record must itself commit to that decision-surface
-identity (mechanism per #942), so a valid source output cannot be replayed onto
-a foreign or newer decision surface. The identity is carried per source kind:
+identity, so a valid source output cannot be replayed onto a foreign or newer
+decision surface. The identity is carried per source kind:
 it is part of `daemon_policy`'s canonical input; the finalized immutable
 `agent_judgment` artifact carries it, while the immutable invocation-to-artifact
 binding proves source authenticity; and `project_policy`'s daemon-authored,
@@ -431,15 +472,15 @@ caller-supplied item digest is never authority.
 For the uniquely eligible record, the daemon resolves and authenticates the
 provenance, recomputes the item's full canonical artifact-digest set, requires
 any provenance `artifact_digest` to occur in that full set, and requires the
-source record to carry the current decision-surface identity (mechanism per
-#942). It then rederives the canonical
+source record's committed digest to equal the current decision-surface digest.
+It then rederives the canonical
 `action`, `reason`, and optional `confidence` from the authenticated
 source-and-item pair. Full `AttentionItem.artifact_digests` equality and every
 approval or command binding continue to use the complete set, including the
 source artifact. Item-side binding-set equality therefore proves containment;
-the artifact-side commitment needs item identity and the sibling artifact
-surface, while including its own final content hash would be redundant and
-impossible. A foreign item binding, source mismatch, or payload difference
+the artifact-side commitment is the decision-surface digest, which names the
+item and the epoch its presented set belongs to without hashing any artifact,
+so it never requires the artifact's own final content hash. A foreign item binding, source mismatch, or payload difference
 rejects the recommendation; an invalid binding never renders.
 An `agent_judgment` recommendation is a labeled proposal. The type case is the
 finding adjudicator's parked batch. Its item-level recommendation endorses the
@@ -1952,9 +1993,9 @@ binds its content-addressed deterministic rule and canonical input digest;
 and a `project_policy` recommendation binds the applied key and resolved-policy
 digest plus its daemon-authored application record. Each authoritative source
 record commits to the containing item's decision-surface identity under
-Section 4, whose eligibility-independent, telemetry-stable,
-surface-distinguishing, and non-cyclic mechanism #942 specifies. The item
-cannot select that record: creation and
+Section 4, the epoch-and-digest `DecisionSurface` record whose digest is
+eligibility-independent, telemetry-stable, surface-distinguishing, and
+non-cyclic. The item cannot select that record: creation and
 reconstruction derive the complete eligible-record set from current
 authoritative state and apply Section 4's unique-or-none rule. A separately
 supplied item digest grants no authority. Source labels without their matching
@@ -2062,7 +2103,8 @@ surface presented to that device before accepting the command:
 `DecisionActionSurface {device_id, item_decision_surface_digest,
 client_capability_digest, actions}`
 
-The record is content-addressed. `actions` is the canonical intersection of
+The record is content-addressed. `item_decision_surface_digest` is the
+`digest` of the item's current Section 4 `DecisionSurface` record. `actions` is the canonical intersection of
 the item's requested decisions and a daemon-registered client-capability
 contract already bound to the device; a caller-supplied action list or digest
 is never authority. The daemon revalidates the device, current item decision
@@ -3612,29 +3654,27 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 42 ("Advisory instruction paths"):
+Revision 43 ("Decision-surface identity"):
 
-1. **Reviewer-instruction edits publish as advisory findings** (Sections
-   3.1, 5.6, 5.8, 11, 14): the gauntlet still detects every
-   reviewer-instruction path as a mandatory, widen-only minimum, but the
-   finding lifts with a third disposition, advisory, which never blocks
-   and never carries a waiver; the publisher renders the advisories in a
-   PR-body section candidate prose cannot forge. The block's independence
-   rationale is already met mechanically: the implementing agent and the
-   Freeside-invoked reviewer compose instructions from the exact trusted
-   base (Sections 5.8, 7; #713), so a candidate's copy cannot govern its
-   own review. What remained was that a merged edit governs later runs,
-   which the human merge gate already judges. The non-waivable block
-   therefore only took routine instruction maintenance out of the loop,
-   which the wave-6 exit run's first real work item showed (#835). Every
-   other control-plane category stays blocking and non-waivable, and
-   advisory is scoped by a domain predicate so a new category must
-   choose. Rejected: a human waiver flow (no waiver producer exists and
-   the block is terminal, so it is a multi-unit build); a per-repository
-   policy key (a trust-profile encoding bump re-records every profile by
-   hand); re-pinning the reviewer to the base (already the design); the
-   operator-authored PR as the only route (the status quo).
-   (User; devlog 2026-08-28-1130-advisory-instruction-paths.md; ADR 0002.)
+1. **The decision surface is an epoch, not a content address** (Sections
+   4, 5.13, 5.14): each attention item carries one daemon-owned
+   `DecisionSurface {item_id, epoch, subject, requested_decision,
+   pr_head_sha, presented_artifact_digests, digest}` record whose digest
+   hashes only the item id, epoch, and structural fields. The epoch
+   advances by exactly one when and only when those fields or the
+   presented artifact set change, and every recommendation source record
+   commits to that digest. The presented set is exactly the union of the
+   item's presentation slots; a source-only provenance artifact and the
+   policy records never enter it, so eligibility never advances the
+   identity. The persisted record is authority: item reconstruction fails
+   closed when it is missing or disagrees with the item. Rejected:
+   binding to `item_version` (telemetry strands the delivered card);
+   content-addressing the presented set minus the derived record's own
+   artifact (eligibility-coupled, so the first of two applicable sources
+   is stranded); dropping the sibling-artifact surface from the
+   commitment (two judgment outputs on one surface collapse to one
+   digest).
+   (User; devlog 2026-08-28-2036-decision-surface-identity.md; #942.)
 
 ## 14. Risks
 

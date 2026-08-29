@@ -374,11 +374,16 @@ func (tx *ReadTx) ListOpenAttentionItemsForRun(
 // and reconstruct every actionable item through GetAttentionItem before using
 // it. The production observer uses it so historical ready-item evidence cannot
 // hide a published outcome while current actionable evidence still fails
-// closed.
+// closed. "Structurally authenticated" includes the decision-surface re-gate
+// (scanAttentionItemHistory): the identity is the item's own, so a record
+// whose surface row is missing or disagrees is corrupt history, not history
+// this primitive may hand back.
 func (tx *ReadTx) ListOpenAttentionItemRecordsForRun(
 	ctx context.Context, runID domain.RunID,
 ) ([]domain.AttentionItem, error) {
-	return tx.listOpenAttentionItemsForRun(ctx, runID, scanAttentionItemRecord)
+	return tx.listOpenAttentionItemsForRun(ctx, runID, func(sc scanner) (domain.AttentionItem, Snapshot, error) {
+		return tx.scanAttentionItemHistory(ctx, sc)
+	})
 }
 
 func (tx *ReadTx) listOpenAttentionItemsForRun(

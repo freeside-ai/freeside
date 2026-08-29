@@ -1,0 +1,20 @@
+{
+  "item_id": "item-1",
+  "epoch": 1,
+  "subject": {
+    "subject_type": "run",
+    "subject_id": "run-1",
+    "run_id": "run-1"
+  },
+  "requested_decision": [
+    "dismiss",
+    "open_pr",
+    "return_to_agent"
+  ],
+  "pr_head_sha": "cafebabe",
+  "presented_artifact_digests": [
+    "sha256:img",
+    "sha256:log"
+  ],
+  "digest": "sha256:adb47dbdf777e31d85c004f469268ebb5bfa486fb3d05fd3a56c7730ff242092"
+}

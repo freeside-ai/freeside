@@ -113,6 +113,11 @@ WHERE id = ?`, domain.ActionFinishNow, domain.ActionApplyThenFinish,
 		domain.ActionContinueUnderPolicy, decision.Item.ID); err != nil {
 		t.Fatal(err)
 	}
+	forged := decision.Item
+	forged.RequestedDecision = []domain.Action{
+		domain.ActionFinishNow, domain.ActionApplyThenFinish, domain.ActionContinueUnderPolicy,
+	}
+	forgeDecisionSurface(t, db, forged)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -212,6 +217,9 @@ SET subject_run_id = ?, body = json_set(body,
 WHERE id = ?`, otherRunID, otherRunID, otherRunID, decision.Item.ID); err != nil {
 		t.Fatal(err)
 	}
+	moved := decision.Item
+	moved.Subject = domain.Subject{Type: moved.Subject.Type, ID: domain.SubjectID(otherRunID), RunID: &otherRunID}
+	forgeDecisionSurface(t, db, moved)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -717,5 +725,25 @@ func assertDiminishingFinish(
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// forgeDecisionSurface rewrites the item's persisted decision surface to
+// describe a tampered body, so the test reaches the review-diminishing gate
+// it exercises: the store's surface re-gate otherwise refuses a row whose
+// structural fields no longer match its record (plan §4).
+func forgeDecisionSurface(t *testing.T, db *sql.DB, item domain.AttentionItem) {
+	t.Helper()
+	surface, err := domain.NewDecisionSurface(item)
+	if err != nil {
+		t.Fatalf("NewDecisionSurface: %v", err)
+	}
+	body, err := json.Marshal(surface)
+	if err != nil {
+		t.Fatalf("encode decision surface: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE attention_decision_surfaces SET epoch = ?, digest = ?, body = ? WHERE item_id = ?`,
+		surface.Epoch, surface.Digest, string(body), surface.ItemID); err != nil {
+		t.Fatalf("forge decision surface: %v", err)
 	}
 }

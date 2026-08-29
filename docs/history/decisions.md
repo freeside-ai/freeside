@@ -1352,6 +1352,8 @@ Revision 40 ("Recommendation-led attention"):
    advanced interaction, not missing fundamentals.
    (User; devlog 2026-08-25-1154-recommendation-led-attention.md.)
 
+## Revision 41
+
 Revision 41 ("Wave 7 split"):
 
 1. **Wave 7 splits into four outcome waves** (Section 11): the decision
@@ -1390,3 +1392,29 @@ Revision 41 ("Wave 7 split"):
    closes that open client question. Rejected: filing them as unbound
    deferrals into a queue of over a hundred.
    (User; devlog 2026-08-27-2219-wave-seven-split.md.)
+
+## Revision 42
+
+Revision 42 ("Advisory instruction paths"):
+
+1. **Reviewer-instruction edits publish as advisory findings** (Sections
+   3.1, 5.6, 5.8, 11, 14): the gauntlet still detects every
+   reviewer-instruction path as a mandatory, widen-only minimum, but the
+   finding lifts with a third disposition, advisory, which never blocks
+   and never carries a waiver; the publisher renders the advisories in a
+   PR-body section candidate prose cannot forge. The block's independence
+   rationale is already met mechanically: the implementing agent and the
+   Freeside-invoked reviewer compose instructions from the exact trusted
+   base (Sections 5.8, 7; #713), so a candidate's copy cannot govern its
+   own review. What remained was that a merged edit governs later runs,
+   which the human merge gate already judges. The non-waivable block
+   therefore only took routine instruction maintenance out of the loop,
+   which the wave-6 exit run's first real work item showed (#835). Every
+   other control-plane category stays blocking and non-waivable, and
+   advisory is scoped by a domain predicate so a new category must
+   choose. Rejected: a human waiver flow (no waiver producer exists and
+   the block is terminal, so it is a multi-unit build); a per-repository
+   policy key (a trust-profile encoding bump re-records every profile by
+   hand); re-pinning the reviewer to the base (already the design); the
+   operator-authored PR as the only route (the status quo).
+   (User; devlog 2026-08-28-1130-advisory-instruction-paths.md; ADR 0002.)

@@ -642,6 +642,7 @@ func TestListRejectsForgedMetadata(t *testing.T) {
 		for _, reset := range []string{
 			`DELETE FROM attention_deliveries`,
 			`DELETE FROM attention_item_pr_references`,
+			`DELETE FROM attention_decision_surfaces`,
 			`DELETE FROM attention_items`,
 			`DELETE FROM conversations`,
 			`DELETE FROM runs`,
@@ -670,6 +671,8 @@ func TestListRejectsForgedMetadata(t *testing.T) {
 				t.Fatalf("insert: %v", err)
 			}
 		}
+		seedDecisionSurface(t, ctx, db, forgedItem)
+		seedDecisionSurface(t, ctx, db, item)
 	}
 	lists := map[string]func(tx *ReadTx) error{
 		"runs": func(tx *ReadTx) error {
@@ -969,6 +972,9 @@ func TestSnapshotRejectsForgedMetadata(t *testing.T) {
 		if _, err := db.ExecContext(ctx, `DELETE FROM attention_item_pr_references`); err != nil {
 			t.Fatalf("reset item pr references: %v", err)
 		}
+		if _, err := db.ExecContext(ctx, `DELETE FROM attention_decision_surfaces`); err != nil {
+			t.Fatalf("reset decision surfaces: %v", err)
+		}
 		if _, err := db.ExecContext(ctx, `DELETE FROM attention_items`); err != nil {
 			t.Fatalf("reset items: %v", err)
 		}
@@ -977,6 +983,7 @@ func TestSnapshotRejectsForgedMetadata(t *testing.T) {
 			item.Type, item.Status, entityVersion, asOfRevision, itemBody); err != nil {
 			t.Fatalf("insert item: %v", err)
 		}
+		seedDecisionSurface(t, ctx, db, item)
 		if _, err := db.ExecContext(ctx,
 			`INSERT INTO attention_item_pr_references (item_id, repo, pr_number, body) VALUES ('item-1', 'owner/repo', 123, ?)`,
 			prReferenceBody); err != nil {
@@ -1194,6 +1201,7 @@ func TestPutAttentionItemLegacyOffsetExpiresWhenConverges(t *testing.T) {
 		item.ID, item.ProjectID, item.Type, item.Status, legacy); err != nil {
 		t.Fatalf("insert legacy row: %v", err)
 	}
+	seedDecisionSurface(t, ctx, db, item)
 	prReferenceBody, err := encode(*item.PRReference)
 	if err != nil {
 		t.Fatalf("encode pr reference: %v", err)
