@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -207,6 +208,45 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		return fmt.Errorf("attention item %s: finding adjudication binding would change: %w",
 			updated.ID, ErrImmutableTransition)
 	}
+	if old.BillableCostSoFar != nil {
+		if updated.BillableCostSoFar == nil ||
+			updated.BillableCostSoFar.Currency != old.BillableCostSoFar.Currency ||
+			updated.BillableCostSoFar.Invocations < old.BillableCostSoFar.Invocations ||
+			compareCanonicalDecimal(
+				updated.BillableCostSoFar.Amount, old.BillableCostSoFar.Amount,
+			) < 0 ||
+			(old.BillableCostSoFar.Complete && !updated.BillableCostSoFar.Complete &&
+				updated.BillableCostSoFar.Invocations == old.BillableCostSoFar.Invocations) {
+			return fmt.Errorf("attention item %s: billable cost observations would regress: %w",
+				updated.ID, ErrImmutableTransition)
+		}
+	}
+	cardFacts := []struct {
+		name       string
+		oldPresent bool
+		old        any
+		updated    any
+	}{
+		{"execution_failure", old.ExecutionFailure != nil, old.ExecutionFailure, updated.ExecutionFailure},
+		{"publish_block", old.PublishBlock != nil, old.PublishBlock, updated.PublishBlock},
+		{"diff_stats", old.DiffStats != nil, old.DiffStats, updated.DiffStats},
+		{"blocked_on", old.BlockedOn != nil, old.BlockedOn, updated.BlockedOn},
+		{"health_diagnostic", old.HealthDiagnostic != nil, old.HealthDiagnostic, updated.HealthDiagnostic},
+		{"review_dispute", old.ReviewDispute != nil, old.ReviewDispute, updated.ReviewDispute},
+	}
+	for _, fact := range cardFacts {
+		if !fact.oldPresent {
+			continue
+		}
+		same, err := jsonEqual(fact.old, fact.updated)
+		if err != nil {
+			return fmt.Errorf("attention item %s %s: %w", updated.ID, fact.name, err)
+		}
+		if !same {
+			return fmt.Errorf("attention item %s: %s would change: %w",
+				updated.ID, fact.name, ErrImmutableTransition)
+		}
+	}
 	samePRReference, err := jsonEqual(old.PRReference, updated.PRReference)
 	if err != nil {
 		return fmt.Errorf("attention item %s: %w", updated.ID, err)
@@ -216,6 +256,39 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 			updated.ID, ErrImmutableTransition)
 	}
 	return nil
+}
+
+// compareCanonicalDecimal compares the non-negative decimal representation
+// CostSoFar.Validate accepts without converting through a floating-point type.
+func compareCanonicalDecimal(left, right string) int {
+	leftWhole, leftFraction, _ := strings.Cut(left, ".")
+	rightWhole, rightFraction, _ := strings.Cut(right, ".")
+	if len(leftWhole) != len(rightWhole) {
+		if len(leftWhole) < len(rightWhole) {
+			return -1
+		}
+		return 1
+	}
+	if compared := strings.Compare(leftWhole, rightWhole); compared != 0 {
+		return compared
+	}
+	width := max(len(leftFraction), len(rightFraction))
+	for i := range width {
+		leftDigit, rightDigit := byte('0'), byte('0')
+		if i < len(leftFraction) {
+			leftDigit = leftFraction[i]
+		}
+		if i < len(rightFraction) {
+			rightDigit = rightFraction[i]
+		}
+		if leftDigit < rightDigit {
+			return -1
+		}
+		if leftDigit > rightDigit {
+			return 1
+		}
+	}
+	return 0
 }
 
 // ValidateAttentionDeliveryTransition reports whether updated is a legal

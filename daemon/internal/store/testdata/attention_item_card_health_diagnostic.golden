@@ -1,25 +1,24 @@
 {
-  "id": "item-3",
+  "id": "item-card-health",
   "project_id": "proj-1",
   "subject": {
-    "subject_type": "run",
-    "subject_id": "run-1",
-    "run_id": "run-1"
+    "subject_type": "system",
+    "subject_id": "daemon",
+    "run_id": null
   },
   "type": "system_health",
   "priority": "normal",
-  "reason": "unattended execution admitted under the backup-encryption waiver for repository 424242",
+  "reason": "run projection is unavailable",
   "requested_decision": [
-    "acknowledge",
-    "stop_unattended"
+    "run_doctor"
   ],
   "recommendation": null,
   "decision_surface": {
     "epoch": 1,
-    "digest": "sha256:8d9ff9eac184194fb29cd666cd6ff855af71c71d180125bb431d47dfe286d6c1"
+    "digest": "sha256:61b36453189854b38f1c6ea273a3aa849a146347283598df5df04d07a17949b8"
   },
-  "evidence_snapshot": [],
-  "agent_claims": [],
+  "evidence_snapshot": null,
+  "agent_claims": null,
   "artifact_digests": [],
   "pr_head_sha": "",
   "pr_reference": null,
@@ -38,7 +37,10 @@
   "publish_block": null,
   "diff_stats": null,
   "blocked_on": null,
-  "health_diagnostic": null,
+  "health_diagnostic": {
+    "code": "run_projection.unavailable",
+    "impairs": "run_visibility"
+  },
   "review_dispute": null,
   "item_version": 1,
   "interruption_class": "exceptional",
@@ -50,13 +52,10 @@
     "first_opened_at": null,
     "submit_to_first_open": null
   },
-  "created_at": null,
+  "created_at": "2026-08-29T20:00:00Z",
   "expires_when": null,
   "decided_at": null,
-  "posture": "blocking",
-  "blocking_supersession": {
-    "kind": "backup_encryption_waiver",
-    "repository_id": 424242
-  },
+  "posture": "advisory",
+  "blocking_supersession": null,
   "status": "open"
 }

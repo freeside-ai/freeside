@@ -106,6 +106,29 @@
   "codex_reenrollment_recovery_binding": null,
   "review_configuration_recovery": null,
   "finding_adjudication": null,
+  "display_names": {
+    "project": {
+      "text": "owner/repo",
+      "source": "name"
+    },
+    "work_unit": {
+      "text": "#724",
+      "source": "name"
+    }
+  },
+  "billable_cost_so_far": null,
+  "execution_failure": null,
+  "publish_block": null,
+  "diff_stats": {
+    "files_changed": 12,
+    "additions": 240,
+    "deletions": 31,
+    "base_sha": "deadbeef",
+    "head_sha": "cafebabe"
+  },
+  "blocked_on": null,
+  "health_diagnostic": null,
+  "review_dispute": null,
   "item_version": 1,
   "interruption_class": "planned_gate",
   "conversation_id": "conv-1",

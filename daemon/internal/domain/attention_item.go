@@ -493,10 +493,24 @@ type AttentionItem struct {
 	// FindingAdjudication carries the proposal projection bound to the exact
 	// immutable artifact digest. It is present only on finding_adjudication.
 	FindingAdjudication *FindingAdjudicationBinding `json:"finding_adjudication"`
-	ItemVersion         int                         `json:"item_version"`
-	InterruptionClass   InterruptionClass           `json:"interruption_class"`
-	ConversationID      *ConversationID             `json:"conversation_id"`
-	Timing              TimingSummary               `json:"timing"`
+	// DisplayNames carries daemon-authored project and work-unit labels for the
+	// scanning layer. It is mutable so later snapshots may reflect a rename.
+	DisplayNames *DisplayNames `json:"display_names"`
+	// BillableCostSoFar is the observed billable aggregate on a
+	// review_diminishing_returns item. It grows as observations arrive.
+	BillableCostSoFar *CostSoFar `json:"billable_cost_so_far"`
+	// The remaining card facts are populated by daemon producers. They are nil
+	// on legacy items and fixed once first attached to an item.
+	ExecutionFailure  *ExecutionFailureFacts `json:"execution_failure"`
+	PublishBlock      *PublishBlockFacts     `json:"publish_block"`
+	DiffStats         *DiffStats             `json:"diff_stats"`
+	BlockedOn         *BlockedWait           `json:"blocked_on"`
+	HealthDiagnostic  *HealthDiagnostic      `json:"health_diagnostic"`
+	ReviewDispute     *ReviewDisputeBinding  `json:"review_dispute"`
+	ItemVersion       int                    `json:"item_version"`
+	InterruptionClass InterruptionClass      `json:"interruption_class"`
+	ConversationID    *ConversationID        `json:"conversation_id"`
+	Timing            TimingSummary          `json:"timing"`
 	// CreatedAt is the daemon-stamped instant this item was created. It is
 	// immutable across the item's lifecycle and nil only for legacy items
 	// persisted before the field existed.
@@ -552,6 +566,14 @@ type AttentionItemInput struct {
 	CodexReenrollmentRecoveryBinding *CodexReenrollmentRecoveryBinding
 	ReviewConfigurationRecovery      *ReviewConfigurationRecoveryBinding
 	FindingAdjudication              *FindingAdjudicationBinding
+	DisplayNames                     *DisplayNames
+	BillableCostSoFar                *CostSoFar
+	ExecutionFailure                 *ExecutionFailureFacts
+	PublishBlock                     *PublishBlockFacts
+	DiffStats                        *DiffStats
+	BlockedOn                        *BlockedWait
+	HealthDiagnostic                 *HealthDiagnostic
+	ReviewDispute                    *ReviewDisputeBinding
 	ItemVersion                      int
 	InterruptionClass                InterruptionClass
 	ConversationID                   *ConversationID
@@ -598,6 +620,14 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		CodexReenrollmentRecoveryBinding: clonePtr(in.CodexReenrollmentRecoveryBinding),
 		ReviewConfigurationRecovery:      clonePtr(in.ReviewConfigurationRecovery),
 		FindingAdjudication:              cloneFindingAdjudicationBinding(in.FindingAdjudication),
+		DisplayNames:                     clonePtr(in.DisplayNames),
+		BillableCostSoFar:                clonePtr(in.BillableCostSoFar),
+		ExecutionFailure:                 clonePtr(in.ExecutionFailure),
+		PublishBlock:                     clonePublishBlockFacts(in.PublishBlock),
+		DiffStats:                        clonePtr(in.DiffStats),
+		BlockedOn:                        cloneBlockedWait(in.BlockedOn),
+		HealthDiagnostic:                 clonePtr(in.HealthDiagnostic),
+		ReviewDispute:                    cloneReviewDisputeBinding(in.ReviewDispute),
 		ItemVersion:                      in.ItemVersion,
 		InterruptionClass:                in.InterruptionClass,
 		ConversationID:                   clonePtr(in.ConversationID),
@@ -798,6 +828,92 @@ func (i AttentionItem) Validate() error {
 			!i.FindingAdjudication.hasOfferedAlternative() {
 			return fmt.Errorf("item %s offers choose_alternative_route without an offered alternative: %w",
 				i.ID, ErrFindingAdjudicationBindingMismatch)
+		}
+	}
+	if i.DisplayNames != nil {
+		if err := i.DisplayNames.Validate(); err != nil {
+			return fmt.Errorf("item %s display_names: %w", i.ID, err)
+		}
+	}
+	if i.BillableCostSoFar != nil {
+		if i.Type != AttentionReviewDiminishing {
+			return fmt.Errorf("item %s type %q carries billable cost: %w",
+				i.ID, i.Type, ErrCardFactOutsideItem)
+		}
+		if err := i.BillableCostSoFar.Validate(); err != nil {
+			return fmt.Errorf("item %s billable_cost_so_far: %w", i.ID, err)
+		}
+	}
+	if i.ExecutionFailure != nil {
+		if i.Type != AttentionExecutionFailure {
+			return fmt.Errorf("item %s type %q carries execution failure facts: %w",
+				i.ID, i.Type, ErrCardFactOutsideItem)
+		}
+		if err := i.ExecutionFailure.Validate(); err != nil {
+			return fmt.Errorf("item %s execution_failure: %w", i.ID, err)
+		}
+		if i.Subject.Type != SubjectRun || i.Subject.RunID == nil {
+			return fmt.Errorf("item %s execution failure has no run subject: %w",
+				i.ID, ErrCardFactInconsistent)
+		}
+	}
+	if i.PublishBlock != nil {
+		if i.Type != AttentionPublishBlocked {
+			return fmt.Errorf("item %s type %q carries publish block facts: %w",
+				i.ID, i.Type, ErrCardFactOutsideItem)
+		}
+		if err := i.PublishBlock.Validate(); err != nil {
+			return fmt.Errorf("item %s publish_block: %w", i.ID, err)
+		}
+	}
+	if i.DiffStats != nil {
+		if i.Type != AttentionReadyForFinalReview {
+			return fmt.Errorf("item %s type %q carries diff stats: %w",
+				i.ID, i.Type, ErrCardFactOutsideItem)
+		}
+		if err := i.DiffStats.Validate(); err != nil {
+			return fmt.Errorf("item %s diff_stats: %w", i.ID, err)
+		}
+		if i.DiffStats.HeadSHA != i.PRHeadSHA {
+			return fmt.Errorf("item %s diff head %q != pr head %q: %w",
+				i.ID, i.DiffStats.HeadSHA, i.PRHeadSHA, ErrCardFactInconsistent)
+		}
+	}
+	if i.BlockedOn != nil {
+		if i.Type != AttentionBlocked {
+			return fmt.Errorf("item %s type %q carries blocked wait facts: %w",
+				i.ID, i.Type, ErrCardFactOutsideItem)
+		}
+		if err := i.BlockedOn.Validate(); err != nil {
+			return fmt.Errorf("item %s blocked_on: %w", i.ID, err)
+		}
+		if i.CreatedAt != nil && i.BlockedOn.Since.After(*i.CreatedAt) {
+			return fmt.Errorf("item %s wait started after item creation: %w",
+				i.ID, ErrCardFactInconsistent)
+		}
+	}
+	if i.HealthDiagnostic != nil {
+		if i.Type != AttentionSystemHealth {
+			return fmt.Errorf("item %s type %q carries a health diagnostic: %w",
+				i.ID, i.Type, ErrCardFactOutsideItem)
+		}
+		if err := i.HealthDiagnostic.Validate(); err != nil {
+			return fmt.Errorf("item %s health_diagnostic: %w", i.ID, err)
+		}
+	}
+	if i.ReviewDispute != nil {
+		if i.Type != AttentionReviewDispute {
+			return fmt.Errorf("item %s type %q carries a review dispute binding: %w",
+				i.ID, i.Type, ErrCardFactOutsideItem)
+		}
+		if err := i.ReviewDispute.Validate(); err != nil {
+			return fmt.Errorf("item %s review_dispute: %w", i.ID, err)
+		}
+		if i.Subject.Type != SubjectRun || i.Subject.RunID == nil ||
+			*i.Subject.RunID != i.ReviewDispute.RunID ||
+			i.Subject.ID != SubjectID(i.ReviewDispute.RunID) {
+			return fmt.Errorf("item %s review dispute disagrees with subject: %w",
+				i.ID, ErrCardFactInconsistent)
 		}
 	}
 	if i.CodexReenrollmentRecoveryBinding != nil {
