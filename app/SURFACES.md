@@ -22,12 +22,12 @@ Mac and iOS match on every line unless a line says otherwise.
   and command-retry machinery, and the run-proposal card with its
   "start with changes" and snooze sheets (its full-artifact view is not),
   plus the shared ask-first decision shell, recommendation slot, action
-  hierarchy, and the recommendation-led finding-adjudication card and typed
-  route picker.
+  hierarchy, the recommendation-led finding-adjudication card and typed
+  route picker, plus the text-only conversation thread and composer.
 - **Generic:** seven of the fourteen card types use only the shared decision
   shell; four additional types compose card-specific orderings from the shared
   graphic module set.
-- **Not yet:** one card type (`effect_proposal`), conversations, the evidence
+- **Not yet:** one card type (`effect_proposal`), conversation attachments, the evidence
   and spec viewers, proposal batches, the
   initiative view, the remaining blocked-reason and waiver readiness display,
   push notifications.
@@ -44,7 +44,7 @@ Mac and iOS match on every line unless a line says otherwise.
 | Run list | Done | Filter by project; two semantic lines separate stage/round from the current hold or milestone, and attached watch chips wrap without truncation. §15 styling: outcome chips (ready is quiet, in progress water, blocked accent, failed wax, not observed dashed). |
 | Run timeline | Done | §15 styling: accent-washed hold card, milestone rail, invocation status chips. |
 | Mac menu bar | Done | Open Freeside, Show Inbox with its count, and the shared urgent count lead; daemon readiness and lifecycle actions have their own section, with Quit last. The mono key template icon keeps the daemon-state badge dot top-right. Doctor results and 1B.1 signals come later (plan §10). |
-| Conversation / Discuss | Not yet | API exists (`getConversation`, `uploadAttachment`); no UI. Plan §5.14. |
+| Conversation / Discuss | Done for text | Every discuss-capable card can open a text composer and render the ordered thread, attachment digests, and awaiting-agent state. Threads bootstrap, persist in the disposable cache, refetch after submit, and converge on heartbeat. Uploading attachments from the composer is Not yet. Plan §5.14. |
 | Evidence packet viewer | Not yet | Detail attachments render explicit loading, image, non-image, unavailable, and too-large states with copyable digests and memory-only open sheets. The full provenance-labeled packet viewer is missing; #922 adds typed metadata. Plan §9, §5.15. |
 | Spec and diff viewer | Not yet | Diff from last reviewed version, prior comments, claimed addressals. Plan §4, §9. |
 | Proposal batch | Not yet | Several proposals decided one by one in one place. Plan §4. |
@@ -62,10 +62,10 @@ lists open issues that will change the card.
 
 | Card | What you can do | Status | Coming |
 | --- | --- | --- | --- |
-| `spec_approval` | approve, request changes, discuss, stop | Generic | #710; spec and diff viewer |
+| `spec_approval` | approve, request changes, discuss, stop | Done for text request-changes and discuss transactions; the superseded card links to the next open specification once it syncs | #920 supplies revision facts; spec and diff viewer |
 | `review_diminishing_returns` | finish now, apply then finish, continue under policy, convert to policy | Done for the shared yield-chart module; production chart facts remain data-gated | #724, #844 |
 | `review_dispute` | adjudicate, discuss, stop | Done for the equal-position and daemon-fact composition; production position facts remain data-gated | #724, #855, #917 |
-| `finding_adjudication` | accept the recommended route, pick an alternative, discuss, stop (§7 widens this to answering questions, challenging assumptions, and asking for more detail) | Done for the proposal, producer-specific model/engine/mixed-origin labels, daemon facts, typed route actions, and alternatives; Discuss UI is Not yet | #840 executes the chosen route; Conversation / Discuss under Screens |
+| `finding_adjudication` | accept the recommended route, pick an alternative, discuss, stop (§7 widens this to answering questions, challenging assumptions, and asking for more detail) | Done for the proposal, producer-specific model/engine/mixed-origin labels, daemon facts, typed route actions, alternatives, and text discussion | #840 executes the chosen route |
 | `review_contradiction` | recover the exact contradiction, or leave parked | Generic (recovery details shown) | |
 | `review_configuration` | adopt the configuration, discuss, stop | Generic (recovery details shown) | |
 | `execution_failure` | retry, retry with capabilities, discuss, stop | Done for the shared stage-rail and diagnostic-claim composition; production stage and timing facts remain data-gated | #869 adds "retry with another provider profile" for quota, expiry, and capacity failures: a profile picker, with cost owner and review independence shown before confirming; #917 supplies typed stage and timing facts |
@@ -104,6 +104,7 @@ user sees.
 | A daemon restore or host takeover (new `sync_epoch`) wipes the cache and re-bootstraps | Done |
 | A partial fetch never marks the cache current; heartbeat catches missed invalidations | Done |
 | Every decision is an idempotent command; a retry after a lost response returns the original result | Done |
+| Conversation snapshots bootstrap and persist with the cache; a discuss refetches immediately and heartbeat converges the next reply | Done |
 | Manual, foreground, reachability, and pull refreshes share one single-flight path; overlapping requests join the same daemon round | Done |
 | Metadata in protected storage, only the device credential in Keychain, attachments never written to disk | Done |
 | Loopback and Tailscale transports | Done, but each endpoint pairs separately today; switching without re-pairing is Not yet |

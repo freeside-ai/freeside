@@ -40,6 +40,23 @@ private final class FailingCacheStore: CacheStore, @unchecked Sendable {
     func discard() { backing.discard() }
 }
 
+private final class CountingCacheStore: CacheStore, @unchecked Sendable {
+    private let backing = InMemoryCacheStore()
+    private let lock = NSLock()
+    private var _saveCount = 0
+
+    var saveCount: Int { lock.withLock { _saveCount } }
+
+    func load() -> CachedState? { backing.load() }
+
+    func save(_ state: CachedState) throws {
+        lock.withLock { _saveCount += 1 }
+        try backing.save(state)
+    }
+
+    func discard() { backing.discard() }
+}
+
 /// The client half of plan §5.14's cursor and freshness semantics,
 /// against the mock daemon.
 @Suite @MainActor struct SyncCoordinatorTests {
@@ -53,12 +70,119 @@ private final class FailingCacheStore: CacheStore, @unchecked Sendable {
         let cursors = try #require(coordinator.cursors)
         #expect(cursors.lastFullSnapshotRevision == cursors.highestObservedServerRevision)
         #expect(coordinator.store.rows.count == AttentionFixtures.phase1Types.count)
+        #expect(
+            coordinator.store.orderedConversations == AttentionFixtures.defaultConversations())
         #expect(coordinator.store.freshness == .fresh)
         let persisted = try #require(cache.load())
         #expect(persisted.cursors == cursors)
         #expect(persisted.attentionItems.count == coordinator.store.rows.count)
+        #expect(persisted.conversations == coordinator.store.orderedConversations)
         #expect(persisted.runs == coordinator.runs)
         #expect(persisted.schedules == coordinator.schedules)
+    }
+
+    @Test func malformedBootstrapConversationFailsClosedBeforeCacheAdoption() async {
+        var malformed = AttentionFixtures.defaultConversations()[0]
+        malformed.conversation.messages[0].conversation_id = "conv-other"
+        let cache = InMemoryCacheStore()
+        let coordinator = makeCoordinator(
+            server: MockServer(conversations: [malformed]), cache: cache)
+
+        await coordinator.bootstrap()
+
+        #expect(coordinator.cursors == nil)
+        #expect(coordinator.store.rows.isEmpty)
+        #expect(coordinator.store.conversationsByID.isEmpty)
+        #expect(coordinator.store.freshness == .syncFailing)
+        #expect(cache.load() == nil)
+    }
+
+    @Test func bootstrapConversationBeyondItsRevisionFailsClosed() async {
+        let server = MockServer()
+        await server.setBootstrapTransform { snapshot in
+            var malformed = snapshot
+            malformed.conversations[0].as_of_revision = snapshot.revision + 1
+            return malformed
+        }
+        let coordinator = makeCoordinator(server: server)
+
+        await coordinator.bootstrap()
+
+        #expect(coordinator.cursors == nil)
+        #expect(coordinator.store.rows.isEmpty)
+        #expect(coordinator.store.conversationsByID.isEmpty)
+        #expect(coordinator.store.freshness == .syncFailing)
+    }
+
+    @Test func malformedCachedConversationIsNotRestoredOnRelaunch() throws {
+        var malformed = AttentionFixtures.defaultConversations()[0]
+        malformed.conversation.messages[1].sequence = 4
+        let cache = InMemoryCacheStore()
+        try cache.save(
+            CachedState(
+                cursors: .init(
+                    syncEpoch: "mock-epoch", lastFullSnapshotRevision: 1,
+                    highestObservedServerRevision: 1),
+                attentionItems: AttentionFixtures.defaultInbox(),
+                conversations: [malformed]))
+
+        let coordinator = makeCoordinator(server: MockServer(), cache: cache)
+
+        #expect(coordinator.cursors == nil)
+        #expect(coordinator.store.rows.isEmpty)
+        #expect(coordinator.store.conversationsByID.isEmpty)
+        #expect(coordinator.store.freshness == .unvalidated)
+    }
+
+    @Test func cachedConversationBeyondItsCursorIsNotRestoredOnRelaunch() throws {
+        var future = AttentionFixtures.defaultConversations()[0]
+        future.as_of_revision = 2
+        let cache = InMemoryCacheStore()
+        try cache.save(
+            CachedState(
+                cursors: .init(
+                    syncEpoch: "mock-epoch", lastFullSnapshotRevision: 1,
+                    highestObservedServerRevision: 1),
+                attentionItems: AttentionFixtures.defaultInbox(),
+                conversations: [future]))
+
+        let coordinator = makeCoordinator(server: MockServer(), cache: cache)
+
+        #expect(coordinator.cursors == nil)
+        #expect(coordinator.store.rows.isEmpty)
+        #expect(coordinator.store.conversationsByID.isEmpty)
+        #expect(coordinator.store.freshness == .unvalidated)
+    }
+
+    @Test func sameRevisionConversationUpdatePersistsForRelaunch() async throws {
+        let server = MockServer()
+        let cache = InMemoryCacheStore()
+        let coordinator = makeCoordinator(server: server, cache: cache)
+        await coordinator.bootstrap()
+        let model = DecisionModel(
+            store: coordinator.store, itemID: "item-spec_approval", onConclusion: { _ in })
+        await model.validate()
+
+        await model.submitDiscuss(message: "Preserve this acknowledged message.")
+
+        let relaunched = makeCoordinator(server: server, cache: cache)
+        let item = try #require(relaunched.store.snapshotsByID["item-spec_approval"])
+        let conversation = try #require(relaunched.store.conversation(for: item.item))
+        #expect(conversation.conversation.status == .awaiting_agent)
+        #expect(conversation.conversation.messages.last?.author == .user)
+        #expect(conversation.conversation.messages.last?.body == "Preserve this acknowledged message.")
+    }
+
+    @Test func unchangedHeartbeatDoesNotRewriteTheCache() async {
+        let cache = CountingCacheStore()
+        let coordinator = makeCoordinator(server: MockServer(), cache: cache)
+        await coordinator.bootstrap()
+        let savesAfterBootstrap = cache.saveCount
+
+        await coordinator.heartbeat()
+
+        #expect(savesAfterBootstrap == 1)
+        #expect(cache.saveCount == savesAfterBootstrap)
     }
 
     @Test func runAndTimelinePartialReadsDoNotMarkTheCacheCurrent() async throws {
@@ -867,8 +991,9 @@ private final class FailingCacheStore: CacheStore, @unchecked Sendable {
         await validation.value
 
         // The guard fired: a second fetch happened rather than certifying
-        // the in-flight response, and the model certified current state.
-        #expect(await getCalls.count == 2)
+        // the in-flight response, then the conversation-bearing item was
+        // confirmed once more around its thread read before certification.
+        #expect(await getCalls.count == 3)
         #expect(model.validation == .validated)
     }
 

@@ -35,13 +35,13 @@ import Testing
     }
 
     @Test func invalidOrUnavailableRecommendationDoesNotAcquireAuthority() {
-        let requested: [Components.Schemas.Action] = [.approve, .discuss]
+        let requested: [Components.Schemas.Action] = [.approve, .answer_and_retry]
 
         #expect(
             DecisionActionRanking(requested: requested, recommendedAction: .retry)
                 .recommended == nil)
         #expect(
-            DecisionActionRanking(requested: requested, recommendedAction: .discuss)
+            DecisionActionRanking(requested: requested, recommendedAction: .answer_and_retry)
                 .recommended == nil)
     }
 
@@ -84,7 +84,7 @@ import Testing
 
     @Test func allFilteredDecisionRendersCapabilityMismatch() {
         let ranking = DecisionActionRanking(
-            requested: [.discuss, .request_changes, .answer_and_retry])
+            requested: [.answer_and_retry])
 
         #expect(ranking.notDecidableHere)
         #expect(ranking.principal.isEmpty)

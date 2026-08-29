@@ -149,6 +149,7 @@ final class FailableTransport: ClientTransport, @unchecked Sendable {
     private let base: any ClientTransport
     private let lock = NSLock()
     private var failingOperations: Set<String> = []
+    private var operationCounts: [String: Int] = [:]
 
     init(base: any ClientTransport = URLSessionTransport()) {
         self.base = base
@@ -162,10 +163,17 @@ final class FailableTransport: ClientTransport, @unchecked Sendable {
         lock.withLock { failingOperations = [] }
     }
 
+    func count(for operationID: String) -> Int {
+        lock.withLock { operationCounts[operationID, default: 0] }
+    }
+
     func send(
         _ request: HTTPRequest, body: HTTPBody?, baseURL: URL, operationID: String
     ) async throws -> (HTTPResponse, HTTPBody?) {
-        let failing = lock.withLock { failingOperations.contains(operationID) }
+        let failing = lock.withLock {
+            operationCounts[operationID, default: 0] += 1
+            return failingOperations.contains(operationID)
+        }
         if failing { throw ConvergenceOutage() }
         return try await base.send(request, body: body, baseURL: baseURL, operationID: operationID)
     }

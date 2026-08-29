@@ -48,7 +48,7 @@ public enum APIClientFactory {
 
     /// A generated client over a default-seeded in-process mock server.
     public static func mock() -> Client {
-        mock(server: MockServer())
+        mock(server: MockServer(automaticallyCompletesAgentWork: true))
     }
 
     /// A generated client over the given mock server; callers hold the

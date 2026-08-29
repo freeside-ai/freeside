@@ -512,6 +512,23 @@ enum MockContractValidation {
             MockServer.MalformedCommandError(commandID: command.command_id, reason: reason)
         }
         switch command.payload.action {
+        case .discuss:
+            guard let message = command.payload.message,
+                !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                command.payload.run_proposal_revision == nil,
+                command.payload.snooze_until == nil,
+                command.payload.alternative_choices == nil
+            else { throw malformed("invalid discuss message") }
+        case .request_changes:
+            guard let message = command.payload.message,
+                !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                message.lengthOfBytes(using: .utf8) <= 8192,
+                command.command_id.lengthOfBytes(using: .utf8) <= 256,
+                (command.payload.attachments ?? []).isEmpty,
+                command.payload.run_proposal_revision == nil,
+                command.payload.snooze_until == nil,
+                command.payload.alternative_choices == nil
+            else { throw malformed("invalid request_changes message") }
         case .start_with_changes:
             guard let revision = command.payload.run_proposal_revision?.value1,
                 command.payload.snooze_until == nil,
@@ -551,7 +568,9 @@ enum MockContractValidation {
         default:
             guard command.payload.run_proposal_revision == nil,
                 command.payload.snooze_until == nil,
-                command.payload.alternative_choices == nil
+                command.payload.alternative_choices == nil,
+                (command.payload.message ?? "").isEmpty,
+                (command.payload.attachments ?? []).isEmpty
             else { throw malformed("proposal input on unrelated action") }
         }
     }

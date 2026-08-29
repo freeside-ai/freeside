@@ -249,6 +249,7 @@ public struct FreesideRootView: View {
                             detailsExpanded: launchDetailsExpanded,
                             detailsRevealRequest: technicalDetailsRequest,
                             onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
+                            onSelectItem: { navigation.route(to: .attentionItem($0)) },
                             onConclusion: { conclusion in
                                 handleConclusion(conclusion, coordinator: coordinator)
                             })
@@ -321,6 +322,7 @@ public struct FreesideRootView: View {
                         detailsRevealRequest: technicalDetailsRequest,
                         onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
                         inspectorPresented: Bindable(navigation).inspectorPresented,
+                        onSelectItem: { navigation.route(to: .attentionItem($0)) },
                         onConclusion: { conclusion in
                             handleConclusion(conclusion, coordinator: coordinator)
                         }

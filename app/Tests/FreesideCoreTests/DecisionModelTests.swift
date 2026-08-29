@@ -425,23 +425,417 @@ import Testing
         #expect(conclusions.count == 1)
     }
 
-    @Test func pendingActionIsRefusedLocallyWithoutARequest() async {
-        // discuss is offered but its transaction belongs to a later
-        // unit: the card renders it disabled and the model refuses to
-        // build a command for it.
+    @Test func discussAppendsTheMessageAndKeepsTheItemOpen() async {
         let server = MockServer()
         let store = await makeStore(server: server)
         let model = DecisionModel(store: store, itemID: "item-spec_approval")
         await model.validate()
         #expect(model.offeredActions.contains(.discuss))
-        #expect(!model.isSubmittable(.discuss))
+        #expect(model.isSubmittable(.discuss))
 
-        await model.submit(.discuss)
+        let claimed = await model.submitDiscuss(
+            message: "Please preserve the rollback order.")
+
+        #expect(claimed)
         #expect(model.phase == .idle)
-        #expect(model.appliedRecord == nil)
+        #expect(model.appliedRecord?.action == .discuss)
+        #expect(model.appliedRecord?.message == "Please preserve the rollback order.")
         #expect(model.submissionError == nil)
         #expect(model.pendingCommand == nil)
         #expect(model.snapshot?.item.status == .open)
+        #expect(model.snapshot?.item.item_version == 2)
+        #expect(model.conversation?.conversation.status == .awaiting_agent)
+        #expect(model.conversation?.conversation.messages.last?.author == .user)
+        #expect(!model.isSubmittable(.discuss))
+    }
+
+    @Test func mismatchedConversationResponseFailsValidationClosed() async {
+        let server = MockServer()
+        await server.setConversationTransform { snapshot in
+            var mismatched = snapshot
+            mismatched.conversation.id = "conv-other"
+            return mismatched
+        }
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-spec_approval")
+
+        await model.validate()
+
+        guard case .failed(let message) = model.validation else {
+            Issue.record("mismatched conversation identity did not fail validation")
+            return
+        }
+        #expect(message.contains("does not match requested id"))
+        #expect(!model.actionsEnabled)
+        #expect(store.conversationsByID["conv-other"] == nil)
+    }
+
+    @Test func futureConversationResponseCannotAdvanceTheObservedFrontier() async throws {
+        let server = MockServer()
+        let coordinator = SyncCoordinator(
+            client: APIClientFactory.mock(server: server),
+            cache: InMemoryCacheStore())
+        await coordinator.bootstrap()
+        let original = try #require(coordinator.cursors)
+        await server.setConversationTransform { snapshot in
+            var future = snapshot
+            future.as_of_revision = original.highestObservedServerRevision + 1
+            return future
+        }
+        let model = DecisionModel(
+            store: coordinator.store, itemID: "item-spec_approval")
+
+        await model.validate()
+
+        guard case .failed(let message) = model.validation else {
+            Issue.record("future conversation revision did not fail validation closed")
+            return
+        }
+        #expect(message.contains("exceeds frontier"))
+        #expect(coordinator.cursors == original)
+        let cached = try #require(
+            coordinator.store.conversationsByID["conv-item-spec_approval"])
+        #expect(cached.as_of_revision <= original.highestObservedServerRevision)
+        #expect(!model.actionsEnabled)
+
+        await server.setConversationTransform(nil)
+        await coordinator.heartbeat()
+        #expect(coordinator.cursors == original)
+        #expect(coordinator.store.freshness == .fresh)
+    }
+
+    @Test(arguments: [
+        "zero-revision", "zero-version", "foreign-message", "duplicate-message",
+        "noncontiguous-sequence", "empty-message", "missing-timestamp", "empty-attachment",
+        "duplicate-attachment",
+    ])
+    func malformedConversationResponseFailsValidationClosed(_ mutation: String) async {
+        let server = MockServer()
+        await server.setConversationTransform { snapshot in
+            var malformed = snapshot
+            switch mutation {
+            case "zero-revision":
+                malformed.as_of_revision = 0
+            case "zero-version":
+                malformed.entity_version = 0
+            case "foreign-message":
+                malformed.conversation.messages[0].conversation_id = "conv-other"
+            case "duplicate-message":
+                malformed.conversation.messages[1].id = malformed.conversation.messages[0].id
+            case "noncontiguous-sequence":
+                malformed.conversation.messages[1].sequence = 3
+            case "empty-message":
+                malformed.conversation.messages[0].id = ""
+            case "missing-timestamp":
+                malformed.conversation.messages[0].created_at = Date(
+                    timeIntervalSince1970: -62_135_769_600)
+            case "empty-attachment":
+                malformed.conversation.messages[0].attachments = [""]
+            case "duplicate-attachment":
+                malformed.conversation.messages[0].attachments = ["digest", "digest"]
+            default:
+                Issue.record("unknown malformed-conversation mutation")
+            }
+            return malformed
+        }
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-spec_approval")
+
+        await model.validate()
+
+        guard case .failed(let message) = model.validation else {
+            Issue.record("malformed conversation did not fail validation")
+            return
+        }
+        #expect(message.contains("invalid conversation response"))
+        #expect(!model.actionsEnabled)
+        #expect(store.conversationsByID["conv-item-spec_approval"] == nil)
+    }
+
+    @Test func emptyDiscussMessageSendsNothing() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-spec_approval")
+        await model.validate()
+        let before = await server.snapshot(itemID: "item-spec_approval")
+
+        let claimed = await model.submitDiscuss(message: " \n ")
+
+        #expect(!claimed)
+        #expect(model.submissionError == "enter a message before sending")
+        #expect(model.appliedRecord == nil)
+        #expect(model.pendingCommand == nil)
+        #expect(await server.snapshot(itemID: "item-spec_approval") == before)
+    }
+
+    @Test func oversizedRequestChangesMessageSendsNothing() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-spec_approval")
+        await model.validate()
+        let before = await server.snapshot(itemID: "item-spec_approval")
+
+        let claimed = await model.submitRequestChanges(
+            message: String(repeating: "a", count: 8193))
+
+        #expect(!claimed)
+        #expect(model.submissionError == "requested changes must be 8 KiB or less")
+        #expect(model.appliedRecord == nil)
+        #expect(model.pendingCommand == nil)
+        #expect(await server.snapshot(itemID: "item-spec_approval") == before)
+    }
+
+    @Test func awaitingConversationDisablesASecondDiscuss() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-spec_approval")
+        await model.validate()
+        await model.submitDiscuss(message: "First message")
+        let version = model.snapshot?.entity_version
+        let messageCount = model.conversation?.conversation.messages.count
+
+        let claimed = await model.submitDiscuss(message: "Second message")
+
+        #expect(!claimed)
+        #expect(model.phase == .idle)
+        #expect(model.submissionError == nil)
+        #expect(model.snapshot?.entity_version == version)
+        #expect(model.conversation?.conversation.status == .awaiting_agent)
+        #expect(model.conversation?.conversation.messages.count == messageCount)
+        #expect(!model.isSubmittable(.discuss))
+    }
+
+    @Test func staleDiscussFromSecondDeviceRendersTheAwaitingConversation() async {
+        let server = MockServer()
+        let firstStore = await makeStore(server: server)
+        let secondStore = await makeStore(server: server)
+        let first = DecisionModel(store: firstStore, itemID: "item-spec_approval")
+        let second = DecisionModel(store: secondStore, itemID: "item-spec_approval")
+        await first.validate()
+        await second.validate()
+        let staleVersion = second.snapshot?.entity_version
+
+        await first.submitDiscuss(message: "First device message")
+        await second.submitDiscuss(message: "Second device message")
+
+        #expect(second.phase == .idle)
+        #expect(second.submissionError == "the agent is still replying to the last message")
+        #expect(second.snapshot?.entity_version != staleVersion)
+        #expect(second.conversation?.conversation.status == .awaiting_agent)
+        #expect(second.conversation?.conversation.messages.last?.body == "First device message")
+        #expect(!second.isSubmittable(.discuss))
+    }
+
+    @Test func staleNonDiscussionConflictRefreshesTheAwaitingConversation() async {
+        let server = MockServer()
+        let firstStore = await makeStore(server: server)
+        let secondStore = await makeStore(server: server)
+        let first = DecisionModel(store: firstStore, itemID: "item-spec_approval")
+        let second = DecisionModel(store: secondStore, itemID: "item-spec_approval")
+        await first.validate()
+        await second.validate()
+
+        await first.submitDiscuss(message: "First device message")
+        let claimed = await second.submitRequestChanges(message: "Revise the order.")
+
+        #expect(claimed)
+        #expect(second.phase == .superseded)
+        #expect(second.submissionError == nil)
+        #expect(second.conversation?.conversation.status == .awaiting_agent)
+        #expect(second.conversation?.conversation.messages.last?.body == "First device message")
+    }
+
+    @Test func replayConflictFetchesTheAwaitingConversation() async {
+        let server = MockServer()
+        let firstStore = await makeStore(server: server)
+        let secondStore = await makeStore(server: server)
+        let first = DecisionModel(store: firstStore, itemID: "item-spec_approval")
+        let second = DecisionModel(store: secondStore, itemID: "item-spec_approval")
+        await first.validate()
+        await second.validate()
+        let lostAttempts = InjectedFailures(times: 2)
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" {
+                try await lostAttempts.consume()
+            }
+        }
+
+        await first.submitDiscuss(message: "First device message")
+        #expect(first.canRetryLostResponse)
+        await server.setBeforeRespond(nil)
+        await second.submitDiscuss(message: "Second device message")
+
+        await first.retryLostResponse()
+
+        #expect(first.phase == .idle)
+        #expect(first.validation == .validated)
+        #expect(first.submissionError == "the agent is still replying to the last message")
+        #expect(first.conversation?.conversation.status == .awaiting_agent)
+        #expect(first.conversation?.conversation.messages.last?.body == "Second device message")
+        #expect(!first.isSubmittable(.discuss))
+    }
+
+    @Test func nonDiscussionReplayConflictRefreshesTheAwaitingConversation() async {
+        let server = MockServer()
+        let firstStore = await makeStore(server: server)
+        let secondStore = await makeStore(server: server)
+        let first = DecisionModel(store: firstStore, itemID: "item-spec_approval")
+        let second = DecisionModel(store: secondStore, itemID: "item-spec_approval")
+        await first.validate()
+        await second.validate()
+        let lostAttempts = InjectedFailures(times: 2)
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" {
+                try await lostAttempts.consume()
+            }
+        }
+
+        await first.submitRequestChanges(message: "Revise the order.")
+        #expect(first.canRetryLostResponse)
+        await server.setBeforeRespond(nil)
+        await second.submitDiscuss(message: "Second device message")
+
+        await first.retryLostResponse()
+
+        #expect(first.phase == .superseded)
+        #expect(first.validation == .validated)
+        #expect(first.submissionError == nil)
+        #expect(first.conversation?.conversation.status == .awaiting_agent)
+        #expect(first.conversation?.conversation.messages.last?.body == "Second device message")
+    }
+
+    @Test func failedDiscussionRefetchClearsTheDefinitiveCommand() async {
+        let server = MockServer()
+        let coordinator = SyncCoordinator(
+            client: APIClientFactory.mock(server: server),
+            cache: InMemoryCacheStore())
+        await coordinator.bootstrap()
+        let model = DecisionModel(
+            store: coordinator.store, itemID: "item-spec_approval")
+        await model.validate()
+        let failedConversationFetch = InjectedFailures(times: 1)
+        await server.setBeforeRespond { operationID in
+            if operationID == "getConversation" {
+                try await failedConversationFetch.consume()
+            }
+        }
+
+        await model.submitDiscuss(message: "Please retry the thread read.")
+
+        #expect(model.pendingCommand == nil)
+        #expect(!model.canRetryLostResponse)
+        #expect(model.appliedRecord?.action == .discuss)
+        #expect(model.phase == .idle)
+
+        await server.setBeforeRespond(nil)
+        await model.validate()
+
+        #expect(model.validation == .validated)
+        #expect(model.conversation?.conversation.messages.last?.body == "Please retry the thread read.")
+    }
+
+    @Test func validationRejectsAConversationPairedWithStaleItemBindings() async throws {
+        let server = MockServer()
+        let writerStore = await makeStore(server: server)
+        let writer = DecisionModel(store: writerStore, itemID: "item-spec_approval")
+        await writer.validate()
+        await writer.submitDiscuss(message: "Complete this between reads.")
+
+        let readerStore = await makeStore(server: server)
+        let reader = DecisionModel(store: readerStore, itemID: "item-spec_approval")
+        let firstConversationRead = OneShot()
+        await server.setBeforeRespond { operationID in
+            if operationID == "getConversation", await firstConversationRead.fire() {
+                await server.completePendingAgentWork()
+            }
+        }
+
+        await reader.validate()
+
+        let canonical = try #require(await server.snapshot(itemID: "item-spec_approval"))
+        #expect(reader.validation == .validated)
+        #expect(reader.snapshot?.entity_version == canonical.entity_version)
+        #expect(reader.snapshot?.item.item_version == canonical.item.item_version)
+        #expect(reader.conversation?.conversation.status == .idle)
+        #expect(reader.isSubmittable(.discuss))
+    }
+
+    @Test func requestChangesSupersedesAndFindsTheReplacement() async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-spec_approval")
+        await model.validate()
+
+        await model.submitRequestChanges(message: "Keep the migration order.")
+
+        #expect(model.phase == .applied)
+        #expect(model.appliedRecord?.action == .request_changes)
+        #expect(model.snapshot?.item.status == .superseded)
+        #expect(model.snapshot?.item.decided_at != nil)
+        #expect(model.revisedSpecification == nil)
+        await server.completePendingAgentWork()
+        await store.refresh()
+        let replacement = try #require(model.revisedSpecification)
+        #expect(replacement.item.status == .open)
+        #expect(replacement.item.subject == model.snapshot?.item.subject)
+    }
+
+    @Test func undecodableReplayConflictRevalidatesInsteadOfRenderingSuperseded() async {
+        let server = MockServer()
+        let client = Client(
+            serverURL: URL(string: "https://freeside.invalid")!,
+            transport: CorruptStatusBodyTransport(
+                base: MockServerTransport(server: server),
+                operationID: "submitCommand",
+                status: 409))
+        let store = InboxStore(client: client)
+        await store.refresh()
+        let model = DecisionModel(store: store, itemID: "item-spec_approval")
+        let competingStore = await makeStore(server: server)
+        let competitor = DecisionModel(store: competingStore, itemID: "item-spec_approval")
+        await model.validate()
+        await competitor.validate()
+        let lostAttempts = InjectedFailures(times: 2)
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" {
+                try await lostAttempts.consume()
+            }
+        }
+
+        await model.submitDiscuss(message: "First device message")
+        #expect(model.canRetryLostResponse)
+        await server.setBeforeRespond(nil)
+        await competitor.submitDiscuss(message: "Second device message")
+        #expect(competitor.conversation?.conversation.messages.last?.body == "Second device message")
+        let revalidationReads = Counter()
+        await server.setBeforeRespond { operationID in
+            if operationID == "getAttentionItem" {
+                await revalidationReads.increment()
+            }
+        }
+
+        await model.retryLostResponse()
+
+        #expect(await revalidationReads.count > 0)
+        #expect(model.phase == .idle)
+        #expect(model.validation == .validated)
+        #expect(model.snapshot?.item.status == .open)
+        #expect(model.snapshot?.entity_version == competitor.snapshot?.entity_version)
+        #expect(model.conversation?.entity_version == competitor.conversation?.entity_version)
+        #expect(model.conversation?.conversation.messages.last?.body == "Second device message")
+    }
+
+    @Test func continueUnderPolicyConcludesResolved() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(
+            store: store, itemID: "item-review_diminishing_returns")
+        await model.validate()
+
+        await model.submit(.continue_under_policy)
+
+        #expect(model.phase == .applied)
+        #expect(model.snapshot?.item.status == .resolved)
     }
 
     @Test func runProposalRendersAuthenticatedFactsAndSubmitsTypedRevision() async {
@@ -1554,9 +1948,9 @@ import Testing
         // The daemon catches up only on the re-fetch: the first
         // getAttentionItem answers the stale version, the second the
         // current one.
-        let firstFetch = OneShot()
+        let fetches = Counter()
         await server.setBeforeRespond { operationID in
-            if operationID == "getAttentionItem", !(await firstFetch.fire()) {
+            if operationID == "getAttentionItem", await fetches.incrementAndGet() == 2 {
                 await server.advance(itemID: "item-spec_approval")
                 await server.advance(itemID: "item-spec_approval")
             }

@@ -222,6 +222,76 @@ struct RealDaemonConvergenceTests {
         #expect(replacement == deviceA.store.snapshotsByID[itemID])
     }
 
+    @Test func discussConvergesTheConversationAcrossTwoDevices() async throws {
+        // The harness has no engine, so this proves the signet transaction
+        // and cross-device conversation sync through awaiting_agent. Agent
+        // completion is covered by the stateful mock and production engine.
+        let control = try ConvergenceHarness.control()
+        let itemID = ConvergenceHarness.uniqueItemID("t693-discuss")
+        let seeded = try await control.seedItemOutcome(
+            id: itemID,
+            type: .spec_approval,
+            actions: [.approve, .request_changes, .discuss, .stop])
+        #expect(seeded.statusCode == 200)
+        let a = try await ConvergenceHarness.pairDevice(displayName: "Convergence 693A")
+        let b = try await ConvergenceHarness.pairDevice(displayName: "Convergence 693B")
+        let deviceA = ConvergenceHarness.coordinator(for: a)
+        let deviceB = ConvergenceHarness.coordinator(for: b)
+        await deviceA.bootstrap()
+        await deviceB.bootstrap()
+
+        let model = DecisionModel(store: deviceA.store, itemID: itemID)
+        await model.validate()
+        await model.submitDiscuss(message: "Please preserve the migration order.")
+
+        let discussed = try #require(model.snapshot)
+        let conversation = try #require(model.conversation)
+        #expect(discussed.item.status == .open)
+        #expect(discussed.item.item_version == 2)
+        #expect(conversation.conversation.status == .awaiting_agent)
+        #expect(conversation.conversation.messages.count == 1)
+        #expect(conversation.conversation.messages[0].author == .user)
+        #expect(!model.isSubmittable(.discuss))
+
+        await model.submitDiscuss(message: "Second message")
+        #expect(model.submissionError == nil)
+        #expect(model.conversation?.conversation.messages.count == 1)
+
+        await deviceB.heartbeat()
+        let converged = try #require(
+            deviceB.store.conversation(for: discussed.item))
+        #expect(converged == model.conversation)
+    }
+
+    @Test func requestChangesSupersedesAndEmptyInputSendsNothing() async throws {
+        // The engine-less harness proves the signet half: request_changes
+        // concludes superseded with decided_at. It deliberately cannot
+        // produce the next spec item; the production engine and mock cover it.
+        let control = try ConvergenceHarness.control()
+        let itemID = ConvergenceHarness.uniqueItemID("t693-revision")
+        let seeded = try await control.seedItemOutcome(
+            id: itemID,
+            type: .spec_approval,
+            actions: [.approve, .request_changes, .discuss, .stop])
+        #expect(seeded.statusCode == 200)
+        let device = try await ConvergenceHarness.pairDevice(
+            displayName: "Convergence 693 revision")
+        let coordinator = ConvergenceHarness.coordinator(for: device)
+        await coordinator.bootstrap()
+        let model = DecisionModel(store: coordinator.store, itemID: itemID)
+        await model.validate()
+        let sendsBefore = device.transport.count(for: "submitCommand")
+
+        await model.submitRequestChanges(message: " \n ")
+        #expect(device.transport.count(for: "submitCommand") == sendsBefore)
+        #expect(model.snapshot?.item.status == .open)
+
+        await model.submitRequestChanges(message: "Keep the migration order.")
+        #expect(device.transport.count(for: "submitCommand") == sendsBefore + 1)
+        #expect(model.snapshot?.item.status == .superseded)
+        #expect(model.snapshot?.item.decided_at != nil)
+    }
+
     // MARK: - Pairing (tests 13 and 14)
 
     @Test func consumedAndUnknownCodesRejectUndifferentiated() async throws {

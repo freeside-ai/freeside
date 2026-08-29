@@ -330,6 +330,10 @@ enum AttentionDisplay {
         return item.status == .open && item._type == .blocked ? "blocked \(duration)" : duration
     }
 
+    static func relativeRowTime(_ date: Date, now: Date) -> String {
+        relativeDuration(max(0, now.timeIntervalSince(date)))
+    }
+
     static func exactRowTimestamp(
         _ item: Components.Schemas.AttentionItem,
         now: Date

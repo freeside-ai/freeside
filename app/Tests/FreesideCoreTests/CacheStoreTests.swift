@@ -18,7 +18,8 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
             lastFullSnapshotRevision: revision,
             highestObservedServerRevision: revision
         ),
-        attentionItems: [AttentionFixtures.fixture(type: .spec_approval)]
+        attentionItems: [AttentionFixtures.fixture(type: .spec_approval)],
+        conversations: AttentionFixtures.defaultConversations()
     )
 }
 
@@ -83,6 +84,34 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         // ledger did not exist to lose).
         try Data(#"{"format": 1, "state": {}}"#.utf8).write(to: file)
         #expect(store.load() == nil)
+    }
+
+    @Test func aPreConversationsFormatThreeCachePreservesOnlyTheCommandLedger() throws {
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var legacyState = try #require(object["state"] as? [String: Any])
+        legacyState.removeValue(forKey: "conversations")
+        object["format"] = 3
+        object["state"] = legacyState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.cursors == nil)
+        #expect(migrated.attentionItems.isEmpty)
+        #expect(migrated.conversations.isEmpty)
+        #expect(migrated.runs.isEmpty)
+        #expect(migrated.schedules.isEmpty)
+        #expect(migrated.runTimelines.isEmpty)
+        #expect(migrated.pendingCommands == state.pendingCommands)
     }
 
     @Test func aPreRunsFormatTwoCachePreservesOnlyTheCommandLedger() throws {

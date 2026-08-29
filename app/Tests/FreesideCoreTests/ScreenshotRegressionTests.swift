@@ -131,6 +131,7 @@
             let inbox = AttentionFixtures.defaultInbox()
             let store = InboxStore(client: client)
             store.replaceAll(with: inbox)
+            store.replaceAllConversations(with: AttentionFixtures.defaultConversations())
             for snapshot in inbox {
                 for digest in snapshot.item.artifact_digests {
                     await store.attachments.load(digest)
@@ -177,6 +178,173 @@
                             .padding())))
             surfaces.append(
                 Surface(name: "attachment-states", width: 480, view: await attachmentStates()))
+            surfaces.append(
+                Surface(
+                    name: "message-composer",
+                    width: 480,
+                    view: AnyView(
+                        MessageComposerSheet(
+                            title: "Request changes",
+                            prompt: "Describe the revision the specification needs.",
+                            submitLabel: "Request changes",
+                            byteLimit: 8192,
+                            rendersInteractiveControls: false,
+                            submit: { _ in true }))))
+            surfaces.append(
+                Surface(
+                    name: "message-composer-phone",
+                    width: 390,
+                    view: AnyView(
+                        MessageComposerSheet(
+                            title: "Request changes",
+                            prompt: "Describe the revision the specification needs.",
+                            submitLabel: "Request changes",
+                            byteLimit: 8192,
+                            rendersInteractiveControls: false,
+                            submit: { _ in true }))))
+            surfaces.append(
+                Surface(
+                    name: "message-composer-dark",
+                    width: 480,
+                    colorScheme: .dark,
+                    view: AnyView(
+                        MessageComposerSheet(
+                            title: "Request changes",
+                            prompt: "Describe the revision the specification needs.",
+                            submitLabel: "Request changes",
+                            byteLimit: 8192,
+                            rendersInteractiveControls: false,
+                            submit: { _ in true }))))
+            surfaces.append(
+                Surface(
+                    name: "message-composer-phone-dark",
+                    width: 390,
+                    colorScheme: .dark,
+                    view: AnyView(
+                        MessageComposerSheet(
+                            title: "Request changes",
+                            prompt: "Describe the revision the specification needs.",
+                            submitLabel: "Request changes",
+                            byteLimit: 8192,
+                            rendersInteractiveControls: false,
+                            submit: { _ in true }))))
+
+            let awaitingStore = InboxStore(client: client)
+            let awaitingItem = AttentionFixtures.fixture(type: .spec_approval)
+            var awaitingConversation = AttentionFixtures.defaultConversations()[0]
+            awaitingConversation.conversation.status = .awaiting_agent
+            awaitingStore.replaceAll(with: [awaitingItem])
+            awaitingStore.replaceAllConversations(with: [awaitingConversation])
+            let awaitingDetail = DecisionDetailView(
+                store: awaitingStore,
+                itemID: awaitingItem.item.id,
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                conversationNow: screenshotNow)
+            surfaces.append(
+                Surface(
+                    name: "decision-spec_approval-awaiting",
+                    view: AnyView(
+                        awaitingDetail.screenshotCard(
+                            awaitingItem.item, at: dynamicTypeSize))))
+            let awaitingPhoneDetail = DecisionDetailView(
+                store: awaitingStore,
+                itemID: awaitingItem.item.id,
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                conversationNow: screenshotNow)
+            surfaces.append(
+                Surface(
+                    name: "decision-spec_approval-awaiting-phone",
+                    width: 390,
+                    view: AnyView(
+                        awaitingPhoneDetail.screenshotCard(
+                            awaitingItem.item, at: dynamicTypeSize))))
+            let awaitingDarkDetail = DecisionDetailView(
+                store: awaitingStore,
+                itemID: awaitingItem.item.id,
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                conversationNow: screenshotNow)
+            surfaces.append(
+                Surface(
+                    name: "decision-spec_approval-awaiting-dark",
+                    colorScheme: .dark,
+                    view: AnyView(
+                        awaitingDarkDetail.screenshotCard(
+                            awaitingItem.item, at: dynamicTypeSize))))
+            let awaitingPhoneDarkDetail = DecisionDetailView(
+                store: awaitingStore,
+                itemID: awaitingItem.item.id,
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                conversationNow: screenshotNow)
+            surfaces.append(
+                Surface(
+                    name: "decision-spec_approval-awaiting-phone-dark",
+                    width: 390,
+                    colorScheme: .dark,
+                    view: AnyView(
+                        awaitingPhoneDarkDetail.screenshotCard(
+                            awaitingItem.item, at: dynamicTypeSize))))
+
+            let replacementStore = InboxStore(client: client)
+            var superseded = AttentionFixtures.fixture(type: .spec_approval)
+            superseded.item.status = .superseded
+            superseded.item.decided_at = screenshotNow
+            var replacement = AttentionFixtures.fixture(type: .spec_approval)
+            replacement.item.id = "item-spec_approval-revision-2"
+            replacement.item.item_version = 2
+            replacement.item.conversation_id = nil
+            replacementStore.replaceAll(with: [superseded, replacement])
+            let replacementDetail = DecisionDetailView(
+                store: replacementStore,
+                itemID: superseded.item.id,
+                loadsAttachments: false,
+                showsValidationProgress: false)
+            surfaces.append(
+                Surface(
+                    name: "decision-spec_approval-superseded-link",
+                    view: AnyView(
+                        replacementDetail.screenshotCard(
+                            superseded.item, at: dynamicTypeSize))))
+            let replacementPhoneDetail = DecisionDetailView(
+                store: replacementStore,
+                itemID: superseded.item.id,
+                loadsAttachments: false,
+                showsValidationProgress: false)
+            surfaces.append(
+                Surface(
+                    name: "decision-spec_approval-superseded-link-phone",
+                    width: 390,
+                    view: AnyView(
+                        replacementPhoneDetail.screenshotCard(
+                            superseded.item, at: dynamicTypeSize))))
+            let replacementDarkDetail = DecisionDetailView(
+                store: replacementStore,
+                itemID: superseded.item.id,
+                loadsAttachments: false,
+                showsValidationProgress: false)
+            surfaces.append(
+                Surface(
+                    name: "decision-spec_approval-superseded-link-dark",
+                    colorScheme: .dark,
+                    view: AnyView(
+                        replacementDarkDetail.screenshotCard(
+                            superseded.item, at: dynamicTypeSize))))
+            let replacementPhoneDarkDetail = DecisionDetailView(
+                store: replacementStore,
+                itemID: superseded.item.id,
+                loadsAttachments: false,
+                showsValidationProgress: false)
+            surfaces.append(
+                Surface(
+                    name: "decision-spec_approval-superseded-link-phone-dark",
+                    width: 390,
+                    colorScheme: .dark,
+                    view: AnyView(
+                        replacementPhoneDarkDetail.screenshotCard(
+                            superseded.item, at: dynamicTypeSize))))
 
             if let selected = inbox.first?.item {
                 surfaces.append(
@@ -240,7 +408,8 @@
                     itemID: snapshot.item.id,
                     graphics: graphics,
                     loadsAttachments: false,
-                    showsValidationProgress: false
+                    showsValidationProgress: false,
+                    conversationNow: screenshotNow
                 )
                 let proposalFacts =
                     snapshot.item._type == .run_proposal
@@ -265,6 +434,58 @@
                                 snapshot.item,
                                 at: dynamicTypeSize,
                                 proposalFacts: proposalFacts))))
+
+                if snapshot.item._type == .spec_approval {
+                    let phoneDetail = DecisionDetailView(
+                        store: store,
+                        itemID: snapshot.item.id,
+                        graphics: graphics,
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        conversationNow: screenshotNow)
+                    surfaces.append(
+                        Surface(
+                            name: "decision-spec_approval-phone",
+                            width: 390,
+                            view: AnyView(
+                                phoneDetail.screenshotCard(
+                                    snapshot.item,
+                                    at: dynamicTypeSize,
+                                    proposalFacts: proposalFacts))))
+                    let darkDetail = DecisionDetailView(
+                        store: store,
+                        itemID: snapshot.item.id,
+                        graphics: graphics,
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        conversationNow: screenshotNow)
+                    surfaces.append(
+                        Surface(
+                            name: "decision-spec_approval-dark",
+                            colorScheme: .dark,
+                            view: AnyView(
+                                darkDetail.screenshotCard(
+                                    snapshot.item,
+                                    at: dynamicTypeSize,
+                                    proposalFacts: proposalFacts))))
+                    let phoneDarkDetail = DecisionDetailView(
+                        store: store,
+                        itemID: snapshot.item.id,
+                        graphics: graphics,
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        conversationNow: screenshotNow)
+                    surfaces.append(
+                        Surface(
+                            name: "decision-spec_approval-phone-dark",
+                            width: 390,
+                            colorScheme: .dark,
+                            view: AnyView(
+                                phoneDarkDetail.screenshotCard(
+                                    snapshot.item,
+                                    at: dynamicTypeSize,
+                                    proposalFacts: proposalFacts))))
+                }
 
                 if snapshot.item._type == .ready_for_final_review {
                     surfaces.append(
@@ -548,7 +769,8 @@
                 store: store,
                 itemID: approval.item.id,
                 loadsAttachments: false,
-                showsValidationProgress: false)
+                showsValidationProgress: false,
+                conversationNow: screenshotNow)
             return Surface(
                 name: "decision-spec_approval-image",
                 view: AnyView(detail.screenshotCard(approval.item, at: dynamicTypeSize)))

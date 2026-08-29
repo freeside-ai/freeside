@@ -64,9 +64,14 @@ public final class SyncCoordinator {
         store = InboxStore(client: client, device: device)
         self.cache = cache
         if let cached = cache.load() {
-            if let cursors = cached.cursors {
+            if let cursors = cached.cursors,
+                (try? ConversationContractValidation.validate(
+                    cached.conversations,
+                    maximumRevision: cursors.highestObservedServerRevision)) != nil
+            {
                 self.cursors = cursors
                 store.replaceAll(with: cached.attentionItems)
+                store.replaceAllConversations(with: cached.conversations)
                 runs = cached.runs
                 schedules = cached.schedules
                 timelinesByRunID = cached.runTimelines.reduce(into: [:]) { timelines, timeline in
@@ -85,6 +90,10 @@ public final class SyncCoordinator {
         // current before the first heartbeat or bootstrap says so.
         store.revisionObserver = { [weak self] revision in
             self?.observe(revision: revision)
+        }
+        store.syncCursorsProvider = { [weak self] in self?.cursors }
+        store.snapshotObserver = { [weak self] revision in
+            self?.observe(snapshotRevision: revision)
         }
         // Every ledger mutation persists immediately: a sync round may
         // never come before termination, and the persisted ledger is the
@@ -109,7 +118,10 @@ public final class SyncCoordinator {
             guard generation == syncGeneration else { return }
             switch output {
             case .ok(let ok):
-                if !adopt(try ok.body.json) {
+                let snapshot = try ok.body.json
+                try ConversationContractValidation.validate(
+                    snapshot.conversations, maximumRevision: snapshot.revision)
+                if !adopt(snapshot) {
                     // A same-epoch partial read completed while this
                     // bootstrap response was in flight. Fetch one new
                     // canonical snapshot rather than replacing that newer
@@ -121,7 +133,11 @@ public final class SyncCoordinator {
             }
         } catch {
             guard generation == syncGeneration else { return }
-            store.freshness = freshnessForReadError(error)
+            if error is ConversationContractValidation.InvalidConversation {
+                store.freshness = .syncFailing
+            } else {
+                store.freshness = freshnessForReadError(error)
+            }
         }
     }
 
@@ -291,13 +307,27 @@ public final class SyncCoordinator {
     /// never the full-snapshot cursor (test 11). Reads that arrive
     /// before any bootstrap scoped an epoch carry no usable cursor.
     public func observe(revision: Int64) {
-        guard var cursors, revision > cursors.highestObservedServerRevision else { return }
+        guard advanceObservedRevision(to: revision) else { return }
+        persist()
+    }
+
+    /// An accepted resource snapshot must persist even when another row
+    /// from the same transaction already advanced the observed cursor.
+    private func observe(snapshotRevision revision: Int64) {
+        guard cursors != nil else { return }
+        _ = advanceObservedRevision(to: revision)
+        persist()
+    }
+
+    @discardableResult
+    private func advanceObservedRevision(to revision: Int64) -> Bool {
+        guard var cursors, revision > cursors.highestObservedServerRevision else { return false }
         cursors.highestObservedServerRevision = revision
         self.cursors = cursors
         if revision > cursors.lastFullSnapshotRevision {
             store.freshness = .unvalidated
         }
-        persist()
+        return true
     }
 
     /// Refreshes the list-level run projections without claiming the whole
@@ -406,6 +436,7 @@ public final class SyncCoordinator {
         }
         cacheGeneration += 1
         store.replaceAll(with: snapshot.attention_items)
+        store.replaceAllConversations(with: snapshot.conversations)
         runs = snapshot.runs
         schedules = snapshot.schedules
         timelinesByRunID = [:]
@@ -480,6 +511,7 @@ public final class SyncCoordinator {
                 CachedState(
                     cursors: cursors,
                     attentionItems: cursors == nil ? [] : store.orderedSnapshots,
+                    conversations: cursors == nil ? [] : store.orderedConversations,
                     runs: cursors == nil ? [] : runs,
                     schedules: cursors == nil ? [] : schedules,
                     runTimelines: cursors == nil

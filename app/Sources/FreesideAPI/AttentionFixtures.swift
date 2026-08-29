@@ -85,6 +85,41 @@ public enum AttentionFixtures {
         phase1Types.map { fixture(type: $0) }
     }
 
+    /// The deterministic thread carried by the default spec-approval card.
+    /// Other discuss-capable cards acquire a conversation on first submit.
+    public static func defaultConversations() -> [Components.Schemas.ConversationSnapshot] {
+        let id = "conv-item-spec_approval"
+        return [
+            .init(
+                as_of_revision: 1,
+                entity_version: 1,
+                conversation: .init(
+                    id: id,
+                    status: .idle,
+                    messages: [
+                        .init(
+                            id: "msg-user-fixture",
+                            conversation_id: id,
+                            sequence: 1,
+                            author: .user,
+                            body: "Can the revised spec preserve the existing migration order?",
+                            attachments: [],
+                            created_at: createdInstant.addingTimeInterval(60)
+                        ),
+                        .init(
+                            id: "msg-agent-fixture",
+                            conversation_id: id,
+                            sequence: 2,
+                            author: .agent,
+                            body: "Yes. The revision keeps the order and narrows the rollback step.",
+                            attachments: [],
+                            created_at: createdInstant.addingTimeInterval(120)
+                        ),
+                    ]
+                ))
+        ]
+    }
+
     /// A ready fixture carrying the other valid readiness class. The default
     /// inbox remains clean; tests and screenshots can opt into this one to
     /// prove degraded readiness survives sync and renders distinctly.
@@ -474,7 +509,7 @@ public enum AttentionFixtures {
             finding_adjudication: findingAdjudication,
             item_version: 1,
             interruption_class: interruption,
-            conversation_id: nil,
+            conversation_id: type == .spec_approval ? "conv-item-spec_approval" : nil,
             timing: .init(
                 delivery_count: 0,
                 first_submitted_at: nil,

@@ -72,6 +72,14 @@ public final class InboxStore {
     /// read must never advance the full-snapshot cursor (plan §5.14
     /// sync test 11).
     public var revisionObserver: ((Int64) -> Void)?
+    /// Supplies the active sync epoch to returned-object correlation without
+    /// making decision cards own the coordinator. A nil cursor means no
+    /// bootstrap has established an epoch yet.
+    var syncCursorsProvider: (() -> SyncCursors?)?
+    /// Reports a canonical resource mutation separately from a bare
+    /// revision observation. Several rows may share one transaction's
+    /// revision, but each accepted row must reach the disk cache.
+    var snapshotObserver: ((Int64) -> Void)?
     /// Reports every pending-command ledger mutation so the sync
     /// coordinator can persist the ledger as it changes (#115): the
     /// retry affordance survives a relaunch only if each claim, state
@@ -82,6 +90,7 @@ public final class InboxStore {
     /// idempotent verbatim resend on relaunch).
     public var pendingCommandsObserver: (() -> Bool)?
     public private(set) var snapshotsByID: [String: Components.Schemas.AttentionItemSnapshot] = [:]
+    public private(set) var conversationsByID: [String: Components.Schemas.ConversationSnapshot] = [:]
     public var scope: Scope = .open
     public var projectID: String?
     private var pendingLaunchProjectID: String?
@@ -261,7 +270,22 @@ public final class InboxStore {
         if !serverOrder.contains(snapshot.item.id) {
             serverOrder.append(snapshot.item.id)
         }
-        revisionObserver?(snapshot.as_of_revision)
+        snapshotObserver?(snapshot.as_of_revision)
+        return true
+    }
+
+    /// Upserts one whole conversation snapshot without letting an older
+    /// partial read replace a newer thread or status.
+    @discardableResult
+    public func apply(_ snapshot: Components.Schemas.ConversationSnapshot) -> Bool {
+        let id = snapshot.conversation.id
+        if let existing = conversationsByID[id],
+            existing.entity_version > snapshot.entity_version
+        {
+            return false
+        }
+        conversationsByID[id] = snapshot
+        snapshotObserver?(snapshot.as_of_revision)
         return true
     }
 
@@ -304,9 +328,30 @@ public final class InboxStore {
         captureStatusesForCurrentOrder()
         repairProjectFilter()
         loadState = .loaded
+    }
+
+    public func replaceAllConversations(
+        with snapshots: [Components.Schemas.ConversationSnapshot]
+    ) {
+        var replaced: [String: Components.Schemas.ConversationSnapshot] = [:]
         for snapshot in snapshots {
-            revisionObserver?(snapshot.as_of_revision)
+            let id = snapshot.conversation.id
+            if let existing = conversationsByID[id],
+                existing.entity_version > snapshot.entity_version
+            {
+                replaced[id] = existing
+            } else {
+                replaced[id] = snapshot
+            }
         }
+        conversationsByID = replaced
+    }
+
+    public func conversation(
+        for item: Components.Schemas.AttentionItem
+    ) -> Components.Schemas.ConversationSnapshot? {
+        guard let id = item.conversation_id else { return nil }
+        return conversationsByID[id]
     }
 
     /// Drops every cached row (an epoch change made them meaningless,
@@ -315,6 +360,7 @@ public final class InboxStore {
     /// settle an ambiguous command against the restored daemon.
     public func discardSnapshots() {
         snapshotsByID = [:]
+        conversationsByID = [:]
         serverOrder = []
         statusAtOrderRebuild = [:]
         projectID = nil
@@ -378,6 +424,10 @@ public final class InboxStore {
     /// Rows in server order, for cache persistence.
     public var orderedSnapshots: [Components.Schemas.AttentionItemSnapshot] {
         serverOrder.compactMap { snapshotsByID[$0] }
+    }
+
+    public var orderedConversations: [Components.Schemas.ConversationSnapshot] {
+        conversationsByID.keys.sorted().compactMap { conversationsByID[$0] }
     }
 
     /// The outcome of claiming an item's in-flight slot for a first send.
