@@ -85,3 +85,13 @@ func TestResumeTargetsExactLiveRunAndRefusesTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestResumeReportsAuthenticatedPublishedOutcome(t *testing.T) {
+	err := terminalResumeError("run-published-after-rerun", domain.RunConclusion{
+		Outcome: domain.RunOutcomePublished, Final: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), `terminal in state "published"`) ||
+		strings.Contains(err.Error(), `terminal in state "blocked"`) {
+		t.Fatalf("published resume refusal = %v", err)
+	}
+}

@@ -12,7 +12,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/observe"
-	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
 )
 
 // runResumeMain reattaches observation to one exact non-terminal run. It
@@ -57,29 +57,17 @@ func runResumeCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 	case *window <= 0:
 		return fmt.Errorf("%w: -freshness-window must be positive, got %s", observe.ErrUsage, *window)
 	}
-	st, _, err := openStoreWithTopicKey(ctx, *dbPath, store.Options{})
+	st, err := observedb.Open(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
-	var conclusion domain.RunConclusion
-	readErr := st.Read(ctx, func(tx *store.ReadTx) error {
-		if _, err := tx.GetRun(ctx, domain.RunID(*runID)); err != nil {
-			return err
-		}
-		observation, err := tx.ObserveRun(ctx, domain.RunID(*runID))
-		if err != nil {
-			return err
-		}
-		conclusion = domain.ConcludeRun(observation)
-		return nil
-	})
+	_, conclusion, readErr := st.ObserveConclusion(ctx, domain.RunID(*runID))
 	closeErr := st.Close()
 	if err := errors.Join(readErr, closeErr); err != nil {
 		return err
 	}
-	if conclusion.Final {
-		return fmt.Errorf("run %q is terminal in state %q; use freesided reattempt to create a new attempt",
-			*runID, conclusion.Outcome)
+	if err := terminalResumeError(domain.RunID(*runID), conclusion); err != nil {
+		return err
 	}
 	followArgs := []string{
 		"-db", *dbPath, "-run", *runID,
@@ -89,4 +77,12 @@ func runResumeCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 		followArgs = append(followArgs, "-once")
 	}
 	return observe.Run(ctx, followArgs, stdout, stderr)
+}
+
+func terminalResumeError(runID domain.RunID, conclusion domain.RunConclusion) error {
+	if !conclusion.Final {
+		return nil
+	}
+	return fmt.Errorf("run %q is terminal in state %q; use freesided reattempt to create a new attempt",
+		runID, conclusion.Outcome)
 }

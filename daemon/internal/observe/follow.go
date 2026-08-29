@@ -45,6 +45,12 @@ type Observer interface {
 	ObserveRun(ctx context.Context, runID domain.RunID) (domain.RunObservation, error)
 }
 
+type authenticatedObserver interface {
+	ObserveConclusion(
+		ctx context.Context, runID domain.RunID,
+	) (domain.RunObservation, domain.RunConclusion, error)
+}
+
 // Config selects the run and paces the follow loop.
 type Config struct {
 	RunID domain.RunID
@@ -105,7 +111,7 @@ func Follow(ctx context.Context, obs Observer, out io.Writer, cfg Config) error 
 		lastObservation domain.RunObservation
 	)
 	for {
-		observation, err := obs.ObserveRun(ctx, cfg.RunID)
+		observation, conclusion, err := observeConclusion(ctx, obs, cfg.RunID)
 		if err != nil {
 			// An interrupt that lands inside a read is the same ordinary end
 			// as one that lands between reads, and ends the same way: a
@@ -136,7 +142,6 @@ func Follow(ctx context.Context, obs Observer, out io.Writer, cfg Config) error 
 		if err != nil {
 			return err
 		}
-		conclusion := Conclude(observation)
 		last = conclusion
 		done := cfg.Once || (conclusion.Final && !changed)
 		if !done {
@@ -167,6 +172,19 @@ func Follow(ctx context.Context, obs Observer, out io.Writer, cfg Config) error 
 		}
 		return f.emitOutcome(conclusion)
 	}
+}
+
+func observeConclusion(
+	ctx context.Context, obs Observer, runID domain.RunID,
+) (domain.RunObservation, Conclusion, error) {
+	if authenticated, ok := obs.(authenticatedObserver); ok {
+		return authenticated.ObserveConclusion(ctx, runID)
+	}
+	observation, err := obs.ObserveRun(ctx, runID)
+	if err != nil {
+		return domain.RunObservation{}, Conclusion{}, err
+	}
+	return observation, Conclude(observation), nil
 }
 
 // observed reports whether the daemon has recorded anything at all about the

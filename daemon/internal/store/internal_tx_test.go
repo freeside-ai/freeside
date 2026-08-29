@@ -52,4 +52,7 @@ func TestInternalTxCannotWriteSynchronizedState(t *testing.T) {
 			t.Errorf("*store.WriteTx lost %s; committing a queue entry alongside a client-visible decision is broken", name)
 		}
 	}
+	if _, ok := internalTx.MethodByName("RecordDispatchedOutbox"); ok {
+		t.Error("*store.InternalTx exposes RecordDispatchedOutbox; completion facts could bypass the revision bump")
+	}
 }

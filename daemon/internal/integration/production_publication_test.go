@@ -300,6 +300,15 @@ func newProductionPublicationHarnessWithFiles(
 
 	runID := domain.RunID("run-production-publication")
 	projectID := domain.ProjectID("project-production-publication")
+	project, err := domain.NewProject(projectID, h.profile.Repo, h.profile.RepositoryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.WriteInternal(h.ctx, func(tx *store.InternalTx) error {
+		return tx.RegisterProject(h.ctx, project)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	policyKeys := append([]domain.PolicyKey{{
 		Key: "paths", Value: strings.Join(candidatePaths, ","),
 		Provenance: domain.KeyProvenance{
@@ -567,6 +576,39 @@ func revisePublicationTrustProfile(t *testing.T, p *productionPublicationHarness
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func repairPublicationTrustProfile(t *testing.T, p *productionPublicationHarness) domain.AutomationTrustProfile {
+	t.Helper()
+	current := p.profile
+	revised, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: current.Repo, RepositoryID: current.RepositoryID,
+		PRExecution:                current.PRExecution,
+		CandidateAutomationChanges: current.CandidateAutomationChanges,
+		PRGitHubTokenPermissions:   current.PRGitHubTokenPermissions,
+		AllowOIDC:                  !current.AllowOIDC,
+		AllowEnvironmentSecrets:    current.AllowEnvironmentSecrets,
+		AllowSecretBearingPRJobs:   current.AllowSecretBearingPRJobs,
+		AllowSelfHostedCI:          current.AllowSelfHostedCI,
+		AllowPullRequestTarget:     current.AllowPullRequestTarget,
+		AllowReusableWorkflows:     current.AllowReusableWorkflows,
+		AllowPackagePublishing:     current.AllowPackagePublishing,
+		AllowArtifactConsumers:     current.AllowArtifactConsumers,
+		CommitPlan:                 current.CommitPlan,
+		MessageRuleset:             current.MessageRuleset,
+		WorkflowAuditDigest:        current.WorkflowAuditDigest,
+		Review:                     current.Review,
+		ProtectedPaths:             current.ProtectedPaths,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(p.ctx, revised, p.now.Add(time.Hour))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return revised
 }
 
 func putProductionBlob(t *testing.T, h *publicationHarness, digest domain.Digest, body []byte) {
@@ -1141,6 +1183,30 @@ func productionSupervisionState(
 		t.Fatalf("decode supervision snapshot %q: %v", stdout.String(), err)
 	}
 	return snapshot.State
+}
+
+func authenticatedProductionConclusion(
+	t *testing.T, p *productionPublicationHarness,
+) domain.RunConclusion {
+	t.Helper()
+	var conclusion domain.RunConclusion
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		run, err := tx.GetRun(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		observation, err := tx.ObserveRun(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		conclusion, err = engine.AuthenticatedProductionRunConclusion(
+			p.ctx, tx, run, observation,
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return conclusion
 }
 
 // TestProductionReviewerInstructionEditPublishesAsAdvisory: on the
@@ -2430,6 +2496,274 @@ func TestProductionBaseAdvanceAfterReviewBlocksAtPublisher(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+
+	// A command-authorized reevaluation has fresh verification evidence, so it
+	// must start the next review round rather than reuse round 1's authority.
+	repairPublicationTrustProfile(t, p)
+	p.audit.AuditedCommitSHA = p.baseSHA
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	secondReviewID := engine.ProductionReviewInvocationID(p.runID, 2)
+	p.reviewer.Script(secondReviewID, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt:        p.now.Add(time.Minute),
+			CompletionEvidence: productionDigest([]byte("clean reevaluation review")),
+		},
+	})
+	submitPublicationRerun(t, p, blocked, "rerun-after-base-advance")
+	var reevaluated engine.ReconcileResult
+	for range 4 {
+		reevaluated, err = p.reconcileLanes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reevaluated.ReadyItemsCreated == 1 {
+			break
+		}
+	}
+	if reevaluated.ReadyItemsCreated != 1 || reevaluated.PublicationTasksCompleted != 1 {
+		t.Fatalf("reevaluated publication = %#v", reevaluated)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		reviews, err := tx.ListReviewRecords(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if len(reviews) != 2 || reviews[1].Round != 2 || reviews[1].InvocationID != secondReviewID {
+			t.Fatalf("reevaluation reviews = %#v", reviews)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionReevaluationReviewEscalationRemainsBlocked(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.audit.AuditedCommitSHA = strings.Repeat("f", 40)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 1 {
+		t.Fatalf("initial base-advance block = %#v, %v", result, err)
+	}
+	blocked, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ProductionBlockedItemID(p.runID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repairPublicationTrustProfile(t, p)
+	p.audit.AuditedCommitSHA = p.baseSHA
+	round := engine.ProductionReviewInvocationID(p.runID, 2)
+	p.reviewer.Script(round, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt:        p.now.Add(time.Minute),
+			CompletionEvidence: productionDigest([]byte("unused quota review")),
+		},
+	})
+	p.reviewSource = &faultReviewSource{
+		ReviewSource: p.reviewer, failPollAt: 1,
+		failPollWith: errors.Join(exec.ErrNoResult, &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureQuota, Err: errors.New("review quota exhausted"),
+		}),
+	}
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	submitPublicationRerun(t, p, blocked, "rerun-review-escalation")
+	var escalated engine.ReconcileResult
+	for range 4 {
+		escalated, err = p.reconcileLanes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if escalated.PublicationTasksCompleted == 1 {
+			break
+		}
+	}
+	if escalated.PublicationTasksCompleted != 1 || escalated.BlockedItemsCreated != 1 ||
+		escalated.ReadyItemsCreated != 0 {
+		t.Fatalf("reevaluation review escalation = %#v", escalated)
+	}
+	item, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID(fmt.Sprintf("production-review-%s-2", p.runID)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Item.Type != domain.AttentionReviewDispute || item.Item.Status != domain.StatusOpen {
+		t.Fatalf("reevaluation review escalation item = %#v", item.Item)
+	}
+	if conclusion := authenticatedProductionConclusion(t, p); !conclusion.Final ||
+		conclusion.Outcome != domain.RunOutcomeBlocked {
+		t.Fatalf("reevaluation review escalation conclusion = %#v, want final blocked", conclusion)
+	}
+	if runs, err := p.attention.ListRuns(p.ctx); err != nil {
+		t.Fatal(err)
+	} else if len(runs) != 1 || runs[0].Run.Outcome != domain.RunOutcomeBlocked {
+		t.Fatalf("reevaluation review escalation runs = %#v", runs)
+	}
+}
+
+func TestProductionReevaluationHardLimitEscalationUsesPolicyRound(t *testing.T) {
+	p := newProductionPublicationHarnessWithPolicyKeys(t, "", []domain.PolicyKey{{
+		Key: "review.hard_round_limit", Value: "1",
+		Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride,
+			Digest: submissionDigest("run-production-publication", "reevaluation-hard-round-limit"),
+		},
+	}})
+	p.audit.AuditedCommitSHA = strings.Repeat("f", 40)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 1 {
+		t.Fatalf("initial base-advance block = %#v, %v", result, err)
+	}
+	blocked, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ProductionBlockedItemID(p.runID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repairPublicationTrustProfile(t, p)
+	p.audit.AuditedCommitSHA = p.baseSHA
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	submitPublicationRerun(t, p, blocked, "rerun-review-hard-limit")
+	var escalated engine.ReconcileResult
+	for range 4 {
+		escalated, err = p.reconcileLanes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if escalated.PublicationTasksCompleted == 1 {
+			break
+		}
+	}
+	if escalated.PublicationTasksCompleted != 1 || escalated.BlockedItemsCreated != 1 ||
+		escalated.ReadyItemsCreated != 0 {
+		t.Fatalf("reevaluation hard-limit escalation = %#v", escalated)
+	}
+	item, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID(fmt.Sprintf("production-review-%s-1", p.runID)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Item.Type != domain.AttentionReviewDiminishing || item.Item.Status != domain.StatusOpen {
+		t.Fatalf("reevaluation hard-limit item = %#v", item.Item)
+	}
+	if conclusion := authenticatedProductionConclusion(t, p); !conclusion.Final ||
+		conclusion.Outcome != domain.RunOutcomeBlocked {
+		t.Fatalf("reevaluation hard-limit conclusion = %#v, want final blocked", conclusion)
+	}
+	if runs, err := p.attention.ListRuns(p.ctx); err != nil {
+		t.Fatal(err)
+	} else if len(runs) != 1 || runs[0].Run.Outcome != domain.RunOutcomeBlocked {
+		t.Fatalf("reevaluation hard-limit runs = %#v", runs)
+	}
+}
+
+func TestProductionReevaluationConfigurationFailureUsesPinnedRound(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.audit.AuditedCommitSHA = strings.Repeat("f", 40)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 1 {
+		t.Fatalf("base-advance block = %#v, %v", result, err)
+	}
+	blocked, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revised, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: p.profile.Repo, RepositoryID: p.profile.RepositoryID,
+		PRExecution:                p.profile.PRExecution,
+		CandidateAutomationChanges: p.profile.CandidateAutomationChanges,
+		PRGitHubTokenPermissions:   p.profile.PRGitHubTokenPermissions,
+		AllowOIDC:                  p.profile.AllowOIDC,
+		AllowEnvironmentSecrets:    p.profile.AllowEnvironmentSecrets,
+		AllowSecretBearingPRJobs:   p.profile.AllowSecretBearingPRJobs,
+		AllowSelfHostedCI:          p.profile.AllowSelfHostedCI,
+		AllowPullRequestTarget:     p.profile.AllowPullRequestTarget,
+		AllowReusableWorkflows:     p.profile.AllowReusableWorkflows,
+		AllowPackagePublishing:     p.profile.AllowPackagePublishing,
+		AllowArtifactConsumers:     p.profile.AllowArtifactConsumers,
+		CommitPlan:                 p.profile.CommitPlan,
+		MessageRuleset:             p.profile.MessageRuleset,
+		WorkflowAuditDigest:        p.profile.WorkflowAuditDigest,
+		Review: domain.ReviewSettings{
+			Mode: p.profile.Review.Mode,
+			ConfigDigest: domain.Digest(
+				"sha256:" + strings.Repeat("d", 64),
+			),
+		},
+		ProtectedPaths: p.profile.ProtectedPaths,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(p.ctx, revised, p.now.Add(time.Minute))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.audit.AuditedCommitSHA = p.baseSHA
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	submitPublicationRerun(t, p, blocked, "rerun-review-config-round")
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("reevaluation configuration failure = %#v, %v", result, err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if failure.Class != domain.ReviewFailureConfiguration || failure.Round != 2 {
+			t.Fatalf("reevaluation configuration failure = %#v", failure)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("park reevaluation configuration failure = %#v, %v", result, err)
+	}
+	configuration, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID(fmt.Sprintf("production-review-%s-2", p.runID)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.Item.Type != domain.AttentionReviewConfiguration ||
+		configuration.Item.Status != domain.StatusOpen {
+		t.Fatalf("reevaluation configuration item = %#v", configuration.Item)
+	}
+	if err := submitOnParkedConfigurationItem(
+		t, p, configuration, "stop-reevaluation-config-round-2", domain.ActionStop,
+	); err != nil {
+		t.Fatalf("stop reevaluation configuration: %v", err)
+	}
+	terminal, err := p.reconcileLanes()
+	if err != nil || terminal.PublicationTasksCompleted != 1 || terminal.BlockedItemsCreated != 1 {
+		t.Fatalf("terminal reevaluation configuration = %#v, %v", terminal, err)
+	}
+	if conclusion := authenticatedProductionConclusion(t, p); !conclusion.Final ||
+		conclusion.Outcome != domain.RunOutcomeBlocked {
+		t.Fatalf("terminal reevaluation configuration conclusion = %#v, want final blocked", conclusion)
+	}
+	if runs, err := p.attention.ListRuns(p.ctx); err != nil {
+		t.Fatal(err)
+	} else if len(runs) != 1 || runs[0].Run.Outcome != domain.RunOutcomeBlocked {
+		t.Fatalf("terminal reevaluation configuration runs = %#v", runs)
 	}
 }
 
@@ -4598,7 +4932,7 @@ func TestProductionPublicationHoldAdvancesToDefinitiveBlock(t *testing.T) {
 	if blocked.Item.ItemVersion != hold.Item.ItemVersion+1 ||
 		blocked.Item.Reason != "Verification or current policy findings blocked production publication." ||
 		!slices.Equal(blocked.Item.RequestedDecision, []domain.Action{
-			domain.ActionInspectTrustFailure, domain.ActionStop,
+			domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
 		}) || blocked.Item.Status != domain.StatusOpen {
 		t.Fatalf("definitive successor = %#v", blocked.Item)
 	}
@@ -4607,6 +4941,543 @@ func TestProductionPublicationHoldAdvancesToDefinitiveBlock(t *testing.T) {
 		!reflect.DeepEqual(blocked.Item.ExpiresWhen, hold.Item.ExpiresWhen) {
 		t.Fatalf("definitive successor lost hold metadata: before=%#v after=%#v",
 			hold.Item, blocked.Item)
+	}
+}
+
+func TestProductionPublicationRerunTrustEvaluationSurvivesRestart(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.room.fail = true
+	p.startAndRecordExport(t)
+	initial, err := p.reconcileLanes()
+	if err != nil || initial.PublicationTasksCompleted != 1 || initial.BlockedItemsCreated != 1 {
+		t.Fatalf("initial block = %#v, %v", initial, err)
+	}
+	originalID := domain.ProductionBlockedItemID(p.runID)
+	original, err := p.attention.GetAttentionItem(p.ctx, originalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalCheckpointKey := "production-verification/" + string(p.runID) + "/" + p.replay.HeadSHA
+	var originalCheckpoint []byte
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		entry, err := tx.GetInbox(p.ctx, originalCheckpointKey)
+		if err != nil {
+			return err
+		}
+		originalCheckpoint = bytes.Clone(entry.Payload)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	commandID := "rerun-production-trust"
+	repairPublicationTrustProfile(t, p)
+	verificationRunsBeforeCommand := p.room.runs
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if replay, err := p.reconcileLanes(); err != nil || replay != (engine.ReconcileResult{}) {
+		t.Fatalf("profile repair without command = %#v, %v", replay, err)
+	}
+	if p.room.runs != verificationRunsBeforeCommand {
+		t.Fatalf("profile repair without command ran %d verification commands",
+			p.room.runs-verificationRunsBeforeCommand)
+	}
+	submitPublicationRerun(t, p, original, commandID)
+	intentKey := signet.PublicationReevaluationKey(p.runID, commandID)
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		entry, err := tx.GetOutbox(p.ctx, intentKey)
+		if err != nil {
+			return err
+		}
+		if entry.Dispatched() {
+			t.Fatal("reevaluation intent dispatched before engine pass")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if conclusion := authenticatedProductionConclusion(t, p); conclusion.Final ||
+		conclusion.Outcome != domain.RunOutcomePending {
+		t.Fatalf("accepted reevaluation conclusion = %#v, want live pending", conclusion)
+	}
+
+	p.room.fail = false
+	p.restartDurableState(t)
+	seamCalls := 0
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterVerification: func() error {
+			seamCalls++
+			return errors.New("stop after reevaluation checkpoint")
+		},
+	}, true)
+	verificationRuns := p.room.runs
+	result, seamErr := p.reconcileLanes()
+	if seamErr == nil {
+		t.Fatalf("reevaluation checkpoint seam did not interrupt reconciliation: result=%#v runs=%d seam=%d", result, p.room.runs, seamCalls)
+	}
+	if p.room.runs != verificationRuns+1 {
+		t.Fatalf("reevaluation verification runs = %d, want %d: %v", p.room.runs, verificationRuns+1, seamErr)
+	}
+
+	var authorizationsAtCheckpoint []domain.CandidateAuthorization
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		authorizationsAtCheckpoint, err = tx.ListCandidateAuthorizations(
+			p.ctx, fakePublicationRepo, p.replay.HeadSHA,
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	revoked := map[domain.Digest]bool{
+		productionDigest([]byte("unrelated recipe")): true,
+	}
+	p.reopenStoreWithApprovedRecipes(t, revoked)
+	p.workflow = p.newEngineWithApprovedRecipes(t, productionCrashSeams{}, true, revoked)
+	held, err := p.reconcileLanes()
+	if err != nil || held.PublicationTasksCompleted != 0 || held.BlockedItemsCreated != 1 ||
+		held.ReadyItemsCreated != 0 {
+		t.Fatalf("checkpointed reevaluation recipe hold = %#v, %v", held, err)
+	}
+	hold, err := p.attention.GetAttentionItem(
+		p.ctx, signet.ReevaluatedBlockedItemID(p.runID, commandID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hold.Item.Status != domain.StatusOpen ||
+		!strings.Contains(hold.Item.Reason, "Restore that approval to recover") ||
+		!slices.Equal(hold.Item.RequestedDecision, []domain.Action{domain.ActionInspectTrustFailure}) {
+		t.Fatalf("checkpointed reevaluation hold = %#v", hold.Item)
+	}
+	if conclusion := authenticatedProductionConclusion(t, p); conclusion.Final ||
+		conclusion.Outcome != domain.RunOutcomePending {
+		t.Fatalf("held reevaluation conclusion = %#v, want live pending", conclusion)
+	}
+
+	p.reopenStoreWithApprovedRecipes(t, map[domain.Digest]bool{p.recipeD: true})
+	readyInterrupted := false
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterReady: func() error {
+			if !readyInterrupted {
+				readyInterrupted = true
+				return errors.New("stop after reevaluation ready")
+			}
+			return nil
+		},
+	}, true)
+	for range 4 {
+		_, err = p.reconcileLanes()
+		if err != nil {
+			break
+		}
+	}
+	if err == nil || !readyInterrupted {
+		t.Fatalf("reevaluation ready seam did not interrupt: %v", err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetOutbox(
+			p.ctx, signet.PublicationReevaluationCompletionKey(commandID))
+		if !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("completion marker before terminal transaction: %w", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if conclusion := authenticatedProductionConclusion(t, p); conclusion.Final ||
+		conclusion.Outcome != domain.RunOutcomePending {
+		t.Fatalf("ready reevaluation without completion marker = %#v, want live pending", conclusion)
+	}
+
+	p.restartDurableState(t)
+	terminalInterrupted := false
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		transitionHook: func(transition engine.DurableTransition, side engine.DurableTransitionSide) error {
+			if !terminalInterrupted && transition == engine.DurableTransitionTerminalCompletion &&
+				side == engine.DurableTransitionAfter {
+				terminalInterrupted = true
+				return errors.New("stop after reevaluation terminal transaction")
+			}
+			return nil
+		},
+	}, true)
+	for range 4 {
+		_, err = p.reconcileLanes()
+		if err != nil {
+			break
+		}
+	}
+	if err == nil || !terminalInterrupted {
+		t.Fatalf("reevaluation terminal seam did not interrupt: %v", err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		marker, err := tx.GetOutbox(
+			p.ctx, signet.PublicationReevaluationCompletionKey(commandID))
+		if err != nil {
+			return err
+		}
+		completion, err := signet.DecodePublicationReevaluationCompletion(marker.Payload)
+		if err != nil {
+			return err
+		}
+		if marker.Kind != signet.PublicationReevaluationCompletedKind || !marker.Dispatched() ||
+			completion.Outcome != signet.PublicationReevaluationPublished {
+			t.Fatalf("completion marker = %+v, payload = %+v", marker, completion)
+		}
+		_, err = tx.GetInbox(p.ctx, string(completion.TerminalInvocationID))
+		return err
+	}); err != nil {
+		t.Fatalf("terminal outcome and completion marker did not commit atomically: %v", err)
+	}
+	p.restartDurableState(t)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	var completed engine.ReconcileResult
+	for range 4 {
+		completed, err = p.reconcileLanes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if completed.PublicationTasksCompleted == 1 {
+			break
+		}
+	}
+	if completed.PublicationTasksCompleted != 1 || completed.ReadyItemsCreated != 1 {
+		t.Fatalf("reevaluation completion = %#v", completed)
+	}
+	if p.room.runs != verificationRuns+1 {
+		t.Fatalf("restart reran clean-room verification: runs = %d, want %d",
+			p.room.runs, verificationRuns+1)
+	}
+	var authorizationsAfterRecovery []domain.CandidateAuthorization
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		authorizationsAfterRecovery, err = tx.ListCandidateAuthorizations(
+			p.ctx, fakePublicationRepo, p.replay.HeadSHA,
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(authorizationsAfterRecovery, authorizationsAtCheckpoint) {
+		t.Fatalf("reevaluation hold duplicated authorization:\n got: %#v\nwant: %#v",
+			authorizationsAfterRecovery, authorizationsAtCheckpoint)
+	}
+	if refs, prs := p.forge.counts(); refs != 1 || prs != 1 {
+		t.Fatalf("reevaluation forge effects = %d/%d, want 1/1", refs, prs)
+	}
+
+	resolvedOriginal, err := p.attention.GetAttentionItem(p.ctx, originalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolvedOriginal.Item.Status != domain.StatusResolved || resolvedOriginal.Item.DecidedAt == nil {
+		t.Fatalf("original block = %#v, want resolved", resolvedOriginal.Item)
+	}
+	if _, err := p.attention.GetAttentionItem(p.ctx, domain.ProductionReadyItemID(p.runID)); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := p.attention.ListRuns(p.ctx)
+	if err != nil {
+		t.Fatalf("ready-after-blocked projection: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Run.ID != p.runID ||
+		runs[0].Run.Outcome != domain.RunOutcomePublished {
+		t.Fatalf("ready-after-blocked runs = %#v, want one published run", runs)
+	}
+	if conclusion := authenticatedProductionConclusion(t, p); !conclusion.Final ||
+		conclusion.Outcome != domain.RunOutcomePublished {
+		t.Fatalf("completed reevaluation conclusion = %#v, want published", conclusion)
+	}
+	if state := productionSupervisionState(t, p); state != observe.SupervisionPublished {
+		t.Fatalf("ready-after-blocked supervision = %q, want published", state)
+	}
+	var followOut, followErr bytes.Buffer
+	if err := observe.Run(p.ctx, []string{
+		"-db", p.dbPath, "-run", string(p.runID), "-once",
+	}, &followOut, &followErr); err != nil {
+		t.Fatalf("follow ready-after-blocked: %v (stderr: %s)", err, followErr.String())
+	}
+	if !strings.Contains(followOut.String(), "outcome  published") ||
+		strings.Contains(followOut.String(), "outcome  blocked") {
+		t.Fatalf("ready-after-blocked follow = %q, want published", followOut.String())
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		originalEntry, err := tx.GetInbox(p.ctx, originalCheckpointKey)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(originalEntry.Payload, originalCheckpoint) {
+			t.Fatal("original verification checkpoint changed during reevaluation")
+		}
+		freshKey := originalCheckpointKey + "/reevaluation/" + commandID
+		if _, err := tx.GetInbox(p.ctx, freshKey); err != nil {
+			return err
+		}
+		intent, err := tx.GetOutbox(p.ctx, intentKey)
+		if err != nil {
+			return err
+		}
+		if !intent.Dispatched() {
+			t.Fatalf("reevaluation intent status = %q, want dispatched", intent.Status)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionPublicationReevaluationPinsAcceptedProfileAcrossRestart(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.room.fail = true
+	p.startAndRecordExport(t)
+	initial, err := p.reconcileLanes()
+	if err != nil || initial.PublicationTasksCompleted != 1 || initial.BlockedItemsCreated != 1 {
+		t.Fatalf("initial block = %#v, %v", initial, err)
+	}
+	blocked, err := p.attention.GetAttentionItem(p.ctx, domain.ProductionBlockedItemID(p.runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptedProfile := repairPublicationTrustProfile(t, p)
+	commandID := "rerun-pinned-profile"
+	submitPublicationRerun(t, p, blocked, commandID)
+	p.room.fail = false
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterVerification: func() error { return errors.New("stop after pinned checkpoint") },
+	}, true)
+	if result, err := p.reconcileLanes(); err == nil {
+		t.Fatalf("checkpoint seam did not interrupt reevaluation: %#v", result)
+	}
+
+	laterProfile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: acceptedProfile.Repo, RepositoryID: acceptedProfile.RepositoryID,
+		PRExecution:                acceptedProfile.PRExecution,
+		CandidateAutomationChanges: acceptedProfile.CandidateAutomationChanges,
+		PRGitHubTokenPermissions:   acceptedProfile.PRGitHubTokenPermissions,
+		AllowOIDC:                  acceptedProfile.AllowOIDC,
+		AllowEnvironmentSecrets:    !acceptedProfile.AllowEnvironmentSecrets,
+		AllowSecretBearingPRJobs:   acceptedProfile.AllowSecretBearingPRJobs,
+		AllowSelfHostedCI:          acceptedProfile.AllowSelfHostedCI,
+		AllowPullRequestTarget:     acceptedProfile.AllowPullRequestTarget,
+		AllowReusableWorkflows:     acceptedProfile.AllowReusableWorkflows,
+		AllowPackagePublishing:     acceptedProfile.AllowPackagePublishing,
+		AllowArtifactConsumers:     acceptedProfile.AllowArtifactConsumers,
+		CommitPlan:                 acceptedProfile.CommitPlan,
+		MessageRuleset:             acceptedProfile.MessageRuleset,
+		WorkflowAuditDigest:        acceptedProfile.WorkflowAuditDigest,
+		Review:                     acceptedProfile.Review,
+		ProtectedPaths:             acceptedProfile.ProtectedPaths,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(p.ctx, laterProfile, p.now.Add(2*time.Hour))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p.restartDurableState(t)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	recovered, err := p.reconcileLanes()
+	if err != nil || recovered.PublicationTasksCompleted != 1 || recovered.BlockedItemsCreated != 1 {
+		t.Fatalf("pinned-profile recovery = %#v, %v", recovered, err)
+	}
+	item, err := p.attention.GetAttentionItem(
+		p.ctx, signet.ReevaluatedBlockedItemID(p.runID, commandID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Item.Status != domain.StatusOpen || item.Item.Reason != domain.PublicationBlockTrust {
+		t.Fatalf("profile-drift block = %#v", item.Item)
+	}
+	// The rerun blocked for a different cause than the original attempt: its
+	// milestone carries its own identity so the history keeps both blocks and
+	// the authenticated conclusion reports the current one.
+	var observation domain.RunObservation
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		observation, err = tx.ObserveRun(p.ctx, p.runID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var blocks []domain.RunMilestone
+	for _, milestone := range observation.Milestones {
+		if milestone.Kind == domain.MilestonePublicationBlocked {
+			blocks = append(blocks, milestone)
+		}
+	}
+	reevaluated := signet.PublicationReevaluationBlockedMilestoneInvocationID(p.runID, commandID)
+	if len(blocks) != 2 ||
+		*blocks[0].Reason != domain.HoldVerificationFindings ||
+		*blocks[1].InvocationID != reevaluated ||
+		*blocks[1].Reason != domain.HoldTrustBlocked {
+		t.Fatalf("reevaluation block milestones = %#v", blocks)
+	}
+	if conclusion := authenticatedProductionConclusion(t, p); !conclusion.Final ||
+		conclusion.Outcome != domain.RunOutcomeBlocked ||
+		conclusion.Reason == nil || *conclusion.Reason != domain.HoldTrustBlocked {
+		t.Fatalf("reevaluation block conclusion = %#v", conclusion)
+	}
+}
+
+func TestProductionPublicationReevaluationCanBlockAgainAndStop(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.room.fail = true
+	p.startAndRecordExport(t)
+	initial, err := p.reconcileLanes()
+	if err != nil || initial.PublicationTasksCompleted != 1 || initial.BlockedItemsCreated != 1 {
+		t.Fatalf("initial block = %#v, %v", initial, err)
+	}
+	original, err := p.attention.GetAttentionItem(p.ctx, domain.ProductionBlockedItemID(p.runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandID := "rerun-production-blocked-again"
+	repairPublicationTrustProfile(t, p)
+	submitPublicationRerun(t, p, original, commandID)
+	p.restartDurableState(t)
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterBlocked: func() error { return errors.New("stop after reevaluated block") },
+	}, true)
+	if blockedAgain, err := p.reconcileLanes(); err == nil {
+		t.Fatalf("reevaluation block seam did not interrupt reconciliation: %#v", blockedAgain)
+	}
+	itemID := signet.ReevaluatedBlockedItemID(p.runID, commandID)
+	created, err := p.attention.GetAttentionItem(p.ctx, itemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantActions := []domain.Action{
+		domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+	}
+	if created.Item.Status != domain.StatusOpen || !slices.Equal(created.Item.RequestedDecision, wantActions) {
+		t.Fatalf("reevaluated block = %#v", created.Item)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetOutbox(
+			p.ctx, signet.PublicationReevaluationCompletionKey(commandID))
+		if !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("completion marker before blocked terminal transaction: %w", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if conclusion := authenticatedProductionConclusion(t, p); conclusion.Final ||
+		conclusion.Outcome != domain.RunOutcomePending {
+		t.Fatalf("blocked reevaluation without completion marker = %#v, want live pending", conclusion)
+	}
+
+	p.restartDurableState(t)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	recovered, err := p.reconcileLanes()
+	if err != nil || recovered.PublicationTasksCompleted != 1 || recovered.BlockedItemsCreated != 1 {
+		t.Fatalf("reevaluation block recovery = %#v, %v", recovered, err)
+	}
+	second, err := p.attention.GetAttentionItem(p.ctx, itemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.EntityVersion != created.EntityVersion || !reflect.DeepEqual(second.Item, created.Item) {
+		t.Fatalf("reevaluation block changed across recovery: before=%#v after=%#v", created, second)
+	}
+	items, err := p.attention.ListAttentionItems(p.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedItems := 0
+	for _, item := range items {
+		if item.Item.Type == domain.AttentionPublishBlocked && item.Item.Subject.RunID != nil &&
+			*item.Item.Subject.RunID == p.runID {
+			blockedItems++
+		}
+	}
+	if blockedItems != 2 {
+		t.Fatalf("publication blocked items = %d, want original and one reevaluated item", blockedItems)
+	}
+
+	deviceID := domain.DeviceID("device-stop-reevaluated-block")
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutDevice(p.ctx, domain.Device{
+			ID: deviceID, DisplayName: "Stop reevaluated block device",
+			Status: domain.DeviceActive, PairedAt: p.now,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.attention.Submit(p.ctx, signet.ClientCommand{
+		CommandID: "stop-reevaluated-block", DeviceID: deviceID,
+		ExpectedEntityVersion: second.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: second.Item.ID, ItemVersion: second.Item.ItemVersion,
+			PRHeadSHA: second.Item.PRHeadSHA, ArtifactDigests: second.Item.ArtifactDigests,
+			Action: domain.ActionStop,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.restartDurableState(t)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if replay, err := p.reconcileLanes(); err != nil || replay != (engine.ReconcileResult{}) {
+		t.Fatalf("stopped reevaluation replay = %#v, %v", replay, err)
+	}
+	stopped, err := p.attention.GetAttentionItem(p.ctx, itemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped.Item.Status != domain.StatusResolved || stopped.Item.DecidedAt == nil {
+		t.Fatalf("stopped reevaluation item = %#v", stopped.Item)
+	}
+	if _, err := p.attention.ListRuns(p.ctx); err != nil {
+		t.Fatalf("stopped reevaluation projection: %v", err)
+	}
+}
+
+func submitPublicationRerun(
+	t *testing.T, p *productionPublicationHarness,
+	blocked signet.AttentionItemSnapshot, commandID string,
+) {
+	t.Helper()
+	deviceID := domain.DeviceID("device-" + commandID)
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutDevice(p.ctx, domain.Device{
+			ID: deviceID, DisplayName: "Publication reevaluation device",
+			Status: domain.DeviceActive, PairedAt: p.now,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	command := signet.ClientCommand{
+		CommandID: commandID, DeviceID: deviceID,
+		ExpectedEntityVersion: blocked.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: blocked.Item.ID, ItemVersion: blocked.Item.ItemVersion,
+			PRHeadSHA: blocked.Item.PRHeadSHA, ArtifactDigests: blocked.Item.ArtifactDigests,
+			Action: domain.ActionRerunTrustEvaluation,
+		},
+	}
+	accepted, err := p.attention.Submit(p.ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeReplay, err := p.store.ServerState(p.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := p.attention.Submit(p.ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterReplay, err := p.store.ServerState(p.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.Revision != accepted.Revision || afterReplay != beforeReplay {
+		t.Fatalf("reevaluation replay = revision %d state %#v, want revision %d state %#v",
+			replayed.Revision, afterReplay, accepted.Revision, beforeReplay)
 	}
 }
 
@@ -5075,7 +5946,9 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		wantActions := []domain.Action{domain.ActionInspectTrustFailure, domain.ActionStop}
+		wantActions := []domain.Action{
+			domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+		}
 		if !slices.Equal(blocked.Item.RequestedDecision, wantActions) {
 			t.Fatalf("blocked actions = %v, want %v", blocked.Item.RequestedDecision, wantActions)
 		}
@@ -5120,57 +5993,130 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 			t.Fatalf("unverified candidate caused effects: %d/%d", refs, prs)
 		}
 	})
-	for _, tc := range []struct {
-		name            string
-		checkpointFirst bool
-	}{{"revoked project-image recipe", false}, {"recipe revoked after checkpoint", true}} {
-		t.Run(tc.name, func(t *testing.T) {
-			p := newProductionPublicationHarness(t, "")
-			p.startAndRecordExport(t)
-			if tc.checkpointFirst {
-				p.workflow = p.newEngine(t, productionCrashSeams{
-					afterVerification: func() error { return errors.New("stop after checkpoint") },
-				}, true)
-				if _, err := p.reconcileLanes(); err == nil {
-					t.Fatal("verification seam did not stop after checkpoint")
-				}
-			}
-			verificationRuns := p.room.runs
-			p.workflow = p.newEngineWithApprovedRecipes(
-				t, productionCrashSeams{}, true,
-				map[domain.Digest]bool{productionDigest([]byte("unrelated recipe")): true},
+	t.Run("revoked project-image recipe", func(t *testing.T) {
+		p := newProductionPublicationHarness(t, "")
+		p.startAndRecordExport(t)
+		verificationRuns := p.room.runs
+		p.workflow = p.newEngineWithApprovedRecipes(
+			t, productionCrashSeams{}, true,
+			map[domain.Digest]bool{productionDigest([]byte("unrelated recipe")): true},
+		)
+		result, err := p.reconcileLanes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.ResultsAccepted != 1 || result.BlockedItemsCreated != 1 ||
+			result.ReadyItemsCreated != 0 {
+			t.Fatalf("revoked-recipe result = %#v", result)
+		}
+		blocked, err := p.attention.GetAttentionItem(
+			p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(blocked.Item.Reason, "no longer approves") {
+			t.Fatalf("revoked-recipe reason = %q", blocked.Item.Reason)
+		}
+		if len(blocked.Item.EvidenceSnapshot) != 0 {
+			t.Fatalf("revoked-recipe evidence = %#v, want none", blocked.Item.EvidenceSnapshot)
+		}
+		if p.room.runs != verificationRuns {
+			t.Fatalf("revoked recipe ran %d additional verification commands", p.room.runs-verificationRuns)
+		}
+		if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+			t.Fatalf("revoked recipe caused effects: %d/%d", refs, prs)
+		}
+		if replay, err := p.reconcileLanes(); err != nil || replay != (engine.ReconcileResult{}) {
+			t.Fatalf("revoked-recipe replay = %#v, %v", replay, err)
+		}
+	})
+	t.Run("recipe revoked after checkpoint holds and resumes", func(t *testing.T) {
+		p := newProductionPublicationHarness(t, "")
+		p.startAndRecordExport(t)
+		p.workflow = p.newEngine(t, productionCrashSeams{
+			afterVerification: func() error { return errors.New("stop after checkpoint") },
+		}, true)
+		if _, err := p.reconcileLanes(); err == nil {
+			t.Fatal("verification seam did not stop after checkpoint")
+		}
+		verificationRuns := p.room.runs
+		var authorizationsBefore []domain.CandidateAuthorization
+		if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+			var err error
+			authorizationsBefore, err = tx.ListCandidateAuthorizations(
+				p.ctx, fakePublicationRepo, p.replay.HeadSHA,
 			)
-			result, err := p.reconcileLanes()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if result.ResultsAccepted != 1 || result.BlockedItemsCreated != 1 ||
-				result.ReadyItemsCreated != 0 {
-				t.Fatalf("revoked-recipe result = %#v", result)
-			}
-			blocked, err := p.attention.GetAttentionItem(
-				p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if len(authorizationsBefore) != 1 {
+			t.Fatalf("checkpoint authorizations = %d, want 1", len(authorizationsBefore))
+		}
+
+		revoked := map[domain.Digest]bool{
+			productionDigest([]byte("unrelated recipe")): true,
+		}
+		p.reopenStoreWithApprovedRecipes(t, revoked)
+		p.workflow = p.newEngineWithApprovedRecipes(
+			t, productionCrashSeams{}, true, revoked,
+		)
+		result, err := p.reconcileLanes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.PublicationTasksCompleted != 0 || result.BlockedItemsCreated != 1 ||
+			result.ReadyItemsCreated != 0 {
+			t.Fatalf("checkpointed revoked-recipe hold = %#v", result)
+		}
+		hold, err := p.attention.GetAttentionItem(
+			p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(hold.Item.Reason, "Restore that approval to recover") ||
+			len(hold.Item.EvidenceSnapshot) != 0 ||
+			!slices.Equal(hold.Item.RequestedDecision, []domain.Action{domain.ActionInspectTrustFailure}) {
+			t.Fatalf("checkpointed revoked-recipe hold = %#v", hold.Item)
+		}
+		if p.room.runs != verificationRuns {
+			t.Fatalf("revoked recipe reran verification: got %d, want %d", p.room.runs, verificationRuns)
+		}
+
+		p.reopenStoreWithApprovedRecipes(t, map[domain.Digest]bool{p.recipeD: true})
+		p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+		result, err = p.reconcileLanes()
+		if err != nil || result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
+			t.Fatalf("restore recipe after checkpointed hold = %#v, %v", result, err)
+		}
+		p.assertReady(t)
+		if p.room.runs != verificationRuns {
+			t.Fatalf("recipe restoration reran verification: got %d, want %d", p.room.runs, verificationRuns)
+		}
+		var authorizationsAfter []domain.CandidateAuthorization
+		if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+			var err error
+			authorizationsAfter, err = tx.ListCandidateAuthorizations(
+				p.ctx, fakePublicationRepo, p.replay.HeadSHA,
 			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !strings.Contains(blocked.Item.Reason, "no longer approves") {
-				t.Fatalf("revoked-recipe reason = %q", blocked.Item.Reason)
-			}
-			if len(blocked.Item.EvidenceSnapshot) != 0 {
-				t.Fatalf("revoked-recipe evidence = %#v, want none", blocked.Item.EvidenceSnapshot)
-			}
-			if p.room.runs != verificationRuns {
-				t.Fatalf("revoked recipe ran %d additional verification commands", p.room.runs-verificationRuns)
-			}
-			if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
-				t.Fatalf("revoked recipe caused effects: %d/%d", refs, prs)
-			}
-			if replay, err := p.reconcileLanes(); err != nil || replay != (engine.ReconcileResult{}) {
-				t.Fatalf("revoked-recipe replay = %#v, %v", replay, err)
-			}
-		})
-	}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(authorizationsAfter, authorizationsBefore) {
+			t.Fatalf("authorizations changed after hold recovery:\n got: %#v\nwant: %#v",
+				authorizationsAfter, authorizationsBefore)
+		}
+		hold, err = p.attention.GetAttentionItem(p.ctx, hold.Item.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hold.Item.Status != domain.StatusSuperseded {
+			t.Fatalf("recovered hold status = %q, want superseded", hold.Item.Status)
+		}
+	})
 	t.Run("target base advanced before publication", func(t *testing.T) {
 		p := newProductionPublicationHarness(t, "")
 		p.audit.AuditedCommitSHA = strings.Repeat("9", 40)

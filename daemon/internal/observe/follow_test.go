@@ -107,6 +107,21 @@ type scriptedObserver struct {
 	runID domain.RunID
 }
 
+type authenticatedScriptedObserver struct {
+	*scriptedObserver
+	conclusion Conclusion
+}
+
+func (o *authenticatedScriptedObserver) ObserveConclusion(
+	ctx context.Context, runID domain.RunID,
+) (domain.RunObservation, domain.RunConclusion, error) {
+	observation, err := o.ObserveRun(ctx, runID)
+	if err != nil {
+		return domain.RunObservation{}, domain.RunConclusion{}, err
+	}
+	return observation, o.conclusion, nil
+}
+
 func (o *scriptedObserver) ObserveRun(
 	_ context.Context, runID domain.RunID,
 ) (domain.RunObservation, error) {
@@ -160,6 +175,29 @@ func runFollow(
 	var out bytes.Buffer
 	err := Follow(ctx, observer, &out, cfg)
 	return followResult{output: out.String(), err: err}
+}
+
+func TestFollowUsesAuthenticatedConclusion(t *testing.T) {
+	verification := domain.HoldVerificationFindings
+	observation := snapshot(t, []domain.RunMilestone{
+		blockedMilestone(10, verification),
+		ownedInvocationMilestone(domain.MilestonePublicationReady, 20, fixturePublicationInvocation),
+	}, nil)
+	observer := &authenticatedScriptedObserver{
+		scriptedObserver: &scriptedObserver{t: t, snapshots: []domain.RunObservation{observation}},
+		conclusion:       Conclusion{Outcome: OutcomePublished, Final: true},
+	}
+	var out bytes.Buffer
+	err := Follow(context.Background(), observer, &out, Config{
+		RunID: fixtureRun, Once: true, Now: func() time.Time { return at(30) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "outcome  published") ||
+		strings.Contains(out.String(), "outcome  blocked") {
+		t.Fatalf("authenticated follow output = %q, want published", out.String())
+	}
 }
 
 func assertOutput(t *testing.T, got, want string) {

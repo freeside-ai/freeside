@@ -110,7 +110,10 @@ func ReattemptProductionRun(
 		if err != nil {
 			return err
 		}
-		conclusion := domain.ConcludeRun(observation)
+		conclusion, err := AuthenticatedProductionRunConclusion(ctx, &tx.ReadTx, parentRun, observation)
+		if err != nil {
+			return err
+		}
 		if !conclusion.Final {
 			return fmt.Errorf("parent run %q is %s; use resume while it is live",
 				parentRun.ID, conclusion.Outcome)

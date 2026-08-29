@@ -1406,6 +1406,8 @@ func TestBackupPayloadExtractorsIncludeAgentWorkflowMarkers(t *testing.T) {
 		engine.KindElaborationInvocationRequested,
 		engine.KindElaborationImplementationClaim,
 		engine.KindRemediationInvocationRequested,
+		signet.PublicationReevaluationRequestedKind,
+		signet.PublicationReevaluationCompletedKind,
 	} {
 		if extractors[kind] == nil {
 			t.Errorf("backup payload extractor %q is not registered", kind)

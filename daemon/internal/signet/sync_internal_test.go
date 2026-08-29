@@ -58,9 +58,15 @@ func TestNormalizeAttentionItemCarriesYieldHistoryWithoutMutation(t *testing.T) 
 }
 
 func TestPublicationAuthorityExclusivityRejectsReadyAndBlocked(t *testing.T) {
-	err := validatePublicationAuthorityExclusivity("run-1", true, true)
+	err := validatePublicationAuthorityExclusivity("run-1", true, true, false, true)
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("validatePublicationAuthorityExclusivity() = %v, want ErrParentKeyMismatch", err)
+	}
+	if err := validatePublicationAuthorityExclusivity("run-1", true, true, true, true); err != nil {
+		t.Fatalf("resolved rerun authority = %v, want nil", err)
+	}
+	if err := validatePublicationAuthorityExclusivity("run-1", true, true, true, false); err == nil {
+		t.Fatal("ready before the last publication block passed authentication")
 	}
 }
 

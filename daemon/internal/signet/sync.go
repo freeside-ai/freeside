@@ -576,7 +576,13 @@ func (s *Service) GetRun(ctx context.Context, id domain.RunID) (RunSnapshot, err
 			return asRunObservationIntegrityError(err)
 		}
 		observation = withAuthoritativeInvocationStatuses(observation)
-		out = runSnapshot(value.Value, value.Snapshot, observation, state.Revision)
+		conclusion, err := AuthenticatedRunConclusion(
+			ctx, tx, value.Value, observation, publicationReadyMilestone(observation),
+		)
+		if err != nil {
+			return asRunObservationIntegrityError(err)
+		}
+		out = runSnapshot(value.Value, value.Snapshot, observation, conclusion, state.Revision)
 		return nil
 	})
 	if err != nil {
@@ -699,6 +705,7 @@ func runSnapshot(
 	run domain.Run,
 	snapshot store.Snapshot,
 	observation domain.RunObservation,
+	conclusion domain.RunConclusion,
 	asOfRevision int64,
 ) RunSnapshot {
 	normalized := normalizeRun(run)
@@ -706,7 +713,7 @@ func runSnapshot(
 		ID: normalized.ID, ProjectID: normalized.ProjectID,
 		SpecDigest: normalized.SpecDigest, PolicyDigest: normalized.PolicyDigest,
 		Stages:  normalized.Stages,
-		Outcome: domain.ConcludeRun(observation).Outcome,
+		Outcome: conclusion.Outcome,
 	}
 	if normalized.CampaignID != "" {
 		campaignID := normalized.CampaignID
@@ -773,7 +780,22 @@ func projectRunSnapshot(
 		return RunSnapshot{}, fmt.Errorf("run %q timeline: %w", run.ID, asRunObservationIntegrityError(err))
 	}
 	observation = withAuthoritativeInvocationStatuses(observation)
-	return runSnapshot(run, snapshot, observation, state.Revision), nil
+	conclusion, err := AuthenticatedRunConclusion(
+		ctx, tx, run, observation, publicationReadyMilestone(observation),
+	)
+	if err != nil {
+		return RunSnapshot{}, fmt.Errorf("run %q conclusion: %w", run.ID, asRunObservationIntegrityError(err))
+	}
+	return runSnapshot(run, snapshot, observation, conclusion, state.Revision), nil
+}
+
+func publicationReadyMilestone(observation domain.RunObservation) bool {
+	for _, milestone := range observation.Milestones {
+		if milestone.Kind == domain.MilestonePublicationReady {
+			return true
+		}
+	}
+	return false
 }
 
 // asRunObservationIntegrityError tags a semantic projection contradiction with
@@ -839,8 +861,13 @@ func authenticateRunObservation(
 	}
 	var readyBinding *domain.ReadyItemPRBinding
 	blockedReasons := make(map[domain.RunHoldReason]bool)
+	reevaluationCommands := make(map[string]bool)
+	allDefinitiveBlocksRerun := true
+	openDefinitiveBlocks := 0
 	readyMilestone := false
 	blockedMilestone := false
+	lastReadyMilestone := -1
+	lastBlockedMilestone := -1
 	for _, snapshot := range items {
 		if err := validateSnapshot(state, snapshot.Snapshot); err != nil {
 			return fmt.Errorf("attention item %q authority: %w", snapshot.Value.ID, err)
@@ -866,10 +893,39 @@ func authenticateRunObservation(
 			}
 		case domain.AttentionPublishBlocked:
 			reason, definitive := domain.DefinitivePublicationBlockReason(item.Reason)
-			if item.ID == domain.ProductionBlockedItemID(run.ID) &&
-				definitive && slices.Equal(item.RequestedDecision,
-				[]domain.Action{domain.ActionInspectTrustFailure, domain.ActionStop}) {
+			if !definitive {
+				continue
+			}
+			identityValid := item.ID == domain.ProductionBlockedItemID(run.ID)
+			if !identityValid {
+				var err error
+				identityValid, err = AuthenticateReevaluatedBlockedItemIdentity(
+					ctx, tx, item.ID, run.ID, run.ProjectID,
+				)
+				if err != nil {
+					return err
+				}
+			}
+			legacyActions := []domain.Action{domain.ActionInspectTrustFailure, domain.ActionStop}
+			rerunnableActions := []domain.Action{
+				domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+			}
+			if identityValid && (slices.Equal(item.RequestedDecision, legacyActions) ||
+				slices.Equal(item.RequestedDecision, rerunnableActions)) {
 				blockedReasons[reason] = true
+				if _, commandID, ok := ReevaluatedBlockedItemCoordinates(item.ID); ok {
+					reevaluationCommands[commandID] = true
+				}
+				if item.Status == domain.StatusOpen {
+					openDefinitiveBlocks++
+					allDefinitiveBlocksRerun = false
+				} else {
+					rerun, err := definitiveBlockResolvedByRerun(ctx, tx, item)
+					if err != nil {
+						return err
+					}
+					allDefinitiveBlocksRerun = allDefinitiveBlocksRerun && rerun
+				}
 			}
 		case domain.AttentionSpecApproval, domain.AttentionExecutionFailure,
 			domain.AttentionAgentQuestion, domain.AttentionReviewDiminishing,
@@ -904,7 +960,7 @@ func authenticateRunObservation(
 			}
 		}
 	}
-	for _, milestone := range observation.Milestones {
+	for index, milestone := range observation.Milestones {
 		invocation := *milestone.InvocationID
 		publicationInvocation := productionPublicationInvocationID(run.ID)
 		switch milestone.Kind {
@@ -978,6 +1034,7 @@ func authenticateRunObservation(
 			}
 		case domain.MilestonePublicationReady:
 			readyMilestone = true
+			lastReadyMilestone = index
 			if err := authenticatePublicationInvocation(
 				run.ID, invocation, publicationInvocation, attempts,
 			); err != nil {
@@ -989,8 +1046,9 @@ func authenticateRunObservation(
 			}
 		case domain.MilestonePublicationBlocked:
 			blockedMilestone = true
-			if err := authenticatePublicationInvocation(
-				run.ID, invocation, publicationInvocation, attempts,
+			lastBlockedMilestone = index
+			if err := authenticateBlockedMilestoneInvocation(
+				run.ID, invocation, publicationInvocation, attempts, reevaluationCommands,
 			); err != nil {
 				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
 			}
@@ -1000,7 +1058,14 @@ func authenticateRunObservation(
 			}
 		}
 	}
-	if err := validatePublicationAuthorityExclusivity(run.ID, readyMilestone, blockedMilestone); err != nil {
+	if openDefinitiveBlocks > 1 {
+		return fmt.Errorf("run %q has %d open definitive publication blocks: %w",
+			run.ID, openDefinitiveBlocks, domain.ErrParentKeyMismatch)
+	}
+	if err := validatePublicationAuthorityExclusivity(
+		run.ID, readyMilestone, blockedMilestone, allDefinitiveBlocksRerun,
+		lastReadyMilestone > lastBlockedMilestone,
+	); err != nil {
 		return err
 	}
 	return nil
@@ -1074,12 +1139,106 @@ func authenticateRunSubmission(
 		invocation, run.ID, domain.ErrParentKeyMismatch)
 }
 
-func validatePublicationAuthorityExclusivity(runID domain.RunID, ready, blocked bool) error {
-	if ready && blocked {
+func validatePublicationAuthorityExclusivity(
+	runID domain.RunID, ready, blocked, everyBlockResolvedByRerun, readyAfterLastBlock bool,
+) error {
+	if ready && blocked && (!everyBlockResolvedByRerun || !readyAfterLastBlock) {
 		return fmt.Errorf("run %q has both ready and blocked publication authority: %w",
 			runID, domain.ErrParentKeyMismatch)
 	}
 	return nil
+}
+
+// AuthenticateReevaluatedBlockedItemIdentity proves that itemID names the
+// successor of an accepted production reevaluation command. Each prior
+// reevaluation carrier is authenticated recursively back to the original
+// production blocked-item identity.
+func AuthenticateReevaluatedBlockedItemIdentity(
+	ctx context.Context, tx *store.ReadTx, itemID domain.ItemID,
+	runID domain.RunID, projectID domain.ProjectID,
+) (bool, error) {
+	return authenticateReevaluatedBlockedItemIdentity(
+		ctx, tx, itemID, runID, projectID, make(map[string]bool),
+	)
+}
+
+func authenticateReevaluatedBlockedItemIdentity(
+	ctx context.Context, tx *store.ReadTx, itemID domain.ItemID,
+	runID domain.RunID, projectID domain.ProjectID, visited map[string]bool,
+) (bool, error) {
+	itemRunID, commandID, ok := ReevaluatedBlockedItemCoordinates(itemID)
+	if !ok || itemRunID != runID {
+		return false, nil
+	}
+	if visited[commandID] {
+		return false, domain.ErrParentKeyMismatch
+	}
+	visited[commandID] = true
+	command, err := tx.GetCommand(ctx, commandID)
+	if err != nil {
+		return false, err
+	}
+	carrier, err := tx.GetAttentionItem(ctx, command.ItemID)
+	if err != nil {
+		return false, err
+	}
+	if command.Action != domain.ActionRerunTrustEvaluation || carrier.Subject.RunID == nil ||
+		*carrier.Subject.RunID != runID || carrier.Subject.Type != domain.SubjectRun ||
+		carrier.Subject.ID != domain.SubjectID(runID) || carrier.ProjectID != projectID ||
+		carrier.Type != domain.AttentionPublishBlocked ||
+		carrier.Status != domain.StatusResolved || carrier.DecidedAt == nil ||
+		command.ItemVersion+1 != carrier.ItemVersion || command.PRHeadSHA != carrier.PRHeadSHA ||
+		!slices.Equal(command.ArtifactDigests, carrier.ArtifactDigests) ||
+		!slices.Equal(carrier.RequestedDecision, []domain.Action{
+			domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+		}) {
+		return false, domain.ErrParentKeyMismatch
+	}
+	if _, definitive := domain.DefinitivePublicationBlockReason(carrier.Reason); !definitive {
+		return false, domain.ErrParentKeyMismatch
+	}
+	if carrier.ID == domain.ProductionBlockedItemID(runID) {
+		return true, nil
+	}
+	return authenticateReevaluatedBlockedItemIdentity(
+		ctx, tx, carrier.ID, runID, projectID, visited,
+	)
+}
+
+func definitiveBlockResolvedByRerun(
+	ctx context.Context, tx *store.ReadTx, item domain.AttentionItem,
+) (bool, error) {
+	_, found, err := definitiveBlockRerunCommand(ctx, tx, item)
+	return found, err
+}
+
+func definitiveBlockRerunCommand(
+	ctx context.Context, tx *store.ReadTx, item domain.AttentionItem,
+) (domain.Command, bool, error) {
+	if item.Status != domain.StatusResolved || item.DecidedAt == nil || item.ItemVersion < 2 {
+		return domain.Command{}, false, nil
+	}
+	commands, err := tx.ListCommandsForItem(ctx, item.ID)
+	if err != nil {
+		return domain.Command{}, false, err
+	}
+	var found *domain.Command
+	for _, command := range commands {
+		if command.Action != domain.ActionRerunTrustEvaluation ||
+			command.ItemVersion+1 != item.ItemVersion || command.PRHeadSHA != item.PRHeadSHA ||
+			!slices.Equal(command.ArtifactDigests, item.ArtifactDigests) {
+			continue
+		}
+		if found != nil {
+			return domain.Command{}, false, domain.ErrParentKeyMismatch
+		}
+		command := command
+		found = &command
+	}
+	if found == nil {
+		return domain.Command{}, false, nil
+	}
+	return *found, true, nil
 }
 
 func authenticateConversationInvocationIntent(
@@ -1137,6 +1296,31 @@ func authenticatePublicationInvocation(
 ) error {
 	if invocation != publicationInvocation {
 		return fmt.Errorf("invocation %q is not the publication invocation of run %q: %w",
+			invocation, runID, domain.ErrParentKeyMismatch)
+	}
+	if _, isAttempt := attempts[invocation]; isAttempt {
+		return fmt.Errorf("publication invocation %q is also an attempt of run %q: %w",
+			invocation, runID, domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+// authenticateBlockedMilestoneInvocation accepts the run's publication
+// invocation, or the reevaluation identity of a command whose reevaluated
+// blocked item this pass already authenticated. A reevaluation identity
+// naming any other command fails closed before the reason check.
+func authenticateBlockedMilestoneInvocation(
+	runID domain.RunID,
+	invocation, publicationInvocation domain.InvocationID,
+	attempts map[domain.InvocationID]runAttemptBinding,
+	reevaluationCommands map[string]bool,
+) error {
+	milestoneRunID, commandID, ok := publicationReevaluationBlockedMilestoneCoordinates(invocation)
+	if !ok {
+		return authenticatePublicationInvocation(runID, invocation, publicationInvocation, attempts)
+	}
+	if milestoneRunID != runID || !reevaluationCommands[commandID] {
+		return fmt.Errorf("invocation %q names no authenticated reevaluation of run %q: %w",
 			invocation, runID, domain.ErrParentKeyMismatch)
 	}
 	if _, isAttempt := attempts[invocation]; isAttempt {

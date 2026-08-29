@@ -305,6 +305,60 @@ func TestMarkOutboxDispatchedInvisibleToSync(t *testing.T) {
 	}
 }
 
+func TestRecordDispatchedOutboxIsWriteOnceVisibleAndNeverPending(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	before, err := s.ServerState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte(`{"outcome":"published"}`)
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		entry, inserted, err := tx.RecordDispatchedOutbox(ctx, "completion/cmd-1", "completion", payload)
+		if err != nil {
+			return err
+		}
+		if !inserted || !entry.Dispatched() {
+			t.Fatalf("completion entry = %+v, inserted %t", entry, inserted)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.ServerState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != before.Revision+1 {
+		t.Fatalf("revision = %d, want %d", after.Revision, before.Revision+1)
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		pending, err := tx.ListPendingOutbox(ctx, "completion")
+		if err != nil {
+			return err
+		}
+		if len(pending) != 0 {
+			t.Fatalf("completion entered pending scan: %+v", pending)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		entry, inserted, err := tx.RecordDispatchedOutbox(ctx, "completion/cmd-1", "completion", payload)
+		if err != nil {
+			return err
+		}
+		if inserted || !entry.Dispatched() {
+			t.Fatalf("replay entry = %+v, inserted %t", entry, inserted)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestPromoteOutboxRefinesPendingRowInPlace: a placeholder settles into its
 // final kind and payload without the row ever being absent, so the identity a
 // caller occupied at insert survives the promotion — same id, same created_at,

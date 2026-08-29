@@ -25,6 +25,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 )
@@ -144,6 +145,7 @@ type AdjudicationDispatch struct {
 // admission identities, and authenticated publication-completion identity.
 type Snapshot struct {
 	Observation                   domain.RunObservation             `json:"observation"`
+	AuthenticatedConclusion       domain.RunConclusion              `json:"-"`
 	LastStage                     string                            `json:"-"`
 	ProducingInvocationID         domain.InvocationID               `json:"-"`
 	PublicationInvocationID       domain.InvocationID               `json:"-"`
@@ -193,6 +195,43 @@ func (s *Store) ObserveRun(
 	return observation, nil
 }
 
+// ObserveConclusion reads one observation and its resolution-aware conclusion
+// in the same transaction. It is the bounded read used by follow and resume;
+// unlike the supervision snapshot it does not reconstruct actionable
+// AttentionItems and therefore needs no mutable evidence-policy input.
+func (s *Store) ObserveConclusion(
+	ctx context.Context, runID domain.RunID,
+) (domain.RunObservation, domain.RunConclusion, error) {
+	var observation domain.RunObservation
+	var conclusion domain.RunConclusion
+	if err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		observation, err = tx.ObserveRun(ctx, runID)
+		if err != nil {
+			return err
+		}
+		run, err := tx.GetRun(ctx, runID)
+		if errors.Is(err, store.ErrNotFound) {
+			// Observation-only timelines predate the durable Run entity and
+			// cannot contain publication reevaluation authority. Preserve their
+			// milestone-only conclusion; every current production run takes the
+			// authenticated path below.
+			conclusion = domain.ConcludeRun(observation)
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		_, _, conclusion, err = authenticateRunConclusion(ctx, tx, run, observation)
+		return err
+	}); err != nil {
+		return domain.RunObservation{}, domain.RunConclusion{}, fmt.Errorf(
+			"observe run conclusion: %w", err,
+		)
+	}
+	return observation, conclusion, nil
+}
+
 // ObserveSnapshot reads one coherent supervision snapshot. Every source row
 // is reconstructed by the store before its bounded projection is returned;
 // no raw SQLite handle or mutable store capability crosses this package.
@@ -215,20 +254,18 @@ func (s *Store) ObserveSnapshot(ctx context.Context, runID domain.RunID) (Snapsh
 		}
 		snapshot.Observation = observation
 		snapshot.LastStage = lastStage(run)
-		publicationIdentity, completed, err := engine.ProductionPublicationCompletion(ctx, tx, run)
+		publicationIdentity, publicationReady, conclusion, err := authenticateRunConclusion(
+			ctx, tx, run, observation,
+		)
 		if err != nil {
 			return err
 		}
-		if completed {
+		if publicationIdentity != (engine.ProductionPublicationIdentity{}) {
 			snapshot.ProducingInvocationID = publicationIdentity.ProducingInvocationID
 			snapshot.PublicationInvocationID = publicationIdentity.PublicationInvocationID
-			snapshot.PublicationReadyAuthenticated, err = authenticatePublicationReady(
-				ctx, tx, run, observation, publicationIdentity,
-			)
-			if err != nil {
-				return err
-			}
+			snapshot.PublicationReadyAuthenticated = publicationReady
 		}
+		snapshot.AuthenticatedConclusion = conclusion
 		snapshot.AttentionItems = []AttentionItem{}
 		snapshot.Admissions = []Admission{}
 		snapshot.ShadowReviews = []domain.ShadowReviewRecord{}
@@ -411,42 +448,36 @@ func (s *Store) ObserveSnapshot(ctx context.Context, runID domain.RunID) (Snapsh
 	return snapshot, nil
 }
 
-// authenticatePublicationReady re-anchors the structurally decoded milestone
-// to the store-owned ready item and its publication authority. Completion
-// identities authenticate the task and terminal, but cannot make an
-// independently forged milestone authoritative.
-func authenticatePublicationReady(
+func authenticateRunConclusion(
 	ctx context.Context,
 	tx *store.ReadTx,
 	run domain.Run,
 	observation domain.RunObservation,
-	identity engine.ProductionPublicationIdentity,
-) (bool, error) {
-	ready := false
-	for _, milestone := range observation.Milestones {
-		if milestone.Kind == domain.MilestonePublicationReady &&
-			milestone.InvocationID != nil &&
-			*milestone.InvocationID == identity.PublicationInvocationID {
-			ready = true
-			break
+) (engine.ProductionPublicationIdentity, bool, domain.RunConclusion, error) {
+	identity, completed, err := engine.ProductionPublicationCompletion(ctx, tx, run)
+	if err != nil {
+		return engine.ProductionPublicationIdentity{}, false, domain.RunConclusion{}, err
+	}
+	readyAuthenticated := false
+	if completed {
+		readyAuthenticated, err = engine.AuthenticateProductionPublicationReady(
+			ctx, tx, run, observation, identity,
+		)
+		if err != nil {
+			return engine.ProductionPublicationIdentity{}, false, domain.RunConclusion{}, err
 		}
 	}
-	if !ready {
-		return false, nil
-	}
-	binding, err := tx.GetReadyItemPRBinding(ctx, domain.ProductionReadyItemID(run.ID))
+	conclusion, err := signet.AuthenticatedRunConclusion(
+		ctx, tx, run, observation, readyAuthenticated,
+	)
 	if err != nil {
-		return false, fmt.Errorf("authenticate publication-ready milestone: %w", err)
+		return engine.ProductionPublicationIdentity{}, false, domain.RunConclusion{},
+			fmt.Errorf("authenticate run conclusion: %w", err)
 	}
-	if binding.RunID != run.ID ||
-		binding.ProducingInvocationID != identity.ProducingInvocationID ||
-		binding.PublicationInvocationID != identity.PublicationInvocationID {
-		return false, fmt.Errorf(
-			"publication-ready binding disagrees with completed publication: %w",
-			domain.ErrParentKeyMismatch,
-		)
+	if !completed {
+		identity = engine.ProductionPublicationIdentity{}
 	}
-	return true, nil
+	return identity, readyAuthenticated, conclusion, nil
 }
 
 // findingInSurface reports whether a finding's location is contained in the

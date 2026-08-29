@@ -100,7 +100,7 @@ func TestSignetWireGoldens(t *testing.T) {
 				Runs: []RunSnapshot{
 					runSnapshot(
 						run, store.Snapshot{AsOfRevision: 20, EntityVersion: 2},
-						observation, 23,
+						observation, domain.ConcludeRun(observation), 23,
 					),
 				},
 				Conversations: []ConversationSnapshot{
