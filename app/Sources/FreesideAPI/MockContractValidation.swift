@@ -23,6 +23,11 @@ enum MockContractValidation {
         let run = snapshot.run
         if run.id.isEmpty || run.project_id.isEmpty { return "empty run identity" }
         if run.spec_digest.isEmpty || run.policy_digest.isEmpty { return "empty run digest" }
+        if let names = run.display_names?.value1,
+            let breach = displayNamesBreach(names)
+        {
+            return breach
+        }
         switch (run.campaign_id, run.attempt_number, run.attempt_reason, run.parent_run_id) {
         case (nil, nil, nil, nil):
             break
@@ -340,6 +345,112 @@ enum MockContractValidation {
             }
         } else if item._type == .finding_adjudication {
             return "finding_adjudication item lacks its binding"
+        }
+        if let names = item.display_names?.value1,
+            let breach = displayNamesBreach(names)
+        {
+            return breach
+        }
+        if let cost = item.billable_cost_so_far?.value1 {
+            if item._type != .review_diminishing_returns {
+                return "billable_cost_so_far on a different item type"
+            }
+            if cost.currency.range(of: #"^[A-Z]{3}$"#, options: .regularExpression) == nil
+                || cost.amount.range(
+                    of: #"^(0|[1-9][0-9]*)(\.[0-9]+)?$"#,
+                    options: .regularExpression) == nil
+                || cost.invocations < 1
+            {
+                return "invalid billable_cost_so_far"
+            }
+        }
+        if let failure = item.execution_failure?.value1 {
+            if item._type != .execution_failure {
+                return "execution_failure facts on a different item type"
+            }
+            if failure.invocation_id.isEmpty {
+                return "empty execution_failure invocation_id"
+            }
+            guard case .run(let subject) = item.subject, subject.run_id != nil else {
+                return "execution_failure facts on a non-run subject"
+            }
+        }
+        if let block = item.publish_block?.value1 {
+            if item._type != .publish_blocked {
+                return "publish_block facts on a different item type"
+            }
+            if (block.hold_reason == nil) == (block.trust_rule == nil) {
+                return "publish_block does not have exactly one variant"
+            }
+        }
+        if let stats = item.diff_stats?.value1 {
+            if item._type != .ready_for_final_review {
+                return "diff_stats on a different item type"
+            }
+            if stats.files_changed < 0 || stats.additions < 0 || stats.deletions < 0
+                || stats.base_sha.isEmpty || stats.head_sha.isEmpty
+            {
+                return "invalid diff_stats"
+            }
+            if stats.head_sha != item.pr_head_sha {
+                return "diff_stats head disagrees with item head"
+            }
+        }
+        if let wait = item.blocked_on?.value1 {
+            if item._type != .blocked {
+                return "blocked_on facts on a different item type"
+            }
+            if wait.since == daemonZeroInstant {
+                return "blocked_on has an unset since"
+            }
+            switch wait.kind {
+            case .spec_approval:
+                if wait.item_id?.isEmpty != false || wait.pr_reference != nil {
+                    return "blocked_on reference disagrees with its kind"
+                }
+            case .pr_checks, .external_review:
+                guard wait.item_id == nil, let reference = wait.pr_reference?.value1 else {
+                    return "blocked_on reference disagrees with its kind"
+                }
+                let parts = reference.repo.split(separator: "/", omittingEmptySubsequences: false)
+                if parts.count != 2
+                    || parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
+                    || reference.number < 1
+                {
+                    return "invalid blocked_on pull request reference"
+                }
+            }
+            if let created = item.created_at, wait.since > created {
+                return "blocked_on starts after item creation"
+            }
+        }
+        if let diagnostic = item.health_diagnostic?.value1 {
+            if item._type != .system_health {
+                return "health_diagnostic on a different item type"
+            }
+            if diagnostic.code.range(
+                of: #"^[a-z0-9][a-z0-9_.-]*$"#, options: .regularExpression) == nil
+            {
+                return "invalid health_diagnostic code"
+            }
+        }
+        if let dispute = item.review_dispute?.value1 {
+            if item._type != .review_dispute {
+                return "review_dispute binding on a different item type"
+            }
+            if dispute.run_id.isEmpty || dispute.round < 1 || dispute.finding_ids.isEmpty
+                || dispute.completion_evidence.isEmpty
+                || dispute.finding_ids.contains(where: \.isEmpty)
+                || Set(dispute.finding_ids).count != dispute.finding_ids.count
+            {
+                return "invalid review_dispute binding"
+            }
+            guard case .run(let subject) = item.subject,
+                subject.subject_id == dispute.run_id,
+                subject.run_id == dispute.run_id
+            else {
+                return "review_dispute binding disagrees with item subject"
+            }
         }
         if item.decision_surface.epoch < 1 {
             return "non-positive decision_surface epoch"
@@ -803,6 +914,13 @@ enum MockContractValidation {
         case .unclear:
             return compatibility == nil && route == .attention_unclear
         }
+    }
+
+    private static func displayNamesBreach(_ names: Components.Schemas.DisplayNames) -> String? {
+        if names.project.text.isEmpty || names.work_unit.text.isEmpty {
+            return "empty display name"
+        }
+        return nil
     }
 
     /// The content address of a text claim's UTF-8 bytes, in the

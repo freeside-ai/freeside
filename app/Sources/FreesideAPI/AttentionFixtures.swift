@@ -500,6 +500,59 @@ public enum AttentionFixtures {
             digest: MockContractValidation.sha256Digest(of: "decision-surface-\(key)-1")
         )
 
+        let displayNames = Components.Schemas.AttentionItem.display_namesPayload(
+            value1: .init(
+                project: .init(text: "owner/repo", source: .name),
+                work_unit: .init(text: "#724", source: .name)
+            ))
+        let billableCost: Components.Schemas.AttentionItem.billable_cost_so_farPayload? =
+            type == .review_diminishing_returns
+            ? .init(value1: .init(currency: "USD", amount: "42.75", invocations: 6, complete: false))
+            : nil
+        let executionFailure: Components.Schemas.AttentionItem.execution_failurePayload? =
+            type == .execution_failure
+            ? .init(value1: .init(outcome: .failed, stage: .implementation, invocation_id: "inv-\(key)"))
+            : nil
+        let publishBlock: Components.Schemas.AttentionItem.publish_blockPayload? =
+            type == .publish_blocked
+            ? .init(
+                value1: .init(
+                    trust_rule: .init(value1: .trust_profile_drift)
+                ))
+            : nil
+        let diffStats: Components.Schemas.AttentionItem.diff_statsPayload? =
+            type == .ready_for_final_review
+            ? .init(
+                value1: .init(
+                    files_changed: 12, additions: 240, deletions: 31,
+                    base_sha: "deadbeef", head_sha: "cafebabe"
+                ))
+            : nil
+        let blockedOn: Components.Schemas.AttentionItem.blocked_onPayload? =
+            type == .blocked
+            ? .init(
+                value1: .init(
+                    kind: .spec_approval, since: createdInstant,
+                    item_id: "item-spec_approval"
+                ))
+            : nil
+        let healthDiagnostic: Components.Schemas.AttentionItem.health_diagnosticPayload? =
+            type == .system_health
+            ? .init(
+                value1: .init(
+                    code: "run_projection.unavailable", impairs: .run_visibility
+                ))
+            : nil
+        let reviewDispute: Components.Schemas.AttentionItem.review_disputePayload? =
+            type == .review_dispute
+            ? .init(
+                value1: .init(
+                    run_id: "run-\(key)", round: 2,
+                    finding_ids: ["finding-1", "finding-2"],
+                    completion_evidence: "sha256:review-completion"
+                ))
+            : nil
+
         let item = Components.Schemas.AttentionItem(
             id: "item-\(key)",
             project_id: "proj-1",
@@ -531,6 +584,14 @@ public enum AttentionFixtures {
             codex_reenrollment_recovery_binding: codexReenrollmentRecovery,
             review_configuration_recovery: reviewConfigurationRecovery,
             finding_adjudication: findingAdjudication,
+            display_names: displayNames,
+            billable_cost_so_far: billableCost,
+            execution_failure: executionFailure,
+            publish_block: publishBlock,
+            diff_stats: diffStats,
+            blocked_on: blockedOn,
+            health_diagnostic: healthDiagnostic,
+            review_dispute: reviewDispute,
             item_version: 1,
             interruption_class: interruption,
             conversation_id: type == .spec_approval ? "conv-item-spec_approval" : nil,
