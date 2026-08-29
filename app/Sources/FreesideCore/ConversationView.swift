@@ -44,7 +44,16 @@ struct ConversationView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     message.author == .user ? Color.accentWashSoft : Color.ground,
-                    in: RoundedRectangle(cornerRadius: 8))
+                    in: RoundedRectangle(cornerRadius: 8)
+                )
+                .overlay(alignment: .leading) {
+                    if message.author == .user {
+                        Capsule()
+                            .fill(Color.accentText)
+                            .frame(width: 3)
+                            .padding(.vertical, 8)
+                    }
+                }
             }
 
             if snapshot.conversation.status == .awaiting_agent {
@@ -146,6 +155,8 @@ struct MessageComposerSheet: View {
                 }
             }
             .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.ground2)
             .navigationTitle(title)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
