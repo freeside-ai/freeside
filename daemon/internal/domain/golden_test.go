@@ -139,6 +139,13 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The decision-surface identity of the base item at creation (plan §4):
+	// the persisted record the store derives, kept off the item body until
+	// #917 projects {epoch, digest} onto the wire.
+	decisionSurface, err := domain.NewDecisionSurface(item)
+	if err != nil {
+		t.Fatal(err)
+	}
 	diminishingItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-diminishing-yield", ProjectID: "proj-1", Subject: subject,
 		Type: domain.AttentionReviewDiminishing, Priority: domain.PriorityNormal,
@@ -1190,6 +1197,7 @@ func TestGolden(t *testing.T) {
 		{"schedule_occurrence_consumed", consumedOccurrence},
 		{"schedule_event", scheduleEvent},
 		{"attention_item", item},
+		{"decision_surface", decisionSurface},
 		{"attention_item_review_diminishing_yield", diminishingItem},
 		{"attention_item_readiness_degraded", degradedItem},
 		{"attention_item_blocked", blockedItem},
