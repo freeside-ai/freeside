@@ -1,3 +1,4 @@
+import Foundation
 import FreesideAPI
 import Testing
 
@@ -11,7 +12,7 @@ import Testing
         .review_diminishing_returns: [
             .finish_now, .apply_then_finish, .continue_under_policy, .convert_to_policy,
         ],
-        .review_dispute: [.approve, .adjudicate, .discuss, .stop],
+        .review_dispute: [.approve, .discuss, .stop],
         .review_contradiction: [.recover_review],
         .review_configuration: [.adopt_review_configuration, .discuss, .stop],
         .finding_adjudication: [
@@ -47,7 +48,7 @@ import Testing
     @Test func phase1ActionsCoverEveryOfferedActionWithoutDuplicates() {
         let offered = Set(AttentionFixtures.phase1ActionSets.values.flatMap { $0 })
         #expect(Set(AttentionFixtures.phase1Actions) == offered)
-        #expect(AttentionFixtures.phase1Actions.count == 33)
+        #expect(AttentionFixtures.phase1Actions.count == 32)
         #expect(Set(AttentionFixtures.phase1Actions).count == AttentionFixtures.phase1Actions.count)
     }
 
@@ -55,6 +56,29 @@ import Testing
         let inbox = AttentionFixtures.defaultInbox()
         #expect(inbox.map(\.item._type) == AttentionFixtures.phase1Types)
         #expect(Set(inbox.map(\.item.id)).count == inbox.count)
+    }
+
+    @Test func recommendationAndDecisionSurfaceRoundTrip() throws {
+        let present = AttentionFixtures.fixture(type: .finding_adjudication).item
+        let absent = AttentionFixtures.fixture(type: .spec_approval).item
+
+        #expect(present.recommendation?.value1.action == .accept_recommended_route)
+        #expect(present.recommendation?.value1.source == .agent_judgment)
+        #expect(absent.recommendation == nil)
+        #expect(present.decision_surface.epoch == 1)
+        #expect(!present.decision_surface.digest.isEmpty)
+
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let decodedPresent = try decoder.decode(
+            Components.Schemas.AttentionItem.self, from: encoder.encode(present))
+        let decodedAbsent = try decoder.decode(
+            Components.Schemas.AttentionItem.self, from: encoder.encode(absent))
+
+        #expect(decodedPresent.recommendation == present.recommendation)
+        #expect(decodedPresent.decision_surface == present.decision_surface)
+        #expect(decodedAbsent.recommendation == nil)
+        #expect(decodedAbsent.decision_surface == absent.decision_surface)
     }
 
     @Test func readyFixturesCoverCleanAndDegradedReadiness() {

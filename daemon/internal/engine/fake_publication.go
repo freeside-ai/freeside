@@ -2331,6 +2331,11 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	if legacyYieldHistory {
 		expected.YieldHistory = nil
 	}
+	// Persistence projections do not constitute an item transition. Normalize
+	// them before the exact-replay check and before lifecycle validation so an
+	// otherwise identical item at the same version still converges.
+	current.Recommendation = expected.Recommendation
+	current.DecisionSurface = expected.DecisionSurface
 	if reflect.DeepEqual(current, expected) {
 		return true
 	}

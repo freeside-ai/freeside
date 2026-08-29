@@ -2342,7 +2342,7 @@ func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 				Type: domain.AttentionReviewDispute, Priority: domain.PriorityNormal,
 				Reason: "legacy dispute",
 				RequestedDecision: []domain.Action{
-					domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop,
+					domain.ActionDiscuss, domain.ActionStop,
 				},
 				PRHeadSHA: task.HeadSHA, ItemVersion: 1,
 				InterruptionClass: domain.InterruptionPlannedGate, Status: status,
@@ -2370,8 +2370,8 @@ func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 				item.Status != status {
 				t.Fatalf("reused legacy dispute = %#v", item)
 			}
-			if item.ItemVersion != 1 || !item.Offers(domain.ActionAdjudicate) ||
-				!item.Offers(domain.ActionDiscuss) || !item.Offers(domain.ActionStop) {
+			if item.ItemVersion != 1 || !item.Offers(domain.ActionDiscuss) ||
+				!item.Offers(domain.ActionStop) {
 				t.Fatalf("routed dispute changed = %#v", item)
 			}
 		})

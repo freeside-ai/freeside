@@ -18,6 +18,11 @@
         "approve",
         "discuss"
       ],
+      "recommendation": null,
+      "decision_surface": {
+        "epoch": 1,
+        "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+      },
       "evidence_snapshot": [],
       "agent_claims": [],
       "artifact_digests": [],

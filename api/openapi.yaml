@@ -1871,6 +1871,7 @@ components:
 
     DaemonPolicyRecommendationProvenance:
       type: object
+      description: The registered daemon rule and canonical input behind a deterministic recommendation.
       additionalProperties: false
       required: [rule_digest, input_digest]
       properties:
@@ -1881,6 +1882,7 @@ components:
 
     AgentJudgmentRecommendationProvenance:
       type: object
+      description: The declared judgment invocation and bound artifact behind an agent recommendation.
       additionalProperties: false
       required: [judgment_site, invocation_id, artifact_digest]
       properties:
@@ -1894,6 +1896,7 @@ components:
 
     ProjectPolicyRecommendationProvenance:
       type: object
+      description: The resolved project policy and authenticated application behind a policy recommendation.
       additionalProperties: false
       required: [policy_key, resolved_policy_digest, application_digest]
       properties:
@@ -1929,6 +1932,7 @@ components:
 
     Recommendation:
       type: object
+      description: A daemon-derived lead that selects one action already offered by the attention item.
       additionalProperties: false
       required: [action, reason, source, provenance, confidence]
       properties:

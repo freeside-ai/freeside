@@ -64,7 +64,7 @@ lists open issues that will change the card.
 | --- | --- | --- | --- |
 | `spec_approval` | approve, request changes, discuss, stop | Done for text request-changes and discuss transactions; the superseded card links to the next open specification once it syncs | #920 supplies revision facts; spec and diff viewer |
 | `review_diminishing_returns` | finish now, apply then finish, continue under policy, convert to policy | Done for the shared yield-chart module; production chart facts remain data-gated | #724, #844 |
-| `review_dispute` | adjudicate, discuss, stop | Done for the equal-position and daemon-fact composition; production position facts remain data-gated | #724, #855, #917 |
+| `review_dispute` | discuss, stop (plus approve for observation-only shadow findings) | Done for the equal-position and daemon-fact composition; production position facts remain data-gated | #724, #855, #917 |
 | `finding_adjudication` | accept the recommended route, pick an alternative, discuss, stop (§7 widens this to answering questions, challenging assumptions, and asking for more detail) | Done for the proposal, producer-specific model/engine/mixed-origin labels, daemon facts, typed route actions, alternatives, and text discussion | #840 executes the chosen route |
 | `review_contradiction` | recover the exact contradiction, or leave parked | Generic (recovery details shown) | |
 | `review_configuration` | adopt the configuration, discuss, stop | Generic (recovery details shown) | |

@@ -662,7 +662,7 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 		before := f.revision(t)
 		pending := []domain.Action{
 			domain.ActionConvertToPolicy,
-			domain.ActionAdjudicate, domain.ActionRetryWithCapability,
+			domain.ActionRetryWithCapability,
 			domain.ActionChooseAlternate,
 			domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry,
 			domain.ActionReturnToAgent,

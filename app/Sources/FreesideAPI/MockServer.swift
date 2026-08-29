@@ -1149,6 +1149,11 @@ public actor MockServer {
                             + "(item \(payload.item_id)). No new unattended work is admitted "
                             + "until resume_unattended is accepted.",
                         requested_decision: [.resume_unattended, .acknowledge],
+                        recommendation: nil,
+                        decision_surface: .init(
+                            epoch: 1,
+                            digest: MockContractValidation.sha256Digest(
+                                of: "decision-surface-\(noticeID)-1")),
                         evidence_snapshot: [],
                         agent_claims: [],
                         artifact_digests: [],
@@ -1226,6 +1231,10 @@ public actor MockServer {
             replacement.item.evidence_snapshot = [artifact]
             replacement.item.agent_claims = []
             replacement.item.artifact_digests = [revisedDigest]
+            replacement.item.decision_surface = .init(
+                epoch: 1,
+                digest: MockContractValidation.sha256Digest(
+                    of: "decision-surface-\(replacementID)-1"))
             replacement.item.item_version += 1
             replacement.item.status = .resolved
             replacement.item.created_at = currentTime

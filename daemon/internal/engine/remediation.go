@@ -880,7 +880,7 @@ func (w *productionPublicationWorkflow) completeRemediationNoop(
 	itemID := domain.ItemID(fmt.Sprintf("production-remediation-dissent-%s-%d", task.RunID, round))
 	if err := w.putReviewAttentionWithActionsAndID(
 		ctx, task, record, attention, domain.AttentionReviewDispute, itemID,
-		[]domain.Action{domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop}, claims,
+		[]domain.Action{domain.ActionDiscuss, domain.ActionStop}, claims,
 	); err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -919,7 +919,7 @@ func (w *productionPublicationWorkflow) completeRemediationSourceIdentityDissent
 		ctx, task, record,
 		"The prior reviewed candidate's imported tree identity could not be authenticated, so remediation change detection stopped.",
 		domain.AttentionReviewDispute, itemID,
-		[]domain.Action{domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop}, claims,
+		[]domain.Action{domain.ActionDiscuss, domain.ActionStop}, claims,
 	); err != nil {
 		return productionTaskOutcome{}, err
 	}

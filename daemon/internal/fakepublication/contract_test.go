@@ -74,6 +74,27 @@ func TestTerminalDigestIgnoresAttentionCreationTime(t *testing.T) {
 		t.Fatalf("creation time changed terminal digest: %q != %q", firstDigest, secondDigest)
 	}
 
+	item.Recommendation = &domain.Recommendation{
+		Action: domain.ActionOpenPR, Reason: "Open the verified pull request.",
+		Source: domain.RecommendationDaemonPolicy,
+		Provenance: domain.RecommendationProvenance{
+			DaemonPolicy: &domain.DaemonPolicyRecommendationProvenance{
+				RuleDigest:  domain.Digest("sha256:" + strings.Repeat("a", 64)),
+				InputDigest: domain.Digest("sha256:" + strings.Repeat("b", 64)),
+			},
+		},
+	}
+	item.DecisionSurface = domain.DecisionSurfaceRef{
+		Epoch: 2, Digest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+	}
+	projectedDigest, err := TerminalDigest(Task{RunID: "run-terminal"}, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projectedDigest != firstDigest {
+		t.Fatalf("persistence projections changed terminal digest: %q != %q", projectedDigest, firstDigest)
+	}
+
 	item.Reason = "different terminal fact"
 	changedDigest, err := TerminalDigest(Task{RunID: "run-terminal"}, item)
 	if err != nil {

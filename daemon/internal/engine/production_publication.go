@@ -2739,7 +2739,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 						ctx, task, *latestRecord, remediationOutcome.attention,
 						domain.AttentionReviewDispute,
 						productionReviewItemID(task.RunID, latestRecord.Round),
-						[]domain.Action{domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop},
+						[]domain.Action{domain.ActionDiscuss, domain.ActionStop},
 						remediationOutcome.claims,
 					); err != nil {
 						return productionReviewPending, err
@@ -3174,7 +3174,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		if err := w.putReviewAttentionWithActionsAndID(
 			ctx, task, record, remediationOutcome.attention, domain.AttentionReviewDispute,
 			productionReviewItemID(task.RunID, record.Round),
-			[]domain.Action{domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop},
+			[]domain.Action{domain.ActionDiscuss, domain.ActionStop},
 			remediationOutcome.claims,
 		); err != nil {
 			return productionReviewPending, err
@@ -3566,6 +3566,8 @@ func (w *productionPublicationWorkflow) putReviewContradictionAttention(
 		comparable := *existing
 		comparable.ItemVersion = item.ItemVersion
 		comparable.Timing = item.Timing
+		comparable.Recommendation = item.Recommendation
+		comparable.DecisionSurface = item.DecisionSurface
 		if !reflect.DeepEqual(comparable, item) {
 			return fmt.Errorf("review contradiction item %q diverges from failure %q: %w",
 				item.ID, failure.InvocationID, domain.ErrReviewRecoveryBindingMismatch)
@@ -3832,6 +3834,8 @@ func (w *productionPublicationWorkflow) putReviewConfigurationAttention(
 		comparable.ItemVersion = item.ItemVersion
 		comparable.Timing = item.Timing
 		comparable.ConversationID = item.ConversationID
+		comparable.Recommendation = item.Recommendation
+		comparable.DecisionSurface = item.DecisionSurface
 		if !reflect.DeepEqual(comparable, item) {
 			return fmt.Errorf("review configuration item %q diverges from failure %q: %w",
 				item.ID, failure.InvocationID, domain.ErrReviewConfigRecoveryBindingMismatch)
@@ -3864,7 +3868,7 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithID(
 ) error {
 	return w.putReviewAttentionWithActionsAndID(
 		ctx, task, record, reason, itemType, itemID,
-		[]domain.Action{domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop},
+		[]domain.Action{domain.ActionDiscuss, domain.ActionStop},
 		nil,
 	)
 }

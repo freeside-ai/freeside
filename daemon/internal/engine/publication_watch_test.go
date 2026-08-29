@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -201,6 +202,28 @@ func TestCompatibleTerminalItemIgnoresReadinessInvalidation(t *testing.T) {
 	foreign.Reason = "a different item"
 	if compatibleTerminalItem(expected, foreign) {
 		t.Fatal("genuinely different item accepted")
+	}
+}
+
+func TestCompatibleTerminalItemIgnoresSameVersionPersistenceProjections(t *testing.T) {
+	st := watchTestStore(t)
+	expected := watchTestItem(t, st, domain.StatusOpen)
+	current := expected
+	current.DecisionSurface = domain.DecisionSurfaceRef{
+		Epoch: 1, Digest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+	}
+	current.Recommendation = &domain.Recommendation{
+		Action: domain.ActionOpenPR, Reason: "Open the verified pull request.",
+		Source: domain.RecommendationDaemonPolicy,
+		Provenance: domain.RecommendationProvenance{
+			DaemonPolicy: &domain.DaemonPolicyRecommendationProvenance{
+				RuleDigest:  domain.Digest("sha256:" + strings.Repeat("e", 64)),
+				InputDigest: domain.Digest("sha256:" + strings.Repeat("f", 64)),
+			},
+		},
+	}
+	if !compatibleTerminalItem(expected, current) {
+		t.Fatal("same-version persistence projections were treated as lifecycle drift")
 	}
 }
 

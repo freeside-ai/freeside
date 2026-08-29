@@ -37,7 +37,10 @@ the daemon, API, and clients.
    replacements. The writer normalizes them to the stored values for replay
    detection, then refreshes them only on a real item transition. Between
    transitions, reconstruction suppresses a recommendation that no longer
-   equals unique-or-none derivation.
+   equals unique-or-none derivation. Engine recovery comparisons normalize
+   both projections, and the fake-publication terminal binding omits them:
+   the engine binds its item before persistence can derive either field, while
+   the store authenticates both through their own reconstruction gates.
 
 5. **Keep terminal recovery's recommendation exemption.** Both reconstruction
    tiers fail closed when the body-carried surface identity disagrees with the
@@ -53,6 +56,30 @@ the daemon, API, and clients.
    records produce no recommendation. Rejected: precedence, source ranking,
    and caller selection, because the plan defines no legitimate multi-source
    override relationship.
+
+## Refute-First Findings
+
+- **Disproved: a caller can substitute recommendation authority.** Domain and
+  store checks reject source/provenance mismatches, stale surface commitments,
+  unbound artifacts, and caller-supplied projection fields. Focused negative
+  tests cover each boundary.
+- **Disproved: a forged body can choose the current surface epoch.** Both
+  reconstruction tiers require the body-carried epoch and digest to equal the
+  authenticated surface row; the tamper test fails closed.
+- **Disproved: ambiguity can select one of several applicable sources.** The
+  collision test returns no recommendation, as the explicit unique-or-none
+  decision requires.
+- **Confirmed and fixed: post-persistence projections broke recovery
+  equality.** Real-daemon integration exposed recommendation and surface
+  identity in terminal bindings and same-version replay comparisons. Recovery
+  now normalizes those fields, and focused digest and compatibility tests pin
+  the separation.
+- **Confirmed and fixed: retiring `adjudicate` stranded legacy rows.** The
+  schema-0058 backfill decoded item bodies only after the enum removal, so a
+  previously valid `review_dispute` row was skipped and became unreadable.
+  The migration now removes the retired token before validating and deriving
+  the surface; get and list regression checks prove the upgraded row remains
+  readable with `discuss` and `stop`.
 
 ## Revisit When
 

@@ -497,7 +497,6 @@ const (
 	ActionApplyThenFinish          Action = "apply_then_finish"
 	ActionContinueUnderPolicy      Action = "continue_under_policy"
 	ActionConvertToPolicy          Action = "convert_to_policy"
-	ActionAdjudicate               Action = "adjudicate"
 	ActionRetry                    Action = "retry"
 	ActionRetryWithCapability      Action = "retry_with_capabilities"
 	ActionAnswerAndRetry           Action = "answer_and_retry"
@@ -528,7 +527,7 @@ const (
 var AllActions = []Action{
 	ActionApprove, ActionRequestChanges, ActionDiscuss, ActionStop,
 	ActionFinishNow, ActionApplyThenFinish, ActionContinueUnderPolicy, ActionConvertToPolicy,
-	ActionAdjudicate, ActionRetry, ActionRetryWithCapability,
+	ActionRetry, ActionRetryWithCapability,
 	ActionAnswerAndRetry, ActionAnswerWithoutRetry,
 	ActionRerunTrustEvaluation, ActionChooseAlternate, ActionInspectTrustFailure,
 	ActionOpenPR, ActionReturnToAgent, ActionMarkSeen, ActionDismiss,
@@ -542,7 +541,7 @@ func (a Action) valid() bool {
 	switch a {
 	case ActionApprove, ActionRequestChanges, ActionDiscuss, ActionStop,
 		ActionFinishNow, ActionApplyThenFinish, ActionContinueUnderPolicy, ActionConvertToPolicy,
-		ActionAdjudicate, ActionRetry, ActionRetryWithCapability,
+		ActionRetry, ActionRetryWithCapability,
 		ActionAnswerAndRetry, ActionAnswerWithoutRetry,
 		ActionRerunTrustEvaluation, ActionChooseAlternate, ActionInspectTrustFailure,
 		ActionOpenPR, ActionReturnToAgent, ActionMarkSeen, ActionDismiss,

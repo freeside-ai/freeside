@@ -294,7 +294,7 @@ func TestShadowReviewRecordsClassifiesSamplesAndBlocksReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantActions := []domain.Action{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop}
-	if !slices.Equal(item.RequestedDecision, wantActions) || item.Offers(domain.ActionAdjudicate) {
+	if !slices.Equal(item.RequestedDecision, wantActions) || item.Offers(domain.Action("adjudicate")) {
 		t.Fatalf("shadow dispute actions = %v, want %v without adjudicate",
 			item.RequestedDecision, wantActions)
 	}
@@ -801,7 +801,7 @@ func TestShadowReviewAttentionDecisionRequiresBoundTerminalCommand(t *testing.T)
 			commands: []domain.Command{command(domain.ActionApprove), command(domain.ActionStop)}, wantErr: true,
 		},
 		{name: "discussion only", item: baseItem, commands: []domain.Command{command(domain.ActionDiscuss)}, wantErr: true},
-		{name: "foreign action", item: baseItem, commands: []domain.Command{command(domain.ActionAdjudicate)}, wantErr: true},
+		{name: "foreign action", item: baseItem, commands: []domain.Command{command(domain.Action("adjudicate"))}, wantErr: true},
 		{name: "open", item: func() domain.AttentionItem {
 			item := baseItem
 			item.Status = domain.StatusOpen
@@ -822,7 +822,7 @@ func TestShadowReviewAttentionDecisionRequiresBoundTerminalCommand(t *testing.T)
 		}()}, wantErr: true},
 		{name: "routed action set", item: func() domain.AttentionItem {
 			item := baseItem
-			item.RequestedDecision = []domain.Action{domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop}
+			item.RequestedDecision = []domain.Action{domain.Action("adjudicate"), domain.ActionDiscuss, domain.ActionStop}
 			return item
 		}(), commands: []domain.Command{command(domain.ActionStop)}, wantErr: true},
 	}

@@ -11,7 +11,7 @@
 /// contradiction carrier and authorizes the daemon's append-only recovery
 /// transition; discuss appends to a conversation without concluding the
 /// item; pending actions are rejected until the unit that owns their
-/// transaction lands: convert_to_policy, adjudicate, retry_with_capabilities,
+/// transaction lands: convert_to_policy, retry_with_capabilities,
 /// choose_alternate_profile, answer_and_retry, answer_without_retry, and
 /// return_to_agent.
 /// A provisional client mirror
@@ -59,7 +59,7 @@ public enum ActionOutcome: Equatable {
             return .snoozesProposal
         case .open_pr, .mark_seen, .acknowledge, .inspect_trust_failure, .run_doctor:
             return .records
-        case .convert_to_policy, .adjudicate, .retry_with_capabilities,
+        case .convert_to_policy, .retry_with_capabilities,
             .choose_alternate_profile, .answer_and_retry,
             .answer_without_retry, .return_to_agent:
             return .pending
