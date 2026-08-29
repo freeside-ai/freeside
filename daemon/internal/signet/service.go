@@ -276,6 +276,10 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 				if err := s.applyReviewRecovery(ctx, tx, command, item, status); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
+			case outcomeRerunsTrustEvaluation:
+				if err := s.applyRerunTrustEvaluation(ctx, tx, command, item, status); err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
 			case outcomeAdoptsReviewConfiguration:
 				if err := s.applyReviewConfigurationRecovery(ctx, tx, command, item, status); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
@@ -375,6 +379,10 @@ const (
 	// outcomeRecoversReview: conclude the contradiction item and append the
 	// exact-row-bound recovery transition in the accepting transaction.
 	outcomeRecoversReview
+	// outcomeRerunsTrustEvaluation: conclude the definitive publication block
+	// and enqueue the exact-command-bound reevaluation intent in the accepting
+	// transaction.
+	outcomeRerunsTrustEvaluation
 	// outcomeAdoptsReviewConfiguration: conclude the review_configuration item
 	// and append the exact-row, profile-supersession-bound configuration
 	// recovery transition in the accepting transaction.
@@ -404,7 +412,9 @@ const (
 // item and append the durable operating transition in the accepting
 // transaction (issue #319; applyStopUnattended, applyResumeUnattended).
 // Recover review similarly concludes its carrier and appends the command-backed
-// exact-row transition (issue #580; applyReviewRecovery).
+// exact-row transition (issue #580; applyReviewRecovery). Rerun trust
+// evaluation concludes a definitive publication block and enqueues the
+// command-bound reevaluation intent (issue #419; applyRerunTrustEvaluation).
 // Discuss runs the conversation transaction (plan §5.14
 // discuss semantics; applyDiscuss). Pending actions are rejected before any
 // transaction because their accepted effect cannot be represented yet: snooze
@@ -424,9 +434,10 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		return domain.StatusDismissed, outcomeConcludes
 	case domain.ActionApprove, domain.ActionStop, domain.ActionFinishNow,
 		domain.ActionApplyThenFinish, domain.ActionContinueUnderPolicy,
-		domain.ActionRetry,
-		domain.ActionRerunTrustEvaluation:
+		domain.ActionRetry:
 		return domain.StatusResolved, outcomeConcludes
+	case domain.ActionRerunTrustEvaluation:
+		return domain.StatusResolved, outcomeRerunsTrustEvaluation
 	case domain.ActionRequestChanges:
 		return domain.StatusSuperseded, outcomeConcludes
 	case domain.ActionStopUnattended:

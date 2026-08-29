@@ -133,15 +133,17 @@ func (f *digestSetFlag) Set(raw string) error {
 
 func backupPayloadExtractors() map[string]store.BackupPayloadDigestExtractor {
 	return map[string]store.BackupPayloadDigestExtractor{
-		engine.FakePublicationTaskKind:            engine.FakePublicationBackupPayloadDigests,
-		engine.FakePublicationInvocationOwnerKind: engine.FakePublicationInvocationOwnerBackupPayloadDigests,
-		signet.AgentInvocationRequestedKind:       signet.AgentInvocationBackupPayloadDigests,
-		engine.KindProductionInvocationRequested:  engine.ProductionInvocationBackupPayloadDigests,
-		engine.KindProductionPublicationRequested: engine.ProductionPublicationBackupPayloadDigests,
-		engine.KindRemediationInvocationRequested: engine.RemediationInvocationBackupPayloadDigests,
-		engine.KindElaborationInvocationRequested: engine.ElaborationInvocationBackupPayloadDigests,
-		engine.KindElaborationImplementationClaim: engine.ElaborationImplementationClaimBackupPayloadDigests,
-		publish.IntentKindReservation:             publish.ReservationBackupPayloadDigests,
-		publish.IntentKindPublication:             publish.PublicationBackupPayloadDigests,
+		engine.FakePublicationTaskKind:              engine.FakePublicationBackupPayloadDigests,
+		engine.FakePublicationInvocationOwnerKind:   engine.FakePublicationInvocationOwnerBackupPayloadDigests,
+		signet.AgentInvocationRequestedKind:         signet.AgentInvocationBackupPayloadDigests,
+		signet.PublicationReevaluationRequestedKind: signet.PublicationReevaluationBackupPayloadDigests,
+		signet.PublicationReevaluationCompletedKind: signet.PublicationReevaluationCompletionBackupPayloadDigests,
+		engine.KindProductionInvocationRequested:    engine.ProductionInvocationBackupPayloadDigests,
+		engine.KindProductionPublicationRequested:   engine.ProductionPublicationBackupPayloadDigests,
+		engine.KindRemediationInvocationRequested:   engine.RemediationInvocationBackupPayloadDigests,
+		engine.KindElaborationInvocationRequested:   engine.ElaborationInvocationBackupPayloadDigests,
+		engine.KindElaborationImplementationClaim:   engine.ElaborationImplementationClaimBackupPayloadDigests,
+		publish.IntentKindReservation:               publish.ReservationBackupPayloadDigests,
+		publish.IntentKindPublication:               publish.PublicationBackupPayloadDigests,
 	}
 }

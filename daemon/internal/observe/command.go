@@ -102,7 +102,7 @@ type supervisionSnapshot struct {
 }
 
 func writeSnapshot(out io.Writer, current observedb.Snapshot) error {
-	conclusion := Conclude(current.Observation)
+	conclusion := current.AuthenticatedConclusion
 	view := supervisionSnapshot{
 		RunID: current.Observation.RunID, State: deriveSupervisionState(current, conclusion),
 		Outcome: conclusion.Outcome, Reason: conclusion.Reason, Terminal: conclusion.Terminal,

@@ -503,15 +503,17 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 
 func realRunBackupPayloadExtractors() map[string]store.BackupPayloadDigestExtractor {
 	return map[string]store.BackupPayloadDigestExtractor{
-		engine.FakePublicationTaskKind:            engine.FakePublicationBackupPayloadDigests,
-		engine.FakePublicationInvocationOwnerKind: engine.FakePublicationInvocationOwnerBackupPayloadDigests,
-		signet.AgentInvocationRequestedKind:       signet.AgentInvocationBackupPayloadDigests,
-		engine.KindProductionInvocationRequested:  engine.ProductionInvocationBackupPayloadDigests,
-		engine.KindProductionPublicationRequested: engine.ProductionPublicationBackupPayloadDigests,
-		engine.KindElaborationInvocationRequested: engine.ElaborationInvocationBackupPayloadDigests,
-		engine.KindElaborationImplementationClaim: engine.ElaborationImplementationClaimBackupPayloadDigests,
-		publish.IntentKindReservation:             publish.ReservationBackupPayloadDigests,
-		publish.IntentKindPublication:             publish.PublicationBackupPayloadDigests,
+		engine.FakePublicationTaskKind:              engine.FakePublicationBackupPayloadDigests,
+		engine.FakePublicationInvocationOwnerKind:   engine.FakePublicationInvocationOwnerBackupPayloadDigests,
+		signet.AgentInvocationRequestedKind:         signet.AgentInvocationBackupPayloadDigests,
+		signet.PublicationReevaluationRequestedKind: signet.PublicationReevaluationBackupPayloadDigests,
+		signet.PublicationReevaluationCompletedKind: signet.PublicationReevaluationCompletionBackupPayloadDigests,
+		engine.KindProductionInvocationRequested:    engine.ProductionInvocationBackupPayloadDigests,
+		engine.KindProductionPublicationRequested:   engine.ProductionPublicationBackupPayloadDigests,
+		engine.KindElaborationInvocationRequested:   engine.ElaborationInvocationBackupPayloadDigests,
+		engine.KindElaborationImplementationClaim:   engine.ElaborationImplementationClaimBackupPayloadDigests,
+		publish.IntentKindReservation:               publish.ReservationBackupPayloadDigests,
+		publish.IntentKindPublication:               publish.PublicationBackupPayloadDigests,
 	}
 }
 
@@ -521,6 +523,7 @@ func TestRealRunBackupPayloadExtractorsIncludeElaborationMarkers(t *testing.T) {
 	for _, kind := range []string{
 		engine.KindElaborationInvocationRequested,
 		engine.KindElaborationImplementationClaim,
+		signet.PublicationReevaluationRequestedKind,
 	} {
 		if extractors[kind] == nil {
 			t.Errorf("backup payload extractor %q is not registered", kind)

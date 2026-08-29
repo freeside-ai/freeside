@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
@@ -641,11 +642,19 @@ func authenticateProductionAttempt(
 		return fmt.Errorf("initial production attempt requires elaboration grant: %w", domain.ErrParentKeyMismatch)
 	}
 	if grant == nil && attempt.Kind == domain.ProductionAttemptRetry {
+		parentRun, err := tx.GetRun(ctx, attempt.ParentRunID)
+		if err != nil {
+			return fmt.Errorf("load retry parent %q: %w", attempt.ParentRunID, err)
+		}
 		observation, err := tx.ObserveRun(ctx, attempt.ParentRunID)
 		if err != nil {
 			return fmt.Errorf("observe retry parent %q: %w", attempt.ParentRunID, err)
 		}
-		if !domain.ConcludeRun(observation).Final {
+		conclusion, err := AuthenticatedProductionRunConclusion(ctx, &tx.ReadTx, parentRun, observation)
+		if err != nil {
+			return fmt.Errorf("conclude retry parent %q: %w", attempt.ParentRunID, err)
+		}
+		if !conclusion.Final {
 			return fmt.Errorf("retry parent %q is still live: %w", attempt.ParentRunID, domain.ErrParentKeyMismatch)
 		}
 	}
@@ -1421,6 +1430,18 @@ func (e *Engine) recordProductionTerminalWithAuthority(
 	terminal productionTerminalRecord,
 	requireCurrentAdmission bool,
 ) (bool, error) {
+	return e.recordProductionTerminalWithCompletion(
+		ctx, run, terminal, requireCurrentAdmission, nil,
+	)
+}
+
+func (e *Engine) recordProductionTerminalWithCompletion(
+	ctx context.Context,
+	run domain.Run,
+	terminal productionTerminalRecord,
+	requireCurrentAdmission bool,
+	completion *signet.PublicationReevaluationCompletion,
+) (bool, error) {
 	payload, err := json.Marshal(terminal)
 	if err != nil {
 		return false, fmt.Errorf("record terminal for %q: %w", terminal.InvocationID, err)
@@ -1452,10 +1473,9 @@ func (e *Engine) recordProductionTerminalWithAuthority(
 				return fmt.Errorf("terminal record for %q disagrees with stored row: %w",
 					terminal.InvocationID, domain.ErrImmutableTransition)
 			}
-			return errReplay
 		}
-		inserted = true
-		if terminal.Status != exec.StatusCompleted {
+		inserted = insertedNow
+		if insertedNow && terminal.Status != exec.StatusCompleted {
 			createdAt := time.Now().UTC()
 			item, err := productionFailureItem(run, terminal, createdAt)
 			if err != nil {
@@ -1468,7 +1488,12 @@ func (e *Engine) recordProductionTerminalWithAuthority(
 		// The terminal milestone rides the recording transaction; only the
 		// closed status class crosses into the projection, never the head,
 		// artifacts, or summary (issue #394).
-		if observed, ok := observedStatus(terminal.Status); ok {
+		if insertedNow {
+			observed, ok := observedStatus(terminal.Status)
+			if !ok {
+				return fmt.Errorf("terminal status %q cannot be observed: %w",
+					terminal.Status, domain.ErrParentKeyMismatch)
+			}
 			invocation := terminal.InvocationID
 			if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
 				RunID: run.ID, Kind: domain.MilestoneTerminalRecorded,
@@ -1478,11 +1503,42 @@ func (e *Engine) recordProductionTerminalWithAuthority(
 				return err
 			}
 		}
+		if completion != nil {
+			completionTerminal := terminal
+			completionTerminal.InvocationID = completion.TerminalInvocationID
+			completionTerminalPayload, err := json.Marshal(completionTerminal)
+			if err != nil {
+				return err
+			}
+			completionTerminalEntry, completionTerminalInserted, err := tx.RecordInbox(
+				ctx, string(completion.TerminalInvocationID), kindProductionStageTerminal,
+				completionTerminalPayload)
+			if err != nil {
+				return err
+			}
+			if completionTerminalEntry.Kind != kindProductionStageTerminal ||
+				!bytes.Equal(completionTerminalEntry.Payload, completionTerminalPayload) {
+				return fmt.Errorf("publication reevaluation terminal %q disagrees with stored row: %w",
+					completion.TerminalInvocationID, domain.ErrImmutableTransition)
+			}
+			completionPayload, err := signet.EncodePublicationReevaluationCompletion(*completion)
+			if err != nil {
+				return err
+			}
+			key := signet.PublicationReevaluationCompletionKey(completion.CommandID)
+			marker, markerInserted, err := tx.RecordDispatchedOutbox(
+				ctx, key, signet.PublicationReevaluationCompletedKind, completionPayload)
+			if err != nil {
+				return err
+			}
+			if markerInserted != completionTerminalInserted || marker.Kind != signet.PublicationReevaluationCompletedKind ||
+				!bytes.Equal(marker.Payload, completionPayload) {
+				return fmt.Errorf("publication reevaluation completion %q disagrees with terminal record: %w",
+					key, domain.ErrImmutableTransition)
+			}
+		}
 		return nil
 	})
-	if errors.Is(err, errReplay) {
-		return false, nil
-	}
 	if err != nil {
 		return false, fmt.Errorf("record terminal for %q: %w", terminal.InvocationID, err)
 	}

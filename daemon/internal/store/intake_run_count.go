@@ -7,21 +7,14 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
-// CountActiveProjectRuns counts the runs of one project that have not yet
-// reached a final outcome. Activity is the same milestone-derived conclusion
-// the run-observation surface reports (domain.ConcludeRun): a run counts while
-// its conclusion is non-final (pending), and drops out once it publishes,
-// blocks definitively, fails, or is lost. Reusing ConcludeRun keeps this cap on
-// the one canonical run-terminality predicate rather than a second, divergent
-// notion of "done".
+// CountActiveProjectRuns counts runs using milestone-only terminality. It is a
+// store-local primitive and cannot authenticate accepted signet commands. The
+// production intake caller therefore uses its own resolution-aware count; this
+// helper remains valid only where publication reevaluation is unreachable.
 //
-// This is the project run-WIP axis label-intake auto_start bounds itself by
-// (intake.IntakePolicy.WIPCapExhausted). It is deliberately distinct from
-// RequireIdentityExecutionCapacity, which limits one inference identity's
-// concurrent executions; the #659 non-goal forbids reusing that
-// inference-parallelism limit as a run cap. The caller derives this count under
-// the store's write lock in the same decision that records the refusal or
-// authors the start, so the count and its consequence cannot race.
+// It is deliberately distinct from RequireIdentityExecutionCapacity, which
+// limits one inference identity's concurrent executions; the #659 non-goal
+// forbids reusing that inference-parallelism limit as a run cap.
 func (tx *ReadTx) CountActiveProjectRuns(ctx context.Context, projectID domain.ProjectID) (int, error) {
 	if projectID == "" {
 		return 0, fmt.Errorf("count active project runs: %w", domain.ErrEmptyID)

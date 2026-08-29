@@ -496,17 +496,19 @@ func TestProductionReviewTransientCleanupFailureSchedulesSameInvocationRetry(t *
 }
 
 func TestProductionHoldRetryPruning(t *testing.T) {
-	w := productionPublicationWorkflow{holdRetryAfter: map[domain.RunID]time.Time{
-		"run-pending":  time.Unix(1, 0),
-		"run-finished": time.Unix(2, 0),
+	pendingKey := productionPublicationTaskKey("run-pending")
+	finishedKey := productionPublicationTaskKey("run-finished")
+	w := productionPublicationWorkflow{holdRetryAfter: map[string]time.Time{
+		pendingKey:  time.Unix(1, 0),
+		finishedKey: time.Unix(2, 0),
 	}}
 	w.pruneHeldTaskRetries([]store.QueueEntry{{
-		IdempotencyKey: productionPublicationTaskKey("run-pending"),
+		IdempotencyKey: pendingKey,
 	}})
-	if _, found := w.holdRetryAfter["run-pending"]; !found {
+	if _, found := w.holdRetryAfter[pendingKey]; !found {
 		t.Fatal("pending task retry deadline was pruned")
 	}
-	if _, found := w.holdRetryAfter["run-finished"]; found {
+	if _, found := w.holdRetryAfter[finishedKey]; found {
 		t.Fatal("finished task retry deadline was retained")
 	}
 }
@@ -1844,6 +1846,248 @@ func validPublicationTask(
 		Publication: ProductionPublication{
 			Title: "Publish the production run", Body: "Produced by a production run.\n",
 			CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside", BotUserID: 42},
+		},
+	}
+}
+
+func TestReconstructProductionReevaluationTaskFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		action          domain.Action
+		resolveItem     bool
+		seedTask        bool
+		dispatchTask    bool
+		malformedSet    bool
+		tamperArtifacts bool
+		mutateRequest   func(*signet.PublicationReevaluationRequest)
+		wantValid       bool
+	}{
+		{name: "valid", action: domain.ActionRerunTrustEvaluation, resolveItem: true, seedTask: true, dispatchTask: true, wantValid: true},
+		{
+			name: "forged payload run", action: domain.ActionRerunTrustEvaluation, resolveItem: true, seedTask: true, dispatchTask: true,
+			mutateRequest: func(request *signet.PublicationReevaluationRequest) { request.RunID = "run-forged" },
+		},
+		{
+			name: "forged trust profile", action: domain.ActionRerunTrustEvaluation, resolveItem: true, seedTask: true, dispatchTask: true,
+			mutateRequest: func(request *signet.PublicationReevaluationRequest) { request.TrustProfileDigest = "sha256:forged" },
+		},
+		{name: "wrong action", action: domain.ActionStop, resolveItem: true, seedTask: true, dispatchTask: true},
+		{name: "malformed action set", action: domain.ActionRerunTrustEvaluation, resolveItem: true, seedTask: true, dispatchTask: true, malformedSet: true},
+		{name: "artifact binding mismatch", action: domain.ActionRerunTrustEvaluation, resolveItem: true, seedTask: true, dispatchTask: true, tamperArtifacts: true},
+		{name: "open item", action: domain.ActionRerunTrustEvaluation, seedTask: true, dispatchTask: true},
+		{name: "missing task", action: domain.ActionRerunTrustEvaluation, resolveItem: true},
+		{name: "pending task", action: domain.ActionRerunTrustEvaluation, resolveItem: true, seedTask: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			dbPath := filepath.Join(t.TempDir(), "freeside.db")
+			st, err := store.Open(ctx, dbPath, store.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			runID := domain.RunID("run-reevaluation-boundary")
+			task := validPublicationTask(t, runID, "project-reevaluation-boundary")
+			profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+				Repo: "acme/reevaluation", RepositoryID: 7,
+				PRExecution:                domain.PRExecutionAuditedSameRepo,
+				CandidateAutomationChanges: domain.AutomationChangesBlocked,
+				PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+				CommitPlan:                 domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
+				WorkflowAuditDigest: "sha256:workflow-audit",
+				Review:              domain.ReviewSettings{Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			project, err := domain.NewProject(task.ProjectID, profile.Repo, profile.RepositoryID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				if err := tx.RegisterProject(ctx, project); err != nil {
+					return err
+				}
+				return tx.RecordTrustProfile(ctx, profile, time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC))
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var claims []domain.AgentClaim
+			if tc.tamperArtifacts {
+				claims = []domain.AgentClaim{reevaluationBoundaryClaim("original evidence")}
+			}
+			item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+				ID: domain.ProductionBlockedItemID(runID), ProjectID: task.ProjectID,
+				Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+				Type:    domain.AttentionPublishBlocked, Priority: domain.PriorityHigh,
+				Reason: domain.PublicationBlockVerification,
+				RequestedDecision: []domain.Action{
+					domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+				},
+				AgentClaims: claims,
+				PRHeadSHA:   task.HeadSHA, ItemVersion: 1,
+				InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.malformedSet {
+				item.RequestedDecision = []domain.Action{domain.ActionRerunTrustEvaluation}
+			}
+			command, err := domain.NewCommand(domain.CommandInput{
+				CommandID: "cmd-reevaluate", DeviceID: "device-reevaluate", ItemID: item.ID,
+				ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA,
+				ArtifactDigests: item.ArtifactDigests, Action: tc.action,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolvedItem := item
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				if err := tx.PutAttentionItem(ctx, item); err != nil {
+					return err
+				}
+				if err := tx.PutCommand(ctx, command); err != nil {
+					return err
+				}
+				if tc.resolveItem {
+					resolvedItem.ItemVersion++
+					resolvedItem.Status = domain.StatusResolved
+					resolvedItem, err = resolvedItem.WithDecidedAt(time.Date(2026, 8, 29, 1, 0, 0, 0, time.UTC))
+					if err != nil {
+						return err
+					}
+					return tx.PutAttentionItem(ctx, resolvedItem)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.tamperArtifacts {
+				resolvedItem.AgentClaims = []domain.AgentClaim{reevaluationBoundaryClaim("tampered evidence")}
+				resolvedItem.ArtifactDigests = []domain.Digest{resolvedItem.AgentClaims[0].Digest}
+				body, err := json.Marshal(resolvedItem)
+				if err != nil {
+					t.Fatal(err)
+				}
+				db, err := sql.Open("sqlite", dbPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, updateErr := db.ExecContext(ctx,
+					"UPDATE attention_items SET body = ? WHERE id = ?", string(body), item.ID,
+				)
+				closeErr := db.Close()
+				if updateErr != nil || closeErr != nil {
+					t.Fatal(errors.Join(updateErr, closeErr))
+				}
+			}
+			if tc.seedTask {
+				payload, err := json.Marshal(task)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+					if _, _, err := tx.EnqueueOutbox(ctx, productionPublicationTaskKey(runID), KindProductionPublicationRequested, payload); err != nil {
+						return err
+					}
+					if tc.dispatchTask {
+						return tx.MarkOutboxDispatched(ctx, productionPublicationTaskKey(runID))
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			request := signet.PublicationReevaluationRequest{
+				RunID: runID, ItemID: item.ID, ItemVersion: item.ItemVersion,
+				CommandID: command.CommandID, PRHeadSHA: item.PRHeadSHA,
+				TrustProfileDigest: profile.ProfileDigest, ReviewRound: 1,
+			}
+			if tc.mutateRequest != nil {
+				tc.mutateRequest(&request)
+			}
+			payload, err := json.Marshal(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry := store.QueueEntry{
+				IdempotencyKey: signet.PublicationReevaluationKey(runID, command.CommandID),
+				Kind:           signet.PublicationReevaluationRequestedKind, Payload: payload,
+			}
+			before, err := st.ServerState(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			workflow := &productionPublicationWorkflow{store: st}
+			got, err := workflow.reconstructProductionReevaluationTask(ctx, entry)
+			if tc.wantValid {
+				if err != nil || got.reevaluation == nil || got.intentKey() != entry.IdempotencyKey {
+					t.Fatalf("reconstruct = %#v, %v", got, err)
+				}
+			} else if err == nil {
+				t.Fatalf("reconstruct succeeded: %#v", got)
+			}
+			after, err := st.ServerState(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after != before {
+				t.Fatalf("read boundary moved state from %#v to %#v", before, after)
+			}
+			if tc.name == "wrong action" {
+				if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+					_, _, err := tx.EnqueueOutbox(
+						ctx, entry.IdempotencyKey, entry.Kind, entry.Payload,
+					)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				beforeReconcile, err := st.ServerState(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := workflow.reconcile(ctx); err == nil {
+					t.Fatal("reconcile accepted mismatched reevaluation intent")
+				}
+				afterReconcile, err := st.ServerState(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if afterReconcile != beforeReconcile {
+					t.Fatalf("reconcile mismatch moved state from %#v to %#v",
+						beforeReconcile, afterReconcile)
+				}
+				workflow.holdOnly = true
+				beforeHoldOnly, err := st.ServerState(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := workflow.reconcile(ctx); err == nil {
+					t.Fatal("hold-only reconcile accepted mismatched reevaluation intent")
+				}
+				afterHoldOnly, err := st.ServerState(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if afterHoldOnly != beforeHoldOnly {
+					t.Fatalf("hold-only mismatch moved state from %#v to %#v",
+						beforeHoldOnly, afterHoldOnly)
+				}
+			}
+		})
+	}
+}
+
+func reevaluationBoundaryClaim(content string) domain.AgentClaim {
+	text := domain.ClaimText{MediaType: domain.MediaTypeTextPlain, Content: content}
+	return domain.AgentClaim{
+		Label: "reevaluation evidence", Artifact: domain.ArtifactID("artifact-" + content),
+		Digest: text.ComputeDigest(), Text: &text,
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-reevaluation-evidence",
+			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
 	}
 }

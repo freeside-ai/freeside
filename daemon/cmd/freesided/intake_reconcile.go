@@ -446,7 +446,7 @@ func (r *intakeReconciler) autoStart(
 	// (just admitted), so the cap bounds the count of OTHER active project runs.
 	start := false
 	if err := r.store.Write(ctx, func(tx *store.WriteTx) error {
-		active, err := tx.CountActiveProjectRuns(ctx, occurrence.Admission.Subject.ProjectID)
+		active, err := countActiveProjectRuns(ctx, &tx.ReadTx, occurrence.Admission.Subject.ProjectID)
 		if err != nil {
 			return err
 		}
@@ -478,6 +478,34 @@ func (r *intakeReconciler) autoStart(
 		return nil
 	}
 	return r.launch(ctx, init, occurrence)
+}
+
+func countActiveProjectRuns(
+	ctx context.Context, tx *store.ReadTx, projectID domain.ProjectID,
+) (int, error) {
+	runs, err := tx.ListRuns(ctx)
+	if err != nil {
+		return 0, err
+	}
+	active := 0
+	for _, snapshot := range runs {
+		run := snapshot.Value
+		if run.ProjectID != projectID {
+			continue
+		}
+		observation, err := tx.ObserveRun(ctx, run.ID)
+		if err != nil {
+			return 0, err
+		}
+		conclusion, err := engine.AuthenticatedProductionRunConclusion(ctx, tx, run, observation)
+		if err != nil {
+			return 0, err
+		}
+		if !conclusion.Final {
+			active++
+		}
+	}
+	return active, nil
 }
 
 func (r *intakeReconciler) launch(ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence) error {

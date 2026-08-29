@@ -65,6 +65,10 @@ const (
 INSERT INTO outbox (idempotency_key, kind, payload, payload_version, payload_digest, created_at)
 VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT (idempotency_key) DO NOTHING`
+	enqueueDispatchedOutboxSQL = `
+INSERT INTO outbox (idempotency_key, kind, payload, payload_version, payload_digest, status, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (idempotency_key) DO NOTHING`
 	selectOutboxSQL = `
 SELECT id, idempotency_key, kind, payload, payload_version, payload_digest, status, created_at
 FROM outbox WHERE idempotency_key = ?`
@@ -106,6 +110,46 @@ func (tx *InternalTx) EnqueueOutbox(ctx context.Context, key, kind string, paylo
 		return QueueEntry{}, false, fmt.Errorf("enqueue outbox %q: %w", key, err)
 	}
 	return entry, inserted, nil
+}
+
+// RecordDispatchedOutbox records a write-once internal fact outside every
+// pending dispatch scan. It is deliberately available only on WriteTx: the
+// enclosing client-visible transaction supplies the revision that makes a
+// projection depending on the fact observable atomically with its outcome.
+func (tx *WriteTx) RecordDispatchedOutbox(
+	ctx context.Context, key, kind string, payload []byte,
+) (QueueEntry, bool, error) {
+	if key == "" {
+		return QueueEntry{}, false, errors.New("record dispatched outbox: empty idempotency key")
+	}
+	if kind == "" {
+		return QueueEntry{}, false, errors.New("record dispatched outbox: empty kind")
+	}
+	if payload == nil {
+		payload = []byte{}
+	}
+	version := outboxPayloadVersion(kind)
+	digest := contentaddr.Sum(payload)
+	createdAt := formatTime(time.Now())
+	res, err := tx.tx.ExecContext(ctx, enqueueDispatchedOutboxSQL,
+		key, kind, payload, version, digest, outboxStatusDispatched, createdAt)
+	if err != nil {
+		return QueueEntry{}, false, fmt.Errorf("record dispatched outbox %q: %w", key, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return QueueEntry{}, false, fmt.Errorf("record dispatched outbox %q: %w", key, err)
+	}
+	entry, err := tx.GetOutbox(ctx, key)
+	if err != nil {
+		return QueueEntry{}, false, fmt.Errorf("record dispatched outbox %q: %w", key, err)
+	}
+	if entry.Status != outboxStatusDispatched {
+		return QueueEntry{}, false, fmt.Errorf(
+			"record dispatched outbox %q found status %q: %w",
+			key, entry.Status, ErrImmutableConflict)
+	}
+	return entry, affected > 0, nil
 }
 
 // ListPendingOutbox returns the committed-but-undispatched intents of one

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/fakepublication"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -100,6 +101,22 @@ func (f corpusFixture) mustWriteInternal(t *testing.T, mutate func(tx *store.Int
 	if err := f.store.WriteInternal(context.Background(), mutate); err != nil {
 		t.Fatalf("write internal: %v", err)
 	}
+}
+
+func (f corpusFixture) seedPublicationReevaluationAuthority(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	profile := configRecoveryTestProfile(t, "sha256:corpus-publication-reevaluation")
+	project, err := domain.NewProject("proj-1", profile.Repo, profile.RepositoryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mustWriteInternal(t, func(tx *store.InternalTx) error {
+		if err := tx.RegisterProject(ctx, project); err != nil {
+			return err
+		}
+		return tx.RecordTrustProfile(ctx, profile, f.at)
+	})
 }
 
 func corpusRun(runID domain.RunID, attempts ...domain.Attempt) domain.Run {
@@ -358,6 +375,132 @@ func blockedItem(runID domain.RunID, reason string, actions []domain.Action) (do
 	}, nil)
 }
 
+func (f corpusFixture) resolvePublicationBlockByRerun(
+	t *testing.T, item domain.AttentionItem, commandID string,
+) {
+	t.Helper()
+	ctx := context.Background()
+	f.seedItem(t, item)
+	deviceID := domain.DeviceID("device-" + commandID)
+	f.mustWrite(t, func(tx *store.WriteTx) error {
+		return tx.PutDevice(ctx, domain.Device{
+			ID: deviceID, DisplayName: "Corpus reevaluation device",
+			Status: domain.DeviceActive, PairedAt: f.at,
+		})
+	})
+	if _, err := f.service.Submit(ctx, signet.ClientCommand{
+		CommandID: commandID, DeviceID: deviceID, ExpectedEntityVersion: 1,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA,
+			ArtifactDigests: item.ArtifactDigests, Action: domain.ActionRerunTrustEvaluation,
+		},
+	}); err != nil {
+		t.Fatalf("resolve block by rerun: %v", err)
+	}
+	var request signet.PublicationReevaluationRequest
+	requestFound := false
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		entry, err := tx.GetOutbox(ctx, signet.PublicationReevaluationKey(*item.Subject.RunID, commandID))
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		request, err = signet.DecodePublicationReevaluationRequest(entry.Payload)
+		requestFound = err == nil
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !requestFound {
+		return
+	}
+	profile, err := f.storeProfile(ctx, request.TrustProfileDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization, err := domain.NewCandidateAuthorization(domain.CandidateAuthorizationInput{
+		Repo: profile.Repo, BaseSHA: corpusBaseSHA, HeadSHA: item.PRHeadSHA,
+		ImportResultDigest:       domain.Digest("sha256:" + strings.Repeat("1", 64)),
+		VerificationRecipeDigest: domain.Digest("sha256:" + strings.Repeat("2", 64)),
+		EvidenceSnapshotDigest:   domain.Digest("sha256:" + strings.Repeat("3", 64)),
+		VerificationOutcome:      domain.VerificationPassed,
+		TrustProfileDigest:       request.TrustProfileDigest,
+		InvocationID:             domain.InvocationID("reevaluation-checkpoint-" + commandID),
+		CreatedAt:                f.at.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mustWriteInternal(t, func(tx *store.InternalTx) error {
+		return tx.RecordCandidateAuthorization(ctx, authorization)
+	})
+}
+
+func (f corpusFixture) seedPublicationReevaluationCompletion(
+	t *testing.T, runID domain.RunID, commandID string,
+	outcome signet.PublicationReevaluationOutcome, evidenceItemID domain.ItemID,
+) {
+	t.Helper()
+	ctx := context.Background()
+	var item domain.AttentionItem
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		item, err = tx.GetAttentionItemRecord(ctx, evidenceItemID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	terminalID := signet.PublicationReevaluationTerminalInvocationID(commandID)
+	completion := signet.PublicationReevaluationCompletion{
+		RunID: runID, CommandID: commandID,
+		IntentKey: signet.PublicationReevaluationKey(runID, commandID), Outcome: outcome,
+		PRHeadSHA: item.PRHeadSHA, EvidenceItemID: item.ID,
+		EvidenceItemVersion: item.ItemVersion, TerminalInvocationID: terminalID,
+	}
+	completionPayload, err := signet.EncodePublicationReevaluationCompletion(completion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalPayload, err := json.Marshal(struct {
+		InvocationID domain.InvocationID `json:"invocation_id"`
+		RunID        domain.RunID        `json:"run_id"`
+		StageID      domain.StageID      `json:"stage_id"`
+		Status       string              `json:"status"`
+		HeadSHA      string              `json:"head_sha,omitempty"`
+		Artifacts    []domain.Digest     `json:"artifacts,omitempty"`
+		Summary      string              `json:"summary,omitempty"`
+	}{terminalID, runID, corpusStageID(runID), "completed", item.PRHeadSHA, nil, ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mustWrite(t, func(tx *store.WriteTx) error {
+		if err := tx.MarkOutboxDispatched(ctx, completion.IntentKey); err != nil {
+			return err
+		}
+		if _, _, err := tx.RecordInbox(ctx, string(terminalID), "production_stage_terminal", terminalPayload); err != nil {
+			return err
+		}
+		_, _, err := tx.RecordDispatchedOutbox(ctx,
+			signet.PublicationReevaluationCompletionKey(commandID),
+			signet.PublicationReevaluationCompletedKind, completionPayload)
+		return err
+	})
+}
+
+func (f corpusFixture) storeProfile(
+	ctx context.Context, digest domain.Digest,
+) (domain.AutomationTrustProfile, error) {
+	var profile domain.AutomationTrustProfile
+	err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		profile, err = tx.GetTrustProfile(ctx, digest)
+		return err
+	})
+	return profile, err
+}
+
 // TestRunObservationCorpusValidBaselines is the corpus's positive half: each
 // milestone, item, and observation kind, built the way the daemon writes it,
 // authenticates. A forge case is only meaningful if its baseline passes, so a
@@ -572,6 +715,228 @@ func TestRunObservationCorpusValidBaselines(t *testing.T) {
 		})
 		if err := f.read(ctx, runID); err != nil {
 			t.Fatalf("valid publication_blocked baseline: %v", err)
+		}
+	})
+
+	t.Run("publication_blocked_legacy_stopped", func(t *testing.T) {
+		f := newCorpusFixture(t)
+		runID := domain.RunID("run-blocked-legacy-stopped")
+		attemptInvocation := domain.InvocationID("inv-blocked-legacy-stopped-attempt")
+		f.mustWrite(t, func(tx *store.WriteTx) error {
+			return tx.PutRun(ctx, corpusRun(runID, corpusAttempt(runID, attemptInvocation)))
+		})
+		item, err := blockedItem(runID, domain.PublicationBlockTrust,
+			[]domain.Action{domain.ActionInspectTrustFailure, domain.ActionStop})
+		if err != nil {
+			t.Fatal(err)
+		}
+		item.PRHeadSHA = "cafebabe"
+		f.seedItem(t, item)
+		deviceID := domain.DeviceID("device-blocked-legacy-stopped")
+		f.mustWrite(t, func(tx *store.WriteTx) error {
+			return tx.PutDevice(ctx, domain.Device{
+				ID: deviceID, DisplayName: "Corpus legacy stop device",
+				Status: domain.DeviceActive, PairedAt: f.at,
+			})
+		})
+		if _, err := f.service.Submit(ctx, signet.ClientCommand{
+			CommandID: "cmd-blocked-legacy-stopped", DeviceID: deviceID,
+			ExpectedEntityVersion: int64(item.ItemVersion),
+			Payload: signet.DecisionPayload{
+				ItemID: item.ID, ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA,
+				ArtifactDigests: item.ArtifactDigests, Action: domain.ActionStop,
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		f.appendMilestone(t, domain.RunMilestone{
+			RunID: runID, Kind: domain.MilestonePublicationBlocked,
+			InvocationID: ptr(publicationInvocation(runID)), Reason: ptr(domain.HoldTrustBlocked),
+			RecordedAt: f.at.Add(3 * time.Hour),
+		})
+		if err := f.read(ctx, runID); err != nil {
+			t.Fatalf("valid stopped legacy publication block: %v", err)
+		}
+		snapshot, err := f.service.GetRun(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.Run.Outcome != domain.RunOutcomeBlocked {
+			t.Fatalf("stopped legacy block outcome = %q, want blocked", snapshot.Run.Outcome)
+		}
+	})
+
+	for _, tc := range []struct {
+		name    string
+		type_   domain.AttentionType
+		actions []domain.Action
+	}{
+		{
+			name: "review_dispute", type_: domain.AttentionReviewDispute,
+			actions: []domain.Action{
+				domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop,
+			},
+		},
+	} {
+		t.Run("publication_reevaluation_"+tc.name, func(t *testing.T) {
+			f := newCorpusFixture(t)
+			f.seedPublicationReevaluationAuthority(t)
+			runID := domain.RunID("run-reevaluation-" + tc.name)
+			attempt := domain.InvocationID("inv-reevaluation-" + tc.name)
+			f.mustWrite(t, func(tx *store.WriteTx) error {
+				return tx.PutRun(ctx, corpusRun(runID, corpusAttempt(runID, attempt)))
+			})
+			blocked, err := blockedItem(runID, domain.PublicationBlockTrust, []domain.Action{
+				domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			blocked.PRHeadSHA = "cafebabe"
+			commandID := "cmd-reevaluation-" + tc.name
+			f.resolvePublicationBlockByRerun(t, blocked, commandID)
+			itemRound := 1
+			item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+				ID:        domain.ItemID(fmt.Sprintf("production-review-%s-%d", runID, itemRound)),
+				ProjectID: "proj-1",
+				Subject: domain.Subject{
+					Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID,
+				},
+				Type: tc.type_, Priority: domain.PriorityNormal,
+				Reason: "Review requires operator attention.", RequestedDecision: tc.actions,
+				PRHeadSHA: blocked.PRHeadSHA, ItemVersion: 1,
+				InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.seedItem(t, item)
+			f.seedPublicationReevaluationCompletion(t, runID, commandID,
+				signet.PublicationReevaluationReviewEscalated, blocked.ID)
+			f.appendMilestone(t, domain.RunMilestone{
+				RunID: runID, Kind: domain.MilestonePublicationBlocked,
+				InvocationID: ptr(publicationInvocation(runID)), Reason: ptr(domain.HoldTrustBlocked),
+				RecordedAt: f.at.Add(3 * time.Hour),
+			})
+			err = f.read(ctx, runID)
+			if err != nil {
+				t.Fatalf("valid reevaluation %s escalation: %v", tc.name, err)
+			}
+			snapshot, err := f.service.GetRun(ctx, runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Run.Outcome != domain.RunOutcomeBlocked {
+				t.Fatalf("reevaluation %s outcome = %q, want blocked",
+					tc.name, snapshot.Run.Outcome)
+			}
+		})
+	}
+
+	t.Run("publication_blocked_reevaluated_identity", func(t *testing.T) {
+		f := newCorpusFixture(t)
+		f.seedPublicationReevaluationAuthority(t)
+		runID := domain.RunID("run-blocked-reevaluated")
+		attemptInvocation := domain.InvocationID("inv-blocked-reevaluated-attempt")
+		f.mustWrite(t, func(tx *store.WriteTx) error {
+			return tx.PutRun(ctx, corpusRun(runID, corpusAttempt(runID, attemptInvocation)))
+		})
+		carrier, err := blockedItem(runID, domain.PublicationBlockTrust, []domain.Action{
+			domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		carrier.PRHeadSHA = "cafebabe"
+		commandID := "cmd-reevaluated-identity"
+		f.resolvePublicationBlockByRerun(t, carrier, commandID)
+		reevaluated, err := blockedItem(runID, domain.PublicationBlockTrust, []domain.Action{
+			domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		reevaluated.ID = signet.ReevaluatedBlockedItemID(runID, commandID)
+		reevaluated.PRHeadSHA = carrier.PRHeadSHA
+		f.seedItem(t, reevaluated)
+		f.seedPublicationReevaluationCompletion(t, runID, commandID,
+			signet.PublicationReevaluationBlocked, carrier.ID)
+		f.appendMilestone(t, domain.RunMilestone{
+			RunID: runID, Kind: domain.MilestonePublicationBlocked,
+			InvocationID: ptr(signet.PublicationReevaluationBlockedMilestoneInvocationID(runID, commandID)),
+			Reason:       ptr(domain.HoldTrustBlocked),
+			RecordedAt:   f.at.Add(3 * time.Hour),
+		})
+		if err := f.read(ctx, runID); err != nil {
+			t.Fatalf("valid reevaluated publication block: %v", err)
+		}
+		f.appendMilestone(t, domain.RunMilestone{
+			RunID: runID, Kind: domain.MilestonePublicationBlocked,
+			InvocationID: ptr(signet.PublicationReevaluationBlockedMilestoneInvocationID(runID, "cmd-unknown")),
+			Reason:       ptr(domain.HoldTrustBlocked),
+			RecordedAt:   f.at.Add(4 * time.Hour),
+		})
+		assertFailClosed(t, "publication_blocked/reevaluation command", f.read(ctx, runID))
+	})
+
+	t.Run("publication_ready_after_resolved_block", func(t *testing.T) {
+		f := newCorpusFixture(t)
+		f.seedPublicationReevaluationAuthority(t)
+		f.seedAuthIdentity(t)
+		runID := domain.RunID("run-ready-after-blocked")
+		attempt := domain.InvocationID("inv-ready-after-blocked")
+		f.mustWrite(t, func(tx *store.WriteTx) error {
+			return tx.PutRun(ctx, corpusRun(runID, corpusAttempt(runID, attempt)))
+		})
+		producing := f.seedAdmission(t, runID, corpusStageID(runID), corpusAttempt(runID, attempt).ID, attempt)
+		f.seedExport(t, producing)
+		blocked, err := blockedItem(runID, domain.PublicationBlockTrust, []domain.Action{
+			domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		blocked.PRHeadSHA = "cafebabe"
+		commandID := "cmd-ready-after-blocked"
+		f.resolvePublicationBlockByRerun(t, blocked, commandID)
+		f.mustWrite(t, func(tx *store.WriteTx) error {
+			return tx.MarkOutboxDispatched(ctx, signet.PublicationReevaluationKey(runID, commandID))
+		})
+		ready, err := f.readyItem(runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.seedItem(t, ready)
+		f.seedPublicationReevaluationCompletion(t, runID, commandID,
+			signet.PublicationReevaluationPublished, blocked.ID)
+		f.seedReadyBinding(t, runID, attempt, publicationInvocation(runID))
+		f.appendMilestone(t, domain.RunMilestone{
+			RunID: runID, Kind: domain.MilestonePublicationBlocked,
+			InvocationID: ptr(publicationInvocation(runID)), Reason: ptr(domain.HoldTrustBlocked),
+			RecordedAt: f.at.Add(3 * time.Hour),
+		})
+		f.appendMilestone(t, domain.RunMilestone{
+			RunID: runID, Kind: domain.MilestonePublicationReady,
+			InvocationID: ptr(publicationInvocation(runID)), RecordedAt: f.at.Add(4 * time.Hour),
+		})
+		if err := f.read(ctx, runID); err != nil {
+			t.Fatalf("valid ready after resolved block: %v", err)
+		}
+		snapshot, err := f.service.GetRun(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.Run.Outcome != domain.RunOutcomePublished {
+			t.Fatalf("ready-after-blocked GetRun outcome = %q, want published",
+				snapshot.Run.Outcome)
+		}
+		runs, err := f.service.ListRuns(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runs) != 1 || runs[0].Run.ID != runID ||
+			runs[0].Run.Outcome != domain.RunOutcomePublished {
+			t.Fatalf("ready-after-blocked ListRuns = %#v, want one published run", runs)
 		}
 	})
 
@@ -1147,6 +1512,102 @@ func TestRunObservationCorpusForges(t *testing.T) {
 			})
 			return runID
 		}},
+		{"observation/reevaluated_identity_from_fake_carrier", func(t *testing.T, f corpusFixture) domain.RunID {
+			runID := domain.RunID("run-fake-rerun-carrier")
+			attempt := domain.InvocationID("inv-fake-rerun-carrier")
+			f.mustWrite(t, func(tx *store.WriteTx) error {
+				return tx.PutRun(ctx, corpusRun(runID, corpusAttempt(runID, attempt)))
+			})
+			carrier, err := blockedItem(runID, domain.PublicationBlockTrust, []domain.Action{
+				domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			carrier.ID = fakepublication.BlockedItemID(runID)
+			carrier.PRHeadSHA = "cafebabe"
+			commandID := "cmd-fake-rerun-carrier"
+			f.resolvePublicationBlockByRerun(t, carrier, commandID)
+			reevaluated, err := blockedItem(runID, domain.PublicationBlockTrust, []domain.Action{
+				domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			reevaluated.ID = signet.ReevaluatedBlockedItemID(runID, commandID)
+			reevaluated.PRHeadSHA = carrier.PRHeadSHA
+			f.seedItem(t, reevaluated)
+			f.appendMilestone(t, domain.RunMilestone{
+				RunID: runID, Kind: domain.MilestonePublicationBlocked,
+				InvocationID: ptr(publicationInvocation(runID)), Reason: ptr(domain.HoldTrustBlocked),
+				RecordedAt: f.at.Add(3 * time.Hour),
+			})
+			return runID
+		}},
+		{"observation/multiple_open_definitive_blocks", func(t *testing.T, f corpusFixture) domain.RunID {
+			runID := domain.RunID("run-multiple-open-blocks")
+			attempt := domain.InvocationID("inv-multiple-open-blocks")
+			f.mustWrite(t, func(tx *store.WriteTx) error {
+				return tx.PutRun(ctx, corpusRun(runID, corpusAttempt(runID, attempt)))
+			})
+			carrier, err := blockedItem(runID, domain.PublicationBlockTrust, []domain.Action{
+				domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			carrier.PRHeadSHA = "cafebabe"
+			f.seedItem(t, carrier)
+			newCommand := func(suffix string) domain.Command {
+				command, err := domain.NewCommand(domain.CommandInput{
+					CommandID: "cmd-multiple-open-blocks-" + suffix,
+					DeviceID:  domain.DeviceID("device-" + suffix),
+					ItemID:    carrier.ID, ItemVersion: carrier.ItemVersion,
+					PRHeadSHA: carrier.PRHeadSHA, ArtifactDigests: carrier.ArtifactDigests,
+					Action: domain.ActionRerunTrustEvaluation,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return command
+			}
+			firstCommand := newCommand("first")
+			secondCommand := newCommand("second")
+			resolved := carrier
+			resolved.Status = domain.StatusResolved
+			resolved.ItemVersion++
+			resolved, err = resolved.WithDecidedAt(f.at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.mustWrite(t, func(tx *store.WriteTx) error {
+				if err := tx.PutCommand(ctx, firstCommand); err != nil {
+					return err
+				}
+				if err := tx.PutCommand(ctx, secondCommand); err != nil {
+					return err
+				}
+				return tx.PutAttentionItem(ctx, resolved)
+			})
+			first, err := blockedItem(runID, domain.PublicationBlockTrust, []domain.Action{
+				domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			first.PRHeadSHA = "cafebabe"
+			first.ID = signet.ReevaluatedBlockedItemID(runID, firstCommand.CommandID)
+			f.seedItem(t, first)
+			second := first
+			second.ID = signet.ReevaluatedBlockedItemID(runID, secondCommand.CommandID)
+			f.seedItem(t, second)
+			f.appendMilestone(t, domain.RunMilestone{
+				RunID: runID, Kind: domain.MilestonePublicationBlocked,
+				InvocationID: ptr(publicationInvocation(runID)), Reason: ptr(domain.HoldTrustBlocked),
+				RecordedAt: f.at.Add(3 * time.Hour),
+			})
+			return runID
+		}},
 		{"observation/ready_and_blocked_coexist", func(t *testing.T, f corpusFixture) domain.RunID {
 			f.seedAuthIdentity(t)
 			runID := domain.RunID("run-1")
@@ -1175,6 +1636,41 @@ func TestRunObservationCorpusForges(t *testing.T) {
 			f.appendMilestone(t, domain.RunMilestone{
 				RunID: runID, Kind: domain.MilestonePublicationBlocked, InvocationID: ptr(publicationInvocation(runID)),
 				Reason: ptr(domain.HoldTrustBlocked), RecordedAt: f.at.Add(4 * time.Hour),
+			})
+			return runID
+		}},
+		{"observation/resolved_block_appended_after_ready", func(t *testing.T, f corpusFixture) domain.RunID {
+			f.seedPublicationReevaluationAuthority(t)
+			f.seedAuthIdentity(t)
+			runID := domain.RunID("run-resolved-block-after-ready")
+			attempt := domain.InvocationID("inv-resolved-block-after-ready")
+			f.mustWrite(t, func(tx *store.WriteTx) error {
+				return tx.PutRun(ctx, corpusRun(runID, corpusAttempt(runID, attempt)))
+			})
+			producing := f.seedAdmission(t, runID, corpusStageID(runID), corpusAttempt(runID, attempt).ID, attempt)
+			f.seedExport(t, producing)
+			blocked, err := blockedItem(runID, domain.PublicationBlockTrust, []domain.Action{
+				domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			blocked.PRHeadSHA = "cafebabe"
+			f.resolvePublicationBlockByRerun(t, blocked, "cmd-resolved-block-after-ready")
+			ready, err := f.readyItem(runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.seedItem(t, ready)
+			f.seedReadyBinding(t, runID, attempt, publicationInvocation(runID))
+			f.appendMilestone(t, domain.RunMilestone{
+				RunID: runID, Kind: domain.MilestonePublicationReady,
+				InvocationID: ptr(publicationInvocation(runID)), RecordedAt: f.at.Add(3 * time.Hour),
+			})
+			f.appendMilestone(t, domain.RunMilestone{
+				RunID: runID, Kind: domain.MilestonePublicationBlocked,
+				InvocationID: ptr(publicationInvocation(runID)), Reason: ptr(domain.HoldTrustBlocked),
+				RecordedAt: f.at.Add(4 * time.Hour),
 			})
 			return runID
 		}},

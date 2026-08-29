@@ -163,6 +163,17 @@ type productionPublicationTask struct {
 	Replay                ProductionReplay      `json:"replay"`
 	Publication           ProductionPublication `json:"publication"`
 	Summary               string                `json:"summary,omitempty"`
+	// reevaluation is reconstructed from a signet intent. It is never part of
+	// the original publication task row, whose bytes remain immutable.
+	reevaluation *productionReevaluation `json:"-"`
+}
+
+type productionReevaluation struct {
+	CommandID          string
+	ItemVersion        int
+	IntentKey          string
+	TrustProfileDigest domain.Digest
+	ReviewRound        int
 }
 
 type productionVerificationCheckpoint struct {
@@ -202,7 +213,7 @@ type productionPublicationWorkflow struct {
 	recipeReadTimeout               time.Duration
 	holdRetryInterval               time.Duration
 	now                             func() time.Time
-	holdRetryAfter                  map[domain.RunID]time.Time
+	holdRetryAfter                  map[string]time.Time
 	reviewRetryAfter                map[domain.RunID]time.Time
 	// holdPace bounds this workflow's per-pass hold projection writes: the
 	// hold-only composition's observations, and the active composition's
@@ -310,7 +321,7 @@ func newProductionPublicationWorkflow(
 		holdOnly:          cfg.HoldOnly,
 		recipeReadTimeout: cfg.RecipeReadTimeout,
 		holdRetryInterval: cfg.HoldRetryInterval, now: cfg.Now,
-		holdRetryAfter:    make(map[domain.RunID]time.Time),
+		holdRetryAfter:    make(map[string]time.Time),
 		reviewRetryAfter:  make(map[domain.RunID]time.Time),
 		afterVerification: cfg.AfterVerification,
 		afterPublication:  cfg.AfterPublication, afterReady: cfg.AfterReady,
@@ -346,8 +357,61 @@ func productionRunIDFromPublicationTaskKey(key string) (domain.RunID, bool) {
 	return domain.RunID(runID), true
 }
 
-func productionVerificationCheckpointKey(runID domain.RunID, headSHA string) string {
-	return "production-verification/" + string(runID) + "/" + headSHA
+func productionRunIDFromPendingTaskKey(key string) (domain.RunID, bool) {
+	if runID, ok := productionRunIDFromPublicationTaskKey(key); ok {
+		return runID, true
+	}
+	runID, _, ok := signet.PublicationReevaluationCoordinates(key)
+	return runID, ok
+}
+
+func productionVerificationCheckpointKey(runID domain.RunID, headSHA, commandID string) string {
+	key := "production-verification/" + string(runID) + "/" + headSHA
+	if commandID != "" {
+		key += "/reevaluation/" + commandID
+	}
+	return key
+}
+
+func (task productionPublicationTask) intentKey() string {
+	if task.reevaluation != nil {
+		return task.reevaluation.IntentKey
+	}
+	return productionPublicationTaskKey(task.RunID)
+}
+
+func (task productionPublicationTask) verificationCheckpointKey() string {
+	commandID := ""
+	if task.reevaluation != nil {
+		commandID = task.reevaluation.CommandID
+	}
+	return productionVerificationCheckpointKey(task.RunID, task.HeadSHA, commandID)
+}
+
+func (task productionPublicationTask) verificationInvocationID() domain.InvocationID {
+	if task.reevaluation != nil {
+		return domain.InvocationID(string(task.VerificationID) + "/reevaluation/" + task.reevaluation.CommandID)
+	}
+	return task.VerificationID
+}
+
+// blockedMilestoneInvocationID gives each reevaluation's publication_blocked
+// milestone its own identity; the store keeps one milestone per (run, kind,
+// invocation), so a rerun on the shared publication invocation would record
+// no block at all (signet.PublicationReevaluationBlockedMilestoneInvocationID).
+func (task productionPublicationTask) blockedMilestoneInvocationID() domain.InvocationID {
+	if task.reevaluation != nil {
+		return signet.PublicationReevaluationBlockedMilestoneInvocationID(
+			task.RunID, task.reevaluation.CommandID)
+	}
+	return task.PublicationID
+}
+
+func (task productionPublicationTask) blockedItemID() domain.ItemID {
+	if task.reevaluation != nil {
+		return signet.ReevaluatedBlockedItemID(task.RunID, task.reevaluation.CommandID)
+	}
+	return productionBlockedItemID(task.RunID)
 }
 
 func productionReadyItemID(runID domain.RunID) domain.ItemID {
@@ -1159,6 +1223,100 @@ func decodeProductionPublicationTask(entry store.QueueEntry) (productionPublicat
 	return task, nil
 }
 
+func (w *productionPublicationWorkflow) reconstructProductionReevaluationTask(
+	ctx context.Context, entry store.QueueEntry,
+) (productionPublicationTask, error) {
+	if entry.Kind != signet.PublicationReevaluationRequestedKind {
+		return productionPublicationTask{}, domain.ErrParentKeyMismatch
+	}
+	request, err := signet.DecodePublicationReevaluationRequest(entry.Payload)
+	if err != nil {
+		return productionPublicationTask{}, err
+	}
+	keyRunID, keyCommandID, ok := signet.PublicationReevaluationCoordinates(entry.IdempotencyKey)
+	if !ok || keyRunID != request.RunID || keyCommandID != request.CommandID ||
+		entry.IdempotencyKey != signet.PublicationReevaluationKey(request.RunID, request.CommandID) {
+		return productionPublicationTask{}, domain.ErrParentKeyMismatch
+	}
+	var (
+		command         domain.Command
+		item            domain.AttentionItem
+		taskRow         store.QueueEntry
+		project         domain.Project
+		acceptedProfile domain.AutomationTrustProfile
+	)
+	err = w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		command, _, err = tx.GetCommandSnapshot(ctx, request.CommandID)
+		if err != nil {
+			return err
+		}
+		item, err = tx.GetAttentionItemRecord(ctx, request.ItemID)
+		if err != nil {
+			return err
+		}
+		project, err = tx.GetProject(ctx, item.ProjectID)
+		if err != nil {
+			return err
+		}
+		acceptedProfile, err = tx.GetTrustProfile(ctx, request.TrustProfileDigest)
+		if err != nil {
+			return err
+		}
+		taskRow, err = tx.GetOutbox(ctx, productionPublicationTaskKey(request.RunID))
+		return err
+	})
+	if err != nil {
+		return productionPublicationTask{}, err
+	}
+	task, err := decodeProductionPublicationTask(taskRow)
+	if err != nil {
+		return productionPublicationTask{}, err
+	}
+	itemRunID := item.Subject.RunID
+	identityValid := item.ID == domain.ProductionBlockedItemID(request.RunID)
+	if !identityValid {
+		err = w.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			identityValid, err = signet.AuthenticateReevaluatedBlockedItemIdentity(
+				ctx, tx, item.ID, request.RunID, task.ProjectID,
+			)
+			return err
+		})
+		if err != nil {
+			return productionPublicationTask{}, err
+		}
+	}
+	if command.CommandID != request.CommandID || command.Action != domain.ActionRerunTrustEvaluation ||
+		command.ItemID != request.ItemID || command.ItemVersion != request.ItemVersion ||
+		command.PRHeadSHA != request.PRHeadSHA || itemRunID == nil || *itemRunID != request.RunID ||
+		item.Subject.Type != domain.SubjectRun || item.Subject.ID != domain.SubjectID(request.RunID) ||
+		item.ProjectID != task.ProjectID || item.Type != domain.AttentionPublishBlocked ||
+		project.ID != item.ProjectID || project.RepositoryID != acceptedProfile.RepositoryID ||
+		project.Repo != acceptedProfile.Repo ||
+		request.TrustProfileDigest != acceptedProfile.ProfileDigest ||
+		item.Status != domain.StatusResolved ||
+		item.DecidedAt == nil || item.ItemVersion != request.ItemVersion+1 ||
+		item.PRHeadSHA != request.PRHeadSHA ||
+		!slices.Equal(command.ArtifactDigests, item.ArtifactDigests) || !identityValid ||
+		!slices.Equal(item.RequestedDecision, productionRerunnableBlockActions) ||
+		!taskRow.Dispatched() {
+		return productionPublicationTask{}, domain.ErrParentKeyMismatch
+	}
+	if _, definitive := domain.DefinitivePublicationBlockReason(item.Reason); !definitive {
+		return productionPublicationTask{}, domain.ErrParentKeyMismatch
+	}
+	if task.RunID != request.RunID || task.HeadSHA != request.PRHeadSHA {
+		return productionPublicationTask{}, domain.ErrParentKeyMismatch
+	}
+	task.reevaluation = &productionReevaluation{
+		CommandID: request.CommandID, ItemVersion: request.ItemVersion,
+		IntentKey: entry.IdempotencyKey, TrustProfileDigest: request.TrustProfileDigest,
+		ReviewRound: request.ReviewRound,
+	}
+	return task, nil
+}
+
 // ProductionPublicationIdentity names the authenticated owners of the final
 // production publication records. The producing invocation owns the terminal;
 // the dedicated publication invocation owns the publication milestones.
@@ -1218,6 +1376,81 @@ func ProductionPublicationCompletion(
 	}, true, nil
 }
 
+// AuthenticateProductionPublicationReady binds publication_ready to the
+// completed production task and its durable ready-item PR identity. The caller
+// supplies the completion identity returned by ProductionPublicationCompletion
+// from the same read transaction.
+func AuthenticateProductionPublicationReady(
+	ctx context.Context,
+	tx *store.ReadTx,
+	run domain.Run,
+	observation domain.RunObservation,
+	identity ProductionPublicationIdentity,
+) (bool, error) {
+	ready := false
+	for _, milestone := range observation.Milestones {
+		if milestone.Kind == domain.MilestonePublicationReady &&
+			milestone.InvocationID != nil &&
+			*milestone.InvocationID == identity.PublicationInvocationID {
+			ready = true
+			break
+		}
+	}
+	if !ready {
+		return false, nil
+	}
+	binding, err := tx.GetReadyItemPRBinding(ctx, domain.ProductionReadyItemID(run.ID))
+	if err != nil {
+		return false, fmt.Errorf("authenticate publication-ready milestone: %w", err)
+	}
+	if binding.RunID != run.ID ||
+		binding.ProducingInvocationID != identity.ProducingInvocationID ||
+		binding.PublicationInvocationID != identity.PublicationInvocationID {
+		return false, fmt.Errorf(
+			"publication-ready binding disagrees with completed publication: %w",
+			domain.ErrParentKeyMismatch,
+		)
+	}
+	return true, nil
+}
+
+// AuthenticatedProductionRunConclusion combines the production completion
+// binding with signet's accepted-rerun classifier. It is the shared adapter for
+// engine and command consumers that already hold one coherent store read.
+func AuthenticatedProductionRunConclusion(
+	ctx context.Context,
+	tx *store.ReadTx,
+	run domain.Run,
+	observation domain.RunObservation,
+) (domain.RunConclusion, error) {
+	// A ready-after-blocked milestone can commit before the reevaluation's
+	// terminal transaction. Let the shared classifier recognize that live
+	// interval before binding readiness to a completed publication.
+	if domain.ConcludeRun(observation).Outcome == domain.RunOutcomeBlocked {
+		conclusion, preliminaryErr := signet.AuthenticatedRunConclusion(
+			ctx, tx, run, observation, false,
+		)
+		if preliminaryErr == nil && !conclusion.Final &&
+			conclusion.Outcome == domain.RunOutcomePending {
+			return conclusion, nil
+		}
+	}
+	identity, completed, err := ProductionPublicationCompletion(ctx, tx, run)
+	if err != nil {
+		return domain.RunConclusion{}, err
+	}
+	readyAuthenticated := false
+	if completed {
+		readyAuthenticated, err = AuthenticateProductionPublicationReady(
+			ctx, tx, run, observation, identity,
+		)
+		if err != nil {
+			return domain.RunConclusion{}, err
+		}
+	}
+	return signet.AuthenticatedRunConclusion(ctx, tx, run, observation, readyAuthenticated)
+}
+
 func validateProductionPublicationCompletion(
 	run domain.Run, task productionPublicationTask, terminal productionTerminalRecord,
 ) error {
@@ -1257,7 +1490,15 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		pending, err = tx.ListPendingOutbox(ctx, KindProductionPublicationRequested)
-		return err
+		if err != nil {
+			return err
+		}
+		reevaluations, err := tx.ListPendingOutbox(ctx, signet.PublicationReevaluationRequestedKind)
+		if err != nil {
+			return err
+		}
+		pending = append(pending, reevaluations...)
+		return nil
 	}); err != nil {
 		return productionPublicationResult{}, err
 	}
@@ -1265,8 +1506,25 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 	var result productionPublicationResult
 	var joined error
 	for _, entry := range pending {
-		task, err := decodeProductionPublicationTask(entry)
+		var task productionPublicationTask
+		var err error
+		if entry.Kind == signet.PublicationReevaluationRequestedKind {
+			task, err = w.reconstructProductionReevaluationTask(ctx, entry)
+		} else {
+			task, err = decodeProductionPublicationTask(entry)
+		}
 		if err != nil {
+			// A reevaluation intent is returned authority, not an engine-owned
+			// task row. The authoritative issue contract requires a mismatch to
+			// fail closed without turning the untrusted coordinates into a store
+			// mutation, including a quarantine item.
+			if entry.Kind == signet.PublicationReevaluationRequestedKind {
+				joined = errors.Join(joined, fmt.Errorf(
+					"reevaluation intent %q cannot be reconstructed: %w: %w",
+					entry.IdempotencyKey, err, domain.ErrParentKeyMismatch,
+				))
+				continue
+			}
 			// A task row this daemon cannot reconstruct is the marker's
 			// failure mode one row over: a newer daemon writes a newer task
 			// too, so joining the error here would end Engine.Run on every
@@ -1274,7 +1532,7 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 			// it names and leave the row pending for a daemon that can read
 			// it. A row whose key this lane could not have filed names no
 			// run, so it stays loud.
-			if runID, ok := productionRunIDFromPublicationTaskKey(entry.IdempotencyKey); ok {
+			if runID, ok := productionRunIDFromPendingTaskKey(entry.IdempotencyKey); ok {
 				quarantined, quarantineErr := w.quarantineTaskRow(ctx, runID)
 				if quarantineErr != nil {
 					joined = errors.Join(joined, fmt.Errorf(
@@ -1314,11 +1572,11 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 		if markerQuarantined {
 			continue
 		}
-		if retryAfter, held := w.holdRetryAfter[task.RunID]; held {
+		if retryAfter, held := w.holdRetryAfter[task.intentKey()]; held {
 			if w.now().Before(retryAfter) {
 				continue
 			}
-			delete(w.holdRetryAfter, task.RunID)
+			delete(w.holdRetryAfter, task.intentKey())
 		}
 		lockDir := filepath.Join(w.workDir, "task-locks")
 		if err := os.MkdirAll(lockDir, 0o700); err != nil {
@@ -1467,9 +1725,9 @@ func (w *productionPublicationWorkflow) pruneHeldTaskRetries(pending []store.Que
 	for _, entry := range pending {
 		pendingKeys[entry.IdempotencyKey] = struct{}{}
 	}
-	for runID := range w.holdRetryAfter {
-		if _, found := pendingKeys[productionPublicationTaskKey(runID)]; !found {
-			delete(w.holdRetryAfter, runID)
+	for key := range w.holdRetryAfter {
+		if _, found := pendingKeys[key]; !found {
+			delete(w.holdRetryAfter, key)
 		}
 	}
 }
@@ -1543,7 +1801,9 @@ func (w *productionPublicationWorkflow) loadBinding(
 		default:
 			return declarationErr
 		}
-		if binding.admission.TrustProfileDigest == nil {
+		if task.reevaluation != nil {
+			binding.profile, err = tx.GetTrustProfile(ctx, task.reevaluation.TrustProfileDigest)
+		} else if binding.admission.TrustProfileDigest == nil {
 			binding.profile, err = tx.LatestTrustProfile(ctx, binding.admission.Base.Repo)
 		} else {
 			binding.profile, err = tx.GetTrustProfile(ctx, *binding.admission.TrustProfileDigest)
@@ -1594,7 +1854,7 @@ func (w *productionPublicationWorkflow) loadBinding(
 		!sameOptionalDigest(binding.replay.EvidenceManifestDigest, binding.export.EvidenceManifestDigest) ||
 		(binding.replay.CommitPlanDigest != nil) != binding.export.CommitPlanPresent ||
 		!binding.replay.ImportOptions.CommitDate.Equal(binding.export.RecordedAt) ||
-		(binding.admission.TrustProfileDigest != nil &&
+		(task.reevaluation == nil && binding.admission.TrustProfileDigest != nil &&
 			binding.profile.ProfileDigest != *binding.admission.TrustProfileDigest) ||
 		binding.profile.Repo != binding.admission.Base.Repo ||
 		binding.profile.RepositoryID != binding.admission.Base.RepositoryID ||
@@ -1927,7 +2187,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
-		if pendingIntent {
+		if found || pendingIntent {
 			return w.holdBlockedTask(
 				ctx, task, imported,
 				"Publication is durably held because current trust no longer approves the admitted project-image recipe. Restore that approval to recover the committed publication intent.",
@@ -1936,7 +2196,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		}
 		return w.completeBlockedTask(
 			ctx, task, binding.run, imported, nil,
-			productionBlockRecipeRevoked,
+			productionBlockRecipeRevoked, productionRerunnableBlockActions,
 		)
 	}
 	if !found {
@@ -1954,7 +2214,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if !checkpoint.Authorization.AuthorizesPublication {
 		return w.completeBlockedTask(
 			ctx, task, binding.run, checkpoint.Imported, checkpoint.Artifacts,
-			productionBlockVerification,
+			productionBlockVerification, productionRerunnableBlockActions,
 		)
 	}
 
@@ -1995,7 +2255,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			// ordinary publish_blocked card rather than a vanished dispute.
 			return w.completeBlockedTask(
 				ctx, task, binding.run, checkpoint.Imported, checkpoint.Artifacts,
-				productionBlockTrust,
+				productionBlockTrust, productionShadowStopBlockActions,
 			)
 		}
 		if errors.Is(err, errShadowReviewBlocksReady) {
@@ -2101,7 +2361,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			}
 			outcome, blockErr := w.completeBlockedTask(
 				ctx, task, binding.run, checkpoint.Imported, checkpoint.Artifacts,
-				reason,
+				reason, productionRerunnableBlockActions,
 			)
 			if blockErr != nil {
 				return productionTaskOutcome{}, errors.Join(err, blockErr)
@@ -2366,6 +2626,16 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	if err != nil {
 		return productionReviewPending, err
 	}
+	minimumRound := 1
+	if task.reevaluation != nil {
+		minimumRound = task.reevaluation.ReviewRound
+		if latestRecord != nil && latestRecord.Round < minimumRound {
+			latestRecord = nil
+		}
+		if latestFailure != nil && latestFailure.Round < minimumRound {
+			latestFailure = nil
+		}
+	}
 	if latestRecord != nil && latestRecord.Outcome != domain.ReviewFindings {
 		if err := w.removeReviewWorkspace(latestRecord.InvocationID); err != nil {
 			return productionReviewPending, err
@@ -2414,7 +2684,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				(latestRecord == nil || latestFailure.Round > latestRecord.Round) {
 				return w.parkReviewConfiguration(ctx, task, binding, *latestFailure)
 			}
-			round := 1
+			round := minimumRound
 			if latestRecord != nil {
 				round = latestRecord.Round + 1
 			}
@@ -2554,7 +2824,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		}
 	}
 
-	round := 1
+	round := minimumRound
 	if latestRecord != nil {
 		round = latestRecord.Round + 1
 	}
@@ -3721,7 +3991,8 @@ func (w *productionPublicationWorkflow) completeReviewEscalationTask(
 	task productionPublicationTask,
 	binding productionBinding,
 ) (productionTaskOutcome, error) {
-	accepted, err := w.recordCompletedTerminalAtBoundary(ctx, binding.run, task)
+	accepted, err := w.recordCompletedTerminalAtBoundary(
+		ctx, binding.run, task, signet.PublicationReevaluationReviewEscalated)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -4053,7 +4324,8 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 	if err := w.supersedeBlockedHold(ctx, task); err != nil {
 		return productionTaskOutcome{}, err
 	}
-	accepted, err := w.recordCompletedTerminalAtBoundary(ctx, binding.run, task)
+	accepted, err := w.recordCompletedTerminalAtBoundary(
+		ctx, binding.run, task, signet.PublicationReevaluationPublished)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -4208,15 +4480,45 @@ func (w *productionPublicationWorkflow) recordAttendedPublicationHolds(ctx conte
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		pending, err = tx.ListPendingOutbox(ctx, KindProductionPublicationRequested)
-		return err
+		if err != nil {
+			return err
+		}
+		reevaluations, err := tx.ListPendingOutbox(ctx, signet.PublicationReevaluationRequestedKind)
+		if err != nil {
+			return err
+		}
+		pending = append(pending, reevaluations...)
+		return nil
 	}); err != nil {
 		return err
 	}
+	runIDs := make([]domain.RunID, 0, len(pending))
+	var joined error
 	for _, entry := range pending {
-		runID, ok := productionRunIDFromPublicationTaskKey(entry.IdempotencyKey)
+		var runID domain.RunID
+		var ok bool
+		if entry.Kind == signet.PublicationReevaluationRequestedKind {
+			task, err := w.reconstructProductionReevaluationTask(ctx, entry)
+			if err != nil {
+				joined = errors.Join(joined, fmt.Errorf(
+					"reevaluation intent %q cannot be reconstructed: %w: %w",
+					entry.IdempotencyKey, err, domain.ErrParentKeyMismatch,
+				))
+				continue
+			}
+			runID, ok = task.RunID, true
+		} else {
+			runID, ok = productionRunIDFromPublicationTaskKey(entry.IdempotencyKey)
+		}
 		if !ok {
 			continue
 		}
+		runIDs = append(runIDs, runID)
+	}
+	if joined != nil {
+		return joined
+	}
+	for _, runID := range runIDs {
 		now := w.now().UTC()
 		if !w.holdPace.due("hold:"+string(runID), string(domain.HoldAttendedModeActive), now) {
 			continue
@@ -4244,6 +4546,9 @@ func (w *productionPublicationWorkflow) appendPublicationMilestone(
 ) error {
 	return w.store.Write(ctx, func(tx *store.WriteTx) error {
 		invocation := task.PublicationID
+		if kind == domain.MilestonePublicationBlocked {
+			invocation = task.blockedMilestoneInvocationID()
+		}
 		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
 			RunID: task.RunID, Kind: kind,
 			InvocationID: &invocation, Reason: cause,
@@ -4340,7 +4645,7 @@ func (w *productionPublicationWorkflow) recordReadyItemPRBinding(
 }
 
 func (w *productionPublicationWorkflow) deferHeldTask(task productionPublicationTask) {
-	w.holdRetryAfter[task.RunID] = w.now().Add(w.holdRetryInterval)
+	w.holdRetryAfter[task.intentKey()] = w.now().Add(w.holdRetryInterval)
 }
 
 // recordPublicationEnvironmentHold states the typed cause behind every
@@ -4394,7 +4699,7 @@ func (w *productionPublicationWorkflow) supersedeBlockedHold(
 	var item domain.AttentionItem
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		item, err = tx.GetAttentionItem(ctx, productionBlockedItemID(task.RunID))
+		item, err = tx.GetAttentionItem(ctx, task.blockedItemID())
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
@@ -4830,7 +5135,7 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 	}
 	verified, err := verify.Verify(ctx, checkoutDir, verify.Options{
 		HeadSHA: imported.CommitSHA, BaseSHA: binding.admission.Base.BaseSHA,
-		InvocationID: task.VerificationID, RecipeSource: verify.ConfigRecipe(recipe),
+		InvocationID: task.verificationInvocationID(), RecipeSource: verify.ConfigRecipe(recipe),
 		RecipePath: verify.DefaultRecipePath, Room: room,
 		ApprovedRecipes: w.approvedRecipes, Changes: imported.Changes,
 		Policy: verify.Policy{ExtraVerificationControlPatterns: slices.Clone(
@@ -4876,14 +5181,14 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 		EvidenceSnapshotDigest:   evidenceDigest, VerificationOutcome: outcome,
 		Findings:           candidateFindings(imported.Findings, verified.Findings),
 		TrustProfileDigest: binding.profile.ProfileDigest,
-		InvocationID:       task.VerificationID, CreatedAt: binding.export.RecordedAt,
+		InvocationID:       task.verificationInvocationID(), CreatedAt: binding.export.RecordedAt,
 	})
 	if err != nil {
 		return productionVerificationCheckpoint{}, err
 	}
 	checkpoint := productionVerificationCheckpoint{
 		Version: productionVerificationVersion,
-		TaskKey: productionPublicationTaskKey(task.RunID), HeadSHA: task.HeadSHA,
+		TaskKey: task.intentKey(), HeadSHA: task.HeadSHA,
 		ProjectImage: binding.image.ID,
 		Imported:     imported, Authorization: authorization, Artifacts: artifacts,
 	}
@@ -4933,7 +5238,7 @@ func (w *productionPublicationWorkflow) persistCheckpoint(
 			return err
 		}
 		entry, _, err := tx.RecordInbox(
-			ctx, productionVerificationCheckpointKey(task.RunID, task.HeadSHA),
+			ctx, task.verificationCheckpointKey(),
 			productionVerificationCheckpointKind, payload,
 		)
 		if err != nil {
@@ -4958,8 +5263,9 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 	)
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		entry, err = tx.GetInbox(ctx, productionVerificationCheckpointKey(task.RunID, task.HeadSHA))
+		entry, err = tx.GetInbox(ctx, task.verificationCheckpointKey())
 		if errors.Is(err, store.ErrNotFound) &&
+			task.reevaluation == nil &&
 			task.ProducingInvocationID == productionInvocationID(task.RunID) {
 			entry, err = tx.GetInbox(ctx, "production-verification/"+string(task.RunID))
 			legacy = err == nil
@@ -5005,7 +5311,7 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 		versionMatches = checkpoint.Version == productionVerificationVersionV1 && checkpoint.HeadSHA == ""
 	}
 	if !versionMatches ||
-		checkpoint.TaskKey != productionPublicationTaskKey(task.RunID) ||
+		checkpoint.TaskKey != task.intentKey() ||
 		checkpoint.ProjectImage != binding.image.ID || authorization.Validate() != nil ||
 		authorization.Repo != binding.admission.Base.Repo ||
 		authorization.BaseSHA != binding.admission.Base.BaseSHA ||
@@ -5014,7 +5320,7 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 		authorization.VerificationRecipeDigest != binding.image.RecipeDigest ||
 		authorization.EvidenceSnapshotDigest != evidenceDigest ||
 		authorization.TrustProfileDigest != binding.profile.ProfileDigest ||
-		authorization.InvocationID != task.VerificationID {
+		authorization.InvocationID != task.verificationInvocationID() {
 		return productionVerificationCheckpoint{}, false, fmt.Errorf("production verification checkpoint disagrees with task: %w",
 			domain.ErrParentKeyMismatch)
 	}
@@ -5067,7 +5373,7 @@ func (w *productionPublicationWorkflow) loadRemediationSourceTree(
 	)
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		entry, err = tx.GetInbox(ctx, productionVerificationCheckpointKey(task.RunID, request.HeadSHA))
+		entry, err = tx.GetInbox(ctx, productionVerificationCheckpointKey(task.RunID, request.HeadSHA, ""))
 		if errors.Is(err, store.ErrNotFound) {
 			entry, err = tx.GetInbox(ctx, "production-verification/"+string(task.RunID))
 			legacy = err == nil
@@ -5276,28 +5582,39 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 	}, approvedRecipes)
 }
 
+func (w *productionPublicationWorkflow) blockedItemWithActionsAndRecipes(
+	task productionPublicationTask,
+	imported importer.Result,
+	artifacts []domain.Artifact,
+	reason string,
+	actions []domain.Action,
+	approvedRecipes map[domain.Digest]bool,
+) (domain.AttentionItem, error) {
+	return w.newBlockedItem(
+		task, imported, artifacts, reason, actions, approvedRecipes,
+	)
+}
+
 func (w *productionPublicationWorkflow) blockedItem(
 	task productionPublicationTask,
 	imported importer.Result,
 	artifacts []domain.Artifact,
 	reason string,
 ) (domain.AttentionItem, error) {
-	return w.blockedItemWithRecipes(task, imported, artifacts, reason, w.approvedRecipes)
-}
-
-func (w *productionPublicationWorkflow) blockedItemWithRecipes(
-	task productionPublicationTask,
-	imported importer.Result,
-	artifacts []domain.Artifact,
-	reason string,
-	approvedRecipes map[domain.Digest]bool,
-) (domain.AttentionItem, error) {
-	return w.newBlockedItem(
+	return w.blockedItemWithActionsAndRecipes(
 		task, imported, artifacts, reason,
-		[]domain.Action{domain.ActionInspectTrustFailure, domain.ActionStop},
-		approvedRecipes,
+		productionShadowStopBlockActions, w.approvedRecipes,
 	)
 }
+
+var (
+	productionRerunnableBlockActions = []domain.Action{
+		domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+	}
+	productionShadowStopBlockActions = []domain.Action{
+		domain.ActionInspectTrustFailure, domain.ActionStop,
+	}
+)
 
 func (w *productionPublicationWorkflow) blockedHoldItem(
 	task productionPublicationTask,
@@ -5322,7 +5639,7 @@ func (w *productionPublicationWorkflow) newBlockedItem(
 	runID := task.RunID
 	createdAt := w.attentionCreatedAt()
 	return domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: productionBlockedItemID(task.RunID), ProjectID: task.ProjectID,
+		ID: task.blockedItemID(), ProjectID: task.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID},
 		Type:    domain.AttentionPublishBlocked, Priority: domain.PriorityHigh,
 		Reason:            reason,
@@ -5349,7 +5666,7 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 	var current domain.AttentionItem
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		current, err = tx.GetAttentionItemRecord(ctx, productionBlockedItemID(task.RunID))
+		current, err = tx.GetAttentionItemRecord(ctx, task.blockedItemID())
 		return err
 	}); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -5360,8 +5677,8 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 	if slices.Equal(current.RequestedDecision, []domain.Action{domain.ActionInspectTrustFailure}) {
 		return nil, nil
 	}
-	if !slices.Equal(current.RequestedDecision,
-		[]domain.Action{domain.ActionInspectTrustFailure, domain.ActionStop}) {
+	if !slices.Equal(current.RequestedDecision, productionRerunnableBlockActions) &&
+		!slices.Equal(current.RequestedDecision, productionShadowStopBlockActions) {
 		return nil, fmt.Errorf("production blocked item %q has unexpected decisions: %w",
 			current.ID, domain.ErrParentKeyMismatch)
 	}
@@ -5403,8 +5720,8 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 	}
 	historicalRecipes := mapsClone(w.approvedRecipes)
 	historicalRecipes[binding.image.RecipeDigest] = true
-	expected, err := w.blockedItemWithRecipes(
-		task, imported, artifacts, current.Reason, historicalRecipes,
+	expected, err := w.blockedItemWithActionsAndRecipes(
+		task, imported, artifacts, current.Reason, current.RequestedDecision, historicalRecipes,
 	)
 	if err != nil {
 		return nil, err
@@ -5422,7 +5739,8 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 			return nil, err
 		}
 	}
-	accepted, err := w.recordCompletedTerminalAtBoundary(ctx, binding.run, task)
+	accepted, err := w.recordCompletedTerminalAtBoundary(
+		ctx, binding.run, task, signet.PublicationReevaluationBlocked)
 	if err != nil {
 		return nil, err
 	}
@@ -5439,8 +5757,9 @@ func (w *productionPublicationWorkflow) completeBlockedTask(
 	imported importer.Result,
 	artifacts []domain.Artifact,
 	reason string,
+	actions []domain.Action,
 ) (productionTaskOutcome, error) {
-	item, err := w.blockedItem(task, imported, artifacts, reason)
+	item, err := w.newBlockedItem(task, imported, artifacts, reason, actions, w.approvedRecipes)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -5465,7 +5784,8 @@ func (w *productionPublicationWorkflow) completeBlockedTask(
 				errors.Join(err, errProductionCrashSeam))
 		}
 	}
-	accepted, err := w.recordCompletedTerminalAtBoundary(ctx, run, task)
+	accepted, err := w.recordCompletedTerminalAtBoundary(
+		ctx, run, task, signet.PublicationReevaluationBlocked)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -5518,28 +5838,35 @@ func (w *productionPublicationWorkflow) recordCompletedTerminal(
 	ctx context.Context,
 	run domain.Run,
 	task productionPublicationTask,
+	completion *signet.PublicationReevaluationCompletion,
 ) (bool, error) {
 	stage, ok := productionStageForInvocation(run, task.ProducingInvocationID)
 	if !ok {
 		return false, domain.ErrParentKeyMismatch
 	}
-	return (&Engine{store: w.store}).recordProductionTerminalWithAuthority(ctx, run, productionTerminalRecord{
+	return (&Engine{store: w.store}).recordProductionTerminalWithCompletion(ctx, run, productionTerminalRecord{
 		InvocationID: task.ProducingInvocationID, RunID: task.RunID,
 		StageID: stage.ID, Status: exec.StatusCompleted,
 		HeadSHA: task.HeadSHA, Artifacts: slices.Clone(task.Artifacts), Summary: task.Summary,
-	}, false)
+	}, false, completion)
 }
 
 func (w *productionPublicationWorkflow) recordCompletedTerminalAtBoundary(
 	ctx context.Context,
 	run domain.Run,
 	task productionPublicationTask,
+	outcome signet.PublicationReevaluationOutcome,
 ) (bool, error) {
 	if err := runDurableTransitionHook(w.transitionHook,
 		DurableTransitionTerminalCompletion, DurableTransitionBefore); err != nil {
 		return false, err
 	}
-	accepted, err := w.recordCompletedTerminal(ctx, run, task)
+	completion, err := w.publicationReevaluationCompletion(
+		ctx, task, outcome)
+	if err != nil {
+		return false, err
+	}
+	accepted, err := w.recordCompletedTerminal(ctx, run, task, completion)
 	if err != nil {
 		return false, err
 	}
@@ -5550,10 +5877,65 @@ func (w *productionPublicationWorkflow) recordCompletedTerminalAtBoundary(
 	return accepted, nil
 }
 
+func (w *productionPublicationWorkflow) publicationReevaluationCompletion(
+	ctx context.Context,
+	task productionPublicationTask,
+	outcome signet.PublicationReevaluationOutcome,
+) (*signet.PublicationReevaluationCompletion, error) {
+	if task.reevaluation == nil {
+		return nil, nil
+	}
+	evidenceItemID, err := w.reevaluationSourceItemID(ctx, task)
+	if err != nil {
+		return nil, err
+	}
+	var item domain.AttentionItem
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		item, err = tx.GetAttentionItemRecord(ctx, evidenceItemID)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	completion := &signet.PublicationReevaluationCompletion{
+		RunID: task.RunID, CommandID: task.reevaluation.CommandID,
+		IntentKey: task.reevaluation.IntentKey, Outcome: outcome,
+		PRHeadSHA: task.HeadSHA, EvidenceItemID: item.ID,
+		EvidenceItemVersion: item.ItemVersion,
+		TerminalInvocationID: signet.PublicationReevaluationTerminalInvocationID(
+			task.reevaluation.CommandID),
+	}
+	if _, err := signet.EncodePublicationReevaluationCompletion(*completion); err != nil {
+		return nil, err
+	}
+	return completion, nil
+}
+
+func (w *productionPublicationWorkflow) reevaluationSourceItemID(
+	ctx context.Context, task productionPublicationTask,
+) (domain.ItemID, error) {
+	if task.reevaluation == nil {
+		return "", nil
+	}
+	var entry store.QueueEntry
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetOutbox(ctx, task.reevaluation.IntentKey)
+		return err
+	}); err != nil {
+		return "", err
+	}
+	request, err := signet.DecodePublicationReevaluationRequest(entry.Payload)
+	if err != nil || request.CommandID != task.reevaluation.CommandID || request.RunID != task.RunID {
+		return "", errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	return request.ItemID, nil
+}
+
 func (w *productionPublicationWorkflow) finishTask(
 	ctx context.Context, task productionPublicationTask,
 ) error {
 	return w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		return tx.MarkOutboxDispatched(ctx, productionPublicationTaskKey(task.RunID))
+		return tx.MarkOutboxDispatched(ctx, task.intentKey())
 	})
 }
