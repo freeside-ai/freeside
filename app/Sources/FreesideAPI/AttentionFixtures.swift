@@ -243,7 +243,7 @@ public enum AttentionFixtures {
                 case .spec_approval, .agent_question, .review_diminishing_returns,
                     .review_contradiction, .review_configuration, .finding_adjudication,
                     .ready_for_final_review, .publish_blocked, .run_proposal:
-                    "summary"
+                    "freeside.summary"
                 case .system_health, .blocked:
                     preconditionFailure("Mechanical cards never carry agent claims")
                 }
@@ -255,6 +255,17 @@ public enum AttentionFixtures {
                     provenance: claimProvenance,
                     text: .init(media_type: .text_sol_markdown, content: summary)
                 ))
+            if type == .review_dispute || type == .execution_failure {
+                let summary = "Work on **\(key)** stopped; the diagnostic claim above needs a decision."
+                agentClaims.append(
+                    .init(
+                        label: "freeside.summary",
+                        artifact_id: "art-summary-\(key)",
+                        digest: MockContractValidation.sha256Digest(of: summary),
+                        provenance: claimProvenance,
+                        text: .init(media_type: .text_sol_markdown, content: summary)
+                    ))
+            }
         }
         // A run-proposal item is the exact store-derived carrier for one
         // proposal digest. Unlike ordinary attention cards it has no agent

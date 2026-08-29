@@ -9,7 +9,7 @@ import Testing
         #expect(
             Set(DecisionCardComposition.sharedModuleSet) == [
                 .factBlock, .findingFacts, .recommendation, .checklist, .stageRail, .comparison,
-                .yieldChart, .claims, .evidence, .details,
+                .yieldChart, .summary, .claims, .evidence, .details,
             ])
     }
 
@@ -22,7 +22,8 @@ import Testing
         let composition = DecisionCardComposition.forType(.finding_adjudication)
         #expect(
             composition.modules == [
-                .recommendation, .findingFacts, .factBlock, .claims, .evidence, .details,
+                .recommendation, .findingFacts, .factBlock, .summary, .claims, .evidence,
+                .details,
             ])
         #expect(composition.actionInsertionIndex == composition.modules.firstIndex(of: .factBlock))
         #expect(composition.reviewingActionInsertionIndex == nil)
@@ -31,25 +32,26 @@ import Testing
     @Test func fourSpecializedCardsAreOnlyModuleOrderings() {
         #expect(
             DecisionCardComposition.forType(.ready_for_final_review).modules == [
-                .recommendation, .checklist, .factBlock, .yieldChart, .claims, .evidence,
-                .details,
+                .recommendation, .checklist, .factBlock, .yieldChart, .summary, .claims,
+                .evidence, .details,
             ])
         #expect(
             DecisionCardComposition.forType(.execution_failure).modules == [
-                .recommendation, .stageRail, .claims, .factBlock, .claims, .evidence, .details,
+                .recommendation, .stageRail, .claims, .factBlock, .summary, .claims, .evidence,
+                .details,
             ])
         #expect(
             DecisionCardComposition.forType(.review_dispute).modules == [
-                .comparison, .factBlock, .claims, .evidence, .details,
+                .comparison, .factBlock, .summary, .claims, .evidence, .details,
             ])
         #expect(
             DecisionCardComposition.forType(.review_diminishing_returns).modules == [
-                .recommendation, .yieldChart, .factBlock, .claims, .evidence, .details,
+                .recommendation, .yieldChart, .factBlock, .summary, .claims, .evidence, .details,
             ])
         #expect(
             !DecisionCardComposition.forType(.review_dispute).modules.contains(.recommendation))
         let ready = DecisionCardComposition.forType(.ready_for_final_review)
-        #expect(ready.actionInsertionIndex == ready.modules.firstIndex(of: .claims))
+        #expect(ready.actionInsertionIndex == ready.modules.firstIndex(of: .summary))
         #expect(ready.reviewingActionInsertionIndex == ready.modules.firstIndex(of: .details))
         #expect(
             DecisionCardComposition.forType(.execution_failure)
@@ -73,8 +75,51 @@ import Testing
             ).isEmpty)
         #expect(
             execution.claims(
-                from: executionClaims, at: 4, prominentClaimIndex: nil) == executionClaims)
-        #expect(!DecisionCardComposition.forType(.review_dispute).claimsAreProminent(at: 2))
+                from: executionClaims, at: 5, prominentClaimIndex: nil
+            ) == executionClaims.filter { $0.label != AgentClaimLabels.summary })
+        #expect(!DecisionCardComposition.forType(.review_dispute).claimsAreProminent(at: 3))
+    }
+
+    @Test(arguments: AttentionFixtures.phase1Types)
+    func summaryLayerIsReservedForNonMechanicalCards(type: Components.Schemas.AttentionType) {
+        let composition = DecisionCardComposition.forType(type)
+        let summaries = composition.summaries(from: AttentionFixtures.fixture(type: type).item.agent_claims)
+
+        if type == .system_health || type == .blocked {
+            #expect(!composition.modules.contains(.summary))
+            #expect(summaries.isEmpty)
+        } else {
+            #expect(composition.modules.contains(.summary))
+            if type == .run_proposal {
+                #expect(summaries.isEmpty)
+            } else {
+                #expect(summaries.count == 1)
+            }
+        }
+    }
+
+    @Test func reservedSummariesNeverRenderAsGenericClaims() throws {
+        let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        let composition = DecisionCardComposition.forType(.ready_for_final_review)
+        let summary = try #require(item.agent_claims.first { $0.label == AgentClaimLabels.summary })
+
+        #expect(composition.summaries(from: item.agent_claims) == [summary])
+        #expect(
+            composition.claims(
+                from: item.agent_claims,
+                at: try #require(composition.modules.firstIndex(of: .claims)),
+                prominentClaimIndex: nil
+            ).allSatisfy { $0.label != AgentClaimLabels.summary })
+
+        var artifactOnly = summary
+        artifactOnly.text = nil
+        #expect(composition.summaries(from: [artifactOnly]).isEmpty)
+        #expect(
+            composition.claims(
+                from: [artifactOnly],
+                at: try #require(composition.modules.firstIndex(of: .claims)),
+                prominentClaimIndex: nil
+            ) == [artifactOnly])
     }
 
     @Test(arguments: AttentionFixtures.phase1Types)

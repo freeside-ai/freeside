@@ -431,11 +431,13 @@ struct DecisionDetailView: View {
                 {
                     recommendationBlock(recommendation, item: item)
                 }
-                let summaryClaims = item.agent_claims.filter { $0.text != nil }
-                if !summaryClaims.isEmpty {
+                let actionClaims = item.agent_claims.filter {
+                    $0.text != nil && $0.label != AgentClaimLabels.summary
+                }
+                if !actionClaims.isEmpty {
                     cardSection("Agent claims (unverified)", dashed: true) {
                         claimRows(
-                            summaryClaims,
+                            actionClaims,
                             rendersInteractiveControls: rendersInteractiveControls)
                     }
                 }
@@ -513,6 +515,10 @@ struct DecisionDetailView: View {
                     proposalFacts: proposalFacts,
                     rendersInteractiveControls: rendersInteractiveControls)
             #endif
+        case .summary:
+            agentSummary(
+                composition.summaries(from: item.agent_claims),
+                rendersInteractiveControls: rendersInteractiveControls)
         case .claims:
             #if os(iOS)
                 claims(
@@ -542,6 +548,41 @@ struct DecisionDetailView: View {
             #if os(iOS)
                 details(item, accessibilityLayout: accessibilityLayout)
             #endif
+        }
+    }
+
+    @ViewBuilder
+    private func agentSummary(
+        _ claims: [Components.Schemas.AgentClaim],
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        if !claims.isEmpty {
+            cardSection("Agent summary (unverified)", dashed: true) {
+                Text("Written by the agent, not checked by the daemon.")
+                    .foregroundStyle(Color.inkDim)
+                ForEach(Array(claims.enumerated()), id: \.offset) { _, claim in
+                    Text("Source: agent invocation `\(producerInvocationID(claim))`")
+                        .font(FreesideFont.caption)
+                        .foregroundStyle(Color.inkDim)
+                        .textSelection(.enabled)
+                    AttachmentRow(
+                        label: "Summary",
+                        digest: claim.digest,
+                        attachments: attachments,
+                        loadsAttachments: loadsAttachments,
+                        text: claim.text,
+                        rendersInteractiveControls: rendersInteractiveControls)
+                }
+            }
+        }
+    }
+
+    private func producerInvocationID(_ claim: Components.Schemas.AgentClaim) -> String {
+        switch claim.provenance {
+        case .head_bound(let provenance):
+            provenance.producer_invocation_id
+        case .head_independent(let provenance):
+            provenance.producer_invocation_id
         }
     }
 
