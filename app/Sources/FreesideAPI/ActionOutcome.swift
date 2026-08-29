@@ -9,13 +9,17 @@
 /// daemon's operating state (#319: stop also raises the resume-offering
 /// notice, resume resolves it); recover_review concludes its exact
 /// contradiction carrier and authorizes the daemon's append-only recovery
-/// transition; pending actions are rejected until the unit
-/// that owns their transaction lands (conversations, timing, proposal
-/// revision, parameter-carrying payloads). A provisional client mirror
+/// transition; discuss appends to a conversation without concluding the
+/// item; pending actions are rejected until the unit that owns their
+/// transaction lands: convert_to_policy, adjudicate, retry_with_capabilities,
+/// choose_alternate_profile, answer_and_retry, answer_without_retry, and
+/// return_to_agent.
+/// A provisional client mirror
 /// pending a queryable contract representation (#22); no `default`, so a new
 /// Action member must declare its outcome here.
 public enum ActionOutcome: Equatable {
     case concludes(Components.Schemas.ItemStatus)
+    case discusses
     case records
     case pending
     case stopsUnattended
@@ -31,9 +35,14 @@ public enum ActionOutcome: Equatable {
         case .dismiss, .decline:
             return .concludes(.dismissed)
         case .approve, .stop, .finish_now, .apply_then_finish, .retry,
+            .continue_under_policy,
             .accept_recommended_route, .choose_alternative_route,
             .rerun_trust_evaluation, .start:
             return .concludes(.resolved)
+        case .request_changes:
+            return .concludes(.superseded)
+        case .discuss:
+            return .discusses
         case .stop_unattended:
             return .stopsUnattended
         case .resume_unattended:
@@ -50,9 +59,8 @@ public enum ActionOutcome: Equatable {
             return .snoozesProposal
         case .open_pr, .mark_seen, .acknowledge, .inspect_trust_failure, .run_doctor:
             return .records
-        case .discuss, .continue_under_policy,
-            .convert_to_policy, .adjudicate, .retry_with_capabilities,
-            .choose_alternate_profile, .request_changes, .answer_and_retry,
+        case .convert_to_policy, .adjudicate, .retry_with_capabilities,
+            .choose_alternate_profile, .answer_and_retry,
             .answer_without_retry, .return_to_agent:
             return .pending
         }

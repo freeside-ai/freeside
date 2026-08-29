@@ -24,6 +24,29 @@ import Testing
         #expect(Set(store.rows.map(\.item._type)) == Set(AttentionFixtures.phase1Types))
     }
 
+    @Test func conversationsApplyMonotonicallyAndDiscardWithTheCache() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        var current = AttentionFixtures.defaultConversations()[0]
+        store.replaceAllConversations(with: [current])
+
+        var newer = current
+        newer.entity_version = 3
+        newer.conversation.status = .awaiting_agent
+        #expect(store.apply(newer))
+
+        current.entity_version = 2
+        #expect(!store.apply(current))
+        #expect(store.conversationsByID[current.conversation.id] == newer)
+        store.replaceAllConversations(with: [current])
+        #expect(store.conversationsByID[current.conversation.id] == newer)
+        #expect(
+            store.conversation(for: AttentionFixtures.fixture(type: .spec_approval).item)
+                == newer)
+
+        store.discardSnapshots()
+        #expect(store.conversationsByID.isEmpty)
+    }
+
     @Test func refreshFailureIsSurfacedNotMasked() async {
         let server = MockServer()
         await server.setBeforeRespond { operationID in

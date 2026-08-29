@@ -38,6 +38,7 @@ public struct SyncCursors: Codable, Equatable, Sendable {
 public struct CachedState: Codable, Equatable, Sendable {
     public var cursors: SyncCursors?
     public var attentionItems: [Components.Schemas.AttentionItemSnapshot]
+    public var conversations: [Components.Schemas.ConversationSnapshot]
     public var runs: [Components.Schemas.RunSnapshot]
     public var schedules: [Components.Schemas.ScheduleSnapshot]
     public var runTimelines: [Components.Schemas.RunTimeline]
@@ -50,6 +51,7 @@ public struct CachedState: Codable, Equatable, Sendable {
     public init(
         cursors: SyncCursors?,
         attentionItems: [Components.Schemas.AttentionItemSnapshot],
+        conversations: [Components.Schemas.ConversationSnapshot] = [],
         runs: [Components.Schemas.RunSnapshot] = [],
         schedules: [Components.Schemas.ScheduleSnapshot] = [],
         runTimelines: [Components.Schemas.RunTimeline] = [],
@@ -57,6 +59,7 @@ public struct CachedState: Codable, Equatable, Sendable {
     ) {
         self.cursors = cursors
         self.attentionItems = attentionItems
+        self.conversations = conversations
         self.runs = runs
         self.schedules = schedules
         self.runTimelines = runTimelines
@@ -68,6 +71,9 @@ public struct CachedState: Codable, Equatable, Sendable {
         cursors = try container.decodeIfPresent(SyncCursors.self, forKey: .cursors)
         attentionItems = try container.decode(
             [Components.Schemas.AttentionItemSnapshot].self, forKey: .attentionItems)
+        conversations =
+            try container.decodeIfPresent(
+                [Components.Schemas.ConversationSnapshot].self, forKey: .conversations) ?? []
         runs =
             try container.decodeIfPresent(
                 [Components.Schemas.RunSnapshot].self, forKey: .runs) ?? []
@@ -105,12 +111,13 @@ public protocol CacheStore: Sendable {
 /// discard is `rm`; a database earns nothing here.
 public struct DiskCacheStore: CacheStore {
     /// Bumped when persisted snapshots change incompatibly. A pre-ledger
-    /// file loads absent; format 2 preserves its independent ledger while
-    /// invalidating snapshots and forcing a bootstrap. 2: cursors
+    /// file loads absent; formats 2 and 3 preserve their independent ledger
+    /// while invalidating snapshots and forcing a bootstrap. 2: cursors
     /// became optional and the pending-command ledger joined (#115). 3:
-    /// run and schedule snapshots joined, so a format-2 cache cannot
-    /// incorrectly claim freshness while those durable rows are absent.
-    static let format = 3
+    /// run and schedule snapshots joined. 4: conversation snapshots joined.
+    /// A pre-current cache cannot claim freshness while durable rows from a
+    /// newer client surface are absent.
+    static let format = 4
 
     private struct CacheFile: Codable {
         var format: Int
@@ -130,11 +137,12 @@ public struct DiskCacheStore: CacheStore {
         switch file.format {
         case Self.format:
             return file.state
-        case 2:
-            // Format 2 already carried retryable commands, but predates the
-            // run surfaces. Keep only that independent ledger: its cursors
-            // cannot scope an incomplete cache, while losing a command ID
-            // could duplicate an operator decision after relaunch.
+        case 2, 3:
+            // Formats 2 and 3 already carried retryable commands, but
+            // predate later durable read surfaces. Keep only that independent
+            // ledger: their cursors cannot scope an incomplete cache, while
+            // losing a command ID could duplicate an operator decision after
+            // relaunch.
             return CachedState(
                 cursors: nil,
                 attentionItems: [],

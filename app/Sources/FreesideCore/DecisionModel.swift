@@ -49,6 +49,10 @@ public final class DecisionModel {
     /// may write the outcome, so a stale late failure cannot clobber a
     /// newer success (or vice versa).
     private var validationGeneration = 0
+    /// Advances only after this model durably claims the item's pending-command
+    /// slot. Message composers use it to distinguish a submission that started
+    /// from one rejected locally before any command could leave the device.
+    private var submissionClaimGeneration = 0
     /// A recorded command emits at most one receipt, after canonical state
     /// proves that its item left the active queue. Revalidation and replay
     /// share this gate so recovery cannot duplicate the receipt.
@@ -117,19 +121,49 @@ public final class DecisionModel {
         return url
     }
 
-    /// Re-keys the view's validation task on cache generation and, for a
-    /// run-proposal card, the exact snapshot tuple its authenticated facts
-    /// must match. A selected card therefore revalidates after either an epoch
-    /// eviction or an ordinary same-epoch proposal advance such as snooze
-    /// release or delivery timing convergence.
+    /// Re-keys the view's validation task on cache generation and the exact
+    /// item and conversation tuples it renders. A selected card therefore
+    /// revalidates after either an epoch eviction or an ordinary same-epoch
+    /// advance, including a heartbeat that repairs an auxiliary post-command
+    /// conversation read.
     public var revalidationID: String {
         let epochKey = "\(itemID)#\(store.cacheGeneration)"
-        guard let snapshot, snapshot.item._type == .run_proposal else { return epochKey }
-        return "\(epochKey)#\(snapshot.as_of_revision)#\(snapshot.entity_version)#\(snapshot.item.item_version)"
+        guard let snapshot else { return epochKey }
+        let snapshotKey =
+            "\(epochKey)#\(snapshot.as_of_revision)#\(snapshot.entity_version)#\(snapshot.item.item_version)"
+        guard let conversation = store.conversation(for: snapshot.item) else {
+            return snapshotKey
+        }
+        return "\(snapshotKey)#\(conversation.as_of_revision)#\(conversation.entity_version)"
     }
 
     public var snapshot: Components.Schemas.AttentionItemSnapshot? {
         store.snapshotsByID[itemID]
+    }
+
+    public var conversation: Components.Schemas.ConversationSnapshot? {
+        snapshot.flatMap { store.conversation(for: $0.item) }
+    }
+
+    public var revisedSpecification: Components.Schemas.AttentionItemSnapshot? {
+        guard let snapshot, snapshot.item._type == .spec_approval,
+            snapshot.item.status == .superseded,
+            let runID = Self.runID(of: snapshot.item.subject)
+        else { return nil }
+        return store.snapshotsByID.values
+            .filter {
+                $0.item.id != itemID && $0.item._type == .spec_approval
+                    && $0.item.status == .open
+                    && Self.runID(of: $0.item.subject) == runID
+            }
+            .max { $0.item.item_version < $1.item.item_version }
+    }
+
+    private static func runID(of subject: Components.Schemas.Subject) -> String? {
+        switch subject {
+        case .run(let run), .proposal_batch(let run): return run.run_id
+        case .project, .system: return nil
+        }
     }
 
     /// The item's in-flight command with an unknown outcome, owned by the
@@ -153,6 +187,9 @@ public final class DecisionModel {
     /// of as buttons that can only fail.
     public func isSubmittable(_ action: Components.Schemas.Action) -> Bool {
         guard snapshot?.item._type != .blocked else { return false }
+        if action == .discuss, conversation?.conversation.status == .awaiting_agent {
+            return false
+        }
         return ActionOutcome.of(action) != .pending
     }
 
@@ -323,6 +360,21 @@ public final class DecisionModel {
                     }
                 }
                 if store.apply(current) {
+                    var confirmed = current
+                    if let conversationID = current.item.conversation_id {
+                        guard
+                            let pair = try await fetchStableConversationPair(
+                                item: current,
+                                conversationID: conversationID,
+                                since: generationBefore)
+                        else { continue }
+                        guard generation == validationGeneration,
+                            store.cacheGeneration == generationBefore,
+                            store.apply(pair.item),
+                            store.apply(pair.conversation)
+                        else { continue }
+                        confirmed = pair.item
+                    }
                     if appliedRecord?.action == .snooze {
                         // An active snooze is authoritative absence (404).
                         // Any visible proposal, whether reopened or already
@@ -336,7 +388,7 @@ public final class DecisionModel {
                         ).ok.body.json
                         guard generation == validationGeneration,
                             store.cacheGeneration == generationBefore,
-                            proposalFactsMatch(current, facts)
+                            proposalFactsMatch(confirmed, facts)
                         else { continue }
                         proposalFacts = facts
                     } else {
@@ -351,7 +403,7 @@ public final class DecisionModel {
                     if phase == .applied, snapshot?.item.status == .open {
                         phase = .idle
                     }
-                    emitConclusionIfVerified(resultingStatus: current.item.status)
+                    emitConclusionIfVerified(resultingStatus: confirmed.item.status)
                     return
                 }
                 // Refused within the epoch: the loop re-fetches to converge.
@@ -391,6 +443,34 @@ public final class DecisionModel {
         await submit(.snooze, snoozeUntil: until)
     }
 
+    @discardableResult
+    public func submitDiscuss(message: String) async -> Bool {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            submissionError = "enter a message before sending"
+            return false
+        }
+        let generationBefore = submissionClaimGeneration
+        await submit(.discuss, message: trimmed)
+        return submissionClaimGeneration != generationBefore
+    }
+
+    @discardableResult
+    public func submitRequestChanges(message: String) async -> Bool {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            submissionError = "describe the requested changes before sending"
+            return false
+        }
+        guard trimmed.lengthOfBytes(using: .utf8) <= 8192 else {
+            submissionError = "requested changes must be 8 KiB or less"
+            return false
+        }
+        let generationBefore = submissionClaimGeneration
+        await submit(.request_changes, message: trimmed)
+        return submissionClaimGeneration != generationBefore
+    }
+
     public func submit(_ action: Components.Schemas.Action) async {
         await submit(
             action, revision: nil, snoozeUntil: nil, alternativeChoices: nil,
@@ -422,6 +502,7 @@ public final class DecisionModel {
         revision: Components.Schemas.RunProposalRevisionInput? = nil,
         snoozeUntil: Date? = nil,
         alternativeChoices: [Components.Schemas.AlternativeChoice]? = nil,
+        message: String? = nil,
         reviewedSnapshot: Components.Schemas.AttentionItemSnapshot? = nil
     ) async {
         guard actionsEnabled, isSubmittable(action), let snapshot else { return }
@@ -430,7 +511,8 @@ public final class DecisionModel {
         }
         guard (action == .start_with_changes) == (revision != nil),
             (action == .snooze) == (snoozeUntil != nil),
-            (action == .choose_alternative_route) == (alternativeChoices != nil)
+            (action == .choose_alternative_route) == (alternativeChoices != nil),
+            (action == .discuss || action == .request_changes) == (message != nil)
         else { return }
         let urlToOpen: URL?
         if action == .open_pr {
@@ -458,6 +540,7 @@ public final class DecisionModel {
                 item_version: snapshot.item.item_version,
                 pr_head_sha: snapshot.item.pr_head_sha,
                 artifact_digests: snapshot.item.artifact_digests,
+                message: message,
                 run_proposal_revision: revision.map {
                     .init(value1: $0)
                 },
@@ -485,7 +568,7 @@ public final class DecisionModel {
         // (#163). Only a definitive outcome below releases the slot.
         switch store.registerPendingCommand(command) {
         case .registered:
-            break
+            submissionClaimGeneration += 1
         case .slotOccupied:
             // Another command already holds the item; nothing to send.
             return
@@ -619,6 +702,37 @@ public final class DecisionModel {
                     await validate()
                     return
                 }
+                if ActionOutcome.of(action) == .discusses {
+                    guard let conversationID = refetched.item.conversation_id else {
+                        phase = .idle
+                        await validate()
+                        return
+                    }
+                    do {
+                        guard
+                            let pair = try await fetchStableConversationPair(
+                                item: refetched,
+                                conversationID: conversationID,
+                                since: generationBeforeRefetch)
+                        else {
+                            phase = .idle
+                            await validate()
+                            return
+                        }
+                        guard store.cacheGeneration == generationBeforeRefetch,
+                            store.apply(pair.item),
+                            store.apply(pair.conversation)
+                        else {
+                            phase = .idle
+                            await validate()
+                            return
+                        }
+                    } catch {
+                        phase = .idle
+                        await validate()
+                        return
+                    }
+                }
                 phase = refetched.item.status == .open ? .idle : .applied
                 emitConclusionIfVerified(resultingStatus: refetched.item.status)
             case .conflict(let conflict):
@@ -640,8 +754,50 @@ public final class DecisionModel {
                     await validate()
                     return
                 }
-                phase = .superseded
-                markValidated()
+                if let conversationID = rejection.replacement_item.item.conversation_id {
+                    do {
+                        guard
+                            let pair = try await fetchStableConversationPair(
+                                item: rejection.replacement_item,
+                                conversationID: conversationID,
+                                since: generationBefore)
+                        else {
+                            phase = .idle
+                            await validate()
+                            return
+                        }
+                        guard store.cacheGeneration == generationBefore,
+                            store.apply(pair.item),
+                            store.apply(pair.conversation)
+                        else {
+                            phase = .idle
+                            await validate()
+                            return
+                        }
+                        let discussionIsAwaiting: Bool
+                        if case .discusses = ActionOutcome.of(action) {
+                            discussionIsAwaiting =
+                                pair.conversation.conversation.status == .awaiting_agent
+                        } else {
+                            discussionIsAwaiting = false
+                        }
+                        if discussionIsAwaiting {
+                            phase = .idle
+                            submissionError = "the agent is still replying to the last message"
+                        } else {
+                            phase = .superseded
+                        }
+                        markValidated()
+                    } catch {
+                        phase = .idle
+                        submissionError =
+                            "the item changed, but the discussion thread could not be refreshed"
+                        validation = .failed(String(describing: error))
+                    }
+                } else {
+                    phase = .superseded
+                    markValidated()
+                }
             case .undocumented(let statusCode, _):
                 if statusCode == 401 {
                     // The credential gate rejected this first request
@@ -672,6 +828,56 @@ public final class DecisionModel {
         } catch {
             await settleAmbiguousOutcome(command, message: String(describing: error))
         }
+    }
+
+    /// Reads the bound thread between two views of its item. Matching item
+    /// resource versions prove the conversation was observed while those
+    /// decision bindings were current; an agent completion advances both in
+    /// one transaction, so a changed confirming item rejects the torn pair.
+    private func fetchStableConversationPair(
+        item: Components.Schemas.AttentionItemSnapshot,
+        conversationID: String,
+        since generationBefore: Int
+    ) async throws -> (
+        item: Components.Schemas.AttentionItemSnapshot,
+        conversation: Components.Schemas.ConversationSnapshot
+    )? {
+        let conversation = try await store.client.getConversation(
+            path: .init(conversation_id: conversationID)
+        ).ok.body.json
+        guard store.cacheGeneration == generationBefore else { return nil }
+        let frontier = try await store.client.getSyncRevision().ok.body.json
+        let confirmed = try await store.client.getAttentionItem(
+            path: .init(item_id: itemID)
+        ).ok.body.json
+        if let activeCursors = store.syncCursorsProvider?(),
+            activeCursors.syncEpoch != frontier.sync_epoch
+        {
+            return nil
+        }
+        store.revisionObserver?(frontier.revision)
+        guard store.cacheGeneration == generationBefore,
+            Self.hasSameResourceState(item, confirmed)
+        else { return nil }
+        // The first item may legitimately become stale while the thread is
+        // in flight. A post-object server frontier accepts that race while
+        // bounding the returned thread before it can reach cache; an active
+        // coordinator also rejects a response from a different sync epoch.
+        try ConversationContractValidation.validate(
+            conversation,
+            expectedID: conversationID,
+            maximumRevision: frontier.revision)
+        return (confirmed, conversation)
+    }
+
+    private static func hasSameResourceState(
+        _ before: Components.Schemas.AttentionItemSnapshot,
+        _ after: Components.Schemas.AttentionItemSnapshot
+    ) -> Bool {
+        before.entity_version == after.entity_version
+            && before.item.status == after.item.status
+            && before.item.conversation_id == after.item.conversation_id
+            && hasSameDecisionBindings(before, after)
     }
 
     private static func hasSameDecisionBindings(
@@ -705,7 +911,7 @@ public final class DecisionModel {
         switch await replayLostResponse(command, since: generationBefore) {
         case .recovered:
             return true
-        case .conflicted(let applied):
+        case .conflicted(let applied, _):
             appliedRecord = nil
             if applied {
                 phase = .superseded
@@ -750,7 +956,7 @@ public final class DecisionModel {
         switch (ActionOutcome.of(record.action), resultingStatus) {
         case (.snoozesProposal, nil):
             break
-        case (.records, _), (.pending, _), (_, .some(.open)), (_, nil):
+        case (.records, _), (.discusses, _), (.pending, _), (_, .some(.open)), (_, nil):
             return
         case (_, .some):
             break
@@ -790,10 +996,12 @@ public final class DecisionModel {
         await validate()
         let generationBefore = store.cacheGeneration
         switch await replayLostResponse(command, since: generationBefore) {
-        case .recovered, .rejected:
+        case .recovered:
             // Settled: converge the snapshot and phase on canonical state.
             await validate()
-        case .conflicted(let applied):
+        case .rejected:
+            await validate()
+        case .conflicted(let applied, let awaitingAgent):
             guard applied else {
                 // A higher rendered version refused the replacement (#162):
                 // revalidate to converge on the newer read (same epoch) or
@@ -803,9 +1011,12 @@ public final class DecisionModel {
             }
             // Settled by a 409: the applied replacement is canonical and
             // presents exactly as a live conflict would.
-            phase = .superseded
+            let discussionIsAwaiting =
+                awaitingAgent && ActionOutcome.of(command.payload.action) == .discusses
+            phase = discussionIsAwaiting ? .idle : .superseded
             markValidated()
-            submissionError = nil
+            submissionError =
+                discussionIsAwaiting ? "the agent is still replying to the last message" : nil
         case .lost, .displaced:
             break
         }
@@ -851,7 +1062,7 @@ public final class DecisionModel {
             // validate() also converges the phase, so a recovered
             // record-only action leaves the item open and decidable.
             await validate()
-        case .conflicted(let applied):
+        case .conflicted(let applied, let awaitingAgent):
             guard applied else {
                 // A higher rendered version refused the replacement (#162):
                 // revalidate to converge on the newer read (same epoch) or
@@ -860,19 +1071,27 @@ public final class DecisionModel {
                 await validate()
                 break
             }
-            phase = .superseded
+            let discussionIsAwaiting =
+                awaitingAgent && ActionOutcome.of(pending.payload.action) == .discusses
+            phase = discussionIsAwaiting ? .idle : .superseded
             markValidated()
+            submissionError =
+                discussionIsAwaiting ? "the agent is still replying to the last message" : nil
         case .rejected:
             phase = .idle
             submissionError = "the decision was not recorded"
             await validate()
         case .lost:
             // Ambiguous again: back to unresolved so the retry stays
-            // offered everywhere.
+            // offered everywhere. Refresh canonical state as well: an
+            // undecodable answered error can throw before the generated
+            // output reaches the typed conflict case, and must never leave
+            // a stale card looking superseded.
             store.setPendingCommandState(
                 itemID: itemID, commandID: pending.command_id, state: .unresolved)
             phase = .idle
             submissionError = "the response was lost again; the decision may still be recorded"
+            await validate()
         case .displaced:
             // Another flow settled the slot while this retry was in
             // flight; converge on canonical state instead of latching
@@ -889,7 +1108,7 @@ public final class DecisionModel {
         /// deserves the same superseded presentation as a live conflict.
         /// `applied` is false when a dead pre-restore row shadowed the
         /// replacement, so the caller must not certify it (#162).
-        case conflicted(applied: Bool)
+        case conflicted(applied: Bool, awaitingAgent: Bool)
         /// The daemon answered authoritatively without a recorded result:
         /// the original command never committed, so nothing is recoverable.
         case rejected
@@ -939,7 +1158,8 @@ public final class DecisionModel {
                 // check, so an authoritative non-replay answer proves
                 // the command never committed; the replacement it
                 // carries is canonical state either way.
-                var isCurrent = true
+                var isCurrent = false
+                var awaitingAgent = false
                 if let rejection = try? conflict.body.json {
                     // An epoch eviction during the replay makes the
                     // replacement possibly dead-epoch: drop it rather than
@@ -947,10 +1167,33 @@ public final class DecisionModel {
                     isCurrent =
                         store.cacheGeneration == generationBefore
                         && store.apply(rejection.replacement_item)
+                    if isCurrent,
+                        let conversationID = rejection.replacement_item.item.conversation_id
+                    {
+                        do {
+                            if let pair = try await fetchStableConversationPair(
+                                item: rejection.replacement_item,
+                                conversationID: conversationID,
+                                since: generationBefore)
+                            {
+                                isCurrent =
+                                    store.apply(pair.item) && store.apply(pair.conversation)
+                                awaitingAgent =
+                                    isCurrent
+                                    && pair.conversation.conversation.status == .awaiting_agent
+                            } else {
+                                isCurrent = false
+                            }
+                        } catch {
+                            isCurrent = false
+                        }
+                    }
                 }
-                guard ownsSlot else { return .displaced }
+                guard pendingCommand?.command_id == command.command_id else {
+                    return .displaced
+                }
                 store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
-                return .conflicted(applied: isCurrent)
+                return .conflicted(applied: isCurrent, awaitingAgent: awaitingAgent)
             case .undocumented(let statusCode, _):
                 if statusCode == 401 {
                     // The resend died at the credential gate, which

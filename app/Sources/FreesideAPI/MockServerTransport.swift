@@ -146,6 +146,16 @@ public struct MockServerTransport: ClientTransport {
                     )
                 )
             }
+        case "getConversation":
+            guard let conversationID = Self.lastPathComponent(request.path),
+                let conversation = await server.conversation(id: conversationID)
+            else {
+                return try Self.json(
+                    status: .notFound,
+                    body: Components.Schemas._Error(
+                        message: "no entity exists under the identifier"))
+            }
+            return try Self.json(status: .ok, body: conversation)
         case "getRunProposalFacts":
             guard let itemID = Self.runProposalItemID(request.path),
                 let facts = try await server.runProposalFacts(itemID: itemID)

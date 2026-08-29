@@ -496,6 +496,32 @@ import Testing
         #expect(after.item.item_version == before.item.item_version + 1)
     }
 
+    @Test func overlongRequestChangesCommandIDIsRejectedWithoutSideEffects() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let before =
+            try await client
+            .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
+        let revisionBefore = try await client.getSyncRevision().ok.body.json.revision
+        var command = Self.command(
+            id: String(repeating: "c", count: 257), against: before, action: .request_changes)
+        command.payload.message = "Show the refusal path."
+
+        let output = try await client.submitCommand(body: .json(command))
+        guard case .undocumented(let statusCode, _) = output else {
+            Issue.record("expected a malformed rejection, got \(output)")
+            return
+        }
+        #expect(statusCode == 422)
+
+        let after =
+            try await client
+            .getAttentionItem(path: .init(item_id: before.item.id)).ok.body.json
+        let revisionAfter = try await client.getSyncRevision().ok.body.json.revision
+        #expect(after == before)
+        #expect(revisionAfter == revisionBefore)
+    }
+
     @Test func pendingActionAgainstAMissingItemIsNotFound() async throws {
         // The item lookup and its policy re-gate precede the pending
         // gate (signet.Submit): a pending action aimed at a missing item
@@ -505,7 +531,8 @@ import Testing
         let before =
             try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
-        var command = Self.command(id: "cmd-pending-missing", against: before, action: .discuss)
+        var command = Self.command(
+            id: "cmd-pending-missing", against: before, action: .answer_and_retry)
         command.payload.item_id = "item-none"
 
         let output = try await client.submitCommand(body: .json(command))
@@ -561,7 +588,8 @@ import Testing
             .ok.body.json
 
         let output = try await client.submitCommand(
-            body: .json(Self.command(id: "cmd-order", against: before, action: .discuss)))
+            body: .json(
+                Self.command(id: "cmd-order", against: before, action: .answer_and_retry)))
         guard case .undocumented(let statusCode, let payload) = output, let body = payload.body
         else {
             Issue.record("expected an authoritative rejection, got \(output)")
@@ -1025,10 +1053,11 @@ import Testing
         let before =
             try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
-        #expect(before.item.requested_decision.contains(.discuss))
+        #expect(ActionOutcome.of(.answer_and_retry) == .pending)
 
         let output = try await client.submitCommand(
-            body: .json(Self.command(id: "cmd-pending", against: before, action: .discuss)))
+            body: .json(
+                Self.command(id: "cmd-pending", against: before, action: .answer_and_retry)))
         guard case .undocumented(let statusCode, _) = output else {
             Issue.record("expected an authoritative rejection, got \(output)")
             return

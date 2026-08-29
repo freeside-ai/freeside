@@ -155,6 +155,13 @@ import Testing
         #expect(AttentionDisplay.relativeRowTime(ordinary, now: now) == nil)
     }
 
+    @Test func relativeRowTimeFormatsBareDatesWithTheSharedUnits() {
+        let now = Date(timeIntervalSince1970: 200_000)
+        #expect(
+            AttentionDisplay.relativeRowTime(
+                now.addingTimeInterval(-86_400), now: now) == "1d")
+    }
+
     @Test func rowContextPrefersNamesAndFallsBackToIdentifiers() {
         let run = AttentionFixtures.fixture(type: .execution_failure).item
 

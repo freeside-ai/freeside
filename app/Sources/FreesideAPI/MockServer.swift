@@ -17,6 +17,10 @@ public actor MockServer {
     public typealias BeforeRespond = @Sendable (_ operationID: String) async throws -> Void
     public typealias CommandResultTransform =
         @Sendable (Components.Schemas.CommandResult) -> Components.Schemas.CommandResult
+    public typealias ConversationTransform =
+        @Sendable (Components.Schemas.ConversationSnapshot) -> Components.Schemas.ConversationSnapshot
+    public typealias BootstrapTransform =
+        @Sendable (Components.Schemas.BootstrapSnapshot) -> Components.Schemas.BootstrapSnapshot
 
     /// Thrown from a `beforeRespond` hook to make the mock answer with a
     /// specific HTTP status and a generic error-shaped body, modelling a
@@ -84,8 +88,10 @@ public actor MockServer {
     }
 
     private var itemsByID: [String: Components.Schemas.AttentionItemSnapshot] = [:]
+    private var conversationsByID: [String: Components.Schemas.ConversationSnapshot] = [:]
     private var commandsByID: [String: NormalizedCommand] = [:]
     private var resultsByCommandID: [String: Components.Schemas.CommandResult] = [:]
+    private var pendingSpecificationReplacements: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     private var proposalFactsByItemID: [String: Components.Schemas.RunProposalFactsSnapshot] = [:]
     private var proposalSnoozesByItemID: [String: Date] = [:]
     private var currentTime = Date(timeIntervalSince1970: 1_786_502_645)
@@ -98,6 +104,9 @@ public actor MockServer {
     private var beforeRespond: BeforeRespond?
     private var afterRespond: BeforeRespond?
     private var commandResultTransform: CommandResultTransform?
+    private var conversationTransform: ConversationTransform?
+    private var bootstrapTransform: BootstrapTransform?
+    private let automaticallyCompletesAgentWork: Bool
     /// The trusted approved-recipe set the evidence gate re-runs
     /// against; policy state owned by the server, never by the rows.
     private let approvedRecipes: Set<String>
@@ -153,6 +162,7 @@ public actor MockServer {
 
     public init(
         items: [Components.Schemas.AttentionItemSnapshot] = AttentionFixtures.defaultInbox(),
+        conversations: [Components.Schemas.ConversationSnapshot] = AttentionFixtures.defaultConversations(),
         deliveries: [Components.Schemas.AttentionDeliverySnapshot] = [],
         runs: [Components.Schemas.RunSnapshot] = RunFixtures.defaultRuns(),
         schedules: [Components.Schemas.ScheduleSnapshot] = RunFixtures.defaultSchedules(),
@@ -163,10 +173,14 @@ public actor MockServer {
         pairingNtfyServerURL: String = "https://ntfy.example",
         pairingNtfyTopic: String? = nil,
         pairingDeviceToken: String? = nil,
-        attachments: [String: Data] = AttentionFixtures.defaultAttachments()
+        attachments: [String: Data] = AttentionFixtures.defaultAttachments(),
+        automaticallyCompletesAgentWork: Bool = false
     ) {
         for snapshot in items {
             itemsByID[snapshot.item.id] = snapshot
+        }
+        for snapshot in conversations {
+            conversationsByID[snapshot.conversation.id] = snapshot
         }
         for snapshot in deliveries {
             deliveriesByKey[DeliveryKey(snapshot.delivery)] = snapshot
@@ -186,6 +200,7 @@ public actor MockServer {
         // never run backwards relative to what this mock lists.
         revision = max(
             1, items.map(\.as_of_revision).max() ?? 1,
+            conversations.map(\.as_of_revision).max() ?? 1,
             deliveries.map(\.as_of_revision).max() ?? 1,
             runs.map(\.as_of_revision).max() ?? 1,
             schedules.map(\.as_of_revision).max() ?? 1,
@@ -241,6 +256,7 @@ public actor MockServer {
         self.pairingNtfyServerURL = pairingNtfyServerURL
         self.pairingNtfyTopic = pairingNtfyTopic
         self.pairingDeviceToken = pairingDeviceToken
+        self.automaticallyCompletesAgentWork = automaticallyCompletesAgentWork
         attachmentsByDigest = attachments
     }
 
@@ -263,6 +279,18 @@ public actor MockServer {
     /// record, so clients can exercise returned-object trust boundaries.
     public func setCommandResultTransform(_ transform: CommandResultTransform?) {
         commandResultTransform = transform
+    }
+
+    /// Mutates only the returned conversation, never the server's stored
+    /// row, so clients can exercise returned-object identity gates.
+    public func setConversationTransform(_ transform: ConversationTransform?) {
+        conversationTransform = transform
+    }
+
+    /// Mutates only the returned bootstrap, never the server's stored rows,
+    /// so clients can exercise canonical-frontier trust boundaries.
+    public func setBootstrapTransform(_ transform: BootstrapTransform?) {
+        bootstrapTransform = transform
     }
 
     /// Controls the mock process boundary independently of synchronized
@@ -334,15 +362,21 @@ public actor MockServer {
         }
     }
 
-    /// Replaces the durable attention frontier and drops write history,
-    /// modelling a restore whose snapshot predates some items and commands.
+    /// Replaces the durable attention and conversation frontier and drops
+    /// write history, modelling a restore whose snapshot predates some rows
+    /// and commands.
     public func restoreAttentionState(
-        items: [Components.Schemas.AttentionItemSnapshot], revision restored: Int64
+        items: [Components.Schemas.AttentionItemSnapshot],
+        conversations: [Components.Schemas.ConversationSnapshot] = [],
+        revision restored: Int64
     ) {
         rotateEpoch(revision: restored)
         itemsByID = Dictionary(uniqueKeysWithValues: items.map { ($0.item.id, $0) })
+        conversationsByID = Dictionary(
+            uniqueKeysWithValues: conversations.map { ($0.conversation.id, $0) })
         commandsByID.removeAll()
         resultsByCommandID.removeAll()
+        pendingSpecificationReplacements.removeAll()
         proposalFactsByItemID.removeAll()
         proposalSnoozesByItemID.removeAll()
     }
@@ -584,7 +618,7 @@ public actor MockServer {
     }
 
     func serverRevision() -> Components.Schemas.ServerRevision {
-        .init(sync_epoch: syncEpoch, revision: revision)
+        return .init(sync_epoch: syncEpoch, revision: revision)
     }
 
     func healthStatus() throws -> Components.Schemas.HealthStatus {
@@ -598,15 +632,20 @@ public actor MockServer {
     /// be torn. The run fixtures are deterministic daemon observations used by both
     /// app platforms and their screenshot workflow.
     func bootstrapSnapshot() throws -> Components.Schemas.BootstrapSnapshot {
-        .init(
+        let snapshot = Components.Schemas.BootstrapSnapshot(
             sync_epoch: syncEpoch,
             revision: revision,
             attention_items: try listAttentionItems(),
             attention_deliveries: try listAttentionDeliveries(),
             runs: try listRuns(),
-            conversations: [],
+            conversations: conversationsByID.keys.sorted().compactMap { conversationsByID[$0] },
             schedules: listSchedules()
         )
+        return bootstrapTransform?(snapshot) ?? snapshot
+    }
+
+    func conversation(id: String) -> Components.Schemas.ConversationSnapshot? {
+        conversationsByID[id].map { conversationTransform?($0) ?? $0 }
     }
 
     func listRuns() throws -> [Components.Schemas.RunSnapshot] {
@@ -863,7 +902,6 @@ public actor MockServer {
     func servedSnapshot(
         itemID: String
     ) throws -> Components.Schemas.AttentionItemSnapshot? {
-        convergeProposalSnoozes()
         guard proposalSnoozesByItemID[itemID] == nil else { return nil }
         guard let snapshot = itemsByID[itemID] else { return nil }
         if let breach = snapshotBreach(snapshot) {
@@ -961,6 +999,15 @@ public actor MockServer {
         // durable command body is unchanged. New commands still fail closed
         // before lifecycle and binding decisions.
         try MockContractValidation.validateActionInput(command)
+        if payload.action == .discuss,
+            let missingDigest = payload.attachments?.first(where: {
+                attachmentsByDigest[$0] == nil
+            })
+        {
+            throw MalformedCommandError(
+                commandID: command.command_id,
+                reason: "attachment \(missingDigest) is not stored")
+        }
         // Openness before binding equality, as the daemon orders it. Per
         // the recorded #65 decision (devlog 2026-07-15-1655), a closed
         // item shares the API's 409 replacement-snapshot shape with
@@ -996,6 +1043,15 @@ public actor MockServer {
                 commandID: command.command_id, action: payload.action, itemID: payload.item_id)
         }
         switch ActionOutcome.of(payload.action) {
+        case .discusses:
+            if let conversationID = current.item.conversation_id,
+                conversationsByID[conversationID]?.conversation.status == .awaiting_agent
+            {
+                return .stale(
+                    .init(
+                        message: "the agent's reply is still pending",
+                        replacement_item: current))
+            }
         case .revisesProposal:
             guard let revised = payload.run_proposal_revision?.value1 else {
                 throw MalformedCommandError(
@@ -1035,6 +1091,36 @@ public actor MockServer {
         switch ActionOutcome.of(payload.action) {
         case .concludes(let status):
             itemsByID[payload.item_id] = concluded(current, as: status)
+            if payload.action == .request_changes {
+                pendingSpecificationReplacements[command.command_id] = current
+            }
+        case .discusses:
+            let conversationID = current.item.conversation_id ?? "conv-\(payload.item_id)"
+            var conversation =
+                conversationsByID[conversationID]
+                ?? .init(
+                    as_of_revision: revision,
+                    entity_version: 0,
+                    conversation: .init(id: conversationID, status: .idle, messages: []))
+            conversation.as_of_revision = revision
+            conversation.entity_version += 1
+            conversation.conversation.status = .awaiting_agent
+            conversation.conversation.messages.append(
+                .init(
+                    id: "msg-user-\(command.command_id)",
+                    conversation_id: conversationID,
+                    sequence: conversation.conversation.messages.count + 1,
+                    author: .user,
+                    body: payload.message ?? "",
+                    attachments: payload.attachments ?? [],
+                    created_at: currentTime))
+            conversationsByID[conversationID] = conversation
+            var discussing = current
+            discussing.as_of_revision = revision
+            discussing.entity_version += 1
+            discussing.item.item_version += 1
+            discussing.item.conversation_id = conversationID
+            itemsByID[payload.item_id] = discussing
         case .stopsUnattended:
             // The daemon's stop transaction (signet applyStopUnattended,
             // #319): conclude the decided item and ensure exactly one open
@@ -1205,7 +1291,73 @@ public actor MockServer {
         commandsByID[command.command_id] = NormalizedCommand(
             command, message: recordedMessage)
         resultsByCommandID[command.command_id] = result
+        scheduleAutomaticAgentCompletionIfNeeded(for: payload.action)
         return .ok(commandResultTransform?(result) ?? result)
+    }
+
+    /// Completes asynchronous mock work explicitly. Read endpoints never call
+    /// this hook, matching the daemon's side-effect-free reads.
+    public func completePendingAgentWork() {
+        for commandID in pendingSpecificationReplacements.keys.sorted() {
+            guard var replacement = pendingSpecificationReplacements.removeValue(forKey: commandID)
+            else { continue }
+            revision += 1
+            replacement.as_of_revision = revision
+            replacement.entity_version = 1
+            replacement.item.id = Self.specificationReplacementID(
+                for: replacement, commandID: commandID)
+            replacement.item.item_version += 1
+            replacement.item.reason = "The revised specification is ready for approval"
+            replacement.item.status = .open
+            replacement.item.decided_at = nil
+            replacement.item.created_at = currentTime
+            replacement.item.conversation_id = nil
+            itemsByID[replacement.item.id] = replacement
+        }
+        for id in conversationsByID.keys.sorted() {
+            guard var snapshot = conversationsByID[id],
+                snapshot.conversation.status == .awaiting_agent,
+                let userMessage = snapshot.conversation.messages.last,
+                userMessage.author == .user
+            else { continue }
+            revision += 1
+            snapshot.as_of_revision = revision
+            snapshot.entity_version += 1
+            snapshot.conversation.status = .idle
+            let commandID =
+                userMessage.id.hasPrefix("msg-user-")
+                ? String(userMessage.id.dropFirst("msg-user-".count)) : userMessage.id
+            snapshot.conversation.messages.append(
+                .init(
+                    id: "msg-agent-\(commandID)",
+                    conversation_id: id,
+                    sequence: snapshot.conversation.messages.count + 1,
+                    author: .agent,
+                    body: "I reviewed your message and updated the work.",
+                    attachments: [],
+                    created_at: currentTime.addingTimeInterval(30)))
+            conversationsByID[id] = snapshot
+            if let itemID = itemsByID.keys.sorted().first(where: {
+                itemsByID[$0]?.item.conversation_id == id
+            }), var item = itemsByID[itemID], item.item.status == .open {
+                item.as_of_revision = revision
+                item.entity_version += 1
+                item.item.item_version += 1
+                itemsByID[itemID] = item
+            }
+        }
+    }
+
+    private func scheduleAutomaticAgentCompletionIfNeeded(
+        for action: Components.Schemas.Action
+    ) {
+        guard automaticallyCompletesAgentWork,
+            action == .discuss || action == .request_changes
+        else { return }
+        Task {
+            try? await Task.sleep(for: .seconds(1))
+            completePendingAgentWork()
+        }
     }
 
     /// Reconstruct the body Signet compares on command-id replay. A valid
@@ -1245,6 +1397,26 @@ public actor MockServer {
             of: "\(revision.intent.rawValue)|\(revision.expected_cost_units)|"
                 + "\(revision.scope.component_count)|\(revision.scope.declared_path_count)|"
                 + "\(revision.scope.touches_control_plane)")
+    }
+
+    private static func specificationReplacementID(
+        for snapshot: Components.Schemas.AttentionItemSnapshot,
+        commandID: String
+    ) -> String {
+        let runID: String?
+        switch snapshot.item.subject {
+        case .run(let run), .proposal_batch(let run): runID = run.run_id
+        case .project, .system: runID = nil
+        }
+        if let runID {
+            let prefix = "spec-approval-\(runID)-"
+            if snapshot.item.id.hasPrefix(prefix),
+                let iteration = Int(snapshot.item.id.dropFirst(prefix.count))
+            {
+                return "\(prefix)\(iteration + 1)"
+            }
+        }
+        return snapshot.item.id + "/revision/" + commandID
     }
 
     private static func isSameProposal(

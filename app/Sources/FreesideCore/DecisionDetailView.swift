@@ -40,10 +40,17 @@ struct DecisionDetailView: View {
         var id: String { rawValue }
     }
 
+    private enum MessageEditor: String, Identifiable {
+        case discuss
+        case requestChanges
+        var id: String { rawValue }
+    }
+
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var model: DecisionModel
     @State private var proposalEditor: ProposalEditor?
+    @State private var messageEditor: MessageEditor?
     @State private var pendingConfirmation: PendingConfirmation?
     @State private var sectionPreferences: DecisionSectionPreferences
     @State private var inspectorPresented: Bool
@@ -56,10 +63,12 @@ struct DecisionDetailView: View {
     private let graphics: DecisionGraphicPresentations
     private let loadsAttachments: Bool
     private let showsValidationProgress: Bool
+    private let conversationNow: Date
     private let itemID: String
     private let detailsRevealRequest: TechnicalDetailsRevealRequest?
     private let onConsumeDetailsRevealRequest: (UUID) -> Void
     private let externalInspectorPresented: Binding<Bool>?
+    private let onSelectItem: (String) -> Void
 
     @MainActor
     init(
@@ -72,8 +81,10 @@ struct DecisionDetailView: View {
         graphics: DecisionGraphicPresentations = .init(),
         loadsAttachments: Bool = true,
         showsValidationProgress: Bool = true,
+        conversationNow: Date = .now,
         sectionPreferences: DecisionSectionPreferences? = nil,
         inspectorPresented: Binding<Bool>? = nil,
+        onSelectItem: @escaping (String) -> Void = { _ in },
         onConclusion: @escaping @MainActor (DecisionConclusion) -> Void = { _ in }
     ) {
         _model = State(
@@ -92,10 +103,12 @@ struct DecisionDetailView: View {
         self.detailsRevealRequest = detailsRevealRequest
         self.onConsumeDetailsRevealRequest = onConsumeDetailsRevealRequest
         externalInspectorPresented = inspectorPresented
+        self.onSelectItem = onSelectItem
         self.recommendation = recommendation
         self.graphics = graphics
         self.loadsAttachments = loadsAttachments
         self.showsValidationProgress = showsValidationProgress
+        self.conversationNow = conversationNow
     }
 
     var body: some View {
@@ -155,6 +168,27 @@ struct DecisionDetailView: View {
                 case .snooze:
                     RunProposalSnoozeSheet { until in
                         Task { await model.snooze(until: until) }
+                    }
+                }
+            }
+            .sheet(item: $messageEditor) { editor in
+                switch editor {
+                case .discuss:
+                    MessageComposerSheet(
+                        title: "Discuss",
+                        prompt: "Send a message to the agent. The item stays open while it replies.",
+                        submitLabel: "Send"
+                    ) { message in
+                        await model.submitDiscuss(message: message)
+                    }
+                case .requestChanges:
+                    MessageComposerSheet(
+                        title: "Request changes",
+                        prompt: "Describe the revision the specification needs.",
+                        submitLabel: "Request changes",
+                        byteLimit: 8192
+                    ) { message in
+                        await model.submitRequestChanges(message: message)
                     }
                 }
             }
@@ -327,6 +361,29 @@ struct DecisionDetailView: View {
                 .font(FreesideFont.sectionTitle)
                 .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if let conversation = model.conversation {
+                ConversationView(
+                    snapshot: conversation,
+                    attachments: attachments,
+                    loadsAttachments: loadsAttachments,
+                    now: conversationNow,
+                    rendersInteractiveControls: rendersInteractiveControls)
+            }
+
+            if let replacement = model.revisedSpecification {
+                Button {
+                    onSelectItem(replacement.item.id)
+                } label: {
+                    HStack(alignment: .firstTextBaseline) {
+                        Label("Revised specification ready", systemImage: "doc.badge.arrow.up")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(FreesideActionButtonStyle(tone: .neutral))
+            }
 
             #if os(macOS)
                 if !composition.modules.contains(.checklist),
@@ -1904,7 +1961,7 @@ struct DecisionDetailView: View {
                     ProgressView().controlSize(.small)
                 }
             }
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, minHeight: 44)
         }
         .buttonStyle(FreesideActionButtonStyle(tone: tone))
         .disabled(
@@ -1946,6 +2003,10 @@ struct DecisionDetailView: View {
         item: Components.Schemas.AttentionItem?
     ) {
         switch action {
+        case .discuss:
+            messageEditor = .discuss
+        case .request_changes:
+            messageEditor = .requestChanges
         case .start_with_changes:
             proposalEditor = .revision
         case .snooze:
@@ -1992,6 +2053,7 @@ struct DecisionDetailView: View {
 
         private func cancelPendingAction() {
             proposalEditor = nil
+            messageEditor = nil
             pendingConfirmation = nil
             keyboardNote = nil
         }

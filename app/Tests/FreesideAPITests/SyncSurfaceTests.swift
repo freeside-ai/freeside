@@ -25,7 +25,7 @@ import Testing
         #expect(bootstrap.attention_deliveries.isEmpty)
         #expect(bootstrap.runs == runs)
         #expect(bootstrap.schedules == schedules)
-        #expect(bootstrap.conversations.isEmpty)
+        #expect(bootstrap.conversations == AttentionFixtures.defaultConversations())
 
         let timeline = try await client.getRunTimeline(
             path: .init(run_id: RunFixtures.activeRunID)

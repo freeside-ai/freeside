@@ -105,6 +105,28 @@ struct StatusOverrideTransport: ClientTransport {
     }
 }
 
+/// Replaces one answered status body with undecodable JSON while preserving
+/// the status, so returned-object failure paths exercise generated decoding.
+struct CorruptStatusBodyTransport: ClientTransport {
+    let base: MockServerTransport
+    let operationID: String
+    let status: Int
+
+    func send(
+        _ request: HTTPRequest,
+        body: HTTPBody?,
+        baseURL: URL,
+        operationID: String
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        let (response, responseBody) = try await base.send(
+            request, body: body, baseURL: baseURL, operationID: operationID)
+        guard operationID == self.operationID, response.status.code == status else {
+            return (response, responseBody)
+        }
+        return (HTTPResponse(status: response.status), HTTPBody(Data("{}".utf8)))
+    }
+}
+
 /// Counts how many times an operation ran, for asserting re-fetches.
 actor Counter {
     private(set) var count = 0
