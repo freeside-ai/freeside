@@ -104,6 +104,10 @@ func TestSignetWireGoldens(t *testing.T) {
 					runSnapshot(
 						run, store.Snapshot{AsOfRevision: 20, EntityVersion: 2},
 						observation, domain.ConcludeRun(observation), 23,
+						&domain.DisplayNames{
+							Project:  domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
+							WorkUnit: domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
+						},
 					),
 				},
 				Conversations: []ConversationSnapshot{

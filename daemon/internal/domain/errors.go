@@ -3,6 +3,8 @@ package domain
 import "errors"
 
 var (
+	ErrCardFactInconsistent                 = errors.New("card fact is inconsistent")
+	ErrCardFactOutsideItem                  = errors.New("card fact is not valid for this attention type")
 	ErrRecommendationProvenanceInconsistent = errors.New("recommendation provenance does not match its source")
 	ErrRecommendationSourceDigestMismatch   = errors.New("recommendation source digest does not match its canonical content")
 )

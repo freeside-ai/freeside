@@ -415,6 +415,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	if err := tx.gateFindingAdjudicationItem(ctx, item); err != nil {
 		return fmt.Errorf("put attention item %q finding adjudication binding: %w", item.ID, err)
 	}
+	if err := tx.gateReviewDisputeItem(ctx, item); err != nil {
+		return fmt.Errorf("put attention item %q review dispute binding: %w", item.ID, err)
+	}
 	existing, err := tx.existingBody(ctx, `SELECT body FROM attention_items WHERE id = ?`, item.ID)
 	if err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
@@ -585,6 +588,56 @@ func (tx *ReadTx) gateFindingAdjudicationItem(
 	return nil
 }
 
+// gateReviewDisputeItem authenticates the daemon-authored dispute coordinates
+// against an immutable routed or shadow review pass instead of trusting a
+// caller-supplied or decoded copy of the round, finding set, or completion
+// evidence. The finding lanes are disjoint, so one exact record match also
+// identifies which authority produced the dispute without another wire field.
+func (tx *ReadTx) gateReviewDisputeItem(
+	ctx context.Context, item domain.AttentionItem,
+) error {
+	if item.ReviewDispute == nil {
+		return nil
+	}
+	binding := item.ReviewDispute
+	record, err := tx.reviewRecordForRound(ctx, binding.RunID, binding.Round)
+	if err != nil {
+		return err
+	}
+	if reviewDisputeBindingMatches(binding, record.CompletionEvidence, record.FindingIDs) {
+		return nil
+	}
+	shadowRecords, err := tx.ListShadowReviewRecords(ctx, binding.RunID)
+	if err != nil {
+		return err
+	}
+	for _, shadow := range shadowRecords {
+		if shadow.ShadowedRound == binding.Round && reviewDisputeBindingMatches(
+			binding, shadow.CompletionEvidence, shadow.FindingIDs,
+		) {
+			return nil
+		}
+	}
+	return domain.ErrParentKeyMismatch
+}
+
+func reviewDisputeBindingMatches(
+	binding *domain.ReviewDisputeBinding,
+	completionEvidence domain.Digest,
+	findingIDs []domain.FindingID,
+) bool {
+	if binding.CompletionEvidence != completionEvidence ||
+		len(binding.FindingIDs) != len(findingIDs) {
+		return false
+	}
+	for _, id := range binding.FindingIDs {
+		if !slices.Contains(findingIDs, id) {
+			return false
+		}
+	}
+	return true
+}
+
 func sameOptionalComparable[T comparable](left, right *T) bool {
 	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
@@ -643,6 +696,9 @@ func (tx *ReadTx) scanAttentionItemHistory(ctx context.Context, sc scanner) (dom
 	if err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
+	if err := tx.gateReviewDisputeItem(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
 	if err := tx.gateDecisionSurface(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
@@ -666,6 +722,9 @@ func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (do
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	if err := tx.gateFindingAdjudicationItem(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	if err := tx.gateReviewDisputeItem(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	if err := tx.gateReadyItemPRReference(ctx, item); err != nil {

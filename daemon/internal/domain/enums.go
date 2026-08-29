@@ -147,6 +147,114 @@ func (p HealthPosture) valid() bool {
 	}
 }
 
+// DisplayNameSource records whether a human-readable label came from a
+// daemon-known name or is an explicit identifier fallback.
+type DisplayNameSource string
+
+const (
+	DisplayNameSourceName       DisplayNameSource = "name"
+	DisplayNameSourceIdentifier DisplayNameSource = "identifier"
+)
+
+// AllDisplayNameSources lists every valid DisplayNameSource.
+var AllDisplayNameSources = []DisplayNameSource{
+	DisplayNameSourceName,
+	DisplayNameSourceIdentifier,
+}
+
+func (s DisplayNameSource) valid() bool {
+	switch s {
+	case DisplayNameSourceName, DisplayNameSourceIdentifier:
+		return true
+	default:
+		return false
+	}
+}
+
+// BlockedWaitKind identifies the authority a blocked card is waiting on.
+type BlockedWaitKind string
+
+const (
+	BlockedWaitSpecApproval   BlockedWaitKind = "spec_approval"
+	BlockedWaitPRChecks       BlockedWaitKind = "pr_checks"
+	BlockedWaitExternalReview BlockedWaitKind = "external_review"
+)
+
+// AllBlockedWaitKinds lists every valid BlockedWaitKind.
+var AllBlockedWaitKinds = []BlockedWaitKind{
+	BlockedWaitSpecApproval,
+	BlockedWaitPRChecks,
+	BlockedWaitExternalReview,
+}
+
+func (k BlockedWaitKind) valid() bool {
+	switch k {
+	case BlockedWaitSpecApproval, BlockedWaitPRChecks, BlockedWaitExternalReview:
+		return true
+	default:
+		return false
+	}
+}
+
+// ImpairedCapability identifies the operator capability a health diagnostic
+// degrades. None represents a diagnostic with no current capability impact.
+type ImpairedCapability string
+
+const (
+	ImpairedCapabilityUnattendedAdmission ImpairedCapability = "unattended_admission"
+	ImpairedCapabilityRunVisibility       ImpairedCapability = "run_visibility"
+	// #nosec G101 -- this is a public capability enum value, not credential material.
+	ImpairedCapabilityAgentCredential ImpairedCapability = "agent_credential"
+	ImpairedCapabilityNone            ImpairedCapability = "none"
+)
+
+// AllImpairedCapabilities lists every valid ImpairedCapability.
+var AllImpairedCapabilities = []ImpairedCapability{
+	ImpairedCapabilityUnattendedAdmission,
+	ImpairedCapabilityRunVisibility,
+	ImpairedCapabilityAgentCredential,
+	ImpairedCapabilityNone,
+}
+
+func (c ImpairedCapability) valid() bool {
+	switch c {
+	case ImpairedCapabilityUnattendedAdmission, ImpairedCapabilityRunVisibility,
+		ImpairedCapabilityAgentCredential, ImpairedCapabilityNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// TrustRule identifies a definitive publication rule that can produce a
+// publish_blocked item without a RunHoldReason variant.
+type TrustRule string
+
+const (
+	TrustRuleRecipeUnapproved   TrustRule = "recipe_unapproved"
+	TrustRuleVerificationFailed TrustRule = "verification_failed"
+	TrustRuleTrustProfileDrift  TrustRule = "trust_profile_drift"
+	TrustRuleTargetBaseAdvanced TrustRule = "target_base_advanced"
+)
+
+// AllTrustRules lists every valid TrustRule.
+var AllTrustRules = []TrustRule{
+	TrustRuleRecipeUnapproved,
+	TrustRuleVerificationFailed,
+	TrustRuleTrustProfileDrift,
+	TrustRuleTargetBaseAdvanced,
+}
+
+func (r TrustRule) valid() bool {
+	switch r {
+	case TrustRuleRecipeUnapproved, TrustRuleVerificationFailed,
+		TrustRuleTrustProfileDrift, TrustRuleTargetBaseAdvanced:
+		return true
+	default:
+		return false
+	}
+}
+
 // SubjectType is what an AttentionItem is about (plan §4).
 type SubjectType string
 

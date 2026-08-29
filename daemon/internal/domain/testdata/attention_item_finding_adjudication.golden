@@ -89,6 +89,14 @@
       }
     ]
   },
+  "display_names": null,
+  "billable_cost_so_far": null,
+  "execution_failure": null,
+  "publish_block": null,
+  "diff_stats": null,
+  "blocked_on": null,
+  "health_diagnostic": null,
+  "review_dispute": null,
   "item_version": 1,
   "interruption_class": "planned_gate",
   "conversation_id": null,

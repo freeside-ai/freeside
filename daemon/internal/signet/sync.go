@@ -94,6 +94,7 @@ type RunSnapshot struct {
 type Run struct {
 	ID              domain.RunID             `json:"id"`
 	ProjectID       domain.ProjectID         `json:"project_id"`
+	DisplayNames    *domain.DisplayNames     `json:"display_names"`
 	CreatedAt       *time.Time               `json:"created_at"`
 	LastActivityAt  *time.Time               `json:"last_activity_at"`
 	SpecDigest      domain.Digest            `json:"spec_digest"`
@@ -582,7 +583,11 @@ func (s *Service) GetRun(ctx context.Context, id domain.RunID) (RunSnapshot, err
 		if err != nil {
 			return asRunObservationIntegrityError(err)
 		}
-		out = runSnapshot(value.Value, value.Snapshot, observation, conclusion, state.Revision)
+		displayNames, err := runDisplayNames(ctx, tx, value.Value)
+		if err != nil {
+			return err
+		}
+		out = runSnapshot(value.Value, value.Snapshot, observation, conclusion, state.Revision, displayNames)
 		return nil
 	})
 	if err != nil {
@@ -707,11 +712,13 @@ func runSnapshot(
 	observation domain.RunObservation,
 	conclusion domain.RunConclusion,
 	asOfRevision int64,
+	displayNames *domain.DisplayNames,
 ) RunSnapshot {
 	normalized := normalizeRun(run)
 	projection := Run{
 		ID: normalized.ID, ProjectID: normalized.ProjectID,
-		SpecDigest: normalized.SpecDigest, PolicyDigest: normalized.PolicyDigest,
+		DisplayNames: displayNames,
+		SpecDigest:   normalized.SpecDigest, PolicyDigest: normalized.PolicyDigest,
 		Stages:  normalized.Stages,
 		Outcome: conclusion.Outcome,
 	}
@@ -786,7 +793,42 @@ func projectRunSnapshot(
 	if err != nil {
 		return RunSnapshot{}, fmt.Errorf("run %q conclusion: %w", run.ID, asRunObservationIntegrityError(err))
 	}
-	return runSnapshot(run, snapshot, observation, conclusion, state.Revision), nil
+	displayNames, err := runDisplayNames(ctx, tx, run)
+	if err != nil {
+		return RunSnapshot{}, fmt.Errorf("run %q display names: %w", run.ID, err)
+	}
+	return runSnapshot(run, snapshot, observation, conclusion, state.Revision, displayNames), nil
+}
+
+func runDisplayNames(ctx context.Context, tx *store.ReadTx, run domain.Run) (*domain.DisplayNames, error) {
+	names := &domain.DisplayNames{
+		Project: domain.DisplayName{
+			Text: string(run.ProjectID), Source: domain.DisplayNameSourceIdentifier,
+		},
+		WorkUnit: domain.DisplayName{
+			Text: string(run.ID), Source: domain.DisplayNameSourceIdentifier,
+		},
+	}
+	project, err := tx.GetProject(ctx, run.ProjectID)
+	if err == nil {
+		names.Project = domain.DisplayName{
+			Text: project.Repo, Source: domain.DisplayNameSourceName,
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, run.ID)
+	if err == nil && declaration.BoundIssue != nil {
+		names.WorkUnit = domain.DisplayName{
+			Text: fmt.Sprintf("#%d", *declaration.BoundIssue), Source: domain.DisplayNameSourceName,
+		}
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	if err := names.Validate(); err != nil {
+		return nil, err
+	}
+	return names, nil
 }
 
 func publicationReadyMilestone(observation domain.RunObservation) bool {
@@ -1434,6 +1476,11 @@ func normalizeAttentionItem(item domain.AttentionItem) domain.AttentionItem {
 			}
 		}
 		item.FindingAdjudication = &binding
+	}
+	if item.ReviewDispute != nil {
+		binding := *item.ReviewDispute
+		binding.FindingIDs = nonNilSlice(slices.Clone(binding.FindingIDs))
+		item.ReviewDispute = &binding
 	}
 	return item
 }

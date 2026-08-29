@@ -20,6 +20,22 @@ func TestEnumValidity(t *testing.T) {
 		valids["HealthPosture"] = append(valids["HealthPosture"], v.valid)
 	}
 	invalids["HealthPosture"] = HealthPosture("").valid
+	for _, v := range AllDisplayNameSources {
+		valids["DisplayNameSource"] = append(valids["DisplayNameSource"], v.valid)
+	}
+	invalids["DisplayNameSource"] = DisplayNameSource("").valid
+	for _, v := range AllBlockedWaitKinds {
+		valids["BlockedWaitKind"] = append(valids["BlockedWaitKind"], v.valid)
+	}
+	invalids["BlockedWaitKind"] = BlockedWaitKind("").valid
+	for _, v := range AllImpairedCapabilities {
+		valids["ImpairedCapability"] = append(valids["ImpairedCapability"], v.valid)
+	}
+	invalids["ImpairedCapability"] = ImpairedCapability("").valid
+	for _, v := range AllTrustRules {
+		valids["TrustRule"] = append(valids["TrustRule"], v.valid)
+	}
+	invalids["TrustRule"] = TrustRule("").valid
 	for _, v := range AllSubjectTypes {
 		valids["SubjectType"] = append(valids["SubjectType"], v.valid)
 	}

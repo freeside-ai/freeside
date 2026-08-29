@@ -77,6 +77,14 @@ func newFixtures(t *testing.T) fixtures {
 		MediaType: domain.MediaTypeTextMarkdown,
 		Content:   "All checks green; the diff touches only docs.",
 	}
+	displayNames := domain.DisplayNames{
+		Project:  domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
+		WorkUnit: domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
+	}
+	diffStats := domain.DiffStats{
+		FilesChanged: 12, Additions: 240, Deletions: 31,
+		BaseSHA: "deadbeef", HeadSHA: "cafebabe",
+	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-1", ProjectID: "proj-1",
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
@@ -108,6 +116,7 @@ func newFixtures(t *testing.T) fixtures {
 			},
 		}},
 		PRHeadSHA: "cafebabe", PRReference: &domain.PRReference{Repo: "owner/repo", Number: 123},
+		DisplayNames: &displayNames, DiffStats: &diffStats,
 		CommitPlanNotice: &noticeReason, ItemVersion: 1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		ConversationID:    &convID, CreatedAt: &ts, ExpiresWhen: &expires, Status: domain.StatusOpen,

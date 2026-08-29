@@ -120,6 +120,14 @@ func TestGolden(t *testing.T) {
 		},
 		TerminalOutcome: domain.ReviewClean,
 	}
+	displayNames := domain.DisplayNames{
+		Project:  domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
+		WorkUnit: domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
+	}
+	diffStats := domain.DiffStats{
+		FilesChanged: 12, Additions: 240, Deletions: 31,
+		BaseSHA: "deadbeef", HeadSHA: "cafebabe",
+	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-1", ProjectID: "proj-1", Subject: subject,
 		Type: domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
@@ -132,6 +140,8 @@ func TestGolden(t *testing.T) {
 		Readiness:         &readiness,
 		YieldHistory:      &yieldHistory,
 		CommitPlanNotice:  &noticeReason,
+		DisplayNames:      &displayNames,
+		DiffStats:         &diffStats,
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		ConversationID:    &convID, CreatedAt: &ts, ExpiresWhen: &expires, Status: domain.StatusOpen,
@@ -156,6 +166,7 @@ func TestGolden(t *testing.T) {
 		EvidenceSnapshot:  []domain.Artifact{},
 		AgentClaims:       []domain.AgentClaim{},
 		YieldHistory:      &yieldHistory,
+		BillableCostSoFar: &domain.CostSoFar{Currency: "USD", Amount: "42.75", Invocations: 6, Complete: false},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt:         &ts,
@@ -176,6 +187,7 @@ func TestGolden(t *testing.T) {
 	// The read-only blocked type offers no action (plan §4; relaxed by #96):
 	// this fixture pins the actionless shape, with every collection rendering
 	// as the required non-null empty array the wire contract declares.
+	blockedOnItemID := domain.ItemID("item-spec-approval")
 	blockedItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-2", ProjectID: "proj-1",
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
@@ -184,9 +196,59 @@ func TestGolden(t *testing.T) {
 		RequestedDecision: []domain.Action{},
 		EvidenceSnapshot:  []domain.Artifact{},
 		AgentClaims:       []domain.AgentClaim{},
+		BlockedOn: &domain.BlockedWait{
+			Kind: domain.BlockedWaitSpecApproval, Since: ts, ItemID: &blockedOnItemID,
+		},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,
+		CreatedAt:         &ts,
 		Status:            domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	executionFailureItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-execution-failure", ProjectID: "proj-1", Subject: subject,
+		Type: domain.AttentionExecutionFailure, Priority: domain.PriorityUrgent,
+		Reason:            "the implementation stage failed",
+		RequestedDecision: []domain.Action{domain.ActionRetry, domain.ActionStop},
+		ExecutionFailure: &domain.ExecutionFailureFacts{
+			Outcome: domain.ExecutionOutcomeFailed, Stage: domain.StageNameImplementation,
+			InvocationID: "inv-implementation-1",
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt: &ts, Status: domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	trustRule := domain.TrustRuleTrustProfileDrift
+	publishBlockedItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-publish-blocked", ProjectID: "proj-1", Subject: subject,
+		Type: domain.AttentionPublishBlocked, Priority: domain.PriorityHigh,
+		Reason:            "current trust state blocked publication",
+		RequestedDecision: []domain.Action{domain.ActionInspectTrustFailure, domain.ActionStop},
+		PublishBlock:      &domain.PublishBlockFacts{TrustRule: &trustRule},
+		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt: &ts, Status: domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reviewDisputeItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-review-dispute", ProjectID: "proj-1", Subject: subject,
+		Type: domain.AttentionReviewDispute, Priority: domain.PriorityHigh,
+		Reason:            "the review finding conflicts with the work contract",
+		RequestedDecision: []domain.Action{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop},
+		ReviewDispute: &domain.ReviewDisputeBinding{
+			RunID: "run-1", Round: 2, FindingIDs: []domain.FindingID{"finding-1", "finding-2"},
+			CompletionEvidence: "sha256:review-completion",
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt: &ts, Status: domain.StatusOpen,
 	}, approved)
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +302,10 @@ func TestGolden(t *testing.T) {
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionExceptional,
 		Posture:           &advisoryPosture,
-		Status:            domain.StatusOpen,
+		HealthDiagnostic: &domain.HealthDiagnostic{
+			Code: "run_projection.unavailable", Impairs: domain.ImpairedCapabilityRunVisibility,
+		},
+		Status: domain.StatusOpen,
 	}, approved)
 	if err != nil {
 		t.Fatal(err)
@@ -1220,6 +1285,9 @@ func TestGolden(t *testing.T) {
 		{"attention_item_review_diminishing_yield", diminishingItem},
 		{"attention_item_readiness_degraded", degradedItem},
 		{"attention_item_blocked", blockedItem},
+		{"attention_item_execution_failure", executionFailureItem},
+		{"attention_item_publish_blocked", publishBlockedItem},
+		{"attention_item_review_dispute", reviewDisputeItem},
 		{"attention_item_decided", decidedItem},
 		{"attention_item_superseded", supersededItem},
 		{"attention_item_advisory", advisoryItem},

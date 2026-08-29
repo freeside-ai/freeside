@@ -1,25 +1,24 @@
 {
-  "id": "item-3",
+  "id": "item-card-publish",
   "project_id": "proj-1",
   "subject": {
     "subject_type": "run",
     "subject_id": "run-1",
     "run_id": "run-1"
   },
-  "type": "system_health",
-  "priority": "normal",
-  "reason": "unattended execution admitted under the backup-encryption waiver for repository 424242",
+  "type": "publish_blocked",
+  "priority": "high",
+  "reason": "publication is blocked",
   "requested_decision": [
-    "acknowledge",
-    "stop_unattended"
+    "inspect_trust_failure"
   ],
   "recommendation": null,
   "decision_surface": {
     "epoch": 1,
-    "digest": "sha256:8d9ff9eac184194fb29cd666cd6ff855af71c71d180125bb431d47dfe286d6c1"
+    "digest": "sha256:6856b4017ff3169a1d4dda70db56560afb1be8a6cd9808f15772da6f27e603d8"
   },
-  "evidence_snapshot": [],
-  "agent_claims": [],
+  "evidence_snapshot": null,
+  "agent_claims": null,
   "artifact_digests": [],
   "pr_head_sha": "",
   "pr_reference": null,
@@ -35,7 +34,10 @@
   "display_names": null,
   "billable_cost_so_far": null,
   "execution_failure": null,
-  "publish_block": null,
+  "publish_block": {
+    "hold_reason": null,
+    "trust_rule": "trust_profile_drift"
+  },
   "diff_stats": null,
   "blocked_on": null,
   "health_diagnostic": null,
@@ -50,13 +52,10 @@
     "first_opened_at": null,
     "submit_to_first_open": null
   },
-  "created_at": null,
+  "created_at": "2026-08-29T20:00:00Z",
   "expires_when": null,
   "decided_at": null,
-  "posture": "blocking",
-  "blocking_supersession": {
-    "kind": "backup_encryption_waiver",
-    "repository_id": 424242
-  },
+  "posture": null,
+  "blocking_supersession": null,
   "status": "open"
 }
