@@ -1013,6 +1013,29 @@ struct DecisionDetailView: View {
         }
     }
 
+    static func runProposalRevision(
+        from facts: Components.Schemas.RunProposalFactsSnapshot,
+        expectedCost: Int,
+        componentCount: Int,
+        touchesControlPlane: Bool
+    ) -> Components.Schemas.RunProposalRevisionInput? {
+        guard
+            expectedCost != facts.expected_cost_units
+                || componentCount != facts.scope.component_count
+                || touchesControlPlane != facts.scope.touches_control_plane
+        else { return nil }
+
+        // The daemon binds this count to the durable declaration, so it must
+        // not become operator input.
+        return .init(
+            intent: facts.intent,
+            expected_cost_units: expectedCost,
+            scope: .init(
+                component_count: componentCount,
+                declared_path_count: facts.scope.declared_path_count,
+                touches_control_plane: touchesControlPlane))
+    }
+
     private func actionInputReady(
         _ action: Components.Schemas.Action,
         item: Components.Schemas.AttentionItem
@@ -1977,7 +2000,6 @@ private struct RunProposalRevisionSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var expectedCost: Int
     @State private var componentCount: Int
-    @State private var declaredPathCount: Int
     @State private var touchesControlPlane: Bool
     private let originalFacts: Components.Schemas.RunProposalFactsSnapshot
     let submit: (Components.Schemas.RunProposalRevisionInput) -> Void
@@ -1988,17 +2010,17 @@ private struct RunProposalRevisionSheet: View {
     ) {
         _expectedCost = State(initialValue: facts.expected_cost_units)
         _componentCount = State(initialValue: facts.scope.component_count)
-        _declaredPathCount = State(initialValue: facts.scope.declared_path_count)
         _touchesControlPlane = State(initialValue: facts.scope.touches_control_plane)
         originalFacts = facts
         self.submit = submit
     }
 
-    private var changesProposal: Bool {
-        expectedCost != originalFacts.expected_cost_units
-            || componentCount != originalFacts.scope.component_count
-            || declaredPathCount != originalFacts.scope.declared_path_count
-            || touchesControlPlane != originalFacts.scope.touches_control_plane
+    private var revision: Components.Schemas.RunProposalRevisionInput? {
+        DecisionDetailView.runProposalRevision(
+            from: originalFacts,
+            expectedCost: expectedCost,
+            componentCount: componentCount,
+            touchesControlPlane: touchesControlPlane)
     }
 
     var body: some View {
@@ -2007,7 +2029,8 @@ private struct RunProposalRevisionSheet: View {
                 LabeledContent("Intent", value: "Implement subject")
                 Stepper("Expected cost: \(expectedCost) units", value: $expectedCost, in: 1...1_000_000)
                 Stepper("Components: \(componentCount)", value: $componentCount, in: 1...32)
-                Stepper("Declared paths: \(declaredPathCount)", value: $declaredPathCount, in: 1...4096)
+                LabeledContent(
+                    "Declared paths", value: "\(originalFacts.scope.declared_path_count)")
                 Toggle("Touches control plane", isOn: $touchesControlPlane)
             }
             .navigationTitle("Start with changes")
@@ -2018,17 +2041,12 @@ private struct RunProposalRevisionSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Submit") {
-                        submit(
-                            .init(
-                                intent: .implement_subject,
-                                expected_cost_units: expectedCost,
-                                scope: .init(
-                                    component_count: componentCount,
-                                    declared_path_count: declaredPathCount,
-                                    touches_control_plane: touchesControlPlane)))
-                        dismiss()
+                        if let revision {
+                            submit(revision)
+                            dismiss()
+                        }
                     }
-                    .disabled(!changesProposal)
+                    .disabled(revision == nil)
                 }
             }
         }
