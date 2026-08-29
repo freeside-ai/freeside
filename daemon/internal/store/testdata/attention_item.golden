@@ -14,6 +14,11 @@
     "return_to_agent",
     "dismiss"
   ],
+  "recommendation": null,
+  "decision_surface": {
+    "epoch": 1,
+    "digest": "sha256:adb47dbdf777e31d85c004f469268ebb5bfa486fb3d05fd3a56c7730ff242092"
+  },
   "evidence_snapshot": [
     {
       "id": "art-1",

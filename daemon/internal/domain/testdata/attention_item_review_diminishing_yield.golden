@@ -13,6 +13,11 @@
     "finish_now",
     "apply_then_finish"
   ],
+  "recommendation": null,
+  "decision_surface": {
+    "epoch": 1,
+    "digest": "sha256:2b6f9b5647cd2062756eb6d2668b587a7839f8b2d027cf422cc1ad996fd9c854"
+  },
   "evidence_snapshot": [],
   "agent_claims": [],
   "artifact_digests": [],

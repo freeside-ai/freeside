@@ -42,7 +42,7 @@ public enum AttentionFixtures {
         .review_diminishing_returns: [
             .finish_now, .apply_then_finish, .continue_under_policy, .convert_to_policy,
         ],
-        .review_dispute: [.approve, .adjudicate, .discuss, .stop],
+        .review_dispute: [.approve, .discuss, .stop],
         .review_contradiction: [.recover_review],
         .review_configuration: [.adopt_review_configuration, .discuss, .stop],
         .finding_adjudication: [
@@ -69,7 +69,7 @@ public enum AttentionFixtures {
     public static let phase1Actions: [Components.Schemas.Action] = [
         .approve, .request_changes, .discuss, .stop,
         .finish_now, .apply_then_finish, .continue_under_policy, .convert_to_policy,
-        .adjudicate, .retry, .retry_with_capabilities,
+        .retry, .retry_with_capabilities,
         .answer_and_retry, .answer_without_retry,
         .rerun_trust_evaluation, .choose_alternate_profile, .inspect_trust_failure,
         .open_pr, .return_to_agent, .mark_seen, .dismiss,
@@ -478,6 +478,28 @@ public enum AttentionFixtures {
                 ))
             : nil
 
+        let recommendation: Components.Schemas.AttentionItem.recommendationPayload? =
+            findingAdjudication.map { binding in
+                .init(
+                    value1: .init(
+                        action: .accept_recommended_route,
+                        reason: "Accept the adjudicator's recommended route for each finding.",
+                        source: .agent_judgment,
+                        provenance: .init(
+                            agent_judgment: .init(
+                                value1: .init(
+                                    judgment_site: .finding_adjudicator,
+                                    invocation_id: "adjudicator-run-\(key)-3",
+                                    artifact_digest: binding.value1.adjudication_digest
+                                ))),
+                        confidence: .init(value1: .high)
+                    ))
+            }
+        let decisionSurface = Components.Schemas.DecisionSurfaceRef(
+            epoch: 1,
+            digest: MockContractValidation.sha256Digest(of: "decision-surface-\(key)-1")
+        )
+
         let item = Components.Schemas.AttentionItem(
             id: "item-\(key)",
             project_id: "proj-1",
@@ -486,6 +508,8 @@ public enum AttentionFixtures {
             priority: priority,
             reason: reason(type: type),
             requested_decision: actions,
+            recommendation: recommendation,
+            decision_surface: decisionSurface,
             evidence_snapshot: [
                 .init(
                     id: "art-log-\(key)",

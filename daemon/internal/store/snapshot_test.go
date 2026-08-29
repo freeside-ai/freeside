@@ -56,9 +56,10 @@ func TestAttentionItemSnapshotMetadata(t *testing.T) {
 	}
 
 	read()
-	if string(marshalIndent(t, got)) != string(marshalIndent(t, f.item)) {
+	want := projectedAttentionItem(t, f.item)
+	if string(marshalIndent(t, got)) != string(marshalIndent(t, want)) {
 		t.Errorf("snapshot item differs from the put item:\ngot:  %s\nwant: %s",
-			marshalIndent(t, got), marshalIndent(t, f.item))
+			marshalIndent(t, got), marshalIndent(t, want))
 	}
 	if snap.EntityVersion != 1 {
 		t.Errorf("entity_version after first put = %d, want 1", snap.EntityVersion)

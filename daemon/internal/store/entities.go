@@ -398,55 +398,50 @@ ON CONFLICT (id) DO UPDATE SET
     body            = excluded.body`
 
 func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionItem) error {
-	body, err := encode(item)
-	if err != nil {
+	// Recommendation and DecisionSurface are daemon-derived fields. Normalize
+	// them before the caller boundary validation so a caller-supplied source,
+	// payload, epoch, or digest grants no authority and is overwritten below.
+	item.Recommendation = nil
+	item.DecisionSurface = domain.DecisionSurfaceRef{}
+	if _, err := encode(item); err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
 	}
-	// Gate the embedded evidence against policy before persisting: encode's
-	// Validate enforces only the producer-class half of the evidence rule, so a
-	// caller bypassing NewAttentionItem could otherwise persist an evidence
-	// artifact under an unapproved recipe (plan §5.15 rule 2). Runs before the
-	// write, so an idempotent replay is gated too.
+	// Gate the embedded evidence against policy before persisting. This also
+	// authenticates the typed finding-adjudication binding used by an
+	// agent_judgment recommendation.
 	if err := tx.gateEvidence(ctx, item); err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
 	}
 	if err := tx.gateFindingAdjudicationItem(ctx, item); err != nil {
 		return fmt.Errorf("put attention item %q finding adjudication binding: %w", item.ID, err)
 	}
-	var readinessSummary *string
-	if item.Readiness != nil {
-		encoded, err := encode(*item.Readiness)
-		if err != nil {
-			return fmt.Errorf("put attention item %q readiness summary: %w", item.ID, err)
-		}
-		readinessSummary = &encoded
-	}
-	var yieldHistory *string
-	if item.YieldHistory != nil {
-		encoded, err := encode(*item.YieldHistory)
-		if err != nil {
-			return fmt.Errorf("put attention item %q yield history: %w", item.ID, err)
-		}
-		yieldHistory = &encoded
-	}
 	existing, err := tx.existingBody(ctx, `SELECT body FROM attention_items WHERE id = ?`, item.ID)
 	if err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
 	}
 	// old is the decoded stored item, and stays nil exactly when this write
-	// creates the item. putDecisionSurface re-gates the persisted surface
+	// creates the item. prepareDecisionSurface re-gates the persisted surface
 	// record against it, so the read-modify-write cannot advance from a row
 	// planted on some other surface.
 	var old *domain.AttentionItem
 	if existing != nil {
+		decoded, err := decode[domain.AttentionItem](existing)
+		if err != nil {
+			return fmt.Errorf("put attention item %q: %w", item.ID, err)
+		}
+		// Derived fields do not create a version-advance demand. A constructor-
+		// built replay, or a caller trying to substitute either field, is compared
+		// with the stored values normalized back in.
+		item.Recommendation = decoded.Recommendation
+		item.DecisionSurface = decoded.DecisionSurface
+		body, err := encode(item)
+		if err != nil {
+			return fmt.Errorf("put attention item %q: %w", item.ID, err)
+		}
 		// A byte-identical replay (a retried command) converges without a
 		// write, so it causes no entity_version churn.
 		if string(existing) == body {
 			return tx.putAttentionItemPRReference(ctx, item)
-		}
-		decoded, err := decode[domain.AttentionItem](existing)
-		if err != nil {
-			return fmt.Errorf("put attention item %q: %w", item.ID, err)
 		}
 		old = &decoded
 		// A row persisted under an older encoding can carry this item's exact
@@ -467,6 +462,36 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 			return fmt.Errorf("put attention item %q: %w", item.ID, mapTransition(err))
 		}
 	}
+	surface, createdSurface, changedSurface, err := tx.prepareDecisionSurface(ctx, item, old)
+	if err != nil {
+		return fmt.Errorf("put attention item %q decision surface: %w", item.ID, err)
+	}
+	item.DecisionSurface = domain.DecisionSurfaceRef{Epoch: surface.Epoch, Digest: surface.Digest}
+	recommendation, err := tx.deriveRecommendation(ctx, item, surface)
+	if err != nil {
+		return fmt.Errorf("put attention item %q recommendation: %w", item.ID, err)
+	}
+	item.Recommendation = recommendation
+	body, err := encode(item)
+	if err != nil {
+		return fmt.Errorf("put attention item %q: %w", item.ID, err)
+	}
+	var readinessSummary *string
+	if item.Readiness != nil {
+		encoded, err := encode(*item.Readiness)
+		if err != nil {
+			return fmt.Errorf("put attention item %q readiness summary: %w", item.ID, err)
+		}
+		readinessSummary = &encoded
+	}
+	var yieldHistory *string
+	if item.YieldHistory != nil {
+		encoded, err := encode(*item.YieldHistory)
+		if err != nil {
+			return fmt.Errorf("put attention item %q yield history: %w", item.ID, err)
+		}
+		yieldHistory = &encoded
+	}
 	if _, err := tx.tx.ExecContext(ctx, putAttentionItemSQL,
 		item.ID, item.ProjectID, item.ConversationID, item.Type, item.Status,
 		item.Posture, item.Subject.RunID, readinessSummary, yieldHistory, tx.asOfRevision, body); err != nil {
@@ -475,7 +500,7 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	if err := tx.putAttentionItemPRReference(ctx, item); err != nil {
 		return fmt.Errorf("put attention item %q pr reference: %w", item.ID, err)
 	}
-	if err := tx.putDecisionSurface(ctx, item, old); err != nil {
+	if err := tx.persistDecisionSurface(ctx, surface, createdSurface, changedSurface); err != nil {
 		return fmt.Errorf("put attention item %q decision surface: %w", item.ID, err)
 	}
 	if existing == nil && item.Type == domain.AttentionReadyForFinalReview && item.Status == domain.StatusOpen {
@@ -649,6 +674,7 @@ func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (do
 	if err := tx.gateDecisionSurface(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
+	tx.gateRecommendation(ctx, &item)
 	return item, snap, nil
 }
 

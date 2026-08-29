@@ -18,67 +18,62 @@ UPDATE attention_decision_surfaces
 SET epoch = ?, digest = ?, body = ?
 WHERE item_id = ?`
 
-// putDecisionSurface maintains the item's decision-surface identity (plan §4)
-// alongside the item row PutAttentionItem just wrote. A new item opens epoch
-// 1; an existing item keeps its stored record unless its structural fields or
-// presented set changed, in which case the epoch advances by exactly one
-// under ValidateDecisionSurfaceTransition. Every other change to the item
-// leaves the row untouched, and the byte-identical and canonical-equal replay
-// branches never reach here, so telemetry never rewrites it. A transition
-// against an existing item with no record is refused rather than repaired:
-// the record's absence is row corruption every gated read already refuses,
-// and a replay converging without a write leaves that refusal in place.
-//
-// old is the decoded pre-update item, nil only when the item is being
-// created. The read-modify-write re-gates the stored record against it before
-// deriving the next epoch: DecisionSurface proves the row is self-consistent,
-// never that it describes the item it is stored against, and PutAttentionItem
-// reaches here from a raw body without any gated reconstruction. Without that
-// check a self-consistent row planted on some other surface would be laundered
-// into a valid-looking successor, fabricating the epoch lineage a source
-// record commits to and re-opening every read the re-gate had failed closed.
-func (tx *WriteTx) putDecisionSurface(
+// prepareDecisionSurface derives the identity PutAttentionItem will copy into
+// the item body. It performs the read-modify-write re-gate before any item row
+// changes, including the item-side epoch-and-digest comparison that prevents a
+// surfaces-table-only writer from choosing an epoch.
+func (tx *WriteTx) prepareDecisionSurface(
 	ctx context.Context, item domain.AttentionItem, old *domain.AttentionItem,
-) error {
+) (domain.DecisionSurface, bool, bool, error) {
 	if old == nil {
 		surface, err := domain.NewDecisionSurface(item)
-		if err != nil {
-			return err
-		}
-		body, err := encode(surface)
-		if err != nil {
-			return err
-		}
+		return surface, true, true, err
+	}
+	current, err := tx.DecisionSurface(ctx, item.ID)
+	if errors.Is(err, ErrNotFound) {
+		return domain.DecisionSurface{}, false, false, errRowInconsistent
+	}
+	if err != nil {
+		return domain.DecisionSurface{}, false, false, err
+	}
+	if !current.Matches(*old) || old.DecisionSurface != (domain.DecisionSurfaceRef{
+		Epoch: current.Epoch, Digest: current.Digest,
+	}) {
+		return domain.DecisionSurface{}, false, false, errRowInconsistent
+	}
+	next, advanced, err := domain.NextDecisionSurface(current, item)
+	if err != nil {
+		return domain.DecisionSurface{}, false, false, err
+	}
+	if !advanced {
+		return current, false, false, nil
+	}
+	if err := domain.ValidateDecisionSurfaceTransition(current, next); err != nil {
+		return domain.DecisionSurface{}, false, false, mapTransition(err)
+	}
+	return next, false, true, nil
+}
+
+// persistDecisionSurface writes the identity prepared before the item body was
+// encoded. Creation runs after the item insert because of the foreign key;
+// advancement updates the existing row in the same transaction.
+func (tx *WriteTx) persistDecisionSurface(
+	ctx context.Context, surface domain.DecisionSurface, created, changed bool,
+) error {
+	if !changed {
+		return nil
+	}
+	body, err := encode(surface)
+	if err != nil {
+		return err
+	}
+	if created {
 		_, err = tx.tx.ExecContext(ctx, insertDecisionSurfaceSQL,
 			surface.ItemID, surface.Epoch, surface.Digest, body)
 		return err
 	}
-	current, err := tx.DecisionSurface(ctx, item.ID)
-	if errors.Is(err, ErrNotFound) {
-		return errRowInconsistent
-	}
-	if err != nil {
-		return err
-	}
-	if !current.Matches(*old) {
-		return errRowInconsistent
-	}
-	next, advanced, err := domain.NextDecisionSurface(current, item)
-	if err != nil {
-		return err
-	}
-	if !advanced {
-		return nil
-	}
-	if err := domain.ValidateDecisionSurfaceTransition(current, next); err != nil {
-		return mapTransition(err)
-	}
-	body, err := encode(next)
-	if err != nil {
-		return err
-	}
 	_, err = tx.tx.ExecContext(ctx, advanceDecisionSurfaceSQL,
-		next.Epoch, next.Digest, body, next.ItemID)
+		surface.Epoch, surface.Digest, body, surface.ItemID)
 	return err
 }
 
@@ -95,7 +90,9 @@ func (tx *ReadTx) gateDecisionSurface(ctx context.Context, item domain.Attention
 	if err != nil {
 		return err
 	}
-	if !surface.Matches(item) {
+	if !surface.Matches(item) || item.DecisionSurface != (domain.DecisionSurfaceRef{
+		Epoch: surface.Epoch, Digest: surface.Digest,
+	}) {
 		return errRowInconsistent
 	}
 	return nil

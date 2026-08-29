@@ -746,4 +746,9 @@ func forgeDecisionSurface(t *testing.T, db *sql.DB, item domain.AttentionItem) {
 		surface.Epoch, surface.Digest, string(body), surface.ItemID); err != nil {
 		t.Fatalf("forge decision surface: %v", err)
 	}
+	if _, err := db.Exec(`UPDATE attention_items SET body = json_set(body,
+'$.decision_surface.epoch', ?, '$.decision_surface.digest', ?) WHERE id = ?`,
+		surface.Epoch, surface.Digest, surface.ItemID); err != nil {
+		t.Fatalf("forge item decision-surface projection: %v", err)
+	}
 }

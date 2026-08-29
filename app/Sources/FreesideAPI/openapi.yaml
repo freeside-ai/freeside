@@ -1859,6 +1859,112 @@ components:
         terminal_outcome:
           $ref: "#/components/schemas/ReviewOutcome"
 
+    RecommendationSource:
+      type: string
+      description: The closed authority class behind an item recommendation.
+      enum: [daemon_policy, agent_judgment, project_policy]
+
+    JudgmentSite:
+      type: string
+      description: A declared daemon-side judgment site (plan §5.13).
+      enum: [finding_adjudicator]
+
+    DaemonPolicyRecommendationProvenance:
+      type: object
+      description: The registered daemon rule and canonical input behind a deterministic recommendation.
+      additionalProperties: false
+      required: [rule_digest, input_digest]
+      properties:
+        rule_digest:
+          $ref: "#/components/schemas/Digest"
+        input_digest:
+          $ref: "#/components/schemas/Digest"
+
+    AgentJudgmentRecommendationProvenance:
+      type: object
+      description: The declared judgment invocation and bound artifact behind an agent recommendation.
+      additionalProperties: false
+      required: [judgment_site, invocation_id, artifact_digest]
+      properties:
+        judgment_site:
+          $ref: "#/components/schemas/JudgmentSite"
+        invocation_id:
+          type: string
+          minLength: 1
+        artifact_digest:
+          $ref: "#/components/schemas/Digest"
+
+    ProjectPolicyRecommendationProvenance:
+      type: object
+      description: The resolved project policy and authenticated application behind a policy recommendation.
+      additionalProperties: false
+      required: [policy_key, resolved_policy_digest, application_digest]
+      properties:
+        policy_key:
+          type: string
+          minLength: 1
+        resolved_policy_digest:
+          $ref: "#/components/schemas/Digest"
+        application_digest:
+          $ref: "#/components/schemas/Digest"
+
+    RecommendationProvenance:
+      type: object
+      additionalProperties: false
+      description: >
+        Closed source-specific provenance. Exactly one property is non-null,
+        and it must match Recommendation.source. This nullable-property shape
+        mirrors the Go contract without a wire discriminator.
+      required: [daemon_policy, agent_judgment, project_policy]
+      properties:
+        daemon_policy:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/DaemonPolicyRecommendationProvenance"
+        agent_judgment:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AgentJudgmentRecommendationProvenance"
+        project_policy:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ProjectPolicyRecommendationProvenance"
+
+    Recommendation:
+      type: object
+      description: A daemon-derived lead that selects one action already offered by the attention item.
+      additionalProperties: false
+      required: [action, reason, source, provenance, confidence]
+      properties:
+        action:
+          $ref: "#/components/schemas/Action"
+        reason:
+          type: string
+          minLength: 1
+        source:
+          $ref: "#/components/schemas/RecommendationSource"
+        provenance:
+          $ref: "#/components/schemas/RecommendationProvenance"
+        confidence:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AdjudicationConfidence"
+
+    DecisionSurfaceRef:
+      type: object
+      additionalProperties: false
+      description: >
+        The daemon-owned epoch and digest identifying this item's current
+        structural decision surface. Both fields mirror the authoritative
+        persisted row and are never client-set.
+      required: [epoch, digest]
+      properties:
+        epoch:
+          type: integer
+          minimum: 1
+        digest:
+          $ref: "#/components/schemas/Digest"
+
     AttentionItem:
       type: object
       description: >
@@ -1873,6 +1979,8 @@ components:
         - priority
         - reason
         - requested_decision
+        - recommendation
+        - decision_surface
         - evidence_snapshot
         - agent_claims
         - artifact_digests
@@ -1919,6 +2027,17 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Action"
+        recommendation:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Recommendation"
+          description: >
+            The optional daemon-derived lead for this exact decision surface.
+            Null means every requested action is equally weighted. A present
+            recommendation selects one requested_decision member and never
+            widens or reorders the offered set.
+        decision_surface:
+          $ref: "#/components/schemas/DecisionSurfaceRef"
         evidence_snapshot:
           type: array
           items:
@@ -2122,6 +2241,10 @@ components:
         priority: "normal"
         reason: "checks are green and the diff is ready"
         requested_decision: ["open_pr", "return_to_agent", "dismiss"]
+        recommendation: null
+        decision_surface:
+          epoch: 1
+          digest: "sha256:adb47dbdf777e31d85c004f469268ebb5bfa486fb3d05fd3a56c7730ff242092"
         evidence_snapshot:
           - id: "art-1"
             type: "verify_log"
@@ -3016,7 +3139,6 @@ components:
         - apply_then_finish
         - continue_under_policy
         - convert_to_policy
-        - adjudicate
         - retry
         - retry_with_capabilities
         - answer_and_retry

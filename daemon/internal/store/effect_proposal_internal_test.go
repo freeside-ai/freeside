@@ -19,8 +19,8 @@ func TestEffectProposalMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 58 {
-		t.Fatalf("schema version = %d, want 58", got)
+	if got := rawVersion(t, db); got != 60 {
+		t.Fatalf("schema version = %d, want 60", got)
 	}
 	for _, table := range []string{
 		"effect_proposal_instances", "effect_proposal_items", "effect_proposal_revisions",
@@ -354,6 +354,13 @@ func TestProposalLedgerRejectsMismatchedCommandAuthority(t *testing.T) {
 		return nil
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		item, err = tx.GetAttentionItem(ctx, item.ID)
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -203,6 +203,12 @@ func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error)
 	item.Status = domain.StatusOpen
 	item.DecidedAt = nil
 	item.Timing = domain.TimingSummary{}
+	// Recommendation and decision-surface identity are filled by the store
+	// after the engine binds the terminal item. They are authenticated by their
+	// own persistence gates and cannot participate in this pre-persistence
+	// task binding.
+	item.Recommendation = nil
+	item.DecisionSurface = domain.DecisionSurfaceRef{}
 	// The terminal digest binds derived publication facts, not the instant at
 	// which a recovery pass first persisted the item.
 	item.CreatedAt = nil

@@ -2317,6 +2317,11 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	// "disagrees" and stranding the publication task; the transition check below
 	// still enforces that open -> superseded is a legal move.
 	normalized.ReadinessInvalidation = expected.ReadinessInvalidation
+	// These two fields are daemon projections added at the item persistence
+	// boundary. Recovery reconstructs the source shape, so neither may make an
+	// otherwise identical terminal item look foreign or stale.
+	normalized.Recommendation = expected.Recommendation
+	normalized.DecisionSurface = expected.DecisionSurface
 	if !reflect.DeepEqual(normalized, expected) {
 		return false
 	}
@@ -2326,6 +2331,11 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	if legacyYieldHistory {
 		expected.YieldHistory = nil
 	}
+	// Persistence projections do not constitute an item transition. Normalize
+	// them before the exact-replay check and before lifecycle validation so an
+	// otherwise identical item at the same version still converges.
+	current.Recommendation = expected.Recommendation
+	current.DecisionSurface = expected.DecisionSurface
 	if reflect.DeepEqual(current, expected) {
 		return true
 	}

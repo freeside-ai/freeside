@@ -59,7 +59,7 @@ struct DecisionActionRanking: Equatable {
         case .open_pr, .inspect_trust_failure: return true
         case .approve, .request_changes, .discuss, .stop, .finish_now,
             .apply_then_finish, .continue_under_policy, .convert_to_policy,
-            .adjudicate, .retry, .retry_with_capabilities, .answer_and_retry,
+            .retry, .retry_with_capabilities, .answer_and_retry,
             .answer_without_retry, .rerun_trust_evaluation,
             .choose_alternate_profile, .return_to_agent, .mark_seen, .dismiss,
             .start, .start_with_changes, .decline, .snooze, .acknowledge,
@@ -77,7 +77,7 @@ struct DecisionActionRanking: Equatable {
             return true
         case .approve, .request_changes, .discuss, .finish_now,
             .apply_then_finish, .continue_under_policy, .convert_to_policy,
-            .adjudicate, .retry, .retry_with_capabilities, .answer_and_retry,
+            .retry, .retry_with_capabilities, .answer_and_retry,
             .answer_without_retry, .rerun_trust_evaluation,
             .choose_alternate_profile, .inspect_trust_failure, .open_pr,
             .return_to_agent, .start, .start_with_changes, .run_doctor,
@@ -99,7 +99,7 @@ struct DecisionActionRanking: Equatable {
         case .stop_unattended: return 13
         case .approve, .request_changes, .discuss, .finish_now,
             .apply_then_finish, .continue_under_policy, .convert_to_policy,
-            .adjudicate, .retry, .retry_with_capabilities, .answer_and_retry,
+            .retry, .retry_with_capabilities, .answer_and_retry,
             .answer_without_retry, .rerun_trust_evaluation,
             .choose_alternate_profile, .inspect_trust_failure, .open_pr,
             .return_to_agent, .start, .start_with_changes, .run_doctor,

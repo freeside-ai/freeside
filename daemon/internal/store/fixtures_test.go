@@ -185,3 +185,16 @@ func newFixtures(t *testing.T) fixtures {
 		},
 	}
 }
+
+// projectedAttentionItem returns the daemon-owned fields PutAttentionItem
+// projects onto a source fixture when no recommendation source is eligible.
+func projectedAttentionItem(t *testing.T, item domain.AttentionItem) domain.AttentionItem {
+	t.Helper()
+	surface, err := domain.NewDecisionSurface(item)
+	if err != nil {
+		t.Fatalf("NewDecisionSurface: %v", err)
+	}
+	item.DecisionSurface = domain.DecisionSurfaceRef{Epoch: surface.Epoch, Digest: surface.Digest}
+	item.Recommendation = nil
+	return item
+}

@@ -1176,6 +1176,24 @@ func TestGolden(t *testing.T) {
 		RecordedAt:   ts,
 	}
 	intakeAdmittedOccurrence.Admission.AdmissionKey = intakeAdmittedOccurrence.ProposalAdmissionKey()
+	findingSurface, err := domain.NewDecisionSurface(findingAdjudicationItem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recommendationSource, err := domain.NewRecommendationSourceRecord(domain.RecommendationSourceRecord{
+		ItemID: findingAdjudicationItem.ID, Source: domain.RecommendationAgentJudgment,
+		Provenance: domain.RecommendationProvenance{AgentJudgment: &domain.AgentJudgmentRecommendationProvenance{
+			JudgmentSite:   domain.JudgmentSiteFindingAdjudicator,
+			InvocationID:   "review-run-1-2",
+			ArtifactDigest: findingAdjudicationItem.FindingAdjudication.AdjudicationDigest,
+		}},
+		Action:                domain.ActionAcceptRecommendedRoute,
+		Reason:                domain.FindingAdjudicatorRecommendationReason,
+		DecisionSurfaceDigest: findingSurface.Digest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name  string
@@ -1198,6 +1216,7 @@ func TestGolden(t *testing.T) {
 		{"schedule_event", scheduleEvent},
 		{"attention_item", item},
 		{"decision_surface", decisionSurface},
+		{"recommendation_source_record", recommendationSource},
 		{"attention_item_review_diminishing_yield", diminishingItem},
 		{"attention_item_readiness_degraded", degradedItem},
 		{"attention_item_blocked", blockedItem},
@@ -1293,12 +1312,29 @@ func TestGolden(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if v, ok := tc.value.(validator); ok {
+			value := tc.value
+			if item, ok := value.(domain.AttentionItem); ok {
+				surface, err := domain.NewDecisionSurface(item)
+				if err != nil {
+					t.Fatalf("derive %q decision surface: %v", tc.name, err)
+				}
+				item.DecisionSurface = domain.DecisionSurfaceRef{Epoch: surface.Epoch, Digest: surface.Digest}
+				if item.Type == domain.AttentionFindingAdjudication {
+					item.Recommendation = &domain.Recommendation{
+						Action:     domain.ActionAcceptRecommendedRoute,
+						Reason:     domain.FindingAdjudicatorRecommendationReason,
+						Source:     domain.RecommendationAgentJudgment,
+						Provenance: recommendationSource.Provenance,
+					}
+				}
+				value = item
+			}
+			if v, ok := value.(validator); ok {
 				if err := v.Validate(); err != nil {
 					t.Fatalf("golden fixture %q is not valid: %v", tc.name, err)
 				}
 			}
-			got, err := json.MarshalIndent(tc.value, "", "  ")
+			got, err := json.MarshalIndent(value, "", "  ")
 			if err != nil {
 				t.Fatalf("marshal %q: %v", tc.name, err)
 			}

@@ -2,6 +2,11 @@ package domain
 
 import "errors"
 
+var (
+	ErrRecommendationProvenanceInconsistent = errors.New("recommendation provenance does not match its source")
+	ErrRecommendationSourceDigestMismatch   = errors.New("recommendation source digest does not match its canonical content")
+)
+
 // Sentinel validation errors. Validators wrap these with %w and context, so
 // callers match a class with errors.Is without string comparison. Each names
 // the invariant it guards.
@@ -90,6 +95,8 @@ var (
 	ErrInvalidSessionMode               = errors.New("invalid launch session mode")
 	ErrInvalidShadowReviewSource        = errors.New("invalid shadow review source")
 	ErrInvalidClassifierAssessment      = errors.New("invalid classifier accuracy assessment")
+	ErrInvalidRecommendationSource      = errors.New("invalid recommendation source")
+	ErrInvalidJudgmentSite              = errors.New("invalid judgment site")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")

@@ -774,7 +774,7 @@ func TestRunObservationCorpusValidBaselines(t *testing.T) {
 		{
 			name: "review_dispute", type_: domain.AttentionReviewDispute,
 			actions: []domain.Action{
-				domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop,
+				domain.ActionDiscuss, domain.ActionStop,
 			},
 		},
 	} {

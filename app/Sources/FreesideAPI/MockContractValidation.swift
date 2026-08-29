@@ -341,6 +341,56 @@ enum MockContractValidation {
         } else if item._type == .finding_adjudication {
             return "finding_adjudication item lacks its binding"
         }
+        if item.decision_surface.epoch < 1 {
+            return "non-positive decision_surface epoch"
+        }
+        if item.decision_surface.digest.isEmpty {
+            return "empty decision_surface digest"
+        }
+        if let recommendation = item.recommendation?.value1 {
+            if !item.requested_decision.contains(recommendation.action) {
+                return "recommendation action is not offered"
+            }
+            if recommendation.reason.isEmpty {
+                return "empty recommendation reason"
+            }
+            let variants = [
+                recommendation.provenance.daemon_policy != nil,
+                recommendation.provenance.agent_judgment != nil,
+                recommendation.provenance.project_policy != nil,
+            ].filter { $0 }.count
+            if variants != 1 {
+                return "recommendation provenance does not have exactly one variant"
+            }
+            switch recommendation.source {
+            case .daemon_policy:
+                guard let provenance = recommendation.provenance.daemon_policy?.value1 else {
+                    return "recommendation source and provenance disagree"
+                }
+                if provenance.rule_digest.isEmpty || provenance.input_digest.isEmpty {
+                    return "empty daemon-policy recommendation digest"
+                }
+            case .agent_judgment:
+                guard let provenance = recommendation.provenance.agent_judgment?.value1 else {
+                    return "recommendation source and provenance disagree"
+                }
+                if provenance.invocation_id.isEmpty || provenance.artifact_digest.isEmpty {
+                    return "empty agent-judgment recommendation field"
+                }
+                if !item.artifact_digests.contains(provenance.artifact_digest) {
+                    return "recommendation artifact is not bound to the item"
+                }
+            case .project_policy:
+                guard let provenance = recommendation.provenance.project_policy?.value1 else {
+                    return "recommendation source and provenance disagree"
+                }
+                if provenance.policy_key.isEmpty || provenance.resolved_policy_digest.isEmpty
+                    || provenance.application_digest.isEmpty
+                {
+                    return "empty project-policy recommendation field"
+                }
+            }
+        }
         // An empty requested_decision is structurally valid (#96): which
         // types must offer an action is signet policy (itemPolicyBreach).
         if let breach = timingBreach(item.timing) { return breach }

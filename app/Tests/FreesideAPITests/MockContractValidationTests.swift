@@ -38,6 +38,96 @@ import Testing
         #expect(MockContractValidation.itemValidityBreach(item) == nil)
     }
 
+    @Test func recommendationAndDecisionSurfaceBreachesNameTheFailedInvariant() {
+        let finding = AttentionFixtures.fixture(type: .finding_adjudication).item
+        #expect(MockContractValidation.itemValidityBreach(finding) == nil)
+
+        var zeroEpoch = finding
+        zeroEpoch.decision_surface.epoch = 0
+        #expect(
+            MockContractValidation.itemValidityBreach(zeroEpoch)
+                == "non-positive decision_surface epoch")
+
+        var emptySurfaceDigest = finding
+        emptySurfaceDigest.decision_surface.digest = ""
+        #expect(
+            MockContractValidation.itemValidityBreach(emptySurfaceDigest)
+                == "empty decision_surface digest")
+
+        var unoffered = finding
+        unoffered.recommendation?.value1.action = .approve
+        #expect(
+            MockContractValidation.itemValidityBreach(unoffered)
+                == "recommendation action is not offered")
+
+        var emptyReason = finding
+        emptyReason.recommendation?.value1.reason = ""
+        #expect(
+            MockContractValidation.itemValidityBreach(emptyReason)
+                == "empty recommendation reason")
+
+        var noVariant = finding
+        noVariant.recommendation?.value1.provenance.agent_judgment = nil
+        #expect(
+            MockContractValidation.itemValidityBreach(noVariant)
+                == "recommendation provenance does not have exactly one variant")
+
+        var twoVariants = finding
+        twoVariants.recommendation?.value1.provenance.daemon_policy = .init(
+            value1: .init(rule_digest: "sha256:rule", input_digest: "sha256:input"))
+        #expect(
+            MockContractValidation.itemValidityBreach(twoVariants)
+                == "recommendation provenance does not have exactly one variant")
+
+        var wrongVariant = finding
+        wrongVariant.recommendation?.value1.source = .daemon_policy
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongVariant)
+                == "recommendation source and provenance disagree")
+
+        var emptyAgentField = finding
+        emptyAgentField.recommendation?.value1.provenance.agent_judgment?.value1.invocation_id = ""
+        #expect(
+            MockContractValidation.itemValidityBreach(emptyAgentField)
+                == "empty agent-judgment recommendation field")
+
+        var unboundArtifact = finding
+        unboundArtifact.recommendation?.value1.provenance.agent_judgment?.value1.artifact_digest =
+            "sha256:unbound"
+        #expect(
+            MockContractValidation.itemValidityBreach(unboundArtifact)
+                == "recommendation artifact is not bound to the item")
+
+        var daemonPolicy = AttentionFixtures.fixture(type: .spec_approval).item
+        daemonPolicy.recommendation = .init(
+            value1: .init(
+                action: .approve,
+                reason: "Use the deterministic default.",
+                source: .daemon_policy,
+                provenance: .init(
+                    daemon_policy: .init(
+                        value1: .init(rule_digest: "", input_digest: "sha256:input")))))
+        #expect(
+            MockContractValidation.itemValidityBreach(daemonPolicy)
+                == "empty daemon-policy recommendation digest")
+
+        var projectPolicy = AttentionFixtures.fixture(type: .spec_approval).item
+        projectPolicy.recommendation = .init(
+            value1: .init(
+                action: .approve,
+                reason: "Apply the resolved project policy.",
+                source: .project_policy,
+                provenance: .init(
+                    project_policy: .init(
+                        value1: .init(
+                            policy_key: "",
+                            resolved_policy_digest: "sha256:policy",
+                            application_digest: "sha256:application")))))
+        #expect(
+            MockContractValidation.itemValidityBreach(projectPolicy)
+                == "empty project-policy recommendation field")
+    }
+
     @Test func healthPostureIsExplicitAndTypeScoped() {
         let fixture = AttentionFixtures.fixture(type: .system_health).item
         #expect(fixture.posture?.value1 == .advisory)

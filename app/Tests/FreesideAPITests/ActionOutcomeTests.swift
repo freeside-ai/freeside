@@ -12,7 +12,6 @@ import Testing
             .apply_then_finish: .concludes(.resolved),
             .continue_under_policy: .concludes(.resolved),
             .convert_to_policy: .pending,
-            .adjudicate: .pending,
             .retry: .concludes(.resolved),
             .retry_with_capabilities: .pending,
             .answer_and_retry: .pending,
@@ -45,7 +44,7 @@ import Testing
         }
         #expect(
             Set(expected.compactMap { $0.value == .pending ? $0.key : nil }) == [
-                .convert_to_policy, .adjudicate, .retry_with_capabilities,
+                .convert_to_policy, .retry_with_capabilities,
                 .choose_alternate_profile, .answer_and_retry, .answer_without_retry,
                 .return_to_agent,
             ])

@@ -497,7 +497,6 @@ const (
 	ActionApplyThenFinish          Action = "apply_then_finish"
 	ActionContinueUnderPolicy      Action = "continue_under_policy"
 	ActionConvertToPolicy          Action = "convert_to_policy"
-	ActionAdjudicate               Action = "adjudicate"
 	ActionRetry                    Action = "retry"
 	ActionRetryWithCapability      Action = "retry_with_capabilities"
 	ActionAnswerAndRetry           Action = "answer_and_retry"
@@ -528,7 +527,7 @@ const (
 var AllActions = []Action{
 	ActionApprove, ActionRequestChanges, ActionDiscuss, ActionStop,
 	ActionFinishNow, ActionApplyThenFinish, ActionContinueUnderPolicy, ActionConvertToPolicy,
-	ActionAdjudicate, ActionRetry, ActionRetryWithCapability,
+	ActionRetry, ActionRetryWithCapability,
 	ActionAnswerAndRetry, ActionAnswerWithoutRetry,
 	ActionRerunTrustEvaluation, ActionChooseAlternate, ActionInspectTrustFailure,
 	ActionOpenPR, ActionReturnToAgent, ActionMarkSeen, ActionDismiss,
@@ -542,7 +541,7 @@ func (a Action) valid() bool {
 	switch a {
 	case ActionApprove, ActionRequestChanges, ActionDiscuss, ActionStop,
 		ActionFinishNow, ActionApplyThenFinish, ActionContinueUnderPolicy, ActionConvertToPolicy,
-		ActionAdjudicate, ActionRetry, ActionRetryWithCapability,
+		ActionRetry, ActionRetryWithCapability,
 		ActionAnswerAndRetry, ActionAnswerWithoutRetry,
 		ActionRerunTrustEvaluation, ActionChooseAlternate, ActionInspectTrustFailure,
 		ActionOpenPR, ActionReturnToAgent, ActionMarkSeen, ActionDismiss,
@@ -550,6 +549,49 @@ func (a Action) valid() bool {
 		ActionAcknowledge, ActionRunDoctor, ActionStopUnattended,
 		ActionResumeUnattended, ActionRecoverReview, ActionAdoptReviewConfiguration,
 		ActionResolveReenrollment, ActionAcceptRecommendedRoute, ActionChooseAlternativeRoute:
+		return true
+	default:
+		return false
+	}
+}
+
+// RecommendationSource identifies the authority behind a recommendation.
+// The zero value is invalid by design.
+type RecommendationSource string
+
+const (
+	RecommendationDaemonPolicy  RecommendationSource = "daemon_policy"
+	RecommendationAgentJudgment RecommendationSource = "agent_judgment"
+	RecommendationProjectPolicy RecommendationSource = "project_policy"
+)
+
+// AllRecommendationSources is the single registration point for recommendation
+// authority kinds.
+var AllRecommendationSources = []RecommendationSource{
+	RecommendationDaemonPolicy, RecommendationAgentJudgment, RecommendationProjectPolicy,
+}
+
+func (s RecommendationSource) valid() bool {
+	switch s {
+	case RecommendationDaemonPolicy, RecommendationAgentJudgment, RecommendationProjectPolicy:
+		return true
+	default:
+		return false
+	}
+}
+
+// JudgmentSite identifies a declared daemon-side judgment site (plan §5.13).
+// Phase 1 registers only the finding adjudicator.
+type JudgmentSite string
+
+const JudgmentSiteFindingAdjudicator JudgmentSite = "finding_adjudicator"
+
+// AllJudgmentSites is the single registration point for judgment sites.
+var AllJudgmentSites = []JudgmentSite{JudgmentSiteFindingAdjudicator}
+
+func (s JudgmentSite) valid() bool {
+	switch s {
+	case JudgmentSiteFindingAdjudicator:
 		return true
 	default:
 		return false

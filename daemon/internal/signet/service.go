@@ -420,8 +420,8 @@ const (
 // transaction because their accepted effect cannot be represented yet: snooze
 // needs the timing update; start_with_changes needs the revised proposal
 // artifact and supersede transaction (plan §4); convert_to_policy,
-// adjudicate, retry_with_capabilities, and
-// choose_alternate_profile carry decision parameters DecisionPayload has no
+// retry_with_capabilities, and choose_alternate_profile carry decision
+// parameters DecisionPayload has no
 // field for (a #22 contract widening when their consumers land); and
 // answer_and_retry, answer_without_retry, and return_to_agent ride the conversation channel but are decisions about a
 // prior agent turn, whose accepted effect (what the workflow does with the
@@ -467,8 +467,7 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		return "", outcomeRecords
 	case domain.ActionDiscuss:
 		return "", outcomeDiscusses
-	case domain.ActionConvertToPolicy, domain.ActionAdjudicate,
-		domain.ActionRetryWithCapability,
+	case domain.ActionConvertToPolicy, domain.ActionRetryWithCapability,
 		domain.ActionChooseAlternate,
 		domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry,
 		domain.ActionReturnToAgent:

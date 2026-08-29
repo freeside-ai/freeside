@@ -1,12 +1,12 @@
 package store
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -252,8 +252,8 @@ func TestCodexReenrollmentMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 58 {
-		t.Fatalf("schema version = %d, want 58", got)
+	if got := rawVersion(t, db); got != 60 {
+		t.Fatalf("schema version = %d, want 60", got)
 	}
 	for _, table := range []string{
 		"codex_reenrollment_operations", "codex_reenrollment_recovery_transitions",
@@ -380,7 +380,7 @@ func TestCodexReenrollmentMigrationNormalizesOnlyAuthenticatedLegacyMarkers(t *t
 			t.Errorf("marker %s binding JSON = %s, present=%t", want.ID, value, ok)
 		}
 	}
-	for id, wantBody := range map[domain.ItemID][]byte{
+	for id, priorBody := range map[domain.ItemID][]byte{
 		wrongID.ID: legacyBodies[wrongID.ID],
 		current.ID: currentBody,
 	} {
@@ -390,8 +390,17 @@ func TestCodexReenrollmentMigrationNormalizesOnlyAuthenticatedLegacyMarkers(t *t
 			FROM attention_items WHERE id = ?`, id).Scan(&entityVersion, &asOfRevision, &body); err != nil {
 			t.Fatal(err)
 		}
-		if entityVersion != 1 || asOfRevision != beforeRevision || !bytes.Equal(body, wantBody) {
-			t.Errorf("near-match marker %s was rewritten", id)
+		var got, prior domain.AttentionItem
+		if err := decodeMigrationJSON(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if err := decodeMigrationJSON(priorBody, &prior); err != nil {
+			t.Fatal(err)
+		}
+		got.Recommendation = nil
+		got.DecisionSurface = domain.DecisionSurfaceRef{}
+		if entityVersion != 1 || asOfRevision != beforeRevision || !reflect.DeepEqual(got, prior) {
+			t.Errorf("near-match marker %s changed beyond the 0059 daemon projection", id)
 		}
 	}
 

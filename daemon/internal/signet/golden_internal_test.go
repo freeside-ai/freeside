@@ -25,7 +25,10 @@ func TestSignetWireGoldens(t *testing.T) {
 		Type:    domain.AttentionSpecApproval, Priority: domain.PriorityNormal,
 		Reason:            "the implementation plan awaits approval",
 		RequestedDecision: []domain.Action{domain.ActionApprove, domain.ActionDiscuss},
-		PRHeadSHA:         strings.Repeat("1", 40), ItemVersion: 3,
+		DecisionSurface: domain.DecisionSurfaceRef{
+			Epoch: 1, Digest: domain.Digest("sha256:" + strings.Repeat("4", 64)),
+		},
+		PRHeadSHA: strings.Repeat("1", 40), ItemVersion: 3,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		ConversationID:    &conversationID, CreatedAt: &createdAt, ExpiresWhen: &expiresAt,
 		Status: domain.StatusOpen,
@@ -140,7 +143,7 @@ func TestSignetWireGoldens(t *testing.T) {
 		},
 		{
 			name:  "attachment-receipt",
-			value: attachmentReceipt{Digest: domain.Digest("sha256:" + strings.Repeat("4", 64))},
+			value: attachmentReceipt{Digest: domain.Digest("sha256:" + strings.Repeat("5", 64))},
 		},
 		{name: "error-response", value: errorResponse{Message: "fixture error"}},
 	}

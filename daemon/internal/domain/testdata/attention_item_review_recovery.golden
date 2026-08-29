@@ -12,6 +12,11 @@
   "requested_decision": [
     "recover_review"
   ],
+  "recommendation": null,
+  "decision_surface": {
+    "epoch": 1,
+    "digest": "sha256:bc42621dbd50d39bb3405572f511022870ddc9755bf8770c8dcc105175a34903"
+  },
   "evidence_snapshot": null,
   "agent_claims": null,
   "artifact_digests": [],

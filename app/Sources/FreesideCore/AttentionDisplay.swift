@@ -146,7 +146,6 @@ enum AttentionDisplay {
         case .apply_then_finish: return "Apply, then finish"
         case .continue_under_policy: return "Continue under policy"
         case .convert_to_policy: return "Convert to policy"
-        case .adjudicate: return "Adjudicate"
         case .retry: return "Retry"
         case .retry_with_capabilities: return "Retry with capabilities"
         case .answer_and_retry: return "Answer and retry"
@@ -182,7 +181,7 @@ enum AttentionDisplay {
         case .stop, .stop_unattended: return "stop.fill"
         case .return_to_agent: return "return"
         case .approve, .request_changes, .discuss, .finish_now, .apply_then_finish,
-            .continue_under_policy, .convert_to_policy, .adjudicate,
+            .continue_under_policy, .convert_to_policy,
             .retry_with_capabilities, .answer_and_retry, .answer_without_retry,
             .rerun_trust_evaluation, .choose_alternate_profile,
             .inspect_trust_failure, .mark_seen, .dismiss, .start,
@@ -219,7 +218,7 @@ enum AttentionDisplay {
         case .dismiss:
             return "The item closes without taking the requested action."
         case .approve, .request_changes, .discuss, .finish_now, .apply_then_finish,
-            .continue_under_policy, .convert_to_policy, .adjudicate, .retry,
+            .continue_under_policy, .convert_to_policy, .retry,
             .retry_with_capabilities, .answer_and_retry, .answer_without_retry,
             .rerun_trust_evaluation, .choose_alternate_profile,
             .inspect_trust_failure, .open_pr, .return_to_agent, .mark_seen,

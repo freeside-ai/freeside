@@ -1,0 +1,4 @@
+-- Project the authoritative decision-surface epoch and digest into each
+-- attention_items body. The Go data-migration hook rewrites every derivable
+-- body in this transaction without changing entity_version or the surface row;
+-- an underivable row remains unreadable and is left untouched.
