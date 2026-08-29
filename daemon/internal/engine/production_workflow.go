@@ -1906,6 +1906,8 @@ func sameProductionQuarantineNotice(current, want domain.AttentionItem) bool {
 	normalized.DecidedAt = want.DecidedAt
 	normalized.ExpiresWhen = want.ExpiresWhen
 	normalized.ConversationID = want.ConversationID
+	normalized.Recommendation = want.Recommendation
+	normalized.DecisionSurface = want.DecisionSurface
 	return reflect.DeepEqual(normalized, want)
 }
 
