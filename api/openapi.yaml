@@ -1965,6 +1965,177 @@ components:
         digest:
           $ref: "#/components/schemas/Digest"
 
+    DisplayNameSource:
+      type: string
+      description: Whether a display label is a chosen name or an explicit identifier fallback.
+      enum: [name, identifier]
+
+    DisplayName:
+      type: object
+      description: One daemon-authored display label and whether it is a name or identifier fallback.
+      additionalProperties: false
+      required: [text, source]
+      properties:
+        text:
+          type: string
+          minLength: 1
+        source:
+          $ref: "#/components/schemas/DisplayNameSource"
+
+    DisplayNames:
+      type: object
+      description: Human-readable project and work-unit labels for a card or run row.
+      additionalProperties: false
+      required: [project, work_unit]
+      properties:
+        project:
+          $ref: "#/components/schemas/DisplayName"
+        work_unit:
+          $ref: "#/components/schemas/DisplayName"
+
+    CostSoFar:
+      type: object
+      description: Billable cost observations aggregated across completed invocations.
+      additionalProperties: false
+      required: [currency, amount, invocations, complete]
+      properties:
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+        amount:
+          type: string
+          pattern: '^(0|[1-9][0-9]*)(\.[0-9]+)?$'
+        invocations:
+          type: integer
+          minimum: 1
+        complete:
+          type: boolean
+
+    StageName:
+      type: string
+      description: The workflow stage that owns an execution outcome.
+      enum: [elaboration, implementation, review, verification]
+
+    ExecutionFailureFacts:
+      type: object
+      description: The terminal execution outcome and invocation that failed within a workflow stage.
+      additionalProperties: false
+      required: [outcome, stage, invocation_id]
+      properties:
+        outcome:
+          $ref: "#/components/schemas/ExecutionOutcomeStatus"
+        stage:
+          $ref: "#/components/schemas/StageName"
+        invocation_id:
+          type: string
+          minLength: 1
+
+    TrustRule:
+      type: string
+      description: A definitive publication trust rule surfaced on a blocked card.
+      enum: [recipe_unapproved, verification_failed, trust_profile_drift, target_base_advanced]
+
+    PublishBlockFacts:
+      type: object
+      additionalProperties: false
+      description: Exactly one of hold_reason or trust_rule is non-null.
+      required: [hold_reason, trust_rule]
+      properties:
+        hold_reason:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RunHoldReason"
+        trust_rule:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TrustRule"
+
+    DiffStats:
+      type: object
+      description: Prospective change counts bound to the exact base and head revisions.
+      additionalProperties: false
+      required: [files_changed, additions, deletions, base_sha, head_sha]
+      properties:
+        files_changed:
+          type: integer
+          minimum: 0
+        additions:
+          type: integer
+          minimum: 0
+        deletions:
+          type: integer
+          minimum: 0
+        base_sha:
+          type: string
+          minLength: 1
+        head_sha:
+          type: string
+          minLength: 1
+
+    BlockedWaitKind:
+      type: string
+      description: The authority or event a blocked work unit is waiting on.
+      enum: [spec_approval, pr_checks, external_review]
+
+    BlockedWait:
+      type: object
+      additionalProperties: false
+      description: The reference variant must match kind.
+      required: [kind, since, item_id, pr_reference]
+      properties:
+        kind:
+          $ref: "#/components/schemas/BlockedWaitKind"
+        since:
+          type: string
+          format: date-time
+        item_id:
+          type: string
+          minLength: 1
+          nullable: true
+        pr_reference:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/PRReference"
+
+    ImpairedCapability:
+      type: string
+      description: The operator capability currently affected by a health diagnostic.
+      enum: [unattended_admission, run_visibility, agent_credential, none]
+
+    HealthDiagnostic:
+      type: object
+      description: A daemon diagnostic code and its current operational impact.
+      additionalProperties: false
+      required: [code, impairs]
+      properties:
+        code:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9_.-]*$'
+        impairs:
+          $ref: "#/components/schemas/ImpairedCapability"
+
+    ReviewDisputeBinding:
+      type: object
+      description: Disputed finding identities bound to one completed review round.
+      additionalProperties: false
+      required: [run_id, round, finding_ids, completion_evidence]
+      properties:
+        run_id:
+          type: string
+          minLength: 1
+        round:
+          type: integer
+          minimum: 1
+        finding_ids:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+        completion_evidence:
+          $ref: "#/components/schemas/Digest"
+
     AttentionItem:
       type: object
       description: >
@@ -1995,6 +2166,14 @@ components:
         - codex_reenrollment_recovery_binding
         - review_configuration_recovery
         - finding_adjudication
+        - display_names
+        - billable_cost_so_far
+        - execution_failure
+        - publish_block
+        - diff_stats
+        - blocked_on
+        - health_diagnostic
+        - review_dispute
         - item_version
         - interruption_class
         - conversation_id
@@ -2168,6 +2347,40 @@ components:
             artifact. Required exactly on finding_adjudication items and null
             elsewhere. The daemon re-gates its proposal axes against the
             artifact named by adjudication_digest before persistence.
+        display_names:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/DisplayNames"
+          description: Daemon-authored project and work-unit labels; null on legacy items.
+        billable_cost_so_far:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/CostSoFar"
+          description: Billable cost observed so far on review_diminishing_returns items.
+        execution_failure:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ExecutionFailureFacts"
+        publish_block:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/PublishBlockFacts"
+        diff_stats:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/DiffStats"
+        blocked_on:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/BlockedWait"
+        health_diagnostic:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/HealthDiagnostic"
+        review_dispute:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ReviewDisputeBinding"
         item_version:
           type: integer
           minimum: 1
@@ -2311,6 +2524,21 @@ components:
         codex_reenrollment_recovery_binding: null
         review_configuration_recovery: null
         finding_adjudication: null
+        display_names:
+          project: {text: "owner/repo", source: "name"}
+          work_unit: {text: "#724", source: "name"}
+        billable_cost_so_far: null
+        execution_failure: null
+        publish_block: null
+        diff_stats:
+          files_changed: 12
+          additions: 240
+          deletions: 31
+          base_sha: "deadbeef"
+          head_sha: "cafebabe"
+        blocked_on: null
+        health_diagnostic: null
+        review_dispute: null
         item_version: 1
         interruption_class: "planned_gate"
         conversation_id: "conv-1"
@@ -2968,7 +3196,7 @@ components:
         runs; summary fields are computed from the observation timeline and
         never persisted as workflow authority.
       required:
-        [id, project_id, created_at, last_activity_at, spec_digest,
+        [id, project_id, display_names, created_at, last_activity_at, spec_digest,
          policy_digest, campaign_id, attempt_number, attempt_reason,
          parent_run_id, stages, latest_milestone, outcome, hold_reason]
       properties:
@@ -2978,6 +3206,11 @@ components:
         project_id:
           type: string
           minLength: 1
+        display_names:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/DisplayNames"
+          description: Daemon-derived project and work-unit labels for run rows.
         created_at:
           type: string
           format: date-time
@@ -3034,6 +3267,9 @@ components:
       example:
         id: "run-1"
         project_id: "proj-1"
+        display_names:
+          project: {text: "owner/repo", source: "name"}
+          work_unit: {text: "#724", source: "name"}
         created_at: "2026-01-02T03:04:05Z"
         last_activity_at: "2026-01-02T03:06:05Z"
         spec_digest: "sha256:spec"

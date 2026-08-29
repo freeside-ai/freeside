@@ -39,6 +39,14 @@
         "codex_reenrollment_recovery_binding": null,
         "review_configuration_recovery": null,
         "finding_adjudication": null,
+        "display_names": null,
+        "billable_cost_so_far": null,
+        "execution_failure": null,
+        "publish_block": null,
+        "diff_stats": null,
+        "blocked_on": null,
+        "health_diagnostic": null,
+        "review_dispute": null,
         "item_version": 3,
         "interruption_class": "planned_gate",
         "conversation_id": "conversation-569",
@@ -81,6 +89,16 @@
       "run": {
         "id": "run-569",
         "project_id": "project-569",
+        "display_names": {
+          "project": {
+            "text": "owner/repo",
+            "source": "name"
+          },
+          "work_unit": {
+            "text": "#724",
+            "source": "name"
+          }
+        },
         "created_at": "2026-08-10T12:34:56Z",
         "last_activity_at": "2026-08-10T12:35:56Z",
         "spec_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
