@@ -433,16 +433,22 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	if err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
 	}
+	// old is the decoded stored item, and stays nil exactly when this write
+	// creates the item. putDecisionSurface re-gates the persisted surface
+	// record against it, so the read-modify-write cannot advance from a row
+	// planted on some other surface.
+	var old *domain.AttentionItem
 	if existing != nil {
 		// A byte-identical replay (a retried command) converges without a
 		// write, so it causes no entity_version churn.
 		if string(existing) == body {
 			return tx.putAttentionItemPRReference(ctx, item)
 		}
-		old, err := decode[domain.AttentionItem](existing)
+		decoded, err := decode[domain.AttentionItem](existing)
 		if err != nil {
 			return fmt.Errorf("put attention item %q: %w", item.ID, err)
 		}
+		old = &decoded
 		// A row persisted under an older encoding can carry this item's exact
 		// content in different bytes: a since-added optional member (e.g.
 		// commit_plan_notice, #222) renders as an explicit null the stored
@@ -450,14 +456,14 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 		// is canonical content, not raw bytes, and an unchanged replay against
 		// such a row still converges without a version-advance demand; the
 		// row itself is rewritten only by a real transition.
-		oldCanonical, err := encode(old)
+		oldCanonical, err := encode(decoded)
 		if err != nil {
 			return fmt.Errorf("put attention item %q: %w", item.ID, err)
 		}
 		if oldCanonical == body {
 			return tx.putAttentionItemPRReference(ctx, item)
 		}
-		if err := domain.ValidateAttentionItemTransition(old, item); err != nil {
+		if err := domain.ValidateAttentionItemTransition(decoded, item); err != nil {
 			return fmt.Errorf("put attention item %q: %w", item.ID, mapTransition(err))
 		}
 	}
@@ -468,6 +474,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	}
 	if err := tx.putAttentionItemPRReference(ctx, item); err != nil {
 		return fmt.Errorf("put attention item %q pr reference: %w", item.ID, err)
+	}
+	if err := tx.putDecisionSurface(ctx, item, old); err != nil {
+		return fmt.Errorf("put attention item %q decision surface: %w", item.ID, err)
 	}
 	if existing == nil && item.Type == domain.AttentionReadyForFinalReview && item.Status == domain.StatusOpen {
 		tx.readyItemCreated = true
@@ -585,7 +594,7 @@ func (tx *ReadTx) GetAttentionItemRecord(
 	ctx context.Context,
 	id domain.ItemID,
 ) (domain.AttentionItem, error) {
-	item, _, err := scanAttentionItemRecord(tx.tx.QueryRowContext(ctx,
+	item, _, err := tx.scanAttentionItemHistory(ctx, tx.tx.QueryRowContext(ctx,
 		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
 	if err != nil {
 		return domain.AttentionItem{}, fmt.Errorf("get attention item record %q: %w", id, notFoundOr(err))
@@ -596,9 +605,30 @@ func (tx *ReadTx) GetAttentionItemRecord(
 	return item, nil
 }
 
+// scanAttentionItemHistory is the record tier's reconstruction: the row
+// cross-check plus the decision-surface re-gate, and none of the mutable
+// current-policy gates the tier exists to see past. The surface record
+// belongs here as well as in the snapshot path (issue #942) because it is
+// daemon-owned identity that advances only with the item's structural fields
+// or presented set: a missing or disagreeing surface row is row corruption
+// every reconstruction must refuse, not a later policy change a
+// terminal-recovery read is entitled to ignore.
+func (tx *ReadTx) scanAttentionItemHistory(ctx context.Context, sc scanner) (domain.AttentionItem, Snapshot, error) {
+	item, snap, err := scanAttentionItemRecord(sc)
+	if err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	if err := tx.gateDecisionSurface(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	return item, snap, nil
+}
+
 // scanAttentionItemSnapshot reconstructs one attention_items row (see the
 // scanner doc for the shared gate sequence), including the evidence policy
-// re-gate.
+// re-gate. It repeats the surface gate last rather than reusing
+// scanAttentionItemHistory so a row tampered to reach a typed binding gate
+// still reports that gate's own error, which is the more specific diagnosis.
 func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (domain.AttentionItem, Snapshot, error) {
 	item, snap, err := scanAttentionItemRecord(sc)
 	if err != nil {
@@ -614,6 +644,9 @@ func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (do
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	if err := tx.gateReadyItemPRReference(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	if err := tx.gateDecisionSurface(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	return item, snap, nil

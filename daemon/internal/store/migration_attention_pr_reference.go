@@ -30,6 +30,8 @@ func applyDataMigration(
 		return authenticateExistingOutboxPayloads(ctx, tx)
 	case version == 40 && name == codexReenrollmentMigration:
 		return rewriteLegacyCodexReenrollmentMarkers(ctx, tx)
+	case version == 58 && name == attentionDecisionSurfacesMigration:
+		return backfillAttentionDecisionSurfaces(ctx, tx)
 	default:
 		return nil
 	}
