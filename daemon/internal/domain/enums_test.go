@@ -342,6 +342,14 @@ func TestEnumValidity(t *testing.T) {
 		valids["FindingSeverity"] = append(valids["FindingSeverity"], v.valid)
 	}
 	invalids["FindingSeverity"] = FindingSeverity("").valid
+	for _, v := range AllUsageSources {
+		valids["UsageSource"] = append(valids["UsageSource"], v.valid)
+	}
+	invalids["UsageSource"] = UsageSource("").valid
+	for _, v := range AllUsageMeasurementKinds {
+		valids["UsageMeasurementKind"] = append(valids["UsageMeasurementKind"], v.valid)
+	}
+	invalids["UsageMeasurementKind"] = UsageMeasurementKind("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

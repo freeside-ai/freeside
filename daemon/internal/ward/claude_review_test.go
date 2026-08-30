@@ -618,12 +618,18 @@ func TestClaudeReviewCollectionCarriesUsage(t *testing.T) {
 		t.Fatalf("Claude envelope produced no result: %+v", outcome)
 	}
 	want := []exec.UsageMeasurement{
-		{Source: domain.UsageSourceReviewSource, Kind: domain.UsageMeasurementBillableCost,
-			Metric: "total_cost", Unit: "usd_micros", Quantity: 1235, Sequence: 1, ObservedAt: codexReviewEpoch},
-		{Source: domain.UsageSourceReviewSource, Kind: domain.UsageMeasurementReportedUsage,
-			Metric: "input_tokens", Unit: "tokens", Quantity: 11, Sequence: 1, ObservedAt: codexReviewEpoch},
-		{Source: domain.UsageSourceReviewSource, Kind: domain.UsageMeasurementReportedUsage,
-			Metric: "output_tokens", Unit: "tokens", Quantity: 7, Sequence: 1, ObservedAt: codexReviewEpoch},
+		{
+			Source: domain.UsageSourceReviewSource, Kind: domain.UsageMeasurementBillableCost,
+			Metric: "total_cost", Unit: "usd_micros", Quantity: 1235, Sequence: 1, ObservedAt: codexReviewEpoch,
+		},
+		{
+			Source: domain.UsageSourceReviewSource, Kind: domain.UsageMeasurementReportedUsage,
+			Metric: "input_tokens", Unit: "tokens", Quantity: 11, Sequence: 1, ObservedAt: codexReviewEpoch,
+		},
+		{
+			Source: domain.UsageSourceReviewSource, Kind: domain.UsageMeasurementReportedUsage,
+			Metric: "output_tokens", Unit: "tokens", Quantity: 7, Sequence: 1, ObservedAt: codexReviewEpoch,
+		},
 	}
 	if !reflect.DeepEqual(outcome.Result.Usage, want) {
 		t.Fatalf("usage = %#v, want %#v", outcome.Result.Usage, want)

@@ -26,16 +26,26 @@ func usageFixture(t *testing.T, name string) []byte {
 func TestExtractUsage(t *testing.T) {
 	observedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	want := []exec.UsageMeasurement{
-		{Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementBillableCost,
-			Metric: "total_cost", Unit: "usd_micros", Quantity: 12346, Sequence: 1, ObservedAt: observedAt},
-		{Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
-			Metric: "input_tokens", Unit: "tokens", Quantity: 100, Sequence: 1, ObservedAt: observedAt},
-		{Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
-			Metric: "output_tokens", Unit: "tokens", Quantity: 50, Sequence: 1, ObservedAt: observedAt},
-		{Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
-			Metric: "cache_creation_input_tokens", Unit: "tokens", Quantity: 10, Sequence: 1, ObservedAt: observedAt},
-		{Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
-			Metric: "cache_read_input_tokens", Unit: "tokens", Quantity: 20, Sequence: 1, ObservedAt: observedAt},
+		{
+			Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementBillableCost,
+			Metric: "total_cost", Unit: "usd_micros", Quantity: 12346, Sequence: 1, ObservedAt: observedAt,
+		},
+		{
+			Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
+			Metric: "input_tokens", Unit: "tokens", Quantity: 100, Sequence: 1, ObservedAt: observedAt,
+		},
+		{
+			Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
+			Metric: "output_tokens", Unit: "tokens", Quantity: 50, Sequence: 1, ObservedAt: observedAt,
+		},
+		{
+			Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
+			Metric: "cache_creation_input_tokens", Unit: "tokens", Quantity: 10, Sequence: 1, ObservedAt: observedAt,
+		},
+		{
+			Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
+			Metric: "cache_read_input_tokens", Unit: "tokens", Quantity: 20, Sequence: 1, ObservedAt: observedAt,
+		},
 	}
 	if got := claude.ExtractUsage(usageFixture(t, "usage_complete.jsonl"), observedAt); !reflect.DeepEqual(got, want) {
 		t.Fatalf("ExtractUsage() = %#v, want %#v", got, want)
@@ -110,10 +120,14 @@ func TestExtractUsageAcceptsFieldReorderingAndZero(t *testing.T) {
 	body := []byte(`{"usage":{"output_tokens":0},"result":"ignored","type":"result","total_cost_usd":0}`)
 	got := claude.ExtractUsage(body, observedAt)
 	want := []exec.UsageMeasurement{
-		{Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementBillableCost,
-			Metric: "total_cost", Unit: "usd_micros", Quantity: 0, Sequence: 1, ObservedAt: observedAt},
-		{Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
-			Metric: "output_tokens", Unit: "tokens", Quantity: 0, Sequence: 1, ObservedAt: observedAt},
+		{
+			Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementBillableCost,
+			Metric: "total_cost", Unit: "usd_micros", Quantity: 0, Sequence: 1, ObservedAt: observedAt,
+		},
+		{
+			Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
+			Metric: "output_tokens", Unit: "tokens", Quantity: 0, Sequence: 1, ObservedAt: observedAt,
+		},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ExtractUsage() = %#v, want %#v", got, want)
