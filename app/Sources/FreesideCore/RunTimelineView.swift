@@ -32,17 +32,11 @@ struct RunTimelineView: View {
                     timelineSection(timeline)
                     invocationSection(timeline)
                 } else if coordinator.timelineLoadStates[snapshot.run.id] == .unavailable {
-                    ContentUnavailableView {
-                        Label {
-                            Text("Timeline unavailable").font(FreesideFont.title)
-                        } icon: {
-                            Image(systemName: "exclamationmark.triangle")
-                        }
-                    } description: {
-                        Text("Freeside could not load daemon observations for this run.")
-                            .font(FreesideFont.callout)
-                    }
-                    .foregroundStyle(Color.inkDim)
+                    UnavailableStateView(
+                        title: "Timeline unavailable",
+                        systemImage: "exclamationmark.triangle",
+                        description: "Freeside could not load daemon observations for this run."
+                    )
                     .frame(maxWidth: .infinity, minHeight: 180)
                 } else {
                     ProgressView("Loading timeline…")

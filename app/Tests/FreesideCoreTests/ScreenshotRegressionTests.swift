@@ -760,6 +760,28 @@
                             screenshotTimeZone: screenshotTimeZone
                         ) { _ in }
                         .screenshotContent())))
+            if let selected = inbox.first?.item {
+                let bannerDetail = DecisionDetailView(
+                    store: store,
+                    itemID: selected.id,
+                    loadsAttachments: false,
+                    showsValidationProgress: false)
+                surfaces.append(
+                    Surface(
+                        name: "decision-banner",
+                        width: 480,
+                        view: AnyView(bannerDetail.screenshotBanner())))
+            }
+            surfaces.append(
+                Surface(
+                    name: "unavailable-state",
+                    width: 480,
+                    view: AnyView(
+                        UnavailableStateView(
+                            title: "No decision selected",
+                            systemImage: "sidebar.trailing",
+                            description: "Select an item to inspect its facts."))))
+
             return surfaces
         }
 

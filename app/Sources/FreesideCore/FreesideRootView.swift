@@ -152,19 +152,12 @@ public struct FreesideRootView: View {
         #else
             NavigationSplitView {
                 VStack(spacing: 0) {
-                    HStack(spacing: 8) {
-                        Picker("Section", selection: selectedTab) {
-                            Label("Inbox", systemImage: "tray.full").tag(LaunchInputs.Screen.inbox)
-                            Label("Runs", systemImage: "point.3.connected.trianglepath.dotted")
-                                .tag(LaunchInputs.Screen.runs)
-                        }
-                        .pickerStyle(.segmented)
-                        if coordinator.store.urgentOpenCount > 0 {
-                            StateChip(
-                                label: "\(coordinator.store.urgentOpenCount) urgent",
-                                color: .waxText)
-                        }
+                    Picker("Section", selection: selectedTab) {
+                        Label("Inbox", systemImage: "tray.full").tag(LaunchInputs.Screen.inbox)
+                        Label("Runs", systemImage: "point.3.connected.trianglepath.dotted")
+                            .tag(LaunchInputs.Screen.runs)
                     }
+                    .pickerStyle(.segmented)
                     .padding()
                     switch selectedTab.wrappedValue {
                     case .inbox:
@@ -284,10 +277,10 @@ public struct FreesideRootView: View {
                     if let run = coordinator.runs.first(where: { $0.run.id == runID }) {
                         RunTimelineView(coordinator: coordinator, snapshot: run)
                     } else {
-                        ContentUnavailableView(
-                            "Run unavailable",
+                        UnavailableStateView(
+                            title: "Run unavailable",
                             systemImage: "questionmark.circle",
-                            description: Text("This run is no longer available."))
+                            description: "This run is no longer available.")
                     }
                 }
             }
@@ -333,8 +326,8 @@ public struct FreesideRootView: View {
                     )
                     .id(attentionSelection)
                 } else if showsInboxClearResult {
-                    emptyDetail(
-                        "Inbox clear", systemImage: "checkmark",
+                    UnavailableStateView(
+                        title: "Inbox clear", systemImage: "checkmark",
                         description: "There are no open attention items.")
                 } else {
                     OperationalSummaryView(
@@ -350,8 +343,8 @@ public struct FreesideRootView: View {
                     RunTimelineView(coordinator: coordinator, snapshot: run)
                         .id(runSelection)
                 } else {
-                    emptyDetail(
-                        "Runs", systemImage: "point.3.connected.trianglepath.dotted",
+                    UnavailableStateView(
+                        title: "Runs", systemImage: "point.3.connected.trianglepath.dotted",
                         description: "Select a run to inspect its timeline.")
                 }
             }
@@ -427,16 +420,4 @@ public struct FreesideRootView: View {
         technicalDetailsRequest = technicalDetailsRequest?.consuming(nonce)
     }
 
-    private func emptyDetail(_ title: String, systemImage: String, description: String) -> some View {
-        ContentUnavailableView {
-            Label {
-                Text(title).font(FreesideFont.title)
-            } icon: {
-                Image(systemName: systemImage)
-            }
-        } description: {
-            Text(description).font(FreesideFont.callout)
-        }
-        .foregroundStyle(Color.inkDim)
-    }
 }

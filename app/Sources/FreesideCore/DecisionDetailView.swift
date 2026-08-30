@@ -49,6 +49,8 @@ struct DecisionDetailView: View {
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @ScaledMetric(relativeTo: .callout) private var bannerGlyphSize: CGFloat = screenshotMetricBase(
+        10, relativeTo: .callout)
     @State private var model: DecisionModel
     @State private var proposalEditor: ProposalEditor?
     @State private var messageEditor: MessageEditor?
@@ -146,11 +148,10 @@ struct DecisionDetailView: View {
                         }
                     }
                 } else {
-                    ContentUnavailableView(
-                        "Item unavailable",
+                    UnavailableStateView(
+                        title: "Item unavailable",
                         systemImage: "questionmark.circle",
-                        description: Text("This attention item is not in the inbox.")
-                    )
+                        description: "This attention item is not in the inbox.")
                 }
             }
             // Re-validate on open and whenever the cache is evicted for a new
@@ -304,10 +305,10 @@ struct DecisionDetailView: View {
                         .background(Color.sidebarGround)
                         .inspectorColumnWidth(min: 280, ideal: 340, max: 440)
                     } else {
-                        ContentUnavailableView(
-                            "No decision selected",
+                        UnavailableStateView(
+                            title: "No decision selected",
                             systemImage: "sidebar.trailing",
-                            description: Text("Select an item to inspect its facts."))
+                            description: "Select an item to inspect its facts.")
                     }
                 }
         #endif
@@ -928,6 +929,16 @@ struct DecisionDetailView: View {
         .frame(maxWidth: wideLayout ? 1_040 : 560, alignment: .topLeading)
     }
 
+    func screenshotBanner() -> some View {
+        bannerLabel(
+            "Submission failed: the daemon rejected the command.",
+            systemImage: "exclamationmark",
+            tint: .waxText,
+            wash: .waxWash
+        )
+        .padding()
+    }
+
     #if os(macOS)
         func screenshotInspector(
             _ item: Components.Schemas.AttentionItem,
@@ -1003,7 +1014,7 @@ struct DecisionDetailView: View {
                         "Finding location",
                         value: AttentionDisplay.findingLocation(location), monospaced: true)
                 }
-                factRow("Binding digest", value: binding.adjudication_digest)
+                factRow("Binding digest", value: binding.adjudication_digest, monospaced: true)
                 factRow("Run", value: binding.run_id)
                 factRow("Round", value: "\(binding.round)")
             }
@@ -1794,13 +1805,10 @@ struct DecisionDetailView: View {
                             }
                         }
                     } else {
-                        ContentUnavailableView(
-                            "Preview unavailable",
+                        UnavailableStateView(
+                            title: "Preview unavailable",
                             systemImage: "doc",
-                            description: Text(
-                                "This \(byteCount(preview.byteCount)) attachment is not text."
-                            )
-                        )
+                            description: "This \(byteCount(preview.byteCount)) attachment is not text.")
                     }
                 }
                 .navigationTitle(label)
@@ -1828,7 +1836,7 @@ struct DecisionDetailView: View {
             Text(text)
         } icon: {
             Image(systemName: systemImage)
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: bannerGlyphSize, weight: .semibold))
         }
         .font(FreesideFont.callout)
         .textSelection(.enabled)
@@ -2096,14 +2104,32 @@ private struct DecisionFactRow: View {
 }
 
 private struct FindingListLabelStyle: LabelStyle {
+    @ScaledMetric(relativeTo: .callout) private var bulletSize: CGFloat = screenshotMetricBase(
+        4, relativeTo: .callout)
+
     func makeBody(configuration: Configuration) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             configuration.icon
-                .font(.system(size: 4))
+                .font(.system(size: bulletSize))
                 .foregroundStyle(Color.inkDim)
             configuration.title
         }
     }
+}
+
+/// macOS ImageRenderer does not apply its injected Dynamic Type environment to
+/// `ScaledMetric`. Mirror the screenshot-only font bridge's iOS scale so the
+/// matrix still exercises the production metric behavior.
+private func screenshotMetricBase(
+    _ value: CGFloat,
+    relativeTo style: Font.TextStyle
+) -> CGFloat {
+    #if os(macOS)
+        guard FreesideFont.screenshotDynamicTypeSize != nil else { return value }
+        return value * FreesideFont.size(of: style) / 16
+    #else
+        return value
+    #endif
 }
 
 struct RunProposalRevisionSheet: View {
