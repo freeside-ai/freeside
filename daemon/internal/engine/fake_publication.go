@@ -1344,7 +1344,7 @@ func (w *fakePublicationWorkflow) reconcileTask(
 	}
 	if imported.CommitSHA == "" {
 		if err := w.putBlockedItem(ctx, task, "", imported.Claims, nil, imported.CommitPlanNotice,
-			"Gauntlet containment withheld a candidate commit."); err != nil {
+			"Gauntlet containment withheld a candidate commit.", nil); err != nil {
 			return taskOutcome{}, err
 		}
 		if err := w.finishTask(ctx, task); err != nil {
@@ -1384,7 +1384,8 @@ func (w *fakePublicationWorkflow) reconcileTask(
 	}
 	if !authorization.AuthorizesPublication {
 		if err := w.putBlockedItem(ctx, task, imported.CommitSHA, imported.Claims, artifacts,
-			imported.CommitPlanNotice, "Verification or policy findings blocked publication."); err != nil {
+			imported.CommitPlanNotice, "Verification or policy findings blocked publication.",
+			publishBlockTrustRule(domain.TrustRuleVerificationFailed)); err != nil {
 			return taskOutcome{}, err
 		}
 		if err := w.finishTask(ctx, task); err != nil {
@@ -1452,6 +1453,7 @@ func (w *fakePublicationWorkflow) reconcileTask(
 				ctx, task, imported.CommitSHA, imported.Claims, artifacts,
 				imported.CommitPlanNotice,
 				"Current trust state definitively blocked publication.",
+				publishBlockFacts(domain.HoldTrustBlocked, err),
 			); putErr != nil {
 				return taskOutcome{}, errors.Join(err, putErr)
 			}
@@ -1477,7 +1479,7 @@ func (w *fakePublicationWorkflow) completePublishedTask(
 	artifacts []domain.Artifact,
 	published publish.Result,
 ) (taskOutcome, error) {
-	ready, err := w.readyItem(task, imported, artifacts, published)
+	ready, err := w.readyItem(ctx, task, imported, artifacts, published)
 	if err != nil {
 		return taskOutcome{}, err
 	}
@@ -2189,6 +2191,7 @@ func (w *fakePublicationWorkflow) persistCandidateMetadata(
 }
 
 func (w *fakePublicationWorkflow) readyItem(
+	ctx context.Context,
 	task fakePublicationTask,
 	imported importer.Result,
 	artifacts []domain.Artifact,
@@ -2196,12 +2199,17 @@ func (w *fakePublicationWorkflow) readyItem(
 ) (domain.AttentionItem, error) {
 	runID := task.RunID
 	createdAt := w.attentionCreatedAt()
+	subject := domain.Subject{
+		Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
+	}
+	names, err := displayNames(ctx, w.store, task.ProjectID, subject)
+	if err != nil {
+		return domain.AttentionItem{}, err
+	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: readyItemID(task.RunID), ProjectID: task.ProjectID,
-		Subject: domain.Subject{
-			Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
-		},
-		Type: domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Subject: subject,
+		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason: fmt.Sprintf("%s#%d is published and ready for final review.",
 			task.Repo, published.PRNumber),
 		RequestedDecision: []domain.Action{
@@ -2213,6 +2221,7 @@ func (w *fakePublicationWorkflow) readyItem(
 			Repo: task.Repo, Number: published.PRNumber,
 		},
 		CommitPlanNotice: imported.CommitPlanNotice,
+		DisplayNames:     names,
 		ItemVersion:      1, InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt: &createdAt,
 		Status:    domain.StatusOpen,
@@ -2227,22 +2236,30 @@ func (w *fakePublicationWorkflow) putBlockedItem(
 	artifacts []domain.Artifact,
 	notice *domain.CommitPlanNoticeReason,
 	reason string,
+	facts *domain.PublishBlockFacts,
 ) error {
 	runID := task.RunID
 	createdAt := w.attentionCreatedAt()
+	subject := domain.Subject{
+		Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
+	}
+	names, err := displayNames(ctx, w.store, task.ProjectID, subject)
+	if err != nil {
+		return err
+	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: blockedItemID(task.RunID), ProjectID: task.ProjectID,
-		Subject: domain.Subject{
-			Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
-		},
-		Type: domain.AttentionPublishBlocked, Priority: domain.PriorityHigh,
+		Subject: subject,
+		Type:    domain.AttentionPublishBlocked, Priority: domain.PriorityHigh,
 		Reason: reason,
 		RequestedDecision: []domain.Action{
 			domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
 		},
 		EvidenceSnapshot: artifacts, AgentClaims: claims,
 		PRHeadSHA: headSHA, CommitPlanNotice: notice,
-		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		PublishBlock: facts,
+		DisplayNames: names,
+		ItemVersion:  1, InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt: &createdAt,
 		Status:    domain.StatusOpen,
 	}, w.approvedRecipes)
@@ -2301,6 +2318,15 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	if legacyYieldHistory {
 		normalized.YieldHistory = expected.YieldHistory
 	}
+	legacyDisplayNames := current.DisplayNames == nil && expected.DisplayNames != nil
+	// Display names are mutable presentation state. Recovery derives the
+	// current project and work-unit names, while the terminal item may retain
+	// an older label from before a rename.
+	normalized.DisplayNames = expected.DisplayNames
+	legacyPublishBlock := current.PublishBlock == nil && expected.PublishBlock != nil
+	if legacyPublishBlock {
+		normalized.PublishBlock = expected.PublishBlock
+	}
 	normalized.ItemVersion = expected.ItemVersion
 	normalized.Status = expected.Status
 	normalized.DecidedAt = expected.DecidedAt
@@ -2331,11 +2357,19 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	if legacyYieldHistory {
 		expected.YieldHistory = nil
 	}
+	if legacyDisplayNames {
+		expected.DisplayNames = nil
+	}
+	if legacyPublishBlock {
+		expected.PublishBlock = nil
+	}
 	// Persistence projections do not constitute an item transition. Normalize
 	// them before the exact-replay check and before lifecycle validation so an
 	// otherwise identical item at the same version still converges.
 	current.Recommendation = expected.Recommendation
 	current.DecisionSurface = expected.DecisionSurface
+	current.DisplayNames = expected.DisplayNames
+	current.PublishBlock = expected.PublishBlock
 	if reflect.DeepEqual(current, expected) {
 		return true
 	}

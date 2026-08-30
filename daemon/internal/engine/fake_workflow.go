@@ -58,7 +58,13 @@ func (e *Engine) StartFakeRun(ctx context.Context, spec FakeRunSpec) (domain.Run
 		return domain.Run{}, fmt.Errorf("start fake run %q: %w", want.ID, err)
 	}
 
-	if _, err := e.ensureItem(ctx, initialItem(existing)); err != nil {
+	names, err := displayNames(ctx, e.store, existing.ProjectID, domain.Subject{
+		Type: domain.SubjectRun, ID: domain.SubjectID(existing.ID), RunID: &existing.ID,
+	})
+	if err != nil {
+		return domain.Run{}, err
+	}
+	if _, err := e.ensureItem(ctx, initialItem(existing, names)); err != nil {
 		return domain.Run{}, err
 	}
 	return existing, nil
@@ -105,7 +111,11 @@ func (e *Engine) ownsFakeRun(ctx context.Context, run domain.Run) (bool, error) 
 	if err != nil {
 		return false, fmt.Errorf("find workflow marker for run %q: %w", run.ID, err)
 	}
-	if !sameWorkflowItem(marker.Item, initialItem(run)) {
+	names, err := displayNames(ctx, e.store, run.ProjectID, runSubject(run))
+	if err != nil {
+		return false, err
+	}
+	if !sameWorkflowItem(marker.Item, initialItem(run, names)) {
 		return false, fmt.Errorf("workflow marker for run %q disagrees with its binding: %w",
 			run.ID, domain.ErrParentKeyMismatch)
 	}
@@ -113,7 +123,11 @@ func (e *Engine) ownsFakeRun(ctx context.Context, run domain.Run) (bool, error) 
 }
 
 func (e *Engine) reconcileRun(ctx context.Context, run domain.Run) (int, error) {
-	created, err := e.ensureItem(ctx, initialItem(run))
+	names, err := displayNames(ctx, e.store, run.ProjectID, runSubject(run))
+	if err != nil {
+		return 0, err
+	}
+	created, err := e.ensureItem(ctx, initialItem(run, names))
 	if err != nil {
 		return 0, err
 	}
@@ -127,7 +141,7 @@ func (e *Engine) reconcileRun(ctx context.Context, run domain.Run) (int, error) 
 		return transitions, nil
 	}
 
-	feedbackCreated, err := e.ensureItem(ctx, feedbackItem(run))
+	feedbackCreated, err := e.ensureItem(ctx, feedbackItem(run, names))
 	if err != nil {
 		return transitions, err
 	}
@@ -198,7 +212,11 @@ func (e *Engine) ensureFeedbackStage(ctx context.Context, runID domain.RunID) (b
 	return added, nil
 }
 
-func initialItem(run domain.Run) domain.AttentionItem {
+func runSubject(run domain.Run) domain.Subject {
+	return domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID}
+}
+
+func initialItem(run domain.Run, displayNames *domain.DisplayNames) domain.AttentionItem {
 	runID := run.ID
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: initialItemID(run.ID), ProjectID: run.ProjectID,
@@ -210,6 +228,7 @@ func initialItem(run domain.Run) domain.AttentionItem {
 		// store intentionally has no item-indexed query; offering stop here
 		// would make the two outcomes indistinguishable to the engine.
 		RequestedDecision: []domain.Action{domain.ActionApprove},
+		DisplayNames:      displayNames,
 		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt: nil,
 		Status:    domain.StatusOpen,
@@ -220,7 +239,7 @@ func initialItem(run domain.Run) domain.AttentionItem {
 	return item
 }
 
-func feedbackItem(run domain.Run) domain.AttentionItem {
+func feedbackItem(run domain.Run, displayNames *domain.DisplayNames) domain.AttentionItem {
 	runID := run.ID
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: feedbackItemID(run.ID), ProjectID: run.ProjectID,
@@ -228,6 +247,7 @@ func feedbackItem(run domain.Run) domain.AttentionItem {
 		Type:    domain.AttentionSpecApproval, Priority: domain.PriorityNormal,
 		Reason:            "Discuss the approved fake run with the agent.",
 		RequestedDecision: []domain.Action{domain.ActionDiscuss},
+		DisplayNames:      displayNames,
 		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt: nil,
 		Status:    domain.StatusOpen,

@@ -228,3 +228,73 @@ func TestUsageObservationsPersistWithRoutedReviewFailure(t *testing.T) {
 		t.Fatalf("failed review usage = %#v, want %#v", observations, measurement)
 	}
 }
+
+func TestBillableCostSoFarProjectsUsageObservations(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	engine, run, attempt := usageEngineFixture(t, true)
+
+	got, err := billableCostSoFar(ctx, engine.store, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("cost before observations = %#v, want nil", got)
+	}
+
+	observedAt := time.Date(2026, 1, 2, 4, 5, 6, 0, time.UTC)
+	if err := appendUsageObservations(ctx, engine.store, attempt.InvocationID, []exec.UsageMeasurement{
+		{
+			Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementBillableCost,
+			Metric: "billable_cost", Unit: "usd_micros", Quantity: 17_500_000,
+			Sequence: 1, ObservedAt: observedAt,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = billableCostSoFar(ctx, engine.store, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &domain.CostSoFar{Currency: "USD", Amount: "17.5", Invocations: 1, Complete: true}
+	if got == nil || *got != *want {
+		t.Fatalf("cost = %#v, want %#v", got, want)
+	}
+
+	if err := appendUsageObservations(ctx, engine.store, attempt.InvocationID, []exec.UsageMeasurement{
+		{
+			Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementBillableCost,
+			Metric: "other_billable_cost", Unit: "credits", Quantity: 3,
+			Sequence: 2, ObservedAt: observedAt.Add(time.Second),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = billableCostSoFar(ctx, engine.store, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want.Complete = false
+	if got == nil || *got != *want {
+		t.Fatalf("cost with unknown unit = %#v, want %#v", got, want)
+	}
+
+	unknownEngine, unknownRun, unknownAttempt := usageEngineFixture(t, true)
+	if err := appendUsageObservations(ctx, unknownEngine.store, unknownAttempt.InvocationID, []exec.UsageMeasurement{
+		{
+			Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementBillableCost,
+			Metric: "billable_cost", Unit: "credits", Quantity: 3,
+			Sequence: 1, ObservedAt: observedAt,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = billableCostSoFar(ctx, unknownEngine.store, unknownRun.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = &domain.CostSoFar{Currency: "USD", Amount: "0", Invocations: 1, Complete: false}
+	if got == nil || *got != *want {
+		t.Fatalf("cost with only an unknown unit = %#v, want %#v", got, want)
+	}
+}

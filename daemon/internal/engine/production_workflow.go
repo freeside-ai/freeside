@@ -1477,7 +1477,20 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 		inserted = insertedNow
 		if insertedNow && terminal.Status != exec.StatusCompleted {
 			createdAt := time.Now().UTC()
-			item, err := productionFailureItem(run, terminal, createdAt)
+			facts, err := executionFailureFacts(
+				ctx, tx, terminal.InvocationID, terminal.Status, terminal.Summary,
+				createdAt, domain.StageNameImplementation,
+			)
+			if err != nil {
+				return err
+			}
+			names, err := tx.DisplayNamesFor(ctx, run.ProjectID, domain.Subject{
+				Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,
+			})
+			if err != nil {
+				return err
+			}
+			item, err := productionFailureItem(run, terminal, createdAt, facts, names)
 			if err != nil {
 				return err
 			}
@@ -1616,9 +1629,22 @@ func (e *Engine) recordProductionDeliveryRefusal(
 		}
 
 		itemID := domain.ItemID("execution-failure-" + string(invocationID))
+		names, err := tx.DisplayNamesFor(ctx, current.ProjectID, domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(current.ID), RunID: &current.ID,
+		})
+		if err != nil {
+			return err
+		}
+		var facts *domain.ExecutionFailureFacts
+		if admissionErr == nil {
+			facts = &domain.ExecutionFailureFacts{
+				Outcome: domain.ExecutionOutcomeFailed, Stage: domain.StageNameImplementation,
+				InvocationID: invocationID,
+			}
+		}
 		item, itemErr := tx.GetAttentionItem(ctx, itemID)
 		if errors.Is(itemErr, store.ErrNotFound) {
-			item, err = productionDeliveryRefusalItem(current, terminal, time.Now().UTC())
+			item, err = productionDeliveryRefusalItem(current, terminal, time.Now().UTC(), facts, names)
 			if err != nil {
 				return err
 			}
@@ -1628,7 +1654,7 @@ func (e *Engine) recordProductionDeliveryRefusal(
 		} else if itemErr != nil {
 			return itemErr
 		} else {
-			want, err := productionDeliveryRefusalItem(current, terminal, *item.CreatedAt)
+			want, err := productionDeliveryRefusalItem(current, terminal, *item.CreatedAt, facts, names)
 			if err != nil {
 				return err
 			}
@@ -1647,6 +1673,7 @@ func (e *Engine) recordProductionDeliveryRefusal(
 // transaction lands.
 func productionFailureItem(
 	run domain.Run, terminal productionTerminalRecord, createdAt time.Time,
+	facts *domain.ExecutionFailureFacts, displayNames *domain.DisplayNames,
 ) (domain.AttentionItem, error) {
 	runID := run.ID
 	reason := fmt.Sprintf("Unattended %s stage ended %q without an accepted result.",
@@ -1661,6 +1688,8 @@ func productionFailureItem(
 		Type:      domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
 		Reason:            reason,
 		RequestedDecision: []domain.Action{domain.ActionDiscuss, domain.ActionStop},
+		ExecutionFailure:  facts,
+		DisplayNames:      displayNames,
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt: &createdAt,
 		Status:    domain.StatusOpen,
@@ -1672,8 +1701,9 @@ func productionFailureItem(
 // requires a separate policy decision.
 func productionDeliveryRefusalItem(
 	run domain.Run, terminal productionTerminalRecord, createdAt time.Time,
+	facts *domain.ExecutionFailureFacts, displayNames *domain.DisplayNames,
 ) (domain.AttentionItem, error) {
-	item, err := productionFailureItem(run, terminal, createdAt)
+	item, err := productionFailureItem(run, terminal, createdAt, facts, displayNames)
 	if err != nil {
 		return domain.AttentionItem{}, err
 	}
@@ -1735,8 +1765,13 @@ func productionQuarantineReason(err error) (string, bool) {
 // stop — the boundary's concluding action — is the one this can honour.
 func productionQuarantineItem(
 	itemID domain.ItemID, runID domain.RunID, projectID domain.ProjectID, reason string,
+	names ...*domain.DisplayNames,
 ) (domain.AttentionItem, error) {
 	subjectRunID := runID
+	var displayNames *domain.DisplayNames
+	if len(names) != 0 {
+		displayNames = names[0]
+	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID:        itemID,
 		ProjectID: projectID,
@@ -1746,6 +1781,7 @@ func productionQuarantineItem(
 		Type: domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
 		Reason:            reason,
 		RequestedDecision: []domain.Action{domain.ActionStop},
+		DisplayNames:      displayNames,
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt: nil,
 		Status:    domain.StatusOpen,
@@ -1814,6 +1850,11 @@ func recordProductionQuarantine(
 	projectID domain.ProjectID,
 	reason string,
 ) error {
+	subject := domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID}
+	names, err := displayNames(ctx, st, projectID, subject)
+	if err != nil {
+		return fmt.Errorf("derive quarantine display names for run %q: %w", runID, err)
+	}
 	// The walk stops at the first slot that is free or open, so it only steps
 	// over notices an operator has concluded. That history grows one entry per
 	// repair, never per pass, so there is no cap: a bound here would have to
@@ -1831,7 +1872,7 @@ func recordProductionQuarantine(
 			}
 			continue
 		}
-		item, err := productionQuarantineItem(itemID, runID, projectID, reason)
+		item, err := productionQuarantineItem(itemID, runID, projectID, reason, names)
 		if err != nil {
 			return fmt.Errorf("construct quarantine item for run %q: %w", runID, err)
 		}
@@ -1865,7 +1906,9 @@ func refreshProductionQuarantine(
 	projectID domain.ProjectID,
 	reason string,
 ) error {
-	want, err := productionQuarantineItem(current.ID, runID, projectID, reason)
+	want, err := productionQuarantineItem(
+		current.ID, runID, projectID, reason, current.DisplayNames,
+	)
 	if err != nil {
 		return fmt.Errorf("construct quarantine item for run %q: %w", runID, err)
 	}

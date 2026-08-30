@@ -126,7 +126,12 @@ func TestAttentionItemCardFactTransitions(t *testing.T) {
 			changed.ExecutionFailure = &copy
 			changed.ExecutionFailure.InvocationID = "inv-other"
 		case changed.PublishBlock != nil:
-			changed.PublishBlock = nil
+			hold := domain.HoldExternalConflict
+			changed.PublishBlock = &domain.PublishBlockFacts{HoldReason: &hold}
+			if err := domain.ValidateAttentionItemTransition(attached, changed); err != nil {
+				t.Errorf("updating %s fact = %v, want accepted successor", populated.Type, err)
+			}
+			continue
 		case changed.DiffStats != nil:
 			copy := *changed.DiffStats
 			changed.DiffStats = &copy

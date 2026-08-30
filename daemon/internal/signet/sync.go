@@ -585,7 +585,9 @@ func (s *Service) GetRun(ctx context.Context, id domain.RunID) (RunSnapshot, err
 		if err != nil {
 			return asRunObservationIntegrityError(err)
 		}
-		displayNames, err := runDisplayNames(ctx, tx, value.Value)
+		displayNames, err := tx.DisplayNamesFor(ctx, value.Value.ProjectID, domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(value.Value.ID), RunID: &value.Value.ID,
+		})
 		if err != nil {
 			return err
 		}
@@ -795,42 +797,13 @@ func projectRunSnapshot(
 	if err != nil {
 		return RunSnapshot{}, fmt.Errorf("run %q conclusion: %w", run.ID, asRunObservationIntegrityError(err))
 	}
-	displayNames, err := runDisplayNames(ctx, tx, run)
+	displayNames, err := tx.DisplayNamesFor(ctx, run.ProjectID, domain.Subject{
+		Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,
+	})
 	if err != nil {
 		return RunSnapshot{}, fmt.Errorf("run %q display names: %w", run.ID, err)
 	}
 	return runSnapshot(run, snapshot, observation, conclusion, state.Revision, displayNames), nil
-}
-
-func runDisplayNames(ctx context.Context, tx *store.ReadTx, run domain.Run) (*domain.DisplayNames, error) {
-	names := &domain.DisplayNames{
-		Project: domain.DisplayName{
-			Text: string(run.ProjectID), Source: domain.DisplayNameSourceIdentifier,
-		},
-		WorkUnit: domain.DisplayName{
-			Text: string(run.ID), Source: domain.DisplayNameSourceIdentifier,
-		},
-	}
-	project, err := tx.GetProject(ctx, run.ProjectID)
-	if err == nil {
-		names.Project = domain.DisplayName{
-			Text: project.Repo, Source: domain.DisplayNameSourceName,
-		}
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return nil, err
-	}
-	declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, run.ID)
-	if err == nil && declaration.BoundIssue != nil {
-		names.WorkUnit = domain.DisplayName{
-			Text: fmt.Sprintf("#%d", *declaration.BoundIssue), Source: domain.DisplayNameSourceName,
-		}
-	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return nil, err
-	}
-	if err := names.Validate(); err != nil {
-		return nil, err
-	}
-	return names, nil
 }
 
 func publicationReadyMilestone(observation domain.RunObservation) bool {

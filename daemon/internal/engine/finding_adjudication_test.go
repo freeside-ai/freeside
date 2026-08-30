@@ -252,8 +252,13 @@ func putFindingAdjudicationRecommendationCase(
 	if err != nil {
 		t.Fatal(err)
 	}
+	names, err := displayNames(t.Context(), f.workflow.store, f.task.ProjectID,
+		findingAdjudicationSurfaceItem(f.task, artifact.Round, artifact.Revision, artifact.Entries).Subject)
+	if err != nil {
+		t.Fatal(err)
+	}
 	item, err := f.workflow.newFindingAdjudicationAttentionItem(
-		f.task, artifact, map[domain.FindingID]domain.Finding{f.finding.ID: f.finding})
+		f.task, artifact, map[domain.FindingID]domain.Finding{f.finding.ID: f.finding}, names)
 	if err != nil {
 		t.Fatal(err)
 	}

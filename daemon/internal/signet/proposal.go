@@ -251,6 +251,7 @@ func proposalReplacementItem(
 			domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze,
 		},
 		EvidenceSnapshot: []domain.Artifact{artifact}, ItemVersion: priorItem.ItemVersion + 1,
+		DisplayNames:      priorItem.DisplayNames,
 		InterruptionClass: priorItem.InterruptionClass, Status: domain.StatusResolved,
 		CreatedAt: &now,
 	}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})

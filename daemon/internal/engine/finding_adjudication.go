@@ -465,7 +465,12 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 		if err != nil {
 			return err
 		}
-		replacement, err := w.newFindingAdjudicationAttentionItem(task, successor, findings)
+		names, err := tx.DisplayNamesFor(ctx, task.ProjectID,
+			findingAdjudicationSurfaceItem(task, successor.Round, successor.Revision, successor.Entries).Subject)
+		if err != nil {
+			return err
+		}
+		replacement, err := w.newFindingAdjudicationAttentionItem(task, successor, findings, names)
 		if err != nil {
 			return err
 		}
@@ -1092,7 +1097,7 @@ func prospectiveFindingAdjudicationSurfaceDigest(
 
 func (w *productionPublicationWorkflow) newFindingAdjudicationAttentionItem(
 	task productionPublicationTask, artifact domain.FindingAdjudication,
-	findings map[domain.FindingID]domain.Finding,
+	findings map[domain.FindingID]domain.Finding, names *domain.DisplayNames,
 ) (domain.AttentionItem, error) {
 	binding := findingAdjudicationBinding(artifact, findings)
 	surfaceItem := findingAdjudicationSurfaceItem(
@@ -1106,6 +1111,7 @@ func (w *productionPublicationWorkflow) newFindingAdjudicationAttentionItem(
 		Reason:            "Choose the artifact-bound route for the adjudicated review findings.",
 		RequestedDecision: surfaceItem.RequestedDecision, PRHeadSHA: surfaceItem.PRHeadSHA,
 		FindingAdjudication: &binding, ItemVersion: 1,
+		DisplayNames:      names,
 		InterruptionClass: domain.InterruptionPlannedGate, CreatedAt: &createdAt,
 		Status: domain.StatusOpen,
 	}, w.approvedRecipes)
@@ -1169,7 +1175,12 @@ func (w *productionPublicationWorkflow) putFindingAdjudicationAttention(
 	}); err != nil {
 		return err
 	}
-	item, err := w.newFindingAdjudicationAttentionItem(task, artifact, findings)
+	names, err := displayNames(ctx, w.store, task.ProjectID,
+		findingAdjudicationSurfaceItem(task, artifact.Round, artifact.Revision, artifact.Entries).Subject)
+	if err != nil {
+		return err
+	}
+	item, err := w.newFindingAdjudicationAttentionItem(task, artifact, findings, names)
 	if err != nil {
 		return err
 	}
@@ -1252,9 +1263,14 @@ func (w *productionPublicationWorkflow) recordRemediationUndeliverable(
 			return err
 		}
 		createdAt := w.attentionCreatedAt()
+		subject := domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID}
+		names, err := tx.DisplayNamesFor(ctx, task.ProjectID, subject)
+		if err != nil {
+			return err
+		}
 		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 			ID: itemID, ProjectID: task.ProjectID,
-			Subject:           domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+			Subject:           subject,
 			Type:              domain.AttentionExecutionFailure,
 			Priority:          domain.PriorityHigh,
 			Reason:            reason,
@@ -1262,6 +1278,7 @@ func (w *productionPublicationWorkflow) recordRemediationUndeliverable(
 			ItemVersion:       1,
 			InterruptionClass: domain.InterruptionExceptional,
 			CreatedAt:         &createdAt,
+			DisplayNames:      names,
 			Status:            domain.StatusOpen,
 		}, w.approvedRecipes)
 		if err != nil {

@@ -550,7 +550,16 @@ func TestCodexAuthStateIsIdentityScopedAndAdvisory(t *testing.T) {
 		ID: "run-codex-auth", ProjectID: "project-1",
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
 	}
-	if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, run) }); err != nil {
+	project, err := domain.NewProject(run.ProjectID, "owner/repo", 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.RegisterProject(ctx, project); err != nil {
+			return err
+		}
+		return tx.PutRun(ctx, run)
+	}); err != nil {
 		t.Fatalf("PutRun: %v", err)
 	}
 
@@ -587,6 +596,11 @@ func TestCodexAuthStateIsIdentityScopedAndAdvisory(t *testing.T) {
 		}
 		if item.CreatedAt == nil {
 			t.Fatal("re-enrollment marker created_at is nil")
+		}
+		if item.DisplayNames == nil || item.DisplayNames.Project != (domain.DisplayName{
+			Text: project.Repo, Source: domain.DisplayNameSourceName,
+		}) {
+			t.Fatalf("re-enrollment marker display names = %#v", item.DisplayNames)
 		}
 		return nil
 	}); err != nil {

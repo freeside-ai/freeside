@@ -304,9 +304,16 @@ func (d Doctor) converge(ctx context.Context, findings []DoctorFinding) error {
 		}
 	}
 	var revision int64
+	var displayNames *domain.DisplayNames
 	if err := d.Store.Read(ctx, func(tx *store.ReadTx) error {
 		state, err := tx.ServerState(ctx)
+		if err != nil {
+			return err
+		}
 		revision = state.Revision
+		displayNames, err = tx.DisplayNamesFor(
+			ctx, d.ProjectID, domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		)
 		return err
 	}); err != nil {
 		return fmt.Errorf("doctor: read revision: %w", err)
@@ -360,7 +367,11 @@ func (d Doctor) converge(ctx context.Context, findings []DoctorFinding) error {
 					domain.ActionAcknowledge,
 					domain.ActionStopUnattended,
 				},
-				ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+				HealthDiagnostic: &domain.HealthDiagnostic{
+					Code: finding.Code, Impairs: domain.ImpairedCapabilityUnattendedAdmission,
+				},
+				DisplayNames: displayNames,
+				ItemVersion:  1, InterruptionClass: domain.InterruptionExceptional,
 				CreatedAt: &createdAt,
 				Posture:   &posture,
 				Status:    domain.StatusOpen,

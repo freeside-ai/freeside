@@ -16,15 +16,30 @@ import (
 func TestGoldenRoundTripCardFacts(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	s := openStore(t, store.Options{})
-	f := newFixtures(t)
+	s := openStore(t, store.Options{AdmissionFloors: attendedFloors()})
+	execution := newAdmissionFixture(t, nil)
+	execution.run.Stages[0].Name = "implement"
+	outcome := cardFactExecutionOutcome(execution.admission)
+	approval := cardFactApprovalItem(t)
 	items := storeCardFactItems(t)
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
-		if err := tx.PutRun(ctx, f.run); err != nil {
+		if err := tx.PutRun(ctx, execution.run); err != nil {
 			return err
 		}
-		finding := adjudicationFinding("finding-1", f.run.ID, "daemon/review.go", time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC))
-		record := adjudicationReviewRecord(t, f.run.ID, 2, []domain.FindingID{finding.ID}, finding.CreatedAt)
+		if err := tx.RecordAuthIdentity(ctx, execution.identity, admissionEpoch); err != nil {
+			return err
+		}
+		if err := tx.RecordExecutionAdmission(ctx, execution.admission); err != nil {
+			return err
+		}
+		if err := tx.RecordExecutionOutcome(ctx, outcome); err != nil {
+			return err
+		}
+		if err := tx.PutAttentionItem(ctx, approval); err != nil {
+			return err
+		}
+		finding := adjudicationFinding("finding-1", execution.run.ID, "daemon/review.go", time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC))
+		record := adjudicationReviewRecord(t, execution.run.ID, 2, []domain.FindingID{finding.ID}, finding.CreatedAt)
 		if err := tx.PutReviewRecord(ctx, record, []domain.Finding{finding}); err != nil {
 			return err
 		}
@@ -182,11 +197,21 @@ func TestAttentionItemAuthenticatesShadowReviewDisputeBinding(t *testing.T) {
 func TestPutAttentionItemRejectsChangedCardFact(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	s := openStore(t, store.Options{})
-	f := newFixtures(t)
+	s := openStore(t, store.Options{AdmissionFloors: attendedFloors()})
+	execution := newAdmissionFixture(t, nil)
+	execution.run.Stages[0].Name = "implement"
 	item := storeCardFactItems(t)["execution_failure"]
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
-		if err := tx.PutRun(ctx, f.run); err != nil {
+		if err := tx.PutRun(ctx, execution.run); err != nil {
+			return err
+		}
+		if err := tx.RecordAuthIdentity(ctx, execution.identity, admissionEpoch); err != nil {
+			return err
+		}
+		if err := tx.RecordExecutionAdmission(ctx, execution.admission); err != nil {
+			return err
+		}
+		if err := tx.RecordExecutionOutcome(ctx, cardFactExecutionOutcome(execution.admission)); err != nil {
 			return err
 		}
 		return tx.PutAttentionItem(ctx, item)
@@ -204,6 +229,32 @@ func TestPutAttentionItemRejectsChangedCardFact(t *testing.T) {
 	}
 }
 
+func cardFactExecutionOutcome(admission domain.ExecutionAdmission) domain.ExecutionOutcome {
+	return domain.ExecutionOutcome{
+		InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+		Status: domain.ExecutionOutcomeFailed, Summary: "implementation failed",
+		RecordedAt: admissionEpoch.Add(time.Minute),
+	}
+}
+
+func cardFactApprovalItem(t *testing.T) domain.AttentionItem {
+	t.Helper()
+	at := time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC)
+	runID := domain.RunID("run-1")
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-spec", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
+		Type:    domain.AttentionSpecApproval, Priority: domain.PriorityNormal,
+		Reason: "approve the specification", RequestedDecision: []domain.Action{domain.ActionApprove},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		CreatedAt: &at, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return item
+}
+
 func storeCardFactItems(t *testing.T) map[string]domain.AttentionItem {
 	t.Helper()
 	at := time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC)
@@ -212,6 +263,16 @@ func storeCardFactItems(t *testing.T) map[string]domain.AttentionItem {
 	itemID := domain.ItemID("item-spec")
 	rule := domain.TrustRuleTrustProfileDrift
 	posture := domain.HealthPostureAdvisory
+	runNames := &domain.DisplayNames{
+		Project:  domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
+		WorkUnit: domain.DisplayName{Text: "#1003", Source: domain.DisplayNameSourceName},
+	}
+	systemNames := &domain.DisplayNames{
+		Project: domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
+		WorkUnit: domain.DisplayName{
+			Text: "daemon", Source: domain.DisplayNameSourceIdentifier,
+		},
+	}
 
 	inputs := map[string]domain.AttentionItemInput{
 		"cost": {
@@ -219,6 +280,7 @@ func storeCardFactItems(t *testing.T) map[string]domain.AttentionItem {
 			Type: domain.AttentionReviewDiminishing, Priority: domain.PriorityNormal,
 			Reason: "review yield is diminishing", RequestedDecision: []domain.Action{domain.ActionFinishNow},
 			BillableCostSoFar: &domain.CostSoFar{Currency: "USD", Amount: "17.50", Invocations: 4},
+			DisplayNames:      runNames,
 			ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate, CreatedAt: &at, Status: domain.StatusOpen,
 		},
 		"execution_failure": {
@@ -229,21 +291,42 @@ func storeCardFactItems(t *testing.T) map[string]domain.AttentionItem {
 				Outcome: domain.ExecutionOutcomeFailed, Stage: domain.StageNameImplementation,
 				InvocationID: "inv-1",
 			},
-			ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional, CreatedAt: &at, Status: domain.StatusOpen,
+			DisplayNames: runNames,
+			ItemVersion:  1, InterruptionClass: domain.InterruptionExceptional, CreatedAt: &at, Status: domain.StatusOpen,
 		},
 		"publish_block": {
 			ID: "item-card-publish", ProjectID: "proj-1", Subject: subject,
 			Type: domain.AttentionPublishBlocked, Priority: domain.PriorityHigh,
 			Reason: "publication is blocked", RequestedDecision: []domain.Action{domain.ActionInspectTrustFailure},
 			PublishBlock: &domain.PublishBlockFacts{TrustRule: &rule},
+			DisplayNames: runNames,
 			ItemVersion:  1, InterruptionClass: domain.InterruptionExceptional, CreatedAt: &at, Status: domain.StatusOpen,
+		},
+		"diff_stats": {
+			ID: "item-card-diff", ProjectID: "proj-1", Subject: subject,
+			Type: domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+			Reason: "the pull request is ready for final review",
+			RequestedDecision: []domain.Action{
+				domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionDismiss,
+			},
+			PRHeadSHA: "cafebabe",
+			PRReference: &domain.PRReference{
+				Repo: "owner/repo", Number: 42,
+			},
+			DiffStats: &domain.DiffStats{
+				FilesChanged: 3, Additions: 17, Deletions: 5,
+				BaseSHA: "deadbeef", HeadSHA: "cafebabe",
+			},
+			DisplayNames: runNames,
+			ItemVersion:  1, InterruptionClass: domain.InterruptionPlannedGate, CreatedAt: &at, Status: domain.StatusOpen,
 		},
 		"blocked_on": {
 			ID: "item-card-blocked", ProjectID: "proj-1", Subject: subject,
 			Type: domain.AttentionBlocked, Priority: domain.PriorityNormal,
 			Reason: "waiting for specification approval", RequestedDecision: []domain.Action{},
-			BlockedOn:   &domain.BlockedWait{Kind: domain.BlockedWaitSpecApproval, Since: at, ItemID: &itemID},
-			ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate, CreatedAt: &at, Status: domain.StatusOpen,
+			BlockedOn:    &domain.BlockedWait{Kind: domain.BlockedWaitSpecApproval, Since: at, ItemID: &itemID},
+			DisplayNames: runNames,
+			ItemVersion:  1, InterruptionClass: domain.InterruptionPlannedGate, CreatedAt: &at, Status: domain.StatusOpen,
 		},
 		"health_diagnostic": {
 			ID: "item-card-health", ProjectID: "proj-1",
@@ -253,7 +336,8 @@ func storeCardFactItems(t *testing.T) map[string]domain.AttentionItem {
 			HealthDiagnostic: &domain.HealthDiagnostic{
 				Code: "run_projection.unavailable", Impairs: domain.ImpairedCapabilityRunVisibility,
 			},
-			Posture: &posture, ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+			DisplayNames: systemNames,
+			Posture:      &posture, ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
 			CreatedAt: &at, Status: domain.StatusOpen,
 		},
 		"review_dispute": {
@@ -264,7 +348,8 @@ func storeCardFactItems(t *testing.T) map[string]domain.AttentionItem {
 				RunID: runID, Round: 2, FindingIDs: []domain.FindingID{"finding-1"},
 				CompletionEvidence: adjudicationDigest("e"),
 			},
-			ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional, CreatedAt: &at, Status: domain.StatusOpen,
+			DisplayNames: runNames,
+			ItemVersion:  1, InterruptionClass: domain.InterruptionExceptional, CreatedAt: &at, Status: domain.StatusOpen,
 		},
 	}
 	items := make(map[string]domain.AttentionItem, len(inputs))

@@ -59,18 +59,29 @@ func (w *productionPublicationWorkflow) reconcileReviewDiminishing(
 	if err != nil {
 		return reviewDiminishingRoute{}, productionReviewPending, true, err
 	}
+	cost, err := billableCostSoFar(ctx, w.store, task.RunID)
+	if err != nil {
+		return reviewDiminishingRoute{}, productionReviewPending, true, err
+	}
+	subject := domain.Subject{
+		Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
+	}
+	names, err := displayNames(ctx, w.store, task.ProjectID, subject)
+	if err != nil {
+		return reviewDiminishingRoute{}, productionReviewPending, true, err
+	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: itemID, ProjectID: task.ProjectID,
-		Subject: domain.Subject{
-			Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
-		},
-		Type: domain.AttentionReviewDiminishing, Priority: domain.PriorityNormal,
+		Subject: subject,
+		Type:    domain.AttentionReviewDiminishing, Priority: domain.PriorityNormal,
 		Reason: reason,
 		RequestedDecision: store.ReviewDiminishingRequestedActions(
 			record.Round, convergence.Policy.HardRoundLimit),
 		AgentClaims: summaryClaims,
 		PRHeadSHA:   record.HeadSHA, YieldHistory: &convergence.History,
-		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		BillableCostSoFar: cost,
+		DisplayNames:      names,
+		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt: &createdAt, Status: domain.StatusOpen,
 	}, w.approvedRecipes)
 	if err != nil {

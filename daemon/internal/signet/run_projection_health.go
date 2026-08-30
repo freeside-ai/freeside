@@ -79,7 +79,19 @@ func (s *Service) convergeRunProjectionHealth(ctx context.Context, excluded []ex
 		if openRuns[run.id] {
 			continue
 		}
-		item, err := newRunProjectionHealthItem(run, s.now().UTC())
+		var names *domain.DisplayNames
+		if err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			names, err = tx.DisplayNamesFor(ctx, run.projectID, domain.Subject{
+				Type: domain.SubjectRun, ID: domain.SubjectID(run.id), RunID: &run.id,
+			})
+			return err
+		}); err != nil {
+			s.logger.Warn("run projection health converge: derive display names",
+				"run", run.id, "error", err)
+			continue
+		}
+		item, err := newRunProjectionHealthItem(run, s.now().UTC(), names)
 		if err != nil {
 			s.logger.Warn("run projection health converge: build item",
 				"run", run.id, "error", err)
@@ -131,7 +143,9 @@ func runProjectionHealthOpenItems(items []domain.AttentionItem) []domain.Attenti
 // is deliberately not embedded, only the trusted run coordinate the operator
 // inspects. Advisory posture surfaces the damaged run without gating unattended
 // admission for the whole system (a blocking posture would).
-func newRunProjectionHealthItem(run excludedRun, createdAt time.Time) (domain.AttentionItem, error) {
+func newRunProjectionHealthItem(
+	run excludedRun, createdAt time.Time, displayNames *domain.DisplayNames,
+) (domain.AttentionItem, error) {
 	runID := run.id
 	posture := domain.HealthPostureAdvisory
 	return domain.NewAttentionItem(domain.AttentionItemInput{
@@ -150,6 +164,10 @@ func newRunProjectionHealthItem(run excludedRun, createdAt time.Time) (domain.At
 				"Inspect the daemon logs for the integrity contradiction.",
 			runID),
 		RequestedDecision: []domain.Action{domain.ActionRunDoctor, domain.ActionAcknowledge},
+		HealthDiagnostic: &domain.HealthDiagnostic{
+			Code: "run_projection_contradiction", Impairs: domain.ImpairedCapabilityRunVisibility,
+		},
+		DisplayNames:      displayNames,
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt:         &createdAt,

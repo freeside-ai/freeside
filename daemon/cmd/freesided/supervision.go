@@ -205,10 +205,15 @@ func (d *daemon) fileDurableStop(ctx context.Context, cause error) error {
 		if d.now != nil {
 			createdAt = d.now().UTC()
 		}
+		subject := domain.Subject{Type: domain.SubjectSystem, ID: "daemon"}
+		displayNames, err := tx.DisplayNamesFor(ctx, "project-system", subject)
+		if err != nil {
+			return err
+		}
 		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 			ID:        domain.ItemID(fmt.Sprintf("%s%d", durableStopItemPrefix, state.Revision+1)),
 			ProjectID: domain.ProjectID("project-system"),
-			Subject:   domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+			Subject:   subject,
 			Type:      domain.AttentionSystemHealth,
 			Priority:  domain.PriorityHigh,
 			Reason:    durableStopReason(cause),
@@ -216,6 +221,10 @@ func (d *daemon) fileDurableStop(ctx context.Context, cause error) error {
 				domain.ActionAcknowledge,
 				domain.ActionRunDoctor,
 			},
+			HealthDiagnostic: &domain.HealthDiagnostic{
+				Code: "daemon_durable_stop", Impairs: domain.ImpairedCapabilityUnattendedAdmission,
+			},
+			DisplayNames:      displayNames,
 			ItemVersion:       1,
 			InterruptionClass: domain.InterruptionExceptional,
 			CreatedAt:         &createdAt,

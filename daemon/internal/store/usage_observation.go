@@ -5,10 +5,69 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
+
+// RunBillableCost is the render-only billable projection exposed outside the
+// observation reader. Unknown units make CompleteUnits false and are never
+// added to USDMicros.
+type RunBillableCost struct {
+	USDMicros     int64
+	InvocationIDs []domain.InvocationID
+	Present       bool
+	CompleteUnits bool
+}
+
+// ProjectRunBillableCost reads the isolated observation surface and returns
+// only the aggregate needed by attention-card presentation. It does not expose
+// raw usage rows to admission or policy code.
+func (s *Store) ProjectRunBillableCost(
+	ctx context.Context, runID domain.RunID,
+) (RunBillableCost, error) {
+	var observations []domain.UsageObservation
+	if err := s.ReadUsage(ctx, func(tx *UsageReadTx) error {
+		var err error
+		observations, err = tx.ListRunUsageObservations(ctx, runID)
+		return err
+	}); err != nil {
+		return RunBillableCost{}, err
+	}
+	totals, err := domain.ProjectRunUsage(observations)
+	if err != nil {
+		return RunBillableCost{}, err
+	}
+	projection := RunBillableCost{CompleteUnits: true}
+	for _, total := range totals {
+		if total.Kind != domain.UsageMeasurementBillableCost {
+			continue
+		}
+		projection.Present = true
+		if total.Unit != "usd_micros" {
+			projection.CompleteUnits = false
+			continue
+		}
+		if total.Quantity > math.MaxInt64-projection.USDMicros {
+			return RunBillableCost{}, domain.ErrUsageQuantityOverflow
+		}
+		projection.USDMicros += total.Quantity
+	}
+	invocations := make(map[domain.InvocationID]struct{})
+	for _, observation := range observations {
+		if observation.Kind == domain.UsageMeasurementBillableCost {
+			invocations[domain.InvocationID(observation.InvocationID)] = struct{}{}
+		}
+	}
+	projection.InvocationIDs = make([]domain.InvocationID, 0, len(invocations))
+	for invocationID := range invocations {
+		projection.InvocationIDs = append(projection.InvocationIDs, invocationID)
+	}
+	slices.Sort(projection.InvocationIDs)
+	return projection, nil
+}
 
 const (
 	appendUsageObservationSQL = `INSERT INTO usage_observations

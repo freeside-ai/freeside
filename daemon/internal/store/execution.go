@@ -373,6 +373,40 @@ func (tx *ReadTx) GetExecutionAdmissionRecord(
 // in insertion order. It reuses the same reconstruction function as the
 // single-record Get, so the re-gate cannot be missed on one path.
 func (tx *ReadTx) ListRunExecutionAdmissions(ctx context.Context, runID domain.RunID) ([]domain.ExecutionAdmission, error) {
+	return tx.listRunExecutionAdmissions(ctx, runID, true)
+}
+
+// ListRunExecutionAdmissionRecords returns immutable admission history without
+// re-applying current policy. Presentation and audit projections use it so a
+// later floor or trust-profile change cannot erase the fact that an invocation
+// was admitted and may have incurred cost.
+func (tx *ReadTx) ListRunExecutionAdmissionRecords(
+	ctx context.Context, runID domain.RunID,
+) ([]domain.ExecutionAdmission, error) {
+	rows, err := tx.tx.QueryContext(ctx, listExecutionAdmissionsSQL)
+	if err != nil {
+		return nil, fmt.Errorf("list execution admission records for run %q: %w", runID, err)
+	}
+	defer rows.Close() //nolint:errcheck // rows.Err below reports any deferred-close failure
+	var admissions []domain.ExecutionAdmission
+	for rows.Next() {
+		admission, err := scanExecutionAdmissionRecord(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list execution admission records for run %q: %w", runID, err)
+		}
+		if admission.RunID == runID {
+			admissions = append(admissions, admission)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list execution admission records for run %q: %w", runID, err)
+	}
+	return admissions, nil
+}
+
+func (tx *ReadTx) listRunExecutionAdmissions(
+	ctx context.Context, runID domain.RunID, currentPolicy bool,
+) ([]domain.ExecutionAdmission, error) {
 	rows, err := tx.tx.QueryContext(ctx, listRunExecutionAdmissionsSQL, runID)
 	if err != nil {
 		return nil, fmt.Errorf("list execution admissions for run %q: %w", runID, err)
@@ -380,7 +414,12 @@ func (tx *ReadTx) ListRunExecutionAdmissions(ctx context.Context, runID domain.R
 	defer rows.Close() //nolint:errcheck // rows.Err below reports any deferred-close failure
 	var admissions []domain.ExecutionAdmission
 	for rows.Next() {
-		admission, err := tx.scanExecutionAdmission(ctx, rows)
+		var admission domain.ExecutionAdmission
+		if currentPolicy {
+			admission, err = tx.scanExecutionAdmission(ctx, rows)
+		} else {
+			admission, err = scanExecutionAdmissionRecord(rows)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("list execution admissions for run %q: %w", runID, err)
 		}

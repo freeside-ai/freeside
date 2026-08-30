@@ -421,9 +421,18 @@ func (r *activeResourceReconciler) convergeCompletionForeclosure(
 
 	posture := domain.HealthPostureAdvisory
 	createdAt := r.now().UTC()
+	subject := domain.Subject{Type: domain.SubjectSystem, ID: "daemon"}
+	var displayNames *domain.DisplayNames
+	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		displayNames, err = tx.DisplayNamesFor(ctx, ready.ProjectID, subject)
+		return err
+	}); err != nil {
+		return err
+	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: itemID, ProjectID: ready.ProjectID,
-		Subject: domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Subject: subject,
 		Type:    domain.AttentionSystemHealth, Priority: domain.PriorityHigh,
 		Reason: fmt.Sprintf(
 			"Work unit %s cannot record completion: merged %s#%d has base %s and head %s; the bound candidate has base %s and head %s",
@@ -436,7 +445,11 @@ func (r *activeResourceReconciler) convergeCompletionForeclosure(
 			foreclosure.binding.HeadSHA,
 		),
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
-		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
+		HealthDiagnostic: &domain.HealthDiagnostic{
+			Code: "completion_foreclosed", Impairs: domain.ImpairedCapabilityNone,
+		},
+		DisplayNames: displayNames,
+		ItemVersion:  1, InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt: &createdAt,
 		Posture:   &posture, Status: domain.StatusOpen,
 	}, nil)
@@ -503,10 +516,18 @@ func (r *activeResourceReconciler) convergeObservationHealth(
 		}
 		return nil
 	}
-	var state store.ServerState
+	var (
+		state        store.ServerState
+		displayNames *domain.DisplayNames
+	)
+	subject := domain.Subject{Type: domain.SubjectSystem, ID: "daemon"}
 	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		state, err = tx.ServerState(ctx)
+		if err != nil {
+			return err
+		}
+		displayNames, err = tx.DisplayNamesFor(ctx, ready.ProjectID, subject)
 		return err
 	}); err != nil {
 		return err
@@ -518,7 +539,7 @@ func (r *activeResourceReconciler) convergeObservationHealth(
 			"%s%d", activeResourceObservationHealthPrefix(ready.ID), state.Revision+1,
 		)),
 		ProjectID: ready.ProjectID,
-		Subject:   domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Subject:   subject,
 		Type:      domain.AttentionSystemHealth, Priority: domain.PriorityHigh,
 		Reason: fmt.Sprintf(
 			"Active-resource observation for %s failed for %d consecutive passes",
@@ -530,7 +551,11 @@ func (r *activeResourceReconciler) convergeObservationHealth(
 			domain.ActionAcknowledge,
 			domain.ActionStopUnattended,
 		},
-		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		HealthDiagnostic: &domain.HealthDiagnostic{
+			Code: "active_resource_observation_failed", Impairs: domain.ImpairedCapabilityRunVisibility,
+		},
+		DisplayNames: displayNames,
+		ItemVersion:  1, InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt: &createdAt,
 		Posture:   &posture, Status: domain.StatusOpen,
 	}, nil)

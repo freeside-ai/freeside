@@ -486,6 +486,50 @@ func (tx *ReadTx) LatestReviewFailure(
 	return tx.GetReviewFailure(ctx, domain.InvocationID(id))
 }
 
+// ListReviewFailures returns one run's immutable failed routed-review
+// invocations in round order. It enumerates the complete table before
+// filtering, so a forged copied run key cannot hide a row from completeness.
+func (tx *ReadTx) ListReviewFailures(
+	ctx context.Context, runID domain.RunID,
+) ([]domain.ReviewFailure, error) {
+	rows, err := tx.tx.QueryContext(ctx, `SELECT invocation_id FROM review_failures
+		ORDER BY run_id, round, invocation_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list review failures %q: %w", runID, err)
+	}
+	var ids []domain.InvocationID
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("list review failures %q row %d: %w", runID, len(ids)+1, err)
+		}
+		ids = append(ids, domain.InvocationID(id))
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("list review failures %q: %w", runID, err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("list review failures %q: %w", runID, err)
+	}
+
+	failures := make([]domain.ReviewFailure, 0, len(ids))
+	for _, id := range ids {
+		failure, err := tx.GetReviewFailure(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("list review failures %q: %w", runID, err)
+		}
+		if failure.RunID == runID {
+			failures = append(failures, failure)
+		}
+	}
+	slices.SortFunc(failures, func(a, b domain.ReviewFailure) int {
+		return a.Round - b.Round
+	})
+	return failures, nil
+}
+
 const putReviewFailureSQL = `
 INSERT INTO review_failures (invocation_id, run_id, round, failure_class, observed_at, body_digest, body)
 VALUES (?, ?, ?, ?, ?, ?, ?)

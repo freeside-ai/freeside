@@ -532,6 +532,7 @@ func TestRunObservationTerminalFailure(t *testing.T) {
 		domain.MilestoneRunSubmitted,
 		domain.MilestoneInvocationAdmitted,
 		domain.MilestoneInvocationStarted,
+		domain.MilestoneExecutionOutcomeRecorded,
 		domain.MilestoneTerminalRecorded,
 	)
 	terminal := observation.Milestones[len(observation.Milestones)-1]

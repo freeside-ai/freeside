@@ -36,7 +36,11 @@ func newAttentionDiscussionFixture(
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "state.db")
-	st, err := store.Open(t.Context(), dbPath, store.Options{})
+	st, err := store.Open(t.Context(), dbPath, store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,17 +53,53 @@ func newAttentionDiscussionFixture(
 	now := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
 	service := signet.NewService(st, signet.WithClock(func() time.Time { return now }))
 	runID := domain.RunID("run-discussion")
+	attempt := domain.Attempt{
+		ID: "attempt-failed", StageID: "stage-implementation", Number: 1,
+		InvocationID: "inv-failed",
+	}
+	run := domain.Run{
+		ID: runID, ProjectID: "project-discussion",
+		SpecDigest:   domain.Digest(contentaddr.Sum([]byte("specification"))),
+		PolicyDigest: domain.Digest(contentaddr.Sum([]byte("policy"))),
+		Stages: []domain.Stage{{
+			ID: attempt.StageID, RunID: runID, Name: "implementation",
+			Attempts: []domain.Attempt{attempt},
+		}},
+	}
+	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: attempt.InvocationID, RunID: run.ID,
+		StageID: attempt.StageID, AttemptID: attempt.ID,
+		Backend:       "fresh_vm_read_only_volume_handoff",
+		Capabilities:  domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialLocalTrusted,
+		EgressProfile: domain.EgressCleanVerification,
+		ImageRef:      domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
+		SpecDigest:    run.SpecDigest, PolicyDigest: run.PolicyDigest,
+		InputDigest: domain.Digest(contentaddr.Sum([]byte("discussion input"))),
+		Base: domain.BaseRevision{
+			Repo: "owner/repo", RepositoryID: 1, BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
+		},
+		Workspace: "workspace-discussion", AdmittedAt: now.Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
 		if err := tx.PutDevice(t.Context(), domain.Device{
 			ID: "device-1", DisplayName: "Operator", Status: domain.DeviceActive, PairedAt: now,
 		}); err != nil {
 			return err
 		}
-		return tx.PutRun(t.Context(), domain.Run{
-			ID: runID, ProjectID: "project-discussion",
-			SpecDigest:   domain.Digest(contentaddr.Sum([]byte("specification"))),
-			PolicyDigest: domain.Digest(contentaddr.Sum([]byte("policy"))),
-			Stages:       []domain.Stage{},
+		if err := tx.PutRun(t.Context(), run); err != nil {
+			return err
+		}
+		if err := tx.RecordExecutionAdmission(t.Context(), admission); err != nil {
+			return err
+		}
+		return tx.RecordExecutionOutcome(t.Context(), domain.ExecutionOutcome{
+			InvocationID: attempt.InvocationID, AdmissionID: admission.ID,
+			Status: domain.ExecutionOutcomeFailed, Summary: "discussion fixture failure",
+			RecordedAt: now,
 		})
 	}); err != nil {
 		t.Fatal(err)
