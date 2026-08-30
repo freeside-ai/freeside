@@ -1618,7 +1618,7 @@ func (e *Engine) recordProductionDeliveryRefusal(
 		itemID := domain.ItemID("execution-failure-" + string(invocationID))
 		item, itemErr := tx.GetAttentionItem(ctx, itemID)
 		if errors.Is(itemErr, store.ErrNotFound) {
-			item, err = productionFailureItem(current, terminal, time.Now().UTC())
+			item, err = productionDeliveryRefusalItem(current, terminal, time.Now().UTC())
 			if err != nil {
 				return err
 			}
@@ -1628,7 +1628,7 @@ func (e *Engine) recordProductionDeliveryRefusal(
 		} else if itemErr != nil {
 			return itemErr
 		} else {
-			want, err := productionFailureItem(current, terminal, *item.CreatedAt)
+			want, err := productionDeliveryRefusalItem(current, terminal, *item.CreatedAt)
 			if err != nil {
 				return err
 			}
@@ -1643,9 +1643,8 @@ func (e *Engine) recordProductionDeliveryRefusal(
 // productionFailureItem is the §4 execution_failure notice for a production
 // stage that ended without an accepted result. Deterministic identity and
 // content, so a replayed pass converges instead of raising a second item.
-// Only acknowledge is offered: retry has no honoring machinery yet, and an
-// action the system cannot honour is worse than an absent one (the
-// waived-posture precedent).
+// Discuss and stop are executable now. Retry remains absent until its own
+// transaction lands.
 func productionFailureItem(
 	run domain.Run, terminal productionTerminalRecord, createdAt time.Time,
 ) (domain.AttentionItem, error) {
@@ -1661,11 +1660,25 @@ func productionFailureItem(
 		Subject:   domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
 		Type:      domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
 		Reason:            reason,
-		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
+		RequestedDecision: []domain.Action{domain.ActionDiscuss, domain.ActionStop},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt: &createdAt,
 		Status:    domain.StatusOpen,
 	}, nil)
+}
+
+// productionDeliveryRefusalItem preserves the acknowledge-only pre-start
+// notice. This boundary did not run a stage, so widening it to a conversation
+// requires a separate policy decision.
+func productionDeliveryRefusalItem(
+	run domain.Run, terminal productionTerminalRecord, createdAt time.Time,
+) (domain.AttentionItem, error) {
+	item, err := productionFailureItem(run, terminal, createdAt)
+	if err != nil {
+		return domain.AttentionItem{}, err
+	}
+	item.RequestedDecision = []domain.Action{domain.ActionAcknowledge}
+	return item, item.Validate()
 }
 
 // Quarantine reasons for a run whose durable production rows cannot be

@@ -11,11 +11,13 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 )
 
 const (
-	ClassifierSiteID = "finding_classifier"
-	DiagnosticSiteID = "execution_diagnostic"
+	ClassifierSiteID          = "finding_classifier"
+	DiagnosticSiteID          = "execution_diagnostic"
+	AttentionDiscussionSiteID = "attention_discussion"
 )
 
 // Ordinal is the landed materiality and confidence vocabulary (§7).
@@ -319,4 +321,101 @@ func (c *Client) DiagnoseExecutionFailure(ctx context.Context, input DiagnosticI
 		Producer: result.Producer, Kind: "diagnostic_claim", InputDigest: result.InputDigest,
 		Body: body, CreatedAt: created, RetainUntil: created.Add(c.sites[DiagnosticSiteID].Retention),
 	})
+}
+
+type discussionOutput struct {
+	Reply string `json:"reply"`
+}
+
+// DiscussionSite declares the advisory-only producer for attention-item
+// conversation replies. Its inputs are daemon facts and the immutable
+// conversation prefix; its output cannot feed policy or mutate a decision set.
+func DiscussionSite(budget Budget) Site {
+	return Site{
+		ID: AttentionDiscussionSiteID, Authority: AuthorityExplain,
+		Fields: []FieldPolicy{
+			{Name: "item_type", Sensitivity: SensitivityOperational},
+			{Name: "reason", Sensitivity: SensitivityRepository},
+			{Name: "card_facts", Sensitivity: SensitivityRepository},
+			{Name: "conversation", Sensitivity: SensitivityRepository},
+		},
+		FailSafe:  `{"reply":""}`,
+		Retention: 14 * 24 * time.Hour, Timeout: 30 * time.Second,
+		MaxInputBytes: 64 << 10, MaxOutputBytes: 8 << 10, MaxComputeUnits: 10_000,
+		Budget: budget, AuditEvery: 10,
+		ValidateOutput: func(data []byte) error {
+			var output discussionOutput
+			if err := decodeStrictObject(data, &output, 8<<10); err != nil {
+				return err
+			}
+			if strings.TrimSpace(output.Reply) == "" || len(output.Reply) > 8<<10 {
+				return errors.New("empty or oversized discussion reply")
+			}
+			if importer.ContainsSecret([]byte(output.Reply)) {
+				return errors.New("credential-shaped discussion reply")
+			}
+			return nil
+		},
+	}
+}
+
+// DiscussionInput contains daemon facts and one immutable conversation
+// prefix. The returned reply is written only to the conversation and the
+// advisory store by their respective callers.
+type DiscussionInput struct {
+	Project      string
+	RootLineage  string
+	ItemType     string
+	Reason       string
+	CardFacts    string
+	Conversation string
+}
+
+// DiscussAttentionItem produces and records one producer-labeled advisory
+// reply. Fallback remains explicit so the engine can use its fixed fail-safe
+// human-facing text while preserving the site's unavailable result.
+func (c *Client) DiscussAttentionItem(
+	ctx context.Context, input DiscussionInput,
+) (reply string, fallback bool, err error) {
+	fields := map[string]InputField{
+		"item_type":    {Value: input.ItemType, Sensitivity: SensitivityOperational},
+		"reason":       {Value: input.Reason, Sensitivity: SensitivityRepository},
+		"card_facts":   {Value: input.CardFacts, Sensitivity: SensitivityRepository},
+		"conversation": {Value: input.Conversation, Sensitivity: SensitivityRepository},
+	}
+	result, callErr := c.Call(ctx, AttentionDiscussionSiteID, input.Project, input.RootLineage, fields)
+	if callErr != nil && !result.Fallback {
+		return "", false, callErr
+	}
+	var output discussionOutput
+	if err := json.Unmarshal(result.Output, &output); err != nil {
+		return "", false, fmt.Errorf("decode validated discussion output: %w", err)
+	}
+	// The fixed fail-safe is engine-owned and must remain deliverable when the
+	// advisory store is the unavailable dependency that caused the fallback.
+	if result.Fallback {
+		return output.Reply, true, nil
+	}
+	inputDigest := result.InputDigest
+	if inputDigest == "" {
+		canonical, marshalErr := json.Marshal(map[string]string{
+			"item_type": input.ItemType, "reason": input.Reason,
+			"card_facts": input.CardFacts, "conversation": input.Conversation,
+		})
+		if marshalErr != nil {
+			return "", false, marshalErr
+		}
+		inputDigest = contentaddr.Sum(canonical)
+	}
+	created := c.now().UTC()
+	id := contentaddr.Sum([]byte("discussion_reply\x00" + AttentionDiscussionSiteID + "\x00" + inputDigest + "\x00" + created.Format(time.RFC3339Nano)))
+	if err := c.advisory.Append(ctx, advisory.Entry{
+		ID: id, RootLineage: input.RootLineage, Site: AttentionDiscussionSiteID,
+		Producer: result.Producer, Kind: "discussion_reply", InputDigest: inputDigest,
+		Body: output.Reply, CreatedAt: created,
+		RetainUntil: created.Add(c.sites[AttentionDiscussionSiteID].Retention),
+	}); err != nil {
+		return "", false, err
+	}
+	return output.Reply, result.Fallback, nil
 }

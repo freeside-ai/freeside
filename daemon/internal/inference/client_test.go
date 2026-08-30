@@ -43,14 +43,16 @@ func testClientWithCredential(
 	classifier := inference.ClassifierSite(testBudget(calls))
 	adjudicator := inference.AdjudicatorSite(testBudget(calls))
 	diagnostic := inference.DiagnosticSite(testBudget(calls))
+	discussion := inference.DiscussionSite(testBudget(calls))
 	classifier.AuditEvery = 1
 	adjudicator.AuditEvery = 1
 	diagnostic.AuditEvery = 1
+	discussion.AuditEvery = 1
 	statePath := filepath.Join(dir, "ledger.json")
 	client, err := inference.New(inference.Config{
 		StatePath: statePath,
 		Binding:   inference.Binding{Provider: "fake", Model: "test", Credential: inference.Secret(credential), Driver: driver},
-		Sites:     []inference.Site{classifier, adjudicator, diagnostic}, Advisory: store,
+		Sites:     []inference.Site{classifier, adjudicator, diagnostic, discussion}, Advisory: store,
 		Now: now,
 	})
 	if err != nil {
@@ -72,6 +74,7 @@ func TestClientReportsRegisteredSites(t *testing.T) {
 		inference.ClassifierSiteID,
 		inference.AdjudicatorSiteID,
 		inference.DiagnosticSiteID,
+		inference.AttentionDiscussionSiteID,
 	} {
 		if !client.SupportsSite(siteID) {
 			t.Fatalf("SupportsSite(%q) = false", siteID)
@@ -229,6 +232,99 @@ func TestDiagnosticIsAdvisoryOnlyAndUnavailableSkipsClaim(t *testing.T) {
 	}
 	if got, listErr := downStore.List(context.Background()); listErr != nil || len(got) != 0 {
 		t.Fatalf("inference-down claims = %#v, %v", got, listErr)
+	}
+}
+
+func TestDiscussionSiteAllowlistAdvisoryFallbackAndBudget(t *testing.T) {
+	site := inference.DiscussionSite(testBudget(2))
+	if site.Authority != inference.AuthorityExplain || site.MaxInputBytes != 64<<10 ||
+		site.MaxOutputBytes != 8<<10 || site.FailSafe != `{"reply":""}` {
+		t.Fatalf("discussion site contract = %+v", site)
+	}
+	wantFields := map[string]inference.Sensitivity{
+		"item_type":    inference.SensitivityOperational,
+		"reason":       inference.SensitivityRepository,
+		"card_facts":   inference.SensitivityRepository,
+		"conversation": inference.SensitivityRepository,
+	}
+	if len(site.Fields) != len(wantFields) {
+		t.Fatalf("discussion fields = %+v", site.Fields)
+	}
+	for _, field := range site.Fields {
+		if want, ok := wantFields[field.Name]; !ok || field.Sensitivity != want {
+			t.Fatalf("discussion field = %+v", field)
+		}
+	}
+
+	driver := fake.New()
+	driver.Script(inference.AttentionDiscussionSiteID, fake.Script{Response: inference.Response{
+		Output: []byte(`{"reply":"The recorded failure happened after the verification step."}`), ComputeUnits: 2,
+	}})
+	client, store, _ := testClient(t, driver, 2)
+	input := inference.DiscussionInput{
+		Project: "project-1", RootLineage: "run-1", ItemType: "execution_failure",
+		Reason: "verification exited 1", CardFacts: `{"step":"verify"}`,
+		Conversation: `{"messages":[{"author":"user","body":"What failed?"}]}`,
+	}
+	reply, fallback, err := client.DiscussAttentionItem(context.Background(), input)
+	if err != nil || fallback || reply != "The recorded failure happened after the verification step." {
+		t.Fatalf("discussion reply = %q, fallback = %t, error = %v", reply, fallback, err)
+	}
+	requests := driver.Requests()
+	if len(requests) != 1 || len(requests[0].Fields) != len(wantFields) ||
+		requests[0].Fields["item_type"] != input.ItemType ||
+		requests[0].Fields["reason"] != input.Reason ||
+		requests[0].Fields["card_facts"] != input.CardFacts ||
+		requests[0].Fields["conversation"] != input.Conversation {
+		t.Fatalf("discussion request = %#v", requests)
+	}
+	entries, err := store.List(context.Background())
+	if err != nil || len(entries) != 2 || entries[1].Kind != "discussion_reply" ||
+		entries[1].Producer != "fake/test" || entries[1].Body != reply {
+		t.Fatalf("discussion advisory entries = %#v, error = %v", entries, err)
+	}
+	driver.Script(inference.AttentionDiscussionSiteID, fake.Script{Response: inference.Response{
+		Output: []byte(fmt.Sprintf(`{"reply":"%s"}`, "ghp_"+strings.Repeat("a", 36))), ComputeUnits: 2,
+	}})
+	secretInput := input
+	secretInput.Conversation = `{"messages":[{"author":"user","body":"Could the reply contain a credential?"}]}`
+	if got, usedFallback, callErr := client.DiscussAttentionItem(context.Background(), secretInput); callErr != nil || !usedFallback || got != "" {
+		t.Fatalf("credential-shaped discussion reply = %q/%t, error = %v", got, usedFallback, callErr)
+	}
+	entries, err = store.List(context.Background())
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("credential-shaped advisory entries = %#v, error = %v", entries, err)
+	}
+
+	down, _, _ := testClient(t, nil, 1)
+	for call := 0; call < 3; call++ {
+		got, usedFallback, callErr := down.DiscussAttentionItem(context.Background(), input)
+		if callErr != nil || !usedFallback || got != "" {
+			t.Fatalf("fallback call %d = %q/%t, error = %v", call, got, usedFallback, callErr)
+		}
+	}
+
+	auditDriver := fake.New()
+	auditDriver.Script(inference.AttentionDiscussionSiteID, fake.Script{Response: inference.Response{
+		Output: []byte(`{"reply":"Provider output that cannot be audited."}`), ComputeUnits: 2,
+	}})
+	unavailable, err := inference.New(inference.Config{
+		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
+		Binding: inference.Binding{
+			Provider: "fake", Model: "test", Credential: "token-value", Driver: auditDriver,
+		},
+		Sites:    []inference.Site{inference.DiscussionSite(testBudget(1))},
+		Advisory: advisory.Unavailable(errors.New("advisory unavailable")),
+		Now:      func() time.Time { return time.Unix(100, 0).UTC() },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, usedFallback, callErr := unavailable.DiscussAttentionItem(context.Background(), input); callErr != nil || !usedFallback || got != "" {
+		t.Fatalf("advisory-unavailable fallback = %q/%t, error = %v", got, usedFallback, callErr)
+	}
+	if requests := auditDriver.Requests(); len(requests) != 1 {
+		t.Fatalf("audit-failing provider requests = %d, want 1", len(requests))
 	}
 }
 

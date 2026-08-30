@@ -527,6 +527,21 @@ func TestWorkflowEngineRejectsUnmarkedInvocation(t *testing.T) {
 	if len(stored.Run.Stages[0].Attempts) != 0 {
 		t.Fatalf("unmarked invocation was recorded: %#v", stored.Run.Stages[0].Attempts)
 	}
+	itemSnapshot, err := f.signet.GetAttentionItem(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("get lookalike item after reconcile: %v", err)
+	}
+	if itemSnapshot.Item.ConversationID == nil {
+		t.Fatal("lookalike discussion lost its conversation binding")
+	}
+	conversation, err := f.signet.GetConversation(ctx, *itemSnapshot.Item.ConversationID)
+	if err != nil {
+		t.Fatalf("get lookalike conversation: %v", err)
+	}
+	if conversation.Conversation.Status != domain.ConversationAwaitingAgent ||
+		len(conversation.Conversation.Messages) != 1 {
+		t.Fatalf("unmarked invocation appended a reply: %#v", conversation.Conversation)
+	}
 }
 
 // TestWorkflowEngineRejectsMalformedAttemptIdentity proves reconstructed Run
