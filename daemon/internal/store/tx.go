@@ -200,10 +200,10 @@ func (s *Store) ReadUsage(ctx context.Context, fn func(*UsageReadTx) error) erro
 	return nil
 }
 
-// newReadTx builds the read surface every transaction shares, carrying the
-// store's boundary policy. One constructor means a policy added to the store
-// reaches all three transaction kinds, instead of the two whoever adds it
-// remembers.
+// newReadTx builds the ordinary policy-bearing read surface. One constructor
+// means a policy added to the store reaches all three ordinary transaction
+// kinds, instead of the two whoever adds it remembers. ReadUsage stays
+// separate because observations are deliberately not policy inputs.
 func (s *Store) newReadTx(tx *sql.Tx) ReadTx {
 	return ReadTx{
 		tx: tx, approvedRecipes: s.approvedRecipes,
