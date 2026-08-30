@@ -32,13 +32,17 @@ const (
 )
 
 // AppendUsageObservations attributes and appends measurements for one stored
-// admission. An admission without an agent binding records nothing because it
-// cannot supply the required agent, launch, treatment, and pricing identity.
+// admission. A missing admission or one without an agent binding records
+// nothing because it cannot supply the required agent, launch, treatment, and
+// pricing identity.
 func (tx *InternalTx) AppendUsageObservations(
 	ctx context.Context,
 	invocationID domain.InvocationID,
 	measurements []exec.UsageMeasurement,
 ) (int, error) {
+	if len(measurements) == 0 {
+		return 0, nil
+	}
 	admission, err := tx.GetExecutionAdmissionRecord(ctx, invocationID)
 	if errors.Is(err, ErrNotFound) {
 		return 0, nil
