@@ -257,6 +257,33 @@ public enum AttentionFixtures {
                 provenance: claimProvenance
             )
         ]
+        // Section 9's agent_question card is self-contained: the question,
+        // what it blocks, and the enumerated options are one labeled claim,
+        // so answering never needs the transcript. The typed producer arrives
+        // with #990; the carrier is the claim contract that exists today.
+        if type == .agent_question {
+            let question =
+                "**Which order should the migration run in?** Implementation is "
+                + "blocked until this is answered; the implementer will not "
+                + "choose an order on its own.\n\n"
+                + "**Option A, store first, then API.** Existing rows migrate "
+                + "before any client can read them, and the API keeps the old "
+                + "shape for one release.\n\n"
+                + "**Option B, API first, then store.** Clients move "
+                + "immediately, and the daemon reads both shapes until the "
+                + "store migration lands."
+            // The question leads the claim register: it is the reason the
+            // card exists, and the screenshot claim is supporting context.
+            agentClaims.insert(
+                .init(
+                    label: "Question (unverified)",
+                    artifact_id: "art-question-\(key)",
+                    digest: MockContractValidation.sha256Digest(of: question),
+                    provenance: claimProvenance,
+                    text: .init(media_type: .text_sol_markdown, content: question)
+                ),
+                at: 0)
+        }
         if type != .system_health, type != .blocked {
             let summary =
                 switch type {

@@ -43,12 +43,17 @@ struct DecisionCardComposition: Equatable {
         }
         let claimModuleIndices = modules.indices.filter { modules[$0] == .claims }
         guard claimModuleIndices.count > 1 else { return claims }
+        let leads = moduleIndex == claimModuleIndices.first
         guard let prominentClaimIndex, claims.indices.contains(prominentClaimIndex) else {
-            return moduleIndex == claimModuleIndices.first ? [] : claims
+            // Without a caller-chosen prominent claim, the claim the operator
+            // can read leads and an attachment stays supporting context
+            // (plan §9). This is the split the macOS action region already
+            // applies, where text claims sit above the actions and attachment
+            // claims move to the inspector.
+            return claims.filter { ($0.text != nil) == leads }
         }
         return claims.enumerated().compactMap { index, claim in
-            (moduleIndex == claimModuleIndices.first) == (index == prominentClaimIndex)
-                ? claim : nil
+            leads == (index == prominentClaimIndex) ? claim : nil
         }
     }
 
@@ -105,8 +110,21 @@ struct DecisionCardComposition: Equatable {
                 ],
                 actionInsertionIndex: 2,
                 reviewingActionInsertionIndex: nil)
+        case .agent_question:
+            // Section 9: the question leads as a labeled agent claim, and it
+            // is answerable without the transcript, so the claim module runs
+            // ahead of the action region instead of sitting in the lower
+            // sections with the supporting context. The second claim module
+            // carries that supporting context, which stays below the actions.
+            return .init(
+                modules: [
+                    .recommendation, .claims, .factBlock, .summary, .claims, .evidence,
+                    .details,
+                ],
+                actionInsertionIndex: 2,
+                reviewingActionInsertionIndex: nil)
         case .spec_approval, .review_contradiction, .review_configuration,
-            .agent_question, .publish_blocked, .run_proposal:
+            .publish_blocked, .run_proposal:
             return .init(
                 modules: [.recommendation, .factBlock, .summary, .claims, .evidence, .details],
                 actionInsertionIndex: 1,

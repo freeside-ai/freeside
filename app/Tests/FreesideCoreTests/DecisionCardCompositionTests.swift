@@ -5,6 +5,50 @@ import Testing
 @testable import FreesideCore
 
 @Suite struct DecisionCardCompositionTests {
+    /// Section 9: an agent question is answerable on its own, so the labeled
+    /// question claim renders before the actions rather than in the lower
+    /// supporting sections.
+    @Test func agentQuestionLeadsWithItsLabeledClaim() {
+        let composition = DecisionCardComposition.forType(.agent_question)
+
+        #expect(
+            composition.modules == [
+                .recommendation, .claims, .factBlock, .summary, .claims, .evidence, .details,
+            ])
+        let claims = try? #require(composition.modules.firstIndex(of: .claims))
+        #expect(claims.map { $0 < composition.actionInsertionIndex } == true)
+        #expect(composition.claimsAreProminent(at: 1))
+        #expect(!composition.claimsAreProminent(at: 4))
+
+        // The question leads; its supporting attachment waits below the
+        // actions, so nothing unrelated stands between the ask and answering.
+        let question = AttentionFixtures.fixture(type: .agent_question).item
+        let lead = composition.claims(
+            from: question.agent_claims, at: 1, prominentClaimIndex: nil)
+        #expect(lead.map(\.label) == ["Question (unverified)"])
+        #expect(lead.allSatisfy { $0.text != nil })
+        let supporting = composition.claims(
+            from: question.agent_claims, at: 4, prominentClaimIndex: nil)
+        #expect(supporting.map(\.label) == ["screenshot"])
+        #expect(
+            !(lead + supporting).contains { $0.label == AgentClaimLabels.summary })
+    }
+
+    /// Section 9: a purely mechanical card carries daemon facts alone, so
+    /// neither type composes the summary layer and neither seeded item
+    /// carries agent prose for a card to render.
+    @Test func mechanicalCardsCarryNoAgentProse() {
+        for type in [Components.Schemas.AttentionType.system_health, .blocked] {
+            let composition = DecisionCardComposition.forType(type)
+            #expect(!composition.modules.contains(.summary))
+
+            let item = AttentionFixtures.fixture(type: type).item
+            #expect(composition.summaries(from: item.agent_claims).isEmpty)
+            #expect(!item.agent_claims.contains { $0.text != nil })
+            #expect(!AttentionDisplay.cardFacts(item).isEmpty)
+        }
+    }
+
     @Test func moduleVocabularyIsClosedAndShared() {
         #expect(
             Set(DecisionCardComposition.sharedModuleSet) == [
@@ -69,14 +113,16 @@ import Testing
             execution.claims(
                 from: executionClaims, at: 4, prominentClaimIndex: diagnosticIndex
             ).map(\.label) == ["screenshot"])
+        // With no caller-chosen prominent claim, the readable diagnostic claim
+        // still leads and the attachment stays supporting context.
         #expect(
             execution.claims(
                 from: executionClaims, at: 2, prominentClaimIndex: nil
-            ).isEmpty)
+            ).map(\.label) == ["Likely cause (unverified)"])
         #expect(
             execution.claims(
                 from: executionClaims, at: 5, prominentClaimIndex: nil
-            ) == executionClaims.filter { $0.label != AgentClaimLabels.summary })
+            ).map(\.label) == ["screenshot"])
         #expect(!DecisionCardComposition.forType(.review_dispute).claimsAreProminent(at: 3))
     }
 
