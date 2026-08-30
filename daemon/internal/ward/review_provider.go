@@ -72,6 +72,9 @@ type reviewProvider interface {
 	// message. Unstructured stderr and non-error envelopes are never authority
 	// for failure classification.
 	terminalFailureMessage(events []byte) string
+	// usageMeasurements extracts numbers-only telemetry from the provider's
+	// authenticated event stream. Providers without trusted telemetry return nil.
+	usageMeasurements(events []byte, observedAt time.Time) []exec.UsageMeasurement
 	// reviewContainerSuffix is the provider-specific review-container name suffix
 	// appended to the shared per-run prefix (Codex: "-codex").
 	reviewContainerSuffix() string
@@ -184,6 +187,10 @@ func (codexReviewProvider) reviewPrompt(req exec.ReviewRequest) string {
 
 func (codexReviewProvider) terminalFailureMessage(events []byte) string {
 	return codexTerminalFailureMessage(events)
+}
+
+func (codexReviewProvider) usageMeasurements([]byte, time.Time) []exec.UsageMeasurement {
+	return nil
 }
 
 func (codexReviewProvider) reviewContainerSuffix() string { return "-codex" }

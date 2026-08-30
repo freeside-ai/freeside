@@ -117,7 +117,7 @@ func (d *Driver) runPipeline(ctx context.Context, in intent) {
 	if errors.As(err, &rej) {
 		// The live session retains a failed terminal write for Inspect/Collect,
 		// so a returned error only needs logging here, matching d.commit.
-		if commitErr := d.commitRejection(ctx, log, in, status, rej); commitErr != nil {
+		if commitErr := d.commitRejection(ctx, log, in, status, rej, result.Usage); commitErr != nil {
 			log.Error("terminal result write failed; retained for retry",
 				"status", string(status), "error", commitErr)
 		}
@@ -125,7 +125,7 @@ func (d *Driver) runPipeline(ctx context.Context, in intent) {
 	}
 	d.commit(log, in.InvocationID, exec.StageResult{
 		InvocationID: in.InvocationID, Status: status,
-		Summary: truncateSummary(err.Error()),
+		Summary: truncateSummary(err.Error()), Usage: result.Usage,
 	})
 }
 
@@ -168,10 +168,11 @@ const rejectionDetailWriteTimeout = 15 * time.Second
 // store cannot hold shutdown open on an expendable write.
 func (d *Driver) commitRejection(
 	ctx context.Context, log *slog.Logger, in intent, status exec.Status, rej *definitiveRejection,
+	usage []exec.UsageMeasurement,
 ) error {
 	if err := d.commitResult(in.InvocationID, exec.StageResult{
 		InvocationID: in.InvocationID, Status: status,
-		Summary: truncateSummary(rej.Error()),
+		Summary: truncateSummary(rej.Error()), Usage: usage,
 	}); err != nil {
 		return err
 	}
@@ -291,6 +292,7 @@ type importOptionsProvider func(
 // asserting evidence that was not persisted.
 func (d *Driver) finish(
 	ctx context.Context, in intent, out exportOutcome, importOptions importOptionsProvider,
+	usage []exec.UsageMeasurement,
 ) (exec.StageResult, error) {
 	checkoutDir := filepath.Join(in.Seed+"-import", "checkout")
 	if err := os.RemoveAll(filepath.Dir(checkoutDir)); err != nil {
@@ -324,7 +326,6 @@ func (d *Driver) finish(
 	if err := d.validateImportFindings(in, imported, opts.Policy.FindingProfile); err != nil {
 		return exec.StageResult{}, err
 	}
-
 	manifestDigest, err := fileDigest(filepath.Join(out.dir, export.ManifestFilename))
 	if err != nil {
 		return exec.StageResult{}, err
@@ -379,9 +380,31 @@ func (d *Driver) finish(
 		InvocationID: in.InvocationID, Status: exec.StatusCompleted,
 		HeadSHA:   record.HeadSHA,
 		Artifacts: artifacts,
+		Usage:     usage,
 		Summary: fmt.Sprintf("Imported candidate %s over base %s.",
 			record.HeadSHA, record.ObservedBaseSHA),
 	}, nil
+}
+
+func (d *Driver) extractUsage(
+	in intent, out exportOutcome, observedAt time.Time,
+) []exec.UsageMeasurement {
+	if !out.evidencePresent {
+		return nil
+	}
+	extractor, ok := d.provider.(UsageExtractor)
+	if !ok {
+		return nil
+	}
+	usage, err := extractor.ExtractUsage(
+		filepath.Join(out.dir, export.EvidenceBlobsDirname), out.evidence, observedAt,
+	)
+	if err != nil {
+		d.logger.Warn("usage extraction failed; continuing without measurements",
+			"invocation", string(in.InvocationID), "error", err)
+		return nil
+	}
+	return usage
 }
 
 // completeReleasedExport owns the cleanup decision after the current-policy
@@ -433,7 +456,14 @@ func (d *Driver) completeReleasedExportWithOptions(
 	if err := validateReleasedExport(d.exportRoot, in, out); err != nil {
 		return classifyExportCompletion(out.dir, exec.StageResult{}, err)
 	}
-	result, err := d.finish(ctx, in, out, importOptions)
+	// The authenticated evidence is the usage source, so observe it before any
+	// candidate validation can reject the returned workspace. The terminal
+	// result persists this timestamp and makes later collection replay exact.
+	usage := d.extractUsage(in, out, d.now().UTC())
+	result, err := d.finish(ctx, in, out, importOptions, usage)
+	if err != nil {
+		result.Usage = usage
+	}
 	return classifyExportCompletion(out.dir, result, err)
 }
 
@@ -445,13 +475,13 @@ func classifyExportCompletion(
 		return result, nil
 	}
 	if errors.Is(err, errExportAuthorityConflict) {
-		return exec.StageResult{}, err
+		return result, err
 	}
 	if errors.Is(err, errDefinitiveExportRejection) {
 		removeReleasedExport(dir)
-		return exec.StageResult{}, err
+		return result, err
 	}
-	return exec.StageResult{}, fmt.Errorf("%w: finish released export: %w",
+	return result, fmt.Errorf("%w: finish released export: %w",
 		ErrRecoveryRetryable, err)
 }
 
@@ -1567,7 +1597,7 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 			if errors.As(err, &rej) {
 				if commitErr := d.commitRejection(ctx,
 					d.logger.With("invocation", string(in.InvocationID), "run", in.RunID),
-					in, status, rej); commitErr != nil {
+					in, status, rej, result.Usage); commitErr != nil {
 					return fmt.Errorf("%w: commit recovery result: %w",
 						ErrRecoveryRetryable, commitErr)
 				}
@@ -1575,7 +1605,7 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 			}
 			if commitErr := d.commitResult(in.InvocationID, exec.StageResult{
 				InvocationID: in.InvocationID, Status: status,
-				Summary: truncateSummary(err.Error()),
+				Summary: truncateSummary(err.Error()), Usage: result.Usage,
 			}); commitErr != nil {
 				return fmt.Errorf("%w: commit recovery result: %w",
 					ErrRecoveryRetryable, commitErr)
@@ -1770,7 +1800,7 @@ func (d *Driver) recoverExported(ctx context.Context, in intent) error {
 			if errors.As(err, &rej) {
 				if commitErr := d.commitRejection(ctx,
 					d.logger.With("invocation", string(in.InvocationID), "run", in.RunID),
-					in, exec.StatusFailed, rej); commitErr != nil {
+					in, exec.StatusFailed, rej, result.Usage); commitErr != nil {
 					// No live session retains a failed recovery write, so propagate
 					// it as retryable instead of returning success and letting the
 					// next pass record the rejected attempt as lost.

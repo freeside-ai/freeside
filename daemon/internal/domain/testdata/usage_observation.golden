@@ -1,0 +1,15 @@
+{
+  "invocation_id": "inv-1",
+  "run_id": "run-1",
+  "agent_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "launch_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "treatment_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "pricing_revision": "pricing-2026-01",
+  "source": "adapter_transcript",
+  "kind": "reported_usage",
+  "metric": "input_tokens",
+  "unit": "tokens",
+  "quantity": 100,
+  "sequence": 1,
+  "observed_at": "2026-01-02T03:04:05Z"
+}

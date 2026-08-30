@@ -150,7 +150,8 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 	if errors.Is(err, exec.ErrUnknownInvocation) {
 		if !w.now().Before(routed.CompletedAt.Add(shadowReviewWait)) {
 			return w.abandonTimedOutShadowReview(
-				ctx, task, routed.Round, id, authorityVerifier, "shadow review launch window expired",
+				ctx, task, routed.Round, id, authorityVerifier,
+				"shadow review launch window expired", nil,
 			)
 		}
 		retained, retainErr := w.ensureReviewWorkspace(ctx, id, workspace, task.HeadSHA)
@@ -177,7 +178,7 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 		if !w.now().Before(routed.CompletedAt.Add(shadowReviewWait)) {
 			return w.abandonTimedOutShadowReview(
 				ctx, task, routed.Round, id, authorityVerifier,
-				"shadow review exceeded its observation window",
+				"shadow review exceeded its observation window", nil,
 			)
 		}
 		return false, nil
@@ -185,7 +186,7 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 	if !w.now().Before(routed.CompletedAt.Add(shadowReviewWait)) {
 		return w.abandonTimedOutShadowReview(
 			ctx, task, routed.Round, id, authorityVerifier,
-			"shadow review completed outside its observation window",
+			"shadow review completed outside its observation window", nil,
 		)
 	}
 	result, err := w.shadowReviewSource.Poll(ctx, id)
@@ -193,7 +194,7 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 		if !w.now().Before(routed.CompletedAt.Add(shadowReviewWait)) {
 			return w.abandonTimedOutShadowReview(
 				ctx, task, routed.Round, id, authorityVerifier,
-				"shadow review result exceeded its observation window",
+				"shadow review result exceeded its observation window", nil,
 			)
 		}
 		return false, nil
@@ -209,14 +210,12 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 	if !w.now().Before(routed.CompletedAt.Add(shadowReviewWait)) {
 		return w.abandonTimedOutShadowReview(
 			ctx, task, routed.Round, id, authorityVerifier,
-			"shadow review result arrived outside its observation window",
+			"shadow review result arrived outside its observation window", result.Usage,
 		)
 	}
 	if err := result.Validate(); err != nil {
 		return w.abandonStartedShadowReview(ctx, task, routed.Round, id, authorityVerifier,
-			&exec.ReviewSourceFailure{
-				Class: domain.ReviewFailureContradiction, Err: err,
-			})
+			reviewSourceFailureWithUsage(domain.ReviewFailureContradiction, err, result.Usage))
 	}
 	if result.InvocationID != id || result.BaseSHA != routed.BaseSHA ||
 		result.HeadSHA != routed.HeadSHA ||
@@ -224,33 +223,32 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 		result.InstructionDigest != instructions.ResultDigest ||
 		result.CostOwner != w.shadowReviewCostOwner {
 		return w.abandonStartedShadowReview(ctx, task, routed.Round, id, authorityVerifier,
-			&exec.ReviewSourceFailure{
-				Class: domain.ReviewFailureContradiction, Err: domain.ErrParentKeyMismatch,
-			})
+			reviewSourceFailureWithUsage(
+				domain.ReviewFailureContradiction, domain.ErrParentKeyMismatch, result.Usage))
 	}
 	if err := authorityVerifier.VerifyRequestAuthority(ctx, id, authority); err != nil {
 		return w.abandonStartedShadowReview(
-			ctx, task, routed.Round, id, authorityVerifier, err,
+			ctx, task, routed.Round, id, authorityVerifier,
+			preserveReviewSourceFailureUsage(err, result.Usage),
 		)
 	}
 	if err := w.shadowReviewSource.Verify(ctx, id, routed.BaseSHA, routed.HeadSHA); err != nil {
 		return w.abandonStartedShadowReview(
-			ctx, task, routed.Round, id, authorityVerifier, err,
+			ctx, task, routed.Round, id, authorityVerifier,
+			preserveReviewSourceFailureUsage(err, result.Usage),
 		)
 	}
 	findingIDs := make([]domain.FindingID, len(result.Findings))
 	for i, finding := range result.Findings {
 		if finding.RunID != task.RunID {
 			return w.abandonStartedShadowReview(ctx, task, routed.Round, id, authorityVerifier,
-				&exec.ReviewSourceFailure{
-					Class: domain.ReviewFailureContradiction, Err: domain.ErrParentKeyMismatch,
-				})
+				reviewSourceFailureWithUsage(
+					domain.ReviewFailureContradiction, domain.ErrParentKeyMismatch, result.Usage))
 		}
 		if err := domain.ValidateShadowReviewFinding(domain.ShadowReviewClaudeLocal, finding); err != nil {
 			return w.abandonStartedShadowReview(ctx, task, routed.Round, id, authorityVerifier,
-				&exec.ReviewSourceFailure{
-					Class: domain.ReviewFailureContradiction, Err: err,
-				})
+				reviewSourceFailureWithUsage(
+					domain.ReviewFailureContradiction, err, result.Usage))
 		}
 		findingIDs[i] = finding.ID
 	}
@@ -270,11 +268,12 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 	})
 	if err != nil {
 		return w.abandonStartedShadowReview(ctx, task, routed.Round, id, authorityVerifier,
-			&exec.ReviewSourceFailure{
-				Class: domain.ReviewFailureContradiction, Err: err,
-			})
+			reviewSourceFailureWithUsage(domain.ReviewFailureContradiction, err, result.Usage))
 	}
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		if _, err := tx.AppendUsageObservations(ctx, id, result.Usage); err != nil {
+			return err
+		}
 		return tx.PutShadowReviewRecord(ctx, record, result.Findings)
 	}); err != nil {
 		return false, err
@@ -303,12 +302,11 @@ func (w *productionPublicationWorkflow) abandonTimedOutShadowReview(
 	id domain.InvocationID,
 	verifier exec.ReviewRequestAuthorityVerifier,
 	reason string,
+	usage []exec.UsageMeasurement,
 ) (bool, error) {
 	return w.abandonStartedShadowReview(ctx, task, round, id, verifier,
-		&exec.ReviewSourceFailure{
-			Class: domain.ReviewFailureTransient,
-			Err:   errors.New(reason),
-		})
+		reviewSourceFailureWithUsage(
+			domain.ReviewFailureTransient, errors.New(reason), usage))
 }
 
 func (w *productionPublicationWorkflow) abandonStartedShadowReview(
@@ -319,6 +317,14 @@ func (w *productionPublicationWorkflow) abandonStartedShadowReview(
 	verifier exec.ReviewRequestAuthorityVerifier,
 	cause error,
 ) (bool, error) {
+	if usage := exec.ReviewSourceFailureUsage(cause); len(usage) > 0 {
+		if err := w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			_, err := tx.AppendUsageObservations(ctx, id, usage)
+			return err
+		}); err != nil {
+			return false, err
+		}
+	}
 	// The authority verifier's contract includes durable teardown before it
 	// rejects a mismatched authority. Use that existing source boundary to reap
 	// a credential-bearing topology instead of merely ceasing to poll it.

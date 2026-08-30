@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -600,6 +601,63 @@ func TestClaudeReviewCollectionEnvelope(t *testing.T) {
 				t.Errorf("terminal envelope = %+v, want %s failure", failed, tc.want)
 			}
 		})
+	}
+}
+
+func TestClaudeReviewCollectionCarriesUsage(t *testing.T) {
+	source := testClaudeReviewSourceForCollection()
+	id := domain.InvocationID("review-run-1-1")
+	req := exec.ReviewRequest{
+		RunID: "run-1", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
+	}
+	outcome := source.normalizeCollection(id, req, CodexReviewCollection{
+		Events: []byte(`{"type":"result","total_cost_usd":0.0012345,"usage":{"input_tokens":11,"output_tokens":7}}` + "\n"),
+		Result: []byte(`{"findings":[]}`),
+	})
+	if outcome.Result == nil {
+		t.Fatalf("Claude envelope produced no result: %+v", outcome)
+	}
+	want := []exec.UsageMeasurement{
+		{
+			Source: domain.UsageSourceReviewSource, Kind: domain.UsageMeasurementBillableCost,
+			Metric: "total_cost", Unit: "usd_micros", Quantity: 1235, Sequence: 1, ObservedAt: codexReviewEpoch,
+		},
+		{
+			Source: domain.UsageSourceReviewSource, Kind: domain.UsageMeasurementReportedUsage,
+			Metric: "input_tokens", Unit: "tokens", Quantity: 11, Sequence: 1, ObservedAt: codexReviewEpoch,
+		},
+		{
+			Source: domain.UsageSourceReviewSource, Kind: domain.UsageMeasurementReportedUsage,
+			Metric: "output_tokens", Unit: "tokens", Quantity: 7, Sequence: 1, ObservedAt: codexReviewEpoch,
+		},
+	}
+	if !reflect.DeepEqual(outcome.Result.Usage, want) {
+		t.Fatalf("usage = %#v, want %#v", outcome.Result.Usage, want)
+	}
+	for _, failed := range []CodexReviewCollection{
+		{
+			Events:     []byte(`{"type":"result","is_error":true,"result":"quota exceeded","total_cost_usd":0.0012345,"usage":{"input_tokens":11,"output_tokens":7}}` + "\n"),
+			ExitStatus: 1,
+		},
+		{
+			Events: []byte(`{"type":"result","total_cost_usd":0.0012345,"usage":{"input_tokens":11,"output_tokens":7}}` + "\n"),
+			Result: []byte(`{"findings":`),
+		},
+	} {
+		failedOutcome := source.normalizeCollection(id, req, failed)
+		if failedOutcome.Result != nil || !reflect.DeepEqual(failedOutcome.Usage, want) {
+			t.Fatalf("failed outcome = %#v, want carried usage %#v", failedOutcome, want)
+		}
+		journal := &fakeCodexReviewJournal{
+			outcomes: map[string]CodexReviewSourceOutcome{string(id): failedOutcome},
+			ready:    map[string]bool{string(id): true},
+		}
+		source.cfg.Journal = journal
+		_, err := source.Poll(t.Context(), id)
+		var sourceFailure *exec.ReviewSourceFailure
+		if !errors.As(err, &sourceFailure) || !reflect.DeepEqual(sourceFailure.Usage, want) {
+			t.Fatalf("Poll failure = %v (%#v), want carried usage %#v", err, sourceFailure, want)
+		}
 	}
 }
 

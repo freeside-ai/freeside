@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -104,6 +106,51 @@ func TestEvidenceIsPersistedBeforeTheExportIsRemoved(t *testing.T) {
 	}
 	if _, ok := artifacts.blobs[digest]; !ok {
 		t.Fatal("evidence did not survive removal of the export directory")
+	}
+}
+
+func TestUsageExtractorReceivesAuthenticatedEvidence(t *testing.T) {
+	t.Parallel()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	dir := t.TempDir()
+	evidence := export.EvidenceManifest{Version: export.EvidenceManifestVersion, Entries: []export.EvidenceEntry{}}
+	want := []exec.UsageMeasurement{{
+		Source: domain.UsageSourceAdapterTranscript,
+		Kind:   domain.UsageMeasurementReportedUsage,
+		Metric: "input_tokens", Unit: "tokens", Quantity: 12,
+		Sequence: 1, ObservedAt: fixedNow,
+	}}
+	d.provider = testProvider{usageExtractor: func(
+		evidenceDir string, got export.EvidenceManifest, observedAt time.Time,
+	) ([]exec.UsageMeasurement, error) {
+		if evidenceDir != filepath.Join(dir, export.EvidenceBlobsDirname) {
+			t.Fatalf("evidence dir = %q", evidenceDir)
+		}
+		if !reflect.DeepEqual(got, evidence) || !observedAt.Equal(fixedNow) {
+			t.Fatalf("extractor got evidence=%#v observed_at=%v", got, observedAt)
+		}
+		return want, nil
+	}}
+	got := d.extractUsage(intent{InvocationID: testInvoke}, exportOutcome{
+		dir: dir, evidence: evidence, evidencePresent: true,
+	}, fixedNow)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("usage = %#v, want %#v", got, want)
+	}
+}
+
+func TestUsageExtractorFailureDoesNotFailTheStage(t *testing.T) {
+	t.Parallel()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	d.provider = testProvider{usageExtractor: func(
+		string, export.EvidenceManifest, time.Time,
+	) ([]exec.UsageMeasurement, error) {
+		return nil, errors.New("telemetry unreadable")
+	}}
+	if got := d.extractUsage(intent{InvocationID: testInvoke}, exportOutcome{
+		dir: t.TempDir(), evidencePresent: true,
+	}, fixedNow); got != nil {
+		t.Fatalf("usage = %#v, want nil after optional extraction failure", got)
 	}
 }
 
@@ -388,9 +435,19 @@ func TestDefinitiveExportRejectionConsumesReleasedDirectory(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	rejected := fmt.Errorf("%w: malformed manifest", errDefinitiveExportRejection)
+	wantUsage := []exec.UsageMeasurement{{
+		Source: domain.UsageSourceAdapterTranscript,
+		Kind:   domain.UsageMeasurementReportedUsage,
+		Metric: "input_tokens", Unit: "tokens", Quantity: 12,
+		Sequence: 1, ObservedAt: fixedNow,
+	}}
 
-	if _, err := classifyExportCompletion(dir, exec.StageResult{}, rejected); !errors.Is(err, rejected) {
+	result, err := classifyExportCompletion(dir, exec.StageResult{Usage: wantUsage}, rejected)
+	if !errors.Is(err, rejected) {
 		t.Fatalf("completion error = %v, want definitive rejection", err)
+	}
+	if !reflect.DeepEqual(result.Usage, wantUsage) {
+		t.Fatalf("rejected result usage = %#v, want %#v", result.Usage, wantUsage)
 	}
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("definitively rejected directory still exists: %v", err)
@@ -665,7 +722,13 @@ func TestCommitRejectionWritesOutcomeThenDetail(t *testing.T) {
 		ObservedBaseSHA: testBase.BaseSHA,
 	})
 	rej := newDefinitiveRejection([]importer.Finding{{Kind: importer.FindingSecret, Path: "config.yaml"}}, nil)
-	if err := d.commitRejection(ctx, d.logger, in, exec.StatusFailed, rej); err != nil {
+	wantUsage := []exec.UsageMeasurement{{
+		Source: domain.UsageSourceAdapterTranscript,
+		Kind:   domain.UsageMeasurementReportedUsage,
+		Metric: "input_tokens", Unit: "tokens", Quantity: 12,
+		Sequence: 1, ObservedAt: fixedNow,
+	}}
+	if err := d.commitRejection(ctx, d.logger, in, exec.StatusFailed, rej, wantUsage); err != nil {
 		t.Fatalf("commitRejection: %v", err)
 	}
 
@@ -679,6 +742,13 @@ func TestCommitRejectionWritesOutcomeThenDetail(t *testing.T) {
 	}
 	if _, found, _ := exports.LookupExportRejection(ctx, testInvoke); !found {
 		t.Fatal("commitRejection did not record the diagnostic detail")
+	}
+	collected, err := d.Collect(ctx, testInvoke)
+	if err != nil {
+		t.Fatalf("Collect rejected result: %v", err)
+	}
+	if !reflect.DeepEqual(collected.Usage, wantUsage) {
+		t.Fatalf("collected rejected usage = %#v, want %#v", collected.Usage, wantUsage)
 	}
 }
 
@@ -698,7 +768,7 @@ func TestCommitRejectionOutcomeSurvivesDetailFailure(t *testing.T) {
 		ObservedBaseSHA: testBase.BaseSHA,
 	})
 	rej := newDefinitiveRejection([]importer.Finding{{Kind: importer.FindingSecret, Path: "config.yaml"}}, nil)
-	if err := d.commitRejection(ctx, d.logger, in, exec.StatusFailed, rej); err != nil {
+	if err := d.commitRejection(ctx, d.logger, in, exec.StatusFailed, rej, nil); err != nil {
 		t.Fatalf("commitRejection: %v", err)
 	}
 
@@ -730,7 +800,7 @@ func TestCommitRejectionDetailSurvivesCanceledRunContext(t *testing.T) {
 	cancel() // the run context is already canceled (daemon shutdown)
 	rej := newDefinitiveRejection([]importer.Finding{{Kind: importer.FindingSecret, Path: "config.yaml"}}, nil)
 
-	if err := d.commitRejection(runCtx, d.logger, in, exec.StatusCanceled, rej); err != nil {
+	if err := d.commitRejection(runCtx, d.logger, in, exec.StatusCanceled, rej, nil); err != nil {
 		t.Fatalf("commitRejection: %v", err)
 	}
 

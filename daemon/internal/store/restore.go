@@ -19,11 +19,19 @@ var safeTableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 const outboxPublicationInsertTrigger = "outbox_publication_intent_requires_current_insert"
 
+const usageObservationsDeleteTrigger = "usage_observations_append_only_delete"
+
 const canonicalOutboxPublicationInsertTriggerSQL = `CREATE TRIGGER outbox_publication_intent_requires_current_insert
 BEFORE INSERT ON outbox
 WHEN NEW.kind = 'publish.publication' AND NEW.payload_version != 2
 BEGIN
     SELECT RAISE(ABORT, 'new publication intents require current payload version');
+END`
+
+const canonicalUsageObservationsDeleteTriggerSQL = `CREATE TRIGGER usage_observations_append_only_delete
+BEFORE DELETE ON usage_observations
+BEGIN
+    SELECT RAISE(ABORT, 'usage observations are append-only');
 END`
 
 // Checkpoint writes a consistent snapshot of the live database to path: a
@@ -158,6 +166,10 @@ func (s *Store) restoreFromSource(
 	if err != nil {
 		return ServerState{}, err
 	}
+	usageDeleteTriggerSQL, err := suspendUsageDeleteTrigger(ctx, tx)
+	if err != nil {
+		return ServerState{}, err
+	}
 
 	for _, t := range tables {
 		// t is a schema identifier validated by restorableTables and cannot be
@@ -171,6 +183,9 @@ func (s *Store) restoreFromSource(
 		}
 	}
 	if err := restorePublicationInsertTrigger(ctx, tx, publicationInsertTriggerSQL); err != nil {
+		return ServerState{}, err
+	}
+	if err := restoreUsageDeleteTrigger(ctx, tx, usageDeleteTriggerSQL); err != nil {
 		return ServerState{}, err
 	}
 	// Overwrite the epoch the checkpoint carried with a fresh one, in the same
@@ -260,6 +275,10 @@ func (s *Store) restoreFromDatabase(
 	if err != nil {
 		return ServerState{}, err
 	}
+	usageDeleteTriggerSQL, err := suspendUsageDeleteTrigger(ctx, tx)
+	if err != nil {
+		return ServerState{}, err
+	}
 	for _, table := range tables {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM "`+table+`"`); err != nil { //nolint:gosec // validated schema identifier
 			return ServerState{}, fmt.Errorf("restore: clear %s: %w", table, err)
@@ -269,6 +288,9 @@ func (s *Store) restoreFromDatabase(
 		}
 	}
 	if err := restorePublicationInsertTrigger(ctx, tx, publicationInsertTriggerSQL); err != nil {
+		return ServerState{}, err
+	}
+	if err := restoreUsageDeleteTrigger(ctx, tx, usageDeleteTriggerSQL); err != nil {
 		return ServerState{}, err
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -311,6 +333,33 @@ func suspendPublicationInsertTrigger(ctx context.Context, tx *sql.Tx) (string, e
 func restorePublicationInsertTrigger(ctx context.Context, tx *sql.Tx, definition string) error {
 	if _, err := tx.ExecContext(ctx, definition); err != nil {
 		return fmt.Errorf("restore: reinstate publication insert guard: %w", err)
+	}
+	return nil
+}
+
+// suspendUsageDeleteTrigger opens the restore-only exception to the
+// append-only delete guard. The complete same-schema copy is atomic, and a
+// rollback restores both the dropped trigger and the pre-restore rows.
+func suspendUsageDeleteTrigger(ctx context.Context, tx *sql.Tx) (string, error) {
+	var definition string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?`,
+		usageObservationsDeleteTrigger,
+	).Scan(&definition); err != nil {
+		return "", fmt.Errorf("restore: read usage delete guard: %w", err)
+	}
+	if definition != canonicalUsageObservationsDeleteTriggerSQL {
+		return "", fmt.Errorf("restore: usage delete guard definition is not canonical")
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TRIGGER "`+usageObservationsDeleteTrigger+`"`); err != nil {
+		return "", fmt.Errorf("restore: suspend usage delete guard: %w", err)
+	}
+	return definition, nil
+}
+
+func restoreUsageDeleteTrigger(ctx context.Context, tx *sql.Tx, definition string) error {
+	if _, err := tx.ExecContext(ctx, definition); err != nil {
+		return fmt.Errorf("restore: reinstate usage delete guard: %w", err)
 	}
 	return nil
 }

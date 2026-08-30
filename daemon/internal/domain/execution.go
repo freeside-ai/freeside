@@ -183,8 +183,10 @@ type ExecutionAdmission struct {
 // closure fragment carries an image reference. This value is the authority
 // the derivations flow from.
 type AdmissionAgentBinding struct {
-	AgentDigest  Digest `json:"agent_digest"`
-	LaunchDigest Digest `json:"launch_digest"`
+	AgentDigest     Digest `json:"agent_digest"`
+	LaunchDigest    Digest `json:"launch_digest"`
+	TreatmentDigest Digest `json:"treatment_digest"`
+	PricingRevision string `json:"pricing_revision"`
 	// LineupRevision is the control-plane revision whose lineup (or recorded
 	// alternate-agent card) named the agent digest for the role.
 	LineupRevision       Digest             `json:"lineup_revision"`
@@ -205,11 +207,15 @@ type AdmissionAgentBinding struct {
 func (b AdmissionAgentBinding) Validate() error {
 	for field, digest := range map[string]Digest{
 		"agent_digest": b.AgentDigest, "launch_digest": b.LaunchDigest,
-		"lineup_revision": b.LineupRevision, "store_manifest_digest": b.StoreManifestDigest,
+		"treatment_digest": b.TreatmentDigest,
+		"lineup_revision":  b.LineupRevision, "store_manifest_digest": b.StoreManifestDigest,
 	} {
 		if !contentaddr.Valid(string(digest)) {
 			return fmt.Errorf("admission agent binding %s %q: %w", field, digest, ErrInvalidDigest)
 		}
+	}
+	if b.PricingRevision == "" {
+		return fmt.Errorf("admission agent binding pricing_revision: %w", ErrEmptyField)
 	}
 	if b.EnrollmentID == "" {
 		return fmt.Errorf("admission agent binding enrollment_id: %w", ErrEmptyID)

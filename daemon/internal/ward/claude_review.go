@@ -96,6 +96,14 @@ func (claudeReviewProvider) terminalFailureMessage(events []byte) string {
 	return message
 }
 
+func (claudeReviewProvider) usageMeasurements(
+	events []byte, observedAt time.Time,
+) []exec.UsageMeasurement {
+	return exec.ExtractClaudeUsage(
+		events, observedAt, domain.UsageSourceReviewSource, RejectDuplicateJSONKeys,
+	)
+}
+
 func (claudeReviewProvider) reviewContainerSuffix() string { return "-claude" }
 
 // legacyTopologyVersions is nil: the Claude review topology has no prior

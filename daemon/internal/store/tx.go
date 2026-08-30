@@ -74,15 +74,17 @@ func (tx *ReadTx) AuthorizeIndependentReviewRecipe(recipe domain.Digest) {
 }
 
 // InternalTx is the transaction handle passed to WriteInternal callbacks:
-// everything a ReadTx can do, plus the inbox/outbox queue methods. It
+// everything a ReadTx can do, plus non-synchronized bookkeeping writes such
+// as inbox/outbox state and append-only usage observations. It
 // deliberately exposes no Put method, so a transaction that does not bump the
 // revision cannot mutate any state exposed through synchronization (§5.14):
 // the Put methods live only on WriteTx, unreachable from here at compile
 // time, not by convention. Only valid until the callback returns.
 //
-// Only non-synchronized bookkeeping (inbox, outbox, dispatch) belongs on this
-// type; a write to any entity carrying as_of_revision must live on WriteTx,
-// or the §5.14 guarantee is broken without a revision bump.
+// Only non-synchronized bookkeeping (inbox, outbox, dispatch, observation-only
+// usage telemetry) belongs on this type; a write to any entity carrying
+// as_of_revision must live on WriteTx, or the §5.14 guarantee is broken without
+// a revision bump.
 type InternalTx struct {
 	ReadTx
 }
@@ -139,9 +141,10 @@ func (s *Store) Write(ctx context.Context, fn func(*WriteTx) error) error {
 }
 
 // WriteInternal runs fn in a write transaction without a revision bump, for
-// bookkeeping invisible to clients (inbox intake, dispatch status). Its
-// callback receives an InternalTx, which exposes no Put method, so a
-// non-bumping transaction cannot mutate synchronized state even by mistake.
+// bookkeeping invisible to clients (inbox intake, dispatch status, usage
+// observations). Its callback receives an InternalTx, which exposes no Put
+// method, so a non-bumping transaction cannot mutate synchronized state even
+// by mistake.
 func (s *Store) WriteInternal(ctx context.Context, fn func(*InternalTx) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -179,10 +182,28 @@ func (s *Store) Read(ctx context.Context, fn func(*ReadTx) error) error {
 	return nil
 }
 
-// newReadTx builds the read surface every transaction shares, carrying the
-// store's boundary policy. One constructor means a policy added to the store
-// reaches all three transaction kinds, instead of the two whoever adds it
-// remembers.
+// ReadUsage runs fn against the dedicated observation-only usage surface.
+// Ordinary ReadTx callbacks cannot access these rows, keeping usage out of
+// admission and policy decisions by construction.
+func (s *Store) ReadUsage(ctx context.Context, fn func(*UsageReadTx) error) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("begin usage read: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := fn(&UsageReadTx{tx: tx}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit usage read: %w", err)
+	}
+	return nil
+}
+
+// newReadTx builds the ordinary policy-bearing read surface. One constructor
+// means a policy added to the store reaches all three ordinary transaction
+// kinds, instead of the two whoever adds it remembers. ReadUsage stays
+// separate because observations are deliberately not policy inputs.
 func (s *Store) newReadTx(tx *sql.Tx) ReadTx {
 	return ReadTx{
 		tx: tx, approvedRecipes: s.approvedRecipes,

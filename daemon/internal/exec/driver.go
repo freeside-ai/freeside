@@ -196,6 +196,8 @@ type StageResult struct {
 	Artifacts []domain.Digest `json:"artifacts"`
 	// Summary is the driver's short human-readable outcome description.
 	Summary string `json:"summary"`
+	// Usage carries numbers-only route telemetry. Nil means not observed.
+	Usage []UsageMeasurement `json:"usage"`
 }
 
 // Validate reports whether the result is well-formed: a result must be
@@ -214,6 +216,11 @@ func (r StageResult) Validate() error {
 	for i, d := range r.Artifacts {
 		if d == "" {
 			return fmt.Errorf("stage result artifacts[%d]: %w", i, domain.ErrEmptyID)
+		}
+	}
+	for i, measurement := range r.Usage {
+		if err := measurement.Validate(); err != nil {
+			return fmt.Errorf("stage result usage[%d]: %w", i, err)
 		}
 	}
 	return nil

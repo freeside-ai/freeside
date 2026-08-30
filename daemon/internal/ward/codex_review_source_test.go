@@ -1218,8 +1218,9 @@ func TestCodexReviewSourcePersistsInvalidCollectedResultAndCleans(t *testing.T) 
 
 func TestCodexReviewSourcePersistsMalformedRawOutputAndCleans(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		entries []tarEntry
+		name      string
+		entries   []tarEntry
+		wantUsage bool
 	}{
 		{
 			name: "missing status",
@@ -1245,8 +1246,10 @@ func TestCodexReviewSourcePersistsMalformedRawOutputAndCleans(t *testing.T) {
 			name: "missing result",
 			entries: []tarEntry{
 				{name: strings.TrimPrefix(codexReviewStatusPath, "/"), body: []byte("0\n")},
-				{name: strings.TrimPrefix(codexReviewEventsPath, "/"), body: []byte("terminal\n")},
+				{name: strings.TrimPrefix(codexReviewEventsPath, "/"), body: []byte(
+					`{"type":"result","total_cost_usd":0.001,"usage":{"input_tokens":11}}` + "\n")},
 			},
+			wantUsage: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1273,6 +1276,11 @@ func TestCodexReviewSourcePersistsMalformedRawOutputAndCleans(t *testing.T) {
 				t.Fatal(err)
 			}
 			fx.rt.exportTarPath = buildTar(t, tc.entries)
+			if tc.wantUsage {
+				// The shared lifecycle has already launched and authenticated the
+				// fixture. Select the Claude parser only for terminal observation.
+				source.cfg.provider = claudeReviewProvider{}
+			}
 			binding, err := journal.GetCodexReviewBinding(ctx, string(id))
 			if err != nil {
 				t.Fatal(err)
@@ -1306,6 +1314,9 @@ func TestCodexReviewSourcePersistsMalformedRawOutputAndCleans(t *testing.T) {
 				outcome.FailureClass != domain.ReviewFailureContradiction ||
 				!strings.Contains(outcome.Failure, "invalid raw output") {
 				t.Fatalf("persisted malformed-output outcome = %#v, ready=%v, %v", outcome, ready, err)
+			}
+			if tc.wantUsage && (len(outcome.Usage) == 0 || outcome.Usage[0].ObservedAt != codexReviewEpoch) {
+				t.Fatalf("missing-result usage = %#v, want terminal Claude usage", outcome.Usage)
 			}
 			containers, _ := fx.rt.ListContainers(ctx)
 			volumes, _ := fx.rt.ListVolumes(ctx)

@@ -18,6 +18,7 @@ import (
 type ReviewSourceFailure struct {
 	Class domain.ReviewFailureClass
 	Err   error
+	Usage []UsageMeasurement
 }
 
 func (e *ReviewSourceFailure) Error() string {
@@ -34,6 +35,17 @@ func ClassifyReviewSourceFailure(err error) domain.ReviewFailureClass {
 		return failure.Class
 	}
 	return domain.ReviewFailureContradiction
+}
+
+// ReviewSourceFailureUsage returns numbers-only telemetry carried by a
+// terminal source failure. Nil keeps an unobserved failure distinct from an
+// observed zero measurement.
+func ReviewSourceFailureUsage(err error) []UsageMeasurement {
+	var failure *ReviewSourceFailure
+	if errors.As(err, &failure) {
+		return slices.Clone(failure.Usage)
+	}
+	return nil
 }
 
 // ReviewSource requests and reconciles external reviews (plan §5.3).
@@ -220,6 +232,7 @@ type ReviewResult struct {
 	CompletedAt         time.Time           `json:"completed_at"`
 	CompletionEvidence  domain.Digest       `json:"completion_evidence"`
 	Findings            []domain.Finding    `json:"findings"`
+	Usage               []UsageMeasurement  `json:"usage"`
 }
 
 // Validate reports whether the result is well-formed: reconcilable
@@ -265,6 +278,11 @@ func (r ReviewResult) Validate() error {
 				i, f.ID, domain.ErrFindingsNotCanonical)
 		}
 		seen[f.ID] = struct{}{}
+	}
+	for i, measurement := range r.Usage {
+		if err := measurement.Validate(); err != nil {
+			return fmt.Errorf("review result usage[%d]: %w", i, err)
+		}
 	}
 	return nil
 }
