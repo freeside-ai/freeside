@@ -178,6 +178,24 @@ func TestAppendUsageObservationsUsesHistoricalAdmissionAttribution(t *testing.T)
 	}
 }
 
+func TestAppendUsageObservationsWithoutAdmissionWritesNothing(t *testing.T) {
+	t.Parallel()
+	s := openAgentAdmissionStore(t)
+	var inserted int
+	if err := s.Write(context.Background(), func(tx *WriteTx) error {
+		var err error
+		inserted, err = tx.AppendUsageObservations(
+			context.Background(), "inv-unattributed", []exec.UsageMeasurement{usageMeasurementFixture()},
+		)
+		return err
+	}); err != nil {
+		t.Fatalf("append without admission: %v", err)
+	}
+	if inserted != 0 {
+		t.Fatalf("inserted = %d, want 0", inserted)
+	}
+}
+
 func TestUsageObservationsAreStructurallyAppendOnly(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

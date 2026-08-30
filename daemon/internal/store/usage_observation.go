@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -39,6 +40,9 @@ func (tx *InternalTx) AppendUsageObservations(
 	measurements []exec.UsageMeasurement,
 ) (int, error) {
 	admission, err := tx.GetExecutionAdmissionRecord(ctx, invocationID)
+	if errors.Is(err, ErrNotFound) {
+		return 0, nil
+	}
 	if err != nil {
 		return 0, fmt.Errorf("append usage observations %q: %w", invocationID, err)
 	}
@@ -177,7 +181,7 @@ func scanUsageObservations(rows *sql.Rows, operation string) ([]domain.UsageObse
 		}
 		observations = append(observations, observation)
 	}
-	if err := rows.Err(); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("%s: %w", operation, err)
 	}
 	return observations, nil

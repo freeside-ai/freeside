@@ -850,6 +850,9 @@ func (e *Engine) collectTerminal(ctx context.Context, runID domain.RunID, attemp
 		return exec.StageResult{}, false, fmt.Errorf("collected status %q disagrees with inspected %q: %w",
 			result.Status, status, exec.ErrInvalidStatus)
 	}
+	if err := appendUsageObservations(ctx, e.store, attempt.InvocationID, result.Usage); err != nil {
+		return exec.StageResult{}, false, err
+	}
 	return result, true, nil
 }
 

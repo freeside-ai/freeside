@@ -3027,36 +3027,34 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	if err := result.Validate(); err != nil {
 		return w.recordReviewSourceFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA,
-			&exec.ReviewSourceFailure{Class: domain.ReviewFailureContradiction, Err: err},
+			reviewSourceFailureWithUsage(domain.ReviewFailureContradiction, err, result.Usage),
 		)
 	}
 	if result.InvocationID != id || result.BaseSHA != binding.admission.Base.BaseSHA ||
 		result.HeadSHA != task.HeadSHA || result.ConfigurationDigest != w.reviewConfigurationDigest {
 		return w.recordReviewSourceFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA,
-			&exec.ReviewSourceFailure{
-				Class: domain.ReviewFailureContradiction,
-				Err:   domain.ErrParentKeyMismatch,
-			},
+			reviewSourceFailureWithUsage(
+				domain.ReviewFailureContradiction, domain.ErrParentKeyMismatch, result.Usage),
 		)
 	}
 	if result.InstructionDigest != req.Instructions.ResultDigest {
 		return w.recordReviewSourceFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA,
-			&exec.ReviewSourceFailure{
-				Class: domain.ReviewFailureContradiction,
-				Err:   domain.ErrParentKeyMismatch,
-			},
+			reviewSourceFailureWithUsage(
+				domain.ReviewFailureContradiction, domain.ErrParentKeyMismatch, result.Usage),
 		)
 	}
 	if err := authorityVerifier.VerifyRequestAuthority(ctx, id, requestAuthority); err != nil {
 		return w.retryOrRecordReviewFailure(ctx, task, id, round,
-			binding.admission.Base.BaseSHA, task.HeadSHA, err,
+			binding.admission.Base.BaseSHA, task.HeadSHA,
+			preserveReviewSourceFailureUsage(err, result.Usage),
 		)
 	}
 	if err := w.reviewSource.Verify(ctx, id, binding.admission.Base.BaseSHA, task.HeadSHA); err != nil {
 		scheduled, schedErr := w.scheduleReviewInvocationRetry(
-			ctx, id, task.RunID, round, binding.admission.Base.BaseSHA, task.HeadSHA, err)
+			ctx, id, task.RunID, round, binding.admission.Base.BaseSHA, task.HeadSHA,
+			preserveReviewSourceFailureUsage(err, result.Usage))
 		if schedErr != nil {
 			return productionReviewPending, schedErr
 		}
@@ -3064,17 +3062,16 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			return productionReviewPending, nil
 		}
 		return w.recordReviewSourceFailure(ctx, task, id, round,
-			binding.admission.Base.BaseSHA, task.HeadSHA, err,
+			binding.admission.Base.BaseSHA, task.HeadSHA,
+			preserveReviewSourceFailureUsage(err, result.Usage),
 		)
 	}
 	for _, finding := range result.Findings {
 		if finding.RunID != task.RunID {
 			return w.recordReviewSourceFailure(ctx, task, id, round,
 				binding.admission.Base.BaseSHA, task.HeadSHA,
-				&exec.ReviewSourceFailure{
-					Class: domain.ReviewFailureContradiction,
-					Err:   domain.ErrParentKeyMismatch,
-				},
+				reviewSourceFailureWithUsage(
+					domain.ReviewFailureContradiction, domain.ErrParentKeyMismatch, result.Usage),
 			)
 		}
 	}
@@ -3104,12 +3101,10 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			}
 			return w.recordReviewSourceFailure(ctx, task, id, round,
 				binding.admission.Base.BaseSHA, task.HeadSHA,
-				&exec.ReviewSourceFailure{
-					Class: domain.ReviewFailureContradiction,
-					Err: fmt.Errorf(
+				reviewSourceFailureWithUsage(
+					domain.ReviewFailureContradiction, fmt.Errorf(
 						"review finding %s location %s does not overlap the reviewed diff: %w",
-						finding.ID, locText, domain.ErrParentKeyMismatch),
-				},
+						finding.ID, locText, domain.ErrParentKeyMismatch), result.Usage),
 			)
 		}
 	}
@@ -3145,6 +3140,9 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		return productionReviewPending, err
 	}
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		if _, err := tx.AppendUsageObservations(ctx, id, result.Usage); err != nil {
+			return err
+		}
 		if err := tx.PutReviewRecord(ctx, record, result.Findings); err != nil {
 			return err
 		}
@@ -3436,6 +3434,11 @@ func (w *productionPublicationWorkflow) recordReviewSourceFailure(
 	// The terminal outcome supersedes any pending same-invocation retry for
 	// this run: clear the durable row atomically with the failure it records.
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		if _, err := tx.AppendUsageObservations(
+			ctx, id, exec.ReviewSourceFailureUsage(sourceErr),
+		); err != nil {
+			return err
+		}
 		if err := tx.PutReviewFailure(ctx, failure); err != nil {
 			return err
 		}
