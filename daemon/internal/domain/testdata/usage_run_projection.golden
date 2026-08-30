@@ -1,0 +1,20 @@
+[
+  {
+    "kind": "billable_cost",
+    "metric": "total_cost",
+    "unit": "usd_micros",
+    "quantity": 1250000
+  },
+  {
+    "kind": "reported_usage",
+    "metric": "input_tokens",
+    "unit": "tokens",
+    "quantity": 400
+  },
+  {
+    "kind": "reported_usage",
+    "metric": "output_tokens",
+    "unit": "tokens",
+    "quantity": 0
+  }
+]

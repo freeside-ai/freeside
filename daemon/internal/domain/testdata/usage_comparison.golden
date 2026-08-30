@@ -1,0 +1,45 @@
+[
+  {
+    "treatment_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "invocations": 2,
+    "pricing_revisions": [
+      "pricing-2026-01",
+      "pricing-2026-02"
+    ],
+    "totals": [
+      {
+        "kind": "billable_cost",
+        "metric": "total_cost",
+        "unit": "usd_micros",
+        "quantity": 1250000
+      },
+      {
+        "kind": "reported_usage",
+        "metric": "input_tokens",
+        "unit": "tokens",
+        "quantity": 200
+      },
+      {
+        "kind": "reported_usage",
+        "metric": "output_tokens",
+        "unit": "tokens",
+        "quantity": 0
+      }
+    ]
+  },
+  {
+    "treatment_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "invocations": 1,
+    "pricing_revisions": [
+      "pricing-2026-01"
+    ],
+    "totals": [
+      {
+        "kind": "reported_usage",
+        "metric": "input_tokens",
+        "unit": "tokens",
+        "quantity": 200
+      }
+    ]
+  }
+]

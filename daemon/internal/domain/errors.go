@@ -99,6 +99,8 @@ var (
 	ErrInvalidClassifierAssessment      = errors.New("invalid classifier accuracy assessment")
 	ErrInvalidRecommendationSource      = errors.New("invalid recommendation source")
 	ErrInvalidJudgmentSite              = errors.New("invalid judgment site")
+	ErrInvalidUsageSource               = errors.New("invalid usage source")
+	ErrInvalidUsageMeasurementKind      = errors.New("invalid usage measurement kind")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -159,6 +161,8 @@ var (
 	ErrCheckStateInconsistent       = errors.New("check state does not match its requirement resolution")
 	ErrReadinessVerdictInconsistent = errors.New("readiness verdict does not match its payload")
 	ErrReadinessSummaryInconsistent = errors.New("readiness summary does not match a ready verdict")
+	ErrUsageObservationConflict     = errors.New("usage observation identity has conflicting content")
+	ErrUsageQuantityOverflow        = errors.New("usage projection quantity overflows int64")
 
 	ErrReviewYieldHistoryInconsistent     = errors.New("review yield history is internally inconsistent")
 	ErrInvalidReadinessInvalidationReason = errors.New("unknown readiness invalidation reason")
