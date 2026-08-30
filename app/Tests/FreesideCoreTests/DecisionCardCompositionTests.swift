@@ -13,12 +13,13 @@ import Testing
 
         #expect(
             composition.modules == [
-                .recommendation, .claims, .factBlock, .summary, .claims, .evidence, .details,
+                .recommendation, .claims, .facts, .factBlock, .summary, .claims, .evidence,
+                .details,
             ])
         let claims = try? #require(composition.modules.firstIndex(of: .claims))
         #expect(claims.map { $0 < composition.actionInsertionIndex } == true)
         #expect(composition.claimsAreProminent(at: 1))
-        #expect(!composition.claimsAreProminent(at: 4))
+        #expect(!composition.claimsAreProminent(at: 5))
 
         // The question leads; its supporting attachment waits below the
         // actions, so nothing unrelated stands between the ask and answering.
@@ -28,7 +29,7 @@ import Testing
         #expect(lead.map(\.label) == ["Question (unverified)"])
         #expect(lead.allSatisfy { $0.text != nil })
         let supporting = composition.claims(
-            from: question.agent_claims, at: 4, prominentClaimIndex: nil)
+            from: question.agent_claims, at: 5, prominentClaimIndex: nil)
         #expect(supporting.map(\.label) == ["screenshot"])
         #expect(
             !(lead + supporting).contains { $0.label == AgentClaimLabels.summary })
@@ -52,8 +53,8 @@ import Testing
     @Test func moduleVocabularyIsClosedAndShared() {
         #expect(
             Set(DecisionCardComposition.sharedModuleSet) == [
-                .factBlock, .findingFacts, .recommendation, .checklist, .stageRail, .comparison,
-                .yieldChart, .summary, .claims, .evidence, .details,
+                .facts, .factBlock, .findingFacts, .recommendation, .checklist, .stageRail,
+                .comparison, .yieldChart, .summary, .claims, .evidence, .details,
             ])
     }
 
@@ -66,8 +67,8 @@ import Testing
         let composition = DecisionCardComposition.forType(.finding_adjudication)
         #expect(
             composition.modules == [
-                .recommendation, .findingFacts, .factBlock, .summary, .claims, .evidence,
-                .details,
+                .recommendation, .findingFacts, .facts, .factBlock, .summary, .claims,
+                .evidence, .details,
             ])
         #expect(composition.actionInsertionIndex == composition.modules.firstIndex(of: .factBlock))
         #expect(composition.reviewingActionInsertionIndex == nil)
@@ -76,21 +77,22 @@ import Testing
     @Test func fourSpecializedCardsAreOnlyModuleOrderings() {
         #expect(
             DecisionCardComposition.forType(.ready_for_final_review).modules == [
-                .recommendation, .checklist, .factBlock, .yieldChart, .summary, .claims,
+                .recommendation, .checklist, .factBlock, .yieldChart, .facts, .summary, .claims,
                 .evidence, .details,
             ])
         #expect(
             DecisionCardComposition.forType(.execution_failure).modules == [
-                .recommendation, .stageRail, .claims, .factBlock, .summary, .claims, .evidence,
-                .details,
+                .recommendation, .stageRail, .facts, .claims, .factBlock, .summary, .claims,
+                .evidence, .details,
             ])
         #expect(
             DecisionCardComposition.forType(.review_dispute).modules == [
-                .comparison, .factBlock, .summary, .claims, .evidence, .details,
+                .comparison, .factBlock, .facts, .summary, .claims, .evidence, .details,
             ])
         #expect(
             DecisionCardComposition.forType(.review_diminishing_returns).modules == [
-                .recommendation, .yieldChart, .factBlock, .summary, .claims, .evidence, .details,
+                .recommendation, .yieldChart, .facts, .factBlock, .summary, .claims, .evidence,
+                .details,
             ])
         #expect(
             !DecisionCardComposition.forType(.review_dispute).modules.contains(.recommendation))
@@ -103,27 +105,29 @@ import Testing
         let execution = DecisionCardComposition.forType(.execution_failure)
         let executionClaims = AttentionFixtures.fixture(type: .execution_failure).item.agent_claims
         let diagnosticIndex = executionClaims.firstIndex { $0.label == "Likely cause (unverified)" }
-        #expect(execution.claimsAreProminent(at: 2))
-        #expect(!execution.claimsAreProminent(at: 4))
+        #expect(execution.claimsAreProminent(at: 3))
+        #expect(!execution.claimsAreProminent(at: 6))
         #expect(
             execution.claims(
-                from: executionClaims, at: 2, prominentClaimIndex: diagnosticIndex
+                from: executionClaims, at: 3, prominentClaimIndex: diagnosticIndex
             ).map(\.label) == ["Likely cause (unverified)"])
         #expect(
             execution.claims(
-                from: executionClaims, at: 4, prominentClaimIndex: diagnosticIndex
+                from: executionClaims, at: 6, prominentClaimIndex: diagnosticIndex
             ).map(\.label) == ["screenshot"])
         // With no caller-chosen prominent claim, the readable diagnostic claim
         // still leads and the attachment stays supporting context.
         #expect(
             execution.claims(
-                from: executionClaims, at: 2, prominentClaimIndex: nil
+                from: executionClaims, at: 3, prominentClaimIndex: nil
             ).map(\.label) == ["Likely cause (unverified)"])
         #expect(
             execution.claims(
-                from: executionClaims, at: 5, prominentClaimIndex: nil
+                from: executionClaims, at: 6, prominentClaimIndex: nil
             ).map(\.label) == ["screenshot"])
-        #expect(!DecisionCardComposition.forType(.review_dispute).claimsAreProminent(at: 3))
+        // The dispute card's claims render below its actions, so they never
+        // count as prominent.
+        #expect(!DecisionCardComposition.forType(.review_dispute).claimsAreProminent(at: 4))
     }
 
     @Test(arguments: AttentionFixtures.phase1Types)
@@ -166,6 +170,42 @@ import Testing
                 at: try #require(composition.modules.firstIndex(of: .claims)),
                 prominentClaimIndex: nil
             ) == [artifactOnly])
+    }
+
+    /// The daemon's typed facts inform the decision, so no composition may
+    /// offer its actions above them. This is the invariant the card shell used
+    /// to buy by pinning the fact section under the ask for every type, which
+    /// also overrode each type's own ordering (#1004 review).
+    @Test(arguments: AttentionFixtures.phase1Types)
+    func factsNeverRenderBelowTheActions(type: Components.Schemas.AttentionType) throws {
+        let composition = DecisionCardComposition.forType(type)
+        let facts = try #require(composition.modules.firstIndex(of: .facts))
+
+        #expect(facts < composition.actionInsertionIndex)
+        if let reviewing = composition.reviewingActionInsertionIndex {
+            #expect(facts < reviewing)
+        }
+    }
+
+    /// Each type keeps its own lead: the readiness verdict, the failing stage,
+    /// and the disputed positions all outrank the identifier-shaped facts that
+    /// sit last before the actions.
+    @Test func eachTypeLeadsWithItsOwnModuleNotWithItsFacts() {
+        for (type, leading) in [
+            (Components.Schemas.AttentionType.ready_for_final_review, DecisionCardModule.checklist),
+            (.execution_failure, .stageRail),
+            (.review_dispute, .comparison),
+            (.review_diminishing_returns, .yieldChart),
+            (.agent_question, .claims),
+            (.finding_adjudication, .findingFacts),
+        ] {
+            let composition = DecisionCardComposition.forType(type)
+            #expect(
+                composition.modules.firstIndex(of: leading).map { lead in
+                    composition.modules.firstIndex(of: .facts).map { lead < $0 } ?? false
+                } == true,
+                "\(type) must lead with \(leading), not with its fact rows")
+        }
     }
 
     @Test(arguments: AttentionFixtures.phase1Types)

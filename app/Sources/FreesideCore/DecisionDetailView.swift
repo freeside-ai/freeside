@@ -361,6 +361,10 @@ struct DecisionDetailView: View {
                 .font(FreesideFont.sectionTitle)
                 .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
+            // The ask and the daemon's reason are one question and its answer,
+            // so nothing renders between them. The reason stays labeled
+            // because the daemon writes it as a sentence fragment.
+            context(item)
 
             if let conversation = model.conversation {
                 ConversationView(
@@ -385,30 +389,47 @@ struct DecisionDetailView: View {
                 .buttonStyle(FreesideActionButtonStyle(tone: .neutral))
             }
 
-            // Section 9 layer 1 leads every card: the ask, then the daemon
-            // facts, then the actions. Several compositions insert the action
-            // region before their .factBlock module, so the fact section
-            // renders here rather than from that module; otherwise those cards
-            // would offer a decision above the facts that inform it.
-            factsSection(
-                item,
-                includesCommitPlan: !composition.modules.contains(.checklist))
-            if let proposalFacts {
-                cardSection("Authenticated proposal") {
-                    proposalRows(proposalFacts)
-                }
-            }
             #if os(macOS)
                 if wideLayout {
+                    // The two columns are read side by side, so the action
+                    // region at the top of the right column is reachable
+                    // before anything further down the left one. The modules
+                    // a composition places ahead of actionInsertionIndex must
+                    // still precede the actions, so they render full width
+                    // above the split rather than beside it.
+                    ForEach(
+                        Array(
+                            composition.modules.prefix(composition.actionInsertionIndex)
+                                .enumerated()), id: \.offset
+                    ) {
+                        index, module in
+                        cardModule(
+                            module,
+                            moduleIndex: index,
+                            item: item,
+                            composition: composition,
+                            proposalFacts: proposalFacts,
+                            rendersInteractiveControls: rendersInteractiveControls,
+                            accessibilityLayout: accessibilityLayout)
+                        if index + 1 == composition.reviewingActionInsertionIndex {
+                            reviewingAction(item)
+                        }
+                    }
                     HStack(alignment: .top, spacing: 16) {
                         VStack(alignment: .leading, spacing: 16) {
-                            ForEach(Array(composition.modules.enumerated()), id: \.offset) {
+                            ForEach(
+                                Array(
+                                    composition.modules.enumerated()
+                                        .dropFirst(composition.actionInsertionIndex)),
+                                id: \.offset
+                            ) {
                                 index, module in
                                 cardModule(
                                     module,
                                     moduleIndex: index,
                                     item: item,
                                     composition: composition,
+                                    proposalFacts: proposalFacts,
                                     rendersInteractiveControls: rendersInteractiveControls,
                                     accessibilityLayout: accessibilityLayout)
                                 if index + 1 == composition.reviewingActionInsertionIndex {
@@ -434,6 +455,7 @@ struct DecisionDetailView: View {
                             moduleIndex: index,
                             item: item,
                             composition: composition,
+                            proposalFacts: proposalFacts,
                             rendersInteractiveControls: rendersInteractiveControls,
                             accessibilityLayout: accessibilityLayout)
                         if index + 1 == composition.actionInsertionIndex {
@@ -456,6 +478,7 @@ struct DecisionDetailView: View {
                         moduleIndex: index,
                         item: item,
                         composition: composition,
+                        proposalFacts: proposalFacts,
                         rendersInteractiveControls: rendersInteractiveControls,
                         accessibilityLayout: accessibilityLayout)
                     if index + 1 == composition.actionInsertionIndex {
@@ -510,10 +533,20 @@ struct DecisionDetailView: View {
         moduleIndex: Int,
         item: Components.Schemas.AttentionItem,
         composition: DecisionCardComposition,
+        proposalFacts: Components.Schemas.RunProposalFactsSnapshot?,
         rendersInteractiveControls: Bool,
         accessibilityLayout: Bool
     ) -> some View {
         switch module {
+        case .facts:
+            factsSection(
+                item,
+                includesCommitPlan: !composition.modules.contains(.checklist))
+            if let proposalFacts {
+                cardSection("Authenticated proposal") {
+                    proposalRows(proposalFacts)
+                }
+            }
         case .recommendation:
             #if os(iOS)
                 if let recommendation = DecisionRecommendationPresentation.of(item),
@@ -628,10 +661,21 @@ struct DecisionDetailView: View {
         }
     }
 
+    @ViewBuilder
+    private func context(_ item: Components.Schemas.AttentionItem) -> some View {
+        if !item.reason.isEmpty {
+            cardSection("Context") {
+                Text(item.reason)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     /// The Section 9 card facts for this item type, read from its typed fact
-    /// fields (#724). Facts lead the card, so this section renders directly
-    /// under the ask; a type whose lead is its own module contributes no rows
-    /// and the section disappears rather than rendering an empty container.
+    /// fields (#724). Rendered from the `.facts` module, which every
+    /// composition places ahead of its action region; a type whose lead is its
+    /// own module contributes no rows and the section disappears rather than
+    /// rendering an empty container.
     @ViewBuilder
     private func factsSection(
         _ item: Components.Schemas.AttentionItem,
@@ -663,11 +707,6 @@ struct DecisionDetailView: View {
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(changeSummary.summary))
-        }
-
-        cardSection("Context") {
-            Text(item.reason)
-                .fixedSize(horizontal: false, vertical: true)
         }
 
         if let adjudication = item.finding_adjudication?.value1 {
