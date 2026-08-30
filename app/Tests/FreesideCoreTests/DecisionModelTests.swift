@@ -884,6 +884,44 @@ import Testing
             ) == nil)
     }
 
+    @Test func expectedCostParsingValidatesTheAcceptedRange() {
+        for input in ["", "abc", "0", "1000001", "12.5"] {
+            #expect(DecisionDetailView.parseExpectedCost(input) == nil)
+        }
+        #expect(DecisionDetailView.parseExpectedCost("1") == 1)
+        #expect(DecisionDetailView.parseExpectedCost("1000000") == 1_000_000)
+        #expect(DecisionDetailView.parseExpectedCost(" 12 ") == 12)
+    }
+
+    @Test func snoozeRequiresAValueAfterTheCurrentTime() {
+        let now = Date(timeIntervalSince1970: 1_786_506_245)
+
+        #expect(!RunProposalSnoozeSheet.isValidSnooze(until: now, now: now))
+        #expect(
+            !RunProposalSnoozeSheet.isValidSnooze(
+                until: now.addingTimeInterval(-1), now: now))
+        #expect(
+            RunProposalSnoozeSheet.isValidSnooze(
+                until: now.addingTimeInterval(1), now: now))
+    }
+
+    @Test func parsedOriginalExpectedCostProducesNoRevision() async throws {
+        let store = await makeStore(server: MockServer())
+        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        await model.validate()
+        let facts = try #require(model.proposalFacts)
+        let expectedCost = try #require(
+            DecisionDetailView.parseExpectedCost(String(facts.expected_cost_units)))
+
+        #expect(
+            DecisionDetailView.runProposalRevision(
+                from: facts,
+                expectedCost: expectedCost,
+                componentCount: facts.scope.component_count,
+                touchesControlPlane: facts.scope.touches_control_plane
+            ) == nil)
+    }
+
     @Test func runProposalRevisionPreservesAuthenticatedFactsOnMixedEdit() async throws {
         let store = await makeStore(server: MockServer())
         let model = DecisionModel(store: store, itemID: "item-run_proposal")

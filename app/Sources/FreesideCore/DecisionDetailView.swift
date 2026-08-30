@@ -1,3 +1,4 @@
+import Foundation
 import FreesideAPI
 import SwiftUI
 
@@ -1134,6 +1135,12 @@ struct DecisionDetailView: View {
                 touches_control_plane: touchesControlPlane))
     }
 
+    static func parseExpectedCost(_ text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Int(trimmed), (1...1_000_000).contains(value) else { return nil }
+        return value
+    }
+
     private func actionInputReady(
         _ action: Components.Schemas.Action,
         item: Components.Schemas.AttentionItem
@@ -2099,9 +2106,9 @@ private struct FindingListLabelStyle: LabelStyle {
     }
 }
 
-private struct RunProposalRevisionSheet: View {
+struct RunProposalRevisionSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var expectedCost: Int
+    @State private var expectedCostText: String
     @State private var componentCount: Int
     @State private var touchesControlPlane: Bool
     private let originalFacts: Components.Schemas.RunProposalFactsSnapshot
@@ -2111,7 +2118,7 @@ private struct RunProposalRevisionSheet: View {
         facts: Components.Schemas.RunProposalFactsSnapshot,
         submit: @escaping (Components.Schemas.RunProposalRevisionInput) -> Void
     ) {
-        _expectedCost = State(initialValue: facts.expected_cost_units)
+        _expectedCostText = State(initialValue: String(facts.expected_cost_units))
         _componentCount = State(initialValue: facts.scope.component_count)
         _touchesControlPlane = State(initialValue: facts.scope.touches_control_plane)
         originalFacts = facts
@@ -2119,7 +2126,10 @@ private struct RunProposalRevisionSheet: View {
     }
 
     private var revision: Components.Schemas.RunProposalRevisionInput? {
-        DecisionDetailView.runProposalRevision(
+        guard let expectedCost = DecisionDetailView.parseExpectedCost(expectedCostText) else {
+            return nil
+        }
+        return DecisionDetailView.runProposalRevision(
             from: originalFacts,
             expectedCost: expectedCost,
             componentCount: componentCount,
@@ -2130,14 +2140,27 @@ private struct RunProposalRevisionSheet: View {
         NavigationStack {
             Form {
                 LabeledContent("Intent", value: "Implement subject")
-                Stepper("Expected cost: \(expectedCost) units", value: $expectedCost, in: 1...1_000_000)
+                    .listRowBackground(Color.ground2)
+                LabeledContent("Expected cost (units)") {
+                    expectedCostField
+                }
+                .listRowBackground(Color.ground2)
                 Stepper("Components: \(componentCount)", value: $componentCount, in: 1...32)
+                    .listRowBackground(Color.ground2)
                 LabeledContent(
-                    "Declared paths", value: "\(originalFacts.scope.declared_path_count)")
+                    "Declared paths", value: "\(originalFacts.scope.declared_path_count)"
+                )
+                .listRowBackground(Color.ground2)
                 Toggle("Touches control plane", isOn: $touchesControlPlane)
+                    .listRowBackground(Color.ground2)
             }
+            .formStyle(.grouped)
+            .font(FreesideFont.body)
+            .foregroundStyle(Color.ink)
             .navigationTitle("Start with changes")
             .tint(.accentText)
+            .scrollContentBackground(.hidden)
+            .background(Color.ground)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -2155,34 +2178,162 @@ private struct RunProposalRevisionSheet: View {
         }
         .frame(minWidth: 380, minHeight: 280)
     }
+
+    /// The project-owned revision composition without Form and TextField,
+    /// whose AppKit-backed controls ImageRenderer cannot draw off-screen.
+    func screenshotContent() -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Start with changes")
+                .font(FreesideFont.largeTitle)
+            VStack(alignment: .leading, spacing: 8) {
+                KeywordLabel(text: "Intent")
+                Text("Implement subject")
+                Divider()
+                KeywordLabel(text: "Expected cost")
+                Text("\(expectedCostText) units")
+                Divider()
+                KeywordLabel(text: "Components")
+                Text("\(componentCount)")
+                Divider()
+                KeywordLabel(text: "Declared paths")
+                Text("\(originalFacts.scope.declared_path_count)")
+                Divider()
+                KeywordLabel(text: "Touches control plane")
+                Text(touchesControlPlane ? "Yes" : "No")
+            }
+            .padding(14)
+            .freesideCard()
+            Text("Expected cost must be a whole number from 1 to 1,000,000 units.")
+                .font(FreesideFont.caption)
+                .foregroundStyle(Color.inkDim)
+            HStack(spacing: 12) {
+                Text("Cancel")
+                    .font(FreesideFont.sans(.body, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .freesideCard()
+                Text("Submit")
+                    .font(FreesideFont.sans(.body, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .freesideCard(border: revision == nil ? .rule : .accentBorder)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: 560, alignment: .leading)
+        .foregroundStyle(Color.ink)
+    }
+
+    @ViewBuilder private var expectedCostField: some View {
+        let field = TextField("Expected cost", text: $expectedCostText)
+            .labelsHidden()
+            .accessibilityLabel("Expected cost")
+            .multilineTextAlignment(.trailing)
+
+        #if os(iOS)
+            field.keyboardType(.numberPad)
+        #else
+            field
+        #endif
+    }
 }
 
-private struct RunProposalSnoozeSheet: View {
+struct RunProposalSnoozeSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var until = Date().addingTimeInterval(60 * 60)
+    @State private var until: Date
+    private let now: Date
+    private let screenshotTimeZone: TimeZone
     let submit: (Date) -> Void
+
+    init(
+        now: Date = Date(),
+        screenshotTimeZone: TimeZone = .current,
+        submit: @escaping (Date) -> Void
+    ) {
+        self.now = now
+        _until = State(initialValue: now.addingTimeInterval(60 * 60))
+        self.screenshotTimeZone = screenshotTimeZone
+        self.submit = submit
+    }
+
+    static func isValidSnooze(until: Date, now: Date) -> Bool {
+        until > now
+    }
+
+    private var formattedScreenshotUntil: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = screenshotTimeZone
+        return formatter.string(from: until)
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 DatePicker(
-                    "Snooze until", selection: $until, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+                    "Snooze until", selection: $until, in: now...,
+                    displayedComponents: [.date, .hourAndMinute]
+                )
+                .listRowBackground(Color.ground2)
             }
+            .formStyle(.grouped)
+            .font(FreesideFont.body)
+            .foregroundStyle(Color.ink)
             .navigationTitle("Snooze proposal")
             .tint(.accentText)
+            .scrollContentBackground(.hidden)
+            .background(Color.ground)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Snooze") {
+                        guard Self.isValidSnooze(until: until, now: Date()) else { return }
                         submit(until)
                         dismiss()
                     }
+                    .disabled(!Self.isValidSnooze(until: until, now: Date()))
                 }
             }
         }
         .frame(minWidth: 380, minHeight: 220)
+    }
+
+    /// The project-owned snooze composition without Form and DatePicker,
+    /// whose AppKit-backed controls ImageRenderer cannot draw off-screen.
+    func screenshotContent() -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Snooze proposal")
+                .font(FreesideFont.largeTitle)
+            VStack(alignment: .leading, spacing: 8) {
+                KeywordLabel(text: "Snooze until")
+                Text(formattedScreenshotUntil)
+                    .font(FreesideFont.body)
+            }
+            .padding(14)
+            .freesideCard()
+            Text("The proposal returns to the inbox at this date and time.")
+                .font(FreesideFont.caption)
+                .foregroundStyle(Color.inkDim)
+            HStack(spacing: 12) {
+                Text("Cancel")
+                    .font(FreesideFont.sans(.body, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .freesideCard()
+                Text("Snooze")
+                    .font(FreesideFont.sans(.body, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .freesideCard(border: .accentBorder)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: 560, alignment: .leading)
+        .foregroundStyle(Color.ink)
     }
 }
 
