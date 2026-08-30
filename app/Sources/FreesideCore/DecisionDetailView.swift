@@ -59,6 +59,7 @@ struct DecisionDetailView: View {
     @State private var inspectorPresented: Bool
     @State private var detailWidth: CGFloat = 0
     @State private var recommendationVisible = true
+    @State private var provenanceExpanded = false
     @State private var alternativeSelections: [String: Components.Schemas.AdjudicationRoute] = [:]
     private let attachments: AttachmentLoader
     private let graphics: DecisionGraphicPresentations
@@ -1273,7 +1274,9 @@ struct DecisionDetailView: View {
 
     /// The recommendation leads its card in the register its revalidated
     /// provenance supports (plan §9): daemon policy and project policy render
-    /// as card facts, agent judgment as a labeled unverified proposal.
+    /// as card facts, agent judgment as a labeled unverified proposal. Inside
+    /// that register it leads with the act, then the reason for it: an
+    /// operator reads the recommendation to decide, not to audit it.
     private func recommendationBlock(
         _ recommendation: DecisionRecommendationPresentation,
         item: Components.Schemas.AttentionItem
@@ -1288,15 +1291,6 @@ struct DecisionDetailView: View {
                 Text("Written by an agent, not checked by the daemon.")
                     .foregroundStyle(Color.inkDim)
             }
-            KeywordLabel(text: "Why")
-            Text(recommendation.reason)
-                .fixedSize(horizontal: false, vertical: true)
-            if let confidence = recommendation.confidence {
-                factRow("Confidence", value: confidence)
-            }
-            ForEach(recommendation.sourceFacts) { fact in
-                factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
-            }
             actionButton(
                 recommendation.action,
                 item: item,
@@ -1305,7 +1299,26 @@ struct DecisionDetailView: View {
                     for: item) == nil ? .primary : .destructive,
                 showsIcon: false
             )
-            .padding(.top, 4)
+            KeywordLabel(text: "Why")
+            Text(recommendation.reason)
+                .fixedSize(horizontal: false, vertical: true)
+            if let confidence = recommendation.confidence {
+                factRow("Confidence", value: confidence)
+            }
+            // The digests, policy key, and judgment site revalidate the
+            // recommendation; an operator deciding never reads them, so they
+            // stay one disclosure away instead of standing between the
+            // recommended act and the reason for it.
+            DisclosureGroup(isExpanded: $provenanceExpanded) {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(recommendation.sourceFacts) { fact in
+                        factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+                    }
+                }
+                .padding(.top, 6)
+            } label: {
+                KeywordLabel(text: "Provenance")
+            }
         }
         .onGeometryChange(for: Bool.self) { geometry in
             geometry.frame(in: .named("decision-card-scroll")).maxY > 0
