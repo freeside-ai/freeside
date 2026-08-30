@@ -841,8 +841,9 @@ func TestElaborationResearchApprovalStartsDigestBoundImplementation(t *testing.T
 
 	itemID := domain.ItemID("spec-approval-implementation-run-2")
 	item, snapshot := f.item(t, itemID)
-	if slices.Contains(item.RequestedDecision, domain.ActionDiscuss) {
-		t.Fatalf("approval item offers unsupported discussion: %+v", item.RequestedDecision)
+	if !slices.Equal(item.RequestedDecision,
+		[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop}) {
+		t.Fatalf("approval item actions = %+v", item.RequestedDecision)
 	}
 	if len(item.AgentClaims) != 2 || item.AgentClaims[0].Text == nil ||
 		item.AgentClaims[0].Text.Content != "# Approved Specification\n\nImplement the bounded workflow." {
@@ -1017,6 +1018,468 @@ func TestElaborationResearchApprovalStartsDigestBoundImplementation(t *testing.T
 	}
 	if bytes.Contains(implementationPrompt.vendorInstructions, []byte(elaborationSystemContract)) {
 		t.Fatal("implementation vendor instructions contain the elaboration stage contract")
+	}
+}
+
+func TestElaborationSpecificationDiscussionRepliesAndPreservesApproval(t *testing.T) {
+	f := newElaborationFixture(t, true, 4)
+	driver := f.newDriver(t)
+	materializer, err := exec.NewMaterializer(f.blobs, exec.MaterializerOptions{
+		MaxInputBytes: exec.ProductionMaxInputBytes, MaxTotalBytes: exec.ProductionMaxTotalInputBytes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capturingDriver := &capturingElaborationDriver{
+		StageDriver: driver, materializer: materializer,
+		prompts: make(map[domain.InvocationID]capturedElaborationPrompt),
+	}
+	initialID := elaborationInvocationID("elaboration-run", 1)
+	if err := elaboratefake.Script(driver, initialID, 0, 0, elaborate.Output{
+		Specification: &elaborate.Specification{
+			Summary:    "The bounded implementation plan is ready.",
+			Body:       "# Approved Specification\n\nImplement the bounded workflow.",
+			Addressals: []elaborate.Addressal{},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.submit(t)
+	engine := f.newEngine(t, capturingDriver)
+	itemID := domain.ItemID("spec-approval-implementation-run-1")
+	for pass := 1; pass <= 3; pass++ {
+		if _, err := engine.Reconcile(t.Context()); err != nil {
+			t.Fatalf("prepare specification pass %d: %v", pass, err)
+		}
+		if _, err := f.signet.GetAttentionItem(t.Context(), itemID); err == nil {
+			break
+		}
+	}
+	item, snapshot := f.item(t, itemID)
+	if item.ItemVersion != 1 {
+		t.Fatalf("initial approval version = %d", item.ItemVersion)
+	}
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "explain-specification", DeviceID: "device-1",
+		ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionDiscuss, ItemVersion: item.ItemVersion,
+			ArtifactDigests: item.ArtifactDigests,
+			Message:         "Why does the specification keep the workflow bounded?",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reply := "It keeps the workflow bounded by pinning the approved artifact and declared scope."
+	discussionID := specDiscussionInvocationID("explain-specification")
+	if err := elaboratefake.Script(driver, discussionID, 0, 0, elaborate.Output{Reply: &reply}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("enqueue discussion: %v", err)
+	}
+	var marker store.QueueEntry
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		marker, err = tx.GetOutbox(t.Context(), string(discussionID))
+		return err
+	}); err != nil || marker.Kind != KindElaborationDiscussionRequested || marker.Dispatched() {
+		t.Fatalf("discussion marker = %+v, error = %v", marker, err)
+	}
+	f = f.reopen(t)
+	driver = f.newDriver(t)
+	capturingDriver.StageDriver = driver
+	engine = f.newEngine(t, capturingDriver)
+	result, err := engine.Reconcile(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.InvocationsStarted != 1 || result.ResultsAccepted != 1 {
+		t.Fatalf("discussion reconcile = %+v", result)
+	}
+	prompt, ok := capturingDriver.prompt(discussionID)
+	if !ok {
+		t.Fatal("discussion elaboration inputs were not captured")
+	}
+	conversation, err := f.signet.GetConversation(t.Context(), domain.ConversationID("conv-"+string(itemID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversationDigest, _, err := conversation.Conversation.PrefixContent(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertElaborationPriorArtifacts(t, prompt, []expectedElaborationPriorArtifact{
+		{
+			role: "prior_specification", digest: f.artifact(t, "spec-implementation-run-1").Digest,
+			body: "# Approved Specification\n\nImplement the bounded workflow.",
+		},
+		{role: "discussion", digest: conversationDigest},
+	})
+	item, snapshot = f.item(t, itemID)
+	if item.ItemVersion != 3 || !slices.Equal(item.RequestedDecision,
+		[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop}) {
+		t.Fatalf("post-discussion item = %+v", item)
+	}
+	conversation, err = f.signet.GetConversation(t.Context(), *item.ConversationID)
+	if err != nil || conversation.Conversation.Status != domain.ConversationIdle ||
+		len(conversation.Conversation.Messages) != 2 || conversation.Conversation.Messages[1].Body != reply {
+		t.Fatalf("discussion conversation = %+v, error = %v", conversation, err)
+	}
+	if _, err := f.run("implementation-run"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("implementation run before approval = %v", err)
+	}
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("discussion replay: %v", err)
+	}
+	conversation, err = f.signet.GetConversation(t.Context(), *item.ConversationID)
+	if err != nil || len(conversation.Conversation.Messages) != 2 {
+		t.Fatalf("replayed discussion = %+v, error = %v", conversation, err)
+	}
+	feedback := "Name the approval replay invariant explicitly."
+	revisionID := elaborationInvocationID("elaboration-run", 2)
+	if err := elaboratefake.Script(driver, revisionID, 0, 0, elaborate.Output{
+		Specification: &elaborate.Specification{
+			Summary:    "The revised implementation plan is ready.",
+			Body:       "# Approved Specification\n\nImplement the bounded, replay-safe workflow.",
+			Addressals: []elaborate.Addressal{{Comment: feedback, Response: "Named the replay invariant."}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "revise-after-discussion", DeviceID: "device-1",
+		ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionRequestChanges, ItemVersion: item.ItemVersion,
+			ArtifactDigests: item.ArtifactDigests, Message: feedback,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for pass := 1; pass <= 3; pass++ {
+		if _, err := engine.Reconcile(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.signet.GetAttentionItem(t.Context(), "spec-approval-implementation-run-2"); err == nil {
+			break
+		}
+	}
+	revised, revisedSnapshot := f.item(t, "spec-approval-implementation-run-2")
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "approve-revision-after-discussion", DeviceID: "device-1",
+		ExpectedEntityVersion: revisedSnapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: revised.ID, Action: domain.ActionApprove, ItemVersion: revised.ItemVersion,
+			ArtifactDigests: revised.ArtifactDigests,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run("implementation-run"); err != nil {
+		t.Fatalf("approved implementation: %v", err)
+	}
+}
+
+func TestElaborationSpecificationDiscussionDeliveryFailureRepliesFailSafe(t *testing.T) {
+	f := newElaborationFixture(t, true, 4)
+	driver := f.newDriver(t)
+	initialID := elaborationInvocationID("elaboration-run", 1)
+	if err := elaboratefake.Script(driver, initialID, 0, 0, elaborate.Output{
+		Specification: &elaborate.Specification{
+			Summary:    "The implementation plan is ready.",
+			Body:       "# Approved Specification\n\nImplement the bounded workflow.",
+			Addressals: []elaborate.Addressal{},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.submit(t)
+	engine := f.newEngine(t, driver)
+	itemID := domain.ItemID("spec-approval-implementation-run-1")
+	for pass := 1; pass <= 3; pass++ {
+		if _, err := engine.Reconcile(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.signet.GetAttentionItem(t.Context(), itemID); err == nil {
+			break
+		}
+	}
+	item, snapshot := f.item(t, itemID)
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "undeliverable-spec-discussion", DeviceID: "device-1",
+		ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionDiscuss, ItemVersion: item.ItemVersion,
+			ArtifactDigests: item.ArtifactDigests, Message: "Explain the bounded scope.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("enqueue discussion before restart: %v", err)
+	}
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		marker, err := tx.GetOutbox(t.Context(), string(specDiscussionInvocationID("undeliverable-spec-discussion")))
+		if err != nil {
+			return err
+		}
+		if marker.Dispatched() {
+			return errors.New("fresh discussion marker dispatched before restart")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.signet.AcceptAgentCompletion(
+		t.Context(), "inv-undeliverable-spec-discussion",
+		signet.AgentReply{Body: unavailableSpecDiscussionReply},
+	); err != nil {
+		t.Fatalf("accept discussion before terminal crash: %v", err)
+	}
+	f = f.reopen(t)
+	driver = f.newDriver(t)
+	engine = f.newEngine(t, driver)
+	validateDelivery := engine.elaboration.validateDelivery
+	engine.elaboration.validateDelivery = func(context.Context, exec.StartSpec) error {
+		return fmt.Errorf("%w: injected input limit", ErrElaborationInputUndeliverable)
+	}
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	item, _ = f.item(t, itemID)
+	conversation, err := f.signet.GetConversation(t.Context(), *item.ConversationID)
+	if err != nil || item.ItemVersion != 3 || len(conversation.Conversation.Messages) != 2 ||
+		conversation.Conversation.Messages[1].Body != unavailableSpecDiscussionReply {
+		t.Fatalf("fail-safe discussion item = %+v, conversation = %+v, error = %v", item, conversation, err)
+	}
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		entry, err := tx.GetOutbox(t.Context(), "inv-undeliverable-spec-discussion")
+		if err != nil {
+			return err
+		}
+		marker, err := tx.GetOutbox(t.Context(), string(specDiscussionInvocationID("undeliverable-spec-discussion")))
+		if err != nil {
+			return err
+		}
+		if !entry.Dispatched() || !marker.Dispatched() {
+			return errors.New("fail-safe discussion intents remain pending")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run("implementation-run"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("fail-safe discussion advanced implementation: %v", err)
+	}
+
+	item, snapshot = f.item(t, itemID)
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "wrong-form-spec-discussion", DeviceID: "device-1",
+		ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionDiscuss, ItemVersion: item.ItemVersion,
+			ArtifactDigests: item.ArtifactDigests, Message: "Return the discussion form only.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wrongFormID := specDiscussionInvocationID("wrong-form-spec-discussion")
+	if err := elaboratefake.Script(driver, wrongFormID, 0, 0, elaborate.Output{
+		Specification: &elaborate.Specification{
+			Summary: "Wrong output form", Body: "# Wrong\n\nThis must not replace the specification.",
+			Addressals: []elaborate.Addressal{},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	engine.elaboration.validateDelivery = validateDelivery
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	item, _ = f.item(t, itemID)
+	conversation, err = f.signet.GetConversation(t.Context(), *item.ConversationID)
+	if err != nil || item.ItemVersion != 5 || len(conversation.Conversation.Messages) != 4 ||
+		conversation.Conversation.Messages[3].Body != unavailableSpecDiscussionReply {
+		t.Fatalf("wrong-form discussion item = %+v, conversation = %+v, error = %v", item, conversation, err)
+	}
+
+	item, snapshot = f.item(t, itemID)
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "late-spec-discussion", DeviceID: "device-1",
+		ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionDiscuss, ItemVersion: item.ItemVersion,
+			ArtifactDigests: item.ArtifactDigests, Message: "Explain before I stop the run.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lateReply := "This reply remains durable after the terminal decision."
+	lateID := specDiscussionInvocationID("late-spec-discussion")
+	if err := elaboratefake.Script(driver, lateID, 0, 1, elaborate.Output{Reply: &lateReply}); err != nil {
+		t.Fatal(err)
+	}
+	item, snapshot = f.item(t, itemID)
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "stop-before-spec-reply", DeviceID: "device-1",
+		ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionStop, ItemVersion: item.ItemVersion,
+			ArtifactDigests: item.ArtifactDigests,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("enqueue late discussion after stop: %v", err)
+	}
+	var marker store.QueueEntry
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		marker, err = tx.GetOutbox(t.Context(), string(lateID))
+		return err
+	}); err != nil || marker.Dispatched() {
+		t.Fatalf("late discussion marker = %+v, error = %v", marker, err)
+	}
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("start late discussion after stop: %v", err)
+	}
+	conversation, err = f.signet.GetConversation(t.Context(), *item.ConversationID)
+	if err != nil || conversation.Conversation.Status != domain.ConversationAwaitingAgent ||
+		len(conversation.Conversation.Messages) != 5 {
+		t.Fatalf("in-flight late discussion = %+v, error = %v", conversation, err)
+	}
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("accept late discussion: %v", err)
+	}
+	item, _ = f.item(t, itemID)
+	conversation, err = f.signet.GetConversation(t.Context(), *item.ConversationID)
+	if err != nil || item.Status != domain.StatusResolved || item.ItemVersion != 7 ||
+		conversation.Conversation.Status != domain.ConversationIdle ||
+		len(conversation.Conversation.Messages) != 6 ||
+		conversation.Conversation.Messages[5].Body != lateReply {
+		t.Fatalf("late discussion item = %+v, conversation = %+v, error = %v", item, conversation, err)
+	}
+	if _, err := f.run("implementation-run"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("late discussion advanced implementation: %v", err)
+	}
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("late discussion replay: %v", err)
+	}
+	conversation, err = f.signet.GetConversation(t.Context(), *item.ConversationID)
+	if err != nil || len(conversation.Conversation.Messages) != 6 {
+		t.Fatalf("replayed late discussion = %+v, error = %v", conversation, err)
+	}
+	damaged := marker
+	damaged.Payload = []byte("{")
+	quarantined, err := engine.quarantinePendingElaborationDiscussionMarker(
+		t.Context(), damaged,
+		fmt.Errorf("%w: truncated payload", errElaborationDiscussionMarkerUnreadable),
+	)
+	if err != nil || !quarantined {
+		t.Fatalf("truncated discussion marker quarantine = %t, %v", quarantined, err)
+	}
+}
+
+func TestElaborationSpecificationDiscussionSecretInputNeverStartsProvider(t *testing.T) {
+	f := newElaborationFixture(t, true, 4)
+	driver := f.newDriver(t)
+	initialID := elaborationInvocationID("elaboration-run", 1)
+	if err := elaboratefake.Script(driver, initialID, 0, 0, elaborate.Output{
+		Specification: &elaborate.Specification{
+			Summary: "Ready.", Body: "# Specification\n\nKeep the workflow bounded.",
+			Addressals: []elaborate.Addressal{},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.submit(t)
+	engine := f.newEngine(t, driver)
+	itemID := domain.ItemID("spec-approval-implementation-run-1")
+	for pass := 1; pass <= 3; pass++ {
+		if _, err := engine.Reconcile(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.signet.GetAttentionItem(t.Context(), itemID); err == nil {
+			break
+		}
+	}
+	item, snapshot := f.item(t, itemID)
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "secret-spec-discussion", DeviceID: "device-1",
+		ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionDiscuss, ItemVersion: item.ItemVersion,
+			ArtifactDigests: item.ArtifactDigests,
+			Message:         "Explain ghp_" + strings.Repeat("A", 36),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	item, _ = f.item(t, itemID)
+	conversation, err := f.signet.GetConversation(t.Context(), *item.ConversationID)
+	if err != nil || len(conversation.Conversation.Messages) != 2 ||
+		conversation.Conversation.Messages[1].Body != unavailableSpecDiscussionReply {
+		t.Fatalf("secret discussion item = %+v, conversation = %+v, error = %v", item, conversation, err)
+	}
+	if _, err := driver.Inspect(t.Context(), specDiscussionInvocationID("secret-spec-discussion")); !errors.Is(err, exec.ErrUnknownInvocation) {
+		t.Fatalf("secret-bearing specification discussion reached provider: %v", err)
+	}
+}
+
+func TestElaborationDiscussionRequestRejectsUnboundOrNoncanonicalPayload(t *testing.T) {
+	if got := specDiscussionInvocationID("spec-discussion-X"); strings.HasPrefix(string(got), "inv-") || got == "inv-spec-discussion-X" {
+		t.Fatalf("daemon discussion invocation %q overlaps the client invocation namespace", got)
+	}
+	digest := domain.Digest(contentaddr.Sum([]byte("conversation prefix")))
+	request := elaborationDiscussionRequest{
+		Version: elaborationDiscussionRequestVersion, ElaborationRunID: "elaboration-run",
+		ImplementationRunID: "implementation-run", ProjectID: "project-1", Iteration: 1,
+		InvocationID: specDiscussionInvocationID("command-1"), DiscussInvocationID: "inv-command-1",
+		ConversationID: "conversation-1", ThroughSequence: 1, PrefixDigest: digest,
+		ItemID: "spec-approval-implementation-run-1", ItemVersion: 2,
+		InputArtifactIDs: []domain.ArtifactID{"spec-implementation-run-1", "spec-discussion-command-1"},
+		SpecArtifactID:   "spec-implementation-run-1", PolicyArtifactID: "policy-1",
+	}
+	payload, err := encodeElaborationDiscussionRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := store.QueueEntry{
+		Kind: KindElaborationDiscussionRequested, IdempotencyKey: string(request.InvocationID), Payload: payload,
+	}
+	if _, err := decodeElaborationDiscussionRequest(entry); err != nil {
+		t.Fatalf("canonical request: %v", err)
+	}
+	wrongKey := entry
+	wrongKey.IdempotencyKey = "inv-other"
+	if _, err := decodeElaborationDiscussionRequest(wrongKey); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("wrong key error = %v", err)
+	}
+	noncanonical := entry
+	noncanonical.Payload = append(append([]byte{}, payload[:len(payload)-1]...), []byte(`,"unknown":true}`)...)
+	if _, err := decodeElaborationDiscussionRequest(noncanonical); err == nil {
+		t.Fatal("discussion request accepted an unknown payload field")
+	}
+	prior := domain.ArtifactID("prior-spec")
+	base := elaborationRequest{
+		InputArtifactIDs:    []domain.ArtifactID{"source", prior, "feedback-1"},
+		PriorSpecArtifactID: &prior, FeedbackArtifactIDs: []domain.ArtifactID{"feedback-1"},
+	}
+	wantInputs := []domain.ArtifactID{"source", request.SpecArtifactID, "feedback-1", "spec-discussion-command-1"}
+	if got := specDiscussionInputArtifactIDs(base, request.SpecArtifactID, "spec-discussion-command-1"); !slices.Equal(got, wantInputs) {
+		t.Fatalf("reconstructed discussion inputs = %v, want %v", got, wantInputs)
 	}
 }
 
@@ -2217,13 +2680,41 @@ func TestElaborationExpiryHoldsOnConformanceRefusal(t *testing.T) {
 	}
 }
 
-func TestElaborationDecisionCommandsRejectDiscussion(t *testing.T) {
-	commands := []domain.Command{
-		{CommandID: "discuss", Action: domain.ActionDiscuss},
-		{CommandID: "approve", Action: domain.ActionApprove},
+func TestElaborationDecisionCommandsIgnoreDiscussion(t *testing.T) {
+	for _, action := range []domain.Action{
+		domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop,
+	} {
+		t.Run(string(action), func(t *testing.T) {
+			commands := []domain.Command{
+				{CommandID: "discuss", Action: domain.ActionDiscuss},
+				{CommandID: "decision", Action: action},
+			}
+			decisions, err := elaborationDecisionCommands(commands)
+			if err != nil || len(decisions) != 1 || decisions[0].Action != action {
+				t.Fatalf("decision commands = %+v, error = %v", decisions, err)
+			}
+		})
 	}
-	if _, err := elaborationDecisionCommands(commands); !errors.Is(err, domain.ErrParentKeyMismatch) {
-		t.Fatalf("discussion command error = %v, want ErrParentKeyMismatch", err)
+}
+
+func TestElaborationApprovalDecisionSetAcceptsHistoricalAndCurrentShapes(t *testing.T) {
+	legacy := []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}
+	current := []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop}
+	if !validElaborationApprovalDecisionSet(legacy) || !validElaborationApprovalDecisionSet(current) {
+		t.Fatal("historical or current specification approval decision set was rejected")
+	}
+	if validElaborationApprovalDecisionSet([]domain.Action{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop}) {
+		t.Fatal("unrecognized specification approval decision set was accepted")
+	}
+}
+
+func TestElaborationRevisionFailureDecisionSetAcceptsHistoricalAndCurrentShapes(t *testing.T) {
+	if !validElaborationRevisionFailureDecisionSet([]domain.Action{domain.ActionStop}) ||
+		!validElaborationRevisionFailureDecisionSet([]domain.Action{domain.ActionDiscuss, domain.ActionStop}) {
+		t.Fatal("historical or current revision-failure decision set was rejected")
+	}
+	if validElaborationRevisionFailureDecisionSet([]domain.Action{domain.ActionDiscuss}) {
+		t.Fatal("unrecognized revision-failure decision set was accepted")
 	}
 }
 

@@ -142,6 +142,7 @@ func backupPayloadExtractors() map[string]store.BackupPayloadDigestExtractor {
 		engine.KindProductionPublicationRequested:   engine.ProductionPublicationBackupPayloadDigests,
 		engine.KindRemediationInvocationRequested:   engine.RemediationInvocationBackupPayloadDigests,
 		engine.KindElaborationInvocationRequested:   engine.ElaborationInvocationBackupPayloadDigests,
+		engine.KindElaborationDiscussionRequested:   engine.ElaborationDiscussionBackupPayloadDigests,
 		engine.KindElaborationImplementationClaim:   engine.ElaborationImplementationClaimBackupPayloadDigests,
 		publish.IntentKindReservation:               publish.ReservationBackupPayloadDigests,
 		publish.IntentKindPublication:               publish.PublicationBackupPayloadDigests,

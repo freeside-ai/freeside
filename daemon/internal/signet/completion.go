@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // kindAgentCompletion is the inbox kind of an accepted agent completion. The
@@ -24,6 +26,72 @@ type AgentReply struct {
 	// Attachments are digest addresses of blobs already finalized in the
 	// artifact store; acceptance verifies presence before the transaction.
 	Attachments []domain.Digest
+}
+
+// AuthenticateAgentCompletion reconstructs a recorded completion and the
+// message it atomically appended. A caller may use the completion as durable
+// proof only when both records still agree with the expected reply.
+func AuthenticateAgentCompletion(
+	ctx context.Context, tx *store.ReadTx, invocationID domain.InvocationID, reply AgentReply,
+) error {
+	accepted, err := ReconstructAgentCompletion(ctx, tx, invocationID)
+	if err != nil {
+		return err
+	}
+	if accepted.Body != reply.Body || !slices.Equal(accepted.Attachments, reply.Attachments) {
+		return domain.ErrParentKeyMismatch
+	}
+	return nil
+}
+
+// ReconstructAgentCompletion returns the reply only after proving the durable
+// completion record agrees with the exact message it atomically appended.
+func ReconstructAgentCompletion(
+	ctx context.Context, tx *store.ReadTx, invocationID domain.InvocationID,
+) (AgentReply, error) {
+	entry, err := tx.GetInbox(ctx, string(invocationID))
+	if err != nil {
+		return AgentReply{}, err
+	}
+	var accepted struct {
+		InvocationID domain.InvocationID `json:"invocation_id"`
+		Body         string              `json:"body"`
+		Attachments  []domain.Digest     `json:"attachments"`
+	}
+	if entry.Kind != kindAgentCompletion || entry.IdempotencyKey != string(invocationID) ||
+		strictjson.Decode(entry.Payload, &accepted, strictjson.RejectInvalidUTF8, strictjson.NoLimit) != nil ||
+		accepted.InvocationID != invocationID {
+		return AgentReply{}, domain.ErrParentKeyMismatch
+	}
+	invocation, err := tx.GetAgentInvocation(ctx, invocationID)
+	if err != nil {
+		return AgentReply{}, err
+	}
+	if invocation.ConversationID == nil {
+		return AgentReply{}, domain.ErrParentKeyMismatch
+	}
+	conversation, err := tx.GetConversation(ctx, *invocation.ConversationID)
+	if err != nil {
+		return AgentReply{}, err
+	}
+	wantMessageID := domain.MessageID("msg-agent-" + string(invocationID))
+	matches := 0
+	for _, message := range conversation.Messages {
+		if message.ID != wantMessageID {
+			continue
+		}
+		if message.Author != domain.AuthorAgent ||
+			message.Sequence != invocation.ThroughSequence+1 ||
+			message.Body != accepted.Body ||
+			!slices.Equal(message.Attachments, accepted.Attachments) {
+			return AgentReply{}, domain.ErrParentKeyMismatch
+		}
+		matches++
+	}
+	if matches != 1 {
+		return AgentReply{}, domain.ErrParentKeyMismatch
+	}
+	return AgentReply{Body: accepted.Body, Attachments: slices.Clone(accepted.Attachments)}, nil
 }
 
 // errCompletionReplay abandons the Write of an already-accepted completion:

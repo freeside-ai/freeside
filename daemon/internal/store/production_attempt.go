@@ -261,8 +261,7 @@ WHERE kind = ? AND idempotency_key LIKE ?`,
 		if err != nil || item.Type != domain.AttentionSpecApproval || item.Status != domain.StatusResolved ||
 			item.Subject.Type != domain.SubjectRun || item.Subject.ID != domain.SubjectID(attempt.ElaborationRunID) ||
 			item.Subject.RunID == nil || *item.Subject.RunID != attempt.ElaborationRunID ||
-			!slices.Equal(item.RequestedDecision,
-				[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}) ||
+			!authenticElaborationApprovalDecisionSet(item.RequestedDecision) ||
 			len(item.EvidenceSnapshot) != 0 ||
 			item.PRHeadSHA != "" {
 			continue
@@ -297,6 +296,13 @@ WHERE kind = ? AND idempotency_key LIKE ?`,
 		}
 	}
 	return domain.ErrParentKeyMismatch
+}
+
+func authenticElaborationApprovalDecisionSet(actions []domain.Action) bool {
+	return slices.Equal(actions,
+		[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}) ||
+		slices.Equal(actions,
+			[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop})
 }
 
 func authenticatesInitialApprovalClaims(

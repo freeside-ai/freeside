@@ -22,10 +22,15 @@ const kindAgentInvocationRequested = string(domain.AgentInvocationRequestedKind)
 // elaboration loop persists and repeatedly replays it as agent input.
 const MaxRequestChangesMessageBytes = 8 << 10
 
+// MaxDiscussCommandIDBytes bounds the command id so identities derived for a
+// discussion cannot bloat a later elaboration request past its aggregate
+// protocol limit.
+const MaxDiscussCommandIDBytes = 256
+
 // MaxRequestChangesCommandIDBytes bounds the command id so the derived
 // spec-feedback artifact id cannot bloat the elaboration request past its
 // aggregate protocol limit.
-const MaxRequestChangesCommandIDBytes = 256
+const MaxRequestChangesCommandIDBytes = MaxDiscussCommandIDBytes
 
 // AgentInvocationRequestedKind identifies a committed discuss invocation in
 // the durable outbox.
@@ -114,6 +119,10 @@ func (s *Service) validateCommandContent(command domain.Command) error {
 			return fmt.Errorf("action %q: %w", command.Action, ErrContentNotAllowed)
 		}
 		return nil
+	}
+	if len(command.CommandID) > MaxDiscussCommandIDBytes {
+		return fmt.Errorf("action %q command id is %d bytes: %w",
+			command.Action, len(command.CommandID), domain.ErrClaimTextTooLarge)
 	}
 	if command.Message == "" {
 		return fmt.Errorf("action %q: %w", command.Action, ErrMessageRequired)

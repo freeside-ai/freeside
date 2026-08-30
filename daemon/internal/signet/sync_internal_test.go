@@ -33,6 +33,48 @@ func TestNormalizeAttentionItemCarriesReadinessAndLegacyNull(t *testing.T) {
 	}
 }
 
+func TestAuthenticateElaborationDiscussionArtifact(t *testing.T) {
+	id := domain.ArtifactID("spec-discussion-command-1")
+	digest := domain.Digest("sha256:" + strings.Repeat("a", 64))
+	producer := domain.InvocationID("inv-elaborate-run-1")
+	valid := domain.Artifact{
+		ID: id, Type: domain.ArtifactKindResearch, Digest: digest,
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: producer,
+			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+		},
+	}
+	if !authenticatesElaborationDiscussionArtifact(valid, id, digest, producer) {
+		t.Fatal("valid discussion artifact was rejected")
+	}
+	for name, mutate := range map[string]func(*domain.Artifact){
+		"retargeted id": func(artifact *domain.Artifact) { artifact.ID = "spec-discussion-other" },
+		"wrong digest":  func(artifact *domain.Artifact) { artifact.Digest = "sha256:" + domain.Digest(strings.Repeat("b", 64)) },
+		"wrong kind":    func(artifact *domain.Artifact) { artifact.Type = domain.ArtifactKindSpecification },
+		"wrong producer": func(artifact *domain.Artifact) {
+			artifact.Provenance.ProducerInvocationID = "inv-elaborate-other"
+		},
+		"agent producer": func(artifact *domain.Artifact) {
+			artifact.Provenance.ProducerClass = domain.ProducerAgent
+		},
+		"head bound": func(artifact *domain.Artifact) {
+			artifact.Provenance.HeadBinding = domain.HeadBound
+			artifact.Provenance.SourceHeadSHA = "cafebabe"
+		},
+		"sensitive": func(artifact *domain.Artifact) {
+			artifact.Provenance.SensitivityClass = domain.SensitivitySensitive
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			artifact := valid
+			mutate(&artifact)
+			if authenticatesElaborationDiscussionArtifact(artifact, id, digest, producer) {
+				t.Fatalf("corrupt discussion artifact authenticated: %+v", artifact)
+			}
+		})
+	}
+}
+
 func TestNormalizeAttentionItemCarriesYieldHistoryWithoutMutation(t *testing.T) {
 	history := &domain.ReviewYieldHistory{
 		Rounds:          []domain.ReviewYieldRound{{Round: 1, Outcome: domain.ReviewClean}},

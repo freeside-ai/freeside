@@ -233,6 +233,11 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 		InvocationsStarted: started,
 		ResultsAccepted:    accepted,
 	}
+	discussionsAccepted, err := e.reconcileAttentionDiscussions(ctx)
+	result.ResultsAccepted += discussionsAccepted
+	if err != nil {
+		return result, fmt.Errorf("reconcile attention discussions: %w", err)
+	}
 	if e.elaboration != nil {
 		startedRuns, blocked, gateErr := e.reconcileElaborationGates(ctx)
 		result.RunTransitions += startedRuns

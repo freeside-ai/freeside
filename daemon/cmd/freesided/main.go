@@ -720,7 +720,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			Binding:    inference.Binding{Provider: "unavailable", Model: "unbound"},
 			Sites: []inference.Site{
 				inference.ClassifierSite(judgmentBudget), inference.AdjudicatorSite(judgmentBudget),
-				inference.DiagnosticSite(judgmentBudget),
+				inference.DiagnosticSite(judgmentBudget), inference.DiscussionSite(judgmentBudget),
 			},
 			Advisory: advisoryWriter, Now: func() time.Time { return time.Now().UTC() },
 		})
