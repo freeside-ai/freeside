@@ -10,14 +10,12 @@ import Testing
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let first = DecisionSectionPreferences(defaults: defaults)
-        #expect(first.factsExpanded)
+        #expect(!first.claimsExpanded)
         #expect(!first.detailsExpanded)
-        first.factsExpanded = false
         first.claimsExpanded = true
         first.detailsExpanded = true
 
         let relaunched = DecisionSectionPreferences(defaults: defaults)
-        #expect(!relaunched.factsExpanded)
         #expect(relaunched.claimsExpanded)
         #expect(relaunched.detailsExpanded)
     }
@@ -33,7 +31,6 @@ import Testing
             detailsExpandedOverride: true)
 
         #expect(preferences.detailsExpanded)
-        #expect(preferences.factsExpanded)
         #expect(!preferences.claimsExpanded)
     }
 }

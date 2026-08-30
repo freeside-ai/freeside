@@ -489,6 +489,32 @@
                 }
 
                 if snapshot.item._type == .ready_for_final_review {
+                    // The card carries this item's commit-plan fact, so the
+                    // inspector beside it must not repeat a Facts section.
+                    let readyPreferencesSuite = "FreesideScreenshotReadyPreferences"
+                    guard let readyDefaults = UserDefaults(suiteName: readyPreferencesSuite)
+                    else {
+                        throw ScreenshotError.preferencesUnavailable
+                    }
+                    readyDefaults.removePersistentDomain(forName: readyPreferencesSuite)
+                    let readyPreferences = DecisionSectionPreferences(defaults: readyDefaults)
+                    readyPreferences.claimsExpanded = true
+                    readyPreferences.evidenceExpanded = true
+                    readyPreferences.detailsExpanded = true
+                    let readyInspector = DecisionDetailView(
+                        store: store,
+                        itemID: snapshot.item.id,
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        sectionPreferences: readyPreferences)
+                    surfaces.append(
+                        Surface(
+                            name: "decision-ready_for_final_review-inspector",
+                            width: 360,
+                            view: AnyView(
+                                readyInspector.screenshotInspector(
+                                    snapshot.item,
+                                    at: dynamicTypeSize))))
                     surfaces.append(
                         Surface(
                             name: "decision-ready_for_final_review-1200",

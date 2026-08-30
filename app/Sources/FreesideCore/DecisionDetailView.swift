@@ -795,17 +795,12 @@ struct DecisionDetailView: View {
             _ item: Components.Schemas.AttentionItem,
             rendersInteractiveControls: Bool = true
         ) -> some View {
+            // The card carries the Section 9 facts and the authenticated
+            // proposal, so the inspector carries only what the card omits:
+            // attachment claims, the evidence packet, and the technical
+            // bindings. A second copy of the same rows made an open inspector
+            // repeat the card beside it.
             VStack(alignment: .leading, spacing: 12) {
-                if let notice = item.commit_plan_notice?.value1 {
-                    inspectorSection("Facts", isExpanded: factsExpanded) {
-                        factRow("Commit plan", value: AttentionDisplay.label(notice))
-                    }
-                }
-                if let facts = model.proposalFacts {
-                    inspectorSection("Authenticated proposal", isExpanded: proposalExpanded) {
-                        proposalRows(facts)
-                    }
-                }
                 let attachmentClaims = item.agent_claims.filter { $0.text == nil }
                 if !attachmentClaims.isEmpty {
                     inspectorSection(
@@ -859,14 +854,6 @@ struct DecisionDetailView: View {
                 .font(FreesideFont.sans(.caption, weight: .semibold))
             proposalRevisionRows(prior)
         }
-    }
-
-    private var factsExpanded: Binding<Bool> {
-        preferenceBinding(\.factsExpanded)
-    }
-
-    private var proposalExpanded: Binding<Bool> {
-        preferenceBinding(\.proposalExpanded)
     }
 
     private var claimsExpanded: Binding<Bool> {
