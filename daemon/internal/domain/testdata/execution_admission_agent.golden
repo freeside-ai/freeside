@@ -1,5 +1,5 @@
 {
-  "id": "sha256:d0ccb5cd59afcdb0a4a52fda17530b455bbafd45dd220d260b1b2b2f107f9740",
+  "id": "sha256:30c98a416a17ac8c357accdf8cfca31370765dad9e6dafab9a4e427ad647822c",
   "invocation_id": "inv-3",
   "run_id": "run-1",
   "stage_id": "stage-1",
@@ -49,6 +49,8 @@
   "agent_binding": {
     "agent_digest": "sha256:fba2e91b81488102b4193bb2a7730f4ec9e5198a98b9baa6c0f2fc6ee60c3b8a",
     "launch_digest": "sha256:a3c077d3202e7218f405162176b564d5c5853628a0bf06b38b342db18174a1cc",
+    "treatment_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "pricing_revision": "2026-08",
     "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "enrollment_id": "enroll-openai-A-codex",
     "enrollment_generation": 2,

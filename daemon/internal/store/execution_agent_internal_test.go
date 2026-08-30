@@ -118,6 +118,8 @@ func agentBoundAdmission(t *testing.T, generation domain.EnrollmentGeneration) d
 		AgentBinding: &domain.AdmissionAgentBinding{
 			AgentDigest:          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			LaunchDigest:         "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			TreatmentDigest:      "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+			PricingRevision:      "pricing-2026-01",
 			LineupRevision:       "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 			EnrollmentID:         generation.EnrollmentID,
 			EnrollmentGeneration: generation.Ordinal,

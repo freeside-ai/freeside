@@ -108,6 +108,8 @@ func agentBinding() domain.AdmissionAgentBinding {
 	return domain.AdmissionAgentBinding{
 		AgentDigest:          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		LaunchDigest:         "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		TreatmentDigest:      "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+		PricingRevision:      "pricing-2026-01",
 		LineupRevision:       "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 		EnrollmentID:         "enroll-1",
 		EnrollmentGeneration: 1,
@@ -148,6 +150,8 @@ func TestAdmissionAgentBindingValidate(t *testing.T) {
 	}{
 		{"valid", func(*domain.AdmissionAgentBinding) {}, nil},
 		{"agent digest is a name", func(b *domain.AdmissionAgentBinding) { b.AgentDigest = "sol-via-codex" }, domain.ErrInvalidDigest},
+		{"treatment digest is a name", func(b *domain.AdmissionAgentBinding) { b.TreatmentDigest = "treatment-a" }, domain.ErrInvalidDigest},
+		{"no pricing revision", func(b *domain.AdmissionAgentBinding) { b.PricingRevision = "" }, domain.ErrEmptyField},
 		{"no enrollment", func(b *domain.AdmissionAgentBinding) { b.EnrollmentID = "" }, domain.ErrEmptyID},
 		{"zero generation", func(b *domain.AdmissionAgentBinding) { b.EnrollmentGeneration = 0 }, domain.ErrNonPositive},
 		{"no egress", func(b *domain.AdmissionAgentBinding) { b.EffectiveEgress = nil }, domain.ErrEmptyField},
@@ -318,6 +322,8 @@ func derivationClosure(t *testing.T) (
 	in.AgentBinding = &domain.AdmissionAgentBinding{
 		AgentDigest:          agent.Digest,
 		LaunchDigest:         launch.Digest,
+		TreatmentDigest:      "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+		PricingRevision:      "pricing-2026-01",
 		LineupRevision:       "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 		EnrollmentID:         resolution.Enrollment.ID,
 		EnrollmentGeneration: generationEntry.Ordinal,

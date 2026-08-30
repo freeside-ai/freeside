@@ -817,6 +817,8 @@ func TestGolden(t *testing.T) {
 		AgentBinding: &domain.AdmissionAgentBinding{
 			AgentDigest:          goldenAgent.Digest,
 			LaunchDigest:         goldenLaunch.Digest,
+			TreatmentDigest:      stageDigest("d"),
+			PricingRevision:      goldenOffer.PricingRevision,
 			LineupRevision:       stageDigest("c"),
 			EnrollmentID:         agentEnrollment.ID,
 			EnrollmentGeneration: 2,
