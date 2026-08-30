@@ -58,11 +58,10 @@ struct InboxView: View {
             case .idle, .loading:
                 ProgressView()
             case .failed(let message):
-                ContentUnavailableView {
-                    Label("Couldn't load the inbox", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(message)
-                }
+                UnavailableStateView(
+                    title: "Couldn't load the inbox",
+                    systemImage: "exclamationmark.triangle",
+                    description: message)
             case .loaded:
                 VStack(spacing: 0) {
                     scopeBar
@@ -80,18 +79,10 @@ struct InboxView: View {
                     .padding(.bottom, 8)
 
                     if store.rows.isEmpty {
-                        ContentUnavailableView {
-                            Label {
-                                Text("No \(store.scope.label.lowercased()) items")
-                                    .font(FreesideFont.title)
-                            } icon: {
-                                Image(systemName: "checklist")
-                            }
-                        } description: {
-                            Text("Attention items in this scope will appear here.")
-                                .font(FreesideFont.callout)
-                        }
-                        .foregroundStyle(Color.inkDim)
+                        UnavailableStateView(
+                            title: "No \(store.scope.label.lowercased()) items",
+                            systemImage: "checklist",
+                            description: "Attention items in this scope will appear here.")
                     } else {
                         #if os(iOS)
                             List(store.rows, id: \.item.id) { snapshot in

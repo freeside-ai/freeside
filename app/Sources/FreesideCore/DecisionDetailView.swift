@@ -148,11 +148,10 @@ struct DecisionDetailView: View {
                         }
                     }
                 } else {
-                    ContentUnavailableView(
-                        "Item unavailable",
+                    UnavailableStateView(
+                        title: "Item unavailable",
                         systemImage: "questionmark.circle",
-                        description: Text("This attention item is not in the inbox.")
-                    )
+                        description: "This attention item is not in the inbox.")
                 }
             }
             // Re-validate on open and whenever the cache is evicted for a new
@@ -306,10 +305,10 @@ struct DecisionDetailView: View {
                         .background(Color.sidebarGround)
                         .inspectorColumnWidth(min: 280, ideal: 340, max: 440)
                     } else {
-                        ContentUnavailableView(
-                            "No decision selected",
+                        UnavailableStateView(
+                            title: "No decision selected",
                             systemImage: "sidebar.trailing",
-                            description: Text("Select an item to inspect its facts."))
+                            description: "Select an item to inspect its facts.")
                     }
                 }
         #endif
@@ -1806,13 +1805,10 @@ struct DecisionDetailView: View {
                             }
                         }
                     } else {
-                        ContentUnavailableView(
-                            "Preview unavailable",
+                        UnavailableStateView(
+                            title: "Preview unavailable",
                             systemImage: "doc",
-                            description: Text(
-                                "This \(byteCount(preview.byteCount)) attachment is not text."
-                            )
-                        )
+                            description: "This \(byteCount(preview.byteCount)) attachment is not text.")
                     }
                 }
                 .navigationTitle(label)

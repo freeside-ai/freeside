@@ -45,16 +45,10 @@ struct RunsListView: View {
             .padding(.bottom, 8)
 
             if visibleRuns.isEmpty {
-                ContentUnavailableView {
-                    Label {
-                        Text("No runs").font(FreesideFont.title)
-                    } icon: {
-                        Image(systemName: "point.3.connected.trianglepath.dotted")
-                    }
-                } description: {
-                    Text("Runs for this project will appear here.").font(FreesideFont.callout)
-                }
-                .foregroundStyle(Color.inkDim)
+                UnavailableStateView(
+                    title: "No runs",
+                    systemImage: "point.3.connected.trianglepath.dotted",
+                    description: "Runs for this project will appear here.")
             } else {
                 #if os(iOS)
                     List(visibleRuns, id: \.run.id) { snapshot in

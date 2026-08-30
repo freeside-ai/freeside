@@ -772,6 +772,15 @@
                         width: 480,
                         view: AnyView(bannerDetail.screenshotBanner())))
             }
+            surfaces.append(
+                Surface(
+                    name: "unavailable-state",
+                    width: 480,
+                    view: AnyView(
+                        UnavailableStateView(
+                            title: "No decision selected",
+                            systemImage: "sidebar.trailing",
+                            description: "Select an item to inspect its facts."))))
 
             return surfaces
         }
