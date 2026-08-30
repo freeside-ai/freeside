@@ -12,10 +12,12 @@ struct WrappingHStack: Layout {
         subviews: Subviews,
         cache: inout ()
     ) -> CGSize {
-        let width = proposal.width ?? .infinity
-        let arrangement = arrange(
-            subviews.map { $0.sizeThatFits(.unspecified) }, maximumWidth: width)
-        return CGSize(width: proposal.width ?? arrangement.size.width, height: arrangement.size.height)
+        fittingSize(
+            for: subviews.map { $0.sizeThatFits(.unspecified) }, proposedWidth: proposal.width)
+    }
+
+    func fittingSize(for sizes: [CGSize], proposedWidth: CGFloat?) -> CGSize {
+        arrange(sizes, maximumWidth: proposedWidth ?? .infinity).size
     }
 
     func placeSubviews(
