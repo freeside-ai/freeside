@@ -24,5 +24,16 @@
       "raw_text": "P2: possible off-by-one in retry ordinal",
       "created_at": "2026-01-02T03:04:05Z"
     }
+  ],
+  "usage": [
+    {
+      "source": "review_source",
+      "kind": "billable_cost",
+      "metric": "total_cost",
+      "unit": "usd_micros",
+      "quantity": 250000,
+      "sequence": 1,
+      "observed_at": "2026-01-02T03:04:05Z"
+    }
   ]
 }

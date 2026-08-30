@@ -24,11 +24,13 @@ import (
 
 func cloneStageResult(r exec.StageResult) exec.StageResult {
 	r.Artifacts = slices.Clone(r.Artifacts)
+	r.Usage = slices.Clone(r.Usage)
 	return r
 }
 
 func cloneReviewResult(r exec.ReviewResult) exec.ReviewResult {
 	r.Findings = slices.Clone(r.Findings)
+	r.Usage = slices.Clone(r.Usage)
 	for i := range r.Findings {
 		if loc := r.Findings[i].Location; loc != nil {
 			clone := *loc

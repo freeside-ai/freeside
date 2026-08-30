@@ -220,6 +220,7 @@ type ReviewResult struct {
 	CompletedAt         time.Time           `json:"completed_at"`
 	CompletionEvidence  domain.Digest       `json:"completion_evidence"`
 	Findings            []domain.Finding    `json:"findings"`
+	Usage               []UsageMeasurement  `json:"usage"`
 }
 
 // Validate reports whether the result is well-formed: reconcilable
@@ -265,6 +266,11 @@ func (r ReviewResult) Validate() error {
 				i, f.ID, domain.ErrFindingsNotCanonical)
 		}
 		seen[f.ID] = struct{}{}
+	}
+	for i, measurement := range r.Usage {
+		if err := measurement.Validate(); err != nil {
+			return fmt.Errorf("review result usage[%d]: %w", i, err)
+		}
 	}
 	return nil
 }

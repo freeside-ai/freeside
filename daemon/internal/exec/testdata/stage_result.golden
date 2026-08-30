@@ -6,5 +6,16 @@
     "sha256:transcript",
     "sha256:diff"
   ],
-  "summary": "implemented the fix and its regression test"
+  "summary": "implemented the fix and its regression test",
+  "usage": [
+    {
+      "source": "adapter_transcript",
+      "kind": "reported_usage",
+      "metric": "input_tokens",
+      "unit": "tokens",
+      "quantity": 1234,
+      "sequence": 1,
+      "observed_at": "2026-01-02T03:04:05Z"
+    }
+  ]
 }

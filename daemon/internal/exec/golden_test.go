@@ -25,6 +25,12 @@ func TestGolden(t *testing.T) {
 		HeadSHA:      "cafebabe",
 		Artifacts:    []domain.Digest{"sha256:transcript", "sha256:diff"},
 		Summary:      "implemented the fix and its regression test",
+		Usage: []exec.UsageMeasurement{{
+			Source: domain.UsageSourceAdapterTranscript,
+			Kind:   domain.UsageMeasurementReportedUsage,
+			Metric: "input_tokens", Unit: "tokens", Quantity: 1234,
+			Sequence: 1, ObservedAt: ts,
+		}},
 	}
 	review := exec.ReviewResult{
 		InvocationID:        "inv-2",
@@ -46,6 +52,12 @@ func TestGolden(t *testing.T) {
 			Message:   "possible off-by-one in retry ordinal",
 			RawText:   "P2: possible off-by-one in retry ordinal",
 			CreatedAt: ts,
+		}},
+		Usage: []exec.UsageMeasurement{{
+			Source: domain.UsageSourceReviewSource,
+			Kind:   domain.UsageMeasurementBillableCost,
+			Metric: "total_cost", Unit: "usd_micros", Quantity: 250000,
+			Sequence: 1, ObservedAt: ts,
 		}},
 	}
 
