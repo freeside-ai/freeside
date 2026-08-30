@@ -35,6 +35,7 @@
         private let canvasWidth: CGFloat = 960
         private let baselineOperatingSystemKey = "macOS-26.6"
         private let screenshotNow = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
+        private let screenshotTimeZone = TimeZone(identifier: "UTC") ?? .current
         private let textSizes = [
             TextSize(name: "xsmall", value: .xSmall),
             TextSize(name: "large", value: .large),
@@ -675,6 +676,90 @@
                     name: "pairing",
                     view: AnyView(PairingView(model: pairing) { _ in }.screenshotContent())
                 ))
+            let runProposalFacts = Components.Schemas.RunProposalFactsSnapshot(
+                as_of_revision: 12,
+                entity_version: 12,
+                item_version: 3,
+                proposal_digest: "sha256:run-proposal-screenshot",
+                supersedes: nil,
+                intent: .implement_subject,
+                expected_cost_units: 12,
+                scope: .init(
+                    component_count: 1,
+                    declared_path_count: 3,
+                    touches_control_plane: false))
+            surfaces.append(
+                Surface(
+                    name: "run-proposal-revision-sheet",
+                    width: 480,
+                    view: AnyView(
+                        RunProposalRevisionSheet(facts: runProposalFacts) { _ in }
+                            .screenshotContent())))
+            surfaces.append(
+                Surface(
+                    name: "run-proposal-revision-sheet-phone",
+                    width: 390,
+                    view: AnyView(
+                        RunProposalRevisionSheet(facts: runProposalFacts) { _ in }
+                            .screenshotContent())))
+            surfaces.append(
+                Surface(
+                    name: "run-proposal-revision-sheet-dark",
+                    width: 480,
+                    colorScheme: .dark,
+                    view: AnyView(
+                        RunProposalRevisionSheet(facts: runProposalFacts) { _ in }
+                            .screenshotContent())))
+            surfaces.append(
+                Surface(
+                    name: "run-proposal-revision-sheet-phone-dark",
+                    width: 390,
+                    colorScheme: .dark,
+                    view: AnyView(
+                        RunProposalRevisionSheet(facts: runProposalFacts) { _ in }
+                            .screenshotContent())))
+            surfaces.append(
+                Surface(
+                    name: "run-proposal-snooze-sheet",
+                    width: 480,
+                    view: AnyView(
+                        RunProposalSnoozeSheet(
+                            now: screenshotNow,
+                            screenshotTimeZone: screenshotTimeZone
+                        ) { _ in }
+                        .screenshotContent())))
+            surfaces.append(
+                Surface(
+                    name: "run-proposal-snooze-sheet-phone",
+                    width: 390,
+                    view: AnyView(
+                        RunProposalSnoozeSheet(
+                            now: screenshotNow,
+                            screenshotTimeZone: screenshotTimeZone
+                        ) { _ in }
+                        .screenshotContent())))
+            surfaces.append(
+                Surface(
+                    name: "run-proposal-snooze-sheet-dark",
+                    width: 480,
+                    colorScheme: .dark,
+                    view: AnyView(
+                        RunProposalSnoozeSheet(
+                            now: screenshotNow,
+                            screenshotTimeZone: screenshotTimeZone
+                        ) { _ in }
+                        .screenshotContent())))
+            surfaces.append(
+                Surface(
+                    name: "run-proposal-snooze-sheet-phone-dark",
+                    width: 390,
+                    colorScheme: .dark,
+                    view: AnyView(
+                        RunProposalSnoozeSheet(
+                            now: screenshotNow,
+                            screenshotTimeZone: screenshotTimeZone
+                        ) { _ in }
+                        .screenshotContent())))
             return surfaces
         }
 
