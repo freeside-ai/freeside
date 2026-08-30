@@ -152,19 +152,12 @@ public struct FreesideRootView: View {
         #else
             NavigationSplitView {
                 VStack(spacing: 0) {
-                    HStack(spacing: 8) {
-                        Picker("Section", selection: selectedTab) {
-                            Label("Inbox", systemImage: "tray.full").tag(LaunchInputs.Screen.inbox)
-                            Label("Runs", systemImage: "point.3.connected.trianglepath.dotted")
-                                .tag(LaunchInputs.Screen.runs)
-                        }
-                        .pickerStyle(.segmented)
-                        if coordinator.store.urgentOpenCount > 0 {
-                            StateChip(
-                                label: "\(coordinator.store.urgentOpenCount) urgent",
-                                color: .waxText)
-                        }
+                    Picker("Section", selection: selectedTab) {
+                        Label("Inbox", systemImage: "tray.full").tag(LaunchInputs.Screen.inbox)
+                        Label("Runs", systemImage: "point.3.connected.trianglepath.dotted")
+                            .tag(LaunchInputs.Screen.runs)
                     }
+                    .pickerStyle(.segmented)
                     .padding()
                     switch selectedTab.wrappedValue {
                     case .inbox:
