@@ -21,6 +21,17 @@ func testInitialProductionAttempt() domain.ProductionAttempt {
 	}
 }
 
+func TestProductionAttemptApprovalDecisionSetAcceptsHistoricalAndCurrentShapes(t *testing.T) {
+	legacy := []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}
+	current := []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop}
+	if !authenticElaborationApprovalDecisionSet(legacy) || !authenticElaborationApprovalDecisionSet(current) {
+		t.Fatal("historical or current specification approval decision set was rejected")
+	}
+	if authenticElaborationApprovalDecisionSet([]domain.Action{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop}) {
+		t.Fatal("unrecognized specification approval decision set was accepted")
+	}
+}
+
 func TestProductionAttemptMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

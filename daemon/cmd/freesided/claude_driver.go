@@ -532,10 +532,16 @@ func (a storeAdmissionAuthority) authenticateElaborationInvocation(
 		if err != nil {
 			return err
 		}
-		if entry.Kind != engine.KindElaborationInvocationRequested {
+		if entry.Kind != engine.KindElaborationInvocationRequested &&
+			entry.Kind != engine.KindElaborationDiscussionRequested {
 			return nil
 		}
 		elaboration = true
+		if entry.Kind == engine.KindElaborationDiscussionRequested {
+			return engine.AuthenticateElaborationDiscussionTransition(
+				ctx, tx, entry, admission.RunID, admission.StageID,
+			)
+		}
 		return engine.AuthenticateElaborationInvocationTransition(
 			ctx, tx, entry, admission.RunID, admission.StageID,
 		)

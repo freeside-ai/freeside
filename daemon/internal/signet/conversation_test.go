@@ -253,6 +253,16 @@ func TestDiscussRecoverySingleAcceptedResult(t *testing.T) {
 		t.Fatalf("conversation status = %q, want idle", snapshot.Conversation.Status)
 	}
 	if err := f2.store.Read(ctx, func(tx *store.ReadTx) error {
+		if err := signet.AuthenticateAgentCompletion(
+			ctx, tx, invocationID, signet.AgentReply{Body: collected.Summary},
+		); err != nil {
+			return fmt.Errorf("authenticate accepted completion: %w", err)
+		}
+		if err := signet.AuthenticateAgentCompletion(
+			ctx, tx, invocationID, signet.AgentReply{Body: "forged reply"},
+		); !errors.Is(err, domain.ErrParentKeyMismatch) {
+			return fmt.Errorf("authenticate forged completion = %w, want ErrParentKeyMismatch", err)
+		}
 		item, err := tx.GetAttentionItem(ctx, f.item.ID)
 		if err != nil {
 			return err
@@ -935,6 +945,83 @@ func TestMessageNamespacesDisjoint(t *testing.T) {
 			t.Fatalf("duplicate message id %q", m.ID)
 		}
 		seen[m.ID] = true
+	}
+}
+
+func TestDiscussRejectsOverlongCommandIDBeforeCommit(t *testing.T) {
+	ctx := context.Background()
+	f := newConversationFixture(t)
+	before := f.revision(t)
+	commandID := strings.Repeat("c", signet.MaxDiscussCommandIDBytes+1)
+
+	_, err := f.service.Submit(ctx, f.discussCommand(commandID, "explain this", nil, 1, 1))
+	if !errors.Is(err, domain.ErrClaimTextTooLarge) {
+		t.Fatalf("Submit overlong discuss command id = %v, want ErrClaimTextTooLarge", err)
+	}
+	if after := f.revision(t); after != before {
+		t.Fatalf("rejected discuss moved revision %d -> %d", before, after)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetCommand(ctx, commandID)
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("GetCommand after rejection = %v, want ErrNotFound", err)
+	}
+}
+
+func TestReconstructAgentCompletionRejectsMisplacedMessage(t *testing.T) {
+	ctx := context.Background()
+	f := newConversationFixture(t)
+	conversationID := domain.ConversationID("conv-misplaced")
+	invocationID := domain.InvocationID("inv-misplaced")
+	conversation := domain.Conversation{ID: conversationID, Status: domain.ConversationIdle}
+	user, err := domain.NewMessage("msg-user-misplaced", conversationID,
+		domain.AuthorUser, "question", nil, (*f.now).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, _ = conversation.Append(user)
+	intervening, err := domain.NewMessage("msg-user-intervening", conversationID,
+		domain.AuthorUser, "unrelated", nil, (*f.now).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, _ = conversation.Append(intervening)
+	agent, err := domain.NewMessage("msg-agent-inv-misplaced", conversationID,
+		domain.AuthorAgent, "answer", nil, (*f.now).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, _ = conversation.Append(agent)
+	invocation, err := domain.NewAgentInvocation(invocationID, nil, &conversationID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"invocation_id": invocationID,
+		"body":          "answer",
+		"attachments":   []domain.Digest{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutConversation(ctx, conversation); err != nil {
+			return err
+		}
+		if err := tx.PutAgentInvocation(ctx, invocation); err != nil {
+			return err
+		}
+		_, _, err := tx.RecordInbox(ctx, string(invocationID), "agent_completion", payload)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := signet.ReconstructAgentCompletion(ctx, tx, invocationID)
+		return err
+	}); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("ReconstructAgentCompletion = %v, want ErrParentKeyMismatch", err)
 	}
 }
 

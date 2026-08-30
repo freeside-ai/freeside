@@ -222,7 +222,7 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 			ID: approvalID, ProjectID: run.ProjectID,
 			Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(elaborationRunID), RunID: &elaborationRunID},
 			Type:    domain.AttentionSpecApproval, Priority: domain.PriorityNormal, Reason: "Approve specification.",
-			RequestedDecision: []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop},
+			RequestedDecision: []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop},
 			AgentClaims: []domain.AgentClaim{{
 				Label: "Specification", Artifact: specification.ID,
 				Digest: specification.Digest, Provenance: specification.Provenance,

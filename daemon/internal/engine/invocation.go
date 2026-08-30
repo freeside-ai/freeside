@@ -60,6 +60,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		pending            []store.QueueEntry
 		pendingProduction  []store.QueueEntry
 		pendingElaboration []store.QueueEntry
+		pendingDiscussion  []store.QueueEntry
 		pendingRemediation []store.QueueEntry
 		held               bool
 		holdReason         domain.RunHoldReason
@@ -111,6 +112,10 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		if err != nil {
 			return err
 		}
+		pendingDiscussion, err = tx.ListPendingOutbox(ctx, KindElaborationDiscussionRequested)
+		if err != nil {
+			return err
+		}
 		pendingRemediation, err = tx.ListPendingOutbox(ctx, KindRemediationInvocationRequested)
 		return err
 	})
@@ -132,6 +137,22 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			request, binding, err := e.loadElaborationBinding(ctx, entry)
 			if err != nil {
 				quarantined, quarantineErr := e.quarantinePendingElaborationMarker(ctx, entry, err)
+				if quarantineErr != nil {
+					return 0, quarantineErr
+				}
+				if quarantined {
+					continue
+				}
+				return 0, err
+			}
+			if err := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, holdReason); err != nil {
+				return 0, err
+			}
+		}
+		for _, entry := range pendingDiscussion {
+			request, binding, err := e.loadElaborationDiscussionBinding(ctx, entry)
+			if err != nil {
+				quarantined, quarantineErr := e.quarantinePendingElaborationDiscussionMarker(ctx, entry, err)
 				if quarantineErr != nil {
 					return 0, quarantineErr
 				}
@@ -288,6 +309,80 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				continue
 			}
 			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, cause)
+		}
+		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
+		started += boolCount(startedNow)
+		if err != nil {
+			if reason, ok := dispatchHoldReason(err); ok {
+				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason); obsErr != nil {
+					return started, obsErr
+				}
+			}
+			if invocationDispatchHold(err) {
+				continue
+			}
+			if unattendedDispatchRefusal(err) {
+				return started, nil
+			}
+			return started, err
+		}
+		if hold {
+			return started, nil
+		}
+	}
+	for _, entry := range pendingDiscussion {
+		if e.elaboration == nil {
+			continue
+		}
+		request, binding, err := e.loadElaborationDiscussionBinding(ctx, entry)
+		if err != nil {
+			quarantined, quarantineErr := e.quarantinePendingElaborationDiscussionMarker(ctx, entry, err)
+			if quarantineErr != nil {
+				return started, quarantineErr
+			}
+			if quarantined {
+				continue
+			}
+			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
+		}
+		if err := releaseProductionQuarantine(
+			ctx, e.store, e.signet, elaborationDiscussionMarkerQuarantinePrefix, binding.run.ID,
+		); err != nil {
+			return started, err
+		}
+		if attemptRecorded(binding.run, request.InvocationID) {
+			var admission domain.ExecutionAdmission
+			if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+				var err error
+				admission, err = tx.GetExecutionAdmissionRecord(ctx, request.InvocationID)
+				return err
+			}); err != nil {
+				return started, fmt.Errorf("intent %q admission: %w", entry.IdempotencyKey, err)
+			}
+			if admission.EgressProfile != domain.EgressProviderOnly {
+				return started, fmt.Errorf("discussion admission has egress %q: %w",
+					admission.EgressProfile, exec.ErrCapabilityRefused)
+			}
+		} else {
+			deliveryErr := e.validateProspectiveDelivery(
+				ctx, binding.run, binding.invocation, e.elaboration.promptPackage, true, nil,
+			)
+			if errors.Is(deliveryErr, ErrElaborationInputUndeliverable) {
+				if err := e.acceptSpecDiscussionReply(ctx, request, unavailableSpecDiscussionReply); err != nil {
+					return started, err
+				}
+				continue
+			}
+			if deliveryErr != nil {
+				return started, deliveryErr
+			}
+			if e.admission == nil || e.admission.environment.EgressProfile != domain.EgressProviderOnly {
+				return started, fmt.Errorf("elaboration discussion requires provider_only admission: %w", exec.ErrCapabilityRefused)
+			}
+		}
+		stage, ok := findElaborationStage(binding.run)
+		if !ok {
+			return started, fmt.Errorf("intent %q: elaboration stage missing", entry.IdempotencyKey)
 		}
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)

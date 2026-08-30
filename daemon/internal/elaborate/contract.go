@@ -23,6 +23,7 @@ const (
 	MaxURLBytes           = 8 << 10
 	MaxPurposeBytes       = 4 << 10
 	MaxSummaryBytes       = 8 << 10
+	MaxReplyBytes         = 8 << 10
 	MaxAddressals         = 64
 	MaxAddressalTextBytes = 8 << 10
 )
@@ -53,10 +54,12 @@ type Specification struct {
 	Addressals []Addressal `json:"addressals"`
 }
 
-// Output is exactly one loop decision: request research or return a spec.
+// Output is exactly one loop decision: request research, return a spec, or
+// answer a discussion turn without advancing the specification.
 type Output struct {
 	FetchRequests []FetchRequest `json:"fetch_requests"`
 	Specification *Specification `json:"specification"`
+	Reply         *string        `json:"reply"`
 }
 
 // DecodeOutput strictly reconstructs and validates one typed stage payload.
@@ -135,8 +138,9 @@ func EncodeOutput(out Output) ([]byte, error) {
 func (o Output) Validate() error {
 	hasFetch := len(o.FetchRequests) > 0
 	hasSpec := o.Specification != nil
-	if hasFetch == hasSpec {
-		return fmt.Errorf("%w: exactly one of fetch_requests or specification is required", ErrInvalidOutput)
+	hasReply := o.Reply != nil
+	if boolCount(hasFetch)+boolCount(hasSpec)+boolCount(hasReply) != 1 {
+		return fmt.Errorf("%w: exactly one of fetch_requests, specification, or reply is required", ErrInvalidOutput)
 	}
 	if hasFetch {
 		if len(o.FetchRequests) > MaxFetchRequests {
@@ -154,7 +158,21 @@ func (o Output) Validate() error {
 		}
 		return nil
 	}
-	return o.Specification.validate()
+	if hasSpec {
+		return o.Specification.validate()
+	}
+	if *o.Reply == "" || *o.Reply != strings.TrimSpace(*o.Reply) ||
+		len(*o.Reply) > MaxReplyBytes || !utf8.ValidString(*o.Reply) {
+		return fmt.Errorf("%w: reply must be non-empty trimmed UTF-8 within %d bytes", ErrInvalidOutput, MaxReplyBytes)
+	}
+	return nil
+}
+
+func boolCount(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func (r FetchRequest) validate() error {

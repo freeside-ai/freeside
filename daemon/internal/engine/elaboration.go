@@ -28,15 +28,21 @@ import (
 
 const (
 	KindElaborationInvocationRequested = string(domain.ElaborationInvocationRequestedKind)
+	KindElaborationDiscussionRequested = string(domain.ElaborationDiscussionRequestedKind)
 	kindElaborationTerminal            = "elaboration_stage_terminal"
+	kindElaborationDiscussionTerminal  = "elaboration_discussion_terminal"
 	// KindElaborationImplementationClaim reserves the future implementation
 	// run identity before approval and remains dispatched for durable replay.
-	KindElaborationImplementationClaim = "elaboration_implementation_claim"
-	elaborationStageName               = "elaboration"
-	elaborationRequestVersion          = "freeside.elaboration-request/v1"
-	maxElaborationContractBytes        = strictjson.Limit(1 << 20)
-	elaborationMarkerQuarantinePrefix  = "elaboration-marker-quarantined-"
-	elaborationQuarantineUnreadable    = "A stored elaboration marker could not be authenticated. " +
+	KindElaborationImplementationClaim          = "elaboration_implementation_claim"
+	elaborationStageName                        = "elaboration"
+	elaborationRequestVersion                   = "freeside.elaboration-request/v1"
+	elaborationDiscussionRequestVersion         = domain.ElaborationDiscussionInvocationIntentVersion
+	maxElaborationContractBytes                 = strictjson.Limit(1 << 20)
+	elaborationMarkerQuarantinePrefix           = "elaboration-marker-quarantined-"
+	elaborationDiscussionMarkerQuarantinePrefix = "elaboration-discussion-marker-quarantined-"
+	elaborationQuarantineUnreadable             = "A stored elaboration marker could not be authenticated. " +
+		"The run is held out of the elaboration lane, and resumes by itself once the marker reconstructs again."
+	elaborationDiscussionQuarantineUnreadable = "A stored elaboration discussion marker could not be authenticated. " +
 		"The run is held out of the elaboration lane, and resumes by itself once the marker reconstructs again."
 	elaborationPriorArtifactVersion = "freeside.elaboration-prior-artifact/v1"
 	elaborationSystemContract       = "# Freeside Elaboration Stage Contract\n\n" +
@@ -48,10 +54,11 @@ const (
 )
 
 var (
-	ErrElaborationIterationsExhausted = errors.New("elaboration iteration budget exhausted")
-	ErrSpecApprovalRequired           = errors.New("current specification is not approved")
-	ErrElaborationInputUndeliverable  = errors.New("elaboration input cannot be delivered")
-	errElaborationMarkerUnreadable    = errors.New("elaboration marker cannot be authenticated")
+	ErrElaborationIterationsExhausted        = errors.New("elaboration iteration budget exhausted")
+	ErrSpecApprovalRequired                  = errors.New("current specification is not approved")
+	ErrElaborationInputUndeliverable         = errors.New("elaboration input cannot be delivered")
+	errElaborationMarkerUnreadable           = errors.New("elaboration marker cannot be authenticated")
+	errElaborationDiscussionMarkerUnreadable = errors.New("elaboration discussion marker cannot be authenticated")
 )
 
 type elaborationWorkflow struct {
@@ -205,6 +212,8 @@ func (e *Engine) encodeElaborationPriorArtifact(
 		role = "research"
 		if strings.HasPrefix(string(artifact.ID), "spec-feedback-") {
 			role = "human_feedback"
+		} else if strings.HasPrefix(string(artifact.ID), "spec-discussion-") {
+			role = "discussion"
 		}
 	case domain.ArtifactKindPolicy,
 		domain.ArtifactKindEvidence,
@@ -1256,8 +1265,7 @@ func verifyElaborationApproval(
 	if item.ProjectID != request.ProjectID || item.Type != domain.AttentionSpecApproval ||
 		item.Subject.Type != domain.SubjectRun || item.Subject.ID != domain.SubjectID(request.ElaborationRunID) ||
 		item.Subject.RunID == nil || *item.Subject.RunID != request.ElaborationRunID ||
-		!slices.Equal(item.RequestedDecision,
-			[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}) ||
+		!validElaborationApprovalDecisionSet(item.RequestedDecision) ||
 		len(item.EvidenceSnapshot) != 0 ||
 		(len(item.AgentClaims) != 1 && len(item.AgentClaims) != 2) || item.PRHeadSHA != "" {
 		return domain.AttentionItem{}, nil, fmt.Errorf(
@@ -1276,6 +1284,13 @@ func verifyElaborationApproval(
 		return domain.AttentionItem{}, nil, err
 	}
 	return item, commands, nil
+}
+
+func validElaborationApprovalDecisionSet(actions []domain.Action) bool {
+	return slices.Equal(actions,
+		[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}) ||
+		slices.Equal(actions,
+			[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop})
 }
 
 func verifyElaborationApprovalClaims(
@@ -1733,6 +1748,9 @@ func (e *Engine) acceptElaborationAttempt(ctx context.Context, run domain.Run, a
 	}); err != nil {
 		return false, err
 	}
+	if entry.Kind == KindElaborationDiscussionRequested {
+		return e.acceptElaborationDiscussionAttempt(ctx, run, attempt, entry)
+	}
 	request, binding, err := e.loadElaborationBinding(ctx, entry)
 	if err != nil {
 		quarantined, quarantineErr := e.quarantinePendingElaborationMarker(ctx, entry, err)
@@ -1815,6 +1833,10 @@ func (e *Engine) acceptElaborationAttempt(ctx context.Context, run domain.Run, a
 			return false, e.recordElaborationFailure(ctx, run, request, exec.StatusFailed, ErrElaborationIterationsExhausted.Error())
 		}
 		return e.acceptResearchRequests(ctx, run, request, output.FetchRequests, settings)
+	}
+	if output.Reply != nil || output.Specification == nil {
+		return false, e.recordElaborationFailure(ctx, run, request, exec.StatusFailed,
+			fmt.Errorf("%w: ordinary elaboration must return research requests or a specification", elaborate.ErrInvalidOutput).Error())
 	}
 	if importer.ContainsSecret([]byte(output.Specification.Summary)) ||
 		importer.ContainsSecret([]byte(output.Specification.Body)) {
@@ -2075,9 +2097,19 @@ func (e *Engine) validateProspectiveDelivery(
 	if err != nil {
 		return err
 	}
-	snapshot, err := e.stageInputSnapshotWithArtifacts(ctx, invocationBinding{
-		run: run, invocation: invocation,
-	}, inputDigest, promptPackage, isElaboration, prospective)
+	binding := invocationBinding{run: run, invocation: invocation}
+	if invocation.ConversationID != nil {
+		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			binding.conversation, err = tx.GetConversation(ctx, *invocation.ConversationID)
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+	snapshot, err := e.stageInputSnapshotWithArtifacts(
+		ctx, binding, inputDigest, promptPackage, isElaboration, prospective,
+	)
 	if err != nil {
 		return err
 	}
@@ -2142,7 +2174,7 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 		ID: itemID, ProjectID: run.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID},
 		Type:    domain.AttentionSpecApproval, Priority: domain.PriorityNormal, Reason: reason,
-		RequestedDecision: []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop},
+		RequestedDecision: []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop},
 		AgentClaims: []domain.AgentClaim{
 			{
 				Label: "Specification", Artifact: artifact.ID, Digest: artifact.Digest,
@@ -2392,11 +2424,16 @@ func (e *Engine) elaborationRevisionFailed(
 	if item.ProjectID != run.ProjectID || item.Subject.Type != domain.SubjectRun ||
 		item.Subject.ID != domain.SubjectID(run.ID) || item.Subject.RunID == nil ||
 		*item.Subject.RunID != run.ID || item.Type != domain.AttentionExecutionFailure ||
-		!slices.Equal(item.RequestedDecision, []domain.Action{domain.ActionStop}) {
+		!validElaborationRevisionFailureDecisionSet(item.RequestedDecision) {
 		return false, fmt.Errorf("elaboration revision failure item %q binding disagrees: %w",
 			item.ID, domain.ErrParentKeyMismatch)
 	}
 	return true, nil
+}
+
+func validElaborationRevisionFailureDecisionSet(actions []domain.Action) bool {
+	return slices.Equal(actions, []domain.Action{domain.ActionStop}) ||
+		slices.Equal(actions, []domain.Action{domain.ActionDiscuss, domain.ActionStop})
 }
 
 func elaborationFailureItem(
@@ -2411,7 +2448,7 @@ func elaborationFailureItem(
 		ID: id, ProjectID: run.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
 		Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityHigh, Reason: reason,
-		RequestedDecision: []domain.Action{domain.ActionStop}, ItemVersion: 1,
+		RequestedDecision: []domain.Action{domain.ActionDiscuss, domain.ActionStop}, ItemVersion: 1,
 		InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
 		CreatedAt: &createdAt,
 	}, nil)
@@ -2515,7 +2552,10 @@ func (e *Engine) reconcileElaborationGates(ctx context.Context) (int, int, error
 		if len(stage.Attempts) == 0 {
 			continue
 		}
-		latest := stage.Attempts[len(stage.Attempts)-1]
+		latest, found := latestElaborationAttempt(stage)
+		if !found {
+			continue
+		}
 		requestEntry := store.QueueEntry{IdempotencyKey: string(latest.InvocationID)}
 		hasTerminal := false
 		var verified verifiedElaborationTerminal
@@ -2581,6 +2621,9 @@ func (e *Engine) reconcileElaborationGates(ctx context.Context) (int, int, error
 		}
 		item := *verified.approval
 		commands := verified.commands
+		if _, err := e.enqueuePendingSpecDiscussion(ctx, verified); err != nil {
+			return started, blocked, err
+		}
 		if item.Status != domain.StatusOpen {
 			if err := e.supersedeElaborationBlockedItem(ctx, *terminal.ApprovalItemID); err != nil {
 				return started, blocked, err
@@ -2651,6 +2694,15 @@ func (e *Engine) reconcileElaborationGates(ctx context.Context) (int, int, error
 	return started, blocked, nil
 }
 
+func latestElaborationAttempt(stage domain.Stage) (domain.Attempt, bool) {
+	for i := len(stage.Attempts) - 1; i >= 0; i-- {
+		if _, ok := elaborationRunIDFromInvocationID(stage.Attempts[i].InvocationID); ok {
+			return stage.Attempts[i], true
+		}
+	}
+	return domain.Attempt{}, false
+}
+
 func elaborationDecisionCommands(commands []domain.Command) ([]domain.Command, error) {
 	decisions := make([]domain.Command, 0, 1)
 	for _, command := range commands {
@@ -2658,6 +2710,9 @@ func elaborationDecisionCommands(commands []domain.Command) ([]domain.Command, e
 			command.Action == domain.ActionRequestChanges ||
 			command.Action == domain.ActionStop {
 			decisions = append(decisions, command)
+			continue
+		}
+		if command.Action == domain.ActionDiscuss {
 			continue
 		}
 		return nil, fmt.Errorf("elaboration item command %q has action %q: %w",

@@ -42,10 +42,12 @@ func TestDecodeOutputStrictAndExclusive(t *testing.T) {
 		want error
 	}{
 		{"fetch", `{"fetch_requests":[{"url":"https://example.com/a","purpose":"confirm behavior"}],"specification":null}`, nil},
+		{"reply", `{"fetch_requests":[],"specification":null,"reply":"The approval remains open."}`, nil},
 		{"unknown", `{"fetch_requests":[],"specification":null,"extra":true}`, elaborate.ErrInvalidOutput},
 		{"trailing", `{"fetch_requests":[],"specification":null}{}`, strictjson.ErrTrailingData},
 		{"neither", `{"fetch_requests":[],"specification":null}`, elaborate.ErrInvalidOutput},
 		{"both", `{"fetch_requests":[{"url":"https://example.com","purpose":"research"}],"specification":{"summary":"s","body":"b","addressals":[]}}`, elaborate.ErrInvalidOutput},
+		{"reply and spec", `{"fetch_requests":[],"specification":{"summary":"s","body":"b","addressals":[]},"reply":"answer"}`, elaborate.ErrInvalidOutput},
 		{"duplicate", `{"fetch_requests":[{"url":"https://example.com","purpose":"one"},{"url":"https://example.com","purpose":"two"}],"specification":null}`, elaborate.ErrInvalidOutput},
 	}
 	for _, tc := range cases {
@@ -75,6 +77,10 @@ func TestOutputRejectsCardinalityAndPresentationOverflow(t *testing.T) {
 		Addressals: []elaborate.Addressal{},
 	}}).Validate(); !errors.Is(err, elaborate.ErrInvalidOutput) {
 		t.Fatalf("summary bound error = %v", err)
+	}
+	reply := strings.Repeat("r", elaborate.MaxReplyBytes+1)
+	if err := (elaborate.Output{Reply: &reply}).Validate(); !errors.Is(err, elaborate.ErrInvalidOutput) {
+		t.Fatalf("reply bound error = %v", err)
 	}
 	addressals := make([]elaborate.Addressal, elaborate.MaxAddressals)
 	for i := range addressals {

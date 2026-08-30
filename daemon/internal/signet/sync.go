@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // ErrInvalidSyncSnapshot marks state that cannot be served as a canonical
@@ -1287,6 +1289,9 @@ func authenticateConversationInvocationIntent(
 	ctx context.Context, tx *store.ReadTx, entry store.QueueEntry,
 	invocation domain.InvocationID, runID domain.RunID,
 ) error {
+	if entry.Kind == string(domain.ElaborationDiscussionRequestedKind) {
+		return authenticateElaborationDiscussionInvocationIntent(ctx, tx, entry, invocation, runID)
+	}
 	if entry.Kind != string(domain.AgentInvocationRequestedKind) {
 		return nil
 	}
@@ -1314,6 +1319,145 @@ func authenticateConversationInvocationIntent(
 		return fmt.Errorf("conversation invocation intent does not bind run %q: %w", runID, domain.ErrParentKeyMismatch)
 	}
 	return nil
+}
+
+func authenticateElaborationDiscussionInvocationIntent(
+	ctx context.Context, tx *store.ReadTx, entry store.QueueEntry,
+	invocation domain.InvocationID, runID domain.RunID,
+) error {
+	request, err := domain.DecodeElaborationDiscussionInvocationIntent(entry.Payload)
+	if err != nil {
+		return err
+	}
+	baseInvocationID := domain.InvocationID(fmt.Sprintf(
+		"inv-elaborate-%s-%d", request.ElaborationRunID, request.Iteration,
+	))
+	baseEntry, err := tx.GetOutbox(ctx, string(baseInvocationID))
+	if err != nil {
+		return err
+	}
+	var base struct {
+		ElaborationRunID    domain.RunID        `json:"elaboration_run_id"`
+		ImplementationRunID domain.RunID        `json:"implementation_run_id"`
+		ProjectID           domain.ProjectID    `json:"project_id"`
+		InvocationID        domain.InvocationID `json:"invocation_id"`
+		Iteration           int                 `json:"iteration"`
+		InputArtifactIDs    []domain.ArtifactID `json:"input_artifact_ids"`
+		PriorSpecArtifactID *domain.ArtifactID  `json:"prior_spec_artifact_id"`
+		FeedbackArtifactIDs []domain.ArtifactID `json:"feedback_artifact_ids"`
+		PolicyArtifactID    domain.ArtifactID   `json:"policy_artifact_id"`
+	}
+	if err := strictjson.DecodeAllowingUnknownFields(
+		baseEntry.Payload, &base, strictjson.RejectInvalidUTF8, strictjson.NoLimit,
+	); err != nil {
+		return err
+	}
+	terminalEntry, err := tx.GetInbox(ctx, string(baseInvocationID))
+	if err != nil {
+		return err
+	}
+	var terminal struct {
+		InvocationID   domain.InvocationID `json:"invocation_id"`
+		Iteration      int                 `json:"iteration"`
+		Status         string              `json:"status"`
+		SpecArtifactID *domain.ArtifactID  `json:"spec_artifact_id"`
+		ApprovalItemID *domain.ItemID      `json:"approval_item_id"`
+	}
+	if err := strictjson.DecodeAllowingUnknownFields(
+		terminalEntry.Payload, &terminal, strictjson.RejectInvalidUTF8, strictjson.NoLimit,
+	); err != nil {
+		return err
+	}
+	providerInvocation, err := tx.GetAgentInvocation(ctx, invocation)
+	if err != nil {
+		return err
+	}
+	discussEntry, err := tx.GetOutbox(ctx, string(request.DiscussInvocationID))
+	if err != nil {
+		return err
+	}
+	discussRequest, err := domain.DecodeConversationInvocationIntent(discussEntry.Payload)
+	if err != nil {
+		return err
+	}
+	discussInvocation, err := tx.GetAgentInvocation(ctx, request.DiscussInvocationID)
+	if err != nil {
+		return err
+	}
+	conversation, err := tx.GetConversation(ctx, request.ConversationID)
+	if err != nil {
+		return err
+	}
+	prefixDigest, _, err := conversation.PrefixContent(request.ThroughSequence)
+	if err != nil {
+		return err
+	}
+	item, err := tx.GetAttentionItem(ctx, request.ItemID)
+	if err != nil {
+		return err
+	}
+	expectedInputs := slices.DeleteFunc(slices.Clone(base.InputArtifactIDs), func(id domain.ArtifactID) bool {
+		return base.PriorSpecArtifactID != nil && id == *base.PriorSpecArtifactID ||
+			slices.Contains(base.FeedbackArtifactIDs, id)
+	})
+	if !slices.Contains(expectedInputs, request.SpecArtifactID) {
+		expectedInputs = append(expectedInputs, request.SpecArtifactID)
+	}
+	expectedInputs = append(expectedInputs, base.FeedbackArtifactIDs...)
+	discussionArtifactID := domain.ArtifactID(
+		"spec-discussion-" + strings.TrimPrefix(string(request.DiscussInvocationID), "inv-"),
+	)
+	discussionArtifact, err := tx.GetArtifact(ctx, discussionArtifactID)
+	if err != nil {
+		return err
+	}
+	expectedInputs = append(expectedInputs, discussionArtifactID)
+	if request.InvocationID != invocation || request.ElaborationRunID != runID ||
+		baseEntry.Kind != string(domain.ElaborationInvocationRequestedKind) ||
+		baseEntry.IdempotencyKey != string(baseInvocationID) || !baseEntry.Dispatched() ||
+		base.ElaborationRunID != request.ElaborationRunID ||
+		base.ImplementationRunID != request.ImplementationRunID || base.ProjectID != request.ProjectID ||
+		base.InvocationID != baseInvocationID || base.Iteration != request.Iteration ||
+		base.PolicyArtifactID != request.PolicyArtifactID ||
+		terminalEntry.Kind != "elaboration_stage_terminal" ||
+		terminalEntry.IdempotencyKey != string(baseInvocationID) ||
+		terminal.InvocationID != baseInvocationID || terminal.Iteration != request.Iteration ||
+		terminal.Status != "completed" || terminal.SpecArtifactID == nil ||
+		*terminal.SpecArtifactID != request.SpecArtifactID || terminal.ApprovalItemID == nil ||
+		*terminal.ApprovalItemID != request.ItemID ||
+		!slices.Equal(request.InputArtifactIDs, expectedInputs) ||
+		providerInvocation.ConversationID == nil || *providerInvocation.ConversationID != request.ConversationID ||
+		providerInvocation.ThroughSequence != request.ThroughSequence ||
+		!slices.Equal(providerInvocation.InputIDs, expectedInputs) ||
+		discussEntry.Kind != string(domain.AgentInvocationRequestedKind) || discussEntry.Quarantined() ||
+		discussRequest.InvocationID != request.DiscussInvocationID ||
+		discussRequest.ConversationID != request.ConversationID || discussRequest.ItemID != request.ItemID ||
+		discussRequest.ItemVersion != request.ItemVersion || discussInvocation.ConversationID == nil ||
+		*discussInvocation.ConversationID != request.ConversationID ||
+		discussInvocation.ThroughSequence != request.ThroughSequence || prefixDigest != request.PrefixDigest ||
+		!authenticatesElaborationDiscussionArtifact(
+			discussionArtifact, discussionArtifactID, request.PrefixDigest, baseInvocationID,
+		) ||
+		item.ConversationID == nil || *item.ConversationID != request.ConversationID ||
+		item.ItemVersion < request.ItemVersion || item.ProjectID != request.ProjectID ||
+		item.Subject.RunID == nil || *item.Subject.RunID != request.ElaborationRunID {
+		return fmt.Errorf("elaboration discussion invocation intent does not bind durable discussion state: %w",
+			domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+func authenticatesElaborationDiscussionArtifact(
+	artifact domain.Artifact,
+	id domain.ArtifactID,
+	digest domain.Digest,
+	producer domain.InvocationID,
+) bool {
+	provenance := artifact.Provenance
+	return artifact.ID == id && artifact.Type == domain.ArtifactKindResearch && artifact.Digest == digest &&
+		provenance.ProducerClass == domain.ProducerDaemon && provenance.ProducerInvocationID == producer &&
+		provenance.HeadBinding == domain.HeadIndependent && provenance.SourceHeadSHA == "" &&
+		provenance.VerificationRecipeDigest == nil && provenance.SensitivityClass == domain.SensitivityNormal
 }
 
 func productionPublicationInvocationID(runID domain.RunID) domain.InvocationID {

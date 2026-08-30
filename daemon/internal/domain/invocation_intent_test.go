@@ -1,9 +1,28 @@
 package domain
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
+
+func validElaborationDiscussionIntent(t *testing.T) []byte {
+	t.Helper()
+	payload, err := json.Marshal(ElaborationDiscussionInvocationIntent{
+		Version:          ElaborationDiscussionInvocationIntentVersion,
+		ElaborationRunID: "run-1", ImplementationRunID: "implementation-1", ProjectID: "project-1",
+		Iteration: 1, InvocationID: "elaboration-discussion-1", DiscussInvocationID: "inv-1",
+		ConversationID: "conversation-1", ThroughSequence: 1,
+		PrefixDigest: Digest("sha256:" + strings.Repeat("a", 64)), ItemID: "item-1", ItemVersion: 2,
+		InputArtifactIDs: []ArtifactID{"spec-1", "spec-discussion-1"},
+		SpecArtifactID:   "spec-1", PolicyArtifactID: "policy-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
 
 func TestAuthenticateInvocationDispatchIntentBindsEveryExecutionLane(t *testing.T) {
 	invocation := InvocationID("inv-1")
@@ -40,13 +59,57 @@ func TestAuthenticateInvocationDispatchIntentBindsEveryExecutionLane(t *testing.
 			},
 			stageID: "elaborate-run-1",
 		},
+		{
+			name: "elaboration discussion",
+			entry: InvocationDispatchIntent{
+				Kind:           string(ElaborationDiscussionRequestedKind),
+				IdempotencyKey: "elaboration-discussion-1",
+				Payload:        validElaborationDiscussionIntent(t),
+			},
+			stageID: "elaborate-run-1",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := AuthenticateInvocationDispatchIntent(tc.entry, invocation, runID, tc.stageID); err != nil {
+			invocationID := invocation
+			if tc.name == "elaboration discussion" {
+				invocationID = "elaboration-discussion-1"
+			}
+			if err := AuthenticateInvocationDispatchIntent(tc.entry, invocationID, runID, tc.stageID); err != nil {
 				t.Fatalf("AuthenticateInvocationDispatchIntent() = %v", err)
 			}
 		})
+	}
+}
+
+func TestElaborationDiscussionInvocationIntentRequiresCompleteStrictBinding(t *testing.T) {
+	valid := validElaborationDiscussionIntent(t)
+	var request map[string]any
+	if err := json.Unmarshal(valid, &request); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{
+		"conversation_id", "item_id", "item_version", "prefix_digest", "discuss_invocation_id",
+		"through_sequence", "input_artifact_ids", "spec_artifact_id", "policy_artifact_id",
+	} {
+		t.Run(field, func(t *testing.T) {
+			copy := make(map[string]any, len(request))
+			for key, value := range request {
+				copy[key] = value
+			}
+			delete(copy, field)
+			payload, err := json.Marshal(copy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeElaborationDiscussionInvocationIntent(payload); err == nil {
+				t.Fatalf("DecodeElaborationDiscussionInvocationIntent accepted missing %s", field)
+			}
+		})
+	}
+	withUnknown := append(valid[:len(valid)-1], []byte(`,"unexpected":true}`)...)
+	if _, err := DecodeElaborationDiscussionInvocationIntent(withUnknown); err == nil {
+		t.Fatal("DecodeElaborationDiscussionInvocationIntent accepted an unknown field")
 	}
 }
 
