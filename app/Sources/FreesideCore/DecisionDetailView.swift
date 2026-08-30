@@ -49,6 +49,8 @@ struct DecisionDetailView: View {
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @ScaledMetric(relativeTo: .callout) private var bannerGlyphSize: CGFloat = screenshotMetricBase(
+        10, relativeTo: .callout)
     @State private var model: DecisionModel
     @State private var proposalEditor: ProposalEditor?
     @State private var messageEditor: MessageEditor?
@@ -926,6 +928,16 @@ struct DecisionDetailView: View {
         .freesideCard()
         .padding()
         .frame(maxWidth: wideLayout ? 1_040 : 560, alignment: .topLeading)
+    }
+
+    func screenshotBanner() -> some View {
+        bannerLabel(
+            "Submission failed: the daemon rejected the command.",
+            systemImage: "exclamationmark",
+            tint: .waxText,
+            wash: .waxWash
+        )
+        .padding()
     }
 
     #if os(macOS)
@@ -1828,7 +1840,7 @@ struct DecisionDetailView: View {
             Text(text)
         } icon: {
             Image(systemName: systemImage)
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: bannerGlyphSize, weight: .semibold))
         }
         .font(FreesideFont.callout)
         .textSelection(.enabled)
@@ -2096,14 +2108,32 @@ private struct DecisionFactRow: View {
 }
 
 private struct FindingListLabelStyle: LabelStyle {
+    @ScaledMetric(relativeTo: .callout) private var bulletSize: CGFloat = screenshotMetricBase(
+        4, relativeTo: .callout)
+
     func makeBody(configuration: Configuration) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             configuration.icon
-                .font(.system(size: 4))
+                .font(.system(size: bulletSize))
                 .foregroundStyle(Color.inkDim)
             configuration.title
         }
     }
+}
+
+/// macOS ImageRenderer does not apply its injected Dynamic Type environment to
+/// `ScaledMetric`. Mirror the screenshot-only font bridge's iOS scale so the
+/// matrix still exercises the production metric behavior.
+private func screenshotMetricBase(
+    _ value: CGFloat,
+    relativeTo style: Font.TextStyle
+) -> CGFloat {
+    #if os(macOS)
+        guard FreesideFont.screenshotDynamicTypeSize != nil else { return value }
+        return value * FreesideFont.size(of: style) / 16
+    #else
+        return value
+    #endif
 }
 
 struct RunProposalRevisionSheet: View {

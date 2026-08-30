@@ -760,6 +760,19 @@
                             screenshotTimeZone: screenshotTimeZone
                         ) { _ in }
                         .screenshotContent())))
+            if let selected = inbox.first?.item {
+                let bannerDetail = DecisionDetailView(
+                    store: store,
+                    itemID: selected.id,
+                    loadsAttachments: false,
+                    showsValidationProgress: false)
+                surfaces.append(
+                    Surface(
+                        name: "decision-banner",
+                        width: 480,
+                        view: AnyView(bannerDetail.screenshotBanner())))
+            }
+
             return surfaces
         }
 
