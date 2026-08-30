@@ -14,9 +14,14 @@ struct FreshnessBanner: View {
     }
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
+        TimelineView(.explicit(Self.staleAt(lastUpdatedAt: lastUpdatedAt).map { [$0] } ?? [])) {
+            context in
             banner(at: context.date)
         }
+    }
+
+    static func staleAt(lastUpdatedAt: Date?) -> Date? {
+        lastUpdatedAt.map { $0.addingTimeInterval(SyncCoordinator.stalenessThreshold) }
     }
 
     @ViewBuilder
