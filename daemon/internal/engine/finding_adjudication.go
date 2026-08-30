@@ -301,10 +301,14 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 		entries = append(entries, modelEntries...)
 	}
 
-	// #1002 replaces the empty digest with the prospective surface digest from domain.NextDecisionSurface.
+	decisionSurfaceDigest, err := prospectiveFindingAdjudicationSurfaceDigest(
+		task, record.Round, 1, entries)
+	if err != nil {
+		return productionReviewPending, err
+	}
 	artifact, err = domain.NewFindingAdjudication(
 		record.RunID, record.Round, binding.run.SpecDigest, record.InstructionDigest,
-		binding.resolvedPolicy.Digest, entries, "", w.now().UTC())
+		binding.resolvedPolicy.Digest, entries, decisionSurfaceDigest, w.now().UTC())
 	if err != nil {
 		return productionReviewPending, err
 	}
@@ -426,9 +430,13 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 		InvocationID: feedback.InvocationID, ConversationID: feedback.ConversationID,
 		ThroughSequence: feedback.ThroughSequence, PrefixDigest: feedback.PrefixDigest,
 	}
-	// #1002 replaces the empty digest with the prospective surface digest from domain.NextDecisionSurface.
+	decisionSurfaceDigest, err := prospectiveFindingAdjudicationSurfaceDigest(
+		task, prior.Round, prior.Revision+1, entries)
+	if err != nil {
+		return prior, err
+	}
 	successor, err := domain.NewSuccessorFindingAdjudication(
-		prior, durableFeedback, entries, "", w.now().UTC())
+		prior, durableFeedback, entries, decisionSurfaceDigest, w.now().UTC())
 	if err != nil {
 		return prior, err
 	}
@@ -459,6 +467,13 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 		}
 		replacement, err := w.newFindingAdjudicationAttentionItem(task, successor, findings)
 		if err != nil {
+			return err
+		}
+		source, err := findingAdjudicationRecommendationSource(replacement, record)
+		if err != nil {
+			return err
+		}
+		if err := tx.PutRecommendationSource(ctx, source); err != nil {
 			return err
 		}
 		if err := tx.PutAttentionItem(ctx, replacement); err != nil {
@@ -1042,32 +1057,81 @@ func productionFindingAdjudicationItemID(
 	return domain.ItemID(fmt.Sprintf("production-review-%s-%d-revision-%d", runID, round, revision))
 }
 
+func findingAdjudicationSurfaceItem(
+	task productionPublicationTask, round, revision int,
+	entries []domain.FindingAdjudicationEntry,
+) domain.AttentionItem {
+	actions := []domain.Action{
+		domain.ActionAcceptRecommendedRoute, domain.ActionDiscuss, domain.ActionStop,
+	}
+	if slices.ContainsFunc(entries, func(entry domain.FindingAdjudicationEntry) bool {
+		return len(entry.OfferedAlternatives) > 0
+	}) {
+		actions = append(actions, domain.ActionChooseAlternativeRoute)
+	}
+	runID := task.RunID
+	return domain.AttentionItem{
+		ID:                productionFindingAdjudicationItemID(task.RunID, round, revision),
+		Subject:           domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		RequestedDecision: actions,
+		PRHeadSHA:         task.HeadSHA,
+	}
+}
+
+func prospectiveFindingAdjudicationSurfaceDigest(
+	task productionPublicationTask, round, revision int,
+	entries []domain.FindingAdjudicationEntry,
+) (domain.Digest, error) {
+	surface, err := domain.NewDecisionSurface(
+		findingAdjudicationSurfaceItem(task, round, revision, entries))
+	if err != nil {
+		return "", err
+	}
+	return surface.Digest, nil
+}
+
 func (w *productionPublicationWorkflow) newFindingAdjudicationAttentionItem(
 	task productionPublicationTask, artifact domain.FindingAdjudication,
 	findings map[domain.FindingID]domain.Finding,
 ) (domain.AttentionItem, error) {
 	binding := findingAdjudicationBinding(artifact, findings)
-	actions := []domain.Action{
-		domain.ActionAcceptRecommendedRoute, domain.ActionDiscuss, domain.ActionStop,
-	}
-	if slices.ContainsFunc(binding.Proposals, func(proposal domain.FindingAdjudicationProposal) bool {
-		return len(proposal.OfferedAlternatives) > 0
-	}) {
-		actions = append(actions, domain.ActionChooseAlternativeRoute)
-	}
-	runID := task.RunID
+	surfaceItem := findingAdjudicationSurfaceItem(
+		task, artifact.Round, artifact.Revision, artifact.Entries)
 	createdAt := w.attentionCreatedAt()
 	return domain.NewAttentionItem(domain.AttentionItemInput{
-		ID:        productionFindingAdjudicationItemID(task.RunID, artifact.Round, artifact.Revision),
+		ID:        surfaceItem.ID,
 		ProjectID: task.ProjectID,
-		Subject:   domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Subject:   surfaceItem.Subject,
 		Type:      domain.AttentionFindingAdjudication, Priority: domain.PriorityHigh,
 		Reason:            "Choose the artifact-bound route for the adjudicated review findings.",
-		RequestedDecision: actions, PRHeadSHA: task.HeadSHA,
+		RequestedDecision: surfaceItem.RequestedDecision, PRHeadSHA: surfaceItem.PRHeadSHA,
 		FindingAdjudication: &binding, ItemVersion: 1,
 		InterruptionClass: domain.InterruptionPlannedGate, CreatedAt: &createdAt,
 		Status: domain.StatusOpen,
 	}, w.approvedRecipes)
+}
+
+func findingAdjudicationRecommendationSource(
+	item domain.AttentionItem, record domain.ReviewRecord,
+) (domain.RecommendationSourceRecord, error) {
+	surface, err := domain.NewDecisionSurface(item)
+	if err != nil {
+		return domain.RecommendationSourceRecord{}, err
+	}
+	return domain.NewRecommendationSourceRecord(domain.RecommendationSourceRecord{
+		ItemID: item.ID,
+		Source: domain.RecommendationAgentJudgment,
+		Provenance: domain.RecommendationProvenance{
+			AgentJudgment: &domain.AgentJudgmentRecommendationProvenance{
+				JudgmentSite:   domain.JudgmentSiteFindingAdjudicator,
+				InvocationID:   record.InvocationID,
+				ArtifactDigest: item.FindingAdjudication.AdjudicationDigest,
+			},
+		},
+		Action:                domain.ActionAcceptRecommendedRoute,
+		Reason:                domain.FindingAdjudicatorRecommendationReason,
+		DecisionSurfaceDigest: surface.Digest,
+	})
 }
 
 func (w *productionPublicationWorkflow) putFindingAdjudicationAttention(
@@ -1109,7 +1173,19 @@ func (w *productionPublicationWorkflow) putFindingAdjudicationAttention(
 	if err != nil {
 		return err
 	}
-	return w.attention.PutItem(ctx, item)
+	if err := item.Validate(); err != nil {
+		return err
+	}
+	source, err := findingAdjudicationRecommendationSource(item, record)
+	if err != nil {
+		return err
+	}
+	return w.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRecommendationSource(ctx, source); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
+	})
 }
 
 // productionRemediationUndeliverableItemID identifies the durable escalation
