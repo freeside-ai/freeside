@@ -266,7 +266,9 @@ func TestShadowFindingCannotBindRoutedAdjudication(t *testing.T) {
 	}
 	artifact, err := domain.NewFindingAdjudication(
 		run.ID, 1, run.SpecDigest, routed.InstructionDigest, run.PolicyDigest,
-		[]domain.FindingAdjudicationEntry{entry}, record.CompletedAt.Add(time.Minute))
+		[]domain.FindingAdjudicationEntry{entry}, "",
+
+		record.CompletedAt.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}

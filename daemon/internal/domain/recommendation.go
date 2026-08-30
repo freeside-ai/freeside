@@ -226,11 +226,13 @@ type RecommendationProjection struct {
 
 // AgentJudgmentRecommendation is the authenticated source result returned by
 // RecommendationAuthority. RunID and Round bind it back to the item's typed
-// adjudication projection.
+// adjudication projection. DecisionSurfaceDigest is the artifact's commitment
+// copied verbatim by the authority.
 type AgentJudgmentRecommendation struct {
-	RunID      RunID
-	Round      int
-	Projection RecommendationProjection
+	RunID                 RunID
+	Round                 int
+	DecisionSurfaceDigest Digest
+	Projection            RecommendationProjection
 }
 
 // FindingAdjudicatorRecommendationReason is the item-level explanation for
@@ -246,18 +248,20 @@ type DaemonPolicyRule interface {
 }
 
 // RecommendationAuthority resolves current authoritative state without
-// letting the item or source record choose it. Production has no daemon-policy
-// rule registry entries in this unit; tests and future producers supply them
-// through this seam.
+// letting the item or source record choose it. ResolveAgentJudgment returns
+// the artifact's decision-surface commitment with the authenticated result.
+// Production has no daemon-policy rule registry entries in this unit; tests
+// and future producers supply them through this seam.
 type RecommendationAuthority interface {
 	ResolveAgentJudgment(JudgmentSite, InvocationID, Digest) (AgentJudgmentRecommendation, error)
 	DaemonPolicyRule(Digest) (DaemonPolicyRule, bool)
 	CurrentResolvedPolicyDigest(RunID) (Digest, error)
 }
 
-// DeriveRecommendation implements the unique-or-none rule. Invalid, stale, or
-// payload-substituted records produce absence; infrastructure errors from an
-// authority resolver are returned to the persistence boundary.
+// DeriveRecommendation implements the unique-or-none rule. An authenticated
+// agent judgment must commit to the current decision surface. Invalid, stale,
+// or payload-substituted records produce absence; infrastructure errors from
+// an authority resolver are returned to the persistence boundary.
 func DeriveRecommendation(
 	item AttentionItem,
 	surface DecisionSurface,
@@ -323,6 +327,9 @@ func DeriveRecommendation(
 		}
 		binding := item.FindingAdjudication
 		if binding == nil || resolved.RunID != binding.RunID || resolved.Round != binding.Round {
+			return nil, nil
+		}
+		if resolved.DecisionSurfaceDigest != surface.Digest {
 			return nil, nil
 		}
 		projection = resolved.Projection

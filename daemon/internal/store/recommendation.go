@@ -140,6 +140,7 @@ func (a recommendationAuthority) ResolveAgentJudgment(
 	}
 	return domain.AgentJudgmentRecommendation{
 		RunID: artifact.RunID, Round: artifact.Round,
+		DecisionSurfaceDigest: artifact.DecisionSurfaceDigest,
 		Projection: domain.RecommendationProjection{
 			Action: domain.ActionAcceptRecommendedRoute,
 			Reason: domain.FindingAdjudicatorRecommendationReason,

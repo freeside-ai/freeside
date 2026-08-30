@@ -423,9 +423,9 @@ func TestPriorDiminishingDecisionIsAuthenticatedBeforeRoundSelection(t *testing.
 		t, runID, 3, []domain.FindingID{finding.ID}, finding.CreatedAt)
 	artifact, err := domain.NewFindingAdjudication(
 		runID, record.Round, adjSpecDigest, record.InstructionDigest, decision.Binding.PolicyDigest,
-		[]domain.FindingAdjudicationEntry{adjudicationEngineEntry(t, finding.ID)},
-		finding.CreatedAt.Add(time.Second),
-	)
+		[]domain.FindingAdjudicationEntry{adjudicationEngineEntry(t, finding.ID)}, "",
+
+		finding.CreatedAt.Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -595,8 +595,9 @@ func seedReviewDiminishingDecisionWithHardLimit(
 		records[index] = adjudicationReviewRecord(t, runID, round, findingIDs, batch[0].CreatedAt)
 		artifacts[index], err = domain.NewFindingAdjudication(
 			runID, round, adjSpecDigest, records[index].InstructionDigest, policy.Digest,
-			entries, batch[0].CreatedAt.Add(time.Second),
-		)
+			entries, "",
+
+			batch[0].CreatedAt.Add(time.Second))
 		if err != nil {
 			t.Fatal(err)
 		}

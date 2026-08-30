@@ -714,7 +714,7 @@ func seedRemediationAuthorityFixture(
 	}
 	adjudication, err := domain.NewFindingAdjudication(
 		runID, 1, run.SpecDigest, record.InstructionDigest, run.PolicyDigest,
-		[]domain.FindingAdjudicationEntry{entry}, at,
+		[]domain.FindingAdjudicationEntry{entry}, "", at,
 	)
 	if err != nil {
 		t.Fatal(err)

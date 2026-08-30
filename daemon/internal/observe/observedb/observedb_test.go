@@ -838,7 +838,8 @@ func seedAdjudicationRun(
 	}
 	record := adjReviewRecord(t, runID, 1, instructionDigest, findingIDs, at)
 	artifact, err := domain.NewFindingAdjudication(
-		runID, 1, specDigest, instructionDigest, policy.Digest, entries, at)
+		runID, 1, specDigest, instructionDigest, policy.Digest, entries, "",
+		at)
 	if err != nil {
 		t.Fatalf("NewFindingAdjudication(%q): %v", runID, err)
 	}

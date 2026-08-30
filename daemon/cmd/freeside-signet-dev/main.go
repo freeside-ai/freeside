@@ -635,7 +635,7 @@ func (c controlHandler) seedFindingAdjudicationAuthority(
 	}
 	artifact, err := domain.NewFindingAdjudication(
 		runID, 1, specDigest, instructionDigest, policyDigest,
-		[]domain.FindingAdjudicationEntry{entry}, createdAt,
+		[]domain.FindingAdjudicationEntry{entry}, "", createdAt,
 	)
 	if err != nil {
 		return domain.FindingAdjudicationBinding{}, err

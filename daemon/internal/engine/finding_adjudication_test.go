@@ -628,7 +628,9 @@ func TestFindingAdjudicationDiscussReconsidersEngineEntries(t *testing.T) {
 	}
 	prior, err := domain.NewFindingAdjudication(
 		f.record.RunID, f.record.Round, f.binding.run.SpecDigest, f.record.InstructionDigest,
-		f.binding.resolvedPolicy.Digest, []domain.FindingAdjudicationEntry{engineEntry}, time.Now().UTC())
+		f.binding.resolvedPolicy.Digest, []domain.FindingAdjudicationEntry{engineEntry}, "",
+
+		time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -655,7 +657,9 @@ func TestFindingAdjudicationCompletionResultRevalidatesTrustBoundary(t *testing.
 		t, "finding-model", domain.RouteParkRevision, domain.ConfidenceHigh)
 	prior, err := domain.NewFindingAdjudication(
 		"run-result", 1, adjudicationDigest("a"), adjudicationDigest("b"), adjudicationDigest("c"),
-		[]domain.FindingAdjudicationEntry{engineEntry, priorModel}, time.Now().UTC())
+		[]domain.FindingAdjudicationEntry{engineEntry, priorModel}, "",
+
+		time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1580,8 +1584,9 @@ func assertFinalReviewFindingsCanFinish(
 		record.InstructionDigest, f.binding.resolvedPolicy.Digest,
 		[]domain.FindingAdjudicationEntry{
 			modelRouteEntry(t, finding.ID, domain.RouteDefer, domain.ConfidenceHigh),
-		}, record.CompletedAt.Add(time.Second),
-	)
+		}, "",
+
+		record.CompletedAt.Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1678,8 +1683,9 @@ func seedDiminishingReviewRound(
 	artifact, err := domain.NewFindingAdjudication(
 		f.task.RunID, current.Round, f.binding.run.SpecDigest,
 		current.InstructionDigest, f.binding.resolvedPolicy.Digest,
-		[]domain.FindingAdjudicationEntry{entry}, current.CompletedAt.Add(time.Second),
-	)
+		[]domain.FindingAdjudicationEntry{entry}, "",
+
+		current.CompletedAt.Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1700,9 +1706,9 @@ func TestFindingAdjudicationDecisionRejectsPayloadOnlyRouteAuthority(t *testing.
 	entry := modelRouteEntry(t, "finding-a", domain.RouteDefer, domain.ConfidenceHigh)
 	artifact, err := domain.NewFindingAdjudication(
 		"run-a", 1, adjudicationDigest("1"), adjudicationDigest("2"),
-		adjudicationDigest("3"), []domain.FindingAdjudicationEntry{entry},
-		time.Date(2026, 8, 24, 3, 0, 0, 0, time.UTC),
-	)
+		adjudicationDigest("3"), []domain.FindingAdjudicationEntry{entry}, "",
+
+		time.Date(2026, 8, 24, 3, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}

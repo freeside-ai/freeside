@@ -72,7 +72,9 @@ func newAdjudication(
 	artifact, err := domain.NewFindingAdjudication(
 		runID, round,
 		adjSpecDigest, adjInstructionDigest, adjPolicyDigest,
-		entries, createdAt)
+		entries, "",
+
+		createdAt)
 	if err != nil {
 		t.Fatalf("new adjudication: %v", err)
 	}
@@ -208,7 +210,7 @@ func successorAdjudication(
 	t.Helper()
 	entries := slices.Clone(prior.Entries)
 	entries[0].Rationale = rationale
-	artifact, err := domain.NewSuccessorFindingAdjudication(prior, feedback, entries, at)
+	artifact, err := domain.NewSuccessorFindingAdjudication(prior, feedback, entries, "", at)
 	if err != nil {
 		t.Fatalf("new successor: %v", err)
 	}
@@ -341,6 +343,41 @@ func TestFindingAdjudicationRoundTripAndReplay(t *testing.T) {
 	}
 }
 
+func TestFindingAdjudicationDecisionSurfaceCommitmentRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	runID := domain.RunID("run-adj-surface")
+	at := time.Date(2026, 8, 21, 12, 30, 0, 0, time.UTC)
+	findings := []domain.Finding{adjudicationFinding("finding-a", runID, "daemon/a.go", at)}
+	st := seedReviewRound(t, runID, 1, findings, at)
+	uncommitted := newAdjudication(t, runID, 1, []domain.FindingID{"finding-a"}, at)
+	decisionSurfaceDigest := adjudicationDigest("e")
+	artifact, err := domain.NewFindingAdjudication(
+		runID, 1, adjSpecDigest, adjInstructionDigest, adjPolicyDigest,
+		uncommitted.Entries, decisionSurfaceDigest, at,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutFindingAdjudication(ctx, artifact)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetFindingAdjudication(ctx, artifact.Digest)
+		if err != nil {
+			return err
+		}
+		if got.DecisionSurfaceDigest != decisionSurfaceDigest {
+			t.Fatalf("decision surface digest = %q, want %q", got.DecisionSurfaceDigest, decisionSurfaceDigest)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFindingAdjudicationEngineModelEntryRoundTrip(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -350,7 +387,9 @@ func TestFindingAdjudicationEngineModelEntryRoundTrip(t *testing.T) {
 	st := seedReviewRound(t, runID, 1, findings, at)
 	artifact, err := domain.NewFindingAdjudication(
 		runID, 1, adjSpecDigest, adjInstructionDigest, adjPolicyDigest,
-		[]domain.FindingAdjudicationEntry{adjudicationEngineModelEntry(t, "finding-a")}, at)
+		[]domain.FindingAdjudicationEntry{adjudicationEngineModelEntry(t, "finding-a")}, "",
+
+		at)
 	if err != nil {
 		t.Fatalf("new adjudication: %v", err)
 	}
@@ -414,7 +453,9 @@ func TestFindingAdjudicationRevisionHistoryAndReplay(t *testing.T) {
 	invocationTwo, feedbackTwo := adjudicationFeedback(t, conversationTwo, "invocation-revision-3", 1)
 	initial, err := domain.NewFindingAdjudication(
 		runID, 1, adjSpecDigest, adjInstructionDigest, adjPolicyDigest,
-		[]domain.FindingAdjudicationEntry{adjudicationEngineModelEntry(t, "finding-a")}, at)
+		[]domain.FindingAdjudicationEntry{adjudicationEngineModelEntry(t, "finding-a")}, "",
+
+		at)
 	if err != nil {
 		t.Fatalf("new mixed-origin adjudication: %v", err)
 	}
@@ -758,7 +799,9 @@ func TestFindingAdjudicationRevisionHistorySurvivesRestore(t *testing.T) {
 	invocationTwo, feedbackTwo := adjudicationFeedback(t, conversationTwo, "invocation-restore-2", 1)
 	initial, err := domain.NewFindingAdjudication(
 		runID, 1, adjSpecDigest, adjInstructionDigest, adjPolicyDigest,
-		[]domain.FindingAdjudicationEntry{adjudicationEngineModelEntry(t, "finding-a")}, at)
+		[]domain.FindingAdjudicationEntry{adjudicationEngineModelEntry(t, "finding-a")}, "",
+
+		at)
 	if err != nil {
 		t.Fatalf("new mixed-origin adjudication: %v", err)
 	}
@@ -869,7 +912,9 @@ func TestFindingAdjudicationDigestBinding(t *testing.T) {
 		entry := adjudicationEngineEntry(t, "finding-a")
 		artifact, err := domain.NewFindingAdjudication(
 			runID, 1, spec, instruction, policy,
-			[]domain.FindingAdjudicationEntry{entry}, at)
+			[]domain.FindingAdjudicationEntry{entry}, "",
+
+			at)
 		if err != nil {
 			t.Fatalf("new adjudication: %v", err)
 		}
@@ -924,7 +969,9 @@ func TestFindingAdjudicationEngineEvidenceBinding(t *testing.T) {
 		}
 		artifact, err := domain.NewFindingAdjudication(
 			runID, 1, adjSpecDigest, adjInstructionDigest, adjPolicyDigest,
-			[]domain.FindingAdjudicationEntry{entry}, at)
+			[]domain.FindingAdjudicationEntry{entry}, "",
+
+			at)
 		if err != nil {
 			t.Fatalf("new adjudication: %v", err)
 		}
