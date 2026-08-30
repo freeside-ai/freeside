@@ -389,19 +389,20 @@ struct DecisionDetailView: View {
                 .buttonStyle(FreesideActionButtonStyle(tone: .neutral))
             }
 
+            // Section 9 layer 1 leads every card: the ask, then the daemon
+            // facts, then the actions. Several compositions insert the action
+            // region before their .factBlock module, so the fact section
+            // renders here rather than from that module; otherwise those cards
+            // would offer a decision above the facts that inform it.
+            factsSection(
+                item,
+                includesCommitPlan: !composition.modules.contains(.checklist))
+            if let proposalFacts {
+                cardSection("Authenticated proposal") {
+                    proposalRows(proposalFacts)
+                }
+            }
             #if os(macOS)
-                if !composition.modules.contains(.checklist),
-                    let notice = item.commit_plan_notice?.value1
-                {
-                    cardSection("Facts") {
-                        factRow("Commit plan", value: AttentionDisplay.label(notice))
-                    }
-                }
-                if let proposalFacts {
-                    cardSection("Authenticated proposal") {
-                        proposalRows(proposalFacts)
-                    }
-                }
                 if wideLayout {
                     HStack(alignment: .top, spacing: 16) {
                         VStack(alignment: .leading, spacing: 16) {
@@ -412,7 +413,6 @@ struct DecisionDetailView: View {
                                     moduleIndex: index,
                                     item: item,
                                     composition: composition,
-                                    proposalFacts: proposalFacts,
                                     rendersInteractiveControls: rendersInteractiveControls,
                                     accessibilityLayout: accessibilityLayout)
                                 if index + 1 == composition.reviewingActionInsertionIndex {
@@ -438,7 +438,6 @@ struct DecisionDetailView: View {
                             moduleIndex: index,
                             item: item,
                             composition: composition,
-                            proposalFacts: proposalFacts,
                             rendersInteractiveControls: rendersInteractiveControls,
                             accessibilityLayout: accessibilityLayout)
                         if index + 1 == composition.actionInsertionIndex {
@@ -461,7 +460,6 @@ struct DecisionDetailView: View {
                         moduleIndex: index,
                         item: item,
                         composition: composition,
-                        proposalFacts: proposalFacts,
                         rendersInteractiveControls: rendersInteractiveControls,
                         accessibilityLayout: accessibilityLayout)
                     if index + 1 == composition.actionInsertionIndex {
@@ -516,7 +514,6 @@ struct DecisionDetailView: View {
         moduleIndex: Int,
         item: Components.Schemas.AttentionItem,
         composition: DecisionCardComposition,
-        proposalFacts: Components.Schemas.RunProposalFactsSnapshot?,
         rendersInteractiveControls: Bool,
         accessibilityLayout: Bool
     ) -> some View {
@@ -563,19 +560,7 @@ struct DecisionDetailView: View {
                     rendersInteractiveControls: rendersInteractiveControls)
             }
         case .factBlock:
-            #if os(macOS)
-                factBlocks(
-                    item,
-                    includesCommitPlan: false,
-                    proposalFacts: nil,
-                    rendersInteractiveControls: rendersInteractiveControls)
-            #else
-                factBlocks(
-                    item,
-                    includesCommitPlan: !composition.modules.contains(.checklist),
-                    proposalFacts: proposalFacts,
-                    rendersInteractiveControls: rendersInteractiveControls)
-            #endif
+            factBlocks(item, rendersInteractiveControls: rendersInteractiveControls)
         case .summary:
             agentSummary(
                 composition.summaries(from: item.agent_claims),
@@ -647,11 +632,32 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// The Section 9 card facts for this item type, read from its typed fact
+    /// fields (#724). Facts lead the card, so this section renders directly
+    /// under the ask; a type whose lead is its own module contributes no rows
+    /// and the section disappears rather than rendering an empty container.
+    @ViewBuilder
+    private func factsSection(
+        _ item: Components.Schemas.AttentionItem,
+        includesCommitPlan: Bool
+    ) -> some View {
+        let facts = AttentionDisplay.cardFacts(item)
+        let notice = includesCommitPlan ? item.commit_plan_notice?.value1 : nil
+        if !facts.isEmpty || notice != nil {
+            cardSection("Facts") {
+                ForEach(facts) { fact in
+                    factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+                }
+                if let notice {
+                    factRow("Commit plan", value: AttentionDisplay.label(notice))
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private func factBlocks(
         _ item: Components.Schemas.AttentionItem,
-        includesCommitPlan: Bool,
-        proposalFacts: Components.Schemas.RunProposalFactsSnapshot?,
         rendersInteractiveControls: Bool
     ) -> some View {
         if let changeSummary = graphics.changeSummary {
@@ -674,12 +680,6 @@ struct DecisionDetailView: View {
                 rendersInteractiveControls: rendersInteractiveControls)
         }
 
-        if includesCommitPlan, let notice = item.commit_plan_notice?.value1 {
-            cardSection("Facts") {
-                factRow("Commit plan", value: AttentionDisplay.label(notice))
-            }
-        }
-
         if let comparison = graphics.comparison, !comparison.verifiableFacts.isEmpty {
             cardSection("What the daemon can verify") {
                 ForEach(comparison.verifiableFacts) { fact in
@@ -692,23 +692,6 @@ struct DecisionDetailView: View {
             cardSection(attemptTimings.title) {
                 ForEach(attemptTimings.facts) { fact in
                     factRow(fact.label, value: fact.value)
-                }
-            }
-        }
-
-        if let facts = proposalFacts {
-            cardSection("Authenticated proposal") {
-                factRow("Intent", value: facts.intent.rawValue)
-                factRow("Expected cost", value: "\(facts.expected_cost_units) units")
-                factRow("Components", value: "\(facts.scope.component_count)")
-                factRow("Declared paths", value: "\(facts.scope.declared_path_count)")
-                factRow(
-                    "Control plane", value: facts.scope.touches_control_plane ? "Yes" : "No")
-                if let prior = facts.supersedes?.value1 {
-                    Divider()
-                    Text("Revision context")
-                        .font(FreesideFont.sans(.caption, weight: .semibold))
-                    proposalRevisionRows(prior)
                 }
             }
         }

@@ -664,7 +664,8 @@ public enum AttentionFixtures {
         case .system_health:
             return "active-resource observation is temporarily unavailable"
         case .blocked:
-            return "the run has waited 18h on an external reviewer"
+            // Consistent with the typed blocked_on wait the card leads with.
+            return "the run is waiting on specification approval"
         }
     }
 }

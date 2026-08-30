@@ -46,27 +46,40 @@ import Testing
                 == "Verification status is unavailable; final review is requested.")
     }
 
-    @Test func mechanicalRowSummariesPreserveDistinctDaemonFacts() {
+    /// The mechanical rows read their typed fields, so rewording the daemon's
+    /// prose cannot change what the row asserts.
+    @Test func mechanicalRowSummariesComeFromTypedFactsNotProse() {
         var systemHealth = AttentionFixtures.fixture(type: .system_health).item
-        systemHealth.reason = "Doctor check backup_age is unhealthy: checkpoint is stale"
+        systemHealth.reason = "any prose at all"
         #expect(
             AttentionDisplay.rowSummary(systemHealth)
-                == "Doctor check backup_age is unhealthy: checkpoint is stale.")
+                == "Run visibility is impaired by diagnostic run_projection.unavailable.")
 
-        systemHealth.reason = "credential integrity probe failed."
+        systemHealth.health_diagnostic = .init(
+            value1: .init(code: "backup_age.stale", impairs: .none))
         #expect(
             AttentionDisplay.rowSummary(systemHealth)
-                == "Credential integrity probe failed.")
+                == "Diagnostic backup_age.stale is open; no capability is impaired.")
+
+        systemHealth.health_diagnostic = nil
+        #expect(
+            AttentionDisplay.rowSummary(systemHealth)
+                == "A system-health condition needs attention.")
 
         var blocked = AttentionFixtures.fixture(type: .blocked).item
-        blocked.reason = "waiting on external reviewer"
-        #expect(AttentionDisplay.rowSummary(blocked) == "Waiting on external reviewer.")
-
         blocked.reason = "the run has waited 18h on an external reviewer"
-        let firstSummary = AttentionDisplay.rowSummary(blocked)
-        blocked.reason = "the run has waited 2d on an external reviewer"
-        #expect(firstSummary == "The run is waiting on an external reviewer.")
-        #expect(AttentionDisplay.rowSummary(blocked) == firstSummary)
+        #expect(AttentionDisplay.rowSummary(blocked) == "Waiting on specification approval.")
+
+        blocked.blocked_on = .init(
+            value1: .init(
+                kind: .pr_checks,
+                since: AttentionFixtures.createdInstant,
+                item_id: nil,
+                pr_reference: .init(value1: .init(repo: "owner/repo", number: 7))))
+        #expect(AttentionDisplay.rowSummary(blocked) == "Waiting on PR checks.")
+
+        blocked.blocked_on = nil
+        #expect(AttentionDisplay.rowSummary(blocked) == "A run is waiting on a blocker.")
     }
 
     @Test func concludedRowSummariesAreNeutralAcrossEveryTypeAndStatus() {
@@ -74,7 +87,6 @@ import Testing
             .resolved, .superseded, .dismissed, .expired,
         ]
         for type in AttentionFixtures.phase1Types {
-            guard type != .system_health else { continue }
             for status in statuses {
                 var item = AttentionFixtures.fixture(type: type).item
                 item.status = status
@@ -85,18 +97,6 @@ import Testing
                         + "\(AttentionDisplay.label(status).lowercased()).")
             }
         }
-
-        var firstHealth = AttentionFixtures.fixture(type: .system_health).item
-        firstHealth.status = .resolved
-        firstHealth.reason = "Doctor check backup_age is unhealthy: checkpoint is stale"
-        var secondHealth = firstHealth
-        secondHealth.reason = "Credential integrity probe failed."
-        #expect(
-            AttentionDisplay.rowSummary(firstHealth)
-                == "Resolved: Doctor check backup_age is unhealthy: checkpoint is stale.")
-        #expect(
-            AttentionDisplay.rowSummary(secondHealth)
-                == "Resolved: Credential integrity probe failed.")
     }
 
     @Test func relativeRowTimesUseCoarseUnitsBlockedWordingAndDeadlinePrecedence() {
@@ -113,13 +113,27 @@ import Testing
 
         var blocked = AttentionFixtures.fixture(type: .blocked).item
         blocked.created_at = now.addingTimeInterval(-18 * 3_600)
+        blocked.blocked_on = .init(
+            value1: .init(
+                kind: .spec_approval,
+                since: now.addingTimeInterval(-18 * 3_600),
+                item_id: "item-spec_approval",
+                pr_reference: nil))
         #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "blocked 18h")
+
+        // Without the typed wait the row falls back to the item's creation.
+        var untypedBlocked = blocked
+        untypedBlocked.blocked_on = nil
+        #expect(AttentionDisplay.relativeRowTime(untypedBlocked, now: now) == "blocked 18h")
 
         let actualWaitStart = now.addingTimeInterval(-2 * 86_400)
         blocked.created_at = now.addingTimeInterval(-60)
-        blocked.reason =
-            "Specification approval has been waiting since "
-            + "\(actualWaitStart.formatted(.iso8601))."
+        blocked.blocked_on = .init(
+            value1: .init(
+                kind: .spec_approval,
+                since: actualWaitStart,
+                item_id: "item-spec_approval",
+                pr_reference: nil))
         #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "blocked 2d")
         #expect(
             AttentionDisplay.exactRowTimestamp(blocked, now: now)
@@ -162,21 +176,105 @@ import Testing
                 now.addingTimeInterval(-86_400), now: now) == "1d")
     }
 
-    @Test func rowContextPrefersNamesAndFallsBackToIdentifiers() {
-        let run = AttentionFixtures.fixture(type: .execution_failure).item
+    /// Section 9's per-type leads: every fact a card shows is read from a
+    /// typed field, so clearing that field clears the fact rather than
+    /// leaving a value recovered from prose.
+    @Test func everyTypedLeadComesFromItsOwnFactFieldAndDisappearsWithIt() {
+        let expected: [Components.Schemas.AttentionType: [String]] = [
+            .execution_failure: ["Outcome", "Failing stage", "Invocation"],
+            .review_diminishing_returns: ["Cost so far"],
+            .review_dispute: ["Run", "Round", "Disputed findings", "Completion evidence"],
+            .ready_for_final_review: ["Diff", "Base", "Head"],
+            .publish_blocked: ["Failed trust rule"],
+            .system_health: ["Diagnostic", "Impairs"],
+            .blocked: ["Waiting on", "Waiting since", "Blocking item"],
+        ]
+        for (type, labels) in expected {
+            var item = AttentionFixtures.fixture(type: type).item
+            #expect(AttentionDisplay.cardFacts(item).map(\.label) == labels)
 
+            item.execution_failure = nil
+            item.billable_cost_so_far = nil
+            item.review_dispute = nil
+            item.diff_stats = nil
+            item.publish_block = nil
+            item.health_diagnostic = nil
+            item.blocked_on = nil
+            item.reason = "the build stage failed twice and the run has waited 18h"
+            #expect(AttentionDisplay.cardFacts(item).isEmpty)
+        }
+
+        // The remaining types lead with an ask, an artifact, or their own
+        // module, so they contribute no fact rows.
+        for type in [
+            Components.Schemas.AttentionType.spec_approval, .agent_question,
+            .finding_adjudication, .run_proposal, .review_contradiction, .review_configuration,
+        ] {
+            #expect(AttentionDisplay.cardFacts(AttentionFixtures.fixture(type: type).item).isEmpty)
+        }
+    }
+
+    @Test func typedLeadsRenderTheirDaemonValues() {
+        #expect(
+            AttentionDisplay.cardFacts(AttentionFixtures.fixture(type: .execution_failure).item)
+                .map(\.value) == ["Failed", "Implementation", "inv-execution_failure"])
+        #expect(
+            AttentionDisplay.cardFacts(
+                AttentionFixtures.fixture(type: .review_diminishing_returns).item
+            ).map(\.value) == ["USD 42.75 across 6 invocations, still accruing"])
+        #expect(
+            AttentionDisplay.cardFacts(
+                AttentionFixtures.fixture(type: .ready_for_final_review).item
+            ).map(\.value) == ["12 files, +240 -31", "deadbeef", "cafebabe"])
+        #expect(
+            AttentionDisplay.cardFacts(AttentionFixtures.fixture(type: .publish_blocked).item)
+                .map(\.value) == ["Trust profile drifted"])
+        #expect(
+            AttentionDisplay.cardFacts(AttentionFixtures.fixture(type: .system_health).item)
+                .map(\.value) == ["run_projection.unavailable", "Run visibility"])
+
+        var blocked = AttentionFixtures.fixture(type: .blocked).item
+        blocked.blocked_on = .init(
+            value1: .init(
+                kind: .pr_checks,
+                since: AttentionFixtures.createdInstant,
+                item_id: nil,
+                pr_reference: .init(value1: .init(repo: "owner/repo", number: 7))))
+        #expect(
+            AttentionDisplay.cardFacts(blocked).map(\.label)
+                == ["Waiting on", "Waiting since", "Pull request"])
+        #expect(AttentionDisplay.cardFacts(blocked).last?.value == "owner/repo#7")
+    }
+
+    @Test func rowContextRendersTheDaemonsDisplayNamesAndMarksIdentifiers() {
+        var run = AttentionFixtures.fixture(type: .execution_failure).item
+
+        #expect(
+            AttentionDisplay.rowContext(run)
+                == .init(
+                    project: .init(value: "owner/repo", isIdentifier: false),
+                    workUnit: .init(value: "#724", isIdentifier: false)
+                ))
+
+        run.display_names = .init(
+            value1: .init(
+                project: .init(text: "proj-1", source: .identifier),
+                work_unit: .init(text: "run-execution_failure", source: .identifier)))
         #expect(
             AttentionDisplay.rowContext(run)
                 == .init(
                     project: .init(value: "proj-1", isIdentifier: true),
                     workUnit: .init(value: "run-execution_failure", isIdentifier: true)
                 ))
+
+        // A legacy item carries no labels; the raw identifiers stand in and
+        // are marked as identifiers.
+        run.display_names = nil
         #expect(
-            AttentionDisplay.rowContext(
-                run, projectName: "Freeside", workUnitName: "Inbox scanning")
+            AttentionDisplay.rowContext(run)
                 == .init(
-                    project: .init(value: "Freeside", isIdentifier: false),
-                    workUnit: .init(value: "Inbox scanning", isIdentifier: false)
+                    project: .init(value: "proj-1", isIdentifier: true),
+                    workUnit: .init(value: "run-execution_failure", isIdentifier: true)
                 ))
 
         let system = AttentionFixtures.fixture(type: .system_health).item
