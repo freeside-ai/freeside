@@ -18,6 +18,7 @@ import (
 type ReviewSourceFailure struct {
 	Class domain.ReviewFailureClass
 	Err   error
+	Usage []UsageMeasurement
 }
 
 func (e *ReviewSourceFailure) Error() string {
@@ -34,6 +35,17 @@ func ClassifyReviewSourceFailure(err error) domain.ReviewFailureClass {
 		return failure.Class
 	}
 	return domain.ReviewFailureContradiction
+}
+
+// ReviewSourceFailureUsage returns numbers-only telemetry carried by a
+// terminal source failure. Nil keeps an unobserved failure distinct from an
+// observed zero measurement.
+func ReviewSourceFailureUsage(err error) []UsageMeasurement {
+	var failure *ReviewSourceFailure
+	if errors.As(err, &failure) {
+		return slices.Clone(failure.Usage)
+	}
+	return nil
 }
 
 // ReviewSource requests and reconciles external reviews (plan §5.3).

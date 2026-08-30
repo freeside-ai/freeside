@@ -72,6 +72,7 @@ type CodexReviewInstructionArtifacts interface {
 type CodexReviewSourceOutcome struct {
 	InvocationID       domain.InvocationID       `json:"invocation_id"`
 	Result             *exec.ReviewResult        `json:"result"`
+	Usage              []exec.UsageMeasurement   `json:"usage,omitempty"`
 	CollectionEvidence domain.Digest             `json:"collection_evidence,omitempty"`
 	FailureClass       domain.ReviewFailureClass `json:"failure_class,omitempty"`
 	Failure            string                    `json:"failure,omitempty"`
@@ -92,7 +93,7 @@ func (o CodexReviewSourceOutcome) Validate() error {
 		if o.Result.InvocationID != o.InvocationID {
 			return domain.ErrParentKeyMismatch
 		}
-		if o.FailureClass != "" || o.Failure != "" || o.AbortRequired {
+		if o.FailureClass != "" || o.Failure != "" || o.AbortRequired || o.Usage != nil {
 			return domain.ErrParentKeyMismatch
 		}
 		if err := o.Result.Validate(); err != nil || !contentaddr.Valid(string(o.CollectionEvidence)) {
@@ -109,6 +110,11 @@ func (o CodexReviewSourceOutcome) Validate() error {
 	}
 	if !validClass {
 		return domain.ErrInvalidReviewFailureClass
+	}
+	for i, measurement := range o.Usage {
+		if err := measurement.Validate(); err != nil {
+			return fmt.Errorf("review failure usage[%d]: %w", i, err)
+		}
 	}
 	return nil
 }
@@ -686,6 +692,7 @@ func (s *CodexReviewSource) Inspect(
 		outcome = CodexReviewSourceOutcome{
 			InvocationID: id, FailureClass: domain.ReviewFailureContradiction,
 			Failure: fmt.Sprintf("Codex review returned invalid raw output: %v", err),
+			Usage:   s.reviewUsageMeasurements(collection.Events),
 		}
 	} else {
 		outcome = s.normalizeCollection(id, request, collection)
@@ -698,11 +705,16 @@ func (s *CodexReviewSource) Inspect(
 			// behind forever. Topology contradictions (conformance failures from
 			// inspect/collect/cleanup) stay loud without cleanup above, because
 			// there the topology itself can no longer be trusted to tear down.
+			usage := outcome.Usage
+			if outcome.Result != nil {
+				usage = outcome.Result.Usage
+			}
 			outcome = CodexReviewSourceOutcome{
 				InvocationID:       id,
 				FailureClass:       domain.ReviewFailureContradiction,
 				Failure:            fmt.Sprintf("Codex review returned an invalid collected result: %v", err),
 				CollectionEvidence: outcome.CollectionEvidence,
+				Usage:              usage,
 			}
 		}
 	}
@@ -775,17 +787,22 @@ func (s *CodexReviewSource) normalizeCollection(
 	evidenceBytes = append(evidenceBytes, collection.Result...)
 	evidenceBytes = fmt.Appendf(evidenceBytes, ":%d", collection.ExitStatus)
 	collectionEvidence := domain.Digest(contentaddr.Sum(evidenceBytes))
+	completedAt, usage := s.reviewUsageMeasurementsAt(collection.Events)
+	failure := func(class domain.ReviewFailureClass, message string) CodexReviewSourceOutcome {
+		return CodexReviewSourceOutcome{
+			InvocationID: id, FailureClass: class, Failure: message, Usage: usage,
+		}
+	}
+	contradiction := func(message string) CodexReviewSourceOutcome {
+		return failure(domain.ReviewFailureContradiction, message)
+	}
 	if collection.ExitStatus != 0 {
 		class, terminalMessage := classifyReviewTerminalFailure(provider, collection.Events)
-		failure := fmt.Sprintf("Codex review exited with status %d", collection.ExitStatus)
+		message := fmt.Sprintf("Codex review exited with status %d", collection.ExitStatus)
 		if codexRefreshAttemptFailure([]byte(terminalMessage)) {
-			failure = "Codex review attempted an in-container credential refresh"
+			message = "Codex review attempted an in-container credential refresh"
 		}
-		return CodexReviewSourceOutcome{
-			InvocationID: id,
-			FailureClass: class,
-			Failure:      failure,
-		}
+		return failure(class, message)
 	}
 	var raw struct {
 		Findings *[]struct {
@@ -806,41 +823,19 @@ func (s *CodexReviewSource) normalizeCollection(
 		} `json:"findings"`
 	}
 	if err := RejectDuplicateJSONKeys(collection.Result); err != nil {
-		return CodexReviewSourceOutcome{
-			InvocationID: id,
-			FailureClass: domain.ReviewFailureContradiction,
-			Failure:      "Codex review returned malformed structured output",
-		}
+		return contradiction("Codex review returned malformed structured output")
 	}
 	if err := strictjson.Decode(
 		collection.Result, &raw, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
 	); err != nil {
 		if errors.Is(err, strictjson.ErrTrailingData) {
-			return CodexReviewSourceOutcome{
-				InvocationID: id,
-				FailureClass: domain.ReviewFailureContradiction,
-				Failure:      "Codex review returned trailing structured output",
-			}
+			return contradiction("Codex review returned trailing structured output")
 		}
-		return CodexReviewSourceOutcome{
-			InvocationID: id,
-			FailureClass: domain.ReviewFailureContradiction,
-			Failure:      "Codex review returned malformed structured output",
-		}
+		return contradiction("Codex review returned malformed structured output")
 	}
 	if raw.Findings == nil {
-		return CodexReviewSourceOutcome{
-			InvocationID: id,
-			FailureClass: domain.ReviewFailureContradiction,
-			Failure:      "Codex review omitted the required findings array",
-		}
+		return contradiction("Codex review omitted the required findings array")
 	}
-	contradiction := func(failure string) CodexReviewSourceOutcome {
-		return CodexReviewSourceOutcome{
-			InvocationID: id, FailureClass: domain.ReviewFailureContradiction, Failure: failure,
-		}
-	}
-	completedAt := s.cfg.Now().UTC()
 	findings := make([]domain.Finding, len(*raw.Findings))
 	for i, item := range *raw.Findings {
 		severity := domain.FindingSeverity(item.Severity)
@@ -903,12 +898,29 @@ func (s *CodexReviewSource) normalizeCollection(
 		ConfigurationDigest: s.cfg.ConfigurationDigest,
 		InstructionDigest:   req.Instructions.ResultDigest,
 		CostOwner:           s.cfg.CostOwner, CompletedAt: completedAt,
-		Findings: findings,
+		Findings: findings, Usage: usage,
 	}
 	result.CompletionEvidence, _ = reviewResultEvidence(provider, result, collectionEvidence)
 	return CodexReviewSourceOutcome{
 		InvocationID: id, Result: &result, CollectionEvidence: collectionEvidence,
 	}
+}
+
+func (s *CodexReviewSource) reviewUsageMeasurements(
+	events []byte,
+) []exec.UsageMeasurement {
+	_, usage := s.reviewUsageMeasurementsAt(events)
+	return usage
+}
+
+func (s *CodexReviewSource) reviewUsageMeasurementsAt(
+	events []byte,
+) (time.Time, []exec.UsageMeasurement) {
+	var observedAt time.Time
+	if s.cfg.Now != nil {
+		observedAt = s.cfg.Now().UTC()
+	}
+	return observedAt, s.reviewProvider().usageMeasurements(events, observedAt)
 }
 
 // CodexReviewResultEvidence binds the normalized result to the authenticated,
@@ -1069,7 +1081,7 @@ func (s *CodexReviewSource) Poll(
 	if outcome.Result == nil {
 		return exec.ReviewResult{}, errors.Join(exec.ErrNoResult,
 			&exec.ReviewSourceFailure{
-				Class: outcome.FailureClass, Err: errors.New(outcome.Failure),
+				Class: outcome.FailureClass, Err: errors.New(outcome.Failure), Usage: outcome.Usage,
 			})
 	}
 	return *outcome.Result, nil

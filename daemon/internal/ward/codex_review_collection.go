@@ -90,18 +90,20 @@ func (b *CodexReviewLifecycle) CollectCodexReview(
 	if err != nil {
 		return CodexReviewCollection{}, err
 	}
+	collection := CodexReviewCollection{ExitStatus: status, Events: events}
 	var result []byte
 	if status == 0 {
 		result, err = read(codexReviewResultPath, maxCodexReviewResultBytes)
 		if err != nil {
-			return CodexReviewCollection{}, err
+			return collection, err
 		}
 		if len(bytes.TrimSpace(result)) == 0 {
-			return CodexReviewCollection{}, errors.Join(ErrCodexReviewOutputInvalid,
+			return collection, errors.Join(ErrCodexReviewOutputInvalid,
 				failf(CheckControlPlaneIsolation, "Codex review result is empty"))
 		}
 	}
-	return CodexReviewCollection{ExitStatus: status, Result: result, Events: events}, nil
+	collection.Result = result
+	return collection, nil
 }
 
 func (b *CodexReviewLifecycle) authenticateCodexReviewContainer(
