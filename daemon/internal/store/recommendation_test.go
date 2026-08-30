@@ -51,11 +51,22 @@ func TestRecommendationSourceDerivesAtCreationAndSuppressesOnCollision(t *testin
 	at := time.Date(2026, 8, 29, 10, 0, 0, 0, time.UTC)
 	finding := adjudicationFinding("finding-recommendation", runID, "daemon/a.go", at)
 	st := seedReviewRound(t, runID, 1, []domain.Finding{finding}, at)
-	artifact := modelAdjudication(t, runID, 1, finding.ID, at)
-	item := adjudicationItem(t, "item-recommendation", bindingFromAdjudication(artifact, finding))
-	surface, err := domain.NewDecisionSurface(item)
+	uncommittedArtifact := modelAdjudication(t, runID, 1, finding.ID, "", at)
+	uncommittedItem := adjudicationItem(
+		t, "item-recommendation", bindingFromAdjudication(uncommittedArtifact, finding),
+	)
+	surface, err := domain.NewDecisionSurface(uncommittedItem)
 	if err != nil {
 		t.Fatal(err)
+	}
+	artifact := modelAdjudication(t, runID, 1, finding.ID, surface.Digest, at)
+	item := adjudicationItem(t, "item-recommendation", bindingFromAdjudication(artifact, finding))
+	committedSurface, err := domain.NewDecisionSurface(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if committedSurface.Digest != surface.Digest {
+		t.Fatalf("committed surface = %q, prospective surface was %q", committedSurface.Digest, surface.Digest)
 	}
 	record := storedAgentRecommendationRecord(
 		t, item, surface, domain.InvocationID("review-"+string(runID)+"-1"))
@@ -135,6 +146,72 @@ func TestRecommendationSourceDerivesAtCreationAndSuppressesOnCollision(t *testin
 	}
 }
 
+func TestAgentRecommendationRequiresArtifactSurfaceCommitment(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		commitment domain.Digest
+	}{
+		{name: "uncommitted"},
+		{name: "foreign", commitment: adjudicationDigest("f")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			runID := domain.RunID("run-recommendation-" + tc.name)
+			at := time.Date(2026, 8, 29, 10, 30, 0, 0, time.UTC)
+			finding := adjudicationFinding(
+				domain.FindingID("finding-recommendation-"+tc.name), runID, "daemon/a.go", at,
+			)
+			st := seedReviewRound(t, runID, 1, []domain.Finding{finding}, at)
+			artifact := modelAdjudication(t, runID, 1, finding.ID, tc.commitment, at)
+			item := adjudicationItem(
+				t, domain.ItemID("item-recommendation-"+tc.name), bindingFromAdjudication(artifact, finding),
+			)
+			surface, err := domain.NewDecisionSurface(item)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record := storedAgentRecommendationRecord(
+				t, item, surface, domain.InvocationID("review-"+string(runID)+"-1"),
+			)
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				if err := tx.PutFindingAdjudication(ctx, artifact); err != nil {
+					return err
+				}
+				if err := tx.PutRecommendationSource(ctx, record); err != nil {
+					return err
+				}
+				return tx.PutAttentionItem(ctx, item)
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			for read := 0; read < 2; read++ {
+				if err := st.Read(ctx, func(tx *store.ReadTx) error {
+					got, err := tx.GetAttentionItem(ctx, item.ID)
+					if err != nil {
+						return err
+					}
+					if got.Recommendation != nil || got.Status != domain.StatusOpen {
+						t.Fatalf("read %d item = recommendation %#v, status %q", read, got.Recommendation, got.Status)
+					}
+					decidingItem, command, err := tx.FindingAdjudicationDecision(ctx, item.ID)
+					if err != nil {
+						return err
+					}
+					if decidingItem.Status != domain.StatusOpen || command != nil {
+						t.Fatalf("read %d decision = item status %q, command %#v", read, decidingItem.Status, command)
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestRecommendationSourceStalesOnStructuralTransition(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -142,11 +219,22 @@ func TestRecommendationSourceStalesOnStructuralTransition(t *testing.T) {
 	at := time.Date(2026, 8, 29, 11, 0, 0, 0, time.UTC)
 	finding := adjudicationFinding("finding-recommendation-stale", runID, "daemon/a.go", at)
 	st := seedReviewRound(t, runID, 1, []domain.Finding{finding}, at)
-	artifact := modelAdjudication(t, runID, 1, finding.ID, at)
-	item := adjudicationItem(t, "item-recommendation-stale", bindingFromAdjudication(artifact, finding))
-	surface, err := domain.NewDecisionSurface(item)
+	uncommittedArtifact := modelAdjudication(t, runID, 1, finding.ID, "", at)
+	uncommittedItem := adjudicationItem(
+		t, "item-recommendation-stale", bindingFromAdjudication(uncommittedArtifact, finding),
+	)
+	surface, err := domain.NewDecisionSurface(uncommittedItem)
 	if err != nil {
 		t.Fatal(err)
+	}
+	artifact := modelAdjudication(t, runID, 1, finding.ID, surface.Digest, at)
+	item := adjudicationItem(t, "item-recommendation-stale", bindingFromAdjudication(artifact, finding))
+	committedSurface, err := domain.NewDecisionSurface(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if committedSurface.Digest != surface.Digest {
+		t.Fatalf("committed surface = %q, prospective surface was %q", committedSurface.Digest, surface.Digest)
 	}
 	record := storedAgentRecommendationRecord(
 		t, item, surface, domain.InvocationID("review-"+string(runID)+"-1"))

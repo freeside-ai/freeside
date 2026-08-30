@@ -55,8 +55,8 @@ func seedFindingAdjudicationItem(t *testing.T, f fixture) domain.AttentionItem {
 		t.Fatalf("new review record: %v", err)
 	}
 	artifact, err := domain.NewFindingAdjudication(
-		runID, 1, specDigest, instructionDigest, policyDigest, entries, *f.now,
-	)
+		runID, 1, specDigest, instructionDigest, policyDigest, entries, "",
+		*f.now)
 	if err != nil {
 		t.Fatalf("new adjudication: %v", err)
 	}

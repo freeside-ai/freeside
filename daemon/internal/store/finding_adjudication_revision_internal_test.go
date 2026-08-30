@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,88 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/migrations"
 )
+
+func TestFindingAdjudicationPreCommitmentBodyReconstructs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	body, err := os.ReadFile(filepath.Join("testdata", "finding_adjudication.golden"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := domain.DecodeFindingAdjudication(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.DecisionSurfaceDigest != "" {
+		t.Fatalf("fixture decision surface digest = %q, want empty", artifact.DecisionSurfaceDigest)
+	}
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	findings := make([]domain.Finding, 0, len(artifact.Entries))
+	ids := make([]domain.FindingID, 0, len(artifact.Entries))
+	for _, entry := range artifact.Entries {
+		ids = append(ids, entry.FindingID)
+		findings = append(findings, domain.Finding{
+			ID: entry.FindingID, RunID: artifact.RunID, Source: "codex_local",
+			Location:  &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1},
+			Message:   "finding",
+			RawText:   "finding",
+			CreatedAt: artifact.CreatedAt.Add(-time.Minute),
+		})
+	}
+	record, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-pre-commitment", RunID: artifact.RunID, Round: artifact.Round,
+		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		ConfigurationDigest: migrationAdjudicationDigest("c"),
+		InstructionDigest:   artifact.InstructionSnapshotDigest,
+		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head",
+		CompletedAt:        artifact.CreatedAt.Add(-time.Minute),
+		CompletionEvidence: migrationAdjudicationDigest("e"),
+		Outcome:            domain.ReviewFindings,
+		FindingIDs:         ids,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: artifact.RunID, ProjectID: "project-1",
+			SpecDigest: artifact.ApprovedSpecDigest, PolicyDigest: artifact.ResolvedPolicyDigest,
+		}); err != nil {
+			return err
+		}
+		return tx.PutReviewRecord(ctx, record, findings)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.ExecContext(ctx, `INSERT INTO finding_adjudications
+        (run_id, round, revision, predecessor_digest, content_digest,
+         finding_batch_digest, approved_spec_digest, instruction_snapshot_digest,
+         resolved_policy_digest, created_at, body_digest, body)
+        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		artifact.RunID, artifact.Round, artifact.Revision, artifact.Digest,
+		artifact.FindingBatchDigest, artifact.ApprovedSpecDigest,
+		artifact.InstructionSnapshotDigest, artifact.ResolvedPolicyDigest,
+		formatTime(artifact.CreatedAt), reviewBodyDigest(string(body)), string(body),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		got, err := tx.GetFindingAdjudication(ctx, artifact.Digest)
+		if err != nil {
+			return err
+		}
+		if got.Digest != artifact.Digest || got.DecisionSurfaceDigest != "" {
+			t.Fatalf("reconstructed digest = %q, decision surface = %q", got.Digest, got.DecisionSurfaceDigest)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func migrationAdjudicationDigest(component string) domain.Digest {
 	return domain.Digest("sha256:" + strings.Repeat(component, 64/len(component)))
@@ -53,8 +136,9 @@ func seedMigrationAdjudication(
 	}
 	artifact, err := domain.NewFindingAdjudication(
 		run.ID, 1, run.SpecDigest, record.InstructionDigest, run.PolicyDigest,
-		[]domain.FindingAdjudicationEntry{entry}, at.Add(time.Minute),
-	)
+		[]domain.FindingAdjudicationEntry{entry}, "",
+
+		at.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("adjudication: %v", err)
 	}

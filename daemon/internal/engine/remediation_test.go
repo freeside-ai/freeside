@@ -389,8 +389,9 @@ func newRemediationReviewFixtureWithBatch(
 	}
 	adjudication, err := domain.NewFindingAdjudication(
 		runID, 1, adjudicationDigest("4"), priorRecord.InstructionDigest,
-		adjudicationDigest("5"), entries, at,
-	)
+		adjudicationDigest("5"), entries, "",
+
+		at)
 	if err != nil {
 		t.Fatal(err)
 	}

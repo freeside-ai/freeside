@@ -74,7 +74,9 @@ func finalDispositionAdjudication(
 	}
 	artifact, err := domain.NewFindingAdjudication(
 		runID, round, adjSpecDigest, adjInstructionDigest, adjPolicyDigest,
-		entries, createdAt)
+		entries, "",
+
+		createdAt)
 	if err != nil {
 		t.Fatalf("new final-disposition adjudication: %v", err)
 	}
@@ -215,8 +217,8 @@ func TestFindingDispositionKeepsSupersededAdjudicationBinding(t *testing.T) {
 		Route: domain.RouteDecline, Consequence: "record the finding as declined instead",
 	}}
 	successor, err := domain.NewSuccessorFindingAdjudication(
-		initial, feedback, entries, at.Add(time.Minute),
-	)
+		initial, feedback, entries, "",
+		at.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("successor: %v", err)
 	}

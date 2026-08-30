@@ -3,6 +3,8 @@ package domain_test
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -459,6 +461,13 @@ func TestEngineCompatibilityIsSoleAllowedProducer(t *testing.T) {
 
 func validAdjudicationFixture(t *testing.T) domain.FindingAdjudication {
 	t.Helper()
+	return adjudicationFixture(t, "")
+}
+
+func adjudicationFixture(
+	t *testing.T, decisionSurfaceDigest domain.Digest,
+) domain.FindingAdjudication {
+	t.Helper()
 	engine, err := domain.NewEngineAdjudicationEntry(
 		"finding-0001", domain.GoalRequired, ptr(domain.CompatibilityAllowed),
 		domain.RouteRemediate, "in declared scope", []string{"declared-path containment"}, nil, nil, nil, nil)
@@ -477,7 +486,9 @@ func validAdjudicationFixture(t *testing.T) domain.FindingAdjudication {
 		"run-abc", 2,
 		adjDigest("approved-spec"), adjDigest("instruction-snapshot"), adjDigest("resolved-policy"),
 		[]domain.FindingAdjudicationEntry{model, engine}, // deliberately unsorted
-		time.Date(2026, 8, 21, 15, 0, 0, 0, time.UTC))
+		decisionSurfaceDigest,
+		time.Date(2026, 8, 21, 15, 0, 0, 0, time.UTC),
+	)
 	if err != nil {
 		t.Fatalf("artifact: %v", err)
 	}
@@ -486,7 +497,13 @@ func validAdjudicationFixture(t *testing.T) domain.FindingAdjudication {
 
 func successorAdjudicationFixture(t *testing.T) domain.FindingAdjudication {
 	t.Helper()
-	prior := validAdjudicationFixture(t)
+	return successorFromAdjudication(t, validAdjudicationFixture(t), "")
+}
+
+func successorFromAdjudication(
+	t *testing.T, prior domain.FindingAdjudication, decisionSurfaceDigest domain.Digest,
+) domain.FindingAdjudication {
+	t.Helper()
 	entries := slices.Clone(prior.Entries)
 	entries[1].Rationale = "feedback identified the governing exception"
 	successor, err := domain.NewSuccessorFindingAdjudication(
@@ -495,13 +512,72 @@ func successorAdjudicationFixture(t *testing.T) domain.FindingAdjudication {
 			InvocationID: "invocation-discuss-1", ConversationID: "conversation-adjudication-1",
 			ThroughSequence: 2, PrefixDigest: adjDigest("conversation-prefix"),
 		},
-		entries,
+		entries, decisionSurfaceDigest,
 		time.Date(2026, 8, 21, 15, 5, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatalf("successor adjudication: %v", err)
 	}
 	return successor
+}
+
+func TestFindingAdjudicationLegacyGoldensDecode(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"finding_adjudication", "finding_adjudication_successor"} {
+		body, err := os.ReadFile(filepath.Join("testdata", name+".golden")) //nolint:gosec // fixed test fixture names
+		if err != nil {
+			t.Fatalf("read %s golden: %v", name, err)
+		}
+		artifact, err := domain.DecodeFindingAdjudication(body)
+		if err != nil {
+			t.Fatalf("decode %s golden: %v", name, err)
+		}
+		if artifact.DecisionSurfaceDigest != "" {
+			t.Fatalf("%s decision surface digest = %q, want empty", name, artifact.DecisionSurfaceDigest)
+		}
+	}
+}
+
+func TestFindingAdjudicationCommittedRoundTrip(t *testing.T) {
+	t.Parallel()
+	decisionSurfaceDigest := adjDigest("decision-surface")
+	uncommitted := validAdjudicationFixture(t)
+	committed := adjudicationFixture(t, decisionSurfaceDigest)
+	if committed.Digest == uncommitted.Digest {
+		t.Fatal("committed and uncommitted artifacts share a content digest")
+	}
+	body, err := committed.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := domain.DecodeFindingAdjudication(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.DecisionSurfaceDigest != decisionSurfaceDigest {
+		t.Fatalf("decoded decision surface digest = %q, want %q", decoded.DecisionSurfaceDigest, decisionSurfaceDigest)
+	}
+
+	malformed := uncommitted
+	malformed.DecisionSurfaceDigest = "not-a-digest"
+	if err := malformed.Validate(); !errors.Is(err, domain.ErrFindingAdjudicationInconsistent) {
+		t.Fatalf("malformed decision surface digest = %v, want ErrFindingAdjudicationInconsistent", err)
+	}
+}
+
+func TestFindingAdjudicationSuccessorUsesProspectiveSurface(t *testing.T) {
+	t.Parallel()
+	decisionSurfaceDigest := adjDigest("decision-surface")
+	committedPrior := adjudicationFixture(t, decisionSurfaceDigest)
+	uncommittedSuccessor := successorFromAdjudication(t, committedPrior, "")
+	if uncommittedSuccessor.DecisionSurfaceDigest != "" {
+		t.Fatalf("successor inherited decision surface digest %q", uncommittedSuccessor.DecisionSurfaceDigest)
+	}
+
+	committedSuccessor := successorFromAdjudication(t, validAdjudicationFixture(t), decisionSurfaceDigest)
+	if committedSuccessor.DecisionSurfaceDigest != decisionSurfaceDigest {
+		t.Fatalf("successor decision surface digest = %q, want %q", committedSuccessor.DecisionSurfaceDigest, decisionSurfaceDigest)
+	}
 }
 
 func TestFindingAdjudicationRoundTripAndDigestStability(t *testing.T) {
@@ -624,8 +700,8 @@ func TestFindingAdjudicationRevisionRules(t *testing.T) {
 
 	changed := slices.Clone(initial.Entries[:1])
 	if _, err := domain.NewSuccessorFindingAdjudication(
-		initial, feedback, changed, initial.CreatedAt.Add(time.Minute),
-	); !errors.Is(err, domain.ErrFindingAdjudicationInconsistent) {
+		initial, feedback, changed, "",
+		initial.CreatedAt.Add(time.Minute)); !errors.Is(err, domain.ErrFindingAdjudicationInconsistent) {
 		t.Fatalf("changed finding batch = %v, want ErrFindingAdjudicationInconsistent", err)
 	}
 }
@@ -650,7 +726,8 @@ func TestFindingAdjudicationAuthorizesFinalDisposition(t *testing.T) {
 	disputed, err := domain.NewFindingAdjudication(
 		"run-disputed", 1,
 		adjDigest("approved-spec"), adjDigest("instruction-snapshot"), adjDigest("resolved-policy"),
-		[]domain.FindingAdjudicationEntry{disputeEntry},
+		[]domain.FindingAdjudicationEntry{disputeEntry}, "",
+
 		time.Date(2026, 8, 21, 16, 1, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
@@ -658,7 +735,8 @@ func TestFindingAdjudicationAuthorizesFinalDisposition(t *testing.T) {
 	deferred, err := domain.NewFindingAdjudication(
 		"run-adjacent", 1,
 		adjDigest("approved-spec"), adjDigest("instruction-snapshot"), adjDigest("resolved-policy"),
-		[]domain.FindingAdjudicationEntry{adjacentEntry},
+		[]domain.FindingAdjudicationEntry{adjacentEntry}, "",
+
 		time.Date(2026, 8, 21, 16, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
@@ -711,12 +789,24 @@ func TestFindingAdjudicationGolden(t *testing.T) {
 		t.Fatalf("marshal artifact: %v", err)
 	}
 	golden.Assert(t, "finding_adjudication", append(body, '\n'))
+	committedBody, err := json.MarshalIndent(adjudicationFixture(t, adjDigest("decision-surface")), "", "  ")
+	if err != nil {
+		t.Fatalf("marshal committed artifact: %v", err)
+	}
+	golden.Assert(t, "finding_adjudication_committed", append(committedBody, '\n'))
 
 	successorBody, err := json.MarshalIndent(successorAdjudicationFixture(t), "", "  ")
 	if err != nil {
 		t.Fatalf("marshal successor artifact: %v", err)
 	}
 	golden.Assert(t, "finding_adjudication_successor", append(successorBody, '\n'))
+	committedSuccessorBody, err := json.MarshalIndent(
+		successorFromAdjudication(t, validAdjudicationFixture(t), adjDigest("decision-surface")), "", "  ",
+	)
+	if err != nil {
+		t.Fatalf("marshal committed successor artifact: %v", err)
+	}
+	golden.Assert(t, "finding_adjudication_successor_committed", append(committedSuccessorBody, '\n'))
 
 	model := fixture.Entries[1]
 	entryBody, err := json.MarshalIndent(model, "", "  ")

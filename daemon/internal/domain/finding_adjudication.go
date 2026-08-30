@@ -535,6 +535,7 @@ type FindingAdjudication struct {
 	ApprovedSpecDigest        Digest                     `json:"approved_spec_digest"`
 	InstructionSnapshotDigest Digest                     `json:"instruction_snapshot_digest"`
 	ResolvedPolicyDigest      Digest                     `json:"resolved_policy_digest"`
+	DecisionSurfaceDigest     Digest                     `json:"decision_surface_digest,omitempty"`
 	Entries                   []FindingAdjudicationEntry `json:"entries"`
 	CreatedAt                 time.Time                  `json:"created_at"`
 	Digest                    Digest                     `json:"digest"`
@@ -576,6 +577,7 @@ type canonicalFindingAdjudication struct {
 	ApprovedSpecDigest        Digest                     `json:"approved_spec_digest"`
 	InstructionSnapshotDigest Digest                     `json:"instruction_snapshot_digest"`
 	ResolvedPolicyDigest      Digest                     `json:"resolved_policy_digest"`
+	DecisionSurfaceDigest     Digest                     `json:"decision_surface_digest,omitempty"`
 	Entries                   []FindingAdjudicationEntry `json:"entries"`
 	CreatedAt                 time.Time                  `json:"created_at"`
 }
@@ -591,6 +593,7 @@ type canonicalSuccessorFindingAdjudication struct {
 	ApprovedSpecDigest        Digest                     `json:"approved_spec_digest"`
 	InstructionSnapshotDigest Digest                     `json:"instruction_snapshot_digest"`
 	ResolvedPolicyDigest      Digest                     `json:"resolved_policy_digest"`
+	DecisionSurfaceDigest     Digest                     `json:"decision_surface_digest,omitempty"`
 	Entries                   []FindingAdjudicationEntry `json:"entries"`
 	CreatedAt                 time.Time                  `json:"created_at"`
 }
@@ -603,6 +606,7 @@ type encodedFindingAdjudication struct {
 	ApprovedSpecDigest        Digest                     `json:"approved_spec_digest"`
 	InstructionSnapshotDigest Digest                     `json:"instruction_snapshot_digest"`
 	ResolvedPolicyDigest      Digest                     `json:"resolved_policy_digest"`
+	DecisionSurfaceDigest     Digest                     `json:"decision_surface_digest,omitempty"`
 	Entries                   []FindingAdjudicationEntry `json:"entries"`
 	CreatedAt                 time.Time                  `json:"created_at"`
 	Digest                    Digest                     `json:"digest"`
@@ -619,19 +623,23 @@ type encodedSuccessorFindingAdjudication struct {
 	ApprovedSpecDigest        Digest                     `json:"approved_spec_digest"`
 	InstructionSnapshotDigest Digest                     `json:"instruction_snapshot_digest"`
 	ResolvedPolicyDigest      Digest                     `json:"resolved_policy_digest"`
+	DecisionSurfaceDigest     Digest                     `json:"decision_surface_digest,omitempty"`
 	Entries                   []FindingAdjudicationEntry `json:"entries"`
 	CreatedAt                 time.Time                  `json:"created_at"`
 	Digest                    Digest                     `json:"digest"`
 }
 
-// NewFindingAdjudication builds one round's adjudication artifact. It sorts the
-// entries by finding id, computes the finding-batch and content digests, and
-// validates. createdAt must be a UTC instant.
+// NewFindingAdjudication builds one round's adjudication artifact. The decision
+// surface digest commits the artifact to the prospective item surface it opens;
+// empty means uncommitted and cannot yield a recommendation. The constructor
+// sorts the entries by finding id, computes the finding-batch and content
+// digests, and validates. createdAt must be a UTC instant.
 func NewFindingAdjudication(
 	runID RunID,
 	round int,
 	approvedSpecDigest, instructionSnapshotDigest, resolvedPolicyDigest Digest,
 	entries []FindingAdjudicationEntry,
+	decisionSurfaceDigest Digest,
 	createdAt time.Time,
 ) (FindingAdjudication, error) {
 	sorted := slices.Clone(entries)
@@ -651,6 +659,7 @@ func NewFindingAdjudication(
 		ApprovedSpecDigest:        approvedSpecDigest,
 		InstructionSnapshotDigest: instructionSnapshotDigest,
 		ResolvedPolicyDigest:      resolvedPolicyDigest,
+		DecisionSurfaceDigest:     decisionSurfaceDigest,
 		Entries:                   sorted,
 		CreatedAt:                 createdAt,
 	}
@@ -666,12 +675,15 @@ func NewFindingAdjudication(
 }
 
 // NewSuccessorFindingAdjudication builds the next immutable adjudication for a
-// review round after Discuss feedback. It preserves every version binding and
-// requires the exact finding set of its predecessor.
+// review round after Discuss feedback. The decision surface digest commits the
+// successor to the prospective replacement item surface it opens; empty means
+// uncommitted and cannot yield a recommendation. It preserves every other
+// version binding and requires the exact finding set of its predecessor.
 func NewSuccessorFindingAdjudication(
 	prior FindingAdjudication,
 	feedback AdjudicationFeedback,
 	entries []FindingAdjudicationEntry,
+	decisionSurfaceDigest Digest,
 	createdAt time.Time,
 ) (FindingAdjudication, error) {
 	if err := prior.Validate(); err != nil {
@@ -707,6 +719,7 @@ func NewSuccessorFindingAdjudication(
 		ApprovedSpecDigest:        prior.ApprovedSpecDigest,
 		InstructionSnapshotDigest: prior.InstructionSnapshotDigest,
 		ResolvedPolicyDigest:      prior.ResolvedPolicyDigest,
+		DecisionSurfaceDigest:     decisionSurfaceDigest,
 		Entries:                   sorted,
 		CreatedAt:                 createdAt,
 	}
@@ -773,6 +786,10 @@ func (a FindingAdjudication) Validate() error {
 		if !contentaddr.Valid(string(digest)) {
 			return fmt.Errorf("finding adjudication %s %q: %w", label, digest, ErrFindingAdjudicationInconsistent)
 		}
+	}
+	if a.DecisionSurfaceDigest != "" && !contentaddr.Valid(string(a.DecisionSurfaceDigest)) {
+		return fmt.Errorf("finding adjudication decision_surface_digest %q: %w",
+			a.DecisionSurfaceDigest, ErrFindingAdjudicationInconsistent)
 	}
 	if len(a.Entries) == 0 {
 		return fmt.Errorf("finding adjudication entries: %w", ErrFindingAdjudicationInconsistent)
@@ -856,6 +873,7 @@ func (a FindingAdjudication) canonical() any {
 		ApprovedSpecDigest:        a.ApprovedSpecDigest,
 		InstructionSnapshotDigest: a.InstructionSnapshotDigest,
 		ResolvedPolicyDigest:      a.ResolvedPolicyDigest,
+		DecisionSurfaceDigest:     a.DecisionSurfaceDigest,
 		Entries:                   a.Entries,
 		CreatedAt:                 a.CreatedAt,
 	}
@@ -873,6 +891,7 @@ func (a FindingAdjudication) canonical() any {
 		ApprovedSpecDigest:        a.ApprovedSpecDigest,
 		InstructionSnapshotDigest: a.InstructionSnapshotDigest,
 		ResolvedPolicyDigest:      a.ResolvedPolicyDigest,
+		DecisionSurfaceDigest:     a.DecisionSurfaceDigest,
 		Entries:                   a.Entries,
 		CreatedAt:                 a.CreatedAt,
 	}
@@ -886,7 +905,8 @@ func (a FindingAdjudication) MarshalJSON() ([]byte, error) {
 			EncodingVersion: a.EncodingVersion, RunID: a.RunID, Round: a.Round,
 			FindingBatchDigest: a.FindingBatchDigest, ApprovedSpecDigest: a.ApprovedSpecDigest,
 			InstructionSnapshotDigest: a.InstructionSnapshotDigest, ResolvedPolicyDigest: a.ResolvedPolicyDigest,
-			Entries: a.Entries, CreatedAt: a.CreatedAt, Digest: a.Digest,
+			DecisionSurfaceDigest: a.DecisionSurfaceDigest,
+			Entries:               a.Entries, CreatedAt: a.CreatedAt, Digest: a.Digest,
 		})
 	}
 	return json.Marshal(encodedSuccessorFindingAdjudication(a))
@@ -907,6 +927,7 @@ func (a *FindingAdjudication) UnmarshalJSON(body []byte) error {
 		ApprovedSpecDigest        Digest                     `json:"approved_spec_digest"`
 		InstructionSnapshotDigest Digest                     `json:"instruction_snapshot_digest"`
 		ResolvedPolicyDigest      Digest                     `json:"resolved_policy_digest"`
+		DecisionSurfaceDigest     Digest                     `json:"decision_surface_digest"`
 		Entries                   []FindingAdjudicationEntry `json:"entries"`
 		CreatedAt                 time.Time                  `json:"created_at"`
 		Digest                    Digest                     `json:"digest"`
@@ -919,7 +940,8 @@ func (a *FindingAdjudication) UnmarshalJSON(body []byte) error {
 		EncodingVersion: wire.EncodingVersion, RunID: wire.RunID, Round: wire.Round,
 		FindingBatchDigest: wire.FindingBatchDigest, ApprovedSpecDigest: wire.ApprovedSpecDigest,
 		InstructionSnapshotDigest: wire.InstructionSnapshotDigest, ResolvedPolicyDigest: wire.ResolvedPolicyDigest,
-		Entries: wire.Entries, CreatedAt: wire.CreatedAt, Digest: wire.Digest,
+		DecisionSurfaceDigest: wire.DecisionSurfaceDigest,
+		Entries:               wire.Entries, CreatedAt: wire.CreatedAt, Digest: wire.Digest,
 	}
 	if len(wire.Revision) == 0 && len(wire.PredecessorDigest) == 0 && len(wire.Feedback) == 0 {
 		a.Revision = 1

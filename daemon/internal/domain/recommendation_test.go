@@ -114,7 +114,7 @@ func TestRecommendationDerivationUniqueOrNone(t *testing.T) {
 	item, surface := recommendationItem(t)
 	agent := agentRecommendationRecord(t, item, surface)
 	authority := fakeRecommendationAuthority{agent: domain.AgentJudgmentRecommendation{
-		RunID: "run-1", Round: 2,
+		RunID: "run-1", Round: 2, DecisionSurfaceDigest: surface.Digest,
 		Projection: domain.RecommendationProjection{
 			Action: domain.ActionAcceptRecommendedRoute,
 			Reason: domain.FindingAdjudicatorRecommendationReason,
@@ -179,7 +179,7 @@ func TestRecommendationDerivationRejectsSubstitutionAndStaleCommitment(t *testin
 	item, surface := recommendationItem(t)
 	record := agentRecommendationRecord(t, item, surface)
 	authority := fakeRecommendationAuthority{agent: domain.AgentJudgmentRecommendation{
-		RunID: "run-1", Round: 2,
+		RunID: "run-1", Round: 2, DecisionSurfaceDigest: surface.Digest,
 		Projection: domain.RecommendationProjection{
 			Action: domain.ActionAcceptRecommendedRoute,
 			Reason: domain.FindingAdjudicatorRecommendationReason,
@@ -283,7 +283,7 @@ func TestRecommendationDerivationRejectsAuthorityMismatches(t *testing.T) {
 	item, surface := recommendationItem(t)
 	agent := agentRecommendationRecord(t, item, surface)
 	agentProjection := domain.AgentJudgmentRecommendation{
-		RunID: "run-1", Round: 2,
+		RunID: "run-1", Round: 2, DecisionSurfaceDigest: surface.Digest,
 		Projection: domain.RecommendationProjection{
 			Action: domain.ActionAcceptRecommendedRoute,
 			Reason: domain.FindingAdjudicatorRecommendationReason,
@@ -344,6 +344,10 @@ func TestRecommendationDerivationRejectsAuthorityMismatches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	uncommittedProjection := agentProjection
+	uncommittedProjection.DecisionSurfaceDigest = ""
+	foreignProjection := agentProjection
+	foreignProjection.DecisionSurfaceDigest = recommendationDigest("f")
 
 	tests := []struct {
 		name      string
@@ -352,6 +356,8 @@ func TestRecommendationDerivationRejectsAuthorityMismatches(t *testing.T) {
 	}{
 		{"unbound agent artifact", wrongArtifact, fakeRecommendationAuthority{agent: agentProjection}},
 		{"wrong review invocation", agent, fakeRecommendationAuthority{agent: agentProjection, agentInvocation: "other-invocation"}},
+		{"uncommitted agent artifact", agent, fakeRecommendationAuthority{agent: uncommittedProjection}},
+		{"foreign agent commitment", agent, fakeRecommendationAuthority{agent: foreignProjection}},
 		{"unregistered daemon rule", daemonRecord, fakeRecommendationAuthority{rules: map[domain.Digest]domain.DaemonPolicyRule{}}},
 		{"changed daemon input", daemonRecord, fakeRecommendationAuthority{rules: map[domain.Digest]domain.DaemonPolicyRule{
 			ruleDigest: fakeRecommendationRule{projection: ruleProjection, input: recommendationDigest("e"), applicable: true},

@@ -342,7 +342,9 @@ func TestFollowCommandSnapshotProjectsAdjudications(t *testing.T) {
 	}
 	artifact, err := domain.NewFindingAdjudication(
 		runID, 1, digest("f"), digest("d"), policy.Digest,
-		[]domain.FindingAdjudicationEntry{entry}, at)
+		[]domain.FindingAdjudicationEntry{entry}, "",
+
+		at)
 	if err != nil {
 		t.Fatalf("NewFindingAdjudication: %v", err)
 	}

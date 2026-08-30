@@ -1,0 +1,61 @@
+{
+  "encoding_version": 2,
+  "run_id": "run-abc",
+  "round": 2,
+  "finding_batch_digest": "sha256:e4427f32d78c1000954bb63c7556843567c790a5c32cc9d4eb82147329f31840",
+  "approved_spec_digest": "sha256:01013fd91991c378868d6c5a1fd8e7964d8787d15ebc34f162a13199af8d51d6",
+  "instruction_snapshot_digest": "sha256:b7ce3804e3e162390407c875e5b43143118cb9c005e4111147dc83277d269451",
+  "resolved_policy_digest": "sha256:e02e7c4f4d81b85ac7b2f191114f6028d351f016b27696759f3753992f7b2280",
+  "decision_surface_digest": "sha256:2adf9398f3e09ddd7132cc9f1c28bd62b9098e96fa594281d03fd7faa713989d",
+  "entries": [
+    {
+      "finding_id": "finding-0001",
+      "producer": "engine",
+      "goal_relationship": "required",
+      "compatibility": "allowed",
+      "route": "remediate",
+      "rationale": "in declared scope",
+      "evidence": [
+        "declared-path containment"
+      ],
+      "cited_rules": null,
+      "assumptions": null,
+      "alternatives": null,
+      "open_questions": null,
+      "confidence": null,
+      "offered_alternatives": null
+    },
+    {
+      "finding_id": "finding-0002",
+      "producer": "model",
+      "goal_relationship": "contradictory",
+      "compatibility": null,
+      "route": "decline",
+      "rationale": "contradicts the approved spec",
+      "evidence": [
+        "spec §2"
+      ],
+      "cited_rules": [
+        "AGENTS.md scope discipline"
+      ],
+      "assumptions": [
+        "spec is authoritative"
+      ],
+      "alternatives": [
+        "defer to a separate work unit"
+      ],
+      "open_questions": [
+        "which spec clause governs?"
+      ],
+      "confidence": "high",
+      "offered_alternatives": [
+        {
+          "route": "dispute",
+          "consequence": "Keep the run parked for human adjudication."
+        }
+      ]
+    }
+  ],
+  "created_at": "2026-08-21T15:00:00Z",
+  "digest": "sha256:e5302c549a7134fd440d0bcfdfa4418e4858ecb700bdb4ddafc2ac662015b9e2"
+}

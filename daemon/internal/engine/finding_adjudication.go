@@ -301,10 +301,10 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 		entries = append(entries, modelEntries...)
 	}
 
+	// #1002 replaces the empty digest with the prospective surface digest from domain.NextDecisionSurface.
 	artifact, err = domain.NewFindingAdjudication(
 		record.RunID, record.Round, binding.run.SpecDigest, record.InstructionDigest,
-		binding.resolvedPolicy.Digest, entries, w.now().UTC(),
-	)
+		binding.resolvedPolicy.Digest, entries, "", w.now().UTC())
 	if err != nil {
 		return productionReviewPending, err
 	}
@@ -426,8 +426,9 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 		InvocationID: feedback.InvocationID, ConversationID: feedback.ConversationID,
 		ThroughSequence: feedback.ThroughSequence, PrefixDigest: feedback.PrefixDigest,
 	}
+	// #1002 replaces the empty digest with the prospective surface digest from domain.NextDecisionSurface.
 	successor, err := domain.NewSuccessorFindingAdjudication(
-		prior, durableFeedback, entries, w.now().UTC())
+		prior, durableFeedback, entries, "", w.now().UTC())
 	if err != nil {
 		return prior, err
 	}
