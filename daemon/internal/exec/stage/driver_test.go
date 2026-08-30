@@ -21,6 +21,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -59,6 +60,16 @@ type testProvider struct {
 	handoffMutate      func(*ward.HandoffSpec)
 	runIDFor           func(domain.InvocationID) string
 	workspaceFor       func(domain.InvocationID) string
+	usageExtractor     func(string, export.EvidenceManifest, time.Time) ([]exec.UsageMeasurement, error)
+}
+
+func (p testProvider) ExtractUsage(
+	evidenceDir string, evidence export.EvidenceManifest, observedAt time.Time,
+) ([]exec.UsageMeasurement, error) {
+	if p.usageExtractor == nil {
+		return nil, nil
+	}
+	return p.usageExtractor(evidenceDir, evidence, observedAt)
 }
 
 func testRunIDFor(id domain.InvocationID) string {

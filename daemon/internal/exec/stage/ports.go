@@ -2,9 +2,11 @@ package stage
 
 import (
 	"context"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -17,6 +19,16 @@ type Provider interface {
 	RunID(domain.InvocationID) string
 	Workspace(domain.InvocationID) string
 	PrepareFailedStatus() int
+}
+
+// UsageExtractor is the optional provider hook for numbers-only telemetry in
+// an already authenticated and imported evidence channel.
+type UsageExtractor interface {
+	ExtractUsage(
+		evidenceDir string,
+		evidence export.EvidenceManifest,
+		observedAt time.Time,
+	) ([]exec.UsageMeasurement, error)
 }
 
 // ProviderHandoffInput is the durable input needed to render one provider's
