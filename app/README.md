@@ -35,9 +35,8 @@ Launch arguments also pin the presentation per launch (`LaunchInputs`), so scree
 ## macOS Keyboard Commands
 
 - ⌘1 shows Inbox; ⌘2 shows Runs; ⌘R refreshes; ⌥⌘I toggles the inspector.
-- J selects the next inbox item and K the previous one; the arrow keys keep their native list behavior.
+- With the inbox list focused, J selects the next item and K the previous one; the arrow keys keep their native list behavior.
 - Return takes only a validated authoritative recommendation. Esc dismisses pending action UI without resolving the item. Space is unbound.
-- ⌘F is reserved and disabled until search ships.
 
 ## Installing the Operator Client
 

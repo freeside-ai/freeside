@@ -9,7 +9,12 @@ import Testing
 
         #expect(descriptors.map(\.id) == FreesideCommandAction.allCases)
         #expect(Set(descriptors.map(\.title)).count == descriptors.count)
-        #expect(!descriptors.contains { $0.key == " " })
+        #expect(!FreesideCommandAction.allCases.map(\.rawValue).contains("find"))
+        #expect(
+            !descriptors.contains {
+                guard let shortcut = $0.shortcut else { return false }
+                return shortcut.modifiers.isEmpty && shortcut.key != .escape
+            })
     }
 
     @Test func returnRequiresTheValidatedAuthoritativeRecommendation() {

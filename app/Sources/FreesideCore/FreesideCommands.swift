@@ -25,7 +25,6 @@ public enum FreesideCommandAction: String, CaseIterable, Identifiable, Sendable 
     case previousItem
     case takeRecommendation
     case cancelPendingAction
-    case find
 
     public var id: Self { self }
 }
@@ -33,25 +32,21 @@ public enum FreesideCommandAction: String, CaseIterable, Identifiable, Sendable 
 public struct FreesideCommandDescriptor: Identifiable {
     public let id: FreesideCommandAction
     public let title: String
-    public let key: KeyEquivalent
-    public let modifiers: EventModifiers
+    public let shortcut: KeyboardShortcut?
 
     @MainActor public static let all: [Self] = [
-        .init(id: .showInbox, title: "Show Inbox", key: "1", modifiers: .command),
-        .init(id: .showRuns, title: "Show Runs", key: "2", modifiers: .command),
-        .init(id: .refresh, title: "Refresh", key: "r", modifiers: .command),
+        .init(id: .showInbox, title: "Show Inbox", shortcut: .init("1", modifiers: .command)),
+        .init(id: .showRuns, title: "Show Runs", shortcut: .init("2", modifiers: .command)),
+        .init(id: .refresh, title: "Refresh", shortcut: .init("r", modifiers: .command)),
         .init(
-            id: .toggleInspector, title: "Toggle Inspector", key: "i",
-            modifiers: [.command, .option]),
-        .init(id: .nextItem, title: "Next Item", key: "j", modifiers: []),
-        .init(id: .previousItem, title: "Previous Item", key: "k", modifiers: []),
+            id: .toggleInspector, title: "Toggle Inspector",
+            shortcut: .init("i", modifiers: [.command, .option])),
+        .init(id: .nextItem, title: "Next Item", shortcut: nil),
+        .init(id: .previousItem, title: "Previous Item", shortcut: nil),
+        .init(id: .takeRecommendation, title: "Take Recommendation", shortcut: nil),
         .init(
-            id: .takeRecommendation, title: "Take Recommendation", key: .return,
-            modifiers: []),
-        .init(
-            id: .cancelPendingAction, title: "Cancel Pending Action", key: .escape,
-            modifiers: []),
-        .init(id: .find, title: "Find", key: "f", modifiers: .command),
+            id: .cancelPendingAction, title: "Cancel Pending Action",
+            shortcut: .init(.escape, modifiers: [])),
     ]
 }
 
