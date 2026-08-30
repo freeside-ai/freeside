@@ -46,7 +46,10 @@ import Testing
             let item = AttentionFixtures.fixture(type: type).item
             #expect(composition.summaries(from: item.agent_claims).isEmpty)
             #expect(!item.agent_claims.contains { $0.text != nil })
-            #expect(!AttentionDisplay.cardFacts(item).isEmpty)
+            #expect(
+                !AttentionDisplay.cardFacts(
+                    item, now: AttentionFixtures.createdInstant
+                ).isEmpty)
         }
     }
 

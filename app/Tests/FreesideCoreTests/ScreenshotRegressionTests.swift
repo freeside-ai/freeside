@@ -241,7 +241,7 @@
                 itemID: awaitingItem.item.id,
                 loadsAttachments: false,
                 showsValidationProgress: false,
-                conversationNow: screenshotNow)
+                now: screenshotNow)
             surfaces.append(
                 Surface(
                     name: "decision-spec_approval-awaiting",
@@ -253,7 +253,7 @@
                 itemID: awaitingItem.item.id,
                 loadsAttachments: false,
                 showsValidationProgress: false,
-                conversationNow: screenshotNow)
+                now: screenshotNow)
             surfaces.append(
                 Surface(
                     name: "decision-spec_approval-awaiting-phone",
@@ -266,7 +266,7 @@
                 itemID: awaitingItem.item.id,
                 loadsAttachments: false,
                 showsValidationProgress: false,
-                conversationNow: screenshotNow)
+                now: screenshotNow)
             surfaces.append(
                 Surface(
                     name: "decision-spec_approval-awaiting-dark",
@@ -279,7 +279,7 @@
                 itemID: awaitingItem.item.id,
                 loadsAttachments: false,
                 showsValidationProgress: false,
-                conversationNow: screenshotNow)
+                now: screenshotNow)
             surfaces.append(
                 Surface(
                     name: "decision-spec_approval-awaiting-phone-dark",
@@ -410,7 +410,7 @@
                     graphics: graphics,
                     loadsAttachments: false,
                     showsValidationProgress: false,
-                    conversationNow: screenshotNow
+                    now: screenshotNow
                 )
                 let proposalFacts =
                     snapshot.item._type == .run_proposal
@@ -443,7 +443,7 @@
                         graphics: graphics,
                         loadsAttachments: false,
                         showsValidationProgress: false,
-                        conversationNow: screenshotNow)
+                        now: screenshotNow)
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-phone",
@@ -459,7 +459,7 @@
                         graphics: graphics,
                         loadsAttachments: false,
                         showsValidationProgress: false,
-                        conversationNow: screenshotNow)
+                        now: screenshotNow)
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-dark",
@@ -475,7 +475,7 @@
                         graphics: graphics,
                         loadsAttachments: false,
                         showsValidationProgress: false,
-                        conversationNow: screenshotNow)
+                        now: screenshotNow)
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-phone-dark",
@@ -925,7 +925,7 @@
                 itemID: approval.item.id,
                 loadsAttachments: false,
                 showsValidationProgress: false,
-                conversationNow: screenshotNow)
+                now: screenshotNow)
             return Surface(
                 name: "decision-spec_approval-image",
                 view: AnyView(detail.screenshotCard(approval.item, at: dynamicTypeSize)))

@@ -187,11 +187,12 @@ import Testing
             .ready_for_final_review: ["Diff", "Base", "Head"],
             .publish_blocked: ["Failed trust rule"],
             .system_health: ["Diagnostic", "Impairs"],
-            .blocked: ["Waiting on", "Waiting since", "Blocking item"],
+            .blocked: ["Waiting on", "Waiting for", "Blocking item"],
         ]
+        let now = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
         for (type, labels) in expected {
             var item = AttentionFixtures.fixture(type: type).item
-            #expect(AttentionDisplay.cardFacts(item).map(\.label) == labels)
+            #expect(AttentionDisplay.cardFacts(item, now: now).map(\.label) == labels)
 
             item.execution_failure = nil
             item.billable_cost_so_far = nil
@@ -201,7 +202,7 @@ import Testing
             item.health_diagnostic = nil
             item.blocked_on = nil
             item.reason = "the build stage failed twice and the run has waited 18h"
-            #expect(AttentionDisplay.cardFacts(item).isEmpty)
+            #expect(AttentionDisplay.cardFacts(item, now: now).isEmpty)
         }
 
         // The remaining types lead with an ask, an artifact, or their own
@@ -210,28 +211,35 @@ import Testing
             Components.Schemas.AttentionType.spec_approval, .agent_question,
             .finding_adjudication, .run_proposal, .review_contradiction, .review_configuration,
         ] {
-            #expect(AttentionDisplay.cardFacts(AttentionFixtures.fixture(type: type).item).isEmpty)
+            #expect(
+                AttentionDisplay.cardFacts(
+                    AttentionFixtures.fixture(type: type).item, now: now
+                ).isEmpty)
         }
     }
 
     @Test func typedLeadsRenderTheirDaemonValues() {
-        #expect(
-            AttentionDisplay.cardFacts(AttentionFixtures.fixture(type: .execution_failure).item)
-                .map(\.value) == ["Failed", "Implementation", "inv-execution_failure"])
+        let now = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
         #expect(
             AttentionDisplay.cardFacts(
-                AttentionFixtures.fixture(type: .review_diminishing_returns).item
+                AttentionFixtures.fixture(type: .execution_failure).item, now: now
+            ).map(\.value) == ["Failed", "Implementation", "inv-execution_failure"])
+        #expect(
+            AttentionDisplay.cardFacts(
+                AttentionFixtures.fixture(type: .review_diminishing_returns).item, now: now
             ).map(\.value) == ["USD 42.75 across 6 invocations, still accruing"])
         #expect(
             AttentionDisplay.cardFacts(
-                AttentionFixtures.fixture(type: .ready_for_final_review).item
+                AttentionFixtures.fixture(type: .ready_for_final_review).item, now: now
             ).map(\.value) == ["12 files, +240 -31", "deadbeef", "cafebabe"])
         #expect(
-            AttentionDisplay.cardFacts(AttentionFixtures.fixture(type: .publish_blocked).item)
-                .map(\.value) == ["Trust profile drifted"])
+            AttentionDisplay.cardFacts(
+                AttentionFixtures.fixture(type: .publish_blocked).item, now: now
+            ).map(\.value) == ["Trust profile drifted"])
         #expect(
-            AttentionDisplay.cardFacts(AttentionFixtures.fixture(type: .system_health).item)
-                .map(\.value) == ["run_projection.unavailable", "Run visibility"])
+            AttentionDisplay.cardFacts(
+                AttentionFixtures.fixture(type: .system_health).item, now: now
+            ).map(\.value) == ["run_projection.unavailable", "Run visibility"])
 
         var blocked = AttentionFixtures.fixture(type: .blocked).item
         blocked.blocked_on = .init(
@@ -241,9 +249,16 @@ import Testing
                 item_id: nil,
                 pr_reference: .init(value1: .init(repo: "owner/repo", number: 7))))
         #expect(
-            AttentionDisplay.cardFacts(blocked).map(\.label)
-                == ["Waiting on", "Waiting since", "Pull request"])
-        #expect(AttentionDisplay.cardFacts(blocked).last?.value == "owner/repo#7")
+            AttentionDisplay.cardFacts(blocked, now: now).map(\.label)
+                == ["Waiting on", "Waiting for", "Pull request"])
+        #expect(AttentionDisplay.cardFacts(blocked, now: now).last?.value == "owner/repo#7")
+
+        // The card reads the wait as a duration in the register the inbox row
+        // uses; the exact instant stays among the technical bindings.
+        #expect(AttentionDisplay.cardFacts(blocked, now: now)[1].value == "18h")
+        #expect(
+            AttentionDisplay.detailBindingRows(blocked)
+                .contains { $0.label == "Waiting since" && $0.value.hasPrefix("2026-") })
     }
 
     @Test func rowContextRendersTheDaemonsDisplayNamesAndMarksIdentifiers() {

@@ -161,7 +161,10 @@ enum AttentionDisplay {
     /// nothing here is derived from prose, logs, or event names, and a type
     /// whose lead is a claim, an artifact, or its own module contributes no
     /// row.
-    static func cardFacts(_ item: Components.Schemas.AttentionItem) -> [FactRow] {
+    static func cardFacts(
+        _ item: Components.Schemas.AttentionItem,
+        now: Date
+    ) -> [FactRow] {
         switch item._type {
         case .execution_failure:
             guard let failure = item.execution_failure?.value1 else { return [] }
@@ -209,7 +212,11 @@ enum AttentionDisplay {
             guard let wait = item.blocked_on?.value1 else { return [] }
             var rows: [FactRow] = [
                 .init("Waiting on", label(wait.kind)),
-                .init("Waiting since", wait.since.formatted(.iso8601), monospaced: true),
+                // The wait reads as the duration the inbox row already uses.
+                // Its exact start is an audit coordinate, so it stays with the
+                // other technical bindings rather than leading the card as a
+                // monospaced timestamp.
+                .init("Waiting for", relativeRowTime(wait.since, now: now)),
             ]
             if let blockingItem = wait.item_id {
                 rows.append(.init("Blocking item", blockingItem, monospaced: true))
@@ -600,6 +607,10 @@ enum AttentionDisplay {
             rows.append(.init(label: "Subject", value: unscoped.subject_id))
         case .run, .proposal_batch:
             break
+        }
+        if let wait = item.blocked_on?.value1 {
+            rows.append(
+                .init(label: "Waiting since", value: wait.since.formatted(.iso8601)))
         }
         rows.append(.init(label: "Item version", value: "\(item.item_version)"))
         if !item.pr_head_sha.isEmpty {

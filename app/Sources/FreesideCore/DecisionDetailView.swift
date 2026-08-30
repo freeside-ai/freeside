@@ -65,7 +65,7 @@ struct DecisionDetailView: View {
     private let graphics: DecisionGraphicPresentations
     private let loadsAttachments: Bool
     private let showsValidationProgress: Bool
-    private let conversationNow: Date
+    private let now: Date
     private let itemID: String
     private let detailsRevealRequest: TechnicalDetailsRevealRequest?
     private let onConsumeDetailsRevealRequest: (UUID) -> Void
@@ -82,7 +82,7 @@ struct DecisionDetailView: View {
         graphics: DecisionGraphicPresentations = .init(),
         loadsAttachments: Bool = true,
         showsValidationProgress: Bool = true,
-        conversationNow: Date = .now,
+        now: Date = .now,
         sectionPreferences: DecisionSectionPreferences? = nil,
         inspectorPresented: Binding<Bool>? = nil,
         onSelectItem: @escaping (String) -> Void = { _ in },
@@ -107,7 +107,7 @@ struct DecisionDetailView: View {
         self.graphics = graphics
         self.loadsAttachments = loadsAttachments
         self.showsValidationProgress = showsValidationProgress
-        self.conversationNow = conversationNow
+        self.now = now
     }
 
     var body: some View {
@@ -372,7 +372,7 @@ struct DecisionDetailView: View {
                     snapshot: conversation,
                     attachments: attachments,
                     loadsAttachments: loadsAttachments,
-                    now: conversationNow,
+                    now: now,
                     rendersInteractiveControls: rendersInteractiveControls)
             }
 
@@ -682,7 +682,7 @@ struct DecisionDetailView: View {
         _ item: Components.Schemas.AttentionItem,
         includesCommitPlan: Bool
     ) -> some View {
-        let facts = AttentionDisplay.cardFacts(item)
+        let facts = AttentionDisplay.cardFacts(item, now: now)
         let notice = includesCommitPlan ? item.commit_plan_notice?.value1 : nil
         if !facts.isEmpty || notice != nil {
             cardSection("Facts") {
