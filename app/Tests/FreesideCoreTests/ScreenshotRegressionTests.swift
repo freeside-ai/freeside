@@ -536,15 +536,13 @@
                 }
             }
 
+            // The fixture carries the contract recommendation, so the card
+            // renders the item's own authoritative lead rather than an
+            // injected presentation.
             let adjudication = AttentionFixtures.fixture(type: .finding_adjudication).item
             let recommendedDetail = DecisionDetailView(
                 store: store,
                 itemID: adjudication.id,
-                recommendation: .init(
-                    action: .accept_recommended_route,
-                    reason: "This route preserves the evidence-backed finding.",
-                    confidence: "High"
-                ),
                 loadsAttachments: false,
                 showsValidationProgress: false
             )
@@ -560,18 +558,33 @@
             let inspectorDetail = DecisionDetailView(
                 store: store,
                 itemID: adjudication.id,
-                recommendation: .init(
-                    action: .accept_recommended_route,
-                    reason: "This route preserves the evidence-backed finding.",
-                    confidence: "High"
-                ),
                 showsValidationProgress: false,
                 sectionPreferences: inspectorPreferences)
+            // The same surface without the item's recommendation: every
+            // requested action is offered with equal weight, and offer order
+            // carries no endorsement.
+            var equallyWeighted = adjudication
+            equallyWeighted.recommendation = nil
             surfaces.append(
                 Surface(
-                    name: "decision-finding_adjudication-recommended",
+                    name: "decision-finding_adjudication-equally-weighted",
                     view: AnyView(
-                        recommendedDetail.screenshotCard(adjudication, at: dynamicTypeSize))))
+                        recommendedDetail.screenshotCard(
+                            equallyWeighted, at: dynamicTypeSize))))
+            surfaces.append(
+                Surface(
+                    name: "decision-finding_adjudication-recommended-phone",
+                    width: 390,
+                    view: AnyView(
+                        recommendedDetail.screenshotCard(
+                            adjudication, at: dynamicTypeSize, compactLayout: true))))
+            surfaces.append(
+                Surface(
+                    name: "decision-finding_adjudication-equally-weighted-phone",
+                    width: 390,
+                    view: AnyView(
+                        recommendedDetail.screenshotCard(
+                            equallyWeighted, at: dynamicTypeSize, compactLayout: true))))
             for width in [CGFloat(900), CGFloat(1_200)] {
                 surfaces.append(
                     Surface(
@@ -592,15 +605,24 @@
                             adjudication,
                             at: dynamicTypeSize))))
 
-            let question = AttentionFixtures.fixture(type: .agent_question).item
+            // A daemon-policy recommendation whose action is destructive: the
+            // card must lead with it in the fact register and still demand the
+            // destructive confirmation.
+            var question = AttentionFixtures.fixture(type: .agent_question).item
+            question.recommendation = .init(
+                value1: .init(
+                    action: .stop,
+                    reason: "Stopping avoids applying an unreviewed answer.",
+                    source: .daemon_policy,
+                    provenance: .init(
+                        daemon_policy: .init(
+                            value1: .init(
+                                rule_digest: "sha256:rule-agent-question-stop",
+                                input_digest: "sha256:input-agent-question-stop"))),
+                    confidence: nil))
             let destructiveRecommendation = DecisionDetailView(
                 store: store,
                 itemID: question.id,
-                recommendation: .init(
-                    action: .stop,
-                    reason: "Stopping avoids applying an unreviewed answer.",
-                    confidence: nil
-                ),
                 loadsAttachments: false,
                 showsValidationProgress: false
             )

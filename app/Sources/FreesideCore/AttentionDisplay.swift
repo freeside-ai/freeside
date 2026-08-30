@@ -546,6 +546,12 @@ enum AttentionDisplay {
         }
     }
 
+    static func label(_ site: Components.Schemas.JudgmentSite) -> String {
+        switch site {
+        case .finding_adjudicator: return "Finding adjudicator"
+        }
+    }
+
     static func label(_ relationship: Components.Schemas.GoalRelationship) -> String {
         switch relationship {
         case .required: return "Required"

@@ -62,7 +62,6 @@ struct DecisionDetailView: View {
     @State private var recommendationVisible = true
     @State private var alternativeSelections: [String: Components.Schemas.AdjudicationRoute] = [:]
     private let attachments: AttachmentLoader
-    private let recommendation: DecisionRecommendationPresentation?
     private let graphics: DecisionGraphicPresentations
     private let loadsAttachments: Bool
     private let showsValidationProgress: Bool
@@ -80,7 +79,6 @@ struct DecisionDetailView: View {
         detailsExpanded: Bool = false,
         detailsRevealRequest: TechnicalDetailsRevealRequest? = nil,
         onConsumeDetailsRevealRequest: @escaping (UUID) -> Void = { _ in },
-        recommendation: DecisionRecommendationPresentation? = nil,
         graphics: DecisionGraphicPresentations = .init(),
         loadsAttachments: Bool = true,
         showsValidationProgress: Bool = true,
@@ -107,7 +105,6 @@ struct DecisionDetailView: View {
         self.onConsumeDetailsRevealRequest = onConsumeDetailsRevealRequest
         externalInspectorPresented = inspectorPresented
         self.onSelectItem = onSelectItem
-        self.recommendation = recommendation
         self.graphics = graphics
         self.loadsAttachments = loadsAttachments
         self.showsValidationProgress = showsValidationProgress
@@ -223,6 +220,11 @@ struct DecisionDetailView: View {
             .onChange(of: model.snapshot?.item.item_version) {
                 pendingConfirmation = nil
                 keyboardNote = nil
+                // A new item version can carry a different recommendation. The
+                // sticky action would otherwise stay reachable from the last
+                // version's scroll position, offering a replacement action
+                // whose reason and provenance were never on screen.
+                recommendationVisible = true
             }
             #if os(macOS)
                 .focusedSceneValue(\.decisionCommandActions, focusedDecisionCommandActions)
@@ -270,7 +272,7 @@ struct DecisionDetailView: View {
         #if os(iOS)
             content.safeAreaInset(edge: .bottom, spacing: 0) {
                 if let item = model.snapshot?.item,
-                    let recommendation,
+                    let recommendation = DecisionRecommendationPresentation.of(item),
                     !recommendationVisible
                 {
                     actionButton(
@@ -485,7 +487,7 @@ struct DecisionDetailView: View {
             rendersInteractiveControls: Bool
         ) -> some View {
             VStack(alignment: .leading, spacing: 16) {
-                if let recommendation,
+                if let recommendation = DecisionRecommendationPresentation.of(item),
                     actionRanking(item).recommended == recommendation.action
                 {
                     recommendationBlock(recommendation, item: item)
@@ -521,7 +523,7 @@ struct DecisionDetailView: View {
         switch module {
         case .recommendation:
             #if os(iOS)
-                if let recommendation,
+                if let recommendation = DecisionRecommendationPresentation.of(item),
                     actionRanking(item).recommended == recommendation.action
                 {
                     recommendationBlock(recommendation, item: item)
@@ -1268,20 +1270,31 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// The recommendation leads its card in the register its revalidated
+    /// provenance supports (plan §9): daemon policy and project policy render
+    /// as card facts, agent judgment as a labeled unverified proposal.
     private func recommendationBlock(
         _ recommendation: DecisionRecommendationPresentation,
         item: Components.Schemas.AttentionItem
     ) -> some View {
         cardSection(
-            "Recommended",
+            recommendation.title,
+            dashed: recommendation.register.isUnverifiedClaim,
             border: .accentBorder,
             fill: .accentWash
         ) {
+            if recommendation.register.isUnverifiedClaim {
+                Text("Written by an agent, not checked by the daemon.")
+                    .foregroundStyle(Color.inkDim)
+            }
             KeywordLabel(text: "Why")
             Text(recommendation.reason)
                 .fixedSize(horizontal: false, vertical: true)
             if let confidence = recommendation.confidence {
                 factRow("Confidence", value: confidence)
+            }
+            ForEach(recommendation.sourceFacts) { fact in
+                factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
             }
             actionButton(
                 recommendation.action,
@@ -1916,7 +1929,7 @@ struct DecisionDetailView: View {
         let composition = DecisionCardComposition.forType(item._type)
         return DecisionActionRanking(
             requested: item.requested_decision,
-            recommendedAction: recommendation?.action,
+            recommendedAction: DecisionRecommendationPresentation.of(item)?.action,
             reservesRecommendedAction: composition.modules.contains(.recommendation))
     }
 
@@ -2044,6 +2057,7 @@ struct DecisionDetailView: View {
 
         private var canTakeRecommendation: Bool {
             guard let item = model.snapshot?.item else { return false }
+            let recommendation = DecisionRecommendationPresentation.of(item)
             return DecisionKeyboardGate.canTakeRecommendation(
                 rankedRecommendation: actionRanking(item).recommended,
                 presentedRecommendation: recommendation?.action,
@@ -2056,7 +2070,7 @@ struct DecisionDetailView: View {
 
         private func takeRecommendationFromKeyboard() {
             guard let item = model.snapshot?.item,
-                let recommendation,
+                let recommendation = DecisionRecommendationPresentation.of(item),
                 canTakeRecommendation
             else {
                 keyboardNote = "Return is unavailable: there is no validated recommendation."
