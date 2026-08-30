@@ -1015,7 +1015,7 @@ struct DecisionDetailView: View {
                         "Finding location",
                         value: AttentionDisplay.findingLocation(location), monospaced: true)
                 }
-                factRow("Binding digest", value: binding.adjudication_digest)
+                factRow("Binding digest", value: binding.adjudication_digest, monospaced: true)
                 factRow("Run", value: binding.run_id)
                 factRow("Round", value: "\(binding.round)")
             }
