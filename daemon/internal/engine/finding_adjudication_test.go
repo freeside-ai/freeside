@@ -227,6 +227,95 @@ func newFindingAdjudicationFixtureWithNote(
 	}
 }
 
+func putFindingAdjudicationRecommendationCase(
+	t *testing.T,
+	f *findingAdjudicationFixture,
+	commitment func(domain.Digest) domain.Digest,
+	mutateSource func(*domain.RecommendationSourceRecord),
+) domain.AttentionItem {
+	t.Helper()
+	entries := []domain.FindingAdjudicationEntry{
+		modelRouteEntry(t, f.finding.ID, domain.RouteParkRevision, domain.ConfidenceHigh),
+	}
+	surfaceDigest, err := prospectiveFindingAdjudicationSurfaceDigest(
+		f.task, f.record.Round, 1, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactCommitment := surfaceDigest
+	if commitment != nil {
+		artifactCommitment = commitment(surfaceDigest)
+	}
+	artifact, err := domain.NewFindingAdjudication(
+		f.record.RunID, f.record.Round, f.binding.run.SpecDigest, f.record.InstructionDigest,
+		f.binding.resolvedPolicy.Digest, entries, artifactCommitment, f.workflow.now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := f.workflow.newFindingAdjudicationAttentionItem(
+		f.task, artifact, map[domain.FindingID]domain.Finding{f.finding.ID: f.finding})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := findingAdjudicationRecommendationSource(item, f.record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mutateSource != nil {
+		mutateSource(&source)
+		source, err = domain.NewRecommendationSourceRecord(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.store.Write(f.ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutFindingAdjudication(f.ctx, artifact); err != nil {
+			return err
+		}
+		if err := tx.PutRecommendationSource(f.ctx, source); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(f.ctx, item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return item
+}
+
+func assertFindingAdjudicationRecommendationAbsent(
+	t *testing.T, f *findingAdjudicationFixture, itemID domain.ItemID, wantSources int,
+) {
+	t.Helper()
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		item, err := tx.GetAttentionItem(f.ctx, itemID)
+		if err != nil {
+			return err
+		}
+		if item.Status != domain.StatusOpen || item.Recommendation != nil {
+			t.Fatalf("rejected recommendation item = status %q, recommendation %#v",
+				item.Status, item.Recommendation)
+		}
+		decidingItem, command, err := tx.FindingAdjudicationDecision(f.ctx, itemID)
+		if err != nil {
+			return err
+		}
+		if decidingItem.Status != domain.StatusOpen || command != nil {
+			t.Fatalf("rejected recommendation decision = status %q, command %#v",
+				decidingItem.Status, command)
+		}
+		sources, err := tx.ListRecommendationSources(f.ctx, itemID)
+		if err != nil {
+			return err
+		}
+		if len(sources) != wantSources {
+			t.Fatalf("recommendation sources = %d, want %d", len(sources), wantSources)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProductionFindingAdjudicatorUsesBoundBodiesAndEngineFacts(t *testing.T) {
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
@@ -309,6 +398,132 @@ func TestProductionFindingAdjudicatorRetainsEngineAllowedRemediation(t *testing.
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestFindingAdjudicationProducesAuthenticatedRecommendation(t *testing.T) {
+	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
+	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
+	f.writePath(t, f.headRoot)
+	f.workflow.findingAdjudicator = &scriptedFindingAdjudicator{entries: []domain.FindingAdjudicationEntry{
+		modelRouteEntry(t, f.finding.ID, domain.RouteParkRevision, domain.ConfidenceHigh),
+	}}
+	state, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot)
+	if err != nil || state != productionReviewPending {
+		t.Fatalf("finding adjudication = %d, %v", state, err)
+	}
+	itemID := productionFindingAdjudicationItemID(f.task.RunID, f.record.Round, 1)
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		item, err := tx.GetAttentionItem(f.ctx, itemID)
+		if err != nil {
+			return err
+		}
+		artifact, err := tx.GetFindingAdjudication(
+			f.ctx, item.FindingAdjudication.AdjudicationDigest)
+		if err != nil {
+			return err
+		}
+		sources, err := tx.ListRecommendationSources(f.ctx, itemID)
+		if err != nil {
+			return err
+		}
+		if len(sources) != 1 {
+			t.Fatalf("recommendation sources = %d, want 1", len(sources))
+		}
+		source := sources[0]
+		recommendation := item.Recommendation
+		if recommendation == nil || recommendation.Action != domain.ActionAcceptRecommendedRoute ||
+			recommendation.Reason != domain.FindingAdjudicatorRecommendationReason ||
+			recommendation.Source != domain.RecommendationAgentJudgment || recommendation.Confidence != nil ||
+			recommendation.Provenance.AgentJudgment == nil ||
+			recommendation.Provenance.AgentJudgment.JudgmentSite != domain.JudgmentSiteFindingAdjudicator ||
+			recommendation.Provenance.AgentJudgment.InvocationID != f.record.InvocationID ||
+			recommendation.Provenance.AgentJudgment.ArtifactDigest != artifact.Digest {
+			t.Fatalf("stored recommendation = %#v", recommendation)
+		}
+		if source.ItemID != item.ID || source.Provenance.AgentJudgment == nil ||
+			source.Provenance.AgentJudgment.InvocationID != f.record.InvocationID ||
+			source.Provenance.AgentJudgment.ArtifactDigest != artifact.Digest ||
+			source.DecisionSurfaceDigest != item.DecisionSurface.Digest ||
+			artifact.DecisionSurfaceDigest != item.DecisionSurface.Digest {
+			t.Fatalf("source = %#v, artifact commitment = %q, item surface = %#v",
+				source, artifact.DecisionSurfaceDigest, item.DecisionSurface)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFindingAdjudicationRejectsInapplicableRecommendationSources(t *testing.T) {
+	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
+	for _, tc := range []struct {
+		name         string
+		commitment   func(domain.Digest) domain.Digest
+		mutateSource func(*domain.RecommendationSourceRecord)
+	}{
+		{
+			name: "foreign artifact commitment",
+			commitment: func(domain.Digest) domain.Digest {
+				return adjudicationDigest("f")
+			},
+		},
+		{
+			name: "foreign review invocation",
+			mutateSource: func(source *domain.RecommendationSourceRecord) {
+				source.Provenance.AgentJudgment.InvocationID = "review-foreign"
+			},
+		},
+		{
+			name: "artifact absent from item binding",
+			mutateSource: func(source *domain.RecommendationSourceRecord) {
+				source.Provenance.AgentJudgment.ArtifactDigest = adjudicationDigest("e")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFindingAdjudicationFixture(
+				t, domain.FindingSeverityP2, location, "low", "high")
+			item := putFindingAdjudicationRecommendationCase(
+				t, f, tc.commitment, tc.mutateSource)
+			assertFindingAdjudicationRecommendationAbsent(t, f, item.ID, 1)
+		})
+	}
+
+	t.Run("multiple sources", func(t *testing.T) {
+		f := newFindingAdjudicationFixture(
+			t, domain.FindingSeverityP2, location, "low", "high")
+		item := putFindingAdjudicationRecommendationCase(t, f, nil, nil)
+		second, err := findingAdjudicationRecommendationSource(item, f.record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second.Reason += " Duplicate record."
+		second, err = domain.NewRecommendationSourceRecord(second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.store.Write(f.ctx, func(tx *store.WriteTx) error {
+			return tx.PutRecommendationSource(f.ctx, second)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		assertFindingAdjudicationRecommendationAbsent(t, f, item.ID, 2)
+	})
+
+	t.Run("older decision surface", func(t *testing.T) {
+		f := newFindingAdjudicationFixture(
+			t, domain.FindingSeverityP2, location, "low", "high")
+		item := putFindingAdjudicationRecommendationCase(t, f, nil, nil)
+		item.ItemVersion++
+		item.RequestedDecision = append(item.RequestedDecision, domain.ActionDismiss)
+		if err := f.store.Write(f.ctx, func(tx *store.WriteTx) error {
+			return tx.PutAttentionItem(f.ctx, item)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		assertFindingAdjudicationRecommendationAbsent(t, f, item.ID, 1)
+	})
 }
 
 func TestFindingAdjudicationDiscussCreatesAuthenticatedSuccessor(t *testing.T) {
@@ -412,6 +627,30 @@ func TestFindingAdjudicationDiscussCreatesAuthenticatedSuccessor(t *testing.T) {
 			newItem.ConversationID != nil || newItem.FindingAdjudication == nil ||
 			newItem.FindingAdjudication.AdjudicationDigest != history[1].Digest {
 			t.Fatalf("successor items = old %#v new %#v", oldItem, newItem)
+		}
+		if newItem.Recommendation == nil ||
+			newItem.Recommendation.Action != domain.ActionAcceptRecommendedRoute ||
+			newItem.Recommendation.Provenance.AgentJudgment == nil ||
+			newItem.Recommendation.Provenance.AgentJudgment.InvocationID != f.record.InvocationID ||
+			newItem.Recommendation.Provenance.AgentJudgment.ArtifactDigest != history[1].Digest ||
+			newItem.Recommendation.Confidence != nil ||
+			history[1].DecisionSurfaceDigest != newItem.DecisionSurface.Digest {
+			t.Fatalf("successor recommendation = %#v, artifact commitment = %q, surface = %#v",
+				newItem.Recommendation, history[1].DecisionSurfaceDigest, newItem.DecisionSurface)
+		}
+		oldSources, err := tx.ListRecommendationSources(f.ctx, oldItem.ID)
+		if err != nil {
+			return err
+		}
+		newSources, err := tx.ListRecommendationSources(f.ctx, newItem.ID)
+		if err != nil {
+			return err
+		}
+		if len(oldSources) != 1 || len(newSources) != 1 ||
+			oldSources[0].ItemID != oldItem.ID || newSources[0].ItemID != newItem.ID ||
+			newSources[0].Provenance.AgentJudgment == nil ||
+			newSources[0].Provenance.AgentJudgment.ArtifactDigest != history[1].Digest {
+			t.Fatalf("successor sources = old %#v, new %#v", oldSources, newSources)
 		}
 		if _, err := tx.GetFindingDisposition(f.ctx, f.finding.ID, 1); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("discussion executed a route: %v", err)
@@ -1111,6 +1350,16 @@ func TestFindingAdjudicationFailClosedAndNotAcceptedParkWithoutArtifact(t *testi
 				if item.Type != domain.AttentionReviewDispute ||
 					!item.Offers(domain.ActionDiscuss) || !item.Offers(domain.ActionStop) {
 					t.Fatalf("fallback item = %#v", item)
+				}
+				if item.Recommendation != nil {
+					t.Fatalf("fallback recommendation = %#v, want absent", item.Recommendation)
+				}
+				sources, err := tx.ListRecommendationSources(f.ctx, item.ID)
+				if err != nil {
+					return err
+				}
+				if len(sources) != 0 {
+					t.Fatalf("fallback recommendation sources = %#v, want none", sources)
 				}
 				return nil
 			}); err != nil {
