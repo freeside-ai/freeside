@@ -10,6 +10,23 @@ enum AttentionDisplay {
         let value: String
     }
 
+    /// One Section 9 card fact: a daemon-produced value with the label the
+    /// card shows it under. Identifiers and digests render monospaced so a
+    /// fact that must be compared by eye reads as one.
+    struct FactRow: Equatable, Identifiable {
+        let label: String
+        let value: String
+        let monospaced: Bool
+
+        var id: String { label }
+
+        init(_ label: String, _ value: String, monospaced: Bool = false) {
+            self.label = label
+            self.value = value
+            self.monospaced = monospaced
+        }
+    }
+
     struct SubjectLine: Equatable {
         let lead: String
         let identifier: String?
@@ -88,11 +105,6 @@ enum AttentionDisplay {
 
     static func rowSummary(_ item: Components.Schemas.AttentionItem) -> String {
         if item.status != .open {
-            if item._type == .system_health {
-                return "\(label(item.status)): "
-                    + daemonFactSummary(
-                        item.reason, fallback: "A system-health condition was reported.")
-            }
             return "This \(title(item._type).lowercased()) item is "
                 + "\(label(item.status).lowercased())."
         }
@@ -129,11 +141,111 @@ enum AttentionDisplay {
         case .run_proposal:
             return "A proposed run is ready to start."
         case .system_health:
-            return daemonFactSummary(
-                item.reason, fallback: "A system-health condition needs attention.")
+            guard let diagnostic = item.health_diagnostic?.value1 else {
+                return "A system-health condition needs attention."
+            }
+            guard diagnostic.impairs != Components.Schemas.ImpairedCapability.none else {
+                return "Diagnostic \(diagnostic.code) is open; no capability is impaired."
+            }
+            return "\(label(diagnostic.impairs)) is impaired by diagnostic \(diagnostic.code)."
         case .blocked:
-            return blockedFactSummary(item.reason)
+            guard let wait = item.blocked_on?.value1 else {
+                return "A run is waiting on a blocker."
+            }
+            return "Waiting on \(phrase(wait.kind))."
         }
+    }
+
+    /// The Section 9 "leads with" facts for one item type, read from the
+    /// item's typed fact fields. Every value is a daemon-produced card fact;
+    /// nothing here is derived from prose, logs, or event names, and a type
+    /// whose lead is a claim, an artifact, or its own module contributes no
+    /// row.
+    static func cardFacts(
+        _ item: Components.Schemas.AttentionItem,
+        now: Date
+    ) -> [FactRow] {
+        switch item._type {
+        case .execution_failure:
+            guard let failure = item.execution_failure?.value1 else { return [] }
+            return [
+                .init("Outcome", label(failure.outcome)),
+                .init("Failing stage", label(failure.stage)),
+                .init("Invocation", failure.invocation_id, monospaced: true),
+            ]
+        case .review_diminishing_returns:
+            guard let cost = item.billable_cost_so_far?.value1 else { return [] }
+            return [.init("Cost so far", costSoFar(cost))]
+        case .review_dispute:
+            guard let dispute = item.review_dispute?.value1 else { return [] }
+            return [
+                .init("Run", dispute.run_id, monospaced: true),
+                .init("Round", "\(dispute.round)"),
+                .init(
+                    "Disputed findings",
+                    dispute.finding_ids.joined(separator: ", "), monospaced: true),
+                .init("Completion evidence", dispute.completion_evidence, monospaced: true),
+            ]
+        case .ready_for_final_review:
+            guard let diff = item.diff_stats?.value1 else { return [] }
+            return [
+                .init("Diff", diffStats(diff)),
+                .init("Base", diff.base_sha, monospaced: true),
+                .init("Head", diff.head_sha, monospaced: true),
+            ]
+        case .publish_blocked:
+            guard let block = item.publish_block?.value1 else { return [] }
+            if let rule = block.trust_rule?.value1 {
+                return [.init("Failed trust rule", label(rule))]
+            }
+            if let hold = block.hold_reason?.value1 {
+                return [.init("Hold reason", label(hold))]
+            }
+            return []
+        case .system_health:
+            guard let diagnostic = item.health_diagnostic?.value1 else { return [] }
+            return [
+                .init("Diagnostic", diagnostic.code, monospaced: true),
+                .init("Impairs", label(diagnostic.impairs)),
+            ]
+        case .blocked:
+            guard let wait = item.blocked_on?.value1 else { return [] }
+            var rows: [FactRow] = [
+                .init("Waiting on", label(wait.kind)),
+                // The wait reads as the duration the inbox row already uses.
+                // Its exact start is an audit coordinate, so it stays with the
+                // other technical bindings rather than leading the card as a
+                // monospaced timestamp.
+                .init("Waiting for", relativeRowTime(wait.since, now: now)),
+            ]
+            if let blockingItem = wait.item_id {
+                rows.append(.init("Blocking item", blockingItem, monospaced: true))
+            }
+            if let pull = wait.pr_reference?.value1 {
+                rows.append(
+                    .init("Pull request", "\(pull.repo)#\(pull.number)", monospaced: true))
+            }
+            return rows
+        // The ask leads a spec approval and an agent question, the adjudication
+        // artifact leads finding_adjudication, the authenticated proposal
+        // snapshot leads run_proposal, and the recovery bindings these two
+        // recovery types lead with are already their own rows.
+        case .spec_approval, .agent_question, .finding_adjudication, .run_proposal,
+            .review_contradiction, .review_configuration:
+            return []
+        }
+    }
+
+    private static func costSoFar(_ cost: Components.Schemas.CostSoFar) -> String {
+        let invocations =
+            cost.invocations == 1 ? "1 invocation" : "\(cost.invocations) invocations"
+        return "\(cost.currency) \(cost.amount) across \(invocations)"
+            + (cost.complete ? "" : ", still accruing")
+    }
+
+    private static func diffStats(_ diff: Components.Schemas.DiffStats) -> String {
+        let files = diff.files_changed == 1 ? "1 file" : "\(diff.files_changed) files"
+        return "\(files), +\(diff.additions) -\(diff.deletions)"
     }
 
     static func label(_ action: Components.Schemas.Action) -> String {
@@ -230,6 +342,80 @@ enum AttentionDisplay {
         }
     }
 
+    static func label(_ outcome: Components.Schemas.ExecutionOutcomeStatus) -> String {
+        switch outcome {
+        case .failed: return "Failed"
+        case .canceled: return "Canceled"
+        case .lost: return "Lost"
+        }
+    }
+
+    static func label(_ stage: Components.Schemas.StageName) -> String {
+        switch stage {
+        case .elaboration: return "Elaboration"
+        case .implementation: return "Implementation"
+        case .review: return "Review"
+        case .verification: return "Verification"
+        }
+    }
+
+    static func label(_ rule: Components.Schemas.TrustRule) -> String {
+        switch rule {
+        case .recipe_unapproved: return "Verification recipe not approved"
+        case .verification_failed: return "Verification failed"
+        case .trust_profile_drift: return "Trust profile drifted"
+        case .target_base_advanced: return "Target base advanced"
+        }
+    }
+
+    static func label(_ reason: Components.Schemas.RunHoldReason) -> String {
+        switch reason {
+        case .operation_stopped: return "Unattended operation stopped"
+        case .blocking_system_health: return "Blocking system-health item"
+        case .input_unavailable: return "Input unavailable"
+        case .backend_not_conformant: return "Runner backend not conformant"
+        case .admission_policy_refused: return "Admission policy refused"
+        case .backup_protection_unready: return "Backup protection not ready"
+        case .repository_untrusted: return "Repository untrusted"
+        case .provider_authority_unavailable: return "Provider authority unavailable"
+        case .attended_mode_active: return "Attended mode active"
+        case .publication_environment: return "Publication environment"
+        case .external_conflict: return "External conflict"
+        case .recipe_revoked: return "Verification recipe revoked"
+        case .verification_findings: return "Verification findings"
+        case .trust_blocked: return "Trust blocked"
+        case .base_advanced: return "Base advanced"
+        case .identity_parallelism: return "Identity parallelism limit"
+        }
+    }
+
+    static func label(_ capability: Components.Schemas.ImpairedCapability) -> String {
+        switch capability {
+        case .unattended_admission: return "Unattended admission"
+        case .run_visibility: return "Run visibility"
+        case .agent_credential: return "Agent credential"
+        case .none: return "No capability"
+        }
+    }
+
+    static func label(_ kind: Components.Schemas.BlockedWaitKind) -> String {
+        switch kind {
+        case .spec_approval: return "Specification approval"
+        case .pr_checks: return "PR checks"
+        case .external_review: return "External review"
+        }
+    }
+
+    /// The same wait, mid-sentence: "PR checks" must not be lowercased into
+    /// "pr checks" by a caller.
+    private static func phrase(_ kind: Components.Schemas.BlockedWaitKind) -> String {
+        switch kind {
+        case .spec_approval: return "specification approval"
+        case .pr_checks: return "PR checks"
+        case .external_review: return "external review"
+        }
+    }
+
     static func label(_ priority: Components.Schemas.Priority) -> String {
         switch priority {
         case .low: return "Low"
@@ -274,21 +460,21 @@ enum AttentionDisplay {
         }
     }
 
-    static func rowContext(
-        _ item: Components.Schemas.AttentionItem,
-        projectName: String? = nil,
-        workUnitName: String? = nil
-    ) -> RowContext {
+    /// Row context comes from the daemon's own labels (`display_names`), which
+    /// carry whether each one is a chosen name or an identifier fallback. A
+    /// legacy item without them falls back to its raw identifiers.
+    static func rowContext(_ item: Components.Schemas.AttentionItem) -> RowContext {
+        let names = item.display_names?.value1
         let project = RowContext.Segment(
-            value: nonempty(projectName) ?? item.project_id,
-            isIdentifier: nonempty(projectName) == nil
+            value: nonempty(names?.project.text) ?? item.project_id,
+            isIdentifier: names.map { $0.project.source == .identifier } ?? true
         )
         let workUnit: RowContext.Segment?
         switch item.subject {
         case .run(let run), .proposal_batch(let run):
             workUnit = .init(
-                value: nonempty(workUnitName) ?? run.subject_id,
-                isIdentifier: nonempty(workUnitName) == nil
+                value: nonempty(names?.work_unit.text) ?? run.subject_id,
+                isIdentifier: names.map { $0.work_unit.source == .identifier } ?? true
             )
         case .project, .system:
             workUnit = nil
@@ -394,6 +580,16 @@ enum AttentionDisplay {
         return rows
     }
 
+    /// Section 9's audit record for actions this client cannot faithfully
+    /// collect and execute: they are omitted from the action surface and
+    /// listed in the drill-down, so an audit still shows what the daemon
+    /// asked for.
+    static func unavailableActionRows(
+        _ actions: [Components.Schemas.Action]
+    ) -> [BindingRow] {
+        actions.map { .init(label: "Requested, not available here", value: label($0)) }
+    }
+
     static func detailBindingRows(
         _ item: Components.Schemas.AttentionItem,
         priorProposalDigest: String? = nil,
@@ -411,6 +607,10 @@ enum AttentionDisplay {
             rows.append(.init(label: "Subject", value: unscoped.subject_id))
         case .run, .proposal_batch:
             break
+        }
+        if let wait = item.blocked_on?.value1 {
+            rows.append(
+                .init(label: "Waiting since", value: wait.since.formatted(.iso8601)))
         }
         rows.append(.init(label: "Item version", value: "\(item.item_version)"))
         if !item.pr_head_sha.isEmpty {
@@ -437,34 +637,11 @@ enum AttentionDisplay {
         return value
     }
 
-    private static func daemonFactSummary(_ fact: String, fallback: String) -> String {
-        let trimmed = fact.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let first = trimmed.first else { return fallback }
-        let sentence = first.uppercased() + trimmed.dropFirst()
-        guard let last = sentence.last, !".!?".contains(last) else { return sentence }
-        return sentence + "."
-    }
-
-    private static func blockedFactSummary(_ fact: String) -> String {
-        let stableFact = fact.replacingOccurrences(
-            of: #"\bhas waited \d+[mhd] on\b"#,
-            with: "is waiting on",
-            options: [.regularExpression, .caseInsensitive]
-        )
-        return daemonFactSummary(stableFact, fallback: "A run is waiting on a blocker.")
-    }
-
-    private static func blockedWaitStart(_ fact: String) -> Date? {
-        guard let marker = fact.range(of: " waiting since ", options: .caseInsensitive)
-        else { return nil }
-        let timestamp = fact[marker.upperBound...]
-            .trimmingCharacters(in: CharacterSet(charactersIn: " ."))
-        return try? Date(timestamp, strategy: .iso8601)
-    }
-
+    /// A blocked row counts from the daemon's recorded wait start, not the
+    /// item's creation: the wait predates the card.
     private static func rowTimeOrigin(_ item: Components.Schemas.AttentionItem) -> Date? {
         guard item.status == .open, item._type == .blocked else { return item.created_at }
-        return blockedWaitStart(item.reason) ?? item.created_at
+        return item.blocked_on?.value1.since ?? item.created_at
     }
 
     private static func relativeDuration(_ interval: TimeInterval) -> String {
@@ -543,6 +720,12 @@ enum AttentionDisplay {
         case .decline: return "Decline"
         case .dispute: return "Dispute"
         case .attention_unclear: return "Clarify"
+        }
+    }
+
+    static func label(_ site: Components.Schemas.JudgmentSite) -> String {
+        switch site {
+        case .finding_adjudicator: return "Finding adjudicator"
         }
     }
 

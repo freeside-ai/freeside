@@ -21,11 +21,12 @@ Mac and iOS match on every line unless a line says otherwise.
   deadlines, run timeline, freshness banner, Mac menu bar, the sync
   and command-retry machinery, and the run-proposal card with its
   "start with changes" and snooze sheets (its full-artifact view is not),
-  plus the shared ask-first decision shell, recommendation slot, action
-  hierarchy, the recommendation-led finding-adjudication card and typed
+  plus the shared ask-first decision shell, the contract recommendation
+  rendered in its source register, action hierarchy, per-type typed card
+  facts, the recommendation-led finding-adjudication card and typed
   route picker, plus the text-only conversation thread and composer.
-- **Generic:** seven of the fourteen card types use only the shared decision
-  shell; four additional types compose card-specific orderings from the shared
+- **Generic:** six of the fourteen card types use only the shared decision
+  shell; five additional types compose card-specific orderings from the shared
   graphic module set.
 - **Not yet:** one card type (`effect_proposal`), conversation attachments, the evidence
   and spec viewers, proposal batches, the
@@ -39,7 +40,7 @@ Mac and iOS match on every line unless a line says otherwise.
 | --- | --- | --- |
 | Pairing | Done | One-time code semantics and grouping, editable system device-name prefill, host/expiry/connection slots, and helper copy naming the host Devices list and per-decision audit record. No credential-like grant value renders. §15 styling: serif title on iOS, wax failure label, accent button. |
 | Inbox | Done | iPhone keeps Inbox and Runs as persistent tabs with independent stacks; Inbox owns its scope/project filters, non-zero urgent badge, and urgent summary. Three-line scanning rows show type and exceptional badges, a type-written summary, project/work-unit context, and coarse relative time. Scope/project counts share the list predicate; selected rows use a leading bar, wash, and border. Context menus retain identifiers and evidence digests. macOS keeps the split-view source list with the same urgent count. Rebuilds fully once a missed notification is detected; the 15-second heartbeat, foreground activation, reachability recovery, pull to refresh, toolbar, and ⌘R all use the coalesced refresh path (plan §5.14). |
-| Decision detail | Done | One shell orders ask, optional recommendation, actions, and decision context without repeating the navigation title. A reserved agent summary renders as its own unverified layer after authenticated context, with its producer invocation visible, while other agent claims stay separate. A resolved decision leaves a neutral six-second receipt outside the card, announces before an optional delayed advance, and can reopen the concluded item without changing the inbox filter; uncertain submissions retain Retry and never advance. On macOS, facts, bindings, claims, evidence, and details live in a closed-by-default inspector whose section state persists; recommendation and actions move to a second card column at 1,000pt. Inbox context-menu requests select the item and reveal its technical details. Actions rank by job and unavailable requests are recorded in Details. Accessibility Dynamic Type stacks facts and actions and collapses lower sections. Per-card layouts are tracked under Cards. |
+| Decision detail | Done | One shell orders ask, the daemon's reason as its answer, then each type's own module ordering, with the typed facts always above the action region and never repeating the navigation title. A recommendation leads its register with the action it recommends, then the reason for it, with the provenance digests one disclosure away. A reserved agent summary renders as its own unverified layer after authenticated context, with its producer invocation visible, while other agent claims stay separate. A resolved decision leaves a neutral six-second receipt outside the card, announces before an optional delayed advance, and can reopen the concluded item without changing the inbox filter; uncertain submissions retain Retry and never advance. On macOS, the card carries the §9 typed facts and the inspector carries only what the card omits: claims, evidence, and technical bindings, closed by default with its section state persisted; recommendation and actions move to a second card column at 1,000pt. Inbox context-menu requests select the item and reveal its technical details. Actions rank by job and unavailable requests are recorded in Details. Accessibility Dynamic Type stacks facts and actions and collapses lower sections. Per-card layouts are tracked under Cards. |
 | Freshness banner | Done | §15 styling: tinted wash with a mono keyword; unreachable and sync-failing take the accent, revoked and a stale last-update threshold take wax. The last-updated indicator stays visible in the macOS toolbar and iOS inbox: "Updated recently" while fresh, then a coarse minute-or-coarser relative time once stale. |
 | Run list | Done | Filter by project; two semantic lines separate stage/round from the current hold or milestone, and attached watch chips wrap without truncation. §15 styling: outcome chips (ready is quiet, in progress water, blocked accent, failed wax, not observed dashed). |
 | Run timeline | Done | §15 styling: accent-washed hold card, milestone rail, invocation status chips. |
@@ -63,25 +64,25 @@ lists open issues that will change the card.
 | Card | What you can do | Status | Coming |
 | --- | --- | --- | --- |
 | `spec_approval` | approve, request changes, discuss, stop | Done for text request-changes and discuss transactions; the superseded card links to the next open specification once it syncs | #920 supplies revision facts; spec and diff viewer |
-| `review_diminishing_returns` | finish now, apply then finish, continue under policy, convert to policy | Done for the shared yield-chart module; production chart facts remain data-gated | #724, #844 |
-| `review_dispute` | discuss, stop (plus approve for observation-only shadow findings) | Done for the equal-position and daemon-fact composition; production position facts remain data-gated | #724, #855, #917 |
+| `review_diminishing_returns` | finish now, apply then finish, continue under policy, convert to policy | Done: the card leads with cost so far from the typed field and the shared yield-chart module; convert to policy is omitted from the action surface and recorded in the drill-down (revision 40 carves it out of the Phase 1 claim) | #844 |
+| `review_dispute` | discuss, stop (plus approve for observation-only shadow findings) | Done: the card leads with the typed run, round, disputed findings, and completion evidence beside the equal-position composition | #855 |
 | `finding_adjudication` | accept the recommended route, pick an alternative, discuss, stop (§7 widens this to answering questions, challenging assumptions, and asking for more detail) | Done for the proposal, producer-specific model/engine/mixed-origin labels, daemon facts, typed route actions, alternatives, and text discussion | #840 executes the chosen route |
 | `review_contradiction` | recover the exact contradiction, or leave parked | Generic (recovery details shown) | |
 | `review_configuration` | adopt the configuration, discuss, stop | Generic (recovery details shown) | |
-| `execution_failure` | retry, retry with capabilities, discuss, stop | Done for the shared stage-rail and diagnostic-claim composition; production stage and timing facts remain data-gated | #869 adds "retry with another provider profile" for quota, expiry, and capacity failures: a profile picker, with cost owner and review independence shown before confirming; #917 supplies typed stage and timing facts |
-| `agent_question` | answer and retry, answer without retry, stop | Generic | #724 |
-| `publish_blocked` | rerun trust check, choose another profile, inspect the failure, stop | Generic | |
-| `ready_for_final_review` | view PR, return to agent, mark seen, dismiss, stop | Done for the readiness checklist and per-round yield composition; change summary remains data-gated | #724, #917; remaining readiness display below |
+| `execution_failure` | retry, retry with capabilities, discuss, stop | Done: the card leads with the typed outcome, failing stage, and invocation beside the stage-rail and diagnostic-claim composition; retry with capabilities is omitted until #921 lands its transaction | #869 adds "retry with another provider profile" for quota, expiry, and capacity failures: a profile picker, with cost owner and review independence shown before confirming |
+| `agent_question` | answer and retry, answer without retry, stop | Done: the labeled question claim leads with what is blocked and the enumerated options, so answering needs no transcript; both answer actions are omitted until #919 lands their transactions | #990 produces the typed question |
+| `publish_blocked` | rerun trust check, choose another profile, inspect the failure, stop | Done: the card leads with the failed trust rule or hold reason from the typed field; choosing another profile is omitted until #936 | #936 |
+| `ready_for_final_review` | view PR, return to agent, mark seen, dismiss, stop | Done: the card leads with the readiness checklist and per-round yield, keeping the typed diff stats last before the actions; change summary remains data-gated and return to agent is omitted until #919 | Remaining readiness display below |
 | `run_proposal` | start, start with changes, decline, snooze | Done for actions and facts, including the declaration-bound path count shown read-only in revisions; the full proposal artifact and the revised-digest diff are Not yet | Batch grouping (see Screens) |
 | `effect_proposal` | approve, approve with changes, decline, snooze; target picked from a daemon-supplied list | Not yet | Lands with the §5.13 effect registry in 1B |
-| `system_health` | acknowledge, run doctor, stop or resume unattended, resolve re-enrollment | Generic (posture badge and re-enrollment details shown) | #868 (account-probe items), #867 (retired-identity items) |
-| `blocked` | read only | Generic | |
+| `system_health` | acknowledge, run doctor, stop or resume unattended, resolve re-enrollment | Done: the card and row lead with the typed diagnostic code and the capability it impairs, daemon facts only (posture badge and re-enrollment details shown) | #868 (account-probe items), #867 (retired-identity items) |
+| `blocked` | read only | Done: the card and row lead with the typed wait, its coarse duration, and the blocking item or pull request, daemon facts only; the exact wait start stays in the technical bindings | |
 
 ## Rules Every Card Follows
 
 | Rule | Status |
 | --- | --- |
-| Anything an agent wrote is visibly labeled as a claim, never shown as fact (plan §9) | Done for the claims section; the contract's text carrier exists, but per-card summaries are neither produced nor laid out yet, #723 |
+| Anything an agent wrote is visibly labeled as a claim, never shown as fact (plan §9) | Done: claims, agent summaries, and an agent-judgment recommendation each render in a labeled unverified register, and the mechanical `system_health` and `blocked` cards carry daemon facts alone |
 | Readiness shows as Blocked, ReadyClean, or ReadyDegraded with waiver IDs and who granted them, never a plain yes/no (plan §6) | Partial: ready final-review items show clean/degraded and the evaluation-set digest; blocked reasons and waiver identities are Not yet |
 | Severity uses one scale: critical, high, medium, low (plan §7) | Not yet |
 | Images load from the artifact store by digest; agent images are labeled claims (plan §4, §5.15) | Done: every attachment has an explicit bounded state, and images expand into a memory-only zoomable sheet |
@@ -90,7 +91,7 @@ lists open issues that will change the card.
 | Fault-class capture at resolution: a suggested value, one tap to correct, allowed to stay unknown (plan §4) | Not yet |
 | A stale submission swaps in the replacement item and says so (plan §4) | Done |
 | Actions that matter are disabled until current state is confirmed; no offline approvals in Phase 1 (plan §5.14) | Done |
-| A recommendation is rendered only when the contract supplies one; offer order never implies a recommendation | Done in the client shell; no production recommendation field exists yet, #917 |
+| A recommendation is rendered only when the contract supplies one; offer order never implies a recommendation | Done: the card reads `AttentionItem.recommendation`, revalidates its source-specific provenance, and renders daemon and project policy as card facts and agent judgment as a labeled proposal; #1002 produces the first one |
 | Consequential stop, decline, and dismiss actions require an explicit destructive confirmation; navigation and loss-risk actions alone use icons | Done |
 | Notifications are hints only; a late one for a resolved item opens current state with no stale action (plan §4, §5.14) | Not yet (no push channel until Phase 2) |
 

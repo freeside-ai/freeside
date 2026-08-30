@@ -20,6 +20,55 @@ import Testing
         }
     }
 
+    /// Every Section 4 Phase 1 action, against the client's capability table:
+    /// one it can faithfully collect and execute is offered, one it cannot is
+    /// omitted from the action surface and recorded in the drill-down. No
+    /// action reaches a disabled control or roadmap copy (plan §9).
+    @Test func everyPhase1ActionIsEitherOfferedOrRecordedAsUnavailable() {
+        for action in Components.Schemas.Action.allCases {
+            let ranking = DecisionActionRanking(requested: [action])
+            let offered =
+                ranking.principal + [ranking.reviewing].compactMap { $0 } + ranking.overflow
+            let executable = ActionOutcome.of(action) != .pending
+
+            #expect(offered == (executable ? [action] : []))
+            #expect(ranking.unavailable == (executable ? [] : [action]))
+            #expect(ranking.notDecidableHere == !executable)
+            #expect(
+                AttentionDisplay.unavailableActionRows(ranking.unavailable).count
+                    == (executable ? 0 : 1))
+        }
+    }
+
+    /// Revision 40 carves `convert_to_policy` out of the Phase 1 decidability
+    /// claim: it is omitted from the action surface, never rendered as a
+    /// disabled control, and still recorded for the audit.
+    @Test func convertToPolicyIsOmittedFromEveryOfferedBucket() {
+        let ranking = DecisionActionRanking(
+            requested: [.finish_now, .convert_to_policy, .continue_under_policy])
+        let offered = ranking.principal + [ranking.reviewing].compactMap { $0 } + ranking.overflow
+
+        #expect(!offered.contains(.convert_to_policy))
+        #expect(ranking.unavailable == [.convert_to_policy])
+        #expect(!ranking.notDecidableHere)
+        #expect(
+            AttentionDisplay.unavailableActionRows(ranking.unavailable)
+                == [.init(label: "Requested, not available here", value: "Convert to policy")])
+    }
+
+    /// With nothing faithful left, the card says so rather than offering a
+    /// dead control.
+    @Test func anAllPendingOfferIsNotDecidableHere() {
+        let ranking = DecisionActionRanking(
+            requested: [.answer_and_retry, .answer_without_retry, .return_to_agent])
+
+        #expect(ranking.principal.isEmpty)
+        #expect(ranking.reviewing == nil)
+        #expect(ranking.overflow.isEmpty)
+        #expect(ranking.notDecidableHere)
+        #expect(AttentionDisplay.unavailableActionRows(ranking.unavailable).count == 3)
+    }
+
     @Test func recommendationIsExplicitNeverOfferOrder() {
         let requested: [Components.Schemas.Action] = [.approve, .retry]
 

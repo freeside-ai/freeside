@@ -57,16 +57,15 @@ struct DecisionDetailView: View {
     @State private var pendingConfirmation: PendingConfirmation?
     @State private var sectionPreferences: DecisionSectionPreferences
     @State private var inspectorPresented: Bool
-    @State private var keyboardNote: String?
     @State private var detailWidth: CGFloat = 0
     @State private var recommendationVisible = true
+    @State private var provenanceExpanded = false
     @State private var alternativeSelections: [String: Components.Schemas.AdjudicationRoute] = [:]
     private let attachments: AttachmentLoader
-    private let recommendation: DecisionRecommendationPresentation?
     private let graphics: DecisionGraphicPresentations
     private let loadsAttachments: Bool
     private let showsValidationProgress: Bool
-    private let conversationNow: Date
+    private let now: Date
     private let itemID: String
     private let detailsRevealRequest: TechnicalDetailsRevealRequest?
     private let onConsumeDetailsRevealRequest: (UUID) -> Void
@@ -80,11 +79,10 @@ struct DecisionDetailView: View {
         detailsExpanded: Bool = false,
         detailsRevealRequest: TechnicalDetailsRevealRequest? = nil,
         onConsumeDetailsRevealRequest: @escaping (UUID) -> Void = { _ in },
-        recommendation: DecisionRecommendationPresentation? = nil,
         graphics: DecisionGraphicPresentations = .init(),
         loadsAttachments: Bool = true,
         showsValidationProgress: Bool = true,
-        conversationNow: Date = .now,
+        now: Date = .now,
         sectionPreferences: DecisionSectionPreferences? = nil,
         inspectorPresented: Binding<Bool>? = nil,
         onSelectItem: @escaping (String) -> Void = { _ in },
@@ -100,18 +98,16 @@ struct DecisionDetailView: View {
                 ?? DecisionSectionPreferences(
                     detailsExpandedOverride: revealsTechnicalDetails ? true : nil))
         _inspectorPresented = State(initialValue: revealsTechnicalDetails)
-        _keyboardNote = State(initialValue: nil)
         attachments = store.attachments
         self.itemID = itemID
         self.detailsRevealRequest = detailsRevealRequest
         self.onConsumeDetailsRevealRequest = onConsumeDetailsRevealRequest
         externalInspectorPresented = inspectorPresented
         self.onSelectItem = onSelectItem
-        self.recommendation = recommendation
         self.graphics = graphics
         self.loadsAttachments = loadsAttachments
         self.showsValidationProgress = showsValidationProgress
-        self.conversationNow = conversationNow
+        self.now = now
     }
 
     var body: some View {
@@ -222,12 +218,22 @@ struct DecisionDetailView: View {
             }
             .onChange(of: model.snapshot?.item.item_version) {
                 pendingConfirmation = nil
-                keyboardNote = nil
+                // A new item version can carry a different recommendation. The
+                // sticky action would otherwise stay reachable from the last
+                // version's scroll position, offering a replacement action
+                // whose reason and provenance were never on screen.
+                recommendationVisible = true
             }
             #if os(macOS)
                 .focusedSceneValue(\.decisionCommandActions, focusedDecisionCommandActions)
                 .onExitCommand { cancelPendingAction() }
+                // Return takes a validated recommendation and otherwise
+                // yields the responder chain: with nothing to take there is
+                // nothing to announce, and swallowing the key to post an
+                // unavailability banner made every card without a
+                // recommendation answer Return with a notice.
                 .onKeyPress(.return) {
+                    guard canTakeRecommendation else { return .ignored }
                     takeRecommendationFromKeyboard()
                     return .handled
                 }
@@ -270,7 +276,7 @@ struct DecisionDetailView: View {
         #if os(iOS)
             content.safeAreaInset(edge: .bottom, spacing: 0) {
                 if let item = model.snapshot?.item,
-                    let recommendation,
+                    let recommendation = DecisionRecommendationPresentation.of(item),
                     !recommendationVisible
                 {
                     actionButton(
@@ -352,24 +358,21 @@ struct DecisionDetailView: View {
         VStack(alignment: .leading, spacing: 16) {
             header(item, accessibilityLayout: accessibilityLayout)
             banner
-            if let keyboardNote {
-                bannerLabel(
-                    keyboardNote,
-                    systemImage: "return",
-                    tint: .accentText,
-                    wash: .accentWashSoft)
-            }
             Text(AttentionDisplay.ask(item))
                 .font(FreesideFont.sectionTitle)
                 .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
+            // The ask and the daemon's reason are one question and its answer,
+            // so nothing renders between them. The reason stays labeled
+            // because the daemon writes it as a sentence fragment.
+            context(item)
 
             if let conversation = model.conversation {
                 ConversationView(
                     snapshot: conversation,
                     attachments: attachments,
                     loadsAttachments: loadsAttachments,
-                    now: conversationNow,
+                    now: now,
                     rendersInteractiveControls: rendersInteractiveControls)
             }
 
@@ -388,22 +391,39 @@ struct DecisionDetailView: View {
             }
 
             #if os(macOS)
-                if !composition.modules.contains(.checklist),
-                    let notice = item.commit_plan_notice?.value1
-                {
-                    cardSection("Facts") {
-                        factRow("Commit plan", value: AttentionDisplay.label(notice))
-                    }
-                }
-                if let proposalFacts {
-                    cardSection("Authenticated proposal") {
-                        proposalRows(proposalFacts)
-                    }
-                }
                 if wideLayout {
+                    // The two columns are read side by side, so the action
+                    // region at the top of the right column is reachable
+                    // before anything further down the left one. The modules
+                    // a composition places ahead of actionInsertionIndex must
+                    // still precede the actions, so they render full width
+                    // above the split rather than beside it.
+                    ForEach(
+                        Array(
+                            composition.modules.prefix(composition.actionInsertionIndex)
+                                .enumerated()), id: \.offset
+                    ) {
+                        index, module in
+                        cardModule(
+                            module,
+                            moduleIndex: index,
+                            item: item,
+                            composition: composition,
+                            proposalFacts: proposalFacts,
+                            rendersInteractiveControls: rendersInteractiveControls,
+                            accessibilityLayout: accessibilityLayout)
+                        if index + 1 == composition.reviewingActionInsertionIndex {
+                            reviewingAction(item)
+                        }
+                    }
                     HStack(alignment: .top, spacing: 16) {
                         VStack(alignment: .leading, spacing: 16) {
-                            ForEach(Array(composition.modules.enumerated()), id: \.offset) {
+                            ForEach(
+                                Array(
+                                    composition.modules.enumerated()
+                                        .dropFirst(composition.actionInsertionIndex)),
+                                id: \.offset
+                            ) {
                                 index, module in
                                 cardModule(
                                     module,
@@ -485,7 +505,7 @@ struct DecisionDetailView: View {
             rendersInteractiveControls: Bool
         ) -> some View {
             VStack(alignment: .leading, spacing: 16) {
-                if let recommendation,
+                if let recommendation = DecisionRecommendationPresentation.of(item),
                     actionRanking(item).recommended == recommendation.action
                 {
                     recommendationBlock(recommendation, item: item)
@@ -519,9 +539,18 @@ struct DecisionDetailView: View {
         accessibilityLayout: Bool
     ) -> some View {
         switch module {
+        case .facts:
+            factsSection(
+                item,
+                includesCommitPlan: !composition.modules.contains(.checklist))
+            if let proposalFacts {
+                cardSection("Authenticated proposal") {
+                    proposalRows(proposalFacts)
+                }
+            }
         case .recommendation:
             #if os(iOS)
-                if let recommendation,
+                if let recommendation = DecisionRecommendationPresentation.of(item),
                     actionRanking(item).recommended == recommendation.action
                 {
                     recommendationBlock(recommendation, item: item)
@@ -561,19 +590,7 @@ struct DecisionDetailView: View {
                     rendersInteractiveControls: rendersInteractiveControls)
             }
         case .factBlock:
-            #if os(macOS)
-                factBlocks(
-                    item,
-                    includesCommitPlan: false,
-                    proposalFacts: nil,
-                    rendersInteractiveControls: rendersInteractiveControls)
-            #else
-                factBlocks(
-                    item,
-                    includesCommitPlan: !composition.modules.contains(.checklist),
-                    proposalFacts: proposalFacts,
-                    rendersInteractiveControls: rendersInteractiveControls)
-            #endif
+            factBlocks(item, rendersInteractiveControls: rendersInteractiveControls)
         case .summary:
             agentSummary(
                 composition.summaries(from: item.agent_claims),
@@ -646,10 +663,42 @@ struct DecisionDetailView: View {
     }
 
     @ViewBuilder
+    private func context(_ item: Components.Schemas.AttentionItem) -> some View {
+        if !item.reason.isEmpty {
+            cardSection("Context") {
+                Text(item.reason)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// The Section 9 card facts for this item type, read from its typed fact
+    /// fields (#724). Rendered from the `.facts` module, which every
+    /// composition places ahead of its action region; a type whose lead is its
+    /// own module contributes no rows and the section disappears rather than
+    /// rendering an empty container.
+    @ViewBuilder
+    private func factsSection(
+        _ item: Components.Schemas.AttentionItem,
+        includesCommitPlan: Bool
+    ) -> some View {
+        let facts = AttentionDisplay.cardFacts(item, now: now)
+        let notice = includesCommitPlan ? item.commit_plan_notice?.value1 : nil
+        if !facts.isEmpty || notice != nil {
+            cardSection("Facts") {
+                ForEach(facts) { fact in
+                    factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+                }
+                if let notice {
+                    factRow("Commit plan", value: AttentionDisplay.label(notice))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
     private func factBlocks(
         _ item: Components.Schemas.AttentionItem,
-        includesCommitPlan: Bool,
-        proposalFacts: Components.Schemas.RunProposalFactsSnapshot?,
         rendersInteractiveControls: Bool
     ) -> some View {
         if let changeSummary = graphics.changeSummary {
@@ -661,21 +710,10 @@ struct DecisionDetailView: View {
             .accessibilityLabel(Text(changeSummary.summary))
         }
 
-        cardSection("Context") {
-            Text(item.reason)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-
         if let adjudication = item.finding_adjudication?.value1 {
             findingAdjudicationDetail(
                 adjudication,
                 rendersInteractiveControls: rendersInteractiveControls)
-        }
-
-        if includesCommitPlan, let notice = item.commit_plan_notice?.value1 {
-            cardSection("Facts") {
-                factRow("Commit plan", value: AttentionDisplay.label(notice))
-            }
         }
 
         if let comparison = graphics.comparison, !comparison.verifiableFacts.isEmpty {
@@ -690,23 +728,6 @@ struct DecisionDetailView: View {
             cardSection(attemptTimings.title) {
                 ForEach(attemptTimings.facts) { fact in
                     factRow(fact.label, value: fact.value)
-                }
-            }
-        }
-
-        if let facts = proposalFacts {
-            cardSection("Authenticated proposal") {
-                factRow("Intent", value: facts.intent.rawValue)
-                factRow("Expected cost", value: "\(facts.expected_cost_units) units")
-                factRow("Components", value: "\(facts.scope.component_count)")
-                factRow("Declared paths", value: "\(facts.scope.declared_path_count)")
-                factRow(
-                    "Control plane", value: facts.scope.touches_control_plane ? "Yes" : "No")
-                if let prior = facts.supersedes?.value1 {
-                    Divider()
-                    Text("Revision context")
-                        .font(FreesideFont.sans(.caption, weight: .semibold))
-                    proposalRevisionRows(prior)
                 }
             }
         }
@@ -810,17 +831,12 @@ struct DecisionDetailView: View {
             _ item: Components.Schemas.AttentionItem,
             rendersInteractiveControls: Bool = true
         ) -> some View {
+            // The card carries the Section 9 facts and the authenticated
+            // proposal, so the inspector carries only what the card omits:
+            // attachment claims, the evidence packet, and the technical
+            // bindings. A second copy of the same rows made an open inspector
+            // repeat the card beside it.
             VStack(alignment: .leading, spacing: 12) {
-                if let notice = item.commit_plan_notice?.value1 {
-                    inspectorSection("Facts", isExpanded: factsExpanded) {
-                        factRow("Commit plan", value: AttentionDisplay.label(notice))
-                    }
-                }
-                if let facts = model.proposalFacts {
-                    inspectorSection("Authenticated proposal", isExpanded: proposalExpanded) {
-                        proposalRows(facts)
-                    }
-                }
                 let attachmentClaims = item.agent_claims.filter { $0.text == nil }
                 if !attachmentClaims.isEmpty {
                     inspectorSection(
@@ -874,14 +890,6 @@ struct DecisionDetailView: View {
                 .font(FreesideFont.sans(.caption, weight: .semibold))
             proposalRevisionRows(prior)
         }
-    }
-
-    private var factsExpanded: Binding<Bool> {
-        preferenceBinding(\.factsExpanded)
-    }
-
-    private var proposalExpanded: Binding<Bool> {
-        preferenceBinding(\.proposalExpanded)
     }
 
     private var claimsExpanded: Binding<Bool> {
@@ -1170,11 +1178,7 @@ struct DecisionDetailView: View {
             proposalDigest: model.proposalFacts?.proposal_digest
         )
         rows.append(
-            contentsOf: actionRanking(item).unavailable.map {
-                .init(
-                    label: "Requested, not available here",
-                    value: AttentionDisplay.label($0))
-            })
+            contentsOf: AttentionDisplay.unavailableActionRows(actionRanking(item).unavailable))
         return rows
     }
 
@@ -1268,20 +1272,24 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// The recommendation leads its card in the register its revalidated
+    /// provenance supports (plan §9): daemon policy and project policy render
+    /// as card facts, agent judgment as a labeled unverified proposal. Inside
+    /// that register it leads with the act, then the reason for it: an
+    /// operator reads the recommendation to decide, not to audit it.
     private func recommendationBlock(
         _ recommendation: DecisionRecommendationPresentation,
         item: Components.Schemas.AttentionItem
     ) -> some View {
         cardSection(
-            "Recommended",
+            recommendation.title,
+            dashed: recommendation.register.isUnverifiedClaim,
             border: .accentBorder,
             fill: .accentWash
         ) {
-            KeywordLabel(text: "Why")
-            Text(recommendation.reason)
-                .fixedSize(horizontal: false, vertical: true)
-            if let confidence = recommendation.confidence {
-                factRow("Confidence", value: confidence)
+            if recommendation.register.isUnverifiedClaim {
+                Text("Written by an agent, not checked by the daemon.")
+                    .foregroundStyle(Color.inkDim)
             }
             actionButton(
                 recommendation.action,
@@ -1291,7 +1299,26 @@ struct DecisionDetailView: View {
                     for: item) == nil ? .primary : .destructive,
                 showsIcon: false
             )
-            .padding(.top, 4)
+            KeywordLabel(text: "Why")
+            Text(recommendation.reason)
+                .fixedSize(horizontal: false, vertical: true)
+            if let confidence = recommendation.confidence {
+                factRow("Confidence", value: confidence)
+            }
+            // The digests, policy key, and judgment site revalidate the
+            // recommendation; an operator deciding never reads them, so they
+            // stay one disclosure away instead of standing between the
+            // recommended act and the reason for it.
+            DisclosureGroup(isExpanded: $provenanceExpanded) {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(recommendation.sourceFacts) { fact in
+                        factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+                    }
+                }
+                .padding(.top, 6)
+            } label: {
+                KeywordLabel(text: "Provenance")
+            }
         }
         .onGeometryChange(for: Bool.self) { geometry in
             geometry.frame(in: .named("decision-card-scroll")).maxY > 0
@@ -1916,7 +1943,7 @@ struct DecisionDetailView: View {
         let composition = DecisionCardComposition.forType(item._type)
         return DecisionActionRanking(
             requested: item.requested_decision,
-            recommendedAction: recommendation?.action,
+            recommendedAction: DecisionRecommendationPresentation.of(item)?.action,
             reservesRecommendedAction: composition.modules.contains(.recommendation))
     }
 
@@ -2044,6 +2071,7 @@ struct DecisionDetailView: View {
 
         private var canTakeRecommendation: Bool {
             guard let item = model.snapshot?.item else { return false }
+            let recommendation = DecisionRecommendationPresentation.of(item)
             return DecisionKeyboardGate.canTakeRecommendation(
                 rankedRecommendation: actionRanking(item).recommended,
                 presentedRecommendation: recommendation?.action,
@@ -2056,13 +2084,9 @@ struct DecisionDetailView: View {
 
         private func takeRecommendationFromKeyboard() {
             guard let item = model.snapshot?.item,
-                let recommendation,
+                let recommendation = DecisionRecommendationPresentation.of(item),
                 canTakeRecommendation
-            else {
-                keyboardNote = "Return is unavailable: there is no validated recommendation."
-                return
-            }
-            keyboardNote = nil
+            else { return }
             trigger(recommendation.action, item: item)
         }
 
@@ -2070,7 +2094,6 @@ struct DecisionDetailView: View {
             proposalEditor = nil
             messageEditor = nil
             pendingConfirmation = nil
-            keyboardNote = nil
         }
     #endif
 }

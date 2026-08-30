@@ -241,7 +241,7 @@
                 itemID: awaitingItem.item.id,
                 loadsAttachments: false,
                 showsValidationProgress: false,
-                conversationNow: screenshotNow)
+                now: screenshotNow)
             surfaces.append(
                 Surface(
                     name: "decision-spec_approval-awaiting",
@@ -253,7 +253,7 @@
                 itemID: awaitingItem.item.id,
                 loadsAttachments: false,
                 showsValidationProgress: false,
-                conversationNow: screenshotNow)
+                now: screenshotNow)
             surfaces.append(
                 Surface(
                     name: "decision-spec_approval-awaiting-phone",
@@ -266,7 +266,7 @@
                 itemID: awaitingItem.item.id,
                 loadsAttachments: false,
                 showsValidationProgress: false,
-                conversationNow: screenshotNow)
+                now: screenshotNow)
             surfaces.append(
                 Surface(
                     name: "decision-spec_approval-awaiting-dark",
@@ -279,7 +279,7 @@
                 itemID: awaitingItem.item.id,
                 loadsAttachments: false,
                 showsValidationProgress: false,
-                conversationNow: screenshotNow)
+                now: screenshotNow)
             surfaces.append(
                 Surface(
                     name: "decision-spec_approval-awaiting-phone-dark",
@@ -410,7 +410,7 @@
                     graphics: graphics,
                     loadsAttachments: false,
                     showsValidationProgress: false,
-                    conversationNow: screenshotNow
+                    now: screenshotNow
                 )
                 let proposalFacts =
                     snapshot.item._type == .run_proposal
@@ -443,7 +443,7 @@
                         graphics: graphics,
                         loadsAttachments: false,
                         showsValidationProgress: false,
-                        conversationNow: screenshotNow)
+                        now: screenshotNow)
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-phone",
@@ -459,7 +459,7 @@
                         graphics: graphics,
                         loadsAttachments: false,
                         showsValidationProgress: false,
-                        conversationNow: screenshotNow)
+                        now: screenshotNow)
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-dark",
@@ -475,7 +475,7 @@
                         graphics: graphics,
                         loadsAttachments: false,
                         showsValidationProgress: false,
-                        conversationNow: screenshotNow)
+                        now: screenshotNow)
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-phone-dark",
@@ -489,6 +489,32 @@
                 }
 
                 if snapshot.item._type == .ready_for_final_review {
+                    // The card carries this item's commit-plan fact, so the
+                    // inspector beside it must not repeat a Facts section.
+                    let readyPreferencesSuite = "FreesideScreenshotReadyPreferences"
+                    guard let readyDefaults = UserDefaults(suiteName: readyPreferencesSuite)
+                    else {
+                        throw ScreenshotError.preferencesUnavailable
+                    }
+                    readyDefaults.removePersistentDomain(forName: readyPreferencesSuite)
+                    let readyPreferences = DecisionSectionPreferences(defaults: readyDefaults)
+                    readyPreferences.claimsExpanded = true
+                    readyPreferences.evidenceExpanded = true
+                    readyPreferences.detailsExpanded = true
+                    let readyInspector = DecisionDetailView(
+                        store: store,
+                        itemID: snapshot.item.id,
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        sectionPreferences: readyPreferences)
+                    surfaces.append(
+                        Surface(
+                            name: "decision-ready_for_final_review-inspector",
+                            width: 360,
+                            view: AnyView(
+                                readyInspector.screenshotInspector(
+                                    snapshot.item,
+                                    at: dynamicTypeSize))))
                     surfaces.append(
                         Surface(
                             name: "decision-ready_for_final_review-1200",
@@ -536,15 +562,13 @@
                 }
             }
 
+            // The fixture carries the contract recommendation, so the card
+            // renders the item's own authoritative lead rather than an
+            // injected presentation.
             let adjudication = AttentionFixtures.fixture(type: .finding_adjudication).item
             let recommendedDetail = DecisionDetailView(
                 store: store,
                 itemID: adjudication.id,
-                recommendation: .init(
-                    action: .accept_recommended_route,
-                    reason: "This route preserves the evidence-backed finding.",
-                    confidence: "High"
-                ),
                 loadsAttachments: false,
                 showsValidationProgress: false
             )
@@ -560,18 +584,33 @@
             let inspectorDetail = DecisionDetailView(
                 store: store,
                 itemID: adjudication.id,
-                recommendation: .init(
-                    action: .accept_recommended_route,
-                    reason: "This route preserves the evidence-backed finding.",
-                    confidence: "High"
-                ),
                 showsValidationProgress: false,
                 sectionPreferences: inspectorPreferences)
+            // The same surface without the item's recommendation: every
+            // requested action is offered with equal weight, and offer order
+            // carries no endorsement.
+            var equallyWeighted = adjudication
+            equallyWeighted.recommendation = nil
             surfaces.append(
                 Surface(
-                    name: "decision-finding_adjudication-recommended",
+                    name: "decision-finding_adjudication-equally-weighted",
                     view: AnyView(
-                        recommendedDetail.screenshotCard(adjudication, at: dynamicTypeSize))))
+                        recommendedDetail.screenshotCard(
+                            equallyWeighted, at: dynamicTypeSize))))
+            surfaces.append(
+                Surface(
+                    name: "decision-finding_adjudication-recommended-phone",
+                    width: 390,
+                    view: AnyView(
+                        recommendedDetail.screenshotCard(
+                            adjudication, at: dynamicTypeSize, compactLayout: true))))
+            surfaces.append(
+                Surface(
+                    name: "decision-finding_adjudication-equally-weighted-phone",
+                    width: 390,
+                    view: AnyView(
+                        recommendedDetail.screenshotCard(
+                            equallyWeighted, at: dynamicTypeSize, compactLayout: true))))
             for width in [CGFloat(900), CGFloat(1_200)] {
                 surfaces.append(
                     Surface(
@@ -592,15 +631,24 @@
                             adjudication,
                             at: dynamicTypeSize))))
 
-            let question = AttentionFixtures.fixture(type: .agent_question).item
+            // A daemon-policy recommendation whose action is destructive: the
+            // card must lead with it in the fact register and still demand the
+            // destructive confirmation.
+            var question = AttentionFixtures.fixture(type: .agent_question).item
+            question.recommendation = .init(
+                value1: .init(
+                    action: .stop,
+                    reason: "Stopping avoids applying an unreviewed answer.",
+                    source: .daemon_policy,
+                    provenance: .init(
+                        daemon_policy: .init(
+                            value1: .init(
+                                rule_digest: "sha256:rule-agent-question-stop",
+                                input_digest: "sha256:input-agent-question-stop"))),
+                    confidence: nil))
             let destructiveRecommendation = DecisionDetailView(
                 store: store,
                 itemID: question.id,
-                recommendation: .init(
-                    action: .stop,
-                    reason: "Stopping avoids applying an unreviewed answer.",
-                    confidence: nil
-                ),
                 loadsAttachments: false,
                 showsValidationProgress: false
             )
@@ -877,7 +925,7 @@
                 itemID: approval.item.id,
                 loadsAttachments: false,
                 showsValidationProgress: false,
-                conversationNow: screenshotNow)
+                now: screenshotNow)
             return Surface(
                 name: "decision-spec_approval-image",
                 view: AnyView(detail.screenshotCard(approval.item, at: dynamicTypeSize)))

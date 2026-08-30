@@ -1,11 +1,5 @@
 import FreesideAPI
 
-struct DecisionRecommendationPresentation: Equatable {
-    let action: Components.Schemas.Action
-    let reason: String
-    let confidence: String?
-}
-
 /// A pure presentation partition over the daemon-offered decision set.
 /// The optional recommendation must come from an authoritative contract
 /// projection. Callers never infer it from offer order.

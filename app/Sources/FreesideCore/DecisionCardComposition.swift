@@ -2,6 +2,7 @@ import FreesideAPI
 import SwiftUI
 
 enum DecisionCardModule: String, CaseIterable {
+    case facts
     case factBlock
     case findingFacts
     case recommendation
@@ -26,11 +27,12 @@ struct DecisionCardComposition: Equatable {
     let actionInsertionIndex: Int
     let reviewingActionInsertionIndex: Int?
 
+    /// A claim module leads when it renders above the action region: that is
+    /// the whole meaning of prominence here, so it is read from
+    /// `actionInsertionIndex` rather than from another module's position.
     func claimsAreProminent(at moduleIndex: Int) -> Bool {
-        guard let claimsIndex = modules.firstIndex(of: .claims),
-            let factsIndex = modules.firstIndex(of: .factBlock)
-        else { return false }
-        return moduleIndex == claimsIndex && claimsIndex < factsIndex
+        guard let claimsIndex = modules.firstIndex(of: .claims) else { return false }
+        return moduleIndex == claimsIndex && claimsIndex < actionInsertionIndex
     }
 
     func claims(
@@ -43,12 +45,17 @@ struct DecisionCardComposition: Equatable {
         }
         let claimModuleIndices = modules.indices.filter { modules[$0] == .claims }
         guard claimModuleIndices.count > 1 else { return claims }
+        let leads = moduleIndex == claimModuleIndices.first
         guard let prominentClaimIndex, claims.indices.contains(prominentClaimIndex) else {
-            return moduleIndex == claimModuleIndices.first ? [] : claims
+            // Without a caller-chosen prominent claim, the claim the operator
+            // can read leads and an attachment stays supporting context
+            // (plan §9). This is the split the macOS action region already
+            // applies, where text claims sit above the actions and attachment
+            // claims move to the inspector.
+            return claims.filter { ($0.text != nil) == leads }
         }
         return claims.enumerated().compactMap { index, claim in
-            (moduleIndex == claimModuleIndices.first) == (index == prominentClaimIndex)
-                ? claim : nil
+            leads == (index == prominentClaimIndex) ? claim : nil
         }
     }
 
@@ -60,35 +67,46 @@ struct DecisionCardComposition: Equatable {
 
     static let sharedModuleSet = DecisionCardModule.allCases
 
+    /// Every composition places `.facts` ahead of `actionInsertionIndex`: the
+    /// daemon's typed facts inform the decision, so they can never render
+    /// below the actions. Where each type puts them among its own modules is
+    /// that type's judgement, not a shared rule, so a card leads with the
+    /// module its §9 row leads with (the readiness checklist, the stage rail,
+    /// the disputed positions) and keeps the identifier-shaped facts last.
     static func forType(_ type: Components.Schemas.AttentionType) -> Self {
         switch type {
         case .ready_for_final_review:
+            // The verdict leads, then the review's shape; the diff's base and
+            // head are audit coordinates, so they sit last before the actions.
             return .init(
                 modules: [
-                    .recommendation, .checklist, .factBlock, .yieldChart, .summary, .claims,
-                    .evidence, .details,
+                    .recommendation, .checklist, .factBlock, .yieldChart, .facts, .summary,
+                    .claims, .evidence, .details,
                 ],
-                actionInsertionIndex: 4,
-                reviewingActionInsertionIndex: 7)
+                actionInsertionIndex: 5,
+                reviewingActionInsertionIndex: 8)
         case .execution_failure:
             return .init(
                 modules: [
-                    .recommendation, .stageRail, .claims, .factBlock, .summary, .claims, .evidence,
-                    .details,
+                    .recommendation, .stageRail, .facts, .claims, .factBlock, .summary, .claims,
+                    .evidence, .details,
                 ],
-                actionInsertionIndex: 3,
+                actionInsertionIndex: 4,
                 reviewingActionInsertionIndex: nil)
         case .review_dispute:
             return .init(
-                modules: [.comparison, .factBlock, .summary, .claims, .evidence, .details],
-                actionInsertionIndex: 2,
+                modules: [
+                    .comparison, .factBlock, .facts, .summary, .claims, .evidence, .details,
+                ],
+                actionInsertionIndex: 3,
                 reviewingActionInsertionIndex: nil)
         case .review_diminishing_returns:
             return .init(
                 modules: [
-                    .recommendation, .yieldChart, .factBlock, .summary, .claims, .evidence, .details,
+                    .recommendation, .yieldChart, .facts, .factBlock, .summary, .claims,
+                    .evidence, .details,
                 ],
-                actionInsertionIndex: 2,
+                actionInsertionIndex: 3,
                 reviewingActionInsertionIndex: nil)
         case .finding_adjudication:
             // Section 9's finding_adjudication row leads with two things: the
@@ -100,21 +118,36 @@ struct DecisionCardComposition: Equatable {
             // which the §9 "Below" column covers, after the action region.
             return .init(
                 modules: [
-                    .recommendation, .findingFacts, .factBlock, .summary, .claims, .evidence,
+                    .recommendation, .findingFacts, .facts, .factBlock, .summary, .claims,
+                    .evidence, .details,
+                ],
+                actionInsertionIndex: 3,
+                reviewingActionInsertionIndex: nil)
+        case .agent_question:
+            // Section 9: the question leads as a labeled agent claim, and it
+            // is answerable without the transcript, so the claim module runs
+            // ahead of the action region instead of sitting in the lower
+            // sections with the supporting context. The second claim module
+            // carries that supporting context, which stays below the actions.
+            return .init(
+                modules: [
+                    .recommendation, .claims, .facts, .factBlock, .summary, .claims, .evidence,
                     .details,
+                ],
+                actionInsertionIndex: 3,
+                reviewingActionInsertionIndex: nil)
+        case .spec_approval, .review_contradiction, .review_configuration,
+            .publish_blocked, .run_proposal:
+            return .init(
+                modules: [
+                    .recommendation, .facts, .factBlock, .summary, .claims, .evidence, .details,
                 ],
                 actionInsertionIndex: 2,
                 reviewingActionInsertionIndex: nil)
-        case .spec_approval, .review_contradiction, .review_configuration,
-            .agent_question, .publish_blocked, .run_proposal:
-            return .init(
-                modules: [.recommendation, .factBlock, .summary, .claims, .evidence, .details],
-                actionInsertionIndex: 1,
-                reviewingActionInsertionIndex: nil)
         case .system_health, .blocked:
             return .init(
-                modules: [.recommendation, .factBlock, .claims, .evidence, .details],
-                actionInsertionIndex: 1,
+                modules: [.recommendation, .facts, .factBlock, .claims, .evidence, .details],
+                actionInsertionIndex: 2,
                 reviewingActionInsertionIndex: nil)
         }
     }
