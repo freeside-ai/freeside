@@ -1,0 +1,10 @@
+# Build output. `go build ./...` writes no binary, but an operator building
+# freesided by hand for `scripts/install-mac-app.sh --daemon-path` lands it
+# here, and the repository has no root ignore file to cover it. An untracked
+# artifact is not harmless: `scripts/run-real-work.sh` refuses to start the
+# §11 1A.2 unattended run on a non-empty `git status --porcelain`, because the
+# composition preflight rejects a daemon carrying a `-dirty` build stamp.
+#
+# Anchored to this directory so a future `internal/<pkg>/testdata/bin/`
+# fixture stays trackable.
+/bin/
