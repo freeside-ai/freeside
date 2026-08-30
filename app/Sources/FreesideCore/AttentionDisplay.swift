@@ -573,6 +573,16 @@ enum AttentionDisplay {
         return rows
     }
 
+    /// Section 9's audit record for actions this client cannot faithfully
+    /// collect and execute: they are omitted from the action surface and
+    /// listed in the drill-down, so an audit still shows what the daemon
+    /// asked for.
+    static func unavailableActionRows(
+        _ actions: [Components.Schemas.Action]
+    ) -> [BindingRow] {
+        actions.map { .init(label: "Requested, not available here", value: label($0)) }
+    }
+
     static func detailBindingRows(
         _ item: Components.Schemas.AttentionItem,
         priorProposalDigest: String? = nil,

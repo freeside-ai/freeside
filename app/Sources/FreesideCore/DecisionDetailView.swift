@@ -1138,11 +1138,7 @@ struct DecisionDetailView: View {
             proposalDigest: model.proposalFacts?.proposal_digest
         )
         rows.append(
-            contentsOf: actionRanking(item).unavailable.map {
-                .init(
-                    label: "Requested, not available here",
-                    value: AttentionDisplay.label($0))
-            })
+            contentsOf: AttentionDisplay.unavailableActionRows(actionRanking(item).unavailable))
         return rows
     }
 
