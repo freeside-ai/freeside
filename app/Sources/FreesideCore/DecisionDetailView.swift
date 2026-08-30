@@ -57,7 +57,6 @@ struct DecisionDetailView: View {
     @State private var pendingConfirmation: PendingConfirmation?
     @State private var sectionPreferences: DecisionSectionPreferences
     @State private var inspectorPresented: Bool
-    @State private var keyboardNote: String?
     @State private var detailWidth: CGFloat = 0
     @State private var recommendationVisible = true
     @State private var alternativeSelections: [String: Components.Schemas.AdjudicationRoute] = [:]
@@ -98,7 +97,6 @@ struct DecisionDetailView: View {
                 ?? DecisionSectionPreferences(
                     detailsExpandedOverride: revealsTechnicalDetails ? true : nil))
         _inspectorPresented = State(initialValue: revealsTechnicalDetails)
-        _keyboardNote = State(initialValue: nil)
         attachments = store.attachments
         self.itemID = itemID
         self.detailsRevealRequest = detailsRevealRequest
@@ -219,7 +217,6 @@ struct DecisionDetailView: View {
             }
             .onChange(of: model.snapshot?.item.item_version) {
                 pendingConfirmation = nil
-                keyboardNote = nil
                 // A new item version can carry a different recommendation. The
                 // sticky action would otherwise stay reachable from the last
                 // version's scroll position, offering a replacement action
@@ -229,7 +226,13 @@ struct DecisionDetailView: View {
             #if os(macOS)
                 .focusedSceneValue(\.decisionCommandActions, focusedDecisionCommandActions)
                 .onExitCommand { cancelPendingAction() }
+                // Return takes a validated recommendation and otherwise
+                // yields the responder chain: with nothing to take there is
+                // nothing to announce, and swallowing the key to post an
+                // unavailability banner made every card without a
+                // recommendation answer Return with a notice.
                 .onKeyPress(.return) {
+                    guard canTakeRecommendation else { return .ignored }
                     takeRecommendationFromKeyboard()
                     return .handled
                 }
@@ -354,13 +357,6 @@ struct DecisionDetailView: View {
         VStack(alignment: .leading, spacing: 16) {
             header(item, accessibilityLayout: accessibilityLayout)
             banner
-            if let keyboardNote {
-                bannerLabel(
-                    keyboardNote,
-                    systemImage: "return",
-                    tint: .accentText,
-                    wash: .accentWashSoft)
-            }
             Text(AttentionDisplay.ask(item))
                 .font(FreesideFont.sectionTitle)
                 .foregroundStyle(Color.ink)
@@ -2042,11 +2038,7 @@ struct DecisionDetailView: View {
             guard let item = model.snapshot?.item,
                 let recommendation = DecisionRecommendationPresentation.of(item),
                 canTakeRecommendation
-            else {
-                keyboardNote = "Return is unavailable: there is no validated recommendation."
-                return
-            }
-            keyboardNote = nil
+            else { return }
             trigger(recommendation.action, item: item)
         }
 
@@ -2054,7 +2046,6 @@ struct DecisionDetailView: View {
             proposalEditor = nil
             messageEditor = nil
             pendingConfirmation = nil
-            keyboardNote = nil
         }
     #endif
 }
