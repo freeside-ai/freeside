@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -215,6 +216,23 @@ func TestInitialApprovalClaimsRequireMarkdownAndCanonicalDigests(t *testing.T) {
 	item.AgentClaims[1].Text = &plain
 	if authenticatesInitialApprovalClaims(item, specification, &summaryDigest, "run-1", 1) {
 		t.Fatal("plain-text reserved summary was accepted")
+	}
+
+	item.AgentClaims[1].Text = &text
+	addressalsDigest := domain.Digest("sha256:addressals")
+	item.AgentClaims = append(item.AgentClaims, domain.AgentClaim{
+		Label: "Addressals", Artifact: "spec-addressals-run-1-1",
+		Digest: addressalsDigest, Provenance: provenance,
+	})
+	item.SpecRevision = &domain.SpecRevisionFacts{AddressalsDigest: addressalsDigest}
+	item.ArtifactDigests = append(item.ArtifactDigests, addressalsDigest)
+	slices.Sort(item.ArtifactDigests)
+	if !authenticatesInitialApprovalClaims(item, specification, &summaryDigest, "run-1", 1) {
+		t.Fatal("canonical revised approval claims were rejected")
+	}
+	item.AgentClaims[2].Artifact = "spec-addressals-run-1-forged"
+	if authenticatesInitialApprovalClaims(item, specification, &summaryDigest, "run-1", 1) {
+		t.Fatal("substituted revised approval addressals were accepted")
 	}
 }
 

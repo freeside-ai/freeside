@@ -2,12 +2,14 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -22,6 +24,14 @@ func TestGoldenRoundTripCardFacts(t *testing.T) {
 	outcome := cardFactExecutionOutcome(execution.admission)
 	approval := cardFactApprovalItem(t)
 	items := storeCardFactItems(t)
+	revision := specRevisionCardFact(t)
+	items["spec_revision"] = revision.item
+	if err := recordSpecApprovalTerminal(ctx, s, revision.priorItem, 1); err != nil {
+		t.Fatalf("record initial specification terminal: %v", err)
+	}
+	if err := recordSpecRevisionTerminal(ctx, s, revision.item); err != nil {
+		t.Fatalf("record spec revision terminal: %v", err)
+	}
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutRun(ctx, execution.run); err != nil {
 			return err
@@ -36,6 +46,17 @@ func TestGoldenRoundTripCardFacts(t *testing.T) {
 			return err
 		}
 		if err := tx.PutAttentionItem(ctx, approval); err != nil {
+			return err
+		}
+		for _, artifact := range revision.artifacts {
+			if err := tx.PutArtifact(ctx, artifact); err != nil {
+				return err
+			}
+		}
+		if err := tx.PutAttentionItem(ctx, revision.priorItem); err != nil {
+			return err
+		}
+		if err := tx.PutCommand(ctx, revision.command); err != nil {
 			return err
 		}
 		finding := adjudicationFinding("finding-1", execution.run.ID, "daemon/review.go", time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC))
@@ -229,6 +250,397 @@ func TestPutAttentionItemRejectsChangedCardFact(t *testing.T) {
 	}
 }
 
+func TestPutAttentionItemAuthenticatesInitialSpecification(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	revision := specRevisionCardFact(t)
+	item := revision.priorItem
+
+	err := s.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutArtifact(ctx, revision.artifacts[0]); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
+	})
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("put without completed elaboration terminal = %v, want ErrParentKeyMismatch", err)
+	}
+	if err := recordSpecApprovalTerminal(ctx, s, item, 1); err != nil {
+		t.Fatalf("record initial specification terminal: %v", err)
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutArtifact(ctx, revision.artifacts[0]); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatalf("put authenticated initial specification: %v", err)
+	}
+}
+
+func TestPutAttentionItemAuthenticatesSpecRevisionArtifacts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	revision := specRevisionCardFact(t)
+	item := revision.item
+
+	missingErr := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, item) })
+	if !errors.Is(missingErr, store.ErrNotFound) {
+		t.Fatalf("put without artifacts = %v, want ErrNotFound", missingErr)
+	}
+	err := s.Write(ctx, func(tx *store.WriteTx) error {
+		for _, artifact := range revision.artifacts {
+			if err := tx.PutArtifact(ctx, artifact); err != nil {
+				return err
+			}
+		}
+		if err := tx.PutAttentionItem(ctx, revision.priorItem); err != nil {
+			return err
+		}
+		if err := tx.PutCommand(ctx, revision.command); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
+	})
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("put without elaboration terminal = %v, want ErrParentKeyMismatch", err)
+	}
+	if err := recordSpecApprovalTerminal(ctx, s, revision.priorItem, 1); err != nil {
+		t.Fatalf("record initial specification terminal: %v", err)
+	}
+	if err := recordSpecRevisionTerminal(ctx, s, item); err != nil {
+		t.Fatalf("record spec revision terminal: %v", err)
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		for _, artifact := range revision.artifacts {
+			if err := tx.PutArtifact(ctx, artifact); err != nil {
+				return err
+			}
+		}
+		if err := tx.PutAttentionItem(ctx, revision.priorItem); err != nil {
+			return err
+		}
+		if err := tx.PutCommand(ctx, revision.command); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatalf("put valid revision: %v", err)
+	}
+
+	missingSummary := item
+	missingSummary.ItemVersion++
+	missingSummary.AgentClaims = []domain.AgentClaim{item.AgentClaims[0], item.AgentClaims[2]}
+	missingSummary.ArtifactDigests = []domain.Digest{
+		missingSummary.AgentClaims[0].Digest, missingSummary.AgentClaims[1].Digest,
+	}
+	slices.Sort(missingSummary.ArtifactDigests)
+	err = s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, missingSummary) })
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("put revision without summary = %v, want ErrParentKeyMismatch", err)
+	}
+
+	forgedSummary := item
+	forgedSummary.ItemVersion++
+	forgedSummary.AgentClaims = slices.Clone(item.AgentClaims)
+	forgedText := domain.ClaimText{
+		MediaType: domain.MediaTypeTextMarkdown, Content: "A caller-supplied summary.",
+	}
+	forgedSummary.AgentClaims[1].Text = &forgedText
+	forgedSummary.AgentClaims[1].Digest = forgedText.ComputeDigest()
+	forgedSummary.ArtifactDigests = []domain.Digest{
+		forgedSummary.AgentClaims[0].Digest,
+		forgedSummary.AgentClaims[1].Digest,
+		forgedSummary.AgentClaims[2].Digest,
+	}
+	slices.Sort(forgedSummary.ArtifactDigests)
+	err = s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, forgedSummary) })
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("put revision with forged summary = %v, want ErrParentKeyMismatch", err)
+	}
+
+	foreign := item
+	foreign.ID = "item-card-spec-revision-foreign"
+	facts := *foreign.SpecRevision
+	facts.PriorSpecDigest = "sha256:foreign"
+	foreign.SpecRevision = &facts
+	err = s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, foreign) })
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("put foreign prior digest = %v, want ErrParentKeyMismatch", err)
+	}
+
+	forgedDiff := item
+	forgedDiff.ID = "spec-approval-implementation-run-forged-2"
+	forgedFacts := *forgedDiff.SpecRevision
+	forgedFacts.Diff.LinesAdded++
+	forgedDiff.SpecRevision = &forgedFacts
+	err = s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, forgedDiff) })
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("put caller-supplied diff = %v, want ErrParentKeyMismatch", err)
+	}
+
+	changed := item
+	changed.ItemVersion++
+	changedFacts := *changed.SpecRevision
+	changedFacts.Diff.LinesAdded++
+	changed.SpecRevision = &changedFacts
+	err = s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, changed) })
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("put changed revision facts = %v, want ErrParentKeyMismatch", err)
+	}
+}
+
+func TestPutAttentionItemBindsSpecRevisionAddressalsToCurrentInvocation(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		mutate func(*specRevisionCardFixture)
+	}{
+		{"foreign artifact identity", func(fixture *specRevisionCardFixture) {
+			fixture.item.AgentClaims[2].Artifact = "spec-addressals-foreign-run-2"
+			fixture.artifacts[3].ID = "spec-addressals-foreign-run-2"
+		}},
+		{"foreign invocation provenance", func(fixture *specRevisionCardFixture) {
+			provenance := fixture.item.AgentClaims[2].Provenance
+			provenance.ProducerInvocationID = "inv-elaborate-run-1-99"
+			fixture.item.AgentClaims[2].Provenance = provenance
+			fixture.artifacts[3].Provenance = provenance
+		}},
+		{"reordered claims", func(fixture *specRevisionCardFixture) {
+			claims := fixture.item.AgentClaims
+			claims[0], claims[1] = claims[1], claims[0]
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			s := openStore(t, store.Options{})
+			revision := specRevisionCardFact(t)
+			tc.mutate(&revision)
+			if err := recordSpecApprovalTerminal(ctx, s, revision.priorItem, 1); err != nil {
+				t.Fatal(err)
+			}
+			if err := recordSpecRevisionTerminal(ctx, s, revision.item); err != nil {
+				t.Fatal(err)
+			}
+			err := s.Write(ctx, func(tx *store.WriteTx) error {
+				for _, artifact := range revision.artifacts {
+					if err := tx.PutArtifact(ctx, artifact); err != nil {
+						return err
+					}
+				}
+				if err := tx.PutAttentionItem(ctx, revision.priorItem); err != nil {
+					return err
+				}
+				if err := tx.PutCommand(ctx, revision.command); err != nil {
+					return err
+				}
+				return tx.PutAttentionItem(ctx, revision.item)
+			})
+			if !errors.Is(err, domain.ErrParentKeyMismatch) {
+				t.Fatalf("put = %v, want ErrParentKeyMismatch", err)
+			}
+		})
+	}
+}
+
+func TestPutAttentionItemAuthenticatesSpecRevisionCommands(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		mutate      func(*specRevisionCardFixture)
+		omitCommand bool
+	}{
+		{"missing command", func(*specRevisionCardFixture) {}, true},
+		{"wrong action", func(fixture *specRevisionCardFixture) {
+			fixture.command.Action = domain.ActionDiscuss
+		}, false},
+		{"wrong message", func(fixture *specRevisionCardFixture) {
+			fixture.command.Message = "Different feedback."
+		}, false},
+		{"wrong iteration", func(fixture *specRevisionCardFixture) {
+			fixture.item.ID = "spec-approval-implementation-run-3"
+			currentProvenance := fixture.item.AgentClaims[0].Provenance
+			currentProvenance.ProducerInvocationID = "inv-elaborate-run-1-3"
+			fixture.item.AgentClaims[0].Artifact = "spec-implementation-run-3"
+			fixture.item.AgentClaims[0].Provenance = currentProvenance
+			fixture.item.AgentClaims[1].Provenance = currentProvenance
+			fixture.item.AgentClaims[2].Provenance = currentProvenance
+			fixture.artifacts[1].ID = "spec-implementation-run-3"
+			fixture.artifacts[1].Provenance = currentProvenance
+			fixture.artifacts[3].Provenance = currentProvenance
+			facts := *fixture.item.SpecRevision
+			facts.Iteration = 3
+			facts.PriorComments[0].Iteration = 2
+			fixture.item.SpecRevision = &facts
+		}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			s := openStore(t, store.Options{})
+			revision := specRevisionCardFact(t)
+			tc.mutate(&revision)
+			if err := recordSpecApprovalTerminal(ctx, s, revision.priorItem, 1); err != nil {
+				t.Fatal(err)
+			}
+			if err := recordSpecRevisionTerminal(ctx, s, revision.item); err != nil {
+				t.Fatal(err)
+			}
+			err := s.Write(ctx, func(tx *store.WriteTx) error {
+				for _, artifact := range revision.artifacts {
+					if err := tx.PutArtifact(ctx, artifact); err != nil {
+						return err
+					}
+				}
+				if err := tx.PutAttentionItem(ctx, revision.priorItem); err != nil {
+					return err
+				}
+				if !tc.omitCommand {
+					if err := tx.PutCommand(ctx, revision.command); err != nil {
+						return err
+					}
+				}
+				return tx.PutAttentionItem(ctx, revision.item)
+			})
+			if !errors.Is(err, domain.ErrParentKeyMismatch) {
+				t.Fatalf("put = %v, want ErrParentKeyMismatch", err)
+			}
+		})
+	}
+}
+
+func TestPutAttentionItemRejectsOmittedSpecRevisionHistory(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	revision := specRevisionCardFact(t)
+	commentBody := "Also require an authenticated source."
+	commentDigest := domain.Digest(contentaddr.Sum([]byte(commentBody)))
+	feedback, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "spec-feedback-revise-again", Type: domain.ArtifactKindResearch, Digest: commentDigest,
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-elaborate-run-1-2",
+			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := domain.NewCommand(domain.CommandInput{
+		CommandID: "revise-again", DeviceID: "device-1", ItemID: revision.item.ID,
+		ItemVersion: revision.item.ItemVersion, ArtifactDigests: revision.item.ArtifactDigests,
+		Action: domain.ActionRequestChanges, Message: commentBody,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentBody := "# Specification\n\nKeep the request valid, bound it to 1 MiB, and cite the source."
+	summaryText := domain.ClaimText{
+		MediaType: domain.MediaTypeTextMarkdown, Content: "Added the authenticated source.",
+	}
+	currentProvenance := revision.item.AgentClaims[0].Provenance
+	currentProvenance.ProducerInvocationID = "inv-elaborate-run-1-3"
+	current, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "spec-implementation-run-3", Type: domain.ArtifactKindSpecification,
+		Digest: domain.Digest(contentaddr.Sum([]byte(currentBody))), Provenance: currentProvenance,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addressals := []domain.SpecAddressalClaim{{CommentID: "revise-again", Response: "Added the source."}}
+	addressalsBody, err := json.Marshal(addressals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addressalsDigest := domain.Digest(contentaddr.Sum(addressalsBody))
+	addressalsArtifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "spec-addressals-implementation-run-3", Type: domain.ArtifactKindSpecification,
+		Digest: addressalsDigest, Provenance: currentProvenance,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := domain.RunID("run-1")
+	at := time.Date(2026, 8, 29, 21, 0, 0, 0, time.UTC)
+	forged, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "spec-approval-implementation-run-3", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
+		Type:    domain.AttentionSpecApproval, Priority: domain.PriorityNormal,
+		Reason: "a third specification is ready",
+		RequestedDecision: []domain.Action{
+			domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop,
+		},
+		AgentClaims: []domain.AgentClaim{
+			{
+				Label: "Specification", Artifact: current.ID, Digest: current.Digest,
+				Provenance: current.Provenance,
+				Text:       &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: currentBody},
+			},
+			{
+				Label: "freeside.summary", Artifact: "spec-summary-implementation-run-3",
+				Digest: summaryText.ComputeDigest(), Provenance: currentProvenance, Text: &summaryText,
+			},
+			{
+				Label: "Addressals", Artifact: addressalsArtifact.ID,
+				Digest: addressalsDigest, Provenance: currentProvenance,
+			},
+		},
+		SpecRevision: &domain.SpecRevisionFacts{
+			Iteration: 3, PriorItemID: revision.item.ID,
+			PriorSpecArtifactID: revision.artifacts[1].ID,
+			PriorSpecDigest:     revision.artifacts[1].Digest,
+			Diff:                domain.DeriveSpecDiff(revision.item.AgentClaims[0].Text.Content, currentBody),
+			PriorComments: []domain.SpecRevisionComment{{
+				CommentID: "revise-again", ArtifactID: feedback.ID, Digest: feedback.Digest,
+				RaisedOnItemID: revision.item.ID, Iteration: 2, Body: commentBody,
+			}},
+			ClaimedAddressals: addressals, AddressalsDigest: addressalsDigest,
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		CreatedAt: &at, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recordSpecApprovalTerminal(ctx, s, revision.priorItem, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordSpecRevisionTerminal(ctx, s, revision.item); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordSpecRevisionTerminal(ctx, s, forged); err != nil {
+		t.Fatal(err)
+	}
+	err = s.Write(ctx, func(tx *store.WriteTx) error {
+		for _, artifact := range append(revision.artifacts, current, feedback, addressalsArtifact) {
+			if err := tx.PutArtifact(ctx, artifact); err != nil {
+				return err
+			}
+		}
+		if err := tx.PutAttentionItem(ctx, revision.priorItem); err != nil {
+			return err
+		}
+		if err := tx.PutCommand(ctx, revision.command); err != nil {
+			return err
+		}
+		if err := tx.PutAttentionItem(ctx, revision.item); err != nil {
+			return err
+		}
+		if err := tx.PutCommand(ctx, command); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, forged)
+	})
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("put omitted history = %v, want ErrParentKeyMismatch", err)
+	}
+}
+
 func cardFactExecutionOutcome(admission domain.ExecutionAdmission) domain.ExecutionOutcome {
 	return domain.ExecutionOutcome{
 		InvocationID: admission.InvocationID, AdmissionID: admission.ID,
@@ -361,4 +773,190 @@ func storeCardFactItems(t *testing.T) map[string]domain.AttentionItem {
 		items[name] = item
 	}
 	return items
+}
+
+type specRevisionCardFixture struct {
+	item      domain.AttentionItem
+	priorItem domain.AttentionItem
+	command   domain.Command
+	artifacts []domain.Artifact
+}
+
+func specRevisionCardFact(t *testing.T) specRevisionCardFixture {
+	t.Helper()
+	priorProvenance := domain.Provenance{
+		ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-elaborate-run-1-1",
+		HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+	}
+	currentProvenance := priorProvenance
+	currentProvenance.ProducerInvocationID = "inv-elaborate-run-1-2"
+	priorBody := "# Specification\n\nKeep the request valid."
+	currentBody := "# Specification\n\nKeep the request valid and bound it to 1 MiB."
+	summaryText := domain.ClaimText{
+		MediaType: domain.MediaTypeTextMarkdown, Content: "Bound the request body to 1 MiB.",
+	}
+	prior, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "spec-implementation-run-1", Type: domain.ArtifactKindSpecification,
+		Digest:     domain.Digest(contentaddr.Sum([]byte(priorBody))),
+		Provenance: priorProvenance,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "spec-implementation-run-2", Type: domain.ArtifactKindSpecification,
+		Digest: domain.Digest(contentaddr.Sum([]byte(currentBody))), Provenance: currentProvenance,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commentBody := "Bound the request body."
+	commentDigest := domain.Digest(contentaddr.Sum([]byte(commentBody)))
+	feedback, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "spec-feedback-revise-spec", Type: domain.ArtifactKindResearch, Digest: commentDigest,
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-elaborate-run-1-1",
+			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addressals := []domain.SpecAddressalClaim{{CommentID: "revise-spec", Response: "Added a 1 MiB bound."}}
+	addressalsBody, err := json.Marshal(addressals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addressalsDigest := domain.Digest(contentaddr.Sum(addressalsBody))
+	addressalsArtifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "spec-addressals-implementation-run-2", Type: domain.ArtifactKindSpecification, Digest: addressalsDigest,
+		Provenance: currentProvenance,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := domain.RunID("run-1")
+	at := time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC)
+	priorItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "spec-approval-implementation-run-1", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
+		Type:    domain.AttentionSpecApproval, Priority: domain.PriorityNormal,
+		Reason: "the first specification is ready",
+		RequestedDecision: []domain.Action{
+			domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop,
+		},
+		AgentClaims: []domain.AgentClaim{{
+			Label: "Specification", Artifact: prior.ID, Digest: prior.Digest, Provenance: prior.Provenance,
+			Text: &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: priorBody},
+		}},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		CreatedAt: &at, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := domain.NewCommand(domain.CommandInput{
+		CommandID: "revise-spec", DeviceID: "device-1", ItemID: priorItem.ID,
+		ItemVersion: priorItem.ItemVersion, ArtifactDigests: priorItem.ArtifactDigests,
+		Action: domain.ActionRequestChanges, Message: commentBody,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "spec-approval-implementation-run-2", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
+		Type:    domain.AttentionSpecApproval, Priority: domain.PriorityNormal,
+		Reason: "a revised specification is ready",
+		RequestedDecision: []domain.Action{
+			domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop,
+		},
+		AgentClaims: []domain.AgentClaim{
+			{
+				Label: "Specification", Artifact: current.ID, Digest: current.Digest,
+				Provenance: current.Provenance,
+				Text:       &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: currentBody},
+			},
+			{
+				Label: "freeside.summary", Artifact: "spec-summary-implementation-run-2",
+				Digest: summaryText.ComputeDigest(), Provenance: currentProvenance, Text: &summaryText,
+			},
+			{Label: "Addressals", Artifact: addressalsArtifact.ID, Digest: addressalsDigest, Provenance: currentProvenance},
+		},
+		SpecRevision: &domain.SpecRevisionFacts{
+			Iteration: 2, PriorItemID: priorItem.ID,
+			PriorSpecArtifactID: prior.ID, PriorSpecDigest: prior.Digest,
+			Diff: domain.DeriveSpecDiff(priorBody, currentBody),
+			PriorComments: []domain.SpecRevisionComment{{
+				CommentID: "revise-spec", ArtifactID: feedback.ID, Digest: feedback.Digest,
+				RaisedOnItemID: priorItem.ID, Iteration: 1, Body: commentBody,
+			}},
+			ClaimedAddressals: addressals, AddressalsDigest: addressalsDigest,
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		CreatedAt: &at, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return specRevisionCardFixture{
+		item: item, priorItem: priorItem, command: command,
+		artifacts: []domain.Artifact{prior, current, feedback, addressalsArtifact},
+	}
+}
+
+func recordSpecRevisionTerminal(
+	ctx context.Context,
+	s *store.Store,
+	item domain.AttentionItem,
+) error {
+	if item.SpecRevision == nil {
+		return domain.ErrParentKeyMismatch
+	}
+	return recordSpecApprovalTerminal(ctx, s, item, item.SpecRevision.Iteration)
+}
+
+func recordSpecApprovalTerminal(
+	ctx context.Context,
+	s *store.Store,
+	item domain.AttentionItem,
+	iteration int,
+) error {
+	var specification *domain.AgentClaim
+	var summaryDigest *domain.Digest
+	for index := range item.AgentClaims {
+		switch item.AgentClaims[index].Label {
+		case "Specification":
+			specification = &item.AgentClaims[index]
+		case "freeside.summary":
+			summaryDigest = &item.AgentClaims[index].Digest
+		}
+	}
+	if specification == nil {
+		return domain.ErrParentKeyMismatch
+	}
+	terminal := struct {
+		InvocationID        domain.InvocationID `json:"invocation_id"`
+		Iteration           int                 `json:"iteration"`
+		Status              string              `json:"status"`
+		ResearchArtifactIDs []domain.ArtifactID `json:"research_artifact_ids"`
+		SpecArtifactID      *domain.ArtifactID  `json:"spec_artifact_id,omitempty"`
+		ApprovalItemID      *domain.ItemID      `json:"approval_item_id,omitempty"`
+		SummaryDigest       *domain.Digest      `json:"summary_digest,omitempty"`
+	}{
+		InvocationID: specification.Provenance.ProducerInvocationID,
+		Iteration:    iteration, Status: "completed",
+		ResearchArtifactIDs: []domain.ArtifactID{}, SpecArtifactID: &specification.Artifact,
+		ApprovalItemID: &item.ID, SummaryDigest: summaryDigest,
+	}
+	body, err := json.Marshal(terminal)
+	if err != nil {
+		return err
+	}
+	return s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, _, err := tx.RecordInbox(
+			ctx, string(terminal.InvocationID), "elaboration_stage_terminal", body,
+		)
+		return err
+	})
 }

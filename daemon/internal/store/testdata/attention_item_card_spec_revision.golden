@@ -1,0 +1,140 @@
+{
+  "id": "spec-approval-implementation-run-2",
+  "project_id": "proj-1",
+  "subject": {
+    "subject_type": "run",
+    "subject_id": "run-1",
+    "run_id": "run-1"
+  },
+  "type": "spec_approval",
+  "priority": "normal",
+  "reason": "a revised specification is ready",
+  "requested_decision": [
+    "approve",
+    "request_changes",
+    "discuss",
+    "stop"
+  ],
+  "recommendation": null,
+  "decision_surface": {
+    "epoch": 1,
+    "digest": "sha256:5ff7e2946ff3343c309b5a52e9bfe1bae78d5bc9baf89e6bf093f605f6341cc9"
+  },
+  "evidence_snapshot": null,
+  "agent_claims": [
+    {
+      "label": "Specification",
+      "artifact_id": "spec-implementation-run-2",
+      "digest": "sha256:be5a69b9b1d2f718ff8b8012f3d216db6a8cc567f42188e2def69205d27dc366",
+      "provenance": {
+        "producer_class": "agent",
+        "producer_invocation_id": "inv-elaborate-run-1-2",
+        "head_binding": "head_independent",
+        "verification_recipe_digest": null,
+        "sensitivity_class": "normal"
+      },
+      "text": {
+        "media_type": "text/markdown",
+        "content": "# Specification\n\nKeep the request valid and bound it to 1 MiB."
+      }
+    },
+    {
+      "label": "freeside.summary",
+      "artifact_id": "spec-summary-implementation-run-2",
+      "digest": "sha256:3952e583ff02ab1fd72543cf7317dfa49b5be283e0e59bb95c93db6be78d11af",
+      "provenance": {
+        "producer_class": "agent",
+        "producer_invocation_id": "inv-elaborate-run-1-2",
+        "head_binding": "head_independent",
+        "verification_recipe_digest": null,
+        "sensitivity_class": "normal"
+      },
+      "text": {
+        "media_type": "text/markdown",
+        "content": "Bound the request body to 1 MiB."
+      }
+    },
+    {
+      "label": "Addressals",
+      "artifact_id": "spec-addressals-implementation-run-2",
+      "digest": "sha256:c886feb1d99e9c544b34a21766e9fe14e1a0f054fddf73188a7239374ea07a37",
+      "provenance": {
+        "producer_class": "agent",
+        "producer_invocation_id": "inv-elaborate-run-1-2",
+        "head_binding": "head_independent",
+        "verification_recipe_digest": null,
+        "sensitivity_class": "normal"
+      },
+      "text": null
+    }
+  ],
+  "artifact_digests": [
+    "sha256:3952e583ff02ab1fd72543cf7317dfa49b5be283e0e59bb95c93db6be78d11af",
+    "sha256:be5a69b9b1d2f718ff8b8012f3d216db6a8cc567f42188e2def69205d27dc366",
+    "sha256:c886feb1d99e9c544b34a21766e9fe14e1a0f054fddf73188a7239374ea07a37"
+  ],
+  "pr_head_sha": "",
+  "pr_reference": null,
+  "readiness": null,
+  "yield_history": null,
+  "commit_plan_notice": null,
+  "base_freshness": null,
+  "readiness_invalidation": null,
+  "review_recovery_binding": null,
+  "codex_reenrollment_recovery_binding": null,
+  "review_configuration_recovery": null,
+  "finding_adjudication": null,
+  "display_names": null,
+  "billable_cost_so_far": null,
+  "execution_failure": null,
+  "publish_block": null,
+  "diff_stats": null,
+  "blocked_on": null,
+  "health_diagnostic": null,
+  "review_dispute": null,
+  "spec_revision": {
+    "iteration": 2,
+    "prior_item_id": "spec-approval-implementation-run-1",
+    "prior_spec_artifact_id": "spec-implementation-run-1",
+    "prior_spec_digest": "sha256:72340e5c9eedfef5a2421febf868e5690761c0a62c5591c7cae29fdf110fc38c",
+    "diff": {
+      "lines_added": 1,
+      "lines_removed": 1,
+      "unified": "@@ -1,3 +1,3 @@\n # Specification\n \n+Keep the request valid and bound it to 1 MiB.\n-Keep the request valid.",
+      "truncated": false
+    },
+    "prior_comments": [
+      {
+        "comment_id": "revise-spec",
+        "artifact_id": "spec-feedback-revise-spec",
+        "digest": "sha256:ad92f5e9e45ce46dc793a727121f61d2fd276557e14bdc5f991bf28cd1a2a670",
+        "raised_on_item_id": "spec-approval-implementation-run-1",
+        "iteration": 1,
+        "body": "Bound the request body."
+      }
+    ],
+    "claimed_addressals": [
+      {
+        "comment_id": "revise-spec",
+        "response": "Added a 1 MiB bound."
+      }
+    ],
+    "addressals_digest": "sha256:c886feb1d99e9c544b34a21766e9fe14e1a0f054fddf73188a7239374ea07a37"
+  },
+  "item_version": 1,
+  "interruption_class": "planned_gate",
+  "conversation_id": null,
+  "timing": {
+    "delivery_count": 0,
+    "first_submitted_at": null,
+    "first_accepted_at": null,
+    "first_opened_at": null,
+    "submit_to_first_open": null
+  },
+  "created_at": "2026-08-29T20:00:00Z",
+  "expires_when": null,
+  "decided_at": null,
+  "posture": null,
+  "blocking_supersession": null,
+  "status": "open"
+}

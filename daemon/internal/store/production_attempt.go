@@ -312,7 +312,7 @@ func authenticatesInitialApprovalClaims(
 	implementationRunID domain.RunID,
 	iteration int,
 ) bool {
-	if len(item.AgentClaims) != 1 && len(item.AgentClaims) != 2 {
+	if len(item.AgentClaims) < 1 || len(item.AgentClaims) > 3 {
 		return false
 	}
 	claim := item.AgentClaims[0]
@@ -322,7 +322,7 @@ func authenticatesInitialApprovalClaims(
 		return false
 	}
 	expectedDigests := []domain.Digest{specification.Digest}
-	if len(item.AgentClaims) == 2 {
+	if len(item.AgentClaims) >= 2 {
 		summary := item.AgentClaims[1]
 		expectedSummaryID := domain.ArtifactID(fmt.Sprintf(
 			"spec-summary-%s-%d", implementationRunID, iteration))
@@ -333,11 +333,23 @@ func authenticatesInitialApprovalClaims(
 			return false
 		}
 		expectedDigests = append(expectedDigests, summary.Digest)
-		slices.Sort(expectedDigests)
-		expectedDigests = slices.Compact(expectedDigests)
 	} else if summaryDigest != nil {
 		return false
 	}
+	if len(item.AgentClaims) == 3 {
+		addressals := item.AgentClaims[2]
+		expectedAddressalsID := domain.ArtifactID(fmt.Sprintf(
+			"spec-addressals-%s-%d", implementationRunID, iteration))
+		if item.SpecRevision == nil || addressals.Label != "Addressals" ||
+			addressals.Artifact != expectedAddressalsID || addressals.Text != nil ||
+			addressals.Digest != item.SpecRevision.AddressalsDigest ||
+			addressals.Provenance != specification.Provenance {
+			return false
+		}
+		expectedDigests = append(expectedDigests, addressals.Digest)
+	}
+	slices.Sort(expectedDigests)
+	expectedDigests = slices.Compact(expectedDigests)
 	return slices.Equal(item.ArtifactDigests, expectedDigests)
 }
 

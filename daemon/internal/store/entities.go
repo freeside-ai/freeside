@@ -423,6 +423,13 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	if err := tx.gateReviewDisputeItem(ctx, item); err != nil {
 		return fmt.Errorf("put attention item %q review dispute binding: %w", item.ID, err)
 	}
+	deferSpecRevisionGate := item.Type == domain.AttentionSpecApproval &&
+		item.SpecRevision == nil && len(item.AgentClaims) == 3
+	if !deferSpecRevisionGate {
+		if err := tx.gateSpecRevisionItem(ctx, item); err != nil {
+			return fmt.Errorf("put attention item %q spec revision binding: %w", item.ID, err)
+		}
+	}
 	if err := tx.gateBlockedItem(ctx, item); err != nil {
 		return fmt.Errorf("put attention item %q blocked binding: %w", item.ID, err)
 	}
@@ -469,6 +476,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 			if item.HealthDiagnostic == nil && decoded.HealthDiagnostic != nil {
 				item.HealthDiagnostic = decoded.HealthDiagnostic
 			}
+			if item.SpecRevision == nil && decoded.SpecRevision != nil {
+				item.SpecRevision = decoded.SpecRevision
+			}
 		}
 		// A constructor replay must also converge against a legacy row that
 		// predates card facts. Backfilling those rows is intentionally not a
@@ -495,6 +505,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 			if decoded.HealthDiagnostic == nil {
 				item.HealthDiagnostic = nil
 			}
+			if decoded.SpecRevision == nil {
+				item.SpecRevision = nil
+			}
 		}
 		body, err := encode(item)
 		if err != nil {
@@ -518,6 +531,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 			return fmt.Errorf("put attention item %q: %w", item.ID, err)
 		}
 		if oldCanonical == body {
+			if err := tx.gateSpecRevisionItem(ctx, item); err != nil {
+				return fmt.Errorf("put attention item %q spec revision binding: %w", item.ID, err)
+			}
 			return tx.putAttentionItemPRReference(ctx, item)
 		}
 		if err := domain.ValidateAttentionItemTransition(decoded, item); err != nil {
@@ -532,6 +548,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	}
 	if err := tx.gateBlockedItem(ctx, item); err != nil {
 		return fmt.Errorf("put attention item %q blocked binding: %w", item.ID, err)
+	}
+	if err := tx.gateSpecRevisionItem(ctx, item); err != nil {
+		return fmt.Errorf("put attention item %q spec revision binding: %w", item.ID, err)
 	}
 	surface, createdSurface, changedSurface, err := tx.prepareDecisionSurface(ctx, item, old)
 	if err != nil {
@@ -689,6 +708,259 @@ func (tx *ReadTx) gateReviewDisputeItem(
 	return domain.ErrParentKeyMismatch
 }
 
+// gateSpecRevisionItem authenticates an initial specification and re-derives
+// each typed revision projection from immutable artifacts, approval items, and
+// request_changes commands. The item body is a presentation carrier, not
+// authority to invent an approval object, diff, comment lineage, or addressal
+// binding.
+func (tx *ReadTx) gateSpecRevisionItem(ctx context.Context, item domain.AttentionItem) error {
+	if item.SpecRevision == nil {
+		if item.Type != domain.AttentionSpecApproval || !hasSpecificationClaim(item) {
+			return nil
+		}
+		return tx.gateInitialSpecificationItem(ctx, item)
+	}
+	facts := item.SpecRevision
+	itemSuffix, ok := strings.CutPrefix(string(item.ID), "spec-approval-")
+	currentPrefix, suffixOK := strings.CutSuffix(string(item.ID), fmt.Sprintf("-%d", facts.Iteration))
+	if !ok || itemSuffix == "" || !suffixOK || currentPrefix == "spec-approval-" ||
+		item.Subject.RunID == nil {
+		return domain.ErrParentKeyMismatch
+	}
+	currentClaim, err := tx.gateSpecificationClaim(
+		ctx, item, domain.ArtifactID("spec-"+itemSuffix), "",
+	)
+	if err != nil {
+		return err
+	}
+	if currentClaim.Provenance.ProducerInvocationID != domain.InvocationID(fmt.Sprintf(
+		"inv-elaborate-%s-%d", *item.Subject.RunID, facts.Iteration,
+	)) {
+		return domain.ErrParentKeyMismatch
+	}
+	currentArtifact, err := tx.GetArtifact(ctx, currentClaim.Artifact)
+	if err != nil {
+		return err
+	}
+	terminalEntry, err := tx.GetInbox(
+		ctx, string(currentClaim.Provenance.ProducerInvocationID),
+	)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	terminal, err := decodeBlockedWaitElaborationTerminal(terminalEntry)
+	if err != nil || terminal.Iteration != facts.Iteration ||
+		terminal.SpecArtifactID == nil || *terminal.SpecArtifactID != currentArtifact.ID ||
+		terminal.ApprovalItemID == nil || *terminal.ApprovalItemID != item.ID ||
+		!blockedWaitTerminalIdentityMatches(terminal, item, currentArtifact) ||
+		len(item.AgentClaims) != 3 ||
+		item.AgentClaims[0].Label != "Specification" ||
+		item.AgentClaims[1].Label != "freeside.summary" ||
+		item.AgentClaims[2].Label != "Addressals" ||
+		!blockedWaitTerminalSummaryMatches(terminal, item, currentArtifact) {
+		return domain.ErrParentKeyMismatch
+	}
+	priorIteration := facts.PriorComments[len(facts.PriorComments)-1].Iteration
+	expectedPriorItemID := domain.ItemID(fmt.Sprintf("%s-%d", currentPrefix, priorIteration))
+	if facts.PriorItemID != expectedPriorItemID {
+		return domain.ErrParentKeyMismatch
+	}
+	priorItem, err := tx.getAttentionItemBindingRecord(ctx, facts.PriorItemID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	if priorItem.Type != domain.AttentionSpecApproval ||
+		priorItem.ProjectID != item.ProjectID ||
+		priorItem.Subject.Type != item.Subject.Type || priorItem.Subject.ID != item.Subject.ID ||
+		!sameOptionalComparable(priorItem.Subject.RunID, item.Subject.RunID) {
+		return domain.ErrParentKeyMismatch
+	}
+	if priorItem.SpecRevision == nil {
+		if len(facts.PriorComments) != 1 {
+			return domain.ErrParentKeyMismatch
+		}
+	} else if len(facts.PriorComments) != len(priorItem.SpecRevision.PriorComments)+1 ||
+		!slices.Equal(
+			facts.PriorComments[:len(priorItem.SpecRevision.PriorComments)],
+			priorItem.SpecRevision.PriorComments,
+		) {
+		return domain.ErrParentKeyMismatch
+	}
+	// Bound recursive authentication before descending. Each prior revision
+	// must have exactly one fewer comment, and the public fact cap therefore
+	// limits even a forged persisted chain to MaxSpecRevisionComments frames.
+	if err := tx.gateSpecRevisionItem(ctx, priorItem); err != nil {
+		return err
+	}
+	priorSuffix, ok := strings.CutPrefix(string(priorItem.ID), "spec-approval-")
+	if !ok || priorSuffix == "" || facts.PriorSpecArtifactID != domain.ArtifactID("spec-"+priorSuffix) {
+		return domain.ErrParentKeyMismatch
+	}
+	priorClaim, err := tx.gateSpecificationClaim(
+		ctx, priorItem, facts.PriorSpecArtifactID, facts.PriorSpecDigest,
+	)
+	if err != nil {
+		return err
+	}
+	if priorClaim.Provenance.ProducerInvocationID != domain.InvocationID(fmt.Sprintf(
+		"inv-elaborate-%s-%d", *item.Subject.RunID, priorIteration,
+	)) {
+		return domain.ErrParentKeyMismatch
+	}
+	if facts.Diff != domain.DeriveSpecDiff(priorClaim.Text.Content, currentClaim.Text.Content) {
+		return domain.ErrParentKeyMismatch
+	}
+	for _, comment := range facts.PriorComments {
+		artifact, err := tx.GetArtifact(ctx, comment.ArtifactID)
+		if err != nil {
+			return err
+		}
+		if artifact.Type != domain.ArtifactKindResearch || artifact.Digest != comment.Digest {
+			return domain.ErrParentKeyMismatch
+		}
+		command, err := tx.GetCommand(ctx, comment.CommentID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return domain.ErrParentKeyMismatch
+			}
+			return err
+		}
+		expectedItemID := domain.ItemID(fmt.Sprintf("%s-%d", currentPrefix, comment.Iteration))
+		if command.CommandID != comment.CommentID ||
+			command.Action != domain.ActionRequestChanges ||
+			command.ItemID != expectedItemID || comment.RaisedOnItemID != expectedItemID ||
+			strings.TrimSpace(command.Message) != comment.Body {
+			return domain.ErrParentKeyMismatch
+		}
+	}
+	implementationRunID, ok := strings.CutPrefix(currentPrefix, "spec-approval-")
+	if !ok || implementationRunID == "" {
+		return domain.ErrParentKeyMismatch
+	}
+	expectedAddressalsID := domain.ArtifactID(fmt.Sprintf(
+		"spec-addressals-%s-%d", implementationRunID, facts.Iteration,
+	))
+	var addressalsClaim *domain.AgentClaim
+	for index := range item.AgentClaims {
+		claim := &item.AgentClaims[index]
+		if claim.Label != "Addressals" {
+			continue
+		}
+		if addressalsClaim != nil {
+			return domain.ErrParentKeyMismatch
+		}
+		addressalsClaim = claim
+	}
+	if addressalsClaim == nil || addressalsClaim.Artifact != expectedAddressalsID ||
+		addressalsClaim.Digest != facts.AddressalsDigest ||
+		addressalsClaim.Provenance != currentClaim.Provenance {
+		return domain.ErrParentKeyMismatch
+	}
+	artifact, err := tx.GetArtifact(ctx, addressalsClaim.Artifact)
+	if err != nil {
+		return err
+	}
+	if artifact.Type != domain.ArtifactKindSpecification ||
+		artifact.Digest != addressalsClaim.Digest ||
+		artifact.Provenance != currentClaim.Provenance {
+		return domain.ErrParentKeyMismatch
+	}
+	return nil
+}
+
+func hasSpecificationClaim(item domain.AttentionItem) bool {
+	return slices.ContainsFunc(item.AgentClaims, func(claim domain.AgentClaim) bool {
+		return claim.Label == "Specification"
+	})
+}
+
+func (tx *ReadTx) gateInitialSpecificationItem(
+	ctx context.Context, item domain.AttentionItem,
+) error {
+	if len(item.AgentClaims) < 1 || len(item.AgentClaims) > 2 ||
+		item.AgentClaims[0].Label != "Specification" ||
+		len(item.AgentClaims) == 2 && item.AgentClaims[1].Label != "freeside.summary" {
+		return domain.ErrParentKeyMismatch
+	}
+	claim, err := tx.gateSpecificationArtifactClaim(ctx, item, "", "")
+	if err != nil {
+		return err
+	}
+	artifact, err := tx.GetArtifact(ctx, claim.Artifact)
+	if err != nil {
+		return err
+	}
+	entry, err := tx.GetInbox(ctx, string(claim.Provenance.ProducerInvocationID))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	terminal, err := decodeBlockedWaitElaborationTerminal(entry)
+	if err != nil || terminal.SpecArtifactID == nil || *terminal.SpecArtifactID != artifact.ID ||
+		terminal.ApprovalItemID == nil || *terminal.ApprovalItemID != item.ID ||
+		!blockedWaitTerminalIdentityMatches(terminal, item, artifact) ||
+		!blockedWaitTerminalSummaryMatches(terminal, item, artifact) {
+		return domain.ErrParentKeyMismatch
+	}
+	return nil
+}
+
+func (tx *ReadTx) gateSpecificationClaim(
+	ctx context.Context,
+	item domain.AttentionItem,
+	expectedID domain.ArtifactID,
+	expectedDigest domain.Digest,
+) (domain.AgentClaim, error) {
+	claim, err := tx.gateSpecificationArtifactClaim(ctx, item, expectedID, expectedDigest)
+	if err != nil {
+		return domain.AgentClaim{}, err
+	}
+	if claim.Text == nil || claim.Text.MediaType != domain.MediaTypeTextMarkdown {
+		return domain.AgentClaim{}, domain.ErrParentKeyMismatch
+	}
+	return claim, nil
+}
+
+func (tx *ReadTx) gateSpecificationArtifactClaim(
+	ctx context.Context,
+	item domain.AttentionItem,
+	expectedID domain.ArtifactID,
+	expectedDigest domain.Digest,
+) (domain.AgentClaim, error) {
+	var matched *domain.AgentClaim
+	for index := range item.AgentClaims {
+		claim := &item.AgentClaims[index]
+		if claim.Label != "Specification" {
+			continue
+		}
+		if matched != nil {
+			return domain.AgentClaim{}, domain.ErrParentKeyMismatch
+		}
+		matched = claim
+	}
+	if matched == nil || expectedID != "" && matched.Artifact != expectedID ||
+		expectedDigest != "" && matched.Digest != expectedDigest {
+		return domain.AgentClaim{}, domain.ErrParentKeyMismatch
+	}
+	artifact, err := tx.GetArtifact(ctx, matched.Artifact)
+	if err != nil {
+		return domain.AgentClaim{}, err
+	}
+	if artifact.Type != domain.ArtifactKindSpecification ||
+		artifact.Digest != matched.Digest || artifact.Provenance != matched.Provenance {
+		return domain.AgentClaim{}, domain.ErrParentKeyMismatch
+	}
+	return *matched, nil
+}
+
 // gateBlockedItem authenticates a spec-approval wait against the referenced
 // immutable item record. Current status is deliberately irrelevant: resolving
 // the approval ends the wait but does not rewrite the historical wait origin.
@@ -817,7 +1089,8 @@ func blockedWaitTerminalSummaryMatches(
 	if len(approval.AgentClaims) == 1 {
 		return terminal.SummaryDigest == nil
 	}
-	if len(approval.AgentClaims) != 2 || terminal.SummaryDigest == nil {
+	if len(approval.AgentClaims) != 2 && len(approval.AgentClaims) != 3 ||
+		terminal.SummaryDigest == nil {
 		return false
 	}
 	for _, claim := range approval.AgentClaims {
@@ -1030,6 +1303,9 @@ func (tx *ReadTx) scanAttentionItemHistory(ctx context.Context, sc scanner) (dom
 	if err := tx.gateReviewDisputeItem(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
+	if err := tx.gateSpecRevisionItem(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
 	if err := tx.gateBlockedItem(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
@@ -1062,6 +1338,9 @@ func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (do
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	if err := tx.gateReviewDisputeItem(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	if err := tx.gateSpecRevisionItem(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	if err := tx.gateBlockedItem(ctx, item); err != nil {

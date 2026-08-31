@@ -55,6 +55,7 @@
     ],
     "completion_evidence": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
   },
+  "spec_revision": null,
   "item_version": 1,
   "interruption_class": "exceptional",
   "conversation_id": null,

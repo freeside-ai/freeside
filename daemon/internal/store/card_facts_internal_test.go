@@ -2,14 +2,264 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
+
+func TestPutAttentionItemRegatesRestoredSpecRevision(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st, err := Open(ctx, t.TempDir()+"/spec-revision.db", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	item, priorItem, command, artifacts := internalSpecRevisionFixture(t)
+	if err := recordInternalSpecApprovalTerminal(ctx, st, priorItem, 1); err != nil {
+		t.Fatalf("record initial specification terminal: %v", err)
+	}
+	if err := recordInternalSpecRevisionTerminal(ctx, st, item); err != nil {
+		t.Fatalf("record spec revision terminal: %v", err)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		for _, artifact := range artifacts {
+			if err := tx.PutArtifact(ctx, artifact); err != nil {
+				return err
+			}
+		}
+		if err := tx.PutAttentionItem(ctx, priorItem); err != nil {
+			return err
+		}
+		if err := tx.PutCommand(ctx, command); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatalf("seed revision: %v", err)
+	}
+	if _, err := st.db.ExecContext(ctx, `
+		UPDATE attention_items
+		SET body = json_set(body, '$.spec_revision.diff.lines_added', 9)
+		WHERE id = ?`, item.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	updated := item
+	updated.ItemVersion++
+	updated.Status = domain.StatusSuperseded
+	updated.SpecRevision = nil
+	err = st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, updated) })
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("update carrying restored forged revision = %v, want ErrParentKeyMismatch", err)
+	}
+}
+
+func TestPutAttentionItemRestoresValidSpecRevision(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st, err := Open(ctx, t.TempDir()+"/spec-revision.db", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	item, priorItem, command, artifacts := internalSpecRevisionFixture(t)
+	if err := recordInternalSpecApprovalTerminal(ctx, st, priorItem, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordInternalSpecRevisionTerminal(ctx, st, item); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		for _, artifact := range artifacts {
+			if err := tx.PutArtifact(ctx, artifact); err != nil {
+				return err
+			}
+		}
+		if err := tx.PutAttentionItem(ctx, priorItem); err != nil {
+			return err
+		}
+		if err := tx.PutCommand(ctx, command); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatalf("seed revision: %v", err)
+	}
+
+	updated := item
+	updated.ItemVersion++
+	updated.Status = domain.StatusSuperseded
+	updated.SpecRevision = nil
+	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, updated) }); err != nil {
+		t.Fatalf("update carrying restored revision: %v", err)
+	}
+}
+
+func internalSpecRevisionFixture(
+	t *testing.T,
+) (domain.AttentionItem, domain.AttentionItem, domain.Command, []domain.Artifact) {
+	t.Helper()
+	priorProvenance := domain.Provenance{
+		ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-elaborate-run-1-1",
+		HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+	}
+	currentProvenance := priorProvenance
+	currentProvenance.ProducerInvocationID = "inv-elaborate-run-1-2"
+	priorBody := "# Specification\n\nKeep the request valid."
+	currentBody := "# Specification\n\nKeep the request valid and bound it to 1 MiB."
+	summaryText := domain.ClaimText{
+		MediaType: domain.MediaTypeTextMarkdown, Content: "Bound the request body to 1 MiB.",
+	}
+	artifact := func(id domain.ArtifactID, kind domain.ArtifactKind, body string, p domain.Provenance) domain.Artifact {
+		t.Helper()
+		value, err := domain.NewArtifact(domain.ArtifactInput{
+			ID: id, Type: kind, Digest: domain.Digest(contentaddr.Sum([]byte(body))), Provenance: p,
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	prior := artifact("spec-implementation-run-1", domain.ArtifactKindSpecification, priorBody, priorProvenance)
+	current := artifact("spec-implementation-run-2", domain.ArtifactKindSpecification, currentBody, currentProvenance)
+	commentBody := "Bound the request body."
+	feedbackProvenance := domain.Provenance{
+		ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-elaborate-run-1-1",
+		HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+	}
+	feedback := artifact("spec-feedback-revise-spec", domain.ArtifactKindResearch, commentBody, feedbackProvenance)
+	addressals := []domain.SpecAddressalClaim{{CommentID: "revise-spec", Response: "Added a 1 MiB bound."}}
+	addressalsBody, err := json.Marshal(addressals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addressalsArtifact := artifact(
+		"spec-addressals-implementation-run-2", domain.ArtifactKindSpecification,
+		string(addressalsBody), currentProvenance,
+	)
+	runID := domain.RunID("run-1")
+	at := time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC)
+	priorItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "spec-approval-implementation-run-1", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
+		Type:    domain.AttentionSpecApproval, Priority: domain.PriorityNormal,
+		Reason: "the first specification is ready",
+		RequestedDecision: []domain.Action{
+			domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop,
+		},
+		AgentClaims: []domain.AgentClaim{{
+			Label: "Specification", Artifact: prior.ID, Digest: prior.Digest, Provenance: prior.Provenance,
+			Text: &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: priorBody},
+		}},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		CreatedAt: &at, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := domain.NewCommand(domain.CommandInput{
+		CommandID: "revise-spec", DeviceID: "device-1", ItemID: priorItem.ID,
+		ItemVersion: priorItem.ItemVersion, ArtifactDigests: priorItem.ArtifactDigests,
+		Action: domain.ActionRequestChanges, Message: commentBody,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "spec-approval-implementation-run-2", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
+		Type:    domain.AttentionSpecApproval, Priority: domain.PriorityNormal,
+		Reason: "a revised specification is ready", RequestedDecision: []domain.Action{domain.ActionApprove},
+		AgentClaims: []domain.AgentClaim{
+			{
+				Label: "Specification", Artifact: current.ID, Digest: current.Digest,
+				Provenance: current.Provenance,
+				Text:       &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: currentBody},
+			},
+			{
+				Label: summaryEvidenceLabel, Artifact: "spec-summary-implementation-run-2",
+				Digest: summaryText.ComputeDigest(), Provenance: currentProvenance, Text: &summaryText,
+			},
+			{
+				Label: "Addressals", Artifact: addressalsArtifact.ID,
+				Digest: addressalsArtifact.Digest, Provenance: currentProvenance,
+			},
+		},
+		SpecRevision: &domain.SpecRevisionFacts{
+			Iteration: 2, PriorItemID: priorItem.ID,
+			PriorSpecArtifactID: prior.ID, PriorSpecDigest: prior.Digest,
+			Diff: domain.DeriveSpecDiff(priorBody, currentBody),
+			PriorComments: []domain.SpecRevisionComment{{
+				CommentID: "revise-spec", ArtifactID: feedback.ID, Digest: feedback.Digest,
+				RaisedOnItemID: priorItem.ID, Iteration: 1, Body: commentBody,
+			}},
+			ClaimedAddressals: addressals, AddressalsDigest: addressalsArtifact.Digest,
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		CreatedAt: &at, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return item, priorItem, command, []domain.Artifact{prior, current, feedback, addressalsArtifact}
+}
+
+func recordInternalSpecRevisionTerminal(
+	ctx context.Context,
+	st *Store,
+	item domain.AttentionItem,
+) error {
+	if item.SpecRevision == nil {
+		return domain.ErrParentKeyMismatch
+	}
+	return recordInternalSpecApprovalTerminal(ctx, st, item, item.SpecRevision.Iteration)
+}
+
+func recordInternalSpecApprovalTerminal(
+	ctx context.Context,
+	st *Store,
+	item domain.AttentionItem,
+	iteration int,
+) error {
+	var specification *domain.AgentClaim
+	var summaryDigest *domain.Digest
+	for index := range item.AgentClaims {
+		switch item.AgentClaims[index].Label {
+		case "Specification":
+			specification = &item.AgentClaims[index]
+		case summaryEvidenceLabel:
+			summaryDigest = &item.AgentClaims[index].Digest
+		}
+	}
+	if specification == nil {
+		return domain.ErrParentKeyMismatch
+	}
+	terminal := blockedWaitElaborationTerminal{
+		InvocationID: specification.Provenance.ProducerInvocationID,
+		Iteration:    iteration, Status: "completed",
+		ResearchArtifactIDs: []domain.ArtifactID{}, SpecArtifactID: &specification.Artifact,
+		ApprovalItemID: &item.ID, SummaryDigest: summaryDigest,
+	}
+	body, err := json.Marshal(terminal)
+	if err != nil {
+		return err
+	}
+	return st.WriteInternal(ctx, func(tx *InternalTx) error {
+		_, _, err := tx.RecordInbox(
+			ctx, string(terminal.InvocationID), blockedWaitElaborationTerminalKind, body,
+		)
+		return err
+	})
+}
 
 func TestAttentionItemReadAuthenticatesReviewDisputeBinding(t *testing.T) {
 	t.Parallel()
@@ -171,6 +421,15 @@ func TestAttentionItemReadAuthenticatesBlockedWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	terminalBody := []byte(`{"invocation_id":"inv-elaborate-run-blocked-card-fact-1","iteration":1,"status":"completed","research_artifact_ids":[],"spec_artifact_id":"spec-implementation-run-1","approval_item_id":"spec-approval-implementation-run-1"}`)
+	if err := st.WriteInternal(ctx, func(tx *InternalTx) error {
+		_, _, err := tx.RecordInbox(
+			ctx, string(invocationID), blockedWaitElaborationTerminalKind, terminalBody,
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		if err := tx.PutRun(ctx, run); err != nil {
 			return err
@@ -182,15 +441,6 @@ func TestAttentionItemReadAuthenticatesBlockedWait(t *testing.T) {
 			return err
 		}
 		return tx.PutAttentionItem(ctx, blocked)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	terminalBody := []byte(`{"invocation_id":"inv-elaborate-run-blocked-card-fact-1","iteration":1,"status":"completed","research_artifact_ids":[],"spec_artifact_id":"spec-implementation-run-1","approval_item_id":"spec-approval-implementation-run-1"}`)
-	if err := st.WriteInternal(ctx, func(tx *InternalTx) error {
-		_, _, err := tx.RecordInbox(
-			ctx, string(invocationID), blockedWaitElaborationTerminalKind, terminalBody,
-		)
-		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
