@@ -2072,6 +2072,108 @@ components:
           type: string
           minLength: 1
 
+    SpecDiff:
+      type: object
+      description: A bounded unified line diff and its complete line counts.
+      additionalProperties: false
+      required: [lines_added, lines_removed, unified, truncated]
+      properties:
+        lines_added:
+          type: integer
+          minimum: 0
+        lines_removed:
+          type: integer
+          minimum: 0
+        unified:
+          type: string
+          minLength: 1
+          maxLength: 65536
+        truncated:
+          type: boolean
+
+    SpecRevisionComment:
+      type: object
+      description: One durable operator comment that caused a specification revision.
+      additionalProperties: false
+      required: [comment_id, artifact_id, digest, raised_on_item_id, iteration, body]
+      properties:
+        comment_id:
+          type: string
+          minLength: 1
+        artifact_id:
+          type: string
+          minLength: 1
+        digest:
+          $ref: "#/components/schemas/Digest"
+        raised_on_item_id:
+          type: string
+          minLength: 1
+        iteration:
+          type: integer
+          minimum: 1
+        body:
+          type: string
+          minLength: 1
+          maxLength: 8192
+
+    SpecAddressalClaim:
+      type: object
+      description: The agent's claimed response to one known operator comment.
+      additionalProperties: false
+      required: [comment_id, response]
+      properties:
+        comment_id:
+          type: string
+          minLength: 1
+        response:
+          type: string
+          minLength: 1
+          maxLength: 8192
+
+    SpecRevisionFacts:
+      type: object
+      description: >
+        Authenticated facts for a revised specification approval card. Comment
+        bodies and claimed addressals are bound to durable artifact digests;
+        the claims are displayed as agent statements, not verified outcomes.
+      additionalProperties: false
+      required:
+        - iteration
+        - prior_item_id
+        - prior_spec_artifact_id
+        - prior_spec_digest
+        - diff
+        - prior_comments
+        - claimed_addressals
+        - addressals_digest
+      properties:
+        iteration:
+          type: integer
+          minimum: 2
+        prior_item_id:
+          type: string
+          minLength: 1
+        prior_spec_artifact_id:
+          type: string
+          minLength: 1
+        prior_spec_digest:
+          $ref: "#/components/schemas/Digest"
+        diff:
+          $ref: "#/components/schemas/SpecDiff"
+        prior_comments:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items:
+            $ref: "#/components/schemas/SpecRevisionComment"
+        claimed_addressals:
+          type: array
+          maxItems: 64
+          items:
+            $ref: "#/components/schemas/SpecAddressalClaim"
+        addressals_digest:
+          $ref: "#/components/schemas/Digest"
+
     BlockedWaitKind:
       type: string
       description: The authority or event a blocked work unit is waiting on.
@@ -2174,6 +2276,7 @@ components:
         - blocked_on
         - health_diagnostic
         - review_dispute
+        - spec_revision
         - item_version
         - interruption_class
         - conversation_id
@@ -2381,6 +2484,13 @@ components:
           nullable: true
           allOf:
             - $ref: "#/components/schemas/ReviewDisputeBinding"
+        spec_revision:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/SpecRevisionFacts"
+          description: >
+            Authenticated revision facts for a revised spec_approval item;
+            null on the initial approval and every other item type.
         item_version:
           type: integer
           minimum: 1
@@ -2539,6 +2649,7 @@ components:
         blocked_on: null
         health_diagnostic: null
         review_dispute: null
+        spec_revision: null
         item_version: 1
         interruption_class: "planned_gate"
         conversation_id: "conv-1"

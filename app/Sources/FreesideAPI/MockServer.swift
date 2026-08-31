@@ -92,6 +92,7 @@ public actor MockServer {
     private var commandsByID: [String: NormalizedCommand] = [:]
     private var resultsByCommandID: [String: Components.Schemas.CommandResult] = [:]
     private var pendingSpecificationReplacements: [String: Components.Schemas.AttentionItemSnapshot] = [:]
+    private var pendingSpecificationComments: [String: String] = [:]
     private var proposalFactsByItemID: [String: Components.Schemas.RunProposalFactsSnapshot] = [:]
     private var proposalSnoozesByItemID: [String: Date] = [:]
     private var currentTime = Date(timeIntervalSince1970: 1_786_502_645)
@@ -377,6 +378,7 @@ public actor MockServer {
         commandsByID.removeAll()
         resultsByCommandID.removeAll()
         pendingSpecificationReplacements.removeAll()
+        pendingSpecificationComments.removeAll()
         proposalFactsByItemID.removeAll()
         proposalSnoozesByItemID.removeAll()
     }
@@ -1093,6 +1095,7 @@ public actor MockServer {
             itemsByID[payload.item_id] = concluded(current, as: status)
             if payload.action == .request_changes {
                 pendingSpecificationReplacements[command.command_id] = current
+                pendingSpecificationComments[command.command_id] = payload.message
             }
         case .discusses:
             let conversationID = current.item.conversation_id ?? "conv-\(payload.item_id)"
@@ -1310,17 +1313,97 @@ public actor MockServer {
         for commandID in pendingSpecificationReplacements.keys.sorted() {
             guard var replacement = pendingSpecificationReplacements.removeValue(forKey: commandID)
             else { continue }
+            let priorItemID = replacement.item.id
+            let comment = pendingSpecificationComments.removeValue(forKey: commandID) ?? ""
+            let priorRevision = replacement.item.spec_revision?.value1
+            let iteration = (priorRevision?.iteration ?? 1) + 1
+            let commentID = commandID
+            let response = "Updated the specification to address this comment."
+            let addressals = [
+                Components.Schemas.SpecAddressalClaim(
+                    comment_id: commentID, response: response)
+            ]
+            let addressalsDigest = MockContractValidation.addressalsDigest(addressals)
+            guard
+                let specificationIndex = replacement.item.agent_claims.firstIndex(where: {
+                    $0.label == "Specification"
+                }),
+                let priorSpecification = replacement.item.agent_claims[specificationIndex].text?
+                    .content
+            else { continue }
+            let priorSpecClaim = replacement.item.agent_claims[specificationIndex]
+            let revisionLine = "Revision response: \(response)"
+            let revisedSpecification = priorSpecification + "\n" + revisionLine
+            let priorLineCount = priorSpecification.split(
+                separator: "\n", omittingEmptySubsequences: false
+            ).count
+            let unifiedDiff =
+                "@@ -1,\(priorLineCount) +1,\(priorLineCount + 1) @@\n"
+                + priorSpecification.split(separator: "\n", omittingEmptySubsequences: false)
+                .map { " \($0)" }.joined(separator: "\n")
+                + "\n+\(revisionLine)"
+            var comments = priorRevision?.prior_comments ?? []
+            comments.append(
+                .init(
+                    comment_id: commentID,
+                    artifact_id: "spec-feedback-\(commentID)",
+                    digest: MockContractValidation.sha256Digest(of: comment),
+                    raised_on_item_id: priorItemID,
+                    iteration: iteration - 1,
+                    body: comment))
             revision += 1
             replacement.as_of_revision = revision
             replacement.entity_version = 1
             replacement.item.id = Self.specificationReplacementID(
                 for: replacement, commandID: commandID)
-            replacement.item.item_version += 1
+            replacement.item.item_version = 1
             replacement.item.reason = "The revised specification is ready for approval"
             replacement.item.status = .open
             replacement.item.decided_at = nil
             replacement.item.created_at = currentTime
             replacement.item.conversation_id = nil
+            replacement.item.spec_revision = .init(
+                value1: .init(
+                    iteration: iteration,
+                    prior_item_id: priorItemID,
+                    prior_spec_artifact_id: priorSpecClaim.artifact_id,
+                    prior_spec_digest: priorSpecClaim.digest,
+                    diff: .init(
+                        lines_added: 1,
+                        lines_removed: 0,
+                        unified: unifiedDiff,
+                        truncated: false),
+                    prior_comments: comments,
+                    claimed_addressals: addressals,
+                    addressals_digest: addressalsDigest))
+            let specificationClaim = Components.Schemas.AgentClaim(
+                label: "Specification",
+                artifact_id: "spec-mock-\(iteration)",
+                digest: MockContractValidation.sha256Digest(of: revisedSpecification),
+                provenance: priorSpecClaim.provenance,
+                text: .init(media_type: .text_sol_markdown, content: revisedSpecification))
+            let summary = replacement.item.reason
+            let summaryClaim = Components.Schemas.AgentClaim(
+                label: "freeside.summary",
+                artifact_id: "spec-summary-mock-\(iteration)",
+                digest: MockContractValidation.sha256Digest(of: summary),
+                provenance: priorSpecClaim.provenance,
+                text: .init(media_type: .text_sol_markdown, content: summary))
+            let addressalsClaim = Components.Schemas.AgentClaim(
+                label: "Addressals",
+                artifact_id: "spec-addressals-mock-\(iteration)",
+                digest: addressalsDigest,
+                provenance: priorSpecClaim.provenance)
+            replacement.item.agent_claims = [
+                specificationClaim,
+                summaryClaim,
+                addressalsClaim,
+            ]
+            replacement.item.artifact_digests = Array(
+                Set(
+                    replacement.item.evidence_snapshot.map(\.digest)
+                        + replacement.item.agent_claims.map(\.digest))
+            ).sorted()
             itemsByID[replacement.item.id] = replacement
         }
         for id in conversationsByID.keys.sorted() {
@@ -1424,6 +1507,7 @@ public actor MockServer {
             {
                 return "\(prefix)\(iteration + 1)"
             }
+            return "\(prefix)2"
         }
         return snapshot.item.id + "/revision/" + commandID
     }

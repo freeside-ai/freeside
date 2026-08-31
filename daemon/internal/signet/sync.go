@@ -1599,6 +1599,12 @@ func normalizeAttentionItem(item domain.AttentionItem) domain.AttentionItem {
 		binding.FindingIDs = nonNilSlice(slices.Clone(binding.FindingIDs))
 		item.ReviewDispute = &binding
 	}
+	if item.SpecRevision != nil {
+		facts := *item.SpecRevision
+		facts.PriorComments = nonNilSlice(slices.Clone(facts.PriorComments))
+		facts.ClaimedAddressals = nonNilSlice(slices.Clone(facts.ClaimedAddressals))
+		item.SpecRevision = &facts
+	}
 	return item
 }
 
