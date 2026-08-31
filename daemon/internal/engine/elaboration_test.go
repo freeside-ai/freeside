@@ -870,7 +870,7 @@ func TestElaborationResearchApprovalStartsDigestBoundImplementation(t *testing.T
 		Summary: "The revised implementation plan is ready.",
 		Body:    "# Approved Specification\n\nImplement and test the bounded workflow before provider start.",
 		Addressals: []elaborate.Addressal{{
-			Comment: comment, Response: "Added the explicit pre-start enforcement and regression matrix.",
+			CommentID: "revise-researched-spec", Response: "Added the explicit pre-start enforcement and regression matrix.",
 		}},
 	}}); err != nil {
 		t.Fatal(err)
@@ -905,6 +905,12 @@ func TestElaborationResearchApprovalStartsDigestBoundImplementation(t *testing.T
 			thirdPrompt.digests, thirdPrompt.bodies)
 	}
 	item, snapshot = f.item(t, "spec-approval-implementation-run-3")
+	if item.SpecRevision == nil || item.SpecRevision.PriorItemID != itemID ||
+		len(item.SpecRevision.PriorComments) != 1 ||
+		item.SpecRevision.PriorComments[0].RaisedOnItemID != itemID ||
+		item.SpecRevision.PriorComments[0].Iteration != 2 {
+		t.Fatalf("researched revision lineage = %+v", item.SpecRevision)
+	}
 	implementationID := productionInvocationID("implementation-run")
 	driver.Script(implementationID, execfake.StageScript{
 		PendingInspects: 1, Outcome: execfake.OutcomeComplete,
@@ -1143,7 +1149,7 @@ func TestElaborationSpecificationDiscussionRepliesAndPreservesApproval(t *testin
 		Specification: &elaborate.Specification{
 			Summary:    "The revised implementation plan is ready.",
 			Body:       "# Approved Specification\n\nImplement the bounded, replay-safe workflow.",
-			Addressals: []elaborate.Addressal{{Comment: feedback, Response: "Named the replay invariant."}},
+			Addressals: []elaborate.Addressal{{CommentID: "revise-after-discussion", Response: "Named the replay invariant."}},
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -1949,7 +1955,7 @@ func TestElaborationRequestChangesCarriesFeedbackAndAddressals(t *testing.T) {
 	secondID := elaborationInvocationID("elaboration-run", 2)
 	if err := elaboratefake.Script(driver, secondID, 0, 0, elaborate.Output{Specification: &elaborate.Specification{
 		Summary: "Revised draft.", Body: "# Specification\n\nLimit the request body to 1 MiB.",
-		Addressals: []elaborate.Addressal{{Comment: comment, Response: "Added an explicit 1 MiB bound."}},
+		Addressals: []elaborate.Addressal{{CommentID: "revise-spec", Response: "Added an explicit 1 MiB bound."}},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1966,13 +1972,82 @@ func TestElaborationRequestChangesCarriesFeedbackAndAddressals(t *testing.T) {
 	}
 	assertElaborationPriorSnapshot(t, f.blobs, start.StageInputs.PriorArtifactDigests, wantPrior)
 	secondItem, _ := f.item(t, "spec-approval-implementation-run-2")
-	if !strings.Contains(secondItem.Reason, "Diff from last reviewed version:") ||
-		!strings.Contains(secondItem.Reason, comment) ||
-		!strings.Contains(secondItem.Reason, "Added an explicit 1 MiB bound.") {
-		t.Fatalf("revision reason omitted review history:\n%s", secondItem.Reason)
+	if secondItem.Reason != "Revised draft." || secondItem.SpecRevision == nil {
+		t.Fatalf("revision item = %+v", secondItem)
+	}
+	revision := secondItem.SpecRevision
+	if revision.Iteration != 2 || revision.PriorItemID != firstItem.ID ||
+		revision.PriorSpecArtifactID != "spec-implementation-run-1" ||
+		len(revision.PriorComments) != 1 || revision.PriorComments[0].CommentID != "revise-spec" ||
+		revision.PriorComments[0].Body != comment || len(revision.ClaimedAddressals) != 1 ||
+		revision.ClaimedAddressals[0].CommentID != "revise-spec" ||
+		!strings.Contains(revision.Diff.Unified, "+Limit the request body to 1 MiB.") {
+		t.Fatalf("revision facts = %+v", revision)
+	}
+	if len(secondItem.AgentClaims) != 3 || secondItem.AgentClaims[2].Label != "Addressals" ||
+		secondItem.AgentClaims[2].Digest != revision.AddressalsDigest {
+		t.Fatalf("revision claims = %+v", secondItem.AgentClaims)
+	}
+	superseded, _ := f.item(t, firstItem.ID)
+	if superseded.Status != domain.StatusSuperseded || superseded.ItemVersion != 2 || superseded.DecidedAt == nil {
+		t.Fatalf("superseded original = %+v", superseded)
 	}
 	if _, err := f.run("implementation-run"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("implementation run after request_changes = %v", err)
+	}
+}
+
+func TestElaborationUpgradePreservesLegacyAddressalOutput(t *testing.T) {
+	f := newElaborationFixture(t, true, 2)
+	comment := "Bound the request body and explain the limit."
+	feedbackBody := []byte(comment)
+	feedback := testElaborationArtifact(
+		t,
+		"spec-feedback-revise-spec",
+		domain.ArtifactKindSpecification,
+		domain.Digest(contentaddr.Sum(feedbackBody)),
+		domain.ProducerDaemon,
+		"inv-elaborate-elaboration-run-2",
+	)
+	if _, err := f.blobs.Put(feedback.Digest, bytes.NewReader(feedbackBody)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.PutArtifact(t.Context(), feedback)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	engine := &Engine{store: f.store, elaboration: &elaborationWorkflow{blobs: f.blobs}}
+	request := elaborationRequest{FeedbackArtifactIDs: []domain.ArtifactID{feedback.ID}}
+	legacyInputs := &domain.StageInputSnapshot{PromptPackageDigest: legacyAddressalPromptPackageDigest}
+	decode, err := engine.elaborationTranscriptDecoder(t.Context(), request, domain.ExecutionAdmission{
+		StageInputs: legacyInputs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyOutput := `{"fetch_requests":[],"specification":{"summary":"Revised.","body":"# Specification\n\nLimit requests to 1 MiB.","addressals":[{"comment":"` + comment + `","response":"Added a 1 MiB limit."}]},"reply":null}`
+	transcript := `{"type":"result","subtype":"success","is_error":false,"result":` +
+		strconv.Quote(legacyOutput) + "}\n"
+	out, err := decode(strings.NewReader(transcript))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Specification == nil || len(out.Specification.Addressals) != 1 ||
+		out.Specification.Addressals[0].CommentID != "revise-spec" {
+		t.Fatalf("upgraded legacy output = %+v, want authenticated command identity", out)
+	}
+
+	currentInputs := &domain.StageInputSnapshot{PromptPackageDigest: f.elaborationPrompt}
+	decode, err = engine.elaborationTranscriptDecoder(t.Context(), request, domain.ExecutionAdmission{
+		StageInputs: currentInputs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decode(strings.NewReader(transcript)); err == nil ||
+		!strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("current prompt accepted legacy addressal output: %v", err)
 	}
 }
 
@@ -2149,7 +2224,7 @@ func TestElaborationEnvelopesKeepRolesAfterRevisionResearch(t *testing.T) {
 	thirdID := elaborationInvocationID("elaboration-run", 3)
 	if err := elaboratefake.Script(driver, thirdID, 0, 0, elaborate.Output{Specification: &elaborate.Specification{
 		Summary: "Researched revision.", Body: "# Specification\n\nApply the cited upstream request limit.",
-		Addressals: []elaborate.Addressal{{Comment: comment, Response: "Added the researched upstream limit."}},
+		Addressals: []elaborate.Addressal{{CommentID: "revise-then-research", Response: "Added the researched upstream limit."}},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -2168,6 +2243,13 @@ func TestElaborationEnvelopesKeepRolesAfterRevisionResearch(t *testing.T) {
 		{role: "prior_specification", digest: f.artifact(t, "spec-implementation-run-1").Digest},
 		{role: "human_feedback", digest: f.artifact(t, "spec-feedback-revise-then-research").Digest},
 	})
+	revised, _ := f.item(t, "spec-approval-implementation-run-3")
+	if revised.SpecRevision == nil || revised.SpecRevision.PriorItemID != firstItem.ID ||
+		len(revised.SpecRevision.PriorComments) != 1 ||
+		revised.SpecRevision.PriorComments[0].RaisedOnItemID != firstItem.ID ||
+		revised.SpecRevision.PriorComments[0].Iteration != 1 {
+		t.Fatalf("post-feedback research revision lineage = %+v", revised.SpecRevision)
+	}
 }
 
 func TestElaborationInputOrderAcceptsPreChainVerifierRevisionResearch(t *testing.T) {
@@ -2230,7 +2312,7 @@ func TestElaborationSecondRequestChangesDispatches(t *testing.T) {
 	secondID := elaborationInvocationID("elaboration-run", 2)
 	if err := elaboratefake.Script(driver, secondID, 0, 0, elaborate.Output{Specification: &elaborate.Specification{
 		Summary: "First revision.", Body: "# Specification\n\nLimit the request body to 1 MiB.",
-		Addressals: []elaborate.Addressal{{Comment: firstComment, Response: "Added an explicit 1 MiB bound."}},
+		Addressals: []elaborate.Addressal{{CommentID: "revise-spec-1", Response: "Added an explicit 1 MiB bound."}},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -2259,8 +2341,7 @@ func TestElaborationSecondRequestChangesDispatches(t *testing.T) {
 	if err := elaboratefake.Script(driver, thirdID, 0, 0, elaborate.Output{Specification: &elaborate.Specification{
 		Summary: "Second revision.", Body: "# Specification\n\nCap both single and aggregate sizes.",
 		Addressals: []elaborate.Addressal{
-			{Comment: firstComment, Response: "Retained the explicit 1 MiB request-body bound."},
-			{Comment: secondComment, Response: "Bounded the aggregate response size."},
+			{CommentID: "revise-spec-1", Response: "Retained the explicit 1 MiB request-body bound."},
 		},
 	}}); err != nil {
 		t.Fatal(err)
@@ -2280,23 +2361,25 @@ func TestElaborationSecondRequestChangesDispatches(t *testing.T) {
 	assertElaborationPriorSnapshot(t, f.blobs, thirdStart.StageInputs.PriorArtifactDigests, wantPrior)
 
 	thirdItem, _ := f.item(t, "spec-approval-implementation-run-3")
-	if !strings.Contains(thirdItem.Reason, secondComment) ||
-		!strings.Contains(thirdItem.Reason, "Bounded the aggregate response size.") {
-		t.Fatalf("second revision reason omitted review history:\n%s", thirdItem.Reason)
+	if thirdItem.SpecRevision == nil || len(thirdItem.SpecRevision.PriorComments) != 2 ||
+		thirdItem.SpecRevision.PriorComments[1].Body != secondComment ||
+		len(thirdItem.SpecRevision.ClaimedAddressals) != 1 ||
+		thirdItem.SpecRevision.ClaimedAddressals[0].CommentID != "revise-spec-1" {
+		t.Fatalf("second revision facts = %+v", thirdItem.SpecRevision)
 	}
 	if _, err := f.run("implementation-run"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("implementation run after second request_changes = %v", err)
 	}
 }
 
-func TestElaborationRejectsIncompleteRevisionAddressals(t *testing.T) {
+func TestElaborationRejectsUnknownRevisionAddressals(t *testing.T) {
 	t.Run("initial specification cannot invent an addressal", func(t *testing.T) {
 		f := newElaborationFixture(t, false, 2)
 		driver := f.newDriver(t)
 		id := elaborationInvocationID("elaboration-run", 1)
 		if err := elaboratefake.Script(driver, id, 0, 0, elaborate.Output{Specification: &elaborate.Specification{
 			Summary: "Initial draft.", Body: "# Specification\n\nReady to implement.",
-			Addressals: []elaborate.Addressal{{Comment: "not supplied", Response: "claimed response"}},
+			Addressals: []elaborate.Addressal{{CommentID: "not-supplied", Response: "claimed response"}},
 		}}); err != nil {
 			t.Fatal(err)
 		}
@@ -2308,7 +2391,7 @@ func TestElaborationRejectsIncompleteRevisionAddressals(t *testing.T) {
 		assertElaborationFailedWithoutImplementation(t, f, id)
 	})
 
-	t.Run("revision must address every feedback block", func(t *testing.T) {
+	t.Run("revision cannot address an unknown feedback block", func(t *testing.T) {
 		f := newElaborationFixture(t, true, 3)
 		driver := f.newDriver(t)
 		firstID := elaborationInvocationID("elaboration-run", 1)
@@ -2340,7 +2423,7 @@ func TestElaborationRejectsIncompleteRevisionAddressals(t *testing.T) {
 		secondID := elaborationInvocationID("elaboration-run", 2)
 		if err := elaboratefake.Script(driver, secondID, 0, 0, elaborate.Output{Specification: &elaborate.Specification{
 			Summary: "Incomplete revision.", Body: "# Specification\n\nBound the request body.",
-			Addressals: []elaborate.Addressal{{Comment: "A different comment.", Response: "Claimed response."}},
+			Addressals: []elaborate.Addressal{{CommentID: "different-comment", Response: "Claimed response."}},
 		}}); err != nil {
 			t.Fatal(err)
 		}
@@ -2349,6 +2432,39 @@ func TestElaborationRejectsIncompleteRevisionAddressals(t *testing.T) {
 		}
 		assertElaborationFailedWithoutImplementation(t, f, secondID)
 	})
+}
+
+func TestUnifiedLineDiff(t *testing.T) {
+	tests := []struct {
+		name           string
+		before, after  string
+		added, removed int
+		contains       []string
+	}{
+		{"equal", "a\nb", "a\nb", 0, 0, []string{"(no textual change)"}},
+		{"insert", "a\nc", "a\nb\nc", 1, 0, []string{"@@", "+b"}},
+		{"delete", "a\nb\nc", "a\nc", 0, 1, []string{"@@", "-b"}},
+		{"replace", "a\nb", "a\nc", 1, 1, []string{"-b", "+c"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := unifiedLineDiff(tc.before, tc.after)
+			if got.LinesAdded != tc.added || got.LinesRemoved != tc.removed || got.Truncated {
+				t.Fatalf("diff = %+v", got)
+			}
+			for _, fragment := range tc.contains {
+				if !strings.Contains(got.Unified, fragment) {
+					t.Errorf("diff %q does not contain %q", got.Unified, fragment)
+				}
+			}
+		})
+	}
+
+	truncated := unifiedLineDiff(strings.Repeat("a", 40_000), strings.Repeat("b", 40_000))
+	if !truncated.Truncated || len(truncated.Unified) > domain.MaxClaimTextBytes ||
+		!strings.Contains(truncated.Unified, "diff truncated") {
+		t.Fatalf("truncated diff = bytes %d, %+v", len(truncated.Unified), truncated)
+	}
 }
 
 func assertElaborationFailedWithoutImplementation(
