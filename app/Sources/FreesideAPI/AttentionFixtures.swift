@@ -85,6 +85,105 @@ public enum AttentionFixtures {
         phase1Types.map { fixture(type: $0) }
     }
 
+    /// A revised approval card beside the initial `spec_revision: null`
+    /// fixture. Tests and screenshot surfaces use this to exercise the typed
+    /// revision projection without changing the default inbox's stable ids.
+    public static func revisedSpecification() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .spec_approval)
+        let priorSpecification = """
+            # Authentication Migration
+
+            ## Intent
+            Migrate session tokens without interrupting active clients.
+
+            ## Order
+            1. Add the new token columns.
+            2. Backfill active sessions.
+            3. Switch reads to the new columns.
+
+            ## Rollback
+            Implicit rollback after a failed deploy.
+
+            ## Verification
+            - Run the migration suite against a production-shaped snapshot.
+            """
+        let revisedSpecification = """
+            # Authentication Migration
+
+            ## Intent
+            Migrate session tokens without interrupting active clients.
+
+            ## Order
+            1. Add the new token columns.
+            2. Backfill active sessions.
+            3. Switch reads to the new columns.
+
+            ## Rollback
+            Restore the prior schema before retrying the deploy.
+
+            ## Verification
+            - Run the migration suite against a production-shaped snapshot.
+            - Confirm restored sessions authenticate through the prior reader.
+            """
+        let commentID = "fixture-request-changes"
+        let comment = "Keep the migration order and make rollback explicit."
+        let addressals = [
+            Components.Schemas.SpecAddressalClaim(
+                comment_id: commentID,
+                response: "Kept the migration order and added an explicit rollback step.")
+        ]
+        let addressalsDigest = MockContractValidation.addressalsDigest(addressals)
+        snapshot.item.id = "spec-approval-run-spec_approval-2"
+        snapshot.item.reason = "A revised specification is ready for approval"
+        snapshot.item.item_version = 2
+        if let specificationIndex = snapshot.item.agent_claims.firstIndex(where: {
+            $0.label == "Specification"
+        }) {
+            let provenance = snapshot.item.agent_claims[specificationIndex].provenance
+            snapshot.item.agent_claims[specificationIndex] = .init(
+                label: "Specification",
+                artifact_id: "spec-run-spec_approval-2",
+                digest: MockContractValidation.sha256Digest(of: revisedSpecification),
+                provenance: provenance,
+                text: .init(media_type: .text_sol_markdown, content: revisedSpecification))
+        }
+        snapshot.item.spec_revision = .init(
+            value1: .init(
+                iteration: 2,
+                prior_item_id: "spec-approval-run-spec_approval-1",
+                prior_spec_artifact_id: "spec-run-spec_approval-1",
+                prior_spec_digest: MockContractValidation.sha256Digest(of: priorSpecification),
+                diff: .init(
+                    lines_added: 2,
+                    lines_removed: 1,
+                    unified:
+                        "@@ -10,3 +10,3 @@\n \n ## Rollback\n-Implicit rollback after a failed deploy.\n+Restore the prior schema before retrying the deploy.\n \n@@ -14,2 +14,3 @@\n ## Verification\n - Run the migration suite against a production-shaped snapshot.\n+- Confirm restored sessions authenticate through the prior reader.",
+                    truncated: false),
+                prior_comments: [
+                    .init(
+                        comment_id: commentID,
+                        artifact_id: "spec-feedback-\(commentID)",
+                        digest: MockContractValidation.sha256Digest(of: comment),
+                        raised_on_item_id: "spec-approval-run-spec_approval-1",
+                        iteration: 1,
+                        body: comment)
+                ],
+                claimed_addressals: addressals,
+                addressals_digest: addressalsDigest))
+        snapshot.item.agent_claims.append(
+            .init(
+                label: "Addressals",
+                artifact_id: "spec-addressals-fixture-2",
+                digest: addressalsDigest,
+                provenance: claimHeadIndependent(key: "spec_approval")))
+        snapshot.item.artifact_digests = Array(
+            Set(
+                snapshot.item.evidence_snapshot.map(\.digest)
+                    + snapshot.item.agent_claims.map(\.digest))
+        ).sorted()
+        return snapshot
+    }
+
     /// The deterministic thread carried by the default spec-approval card.
     /// Other discuss-capable cards acquire a conversation on first submit.
     public static func defaultConversations() -> [Components.Schemas.ConversationSnapshot] {
@@ -257,6 +356,31 @@ public enum AttentionFixtures {
                 provenance: claimProvenance
             )
         ]
+        if type == .spec_approval {
+            let specification = """
+                # Authentication Migration
+
+                ## Intent
+                Migrate session tokens without interrupting active clients.
+
+                ## Order
+                1. Add the new token columns.
+                2. Backfill active sessions.
+                3. Switch reads to the new columns.
+
+                ## Rollback
+                Implicit rollback after a failed deploy.
+
+                ## Verification
+                - Run the migration suite against a production-shaped snapshot.
+                """
+            agentClaims[0] = .init(
+                label: "Specification",
+                artifact_id: "spec-run-spec_approval-1",
+                digest: MockContractValidation.sha256Digest(of: specification),
+                provenance: claimProvenance,
+                text: .init(media_type: .text_sol_markdown, content: specification))
+        }
         // Section 9's agent_question card is self-contained: the question,
         // what it blocks, and the enumerated options are one labeled claim,
         // so answering never needs the transcript. The typed producer arrives
@@ -619,6 +743,7 @@ public enum AttentionFixtures {
             blocked_on: blockedOn,
             health_diagnostic: healthDiagnostic,
             review_dispute: reviewDispute,
+            spec_revision: nil,
             item_version: 1,
             interruption_class: interruption,
             conversation_id: type == .spec_approval ? "conv-item-spec_approval" : nil,

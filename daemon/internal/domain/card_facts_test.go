@@ -1,12 +1,85 @@
 package domain_test
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
+
+func TestDeriveSpecDiffPreservesInteriorMatchesAboveMatrixBound(t *testing.T) {
+	before := make([]string, 1_001)
+	for index := range before {
+		before[index] = fmt.Sprintf("requirement %04d", index)
+	}
+	after := append([]string(nil), before...)
+	after[100] = "requirement 0100, revised"
+	after[900] = "requirement 0900, revised"
+
+	diff := domain.DeriveSpecDiff(strings.Join(before, "\n"), strings.Join(after, "\n"))
+	if diff.LinesAdded != 2 || diff.LinesRemoved != 2 || diff.Truncated {
+		t.Fatalf("large separated diff = %+v", diff)
+	}
+	for _, line := range []string{"-requirement 0100", "+requirement 0100, revised", "-requirement 0900", "+requirement 0900, revised"} {
+		if !strings.Contains(diff.Unified, line) {
+			t.Errorf("diff does not contain %q", line)
+		}
+	}
+}
+
+func TestDeriveSpecDiffPreservesRepeatedInteriorMatchesAboveMatrixBound(t *testing.T) {
+	before := make([]string, 1_001)
+	for index := range before {
+		before[index] = "repeated requirement"
+	}
+	after := append([]string(nil), before...)
+	after[100] = "first revised requirement"
+	after[900] = "second revised requirement"
+
+	diff := domain.DeriveSpecDiff(strings.Join(before, "\n"), strings.Join(after, "\n"))
+	if diff.LinesAdded != 2 || diff.LinesRemoved != 2 || diff.Truncated {
+		t.Fatalf("large repeated-line diff = %+v", diff)
+	}
+	for _, line := range []string{"+first revised requirement", "+second revised requirement"} {
+		if !strings.Contains(diff.Unified, line) {
+			t.Errorf("diff does not contain %q", line)
+		}
+	}
+}
+
+func TestDeriveSpecDiffPreservesTrailingWhitespace(t *testing.T) {
+	diff := domain.DeriveSpecDiff("# Hi", "# Hi  ")
+	if diff.LinesAdded != 1 || diff.LinesRemoved != 1 {
+		t.Fatalf("trailing-whitespace diff = %+v", diff)
+	}
+	if !strings.Contains(diff.Unified, "+# Hi  ") {
+		t.Fatalf("trailing whitespace missing from %q", diff.Unified)
+	}
+	if err := diff.Validate(); err != nil {
+		t.Fatalf("trailing-whitespace diff validation: %v", err)
+	}
+}
+
+func TestDeriveSpecDiffAcceptsCRLFBeforeHunkEnd(t *testing.T) {
+	before := strings.Join([]string{"one", "two", "three", "four", "five", "six", "seven", "eight"}, "\r\n")
+	after := strings.Join([]string{"one", "revised", "three", "four", "five", "six", "seven", "eight"}, "\r\n")
+
+	diff := domain.DeriveSpecDiff(before, after)
+	if diff.LinesAdded != 1 || diff.LinesRemoved != 1 {
+		t.Fatalf("CRLF diff = %+v", diff)
+	}
+	if strings.Contains(diff.Unified, "\r") {
+		t.Fatalf("CRLF diff contains carriage return: %q", diff.Unified)
+	}
+	if err := diff.Validate(); err != nil {
+		t.Fatalf("CRLF diff validation: %v", err)
+	}
+}
 
 func TestCardFactValidation(t *testing.T) {
 	at := time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC)
@@ -248,6 +321,113 @@ func TestAttentionItemCardFactsDetachCallerInput(t *testing.T) {
 	if got := disputeItem.ReviewDispute.FindingIDs[0]; got != "finding-1" {
 		t.Errorf("review dispute finding changed through caller input: %q", got)
 	}
+}
+
+func TestSpecRevisionFacts(t *testing.T) {
+	in := specRevisionInput(t)
+	item := mustItem(t, in)
+	if item.SpecRevision == nil || item.SpecRevision.Iteration != 2 {
+		t.Fatalf("spec revision = %+v", item.SpecRevision)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*domain.AttentionItemInput)
+	}{
+		{"wrong item type", func(in *domain.AttentionItemInput) { in.Type = domain.AttentionBlocked }},
+		{"same prior item", func(in *domain.AttentionItemInput) { in.SpecRevision.PriorItemID = in.ID }},
+		{"comment digest", func(in *domain.AttentionItemInput) { in.SpecRevision.PriorComments[0].Digest = "sha256:other" }},
+		{"comment artifact id", func(in *domain.AttentionItemInput) {
+			in.SpecRevision.PriorComments[0].ArtifactID = "spec-feedback-other"
+		}},
+		{"comment item iteration", func(in *domain.AttentionItemInput) {
+			in.SpecRevision.PriorComments[0].RaisedOnItemID = "spec-approval-run-9"
+		}},
+		{"prior item", func(in *domain.AttentionItemInput) {
+			in.SpecRevision.PriorItemID = "spec-approval-run-9"
+		}},
+		{"duplicate comment", func(in *domain.AttentionItemInput) {
+			in.SpecRevision.PriorComments = append(in.SpecRevision.PriorComments, in.SpecRevision.PriorComments[0])
+		}},
+		{"unknown addressal", func(in *domain.AttentionItemInput) { in.SpecRevision.ClaimedAddressals[0].CommentID = "unknown" }},
+		{"duplicate addressal", func(in *domain.AttentionItemInput) {
+			in.SpecRevision.ClaimedAddressals = append(in.SpecRevision.ClaimedAddressals, in.SpecRevision.ClaimedAddressals[0])
+		}},
+		{"addressals digest", func(in *domain.AttentionItemInput) { in.SpecRevision.AddressalsDigest = "sha256:other" }},
+		{"missing claim", func(in *domain.AttentionItemInput) { in.AgentClaims = in.AgentClaims[:1] }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := specRevisionInput(t)
+			tc.mutate(&candidate)
+			if _, err := domain.NewAttentionItem(candidate, nil); !errors.Is(err, domain.ErrCardFactInconsistent) &&
+				!errors.Is(err, domain.ErrCardFactOutsideItem) {
+				t.Fatalf("NewAttentionItem = %v", err)
+			}
+		})
+	}
+
+	changed := item
+	changed.ItemVersion++
+	copy := *changed.SpecRevision
+	copy.Diff.LinesAdded++
+	changed.SpecRevision = &copy
+	if err := domain.ValidateAttentionItemTransition(item, changed); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("changed spec revision transition = %v", err)
+	}
+
+	detached := specRevisionInput(t)
+	detachedItem := mustItem(t, detached)
+	detached.SpecRevision.PriorComments[0].Body = "mutated"
+	detached.SpecRevision.ClaimedAddressals[0].Response = "mutated"
+	if detachedItem.SpecRevision.PriorComments[0].Body == "mutated" ||
+		detachedItem.SpecRevision.ClaimedAddressals[0].Response == "mutated" {
+		t.Fatal("spec revision slices remained caller-owned")
+	}
+}
+
+func specRevisionInput(t *testing.T) domain.AttentionItemInput {
+	t.Helper()
+	commentBody := "Bound the request body."
+	commentDigest := domain.Digest(contentaddr.Sum([]byte(commentBody)))
+	addressals := []domain.SpecAddressalClaim{{CommentID: "revise-spec", Response: "Added a 1 MiB bound."}}
+	body, err := json.Marshal(addressals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addressalsDigest := domain.Digest(contentaddr.Sum(body))
+	provenance := domain.Provenance{
+		ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-elaborate-2",
+		HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+	}
+	runID := domain.RunID("run-1")
+	in := validItemInput(domain.AttentionSpecApproval)
+	in.ID = "spec-approval-run-2"
+	in.Subject.RunID = &runID
+	in.AgentClaims = []domain.AgentClaim{
+		{
+			Label: "Specification", Artifact: "spec-run-2", Digest: "sha256:spec-2",
+			Provenance: provenance,
+		},
+		{
+			Label: "Addressals", Artifact: "spec-addressals-run-2", Digest: addressalsDigest,
+			Provenance: provenance,
+		},
+	}
+	in.SpecRevision = &domain.SpecRevisionFacts{
+		Iteration: 2, PriorItemID: "spec-approval-run-1",
+		PriorSpecArtifactID: "spec-run-1", PriorSpecDigest: "sha256:spec-1",
+		Diff: domain.SpecDiff{
+			LinesAdded: 1, LinesRemoved: 1,
+			Unified: "@@ -1,1 +1,1 @@\n-old\n+new",
+		},
+		PriorComments: []domain.SpecRevisionComment{{
+			CommentID: "revise-spec", ArtifactID: "spec-feedback-revise-spec", Digest: commentDigest,
+			RaisedOnItemID: "spec-approval-run-1", Iteration: 1, Body: commentBody,
+		}},
+		ClaimedAddressals: addressals, AddressalsDigest: addressalsDigest,
+	}
+	return in
 }
 
 func cardFactInputs() []domain.AttentionItemInput {

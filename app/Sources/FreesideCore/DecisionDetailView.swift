@@ -54,6 +54,7 @@ struct DecisionDetailView: View {
     @State private var model: DecisionModel
     @State private var proposalEditor: ProposalEditor?
     @State private var messageEditor: MessageEditor?
+    @State private var specApprovalReader: SpecApprovalReader?
     @State private var pendingConfirmation: PendingConfirmation?
     @State private var sectionPreferences: DecisionSectionPreferences
     @State private var inspectorPresented: Bool
@@ -190,6 +191,13 @@ struct DecisionDetailView: View {
                     }
                 }
             }
+            #if os(iOS)
+                .sheet(item: $specApprovalReader) { reader in
+                    if let item = model.snapshot?.item {
+                        specApprovalReaderSheet(reader, item: item)
+                    }
+                }
+            #endif
             .navigationTitle(model.snapshot.map { AttentionDisplay.title($0.item) } ?? "Decision")
             .confirmationDialog(
                 confirmationTitle,
@@ -365,7 +373,9 @@ struct DecisionDetailView: View {
             // The ask and the daemon's reason are one question and its answer,
             // so nothing renders between them. The reason stays labeled
             // because the daemon writes it as a sentence fragment.
-            context(item)
+            if item.spec_revision == nil {
+                context(item)
+            }
 
             if let conversation = model.conversation {
                 ConversationView(
@@ -512,6 +522,7 @@ struct DecisionDetailView: View {
                 }
                 let actionClaims = item.agent_claims.filter {
                     $0.text != nil && $0.label != AgentClaimLabels.summary
+                        && !AgentClaimLabels.isApprovalMaterial($0.label)
                 }
                 if !actionClaims.isEmpty {
                     cardSection("Agent claims (unverified)", dashed: true) {
@@ -548,6 +559,12 @@ struct DecisionDetailView: View {
                     proposalRows(proposalFacts)
                 }
             }
+        case .specRevision:
+            specRevisionLead(item)
+        case .specification:
+            specificationMaterial(
+                item,
+                rendersInteractiveControls: rendersInteractiveControls)
         case .recommendation:
             #if os(iOS)
                 if let recommendation = DecisionRecommendationPresentation.of(item),
@@ -734,6 +751,235 @@ struct DecisionDetailView: View {
     }
 
     @ViewBuilder
+    private func specRevisionLead(_ item: Components.Schemas.AttentionItem) -> some View {
+        if let revision = item.spec_revision?.value1,
+            let priorIteration = Self.priorSpecRevisionIteration(in: item)
+        {
+            cardSection("Specification revision") {
+                Text(
+                    "Revision \(revision.iteration), supersedes revision \(priorIteration), +\(revision.diff.lines_added) −\(revision.diff.lines_removed) lines"
+                )
+                .font(FreesideFont.sans(.callout, weight: .semibold))
+                .fixedSize(horizontal: false, vertical: true)
+
+                Divider()
+                Text("Agent responses are unverified.")
+                    .font(FreesideFont.caption)
+                    .foregroundStyle(Color.inkDim)
+
+                ForEach(Array(revision.prior_comments.enumerated()), id: \.offset) {
+                    index, comment in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("You, iteration \(comment.iteration)")
+                            .font(FreesideFont.caption)
+                            .foregroundStyle(Color.accentText)
+                        Text(comment.body)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        if let addressal = revision.claimed_addressals.first(where: {
+                            $0.comment_id == comment.comment_id
+                        }) {
+                            Label("Agent response", systemImage: "quote.bubble")
+                                .font(FreesideFont.caption)
+                                .foregroundStyle(Color.inkDim)
+                            Text(addressal.response)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            Label("No addressal claimed", systemImage: "questionmark.bubble")
+                                .font(FreesideFont.caption)
+                                .foregroundStyle(Color.inkDim)
+                        }
+                    }
+                    if index < revision.prior_comments.count - 1 {
+                        Divider()
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func specificationMaterial(
+        _ item: Components.Schemas.AttentionItem,
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        if let specification = Self.specificationClaim(in: item) {
+            let iteration = Self.specificationRevisionIteration(in: item)
+            let title = iteration.map { "Specification, revision \($0)" } ?? "Specification"
+            cardSection("Approval material") {
+                if specification.text != nil {
+                    approvalMaterialRow(
+                        title: title,
+                        detail: "Daemon-bound digest \(specification.digest)",
+                        reader: .specification,
+                        rendersInteractiveControls: rendersInteractiveControls)
+                } else {
+                    AttachmentRow(
+                        label: title,
+                        digest: specification.digest,
+                        attachments: attachments,
+                        loadsAttachments: loadsAttachments,
+                        rendersInteractiveControls: rendersInteractiveControls)
+                }
+
+                if let priorIteration = Self.priorSpecRevisionIteration(in: item) {
+                    Divider()
+                    approvalMaterialRow(
+                        title: "Diff from revision \(priorIteration)",
+                        detail: "Bounded unified diff",
+                        reader: .diff,
+                        rendersInteractiveControls: rendersInteractiveControls)
+                }
+            }
+        }
+    }
+
+    static func specificationRevisionIteration(
+        in item: Components.Schemas.AttentionItem
+    ) -> Int? {
+        if let iteration = item.spec_revision?.value1.iteration {
+            return iteration
+        }
+        guard let artifactID = specificationClaim(in: item)?.artifact_id,
+            let suffix = artifactID.split(separator: "-").last,
+            let iteration = Int(suffix), iteration > 0
+        else { return nil }
+        return iteration
+    }
+
+    static func priorSpecRevisionIteration(
+        in item: Components.Schemas.AttentionItem
+    ) -> Int? {
+        item.spec_revision?.value1.prior_comments.last?.iteration
+    }
+
+    @ViewBuilder
+    private func approvalMaterialRow(
+        title: String,
+        detail: String,
+        reader: SpecApprovalReader,
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        if rendersInteractiveControls {
+            Button {
+                openSpecApprovalReader(reader)
+            } label: {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title)
+                            .font(FreesideFont.sans(.callout, weight: .semibold))
+                            .foregroundStyle(Color.ink)
+                        Text(detail)
+                            .font(FreesideFont.caption)
+                            .foregroundStyle(Color.inkDim)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 8)
+                    Text("Open")
+                        .font(FreesideFont.caption)
+                        .foregroundStyle(Color.accentText)
+                    Image(systemName: "chevron.right")
+                        .font(FreesideFont.caption)
+                        .foregroundStyle(Color.accentText)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open \(title)")
+        } else {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(FreesideFont.sans(.callout, weight: .semibold))
+                    Text(detail)
+                        .font(FreesideFont.caption)
+                        .foregroundStyle(Color.inkDim)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 8)
+                Label("Open", systemImage: "chevron.right")
+                    .labelStyle(.titleAndIcon)
+                    .font(FreesideFont.caption)
+                    .foregroundStyle(Color.accentText)
+            }
+        }
+    }
+
+    static func specificationClaim(
+        in item: Components.Schemas.AttentionItem
+    ) -> Components.Schemas.AgentClaim? {
+        item.agent_claims.first { claim in
+            claim.label == AgentClaimLabels.specification
+        }
+    }
+
+    private func openSpecApprovalReader(_ reader: SpecApprovalReader) {
+        specApprovalReader = reader
+        #if os(macOS)
+            inspectorBinding.wrappedValue = true
+        #endif
+    }
+
+    @ViewBuilder
+    private func specApprovalReaderContent(
+        _ reader: SpecApprovalReader,
+        item: Components.Schemas.AttentionItem,
+        rendersScrollableContent: Bool = true
+    ) -> some View {
+        switch reader {
+        case .specification:
+            if let specification = Self.specificationClaim(in: item),
+                let text = specification.text
+            {
+                SpecificationReaderView(
+                    text: text.content,
+                    digest: specification.digest,
+                    rendersScrollableContent: rendersScrollableContent)
+            } else {
+                UnavailableStateView(
+                    title: "Specification unavailable",
+                    systemImage: "doc",
+                    description: "This approval does not carry a readable specification.")
+            }
+        case .diff:
+            if let revision = item.spec_revision?.value1 {
+                UnifiedDiffView(
+                    unified: revision.diff.unified,
+                    linesAdded: revision.diff.lines_added,
+                    linesRemoved: revision.diff.lines_removed,
+                    truncated: revision.diff.truncated,
+                    rendersScrollableContent: rendersScrollableContent)
+            } else {
+                UnavailableStateView(
+                    title: "Diff unavailable",
+                    systemImage: "doc.text.magnifyingglass",
+                    description: "This is the first specification revision.")
+            }
+        }
+    }
+
+    #if os(iOS)
+        @ViewBuilder
+        private func specApprovalReaderSheet(
+            _ reader: SpecApprovalReader,
+            item: Components.Schemas.AttentionItem
+        ) -> some View {
+            NavigationStack {
+                specApprovalReaderContent(reader, item: item)
+                    .padding()
+                    .navigationTitle(reader == .specification ? "Specification" : "Specification changes")
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { specApprovalReader = nil }
+                        }
+                    }
+            }
+        }
+    #endif
+
+    @ViewBuilder
     private func claims(
         _ claims: [Components.Schemas.AgentClaim],
         accessibilityLayout: Bool,
@@ -837,41 +1083,62 @@ struct DecisionDetailView: View {
             // bindings. A second copy of the same rows made an open inspector
             // repeat the card beside it.
             VStack(alignment: .leading, spacing: 12) {
-                let attachmentClaims = item.agent_claims.filter { $0.text == nil }
-                if !attachmentClaims.isEmpty {
-                    inspectorSection(
-                        "Agent claims (unverified)",
-                        isExpanded: claimsExpanded,
-                        dashed: true
-                    ) {
-                        claimRows(
-                            attachmentClaims,
-                            rendersInteractiveControls: rendersInteractiveControls)
+                if let specApprovalReader {
+                    HStack {
+                        Text(
+                            specApprovalReader == .specification
+                                ? "Specification" : "Specification changes"
+                        )
+                        .font(FreesideFont.sectionTitle)
+                        Spacer()
+                        Button {
+                            self.specApprovalReader = nil
+                        } label: {
+                            Label("Close reader", systemImage: "xmark")
+                                .labelStyle(.iconOnly)
+                        }
+                        .buttonStyle(.plain)
                     }
-                }
-                if !item.evidence_snapshot.isEmpty {
-                    inspectorSection("Evidence", isExpanded: evidenceExpanded) {
-                        ForEach(item.evidence_snapshot, id: \.id) { artifact in
-                            AttachmentRow(
-                                label: artifact._type.rawValue,
-                                digest: artifact.digest,
-                                attachments: attachments,
-                                loadsAttachments: loadsAttachments,
+                    specApprovalReaderContent(specApprovalReader, item: item)
+                } else {
+                    let attachmentClaims = item.agent_claims.filter {
+                        $0.text == nil && !AgentClaimLabels.isApprovalMaterial($0.label)
+                    }
+                    if !attachmentClaims.isEmpty {
+                        inspectorSection(
+                            "Agent claims (unverified)",
+                            isExpanded: claimsExpanded,
+                            dashed: true
+                        ) {
+                            claimRows(
+                                attachmentClaims,
                                 rendersInteractiveControls: rendersInteractiveControls)
                         }
                     }
-                }
-                inspectorSection("Details", isExpanded: detailsExpanded) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
-                            factRow(row.label, value: row.value, monospaced: true)
+                    if !item.evidence_snapshot.isEmpty {
+                        inspectorSection("Evidence", isExpanded: evidenceExpanded) {
+                            ForEach(item.evidence_snapshot, id: \.id) { artifact in
+                                AttachmentRow(
+                                    label: artifact._type.rawValue,
+                                    digest: artifact.digest,
+                                    attachments: attachments,
+                                    loadsAttachments: loadsAttachments,
+                                    rendersInteractiveControls: rendersInteractiveControls)
+                            }
                         }
                     }
+                    inspectorSection("Details", isExpanded: detailsExpanded) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
+                                factRow(row.label, value: row.value, monospaced: true)
+                            }
+                        }
+                    }
+                    .id(ScrollTarget.technicalDetails)
+                    .font(FreesideFont.caption)
+                    .foregroundStyle(Color.inkDim)
+                    .textSelection(.enabled)
                 }
-                .id(ScrollTarget.technicalDetails)
-                .font(FreesideFont.caption)
-                .foregroundStyle(Color.inkDim)
-                .textSelection(.enabled)
             }
             .environment(\.dynamicTypeSize, dynamicTypeSize)
         }
@@ -945,6 +1212,24 @@ struct DecisionDetailView: View {
             wash: .waxWash
         )
         .padding()
+    }
+
+    @ViewBuilder
+    func screenshotSpecApprovalReader(
+        _ reader: SpecApprovalReader,
+        item: Components.Schemas.AttentionItem
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(reader == .specification ? "Specification" : "Specification changes")
+                .font(FreesideFont.sectionTitle)
+            specApprovalReaderContent(
+                reader,
+                item: item,
+                rendersScrollableContent: false)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(Color.ground)
     }
 
     #if os(macOS)

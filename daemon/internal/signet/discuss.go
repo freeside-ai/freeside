@@ -20,7 +20,7 @@ const kindAgentInvocationRequested = string(domain.AgentInvocationRequestedKind)
 
 // MaxRequestChangesMessageBytes bounds revision feedback before the
 // elaboration loop persists and repeatedly replays it as agent input.
-const MaxRequestChangesMessageBytes = 8 << 10
+const MaxRequestChangesMessageBytes = domain.MaxSpecRevisionCommentBytes
 
 // MaxDiscussCommandIDBytes bounds the command id so identities derived for a
 // discussion cannot bloat a later elaboration request past its aggregate

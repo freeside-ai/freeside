@@ -452,6 +452,61 @@ enum MockContractValidation {
                 return "review_dispute binding disagrees with item subject"
             }
         }
+        if let revision = item.spec_revision?.value1 {
+            if item._type != .spec_approval {
+                return "spec_revision facts on a different item type"
+            }
+            if revision.iteration < 2 || revision.prior_item_id.isEmpty
+                || revision.prior_item_id == item.id
+                || revision.prior_spec_artifact_id.isEmpty || revision.prior_spec_digest.isEmpty
+                || revision.prior_comments.isEmpty || revision.prior_comments.count > 64
+                || revision.claimed_addressals.count > 64 || revision.addressals_digest.isEmpty
+                || revision.diff.lines_added < 0 || revision.diff.lines_removed < 0
+                || isBlank(revision.diff.unified)
+                || revision.diff.unified.lengthOfBytes(using: .utf8) > 65_536
+            {
+                return "invalid spec_revision facts"
+            }
+            var commentIDs = Set<String>()
+            var artifactIDs = Set<String>()
+            var previousIteration = 0
+            for comment in revision.prior_comments {
+                if isBlank(comment.comment_id) || comment.artifact_id.isEmpty
+                    || comment.artifact_id != "spec-feedback-\(comment.comment_id)"
+                    || comment.digest.isEmpty || comment.raised_on_item_id.isEmpty
+                    || comment.iteration < 1 || comment.iteration >= revision.iteration
+                    || comment.iteration <= previousIteration
+                    || isBlank(comment.body)
+                    || comment.body.lengthOfBytes(using: .utf8) > 8192
+                    || sha256Digest(of: comment.body) != comment.digest
+                    || !commentIDs.insert(comment.comment_id).inserted
+                    || !artifactIDs.insert(comment.artifact_id).inserted
+                {
+                    return "invalid spec_revision comment"
+                }
+                previousIteration = comment.iteration
+            }
+            if revision.prior_comments.last?.raised_on_item_id != revision.prior_item_id {
+                return "spec_revision prior item mismatch"
+            }
+            var addressed = Set<String>()
+            for addressal in revision.claimed_addressals {
+                if isBlank(addressal.comment_id) || isBlank(addressal.response)
+                    || addressal.response.lengthOfBytes(using: .utf8) > 8192
+                    || !commentIDs.contains(addressal.comment_id)
+                    || !addressed.insert(addressal.comment_id).inserted
+                {
+                    return "invalid spec_revision addressal"
+                }
+            }
+            if addressalsDigest(revision.claimed_addressals) != revision.addressals_digest {
+                return "spec_revision addressals digest mismatch"
+            }
+            let claims = item.agent_claims.filter { $0.label == "Addressals" }
+            if claims.count != 1 || claims[0].digest != revision.addressals_digest {
+                return "spec_revision Addressals claim mismatch"
+            }
+        }
         if item.decision_surface.epoch < 1 {
             return "non-positive decision_surface epoch"
         }
@@ -929,6 +984,30 @@ enum MockContractValidation {
     /// fixtures and the validation mirror share.
     static func sha256Digest(of content: String) -> String {
         "sha256:" + SHA256.hash(data: Data(content.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Mirrors Go's `json.Marshal([]SpecAddressalClaim)` byte-for-byte for
+    /// the two-field contract shape used as the durable claim body.
+    static func addressalsDigest(
+        _ addressals: [Components.Schemas.SpecAddressalClaim]
+    ) -> String {
+        let body = addressals.map {
+            "{\"comment_id\":\(goJSONString($0.comment_id)),\"response\":\(goJSONString($0.response))}"
+        }.joined(separator: ",")
+        return sha256Digest(of: "[\(body)]")
+    }
+
+    private static func goJSONString(_ value: String) -> String {
+        guard let encoded = try? JSONEncoder().encode(value) else {
+            preconditionFailure("String JSON encoding cannot fail")
+        }
+        return String(decoding: encoded, as: UTF8.self)
+            .replacingOccurrences(of: "\\/", with: "/")
+            .replacingOccurrences(of: "<", with: "\\u003c")
+            .replacingOccurrences(of: ">", with: "\\u003e")
+            .replacingOccurrences(of: "&", with: "\\u0026")
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
     }
 
     /// The generated runtime's RFC 3339 decoder accepts whole seconds, which

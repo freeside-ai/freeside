@@ -4,7 +4,7 @@
   "specification": {
     "addressals": [
       {
-        "comment": "Show the refusal path.",
+        "comment_id": "request-refusal-tests",
         "response": "Added refusal tests."
       }
     ],

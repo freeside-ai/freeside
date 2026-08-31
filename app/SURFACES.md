@@ -29,7 +29,7 @@ Mac and iOS match on every line unless a line says otherwise.
   shell; five additional types compose card-specific orderings from the shared
   graphic module set.
 - **Not yet:** one card type (`effect_proposal`), conversation attachments, the evidence
-  and spec viewers, proposal batches, the
+  packet viewer, proposal batches, the
   initiative view, the remaining blocked-reason and waiver readiness display,
   push notifications.
 - **Open:** twelve placement questions, listed at the end.
@@ -47,7 +47,7 @@ Mac and iOS match on every line unless a line says otherwise.
 | Mac menu bar | Done | Open Freeside, Show Inbox with its count, and the shared urgent count lead; daemon readiness and lifecycle actions have their own section, with Quit last. The mono key template icon keeps the daemon-state badge dot top-right. Doctor results and 1B.1 signals come later (plan §10). |
 | Conversation / Discuss | Done for text | Every discuss-capable card can open a text composer and render the ordered thread, attachment digests, and awaiting-agent state. Threads bootstrap, persist in the disposable cache, refetch after submit, and converge on heartbeat. Uploading attachments from the composer is Not yet. Plan §5.14. |
 | Evidence packet viewer | Not yet | Detail attachments render explicit loading, image, non-image, unavailable, and too-large states with copyable digests and memory-only open sheets. The full provenance-labeled packet viewer is missing; #922 adds typed metadata. Plan §9, §5.15. |
-| Spec and diff viewer | Not yet | Diff from last reviewed version, prior comments, claimed addressals. Plan §4, §9. |
+| Spec and diff viewer | Done | Initial and revised approvals present the daemon-bound specification as the approval object in a dedicated scrollable reader. A revision leads with its authenticated iteration, prior iteration, complete line counts, and prior-comment-to-unverified-addressal mapping; a separate unified-diff reader distinguishes hunks, additions, removals, and context while collapsing later hunks and stating when the payload is truncated. Plan §4, §9. |
 | Proposal batch | Not yet | Several proposals decided one by one in one place. Plan §4. |
 | Initiative view | Not yet | Phase 1B.2. Plan §5.18, §11. |
 | Project detail, past-work history, schedules page, consent grants | Later | Explicitly after 1B. Plan §11. |
@@ -63,7 +63,7 @@ lists open issues that will change the card.
 
 | Card | What you can do | Status | Coming |
 | --- | --- | --- | --- |
-| `spec_approval` | approve, request changes, discuss, stop | Done for text request-changes and discuss transactions; the superseded card links to the next open specification once it syncs | #920 supplies revision facts; spec and diff viewer |
+| `spec_approval` | approve, request changes, discuss, stop | Done for text request-changes and discuss transactions; the superseded card links to the next open specification once it syncs. Initial and revised cards present the daemon-bound specification below the actions; revised cards lead with authenticated iteration and diff counts plus prior comments mapped to clearly unverified addressal claims, with the bounded unified diff in its own reader. | |
 | `review_diminishing_returns` | finish now, apply then finish, continue under policy, convert to policy | Done: the card leads with cost so far from the typed field and the shared yield-chart module; convert to policy is omitted from the action surface and recorded in the drill-down (revision 40 carves it out of the Phase 1 claim) | #844 |
 | `review_dispute` | discuss, stop (plus approve for observation-only shadow findings) | Done: the card leads with the typed run, round, disputed findings, and completion evidence beside the equal-position composition | #855 |
 | `finding_adjudication` | accept the recommended route, pick an alternative, discuss, stop (§7 widens this to answering questions, challenging assumptions, and asking for more detail) | Done for the proposal, producer-specific model/engine/mixed-origin labels, daemon facts, typed route actions, alternatives, and text discussion | #840 executes the chosen route |

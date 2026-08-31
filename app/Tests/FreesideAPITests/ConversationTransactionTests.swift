@@ -136,13 +136,45 @@ import Testing
 
         #expect(superseded.item.status == .superseded)
         #expect(superseded.item.decided_at != nil)
-        #expect(replacement.item.item_version == before.item.item_version + 1)
+        #expect(replacement.item.item_version == 1)
+        let revision = try #require(replacement.item.spec_revision?.value1)
+        #expect(revision.iteration == 2)
+        #expect(revision.prior_item_id == before.item.id)
+        let priorSpecification = try #require(
+            before.item.agent_claims.first { $0.label == "Specification" })
+        let revisedSpecification = try #require(
+            replacement.item.agent_claims.first { $0.label == "Specification" })
+        #expect(revision.prior_spec_artifact_id == priorSpecification.artifact_id)
+        #expect(revision.prior_spec_digest == priorSpecification.digest)
+        #expect(revisedSpecification.artifact_id != priorSpecification.artifact_id)
+        #expect(revisedSpecification.digest != priorSpecification.digest)
+        #expect(revision.diff.lines_added == 1)
+        #expect(revision.diff.lines_removed == 0)
+        #expect(revision.prior_comments.map(\.comment_id) == ["cmd-revision"])
+        #expect(revision.prior_comments.map(\.body) == ["Keep the migration order."])
+        #expect(revision.claimed_addressals.map(\.comment_id) == ["cmd-revision"])
+        #expect(
+            replacement.item.agent_claims.map(\.label)
+                == ["Specification", "freeside.summary", "Addressals"])
+        let summary = try #require(
+            replacement.item.agent_claims.first { $0.label == "freeside.summary" })
+        #expect(summary.text?.content == replacement.item.reason)
+        #expect(replacement.item.artifact_digests.contains(summary.digest))
+        #expect(
+            replacement.item.agent_claims.filter { $0.label == "Addressals" }.map(\.digest)
+                == [revision.addressals_digest])
     }
 
     @Test func requestChangesUsesTheDaemonReplacementNameWhenTheSeedMatches() async throws {
         var before = AttentionFixtures.fixture(type: .spec_approval)
         before.item.id = "spec-approval-run-spec_approval-1"
         before.item.conversation_id = nil
+        before.item.agent_claims.removeAll { $0.label == "freeside.summary" }
+        before.item.artifact_digests = Array(
+            Set(
+                before.item.evidence_snapshot.map(\.digest)
+                    + before.item.agent_claims.map(\.digest))
+        ).sorted()
         let server = MockServer(items: [before], conversations: [])
         let client = APIClientFactory.mock(server: server)
         let command = Self.command(
@@ -157,6 +189,9 @@ import Testing
 
         #expect(replacement.item.status == .open)
         #expect(replacement.item.subject == before.item.subject)
+        #expect(
+            replacement.item.agent_claims.map(\.label)
+                == ["Specification", "freeside.summary", "Addressals"])
     }
 
     @Test func discussRejectsAnAttachmentThatIsNotStored() async throws {

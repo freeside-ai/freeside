@@ -205,10 +205,17 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 			return err
 		}
 		approvalID := domain.ItemID("spec-approval-run-1-1")
-		terminal, err := json.Marshal(map[string]any{
-			"invocation_id": elaborationInvocationID, "iteration": 1, "status": "completed",
-			"research_artifact_ids": []domain.ArtifactID{}, "spec_artifact_id": specification.ID,
-			"approval_item_id": approvalID,
+		terminal, err := json.Marshal(struct {
+			InvocationID        domain.InvocationID `json:"invocation_id"`
+			Iteration           int                 `json:"iteration"`
+			Status              string              `json:"status"`
+			ResearchArtifactIDs []domain.ArtifactID `json:"research_artifact_ids"`
+			SpecArtifactID      *domain.ArtifactID  `json:"spec_artifact_id,omitempty"`
+			ApprovalItemID      *domain.ItemID      `json:"approval_item_id,omitempty"`
+		}{
+			InvocationID: elaborationInvocationID, Iteration: 1, Status: "completed",
+			ResearchArtifactIDs: []domain.ArtifactID{}, SpecArtifactID: &specification.ID,
+			ApprovalItemID: &approvalID,
 		})
 		if err != nil {
 			return err

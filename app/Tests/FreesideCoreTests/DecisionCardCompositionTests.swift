@@ -56,9 +56,39 @@ import Testing
     @Test func moduleVocabularyIsClosedAndShared() {
         #expect(
             Set(DecisionCardComposition.sharedModuleSet) == [
-                .facts, .factBlock, .findingFacts, .recommendation, .checklist, .stageRail,
-                .comparison, .yieldChart, .summary, .claims, .evidence, .details,
+                .facts, .specRevision, .specification, .factBlock, .findingFacts, .recommendation,
+                .checklist, .stageRail, .comparison, .yieldChart, .summary, .claims, .evidence,
+                .details,
             ])
+    }
+
+    @Test @MainActor func revisedSpecificationLeadsWithTypedRevisionFacts() throws {
+        let item = AttentionFixtures.revisedSpecification().item
+        let revision = try #require(item.spec_revision?.value1)
+        let composition = DecisionCardComposition.forType(.spec_approval)
+
+        #expect(revision.iteration == 2)
+        #expect(revision.diff.lines_added == 2)
+        #expect(revision.diff.lines_removed == 1)
+        #expect(
+            composition.modules == [
+                .recommendation, .specRevision, .facts, .specification, .factBlock, .summary,
+                .claims, .evidence, .details,
+            ])
+        #expect(
+            composition.modules.firstIndex(of: .specRevision).map {
+                $0 < composition.actionInsertionIndex
+            } == true)
+        #expect(
+            composition.modules.firstIndex(of: .specification)
+                == composition.actionInsertionIndex)
+        #expect(
+            composition.claims(
+                from: item.agent_claims,
+                at: try #require(composition.modules.firstIndex(of: .claims)),
+                prominentClaimIndex: nil
+            ).allSatisfy { !AgentClaimLabels.isApprovalMaterial($0.label) })
+        #expect(DecisionDetailView.specificationClaim(in: item)?.label == "Specification")
     }
 
     @Test func findingAdjudicationLeadsWithTheLabeledProposalAndDaemonFacts() {

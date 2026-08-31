@@ -285,6 +285,56 @@ import Testing
                 == "artifact_digests is not the canonical union of rendered digests")
     }
 
+    @Test func specificationRevisionFactsAreBoundAndTypeScoped() throws {
+        let fixture = AttentionFixtures.revisedSpecification().item
+        #expect(MockContractValidation.itemValidityBreach(fixture) == nil)
+
+        var unaddressed = fixture
+        let emptyDigest = MockContractValidation.addressalsDigest([])
+        unaddressed.spec_revision?.value1.claimed_addressals = []
+        unaddressed.spec_revision?.value1.addressals_digest = emptyDigest
+        let unaddressedClaim = try #require(
+            unaddressed.agent_claims.firstIndex { $0.label == "Addressals" })
+        unaddressed.agent_claims[unaddressedClaim].digest = emptyDigest
+        unaddressed.artifact_digests = Array(
+            Set(
+                unaddressed.evidence_snapshot.map(\.digest)
+                    + unaddressed.agent_claims.map(\.digest))
+        ).sorted()
+        #expect(MockContractValidation.itemValidityBreach(unaddressed) == nil)
+
+        var wrongType = fixture
+        wrongType._type = .agent_question
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "spec_revision facts on a different item type")
+
+        var tamperedComment = fixture
+        tamperedComment.spec_revision?.value1.prior_comments[0].body = "Different feedback"
+        #expect(
+            MockContractValidation.itemValidityBreach(tamperedComment)
+                == "invalid spec_revision comment")
+
+        var unknownAddressal = fixture
+        unknownAddressal.spec_revision?.value1.claimed_addressals[0].comment_id = "unknown"
+        #expect(
+            MockContractValidation.itemValidityBreach(unknownAddressal)
+                == "invalid spec_revision addressal")
+
+        var tamperedClaim = fixture
+        let claimIndex = try #require(
+            tamperedClaim.agent_claims.firstIndex { $0.label == "Addressals" })
+        tamperedClaim.agent_claims[claimIndex].digest = "sha256:different"
+        tamperedClaim.artifact_digests = Array(
+            Set(
+                tamperedClaim.evidence_snapshot.map(\.digest)
+                    + tamperedClaim.agent_claims.map(\.digest))
+        ).sorted()
+        #expect(
+            MockContractValidation.itemValidityBreach(tamperedClaim)
+                == "spec_revision Addressals claim mismatch")
+    }
+
     @Test func reviewRecoveryBindingIsExactAndTypeScoped() {
         let fixture = AttentionFixtures.fixture(type: .review_contradiction).item
         #expect(MockContractValidation.itemValidityBreach(fixture) == nil)
@@ -607,6 +657,18 @@ import Testing
         #expect(
             MockContractValidation.sha256Digest(of: "abc")
                 == "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    }
+
+    @Test func addressalsDigestUsesGoSlashEscaping() {
+        let addressals = [
+            Components.Schemas.SpecAddressalClaim(
+                comment_id: "comment/1", response: "Updated path/to/spec")
+        ]
+        let goJSON = #"[{"comment_id":"comment/1","response":"Updated path/to/spec"}]"#
+
+        #expect(
+            MockContractValidation.addressalsDigest(addressals)
+                == MockContractValidation.sha256Digest(of: goJSON))
     }
 
     // Every fixture passes the full validity check, each text claim's digest

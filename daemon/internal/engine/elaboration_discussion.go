@@ -499,13 +499,15 @@ func (e *Engine) acceptElaborationDiscussionAttempt(
 	}
 	reply := unavailableSpecDiscussionReply
 	if err == nil && result.Status == exec.StatusCompleted {
-		if admissibleErr := e.requireElaborationAdmissible(ctx, request.InvocationID); admissibleErr != nil {
+		if _, admissibleErr := e.requireElaborationAdmissible(ctx, request.InvocationID); admissibleErr != nil {
 			if MutableAdmissionPolicyRefusal(admissibleErr) {
 				return false, nil
 			}
 			return false, admissibleErr
 		}
-		output, outputErr := e.readElaborationOutput(ctx, request.InvocationID, result)
+		output, outputErr := e.readElaborationOutput(
+			ctx, request.InvocationID, result, elaborate.DecodeTranscript,
+		)
 		if outputErr == nil && output.Reply != nil && !importer.ContainsSecret([]byte(*output.Reply)) {
 			reply = *output.Reply
 		}
