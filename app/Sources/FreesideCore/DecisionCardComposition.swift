@@ -3,6 +3,8 @@ import SwiftUI
 
 enum DecisionCardModule: String, CaseIterable {
     case facts
+    case specRevision
+    case specification
     case factBlock
     case findingFacts
     case recommendation
@@ -20,6 +22,12 @@ enum DecisionCardModule: String, CaseIterable {
 // daemon/internal/export/evidence_source.go.
 enum AgentClaimLabels {
     static let summary = "freeside.summary"
+    static let addressals = "Addressals"
+    static let specification = "Specification"
+
+    static func isApprovalMaterial(_ label: String) -> Bool {
+        label == addressals || label == specification
+    }
 }
 
 struct DecisionCardComposition: Equatable {
@@ -42,6 +50,7 @@ struct DecisionCardComposition: Equatable {
     ) -> [Components.Schemas.AgentClaim] {
         let claims = claims.filter {
             !($0.label == AgentClaimLabels.summary && $0.text != nil)
+                && !AgentClaimLabels.isApprovalMaterial($0.label)
         }
         let claimModuleIndices = modules.indices.filter { modules[$0] == .claims }
         guard claimModuleIndices.count > 1 else { return claims }
@@ -136,7 +145,15 @@ struct DecisionCardComposition: Equatable {
                 ],
                 actionInsertionIndex: 3,
                 reviewingActionInsertionIndex: nil)
-        case .spec_approval, .review_contradiction, .review_configuration,
+        case .spec_approval:
+            return .init(
+                modules: [
+                    .recommendation, .specRevision, .facts, .specification, .factBlock, .summary,
+                    .claims, .evidence, .details,
+                ],
+                actionInsertionIndex: 3,
+                reviewingActionInsertionIndex: nil)
+        case .review_contradiction, .review_configuration,
             .publish_blocked, .run_proposal:
             return .init(
                 modules: [

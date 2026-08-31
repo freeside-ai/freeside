@@ -486,6 +486,107 @@
                                     snapshot.item,
                                     at: dynamicTypeSize,
                                     proposalFacts: proposalFacts))))
+
+                    let revised = AttentionFixtures.revisedSpecification()
+                    let revisedStore = InboxStore(client: client)
+                    revisedStore.replaceAll(with: [revised])
+                    revisedStore.replaceAllConversations(
+                        with: AttentionFixtures.defaultConversations())
+                    let revisedDetail = DecisionDetailView(
+                        store: revisedStore,
+                        itemID: revised.item.id,
+                        graphics: .init(),
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        now: screenshotNow)
+                    surfaces.append(
+                        Surface(
+                            name: "decision-spec_approval-revised",
+                            view: AnyView(
+                                revisedDetail.screenshotCard(
+                                    revised.item, at: dynamicTypeSize))))
+                    surfaces.append(
+                        Surface(
+                            name: "decision-spec_approval-revised-phone",
+                            width: 390,
+                            view: AnyView(
+                                revisedDetail.screenshotCard(
+                                    revised.item, at: dynamicTypeSize))))
+                    surfaces.append(
+                        Surface(
+                            name: "decision-spec_approval-revised-dark",
+                            colorScheme: .dark,
+                            view: AnyView(
+                                revisedDetail.screenshotCard(
+                                    revised.item, at: dynamicTypeSize))))
+                    surfaces.append(
+                        Surface(
+                            name: "decision-spec_approval-revised-phone-dark",
+                            width: 390,
+                            colorScheme: .dark,
+                            view: AnyView(
+                                revisedDetail.screenshotCard(
+                                    revised.item, at: dynamicTypeSize))))
+                    surfaces.append(
+                        Surface(
+                            name: "decision-spec_approval-specification-reader",
+                            width: 720,
+                            view: AnyView(
+                                revisedDetail.screenshotSpecApprovalReader(
+                                    .specification, item: revised.item))))
+                    surfaces.append(
+                        Surface(
+                            name: "decision-spec_approval-specification-reader-phone",
+                            width: 390,
+                            view: AnyView(
+                                revisedDetail.screenshotSpecApprovalReader(
+                                    .specification, item: revised.item))))
+                    surfaces.append(
+                        Surface(
+                            name: "decision-spec_approval-specification-reader-dark",
+                            width: 720,
+                            colorScheme: .dark,
+                            view: AnyView(
+                                revisedDetail.screenshotSpecApprovalReader(
+                                    .specification, item: revised.item))))
+                    surfaces.append(
+                        Surface(
+                            name: "decision-spec_approval-specification-reader-phone-dark",
+                            width: 390,
+                            colorScheme: .dark,
+                            view: AnyView(
+                                revisedDetail.screenshotSpecApprovalReader(
+                                    .specification, item: revised.item))))
+                    surfaces.append(
+                        Surface(
+                            name: "decision-spec_approval-diff-reader",
+                            width: 720,
+                            view: AnyView(
+                                revisedDetail.screenshotSpecApprovalReader(
+                                    .diff, item: revised.item))))
+                    surfaces.append(
+                        Surface(
+                            name: "decision-spec_approval-diff-reader-phone",
+                            width: 390,
+                            view: AnyView(
+                                revisedDetail.screenshotSpecApprovalReader(
+                                    .diff, item: revised.item))))
+                    surfaces.append(
+                        Surface(
+                            name: "decision-spec_approval-diff-reader-dark",
+                            width: 720,
+                            colorScheme: .dark,
+                            view: AnyView(
+                                revisedDetail.screenshotSpecApprovalReader(
+                                    .diff, item: revised.item))))
+                    surfaces.append(
+                        Surface(
+                            name: "decision-spec_approval-diff-reader-phone-dark",
+                            width: 390,
+                            colorScheme: .dark,
+                            view: AnyView(
+                                revisedDetail.screenshotSpecApprovalReader(
+                                    .diff, item: revised.item))))
                 }
 
                 if snapshot.item._type == .ready_for_final_review {
