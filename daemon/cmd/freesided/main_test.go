@@ -1406,6 +1406,7 @@ func TestBackupPayloadExtractorsIncludeAgentWorkflowMarkers(t *testing.T) {
 		engine.KindElaborationInvocationRequested,
 		engine.KindElaborationImplementationClaim,
 		engine.KindRemediationInvocationRequested,
+		engine.KindOperatorFeedbackInvocationRequested,
 		signet.PublicationReevaluationRequestedKind,
 		signet.PublicationReevaluationCompletedKind,
 	} {

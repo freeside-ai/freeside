@@ -745,6 +745,16 @@ enum MockContractValidation {
                 command.payload.snooze_until == nil,
                 command.payload.alternative_choices == nil
             else { throw malformed("invalid request_changes message") }
+        case .answer_and_retry, .answer_without_retry, .return_to_agent:
+            guard let message = command.payload.message,
+                !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                message.lengthOfBytes(using: .utf8) <= 8192,
+                command.command_id.lengthOfBytes(using: .utf8) <= 256,
+                (command.payload.attachments ?? []).isEmpty,
+                command.payload.run_proposal_revision == nil,
+                command.payload.snooze_until == nil,
+                command.payload.alternative_choices == nil
+            else { throw malformed("invalid answer or return feedback") }
         case .start_with_changes:
             guard let revision = command.payload.run_proposal_revision?.value1,
                 command.payload.snooze_until == nil,

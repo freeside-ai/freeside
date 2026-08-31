@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -132,6 +134,62 @@ func (tx *ReadTx) ListCommandsForItem(ctx context.Context, itemID domain.ItemID)
 		if command.ItemID != itemID {
 			return nil, fmt.Errorf("list commands for item %q returned %q: %w",
 				itemID, command.ItemID, errRowInconsistent)
+		}
+		commands = append(commands, command)
+	}
+	return commands, nil
+}
+
+// ListCommandsForActions returns every immutable accepted command whose
+// action is in actions, in command-id order. It reconstructs each selected row
+// through GetCommand, so the extracted columns and backup binding remain part
+// of the read authority. Unrelated command and attention rows are not read.
+func (tx *ReadTx) ListCommandsForActions(
+	ctx context.Context, actions ...domain.Action,
+) ([]domain.Command, error) {
+	if len(actions) == 0 {
+		return nil, nil
+	}
+	for _, action := range actions {
+		if !slices.Contains(domain.AllActions, action) {
+			return nil, fmt.Errorf("list commands for actions: invalid action %q", action)
+		}
+	}
+	actionSet, err := json.Marshal(actions)
+	if err != nil {
+		return nil, fmt.Errorf("list commands for actions: %w", err)
+	}
+	rows, err := tx.tx.QueryContext(ctx, `
+SELECT command_id FROM commands
+WHERE action IN (SELECT value FROM json_each(?))
+ORDER BY command_id`, actionSet)
+	if err != nil {
+		return nil, fmt.Errorf("list commands for actions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("list commands for actions: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list commands for actions: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("list commands for actions: %w", err)
+	}
+	commands := make([]domain.Command, 0, len(ids))
+	for _, id := range ids {
+		command, err := tx.GetCommand(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("list commands for actions: %w", err)
+		}
+		if !slices.Contains(actions, command.Action) {
+			return nil, fmt.Errorf("list commands for actions returned %q: %w",
+				command.Action, errRowInconsistent)
 		}
 		commands = append(commands, command)
 	}

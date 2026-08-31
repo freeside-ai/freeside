@@ -1475,11 +1475,11 @@ components:
         message:
           type: string
           description: >
-            Conversation content for the actions that ride the conversation
-            channel (plan §5.14 discuss semantics: the transaction's first
-            step is "append message"). Required for discuss, absent for pure
-            decisions; which actions require or forbid it is the daemon's
-            acceptance policy.
+            Human-authored text for message-carrying decisions. Required for
+            discuss, request_changes, answer_and_retry,
+            answer_without_retry, and return_to_agent; absent for pure
+            decisions. The daemon binds it to the versioned command and
+            applies each action's size and attachment policy.
         attachments:
           type: array
           items:
@@ -3476,7 +3476,11 @@ components:
 
     Action:
       type: string
-      description: A decision a client can take on an attention item (plan §4).
+      description: >
+        A decision a client can take on an attention item (plan §4).
+        answer_and_retry and answer_without_retry carry the answer in
+        DecisionPayload.message; return_to_agent carries required feedback
+        there.
       enum:
         - approve
         - request_changes

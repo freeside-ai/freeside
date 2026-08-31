@@ -224,6 +224,11 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 	if err != nil {
 		return ReconcileResult{}, fmt.Errorf("reconcile runs: %w", err)
 	}
+	feedbackTransitions, err := e.reconcileOperatorFeedback(ctx)
+	if err != nil {
+		return ReconcileResult{}, fmt.Errorf("reconcile operator feedback: %w", err)
+	}
+	runTransitions += feedbackTransitions
 	started, accepted, err := e.reconcileInvocations(ctx)
 	if err != nil {
 		return ReconcileResult{}, fmt.Errorf("reconcile invocations: %w", err)
@@ -275,6 +280,7 @@ func (e *Engine) ReconcileProductionPublications(ctx context.Context) (Reconcile
 	}
 	publication, err := e.productionPublication.reconcile(ctx)
 	result := ReconcileResult{
+		RunTransitions:            publication.feedbackTransitions,
 		ResultsAccepted:           publication.accepted,
 		PublicationTasksCompleted: publication.completed,
 		ReadyCleanItemsCreated:    publication.readyClean,

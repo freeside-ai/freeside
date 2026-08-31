@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -664,8 +666,6 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 			domain.ActionConvertToPolicy,
 			domain.ActionRetryWithCapability,
 			domain.ActionChooseAlternate,
-			domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry,
-			domain.ActionReturnToAgent,
 		}
 		for _, action := range pending {
 			cmd := f.command("cmd-pending-"+string(action), action)
@@ -675,6 +675,75 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 		}
 		if after := f.revision(t); after != before {
 			t.Errorf("pending-action rejection moved the revision %d → %d", before, after)
+		}
+	})
+
+	t.Run("answer and return actions record their message and conclude", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			action     domain.Action
+			itemType   domain.AttentionType
+			wantStatus domain.ItemStatus
+		}{
+			{"answer and retry", domain.ActionAnswerAndRetry, domain.AttentionAgentQuestion, domain.StatusSuperseded},
+			{"answer without retry", domain.ActionAnswerWithoutRetry, domain.AttentionAgentQuestion, domain.StatusResolved},
+			{"return to agent", domain.ActionReturnToAgent, domain.AttentionReadyForFinalReview, domain.StatusSuperseded},
+		}
+		for index, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				item := f.item
+				item.ID = domain.ItemID("item-message-action-" + string(test.action))
+				item.Type = test.itemType
+				item.RequestedDecision = []domain.Action{test.action}
+				if test.itemType == domain.AttentionAgentQuestion {
+					item.PRHeadSHA = ""
+					item.PRReference = nil
+					item.InterruptionClass = domain.InterruptionExceptional
+				}
+				if err := f.service.PutItem(ctx, item); err != nil {
+					t.Fatal(err)
+				}
+				command := f.command(fmt.Sprintf("cmd-message-action-%d", index), test.action)
+				command.Payload.ItemID = item.ID
+				command.Payload.ItemVersion = item.ItemVersion
+				command.Payload.PRHeadSHA = item.PRHeadSHA
+				command.Payload.ArtifactDigests = item.ArtifactDigests
+				command.Payload.Message = "  Operator feedback.  "
+				withoutMessage := command
+				withoutMessage.CommandID += "-empty"
+				withoutMessage.Payload.Message = " \t\n "
+				if _, err := f.service.Submit(ctx, withoutMessage); !errors.Is(err, signet.ErrMessageRequired) {
+					t.Fatalf("empty message error = %v, want ErrMessageRequired", err)
+				}
+				first, err := f.service.Submit(ctx, command)
+				if err != nil {
+					t.Fatal(err)
+				}
+				beforeReplay := f.revision(t)
+				replay, err := f.service.Submit(ctx, command)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(replay, first) || f.revision(t) != beforeReplay {
+					t.Fatal("idempotent replay changed the recorded result or server revision")
+				}
+				var stored domain.AttentionItem
+				if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+					var err error
+					stored, err = tx.GetAttentionItem(ctx, item.ID)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if first.Record.Message != command.Payload.Message || stored.Status != test.wantStatus {
+					t.Fatalf("result = %#v, item status = %q", first.Record, stored.Status)
+				}
+				stale := command
+				stale.CommandID += "-stale"
+				if _, err := f.service.Submit(ctx, stale); !errors.Is(err, signet.ErrClosedItem) {
+					t.Fatalf("closed-item submission error = %v, want ErrClosedItem", err)
+				}
+			})
 		}
 	})
 

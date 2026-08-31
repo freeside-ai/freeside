@@ -532,7 +532,7 @@ import Testing
             try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         var command = Self.command(
-            id: "cmd-pending-missing", against: before, action: .answer_and_retry)
+            id: "cmd-pending-missing", against: before, action: .convert_to_policy)
         command.payload.item_id = "item-none"
 
         let output = try await client.submitCommand(body: .json(command))
@@ -589,7 +589,7 @@ import Testing
 
         let output = try await client.submitCommand(
             body: .json(
-                Self.command(id: "cmd-order", against: before, action: .answer_and_retry)))
+                Self.command(id: "cmd-order", against: before, action: .convert_to_policy)))
         guard case .undocumented(let statusCode, let payload) = output, let body = payload.body
         else {
             Issue.record("expected an authoritative rejection, got \(output)")
@@ -1052,12 +1052,12 @@ import Testing
         let client = APIClientFactory.mock(server: server)
         let before =
             try await client
-            .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
-        #expect(ActionOutcome.of(.answer_and_retry) == .pending)
+            .getAttentionItem(path: .init(item_id: "item-review_diminishing_returns")).ok.body.json
+        #expect(ActionOutcome.of(.convert_to_policy) == .pending)
 
         let output = try await client.submitCommand(
             body: .json(
-                Self.command(id: "cmd-pending", against: before, action: .answer_and_retry)))
+                Self.command(id: "cmd-pending", against: before, action: .convert_to_policy)))
         guard case .undocumented(let statusCode, _) = output else {
             Issue.record("expected an authoritative rejection, got \(output)")
             return
@@ -1067,12 +1067,41 @@ import Testing
         // No effect: the same prepared state still applies cleanly.
         let after =
             try await client
-            .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
+            .getAttentionItem(path: .init(item_id: "item-review_diminishing_returns")).ok.body.json
         #expect(after == before)
         _ =
             try await client
             .submitCommand(body: .json(Self.command(id: "cmd-still-valid", against: before)))
             .ok.body.json
+    }
+
+    @Test func answerAndReturnActionsRequireMessagesAndConclude() async throws {
+        for (itemID, action, status) in [
+            (
+                "item-agent_question", Components.Schemas.Action.answer_and_retry,
+                Components.Schemas.ItemStatus.superseded
+            ),
+            ("item-ready_for_final_review", .return_to_agent, .superseded),
+        ] {
+            let server = MockServer()
+            let client = APIClientFactory.mock(server: server)
+            let before = try await client.getAttentionItem(path: .init(item_id: itemID)).ok.body.json
+            var missing = Self.command(id: "cmd-missing-\(action)", against: before, action: action)
+            let rejected = try await client.submitCommand(body: .json(missing))
+            guard case .undocumented(let statusCode, _) = rejected else {
+                Issue.record("expected missing-message rejection, got \(rejected)")
+                continue
+            }
+            #expect(statusCode == 422)
+
+            missing.payload.message = "Operator feedback"
+            let first = try await client.submitCommand(body: .json(missing)).ok.body.json
+            let replay = try await client.submitCommand(body: .json(missing)).ok.body.json
+            #expect(replay == first)
+            #expect(first.record.message == "Operator feedback")
+            let after = try await client.getAttentionItem(path: .init(item_id: itemID)).ok.body.json
+            #expect(after.item.status == status)
+        }
     }
 
     @Test func dismissDismissesTheItem() async throws {

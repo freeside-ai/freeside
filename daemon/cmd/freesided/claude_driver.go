@@ -805,11 +805,19 @@ func (a storeAdmissionAuthority) invocationCommitAuthor(
 		entry       store.QueueEntry
 		publication engine.ProductionPublication
 		remediation bool
+		feedback    bool
 	)
 	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		entry, err = tx.GetOutbox(ctx, string(id))
 		if err != nil {
+			return err
+		}
+		if entry.Kind == engine.KindOperatorFeedbackInvocationRequested {
+			feedback = true
+			publication, err = engine.AuthenticateOperatorFeedbackInvocationTransition(
+				ctx, tx, entry, admission.RunID, admission.StageID,
+			)
 			return err
 		}
 		if entry.Kind != engine.KindRemediationInvocationRequested {
@@ -821,6 +829,13 @@ func (a storeAdmissionAuthority) invocationCommitAuthor(
 		)
 		return err
 	})
+	if feedback {
+		if err != nil {
+			return engine.ProductionCommitAuthor{}, false,
+				fmt.Errorf("authenticate operator-feedback commit author: %w", err)
+		}
+		return publication.CommitAuthor, true, nil
+	}
 	if remediation {
 		if err != nil {
 			return engine.ProductionCommitAuthor{}, false,

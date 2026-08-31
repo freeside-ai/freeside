@@ -93,7 +93,8 @@ type ProductionPublicationConfig struct {
 	NewRoom         func(domain.ProjectImage) (ProductionVerificationRoom, error)
 	ReviewSource    exec.ReviewSource
 	// RemediationPromptPackageDigest selects the trusted prompt package for
-	// implementation-role invocations created by finding adjudication.
+	// implementation-role follow-up invocations created by finding
+	// adjudication or accepted operator feedback.
 	RemediationPromptPackageDigest domain.Digest
 	// ShadowReviewSource is optional. When present, every other shadow field
 	// is required and the source remains observation-only: it cannot satisfy
@@ -239,12 +240,13 @@ func (w *productionPublicationWorkflow) attentionCreatedAt() time.Time {
 }
 
 type productionPublicationResult struct {
-	completed     int
-	accepted      int
-	readyClean    int
-	readyDegraded int
-	blocked       int
-	lastPR        int
+	feedbackTransitions int
+	completed           int
+	accepted            int
+	readyClean          int
+	readyDegraded       int
+	blocked             int
+	lastPR              int
 }
 
 func newProductionPublicationWorkflow(
@@ -665,6 +667,25 @@ func RecordExecutionExport(
 		return err
 	}); err != nil {
 		return err
+	}
+	var operatorFeedback bool
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		operatorFeedback, err = authenticateOperatorFeedbackAttempt(
+			ctx, tx, executionExport.InvocationID, admission.RunID, admission.StageID,
+		)
+		return err
+	}); err != nil {
+		return fmt.Errorf("authenticate operator-feedback export: %w", err)
+	}
+	if operatorFeedback {
+		// A feedback invocation resumes implementation from durable input, but
+		// its first export is not itself a publication candidate. Recording it
+		// export-only lets the attempt close without minting a task that would
+		// incorrectly reuse the original production invocation's identity.
+		return st.Write(ctx, func(tx *store.WriteTx) error {
+			return tx.RecordExecutionExport(ctx, executionExport)
+		})
 	}
 	switch admission.OperatingMode {
 	case domain.ModeAttendedDev:
@@ -1487,6 +1508,13 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 		}
 		return productionPublicationResult{}, nil
 	}
+	var result productionPublicationResult
+	var joined error
+	feedbackTransitions, err := w.reconcileOperatorFeedback(ctx)
+	result.feedbackTransitions = feedbackTransitions
+	if err != nil {
+		joined = errors.Join(joined, fmt.Errorf("reconcile returned operator feedback: %w", err))
+	}
 	var pending []store.QueueEntry
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -1501,11 +1529,9 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 		pending = append(pending, reevaluations...)
 		return nil
 	}); err != nil {
-		return productionPublicationResult{}, err
+		return result, errors.Join(joined, err)
 	}
 	w.pruneHeldTaskRetries(pending)
-	var result productionPublicationResult
-	var joined error
 	for _, entry := range pending {
 		var task productionPublicationTask
 		var err error
@@ -5623,7 +5649,8 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 		Reason: fmt.Sprintf("Published %s#%d and completed production verification.",
 			checkpoint.Authorization.Repo, published.PRNumber),
 		RequestedDecision: []domain.Action{
-			domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionDismiss, domain.ActionStop,
+			domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionMarkSeen,
+			domain.ActionDismiss, domain.ActionStop,
 		},
 		EvidenceSnapshot: checkpoint.Artifacts,
 		AgentClaims: normalizeSummaryClaims(

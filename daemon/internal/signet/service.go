@@ -264,6 +264,10 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 				if err := s.applyDiscuss(ctx, tx, command, item, snap); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
+			case outcomeAnswersAndRetries, outcomeReturnsToAgent:
+				if err := concludeItem(ctx, tx, item, status, s.now().UTC()); err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
 			case outcomeStopsUnattended:
 				if err := s.applyStopUnattended(ctx, tx, command, item, status); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
@@ -399,6 +403,11 @@ const (
 	outcomeRevisesAndStartsProposal
 	outcomeDeclinesProposal
 	outcomeSnoozesProposal
+	// Answer-and-retry and return-to-agent conclude their carrier as
+	// superseded; the engine consumes the authenticated command as recorded
+	// input and creates the next invocation exactly once.
+	outcomeAnswersAndRetries
+	outcomeReturnsToAgent
 )
 
 // actionOutcome maps an action to what its acceptance does, following plan
@@ -440,6 +449,12 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		return domain.StatusResolved, outcomeRerunsTrustEvaluation
 	case domain.ActionRequestChanges:
 		return domain.StatusSuperseded, outcomeConcludes
+	case domain.ActionAnswerAndRetry:
+		return domain.StatusSuperseded, outcomeAnswersAndRetries
+	case domain.ActionAnswerWithoutRetry:
+		return domain.StatusResolved, outcomeConcludes
+	case domain.ActionReturnToAgent:
+		return domain.StatusSuperseded, outcomeReturnsToAgent
 	case domain.ActionStopUnattended:
 		return domain.StatusResolved, outcomeStopsUnattended
 	case domain.ActionResumeUnattended:
@@ -468,9 +483,7 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 	case domain.ActionDiscuss:
 		return "", outcomeDiscusses
 	case domain.ActionConvertToPolicy, domain.ActionRetryWithCapability,
-		domain.ActionChooseAlternate,
-		domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry,
-		domain.ActionReturnToAgent:
+		domain.ActionChooseAlternate:
 		return "", outcomePending
 	}
 	// Invalid zero value: unreachable past NewCommand's validation and

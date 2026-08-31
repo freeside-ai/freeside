@@ -56,17 +56,15 @@ import Testing
                 == [.init(label: "Requested, not available here", value: "Convert to policy")])
     }
 
-    /// With nothing faithful left, the card says so rather than offering a
-    /// dead control.
-    @Test func anAllPendingOfferIsNotDecidableHere() {
+    @Test func answerAndReturnActionsAreOffered() {
         let ranking = DecisionActionRanking(
             requested: [.answer_and_retry, .answer_without_retry, .return_to_agent])
 
-        #expect(ranking.principal.isEmpty)
+        #expect(ranking.principal == [.answer_and_retry, .answer_without_retry, .return_to_agent])
         #expect(ranking.reviewing == nil)
         #expect(ranking.overflow.isEmpty)
-        #expect(ranking.notDecidableHere)
-        #expect(AttentionDisplay.unavailableActionRows(ranking.unavailable).count == 3)
+        #expect(!ranking.notDecidableHere)
+        #expect(ranking.unavailable.isEmpty)
     }
 
     @Test func recommendationIsExplicitNeverOfferOrder() {
@@ -84,13 +82,13 @@ import Testing
     }
 
     @Test func invalidOrUnavailableRecommendationDoesNotAcquireAuthority() {
-        let requested: [Components.Schemas.Action] = [.approve, .answer_and_retry]
+        let requested: [Components.Schemas.Action] = [.approve, .convert_to_policy]
 
         #expect(
             DecisionActionRanking(requested: requested, recommendedAction: .retry)
                 .recommended == nil)
         #expect(
-            DecisionActionRanking(requested: requested, recommendedAction: .answer_and_retry)
+            DecisionActionRanking(requested: requested, recommendedAction: .convert_to_policy)
                 .recommended == nil)
     }
 
@@ -131,9 +129,9 @@ import Testing
         #expect(ranking.principal == [.approve, .retry])
     }
 
-    @Test func allFilteredDecisionRendersCapabilityMismatch() {
+    @Test func pendingDecisionRendersCapabilityMismatch() {
         let ranking = DecisionActionRanking(
-            requested: [.answer_and_retry])
+            requested: [.convert_to_policy])
 
         #expect(ranking.notDecidableHere)
         #expect(ranking.principal.isEmpty)

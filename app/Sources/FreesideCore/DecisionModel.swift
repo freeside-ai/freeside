@@ -471,6 +471,37 @@ public final class DecisionModel {
         return submissionClaimGeneration != generationBefore
     }
 
+    @discardableResult
+    public func submitAnswer(_ action: Components.Schemas.Action, message: String) async -> Bool {
+        guard action == .answer_and_retry || action == .answer_without_retry else { return false }
+        return await submitMessageAction(
+            action, message: message, emptyError: "enter an answer before sending")
+    }
+
+    @discardableResult
+    public func submitReturnToAgent(message: String) async -> Bool {
+        await submitMessageAction(
+            .return_to_agent, message: message,
+            emptyError: "describe what the agent should change before returning the work")
+    }
+
+    private func submitMessageAction(
+        _ action: Components.Schemas.Action, message: String, emptyError: String
+    ) async -> Bool {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            submissionError = emptyError
+            return false
+        }
+        guard trimmed.lengthOfBytes(using: .utf8) <= 8192 else {
+            submissionError = "the message must be 8 KiB or less"
+            return false
+        }
+        let generationBefore = submissionClaimGeneration
+        await submit(action, message: trimmed)
+        return submissionClaimGeneration != generationBefore
+    }
+
     public func submit(_ action: Components.Schemas.Action) async {
         await submit(
             action, revision: nil, snoozeUntil: nil, alternativeChoices: nil,
@@ -512,7 +543,10 @@ public final class DecisionModel {
         guard (action == .start_with_changes) == (revision != nil),
             (action == .snooze) == (snoozeUntil != nil),
             (action == .choose_alternative_route) == (alternativeChoices != nil),
-            (action == .discuss || action == .request_changes) == (message != nil)
+            ([
+                .discuss, .request_changes, .answer_and_retry, .answer_without_retry,
+                .return_to_agent,
+            ] as Set).contains(action) == (message != nil)
         else { return }
         let urlToOpen: URL?
         if action == .open_pr {
