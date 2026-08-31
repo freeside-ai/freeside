@@ -1261,6 +1261,7 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	specRevisionItem := mustItem(t, specRevisionInput(t))
 
 	cases := []struct {
 		name  string
@@ -1290,6 +1291,7 @@ func TestGolden(t *testing.T) {
 		{"attention_item_execution_failure", executionFailureItem},
 		{"attention_item_publish_blocked", publishBlockedItem},
 		{"attention_item_review_dispute", reviewDisputeItem},
+		{"attention_item_spec_revision", specRevisionItem},
 		{"attention_item_decided", decidedItem},
 		{"attention_item_superseded", supersededItem},
 		{"attention_item_advisory", advisoryItem},

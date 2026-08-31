@@ -1,0 +1,117 @@
+{
+  "id": "spec-approval-run-2",
+  "project_id": "proj-1",
+  "subject": {
+    "subject_type": "run",
+    "subject_id": "run-1",
+    "run_id": "run-1"
+  },
+  "type": "spec_approval",
+  "priority": "normal",
+  "reason": "needs a decision",
+  "requested_decision": [
+    "stop"
+  ],
+  "recommendation": null,
+  "decision_surface": {
+    "epoch": 1,
+    "digest": "sha256:312a540e61b8ca1ccda7dc6827ed597ee5164e989da58fa2df9acf04c424115b"
+  },
+  "evidence_snapshot": null,
+  "agent_claims": [
+    {
+      "label": "Specification",
+      "artifact_id": "spec-run-2",
+      "digest": "sha256:spec-2",
+      "provenance": {
+        "producer_class": "agent",
+        "producer_invocation_id": "inv-elaborate-2",
+        "head_binding": "head_independent",
+        "verification_recipe_digest": null,
+        "sensitivity_class": "normal"
+      },
+      "text": null
+    },
+    {
+      "label": "Addressals",
+      "artifact_id": "spec-addressals-run-2",
+      "digest": "sha256:c886feb1d99e9c544b34a21766e9fe14e1a0f054fddf73188a7239374ea07a37",
+      "provenance": {
+        "producer_class": "agent",
+        "producer_invocation_id": "inv-elaborate-2",
+        "head_binding": "head_independent",
+        "verification_recipe_digest": null,
+        "sensitivity_class": "normal"
+      },
+      "text": null
+    }
+  ],
+  "artifact_digests": [
+    "sha256:c886feb1d99e9c544b34a21766e9fe14e1a0f054fddf73188a7239374ea07a37",
+    "sha256:spec-2"
+  ],
+  "pr_head_sha": "",
+  "pr_reference": null,
+  "readiness": null,
+  "yield_history": null,
+  "commit_plan_notice": null,
+  "base_freshness": null,
+  "readiness_invalidation": null,
+  "review_recovery_binding": null,
+  "codex_reenrollment_recovery_binding": null,
+  "review_configuration_recovery": null,
+  "finding_adjudication": null,
+  "display_names": null,
+  "billable_cost_so_far": null,
+  "execution_failure": null,
+  "publish_block": null,
+  "diff_stats": null,
+  "blocked_on": null,
+  "health_diagnostic": null,
+  "review_dispute": null,
+  "spec_revision": {
+    "iteration": 2,
+    "prior_item_id": "spec-approval-run-1",
+    "prior_spec_artifact_id": "spec-run-1",
+    "prior_spec_digest": "sha256:spec-1",
+    "diff": {
+      "lines_added": 1,
+      "lines_removed": 1,
+      "unified": "@@ -1,1 +1,1 @@\n-old\n+new",
+      "truncated": false
+    },
+    "prior_comments": [
+      {
+        "comment_id": "revise-spec",
+        "artifact_id": "spec-feedback-revise-spec",
+        "digest": "sha256:ad92f5e9e45ce46dc793a727121f61d2fd276557e14bdc5f991bf28cd1a2a670",
+        "raised_on_item_id": "spec-approval-run-1",
+        "iteration": 1,
+        "body": "Bound the request body."
+      }
+    ],
+    "claimed_addressals": [
+      {
+        "comment_id": "revise-spec",
+        "response": "Added a 1 MiB bound."
+      }
+    ],
+    "addressals_digest": "sha256:c886feb1d99e9c544b34a21766e9fe14e1a0f054fddf73188a7239374ea07a37"
+  },
+  "item_version": 1,
+  "interruption_class": "planned_gate",
+  "conversation_id": null,
+  "timing": {
+    "delivery_count": 0,
+    "first_submitted_at": null,
+    "first_accepted_at": null,
+    "first_opened_at": null,
+    "submit_to_first_open": null
+  },
+  "created_at": null,
+  "expires_when": null,
+  "decided_at": null,
+  "posture": null,
+  "blocking_supersession": null,
+  "status": "open"
+}

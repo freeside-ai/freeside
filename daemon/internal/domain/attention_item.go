@@ -508,6 +508,7 @@ type AttentionItem struct {
 	BlockedOn         *BlockedWait           `json:"blocked_on"`
 	HealthDiagnostic  *HealthDiagnostic      `json:"health_diagnostic"`
 	ReviewDispute     *ReviewDisputeBinding  `json:"review_dispute"`
+	SpecRevision      *SpecRevisionFacts     `json:"spec_revision"`
 	ItemVersion       int                    `json:"item_version"`
 	InterruptionClass InterruptionClass      `json:"interruption_class"`
 	ConversationID    *ConversationID        `json:"conversation_id"`
@@ -575,6 +576,7 @@ type AttentionItemInput struct {
 	BlockedOn                        *BlockedWait
 	HealthDiagnostic                 *HealthDiagnostic
 	ReviewDispute                    *ReviewDisputeBinding
+	SpecRevision                     *SpecRevisionFacts
 	ItemVersion                      int
 	InterruptionClass                InterruptionClass
 	ConversationID                   *ConversationID
@@ -629,6 +631,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		BlockedOn:                        cloneBlockedWait(in.BlockedOn),
 		HealthDiagnostic:                 clonePtr(in.HealthDiagnostic),
 		ReviewDispute:                    cloneReviewDisputeBinding(in.ReviewDispute),
+		SpecRevision:                     cloneSpecRevisionFacts(in.SpecRevision),
 		ItemVersion:                      in.ItemVersion,
 		InterruptionClass:                in.InterruptionClass,
 		ConversationID:                   clonePtr(in.ConversationID),
@@ -915,6 +918,30 @@ func (i AttentionItem) Validate() error {
 			i.Subject.ID != SubjectID(i.ReviewDispute.RunID) {
 			return fmt.Errorf("item %s review dispute disagrees with subject: %w",
 				i.ID, ErrCardFactInconsistent)
+		}
+	}
+	if i.SpecRevision != nil {
+		if i.Type != AttentionSpecApproval {
+			return fmt.Errorf("item %s type %q carries spec revision facts: %w",
+				i.ID, i.Type, ErrCardFactOutsideItem)
+		}
+		if err := i.SpecRevision.Validate(); err != nil {
+			return fmt.Errorf("item %s spec_revision: %w", i.ID, err)
+		}
+		if i.Subject.Type != SubjectRun || i.Subject.RunID == nil ||
+			i.Subject.ID != SubjectID(*i.Subject.RunID) || i.SpecRevision.PriorItemID == i.ID {
+			return fmt.Errorf("item %s spec revision disagrees with subject or prior item: %w",
+				i.ID, ErrCardFactInconsistent)
+		}
+		matchingClaims := 0
+		for _, claim := range i.AgentClaims {
+			if claim.Label == "Addressals" && claim.Digest == i.SpecRevision.AddressalsDigest {
+				matchingClaims++
+			}
+		}
+		if matchingClaims != 1 {
+			return fmt.Errorf("item %s spec revision has %d matching Addressals claims: %w",
+				i.ID, matchingClaims, ErrCardFactInconsistent)
 		}
 	}
 	if i.CodexReenrollmentRecoveryBinding != nil {

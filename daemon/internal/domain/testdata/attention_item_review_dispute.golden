@@ -49,6 +49,7 @@
     ],
     "completion_evidence": "sha256:review-completion"
   },
+  "spec_revision": null,
   "item_version": 1,
   "interruption_class": "exceptional",
   "conversation_id": null,

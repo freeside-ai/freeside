@@ -40,6 +40,7 @@
   "blocked_on": null,
   "health_diagnostic": null,
   "review_dispute": null,
+  "spec_revision": null,
   "item_version": 1,
   "interruption_class": "exceptional",
   "conversation_id": null,
