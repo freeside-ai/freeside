@@ -16,7 +16,7 @@ func TestOutputGolden(t *testing.T) {
 		Summary: "Add the missing lifecycle gate.",
 		Body:    "# Objective\n\nRequire approval before implementation.",
 		Addressals: []elaborate.Addressal{{
-			Comment: "Show the refusal path.", Response: "Added refusal tests.",
+			CommentID: "request-refusal-tests", Response: "Added refusal tests.",
 		}},
 	}}
 	body, err := elaborate.EncodeOutput(out)
@@ -64,6 +64,26 @@ func TestDecodeOutputStrictAndExclusive(t *testing.T) {
 	}
 }
 
+func TestDecodeLegacyAddressalOutputBindsAuthenticatedFeedback(t *testing.T) {
+	body := []byte(`{"fetch_requests":[],"specification":{"summary":"Revised.","body":"# Specification","addressals":[{"comment":"Bound the request.","response":"Added a 1 MiB limit."}]},"reply":null}`)
+	out, err := elaborate.DecodeLegacyAddressalOutput(body, map[string]string{
+		"Bound the request.": "revise-spec",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Specification == nil || len(out.Specification.Addressals) != 1 ||
+		out.Specification.Addressals[0].CommentID != "revise-spec" {
+		t.Fatalf("legacy output = %+v, want authenticated comment id", out)
+	}
+	if _, err := elaborate.DecodeLegacyAddressalOutput(body, nil); !errors.Is(err, elaborate.ErrInvalidOutput) {
+		t.Fatalf("unbound legacy output error = %v, want ErrInvalidOutput", err)
+	}
+	if _, err := elaborate.DecodeOutput(body); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("current decoder accepted legacy output: %v", err)
+	}
+}
+
 func TestOutputRejectsCardinalityAndPresentationOverflow(t *testing.T) {
 	requests := make([]elaborate.FetchRequest, elaborate.MaxFetchRequests+1)
 	for i := range requests {
@@ -85,8 +105,8 @@ func TestOutputRejectsCardinalityAndPresentationOverflow(t *testing.T) {
 	addressals := make([]elaborate.Addressal, elaborate.MaxAddressals)
 	for i := range addressals {
 		addressals[i] = elaborate.Addressal{
-			Comment:  strings.Repeat("c", elaborate.MaxAddressalTextBytes),
-			Response: strings.Repeat("r", elaborate.MaxAddressalTextBytes),
+			CommentID: strings.Repeat("c", elaborate.MaxAddressalTextBytes),
+			Response:  strings.Repeat("r", elaborate.MaxAddressalTextBytes),
 		}
 	}
 	if _, err := elaborate.EncodeOutput(elaborate.Output{Specification: &elaborate.Specification{

@@ -25,6 +25,18 @@ type transcriptRecord struct {
 // record in a Claude stream-json transcript. The human-readable StageResult
 // summary is deliberately not an output channel.
 func DecodeTranscript(reader io.Reader) (Output, error) {
+	return decodeTranscript(reader, DecodeOutput)
+}
+
+// DecodeLegacyAddressalTranscript decodes the durable transcript emitted by
+// the prompt contract immediately preceding comment_id addressals.
+func DecodeLegacyAddressalTranscript(reader io.Reader, commentIDs map[string]string) (Output, error) {
+	return decodeTranscript(reader, func(data []byte) (Output, error) {
+		return DecodeLegacyAddressalOutput(data, commentIDs)
+	})
+}
+
+func decodeTranscript(reader io.Reader, decode func([]byte) (Output, error)) (Output, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), int(MaxTranscriptRecordBytes))
 	var result *string
@@ -52,7 +64,7 @@ func DecodeTranscript(reader io.Reader) (Output, error) {
 	if result == nil {
 		return Output{}, ErrTranscriptResultMissing
 	}
-	return DecodeOutput([]byte(*result))
+	return decode([]byte(*result))
 }
 
 // EncodeTranscript emits the production transcript result shape for the

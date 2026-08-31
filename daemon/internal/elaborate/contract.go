@@ -43,8 +43,25 @@ type FetchRequest struct {
 // Addressal maps one prior human comment to the revision's claimed response.
 // It is agent-authored presentation, never proof that the comment was met.
 type Addressal struct {
+	CommentID string `json:"comment_id"`
+	Response  string `json:"response"`
+}
+
+type legacyAddressal struct {
 	Comment  string `json:"comment"`
 	Response string `json:"response"`
+}
+
+type legacySpecification struct {
+	Summary    string            `json:"summary"`
+	Body       string            `json:"body"`
+	Addressals []legacyAddressal `json:"addressals"`
+}
+
+type legacyOutput struct {
+	FetchRequests []FetchRequest       `json:"fetch_requests"`
+	Specification *legacySpecification `json:"specification"`
+	Reply         *string              `json:"reply"`
 }
 
 // Specification is the terminal elaborator output.
@@ -75,6 +92,45 @@ func DecodeOutput(data []byte) (Output, error) {
 		strictjson.RejectInvalidUTF8, MaxOutputBytes); err != nil {
 		return Output{}, fmt.Errorf("decode elaborator output: %w (output begins %q)",
 			err, outputPrefix(data))
+	}
+	if err := out.Validate(); err != nil {
+		return Output{}, err
+	}
+	return out, nil
+}
+
+// DecodeLegacyAddressalOutput reconstructs output admitted under the prompt
+// contract immediately preceding comment_id addressals. The caller supplies
+// the authenticated feedback-body-to-command-id binding from that invocation;
+// no current-contract output passes through this compatibility path.
+func DecodeLegacyAddressalOutput(data []byte, commentIDs map[string]string) (Output, error) {
+	var legacy legacyOutput
+	if err := strictjson.Decode(stripMarkdownFence(data), &legacy,
+		strictjson.RejectInvalidUTF8, MaxOutputBytes); err != nil {
+		return Output{}, fmt.Errorf("decode legacy elaborator output: %w (output begins %q)",
+			err, outputPrefix(data))
+	}
+	out := Output{
+		FetchRequests: legacy.FetchRequests,
+		Reply:         legacy.Reply,
+	}
+	if legacy.Specification != nil {
+		out.Specification = &Specification{
+			Summary:    legacy.Specification.Summary,
+			Body:       legacy.Specification.Body,
+			Addressals: make([]Addressal, len(legacy.Specification.Addressals)),
+		}
+		for i, addressal := range legacy.Specification.Addressals {
+			commentID, ok := commentIDs[addressal.Comment]
+			if !ok {
+				return Output{}, fmt.Errorf("%w: legacy addressals[%d] does not match authenticated feedback",
+					ErrInvalidOutput, i)
+			}
+			out.Specification.Addressals[i] = Addressal{
+				CommentID: commentID,
+				Response:  addressal.Response,
+			}
+		}
 	}
 	if err := out.Validate(); err != nil {
 		return Output{}, err
@@ -204,12 +260,12 @@ func (s Specification) validate() error {
 		return fmt.Errorf("%w: specification addressals exceeds %d entries", ErrInvalidOutput, MaxAddressals)
 	}
 	for i, addressal := range s.Addressals {
-		if addressal.Comment == "" || addressal.Response == "" ||
-			len(addressal.Comment) > MaxAddressalTextBytes || len(addressal.Response) > MaxAddressalTextBytes ||
-			addressal.Comment != strings.TrimSpace(addressal.Comment) ||
+		if addressal.CommentID == "" || addressal.Response == "" ||
+			len(addressal.CommentID) > MaxAddressalTextBytes || len(addressal.Response) > domain.MaxSpecRevisionCommentBytes ||
+			addressal.CommentID != strings.TrimSpace(addressal.CommentID) ||
 			addressal.Response != strings.TrimSpace(addressal.Response) ||
-			!utf8.ValidString(addressal.Comment) || !utf8.ValidString(addressal.Response) {
-			return fmt.Errorf("%w: addressals[%d] requires trimmed UTF-8 comment and response", ErrInvalidOutput, i)
+			!utf8.ValidString(addressal.CommentID) || !utf8.ValidString(addressal.Response) {
+			return fmt.Errorf("%w: addressals[%d] requires trimmed UTF-8 comment_id and response", ErrInvalidOutput, i)
 		}
 	}
 	return nil
