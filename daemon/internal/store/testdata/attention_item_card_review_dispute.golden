@@ -31,7 +31,16 @@
   "codex_reenrollment_recovery_binding": null,
   "review_configuration_recovery": null,
   "finding_adjudication": null,
-  "display_names": null,
+  "display_names": {
+    "project": {
+      "text": "owner/repo",
+      "source": "name"
+    },
+    "work_unit": {
+      "text": "#1003",
+      "source": "name"
+    }
+  },
   "billable_cost_so_far": null,
   "execution_failure": null,
   "publish_block": null,

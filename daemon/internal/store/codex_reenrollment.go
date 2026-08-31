@@ -184,12 +184,17 @@ func NewCodexReenrollmentMarker(
 	version int,
 	status domain.ItemStatus,
 	binding *domain.CodexReenrollmentRecoveryBinding,
+	names ...*domain.DisplayNames,
 ) (domain.AttentionItem, error) {
 	itemID, err := CodexReenrollmentMarkerID(id, occurrence)
 	if err != nil {
 		return domain.AttentionItem{}, err
 	}
 	posture := domain.HealthPostureAdvisory
+	var displayNames *domain.DisplayNames
+	if len(names) != 0 {
+		displayNames = names[0]
+	}
 	actions := []domain.Action{domain.ActionAcknowledge}
 	if binding != nil {
 		if binding.AuthIdentityID != id {
@@ -207,11 +212,15 @@ func NewCodexReenrollmentMarker(
 		),
 		RequestedDecision:                actions,
 		CodexReenrollmentRecoveryBinding: binding,
-		ItemVersion:                      version,
-		InterruptionClass:                domain.InterruptionExceptional,
-		CreatedAt:                        nil,
-		Posture:                          &posture,
-		Status:                           status,
+		HealthDiagnostic: &domain.HealthDiagnostic{
+			Code: "codex_reenrollment_required", Impairs: domain.ImpairedCapabilityAgentCredential,
+		},
+		DisplayNames:      displayNames,
+		ItemVersion:       version,
+		InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt:         nil,
+		Posture:           &posture,
+		Status:            status,
 	}, nil)
 }
 
@@ -232,7 +241,7 @@ func CodexReenrollmentMarkerOccurrence(
 	}
 	expected, err := NewCodexReenrollmentMarker(
 		id, occurrence, item.ProjectID, item.ItemVersion, item.Status,
-		item.CodexReenrollmentRecoveryBinding,
+		item.CodexReenrollmentRecoveryBinding, item.DisplayNames,
 	)
 	if err != nil {
 		return 0, err
@@ -240,6 +249,9 @@ func CodexReenrollmentMarkerOccurrence(
 	expected.Timing = item.Timing
 	expected.CreatedAt = item.CreatedAt
 	expected.DecidedAt = item.DecidedAt
+	if item.HealthDiagnostic == nil {
+		expected.HealthDiagnostic = nil
+	}
 	// Recommendation and decision-surface identity are daemon projections.
 	// Their own reconstruction gates authenticate them before this marker
 	// shape check, so they cannot make the identity-derived constructor differ.

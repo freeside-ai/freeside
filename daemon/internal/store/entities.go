@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -9,10 +10,14 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // The statements below are deliberately spelled out per entity, as constants:
@@ -418,6 +423,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	if err := tx.gateReviewDisputeItem(ctx, item); err != nil {
 		return fmt.Errorf("put attention item %q review dispute binding: %w", item.ID, err)
 	}
+	if err := tx.gateBlockedItem(ctx, item); err != nil {
+		return fmt.Errorf("put attention item %q blocked binding: %w", item.ID, err)
+	}
 	existing, err := tx.existingBody(ctx, `SELECT body FROM attention_items WHERE id = ?`, item.ID)
 	if err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
@@ -437,6 +445,57 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 		// with the stored values normalized back in.
 		item.Recommendation = decoded.Recommendation
 		item.DecisionSurface = decoded.DecisionSurface
+		// Read-modify-write paths created before display names existed must not
+		// erase producer-derived labels already attached to the item.
+		if item.DisplayNames == nil && decoded.DisplayNames != nil {
+			item.DisplayNames = decoded.DisplayNames
+		}
+		if item.Type == decoded.Type {
+			if item.BillableCostSoFar == nil && decoded.BillableCostSoFar != nil {
+				item.BillableCostSoFar = decoded.BillableCostSoFar
+			}
+			if item.ExecutionFailure == nil && decoded.ExecutionFailure != nil {
+				item.ExecutionFailure = decoded.ExecutionFailure
+			}
+			if item.PublishBlock == nil && decoded.PublishBlock != nil {
+				item.PublishBlock = decoded.PublishBlock
+			}
+			if item.DiffStats == nil && decoded.DiffStats != nil {
+				item.DiffStats = decoded.DiffStats
+			}
+			if item.BlockedOn == nil && decoded.BlockedOn != nil {
+				item.BlockedOn = decoded.BlockedOn
+			}
+			if item.HealthDiagnostic == nil && decoded.HealthDiagnostic != nil {
+				item.HealthDiagnostic = decoded.HealthDiagnostic
+			}
+		}
+		// A constructor replay must also converge against a legacy row that
+		// predates card facts. Backfilling those rows is intentionally not a
+		// same-version side effect; a later real transition may add the facts.
+		if item.ItemVersion == decoded.ItemVersion {
+			if decoded.DisplayNames == nil {
+				item.DisplayNames = nil
+			}
+			if decoded.BillableCostSoFar == nil {
+				item.BillableCostSoFar = nil
+			}
+			if decoded.ExecutionFailure == nil {
+				item.ExecutionFailure = nil
+			}
+			if decoded.PublishBlock == nil {
+				item.PublishBlock = nil
+			}
+			if decoded.DiffStats == nil {
+				item.DiffStats = nil
+			}
+			if decoded.BlockedOn == nil {
+				item.BlockedOn = nil
+			}
+			if decoded.HealthDiagnostic == nil {
+				item.HealthDiagnostic = nil
+			}
+		}
 		body, err := encode(item)
 		if err != nil {
 			return fmt.Errorf("put attention item %q: %w", item.ID, err)
@@ -464,6 +523,15 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 		if err := domain.ValidateAttentionItemTransition(decoded, item); err != nil {
 			return fmt.Errorf("put attention item %q: %w", item.ID, mapTransition(err))
 		}
+	}
+	// A version-advancing write can restore an omitted fact from the stored
+	// body above. Authenticate that restored value only after normalization, so
+	// a tampered persisted binding cannot be carried into its successor.
+	if err := tx.gateExecutionFailureItem(ctx, item); err != nil {
+		return fmt.Errorf("put attention item %q execution failure binding: %w", item.ID, err)
+	}
+	if err := tx.gateBlockedItem(ctx, item); err != nil {
+		return fmt.Errorf("put attention item %q blocked binding: %w", item.ID, err)
 	}
 	surface, createdSurface, changedSurface, err := tx.prepareDecisionSurface(ctx, item, old)
 	if err != nil {
@@ -621,6 +689,269 @@ func (tx *ReadTx) gateReviewDisputeItem(
 	return domain.ErrParentKeyMismatch
 }
 
+// gateBlockedItem authenticates a spec-approval wait against the referenced
+// immutable item record. Current status is deliberately irrelevant: resolving
+// the approval ends the wait but does not rewrite the historical wait origin.
+func (tx *ReadTx) gateBlockedItem(ctx context.Context, item domain.AttentionItem) error {
+	if item.BlockedOn == nil {
+		return nil
+	}
+	if item.Type != domain.AttentionBlocked ||
+		item.BlockedOn.Kind != domain.BlockedWaitSpecApproval ||
+		item.BlockedOn.ItemID == nil {
+		return domain.ErrParentKeyMismatch
+	}
+	referenced, err := tx.getAttentionItemBindingRecord(ctx, *item.BlockedOn.ItemID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	if referenced.Type != domain.AttentionSpecApproval ||
+		item.Subject.Type != domain.SubjectRun || referenced.Subject.Type != domain.SubjectRun ||
+		item.Subject.RunID == nil || referenced.Subject.RunID == nil ||
+		item.Subject.ID != domain.SubjectID(*item.Subject.RunID) ||
+		referenced.Subject.ID != domain.SubjectID(*referenced.Subject.RunID) ||
+		*item.Subject.RunID != *referenced.Subject.RunID ||
+		item.ProjectID != referenced.ProjectID {
+		return domain.ErrParentKeyMismatch
+	}
+	waitStart, err := tx.blockedWaitStart(ctx, referenced)
+	if err != nil {
+		return err
+	}
+	if !item.BlockedOn.Since.Equal(waitStart) {
+		return domain.ErrParentKeyMismatch
+	}
+	run, err := tx.GetRun(ctx, *item.Subject.RunID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	if run.ProjectID != item.ProjectID {
+		return domain.ErrParentKeyMismatch
+	}
+	return nil
+}
+
+// blockedWaitStart authenticates the wait origin against the approval's own
+// timestamp when present. Historical approval items predate CreatedAt, so
+// their immutable specification artifact identifies the producing invocation
+// whose accepted inbox record supplied the engine's legacy fallback instant.
+func (tx *ReadTx) blockedWaitStart(
+	ctx context.Context, approval domain.AttentionItem,
+) (time.Time, error) {
+	if approval.CreatedAt != nil {
+		return *approval.CreatedAt, nil
+	}
+	if len(approval.AgentClaims) == 0 {
+		return time.Time{}, domain.ErrParentKeyMismatch
+	}
+	claim := approval.AgentClaims[0]
+	specification, err := tx.GetArtifact(ctx, claim.Artifact)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return time.Time{}, domain.ErrParentKeyMismatch
+		}
+		return time.Time{}, err
+	}
+	if claim.Label != "Specification" ||
+		specification.Type != domain.ArtifactKindSpecification ||
+		claim.Digest != specification.Digest ||
+		claim.Provenance != specification.Provenance {
+		return time.Time{}, domain.ErrParentKeyMismatch
+	}
+	entry, err := tx.GetInbox(
+		ctx, string(specification.Provenance.ProducerInvocationID),
+	)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return time.Time{}, domain.ErrParentKeyMismatch
+		}
+		return time.Time{}, err
+	}
+	terminal, err := decodeBlockedWaitElaborationTerminal(entry)
+	if err != nil || terminal.SpecArtifactID == nil ||
+		*terminal.SpecArtifactID != specification.ID ||
+		terminal.ApprovalItemID == nil || *terminal.ApprovalItemID != approval.ID ||
+		!blockedWaitTerminalIdentityMatches(terminal, approval, specification) ||
+		!blockedWaitTerminalSummaryMatches(terminal, approval, specification) {
+		return time.Time{}, domain.ErrParentKeyMismatch
+	}
+	return entry.CreatedAt, nil
+}
+
+func blockedWaitTerminalIdentityMatches(
+	terminal blockedWaitElaborationTerminal,
+	approval domain.AttentionItem,
+	specification domain.Artifact,
+) bool {
+	if approval.Subject.RunID == nil ||
+		terminal.InvocationID != domain.InvocationID(fmt.Sprintf(
+			"inv-elaborate-%s-%d", *approval.Subject.RunID, terminal.Iteration,
+		)) {
+		return false
+	}
+	implementationIteration, ok := strings.CutPrefix(string(specification.ID), "spec-")
+	if !ok {
+		return false
+	}
+	implementationRun, ok := strings.CutSuffix(
+		implementationIteration, fmt.Sprintf("-%d", terminal.Iteration),
+	)
+	if !ok || implementationRun == "" ||
+		domain.RunID(implementationRun) == *approval.Subject.RunID {
+		return false
+	}
+	return approval.ID == domain.ItemID("spec-approval-"+implementationIteration)
+}
+
+func blockedWaitTerminalSummaryMatches(
+	terminal blockedWaitElaborationTerminal,
+	approval domain.AttentionItem,
+	specification domain.Artifact,
+) bool {
+	if len(approval.AgentClaims) == 1 {
+		return terminal.SummaryDigest == nil
+	}
+	if len(approval.AgentClaims) != 2 || terminal.SummaryDigest == nil {
+		return false
+	}
+	for _, claim := range approval.AgentClaims {
+		if claim.Label != export.SummaryEvidenceLabel {
+			continue
+		}
+		implementationIteration := strings.TrimPrefix(string(specification.ID), "spec-")
+		return claim.Validate() == nil && claim.Text != nil &&
+			claim.Text.MediaType == domain.MediaTypeTextMarkdown &&
+			claim.Artifact == domain.ArtifactID("spec-summary-"+implementationIteration) &&
+			claim.Digest == *terminal.SummaryDigest &&
+			claim.Provenance == specification.Provenance
+	}
+	return false
+}
+
+const blockedWaitElaborationTerminalKind = "elaboration_stage_terminal"
+
+type blockedWaitElaborationTerminal struct {
+	InvocationID        domain.InvocationID `json:"invocation_id"`
+	Iteration           int                 `json:"iteration"`
+	Status              string              `json:"status"`
+	ResearchArtifactIDs []domain.ArtifactID `json:"research_artifact_ids"`
+	SpecArtifactID      *domain.ArtifactID  `json:"spec_artifact_id,omitempty"`
+	ApprovalItemID      *domain.ItemID      `json:"approval_item_id,omitempty"`
+	SummaryDigest       *domain.Digest      `json:"summary_digest,omitempty"`
+}
+
+func decodeBlockedWaitElaborationTerminal(
+	entry QueueEntry,
+) (blockedWaitElaborationTerminal, error) {
+	if entry.Kind != blockedWaitElaborationTerminalKind {
+		return blockedWaitElaborationTerminal{}, domain.ErrParentKeyMismatch
+	}
+	var terminal blockedWaitElaborationTerminal
+	if err := strictjson.Decode(
+		entry.Payload, &terminal, strictjson.RejectInvalidUTF8, strictjson.Limit(1<<20),
+	); err != nil {
+		return blockedWaitElaborationTerminal{}, domain.ErrParentKeyMismatch
+	}
+	if terminal.InvocationID == "" ||
+		string(terminal.InvocationID) != entry.IdempotencyKey ||
+		terminal.Iteration < 1 || terminal.Status != "completed" ||
+		terminal.ResearchArtifactIDs == nil || len(terminal.ResearchArtifactIDs) != 0 ||
+		terminal.SpecArtifactID == nil || *terminal.SpecArtifactID == "" ||
+		terminal.ApprovalItemID == nil || *terminal.ApprovalItemID == "" {
+		return blockedWaitElaborationTerminal{}, domain.ErrParentKeyMismatch
+	}
+	if terminal.SummaryDigest != nil {
+		if _, ok := contentaddr.Parse(string(*terminal.SummaryDigest)); !ok {
+			return blockedWaitElaborationTerminal{}, domain.ErrParentKeyMismatch
+		}
+	}
+	canonical, err := json.Marshal(terminal)
+	if err != nil || !bytes.Equal(canonical, entry.Payload) {
+		return blockedWaitElaborationTerminal{}, domain.ErrParentKeyMismatch
+	}
+	return terminal, nil
+}
+
+// getAttentionItemBindingRecord authenticates one immutable item's stored
+// columns and decision surface without recursively applying its card-fact
+// gates. A forged blocked item may point at itself, so gateBlockedItem cannot
+// use GetAttentionItemRecord before it has established that the target is a
+// spec-approval item.
+func (tx *ReadTx) getAttentionItemBindingRecord(
+	ctx context.Context, id domain.ItemID,
+) (domain.AttentionItem, error) {
+	item, _, err := scanAttentionItemRecord(tx.tx.QueryRowContext(ctx,
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
+	if err != nil {
+		return domain.AttentionItem{}, notFoundOr(err)
+	}
+	if item.ID != id {
+		return domain.AttentionItem{}, errRowInconsistent
+	}
+	if err := tx.gateDecisionSurface(ctx, item); err != nil {
+		return domain.AttentionItem{}, err
+	}
+	return item, nil
+}
+
+// gateExecutionFailureItem authenticates copied terminal coordinates against
+// the immutable admission and outcome records, then maps the admitted run
+// stage to the card's stable StageName vocabulary.
+func (tx *ReadTx) gateExecutionFailureItem(ctx context.Context, item domain.AttentionItem) error {
+	if item.ExecutionFailure == nil {
+		return nil
+	}
+	facts := item.ExecutionFailure
+	outcome, err := tx.GetExecutionOutcomeRecord(ctx, facts.InvocationID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	if outcome.Status != facts.Outcome {
+		return domain.ErrParentKeyMismatch
+	}
+	admission, err := tx.GetExecutionAdmissionRecord(ctx, facts.InvocationID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	if item.Subject.Type != domain.SubjectRun || item.Subject.RunID == nil ||
+		*item.Subject.RunID != admission.RunID || item.Subject.ID != domain.SubjectID(admission.RunID) {
+		return domain.ErrParentKeyMismatch
+	}
+	run, err := tx.GetRun(ctx, admission.RunID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	if run.ProjectID != item.ProjectID {
+		return domain.ErrParentKeyMismatch
+	}
+	for _, stage := range run.Stages {
+		if stage.ID != admission.StageID {
+			continue
+		}
+		mapped, err := domain.CanonicalStageRole(stage.Name)
+		if err != nil || mapped != facts.Stage {
+			return domain.ErrParentKeyMismatch
+		}
+		return nil
+	}
+	return domain.ErrParentKeyMismatch
+}
+
 func reviewDisputeBindingMatches(
 	binding *domain.ReviewDisputeBinding,
 	completionEvidence domain.Digest,
@@ -699,6 +1030,12 @@ func (tx *ReadTx) scanAttentionItemHistory(ctx context.Context, sc scanner) (dom
 	if err := tx.gateReviewDisputeItem(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
+	if err := tx.gateBlockedItem(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	if err := tx.gateExecutionFailureItem(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
 	if err := tx.gateDecisionSurface(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
@@ -725,6 +1062,12 @@ func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (do
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	if err := tx.gateReviewDisputeItem(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	if err := tx.gateBlockedItem(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	if err := tx.gateExecutionFailureItem(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	if err := tx.gateReadyItemPRReference(ctx, item); err != nil {

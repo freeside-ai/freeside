@@ -163,6 +163,8 @@ func authenticateLegacyCodexReenrollmentMarker(
 		if err != nil {
 			return domain.AttentionItem{}, false
 		}
+		updated.DisplayNames = nil
+		updated.HealthDiagnostic = nil
 		updated.Timing = item.Timing
 		updated.DecidedAt = item.DecidedAt
 		if err := updated.Validate(); err != nil {

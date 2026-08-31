@@ -93,10 +93,14 @@ func waivedPostureItemID(invocationID domain.InvocationID) domain.ItemID {
 // this still-open notice blocking again with no write.
 func waivedPostureItem(
 	run domain.Run, invocationID domain.InvocationID, waiver domain.BackupEncryptionWaiver,
-	createdAt time.Time,
+	createdAt time.Time, names ...*domain.DisplayNames,
 ) (domain.AttentionItem, error) {
 	runID := run.ID
 	posture := domain.HealthPostureBlocking
+	var displayNames *domain.DisplayNames
+	if len(names) != 0 {
+		displayNames = names[0]
+	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: waivedPostureItemID(invocationID), ProjectID: run.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
@@ -110,7 +114,11 @@ func waivedPostureItem(
 		// that existed, offering an action the system could not honour was
 		// judged worse than an absent one.
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge, domain.ActionStopUnattended},
-		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
+		HealthDiagnostic: &domain.HealthDiagnostic{
+			Code: "backup_encryption_waived", Impairs: domain.ImpairedCapabilityUnattendedAdmission,
+		},
+		DisplayNames: displayNames,
+		ItemVersion:  1, InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt: &createdAt,
 		Posture:   &posture,
 		BlockingSupersession: &domain.BlockingSupersession{

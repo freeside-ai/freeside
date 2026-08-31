@@ -1,27 +1,32 @@
 {
-  "id": "item-card-health",
+  "id": "item-card-diff",
   "project_id": "proj-1",
   "subject": {
-    "subject_type": "system",
-    "subject_id": "daemon",
-    "run_id": null
+    "subject_type": "run",
+    "subject_id": "run-1",
+    "run_id": "run-1"
   },
-  "type": "system_health",
+  "type": "ready_for_final_review",
   "priority": "normal",
-  "reason": "run projection is unavailable",
+  "reason": "the pull request is ready for final review",
   "requested_decision": [
-    "run_doctor"
+    "open_pr",
+    "return_to_agent",
+    "dismiss"
   ],
   "recommendation": null,
   "decision_surface": {
     "epoch": 1,
-    "digest": "sha256:61b36453189854b38f1c6ea273a3aa849a146347283598df5df04d07a17949b8"
+    "digest": "sha256:f41c0892270144d9355afc7ab04fa6a0895af22b214d12e9e207db1469c83af9"
   },
   "evidence_snapshot": null,
   "agent_claims": null,
   "artifact_digests": [],
-  "pr_head_sha": "",
-  "pr_reference": null,
+  "pr_head_sha": "cafebabe",
+  "pr_reference": {
+    "repo": "owner/repo",
+    "number": 42
+  },
   "readiness": null,
   "yield_history": null,
   "commit_plan_notice": null,
@@ -37,22 +42,25 @@
       "source": "name"
     },
     "work_unit": {
-      "text": "daemon",
-      "source": "identifier"
+      "text": "#1003",
+      "source": "name"
     }
   },
   "billable_cost_so_far": null,
   "execution_failure": null,
   "publish_block": null,
-  "diff_stats": null,
-  "blocked_on": null,
-  "health_diagnostic": {
-    "code": "run_projection.unavailable",
-    "impairs": "run_visibility"
+  "diff_stats": {
+    "files_changed": 3,
+    "additions": 17,
+    "deletions": 5,
+    "base_sha": "deadbeef",
+    "head_sha": "cafebabe"
   },
+  "blocked_on": null,
+  "health_diagnostic": null,
   "review_dispute": null,
   "item_version": 1,
-  "interruption_class": "exceptional",
+  "interruption_class": "planned_gate",
   "conversation_id": null,
   "timing": {
     "delivery_count": 0,
@@ -64,7 +72,7 @@
   "created_at": "2026-08-29T20:00:00Z",
   "expires_when": null,
   "decided_at": null,
-  "posture": "advisory",
+  "posture": null,
   "blocking_supersession": null,
   "status": "open"
 }

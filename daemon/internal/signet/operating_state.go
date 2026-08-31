@@ -59,10 +59,15 @@ func (s *Service) applyStopUnattended(
 		}
 	}
 	posture := domain.HealthPostureBlocking
+	subject := domain.Subject{Type: domain.SubjectSystem, ID: "daemon"}
+	displayNames, err := tx.DisplayNamesFor(ctx, item.ProjectID, subject)
+	if err != nil {
+		return err
+	}
 	notice, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID:        stoppedNoticeID(command.CommandID),
 		ProjectID: item.ProjectID,
-		Subject:   domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Subject:   subject,
 		Type:      domain.AttentionSystemHealth,
 		Priority:  domain.PriorityHigh,
 		Reason: fmt.Sprintf(
@@ -70,6 +75,10 @@ func (s *Service) applyStopUnattended(
 				"No new unattended work is admitted until resume_unattended is accepted.",
 			item.ID),
 		RequestedDecision: []domain.Action{domain.ActionResumeUnattended, domain.ActionAcknowledge},
+		HealthDiagnostic: &domain.HealthDiagnostic{
+			Code: "unattended_operation_stopped", Impairs: domain.ImpairedCapabilityUnattendedAdmission,
+		},
+		DisplayNames:      displayNames,
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt:         &now,

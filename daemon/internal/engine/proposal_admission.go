@@ -118,7 +118,16 @@ func (e *Engine) admitProposalAt(
 		if err := tx.PutArtifact(ctx, artifact); err != nil {
 			return fmt.Errorf("persist proposal artifact: %w", err)
 		}
-		item, err := newProposalItem(request.ProjectID, instance, artifact, request.Priority, request.RequestedDecision)
+		subject := domain.Subject{
+			Type: domain.SubjectProposalBatch, ID: domain.SubjectID(instance.ProposalBatchID),
+		}
+		names, err := tx.DisplayNamesFor(ctx, request.ProjectID, subject)
+		if err != nil {
+			return err
+		}
+		item, err := newProposalItem(
+			request.ProjectID, instance, artifact, request.Priority, request.RequestedDecision, names,
+		)
 		if err != nil {
 			return err
 		}
@@ -143,6 +152,7 @@ func newProposalItem(
 	artifact domain.Artifact,
 	priority domain.Priority,
 	requestedDecision []domain.Action,
+	displayNames *domain.DisplayNames,
 ) (domain.AttentionItem, error) {
 	if instance.Proposal.Kind != domain.EffectRunProposal || instance.Proposal.RunProposal == nil {
 		return domain.AttentionItem{}, domain.ErrEffectProposalInconsistent
@@ -163,6 +173,7 @@ func newProposalItem(
 		Reason:            "Start the daemon-enumerated work subject",
 		RequestedDecision: slices.Clone(requestedDecision),
 		EvidenceSnapshot:  []domain.Artifact{artifact}, ItemVersion: 1,
+		DisplayNames:      displayNames,
 		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
 		CreatedAt: &instance.CreatedAt,
 	}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})

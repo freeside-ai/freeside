@@ -633,6 +633,56 @@ func TestAttentionItemFixedBindings(t *testing.T) {
 	}
 }
 
+func TestAttentionItemCardFactReplayPreservesStoredRepresentation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newFixtures(t)
+	legacy := f.item
+	legacy.DisplayNames = nil
+	legacy.DiffStats = nil
+
+	for _, tc := range []struct {
+		name   string
+		stored domain.AttentionItem
+		replay domain.AttentionItem
+		named  bool
+	}{
+		{"legacy null survives populated constructor replay", legacy, f.item, false},
+		{"stored facts survive legacy read-modify-write replay", f.item, legacy, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+			if err := s.Write(ctx, func(tx *store.WriteTx) error {
+				if err := tx.PutConversation(ctx, f.conversation); err != nil {
+					return err
+				}
+				return tx.PutAttentionItem(ctx, tc.stored)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Write(ctx, func(tx *store.WriteTx) error {
+				return tx.PutAttentionItem(ctx, tc.replay)
+			}); err != nil {
+				t.Fatalf("replay: %v", err)
+			}
+			var got domain.AttentionItem
+			if err := s.Read(ctx, func(tx *store.ReadTx) error {
+				var err error
+				got, err = tx.GetAttentionItem(ctx, tc.stored.ID)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if (got.DisplayNames != nil) != tc.named {
+				t.Fatalf("display_names = %#v, named = %v", got.DisplayNames, tc.named)
+			}
+			if (got.DiffStats != nil) != tc.named {
+				t.Fatalf("diff_stats = %#v, populated = %v", got.DiffStats, tc.named)
+			}
+		})
+	}
+}
+
 // TestAttentionItemStaleWriteRejected: a changed item body must advance
 // item_version, or a stale copy could roll back a later transition (a
 // resolved v2 overwritten by an open v1); a byte-identical replay converges

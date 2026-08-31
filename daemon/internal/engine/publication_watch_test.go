@@ -246,3 +246,54 @@ func TestCompatibleTerminalItemAcceptsLegacyNilReadinessOnly(t *testing.T) {
 		t.Fatal("conflicting persisted readiness accepted during recovery compatibility")
 	}
 }
+
+func TestCompatibleTerminalItemAcceptsLegacyNilCardPresentation(t *testing.T) {
+	st := watchTestStore(t)
+	current := watchTestItem(t, st, domain.StatusOpen)
+	expected := current
+	expected.DisplayNames = &domain.DisplayNames{
+		Project: domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
+	}
+	rule := domain.TrustRuleVerificationFailed
+	expected.PublishBlock = &domain.PublishBlockFacts{TrustRule: &rule}
+	if !compatibleTerminalItem(expected, current) {
+		t.Fatal("legacy nil card presentation rejected during recovery compatibility")
+	}
+}
+
+func TestCompatibleTerminalItemIgnoresDisplayNameRenames(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*domain.DisplayNames)
+	}{
+		{"project", func(names *domain.DisplayNames) {
+			names.Project = domain.DisplayName{Text: "owner/new", Source: domain.DisplayNameSourceName}
+		}},
+		{"work unit", func(names *domain.DisplayNames) {
+			names.WorkUnit = domain.DisplayName{Text: "#1034", Source: domain.DisplayNameSourceName}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := watchTestStore(t)
+			current := watchTestItem(t, st, domain.StatusOpen)
+			current.DisplayNames = &domain.DisplayNames{
+				Project:  domain.DisplayName{Text: "project-1", Source: domain.DisplayNameSourceIdentifier},
+				WorkUnit: domain.DisplayName{Text: "run-1", Source: domain.DisplayNameSourceIdentifier},
+			}
+			expected := current
+			expected.DisplayNames = &domain.DisplayNames{
+				Project: current.DisplayNames.Project, WorkUnit: current.DisplayNames.WorkUnit,
+			}
+			tc.edit(expected.DisplayNames)
+			if !compatibleTerminalItem(expected, current) {
+				t.Fatal("display-name rename rejected during recovery compatibility")
+			}
+
+			foreign := current
+			foreign.Reason = "a different item"
+			if compatibleTerminalItem(expected, foreign) {
+				t.Fatal("genuinely different item accepted")
+			}
+		})
+	}
+}

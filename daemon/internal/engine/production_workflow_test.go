@@ -177,7 +177,7 @@ func TestProductionReadyItemPreservesReadinessSummary(t *testing.T) {
 			if err := verdict.Validate(); err != nil {
 				t.Fatalf("test verdict: %v", err)
 			}
-			item, err := w.readyItem(task, checkpoint, published, verdict, yieldHistory)
+			item, err := w.readyItem(t.Context(), task, checkpoint, published, verdict, yieldHistory)
 			if err != nil {
 				t.Fatalf("readyItem: %v", err)
 			}
@@ -204,7 +204,7 @@ func TestProductionBlockedItemCarriesInvocationBoundSummary(t *testing.T) {
 	}
 	summary := summaryClaimFixture(task.ProducingInvocationID, "Publication stopped at the trust gate.")
 	w := &productionPublicationWorkflow{now: func() time.Time { return time.Unix(1, 0).UTC() }}
-	item, err := w.blockedItem(task, importer.Result{
+	item, err := w.blockedItem(t.Context(), task, importer.Result{
 		CommitSHA: strings.Repeat("b", 40), Claims: []domain.AgentClaim{summary},
 	}, nil, "Trust evaluation failed.")
 	if err != nil {

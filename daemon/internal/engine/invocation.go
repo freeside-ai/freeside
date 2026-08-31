@@ -999,6 +999,7 @@ func attemptIDFor(invocationID domain.InvocationID) domain.AttemptID {
 
 func (e *Engine) loadInvocationBinding(ctx context.Context, invocationID domain.InvocationID) (invocationBinding, error) {
 	var binding invocationBinding
+	var names *domain.DisplayNames
 	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		binding.invocation, err = tx.GetAgentInvocation(ctx, invocationID)
@@ -1041,6 +1042,10 @@ func (e *Engine) loadInvocationBinding(ctx context.Context, invocationID domain.
 		if err != nil {
 			return err
 		}
+		names, err = tx.DisplayNamesFor(ctx, binding.run.ProjectID, runSubject(binding.run))
+		if err != nil {
+			return err
+		}
 		marker, err := tx.GetAttentionItem(ctx, initialItemID(binding.run.ID))
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
@@ -1048,7 +1053,7 @@ func (e *Engine) loadInvocationBinding(ctx context.Context, invocationID domain.
 			}
 			return fmt.Errorf("fake workflow marker for run %q: %w", binding.run.ID, err)
 		}
-		if !sameWorkflowItem(marker, initialItem(binding.run)) {
+		if !sameWorkflowItem(marker, initialItem(binding.run, names)) {
 			return fmt.Errorf("fake workflow marker for run %q disagrees with its binding: %w",
 				binding.run.ID, domain.ErrParentKeyMismatch)
 		}
@@ -1061,7 +1066,7 @@ func (e *Engine) loadInvocationBinding(ctx context.Context, invocationID domain.
 	if err != nil {
 		return invocationBinding{}, err
 	}
-	if !sameWorkflowItem(binding.item, feedbackItem(binding.run)) {
+	if !sameWorkflowItem(binding.item, feedbackItem(binding.run, names)) {
 		return invocationBinding{}, fmt.Errorf("attention item %q is not the feedback item for run %q: %w",
 			binding.item.ID, binding.run.ID, domain.ErrParentKeyMismatch)
 	}
@@ -1232,7 +1237,16 @@ func (e *Engine) recordAttempt(
 			// telling the operator so.
 			if fresh.BackupEncryptionWaiver != nil {
 				createdAt := e.admission.now().UTC()
-				item, err := waivedPostureItem(run, invocationID, *fresh.BackupEncryptionWaiver, createdAt)
+				subject := domain.Subject{
+					Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,
+				}
+				names, err := tx.DisplayNamesFor(ctx, run.ProjectID, subject)
+				if err != nil {
+					return err
+				}
+				item, err := waivedPostureItem(
+					run, invocationID, *fresh.BackupEncryptionWaiver, createdAt, names,
+				)
 				if err != nil {
 					return err
 				}

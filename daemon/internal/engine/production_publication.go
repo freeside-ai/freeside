@@ -184,6 +184,7 @@ type productionVerificationCheckpoint struct {
 	Imported      importer.Result               `json:"imported"`
 	Authorization domain.CandidateAuthorization `json:"authorization"`
 	Artifacts     []domain.Artifact             `json:"artifacts"`
+	DiffStats     *domain.DiffStats             `json:"diff_stats"`
 }
 
 type productionPublicationWorkflow struct {
@@ -2197,6 +2198,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		return w.completeBlockedTask(
 			ctx, task, binding.run, imported, nil,
 			productionBlockRecipeRevoked, productionRerunnableBlockActions,
+			publishBlockTrustRule(domain.TrustRuleRecipeUnapproved),
 		)
 	}
 	if !found {
@@ -2215,6 +2217,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		return w.completeBlockedTask(
 			ctx, task, binding.run, checkpoint.Imported, checkpoint.Artifacts,
 			productionBlockVerification, productionRerunnableBlockActions,
+			publishBlockTrustRule(domain.TrustRuleVerificationFailed),
 		)
 	}
 
@@ -2255,7 +2258,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			// ordinary publish_blocked card rather than a vanished dispute.
 			return w.completeBlockedTask(
 				ctx, task, binding.run, checkpoint.Imported, checkpoint.Artifacts,
-				productionBlockTrust, productionShadowStopBlockActions,
+				productionBlockTrust, productionShadowStopBlockActions, nil,
 			)
 		}
 		if errors.Is(err, errShadowReviewBlocksReady) {
@@ -2362,6 +2365,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			outcome, blockErr := w.completeBlockedTask(
 				ctx, task, binding.run, checkpoint.Imported, checkpoint.Artifacts,
 				reason, productionRerunnableBlockActions,
+				publishBlockFacts(domain.HoldTrustBlocked, err),
 			)
 			if blockErr != nil {
 				return productionTaskOutcome{}, errors.Join(err, blockErr)
@@ -3530,16 +3534,22 @@ func (w *productionPublicationWorkflow) putReviewContradictionAttention(
 	}
 	runID := task.RunID
 	createdAt := w.attentionCreatedAt()
+	subject := domain.Subject{
+		Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
+	}
+	names, err := displayNames(ctx, w.store, task.ProjectID, subject)
+	if err != nil {
+		return err
+	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: productionReviewItemID(task.RunID, failure.Round), ProjectID: task.ProjectID,
-		Subject: domain.Subject{
-			Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
-		},
-		Type: domain.AttentionReviewContradiction, Priority: domain.PriorityHigh,
+		Subject: subject,
+		Type:    domain.AttentionReviewContradiction, Priority: domain.PriorityHigh,
 		Reason:            fmt.Sprintf("Codex review contradicted its execution contract: %s", failure.Reason),
 		RequestedDecision: []domain.Action{domain.ActionRecoverReview},
 		PRHeadSHA:         failure.HeadSHA, ReviewRecoveryBinding: &binding,
-		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		DisplayNames: names,
+		ItemVersion:  1, InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt: &createdAt,
 		Status:    domain.StatusOpen,
 	}, w.approvedRecipes)
@@ -3792,12 +3802,17 @@ func (w *productionPublicationWorkflow) putReviewConfigurationAttention(
 	}
 	runID := task.RunID
 	createdAt := w.attentionCreatedAt()
+	subject := domain.Subject{
+		Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
+	}
+	names, err := displayNames(ctx, w.store, task.ProjectID, subject)
+	if err != nil {
+		return err
+	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: productionReviewItemID(task.RunID, failure.Round), ProjectID: task.ProjectID,
-		Subject: domain.Subject{
-			Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
-		},
-		Type: domain.AttentionReviewConfiguration, Priority: domain.PriorityHigh,
+		Subject: subject,
+		Type:    domain.AttentionReviewConfiguration, Priority: domain.PriorityHigh,
 		Reason: fmt.Sprintf(
 			"Codex review parked on a reviewer configuration the trust profile no longer approves: %s",
 			failure.Reason),
@@ -3805,7 +3820,8 @@ func (w *productionPublicationWorkflow) putReviewConfigurationAttention(
 			domain.ActionAdoptReviewConfiguration, domain.ActionDiscuss, domain.ActionStop,
 		},
 		PRHeadSHA: failure.HeadSHA, ReviewConfigurationRecovery: &recovery,
-		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		DisplayNames: names,
+		ItemVersion:  1, InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt: &createdAt,
 		Status:    domain.StatusOpen,
 	}, w.approvedRecipes)
@@ -3887,9 +3903,23 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithActionsAndID(
 	agentClaims []domain.AgentClaim,
 ) error {
 	runID := task.RunID
+	subject := domain.Subject{
+		Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
+	}
+	names, err := displayNames(ctx, w.store, task.ProjectID, subject)
+	if err != nil {
+		return err
+	}
 	actions := []domain.Action{domain.ActionFinishNow}
 	if itemType == domain.AttentionReviewDispute {
 		actions = disputeActions
+	}
+	var cost *domain.CostSoFar
+	if itemType == domain.AttentionReviewDiminishing {
+		cost, err = billableCostSoFar(ctx, w.store, task.RunID)
+		if err != nil {
+			return err
+		}
 	}
 	// The first item written at this round's deterministic identity durably
 	// binds its routing decision. Classification may recover differently on a
@@ -3940,12 +3970,12 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithActionsAndID(
 		}
 		desired, err := domain.NewAttentionItem(domain.AttentionItemInput{
 			ID: itemID, ProjectID: task.ProjectID,
-			Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID},
+			Subject: subject,
 			Type:    itemType, Priority: domain.PriorityNormal, Reason: reason,
 			RequestedDecision: actions, AgentClaims: agentClaims,
 			PRHeadSHA: task.HeadSHA, ItemVersion: existing.ItemVersion + 1,
 			InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
-			CreatedAt: &createdAt,
+			CreatedAt: &createdAt, DisplayNames: names,
 		}, w.approvedRecipes)
 		if err != nil {
 			return err
@@ -3976,12 +4006,12 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithActionsAndID(
 	createdAt := w.attentionCreatedAt()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: itemID, ProjectID: task.ProjectID,
-		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID},
+		Subject: subject,
 		Type:    itemType, Priority: domain.PriorityNormal, Reason: reason,
 		RequestedDecision: actions, AgentClaims: agentClaims,
 		PRHeadSHA: task.HeadSHA, ItemVersion: 1,
 		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
-		CreatedAt: &createdAt,
+		CreatedAt: &createdAt, BillableCostSoFar: cost, DisplayNames: names,
 	}, w.approvedRecipes)
 	if err != nil {
 		return err
@@ -4281,7 +4311,7 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		if err := persistReadiness(ctx); err != nil {
 			return productionTaskOutcome{}, err
 		}
-		ready, err := w.readyItem(task, checkpoint, published, verdict, yieldHistory)
+		ready, err := w.readyItem(ctx, task, checkpoint, published, verdict, yieldHistory)
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
@@ -4378,7 +4408,7 @@ func (w *productionPublicationWorkflow) hasCompatibleReadyItem(
 	historicalRecipes := mapsClone(w.approvedRecipes)
 	historicalRecipes[binding.image.RecipeDigest] = true
 	expectedReady, err := w.readyItemWithRecipes(
-		task, checkpoint, published, verdict, yieldHistory, historicalRecipes,
+		ctx, task, checkpoint, published, verdict, yieldHistory, historicalRecipes,
 	)
 	if err != nil {
 		return false, err
@@ -4388,7 +4418,7 @@ func (w *productionPublicationWorkflow) hasCompatibleReadyItem(
 		redactedCheckpoint := checkpoint
 		redactedCheckpoint.Artifacts = nil
 		expectedRedacted, err = w.readyItemWithRecipes(
-			task, redactedCheckpoint, published, verdict, yieldHistory, historicalRecipes,
+			ctx, task, redactedCheckpoint, published, verdict, yieldHistory, historicalRecipes,
 		)
 		if err != nil {
 			return false, err
@@ -4428,14 +4458,14 @@ func (w *productionPublicationWorkflow) holdBlockedTask(
 	}); err != nil {
 		return productionTaskOutcome{}, err
 	}
-	item, err := w.blockedHoldItem(task, imported, reason)
+	item, err := w.blockedHoldItem(ctx, task, imported, reason, cause)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
 	var current domain.AttentionItem
 	err = w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		current, err = tx.GetAttentionItem(ctx, item.ID)
+		current, err = tx.GetAttentionItemRecord(ctx, item.ID)
 		return err
 	})
 	if err == nil {
@@ -4706,7 +4736,7 @@ func (w *productionPublicationWorkflow) supersedeBlockedHold(
 	var item domain.AttentionItem
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		item, err = tx.GetAttentionItem(ctx, task.blockedItemID())
+		item, err = tx.GetAttentionItemRecord(ctx, task.blockedItemID())
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
@@ -5193,11 +5223,18 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 	if err != nil {
 		return productionVerificationCheckpoint{}, err
 	}
+	diffStats, err := deriveDiffStats(
+		ctx, w.workDir, checkoutDir, authorization.BaseSHA, authorization.HeadSHA,
+	)
+	if err != nil {
+		return productionVerificationCheckpoint{}, err
+	}
 	checkpoint := productionVerificationCheckpoint{
 		Version: productionVerificationVersion,
 		TaskKey: task.intentKey(), HeadSHA: task.HeadSHA,
 		ProjectImage: binding.image.ID,
 		Imported:     imported, Authorization: authorization, Artifacts: artifacts,
+		DiffStats: diffStats,
 	}
 	if err := runDurableTransitionHook(w.transitionHook,
 		DurableTransitionVerificationEvidence, DurableTransitionBefore); err != nil {
@@ -5330,6 +5367,16 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 		authorization.InvocationID != task.verificationInvocationID() {
 		return productionVerificationCheckpoint{}, false, fmt.Errorf("production verification checkpoint disagrees with task: %w",
 			domain.ErrParentKeyMismatch)
+	}
+	if checkpoint.DiffStats != nil {
+		if err := checkpoint.DiffStats.Validate(); err != nil ||
+			checkpoint.DiffStats.BaseSHA != authorization.BaseSHA ||
+			checkpoint.DiffStats.HeadSHA != authorization.HeadSHA {
+			return productionVerificationCheckpoint{}, false, fmt.Errorf(
+				"production verification checkpoint diff stats disagree with authorization: %w",
+				domain.ErrParentKeyMismatch,
+			)
+		}
 	}
 	for _, artifact := range checkpoint.Artifacts {
 		if err := verifyFakePublicationBlob(w.artifacts, artifact); err != nil {
@@ -5541,6 +5588,7 @@ func (w *productionPublicationWorkflow) adoptedReviewProfileDigest(
 }
 
 func (w *productionPublicationWorkflow) readyItem(
+	ctx context.Context,
 	task productionPublicationTask,
 	checkpoint productionVerificationCheckpoint,
 	published publish.Result,
@@ -5548,11 +5596,12 @@ func (w *productionPublicationWorkflow) readyItem(
 	yieldHistory domain.ReviewYieldHistory,
 ) (domain.AttentionItem, error) {
 	return w.readyItemWithRecipes(
-		task, checkpoint, published, verdict, yieldHistory, w.approvedRecipes,
+		ctx, task, checkpoint, published, verdict, yieldHistory, w.approvedRecipes,
 	)
 }
 
 func (w *productionPublicationWorkflow) readyItemWithRecipes(
+	ctx context.Context,
 	task productionPublicationTask,
 	checkpoint productionVerificationCheckpoint,
 	published publish.Result,
@@ -5562,9 +5611,14 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 ) (domain.AttentionItem, error) {
 	runID := task.RunID
 	createdAt := w.attentionCreatedAt()
+	subject := domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID}
+	names, err := displayNames(ctx, w.store, task.ProjectID, subject)
+	if err != nil {
+		return domain.AttentionItem{}, err
+	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: productionReadyItemID(task.RunID), ProjectID: task.ProjectID,
-		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID},
+		Subject: subject,
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason: fmt.Sprintf("Published %s#%d and completed production verification.",
 			checkpoint.Authorization.Repo, published.PRNumber),
@@ -5582,6 +5636,8 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 			Class: verdict.Class, EvaluationSetDigest: verdict.EvaluationSetDigest,
 		},
 		YieldHistory:     &yieldHistory,
+		DiffStats:        checkpoint.DiffStats,
+		DisplayNames:     names,
 		CommitPlanNotice: checkpoint.Imported.CommitPlanNotice,
 		ItemVersion:      1, InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt: &createdAt,
@@ -5590,27 +5646,30 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 }
 
 func (w *productionPublicationWorkflow) blockedItemWithActionsAndRecipes(
+	ctx context.Context,
 	task productionPublicationTask,
 	imported importer.Result,
 	artifacts []domain.Artifact,
 	reason string,
 	actions []domain.Action,
 	approvedRecipes map[domain.Digest]bool,
+	facts *domain.PublishBlockFacts,
 ) (domain.AttentionItem, error) {
 	return w.newBlockedItem(
-		task, imported, artifacts, reason, actions, approvedRecipes,
+		ctx, task, imported, artifacts, reason, actions, approvedRecipes, facts,
 	)
 }
 
 func (w *productionPublicationWorkflow) blockedItem(
+	ctx context.Context,
 	task productionPublicationTask,
 	imported importer.Result,
 	artifacts []domain.Artifact,
 	reason string,
 ) (domain.AttentionItem, error) {
 	return w.blockedItemWithActionsAndRecipes(
-		task, imported, artifacts, reason,
-		productionShadowStopBlockActions, w.approvedRecipes,
+		ctx, task, imported, artifacts, reason,
+		productionShadowStopBlockActions, w.approvedRecipes, nil,
 	)
 }
 
@@ -5624,30 +5683,39 @@ var (
 )
 
 func (w *productionPublicationWorkflow) blockedHoldItem(
+	ctx context.Context,
 	task productionPublicationTask,
 	imported importer.Result,
 	reason string,
+	cause domain.RunHoldReason,
 ) (domain.AttentionItem, error) {
 	return w.newBlockedItem(
-		task, imported, nil, reason,
+		ctx, task, imported, nil, reason,
 		[]domain.Action{domain.ActionInspectTrustFailure},
-		w.approvedRecipes,
+		w.approvedRecipes, publishBlockHoldReason(cause),
 	)
 }
 
 func (w *productionPublicationWorkflow) newBlockedItem(
+	ctx context.Context,
 	task productionPublicationTask,
 	imported importer.Result,
 	artifacts []domain.Artifact,
 	reason string,
 	actions []domain.Action,
 	approvedRecipes map[domain.Digest]bool,
+	facts *domain.PublishBlockFacts,
 ) (domain.AttentionItem, error) {
 	runID := task.RunID
 	createdAt := w.attentionCreatedAt()
+	subject := domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID}
+	names, err := displayNames(ctx, w.store, task.ProjectID, subject)
+	if err != nil {
+		return domain.AttentionItem{}, err
+	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: task.blockedItemID(), ProjectID: task.ProjectID,
-		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID},
+		Subject: subject,
 		Type:    domain.AttentionPublishBlocked, Priority: domain.PriorityHigh,
 		Reason:            reason,
 		RequestedDecision: actions,
@@ -5655,6 +5723,8 @@ func (w *productionPublicationWorkflow) newBlockedItem(
 		AgentClaims:       normalizeSummaryClaims(imported.Claims, task.ProducingInvocationID),
 		PRHeadSHA:         imported.CommitSHA,
 		CommitPlanNotice:  imported.CommitPlanNotice,
+		PublishBlock:      facts,
+		DisplayNames:      names,
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt: &createdAt,
 		Status:    domain.StatusOpen,
@@ -5727,8 +5797,13 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 	}
 	historicalRecipes := mapsClone(w.approvedRecipes)
 	historicalRecipes[binding.image.RecipeDigest] = true
+	facts, err := definitivePublishBlockFacts(current.Reason)
+	if err != nil {
+		return nil, fmt.Errorf("production blocked item %q has no fact contract: %w", current.ID, err)
+	}
 	expected, err := w.blockedItemWithActionsAndRecipes(
-		task, imported, artifacts, current.Reason, current.RequestedDecision, historicalRecipes,
+		ctx, task, imported, artifacts, current.Reason, current.RequestedDecision, historicalRecipes,
+		facts,
 	)
 	if err != nil {
 		return nil, err
@@ -5765,8 +5840,9 @@ func (w *productionPublicationWorkflow) completeBlockedTask(
 	artifacts []domain.Artifact,
 	reason string,
 	actions []domain.Action,
+	facts *domain.PublishBlockFacts,
 ) (productionTaskOutcome, error) {
-	item, err := w.newBlockedItem(task, imported, artifacts, reason, actions, w.approvedRecipes)
+	item, err := w.newBlockedItem(ctx, task, imported, artifacts, reason, actions, w.approvedRecipes, facts)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}

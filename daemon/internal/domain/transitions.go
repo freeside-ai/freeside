@@ -228,7 +228,6 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		updated    any
 	}{
 		{"execution_failure", old.ExecutionFailure != nil, old.ExecutionFailure, updated.ExecutionFailure},
-		{"publish_block", old.PublishBlock != nil, old.PublishBlock, updated.PublishBlock},
 		{"diff_stats", old.DiffStats != nil, old.DiffStats, updated.DiffStats},
 		{"blocked_on", old.BlockedOn != nil, old.BlockedOn, updated.BlockedOn},
 		{"health_diagnostic", old.HealthDiagnostic != nil, old.HealthDiagnostic, updated.HealthDiagnostic},
@@ -246,6 +245,14 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 			return fmt.Errorf("attention item %s: %s would change: %w",
 				updated.ID, fact.name, ErrImmutableTransition)
 		}
+	}
+	// Publication holds may move between canonical causes while their
+	// deterministic publish-blocked item remains open. Keep the fact present,
+	// but let the successor state describe the current hold rather than stale
+	// operator context from an earlier version.
+	if old.PublishBlock != nil && updated.PublishBlock == nil {
+		return fmt.Errorf("attention item %s: publish_block would be removed: %w",
+			updated.ID, ErrImmutableTransition)
 	}
 	samePRReference, err := jsonEqual(old.PRReference, updated.PRReference)
 	if err != nil {

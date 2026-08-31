@@ -5839,6 +5839,48 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 		}
 	})
 
+	t.Run("definitive blocked fact must match reason", func(t *testing.T) {
+		p := newProductionPublicationHarness(t, "")
+		p.room.fail = true
+		p.workflow = p.newEngine(t, productionCrashSeams{
+			afterBlocked: func() error { return errors.New("stop after blocked item") },
+		}, true)
+		p.startAndRecordExport(t)
+		if _, err := p.reconcileLanes(); err == nil {
+			t.Fatal("blocked-item seam did not interrupt reconciliation")
+		}
+		blocked, err := p.attention.GetAttentionItem(
+			p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rule := domain.TrustRuleRecipeUnapproved
+		blocked.Item.PublishBlock = &domain.PublishBlockFacts{TrustRule: &rule}
+		forged, err := json.Marshal(blocked.Item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := sql.Open("sqlite", p.dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, execErr := raw.ExecContext(
+			p.ctx, "UPDATE attention_items SET body = ? WHERE id = ?", string(forged), blocked.Item.ID,
+		)
+		closeErr := raw.Close()
+		if execErr != nil || closeErr != nil {
+			t.Fatal(errors.Join(execErr, closeErr))
+		}
+		p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+		if _, err := p.reconcileLanes(); !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Fatalf("forged blocked fact = %v, want parent-key mismatch", err)
+		}
+		if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+			t.Fatalf("forged blocked fact caused forge effects: %d/%d", refs, prs)
+		}
+	})
+
 	t.Run("resolved blocked item survives recipe revocation", func(t *testing.T) {
 		p := newProductionPublicationHarness(t, "")
 		p.room.fail = true

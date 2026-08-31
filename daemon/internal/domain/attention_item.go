@@ -500,7 +500,8 @@ type AttentionItem struct {
 	// review_diminishing_returns item. It grows as observations arrive.
 	BillableCostSoFar *CostSoFar `json:"billable_cost_so_far"`
 	// The remaining card facts are populated by daemon producers. They are nil
-	// on legacy items and fixed once first attached to an item.
+	// on legacy items and fixed once first attached, except PublishBlock, which
+	// follows the current canonical cause across versioned publication holds.
 	ExecutionFailure  *ExecutionFailureFacts `json:"execution_failure"`
 	PublishBlock      *PublishBlockFacts     `json:"publish_block"`
 	DiffStats         *DiffStats             `json:"diff_stats"`

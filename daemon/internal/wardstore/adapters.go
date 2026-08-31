@@ -586,8 +586,11 @@ func codexAuthReenrollmentItem(
 	version int,
 	status domain.ItemStatus,
 	binding *domain.CodexReenrollmentRecoveryBinding,
+	names ...*domain.DisplayNames,
 ) (domain.AttentionItem, error) {
-	return store.NewCodexReenrollmentMarker(id, occurrence, projectID, version, status, binding)
+	return store.NewCodexReenrollmentMarker(
+		id, occurrence, projectID, version, status, binding, names...,
+	)
 }
 
 func codexAuthReenrollmentItemAt(
@@ -598,8 +601,11 @@ func codexAuthReenrollmentItemAt(
 	status domain.ItemStatus,
 	binding *domain.CodexReenrollmentRecoveryBinding,
 	createdAt time.Time,
+	names ...*domain.DisplayNames,
 ) (domain.AttentionItem, error) {
-	item, err := codexAuthReenrollmentItem(id, occurrence, projectID, version, status, binding)
+	item, err := codexAuthReenrollmentItem(
+		id, occurrence, projectID, version, status, binding, names...,
+	)
 	if err != nil {
 		return domain.AttentionItem{}, err
 	}
@@ -763,8 +769,13 @@ func (a *AuthState) MarkCodexAuthNeedsReenrollment(
 		if err != nil {
 			return err
 		}
+		names, err := tx.DisplayNamesFor(ctx, run.ProjectID,
+			domain.Subject{Type: domain.SubjectSystem, ID: "daemon"})
+		if err != nil {
+			return err
+		}
 		item, err := codexAuthReenrollmentItemAt(
-			id, nextOccurrence, run.ProjectID, 1, domain.StatusOpen, nil, a.now(),
+			id, nextOccurrence, run.ProjectID, 1, domain.StatusOpen, nil, a.now(), names,
 		)
 		if err != nil {
 			return err
@@ -897,8 +908,13 @@ func (a *Enrollment) Begin(
 			if err != nil {
 				return err
 			}
+			names, err := tx.DisplayNamesFor(ctx, projectID,
+				domain.Subject{Type: domain.SubjectSystem, ID: "daemon"})
+			if err != nil {
+				return err
+			}
 			marker, err = codexAuthReenrollmentItemAt(
-				identity.ID, next, projectID, 1, domain.StatusOpen, nil, now,
+				identity.ID, next, projectID, 1, domain.StatusOpen, nil, now, names,
 			)
 			if err != nil {
 				return err
