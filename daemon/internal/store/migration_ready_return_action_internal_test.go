@@ -38,14 +38,14 @@ func TestReadyReturnActionMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 62 {
-		t.Fatalf("schema version = %d, want 62", got)
+	if got := rawVersion(t, db); got != 63 {
+		t.Fatalf("schema version = %d, want 63", got)
 	}
 
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
 		`SELECT id, project_id, conversation_id, item_type, status, health_posture,
-		        subject_run_id, readiness_summary, yield_history, entity_version,
-		        as_of_revision, body
+		        subject_run_id, readiness_summary, readiness_detail, yield_history,
+		        entity_version, as_of_revision, body
 		 FROM attention_items WHERE id = ?`, production.ID))
 	if err != nil {
 		t.Fatalf("reconstruct migrated item: %v", err)
@@ -78,8 +78,8 @@ func TestReadyReturnActionMigrationAppliesFromHead(t *testing.T) {
 
 	fakeGot, fakeSnapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
 		`SELECT id, project_id, conversation_id, item_type, status, health_posture,
-		        subject_run_id, readiness_summary, yield_history, entity_version,
-		        as_of_revision, body
+		        subject_run_id, readiness_summary, readiness_detail, yield_history,
+		        entity_version, as_of_revision, body
 		 FROM attention_items WHERE id = ?`, fake.ID))
 	if err != nil {
 		t.Fatalf("reconstruct fake item: %v", err)
@@ -126,8 +126,8 @@ func TestReadyReturnActionMigrationRejectsUnauthenticatedBinding(t *testing.T) {
 	}
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
 		`SELECT id, project_id, conversation_id, item_type, status, health_posture,
-		        subject_run_id, readiness_summary, yield_history, entity_version,
-		        as_of_revision, body
+		        subject_run_id, readiness_summary, readiness_detail, yield_history,
+		        entity_version, as_of_revision, body
 		 FROM attention_items WHERE id = ?`, item.ID))
 	if err != nil {
 		t.Fatal(err)
@@ -298,7 +298,22 @@ func seedLegacyReadyBinding(t *testing.T, ctx context.Context, db *sql.DB, item 
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.RecordReadyItemPRBinding(ctx, binding); err != nil {
+	// The schema sits at 0061 here, before 0063 added readiness_detail, so the
+	// store's item read cannot authenticate the binding through the head
+	// SELECT. Write the row the way RecordReadyItemPRBinding would; the
+	// migration under test re-authenticates it through readyBindingForMigration.
+	bindingBody, err := encode(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.putImmutable(ctx, insertReadyItemPRBindingSQL,
+		[]any{
+			binding.ItemID, binding.RunID, binding.ProducingInvocationID,
+			binding.PublicationInvocationID, binding.PublicationIdentity,
+			binding.RepositoryID, binding.PRNumber,
+			bindingBody, formatTime(binding.RecordedAt),
+		},
+		selectReadyItemPRBindingBodySQL, []any{binding.ItemID}, bindingBody); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {

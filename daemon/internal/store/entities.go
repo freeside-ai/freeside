@@ -389,8 +389,8 @@ func (tx *ReadTx) GetArtifact(ctx context.Context, id domain.ArtifactID) (domain
 }
 
 const putAttentionItemSQL = `
-INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, yield_history, entity_version, as_of_revision, body)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     project_id      = excluded.project_id,
     conversation_id = excluded.conversation_id,
@@ -574,6 +574,14 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 		}
 		readinessSummary = &encoded
 	}
+	var readinessDetail *string
+	if item.ReadinessDetail != nil {
+		encoded, err := encode(*item.ReadinessDetail)
+		if err != nil {
+			return fmt.Errorf("put attention item %q readiness detail: %w", item.ID, err)
+		}
+		readinessDetail = &encoded
+	}
 	var yieldHistory *string
 	if item.YieldHistory != nil {
 		encoded, err := encode(*item.YieldHistory)
@@ -584,7 +592,7 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	}
 	if _, err := tx.tx.ExecContext(ctx, putAttentionItemSQL,
 		item.ID, item.ProjectID, item.ConversationID, item.Type, item.Status,
-		item.Posture, item.Subject.RunID, readinessSummary, yieldHistory, tx.asOfRevision, body); err != nil {
+		item.Posture, item.Subject.RunID, readinessSummary, readinessDetail, yieldHistory, tx.asOfRevision, body); err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
 	}
 	if err := tx.putAttentionItemPRReference(ctx, item); err != nil {
@@ -1160,7 +1168,7 @@ func (tx *ReadTx) getAttentionItemBindingRecord(
 	ctx context.Context, id domain.ItemID,
 ) (domain.AttentionItem, error) {
 	item, _, err := scanAttentionItemRecord(tx.tx.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
 	if err != nil {
 		return domain.AttentionItem{}, notFoundOr(err)
 	}
@@ -1261,7 +1269,7 @@ func (tx *ReadTx) GetAttentionItem(ctx context.Context, id domain.ItemID) (domai
 // domain content matches, so acceptance needs the store's own version counter.
 func (tx *ReadTx) GetAttentionItemSnapshot(ctx context.Context, id domain.ItemID) (domain.AttentionItem, Snapshot, error) {
 	item, snap, err := tx.scanAttentionItemSnapshot(ctx, tx.tx.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
 	if err != nil {
 		return domain.AttentionItem{}, Snapshot{}, fmt.Errorf("get attention item %q: %w", id, notFoundOr(err))
 	}
@@ -1277,7 +1285,7 @@ func (tx *ReadTx) GetAttentionItemRecord(
 	id domain.ItemID,
 ) (domain.AttentionItem, error) {
 	item, _, err := tx.scanAttentionItemHistory(ctx, tx.tx.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
 	if err != nil {
 		return domain.AttentionItem{}, fmt.Errorf("get attention item record %q: %w", id, notFoundOr(err))
 	}
@@ -1369,11 +1377,12 @@ func scanAttentionItemRecord(sc scanner) (domain.AttentionItem, Snapshot, error)
 		healthPosture  sql.NullString
 		subjectRunID   sql.NullString
 		readinessBody  sql.NullString
+		detailBody     sql.NullString
 		yieldBody      sql.NullString
 		snap           Snapshot
 		body           []byte
 	)
-	if err := sc.Scan(&id, &projectID, &conversationID, &itemType, &status, &healthPosture, &subjectRunID, &readinessBody, &yieldBody, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
+	if err := sc.Scan(&id, &projectID, &conversationID, &itemType, &status, &healthPosture, &subjectRunID, &readinessBody, &detailBody, &yieldBody, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	item, err := decode[domain.AttentionItem](body)
@@ -1413,6 +1422,28 @@ func scanAttentionItemRecord(sc scanner) (domain.AttentionItem, Snapshot, error)
 		consistent = consistent && item.Readiness != nil && *item.Readiness == readiness
 	} else {
 		consistent = consistent && item.Readiness == nil
+	}
+	if detailBody.Valid {
+		// The detail carries slices, so compare the canonical encodings of the
+		// column and the body's copy, as the yield history does below.
+		detail, err := decode[domain.ReadinessDetail]([]byte(detailBody.String))
+		if err != nil {
+			return domain.AttentionItem{}, Snapshot{}, err
+		}
+		encoded, err := encode(detail)
+		if err != nil {
+			return domain.AttentionItem{}, Snapshot{}, err
+		}
+		consistent = consistent && item.ReadinessDetail != nil && detailBody.String == encoded
+		if consistent {
+			itemEncoded, err := encode(*item.ReadinessDetail)
+			if err != nil {
+				return domain.AttentionItem{}, Snapshot{}, err
+			}
+			consistent = itemEncoded == encoded
+		}
+	} else {
+		consistent = consistent && item.ReadinessDetail == nil
 	}
 	if yieldBody.Valid {
 		history, err := decode[domain.ReviewYieldHistory]([]byte(yieldBody.String))

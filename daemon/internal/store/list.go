@@ -67,7 +67,7 @@ func (tx *ReadTx) ListConversations(ctx context.Context) ([]Snapshotted[domain.C
 }
 
 const listAttentionItemsSQL = `
-SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, yield_history, entity_version, as_of_revision, body
+SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body
 FROM attention_items ORDER BY id`
 
 // ListAttentionItems enumerates every persisted attention item (List

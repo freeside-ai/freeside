@@ -152,6 +152,19 @@ func (tx *ReadTx) validateReadyItemPRBinding(
 	if err != nil {
 		return fmt.Errorf("item: %w", err)
 	}
+	return tx.validateReadyItemPRBindingAgainst(ctx, item, binding)
+}
+
+// validateReadyItemPRBindingAgainst authenticates a binding against an item
+// the caller already reconstructed. The 0062 data migration needs this split:
+// it runs before 0063 added readiness_detail, so the head-schema item read
+// above cannot execute there, while its own scan projects the column as NULL.
+func (tx *ReadTx) validateReadyItemPRBindingAgainst(
+	ctx context.Context, item domain.AttentionItem, binding domain.ReadyItemPRBinding,
+) error {
+	if item.ID != binding.ItemID {
+		return errRowInconsistent
+	}
 	if item.Type != domain.AttentionReadyForFinalReview || item.ProjectID == "" ||
 		item.Subject.Type != domain.SubjectRun || item.Subject.RunID == nil ||
 		*item.Subject.RunID != binding.RunID || item.Subject.ID != domain.SubjectID(binding.RunID) ||
