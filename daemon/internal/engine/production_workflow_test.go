@@ -1034,6 +1034,7 @@ func TestCheckpointArtifactVerifyRetryableUnlessDeterministic(t *testing.T) {
 	ctx := t.Context()
 	artifact := domain.Artifact{
 		ID: "artifact-1", Digest: domain.Digest("sha256:" + strings.Repeat("0", 64)),
+		Metadata: runMeta(),
 	}
 	transientOpen := &os.PathError{Op: "open", Path: "checkpoint-blob", Err: errors.New("input/output error")}
 
@@ -1243,6 +1244,7 @@ func TestLoadProductionBindingAuthenticatesTheSpecificationInput(t *testing.T) {
 			HeadBinding:          domain.HeadIndependent,
 			SensitivityClass:     domain.SensitivityNormal,
 		},
+		Metadata: runMeta(),
 	}
 	extra := specification
 	extra.ID = "artifact-extra"
@@ -2089,6 +2091,7 @@ func reevaluationBoundaryClaim(content string) domain.AgentClaim {
 			ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-reevaluation-evidence",
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: claimTextMeta(text),
 	}
 }
 

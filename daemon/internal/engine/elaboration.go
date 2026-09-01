@@ -2367,6 +2367,11 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 			ProducerInvocationID: request.InvocationID, HeadBinding: domain.HeadIndependent,
 			SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaTextMarkdown, SizeBytes: int64(len(specification.Body)),
+			CreatedAt: e.elaboration.now().UTC(), Source: domain.EvidenceSourceRun,
+			Availability: domain.EvidenceAvailable,
+		},
 	}, nil)
 	if err != nil {
 		return false, err
@@ -2412,10 +2417,18 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 			Label: "Specification", Artifact: artifact.ID, Digest: artifact.Digest,
 			Provenance: artifact.Provenance,
 			Text:       &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: specification.Body},
+			Metadata: domain.EvidenceMetadata{
+				MediaType: domain.EvidenceMediaTextMarkdown, SizeBytes: int64(len(specification.Body)),
+				CreatedAt: createdAt, Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+			},
 		},
 		{
 			Label: export.SummaryEvidenceLabel, Artifact: summaryArtifactID,
 			Digest: summaryDigest, Provenance: artifact.Provenance, Text: &summaryText,
+			Metadata: domain.EvidenceMetadata{
+				MediaType: domain.EvidenceMediaType(summaryText.MediaType), SizeBytes: int64(len(summaryText.Content)),
+				CreatedAt: createdAt, Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+			},
 		},
 	}
 	var revisionArtifact *domain.Artifact
@@ -2428,6 +2441,10 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 		claims = append(claims, domain.AgentClaim{
 			Label: "Addressals", Artifact: revisionArtifact.ID, Digest: revisionArtifact.Digest,
 			Provenance: revisionArtifact.Provenance,
+			Metadata: domain.EvidenceMetadata{
+				MediaType: revisionArtifact.Metadata.MediaType, SizeBytes: revisionArtifact.Metadata.SizeBytes,
+				CreatedAt: createdAt, Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+			},
 		})
 	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
@@ -2589,6 +2606,13 @@ func (e *Engine) buildSpecRevision(
 	addressalsArtifact, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: addressalsID, Type: domain.ArtifactKindSpecification, Digest: addressalsDigest,
 		Provenance: provenance,
+		// The addressals body is a JSON array of the agent's per-comment
+		// responses; size is its exact byte length.
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: int64(len(addressalsBody)),
+			CreatedAt: e.elaboration.now().UTC(), Source: domain.EvidenceSourceRun,
+			Availability: domain.EvidenceAvailable,
+		},
 	}, nil)
 	if err != nil {
 		return nil, nil, err
@@ -3177,6 +3201,11 @@ func (e *Engine) enqueueSpecRevision(ctx context.Context, run domain.Run, reques
 			ProducerInvocationID: request.InvocationID, HeadBinding: domain.HeadIndependent,
 			SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaTextPlain, SizeBytes: int64(len(feedbackMessage)),
+			CreatedAt: e.elaboration.now().UTC(), Source: domain.EvidenceSourceRun,
+			Availability: domain.EvidenceAvailable,
+		},
 	}, nil)
 	if err != nil {
 		return err
@@ -3203,7 +3232,7 @@ func (e *Engine) enqueueSpecRevision(ctx context.Context, run domain.Run, reques
 		); err != nil {
 			return err
 		}
-		if err := tx.PutArtifact(ctx, feedback); err != nil {
+		if err := putArtifactIdempotent(ctx, tx, feedback); err != nil {
 			return err
 		}
 		if err := tx.PutAgentInvocation(ctx, invocation); err != nil {

@@ -37,6 +37,9 @@ func TestGetAgentClaimsRejectsTamperedRow(t *testing.T) {
 
 	const agentProvenance = `{"producer_class":"agent","producer_invocation_id":"inv-1","head_binding":"head_bound","source_head_sha":"cafebabe","verification_recipe_digest":null,"sensitivity_class":"normal"}`
 	const verifierProvenance = `{"producer_class":"verifier","producer_invocation_id":"inv-1","head_binding":"head_bound","source_head_sha":"cafebabe","verification_recipe_digest":null,"sensitivity_class":"normal"}`
+	// Valid claim-source evidence metadata for an image (no inline text) claim, so
+	// a body that must reach a post-metadata gate is not stopped at metadata first.
+	const claimMetadata = `{"media_type":"image/png","size_bytes":1,"created_at":"2026-01-02T03:04:05Z","source":"claim","availability":"available"}`
 
 	cases := []struct {
 		name    string
@@ -52,7 +55,7 @@ func TestGetAgentClaimsRejectsTamperedRow(t *testing.T) {
 		},
 		{
 			"body invocation_id disagrees with row key",
-			`{"invocation_id":"inv-2","claims":[{"label":"screenshot","artifact_id":"art-2","digest":"sha256:img","provenance":` + agentProvenance + `,"text":null}]}`,
+			`{"invocation_id":"inv-2","claims":[{"label":"screenshot","artifact_id":"art-2","digest":"sha256:img","provenance":` + agentProvenance + `,"text":null,"metadata":` + claimMetadata + `}]}`,
 			errRowInconsistent,
 		},
 		{

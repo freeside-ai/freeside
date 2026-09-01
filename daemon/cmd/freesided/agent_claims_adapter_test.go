@@ -110,10 +110,14 @@ func adapterClaimSet(id domain.InvocationID) []domain.AgentClaim {
 		SensitivityClass:     domain.SensitivityNormal,
 	}
 	return []domain.AgentClaim{
-		{Label: "screenshot", Artifact: "art-image", Digest: "sha256:img", Provenance: provenance},
+		{
+			Label: "screenshot", Artifact: "art-image", Digest: "sha256:img", Provenance: provenance,
+			Metadata: testClaimEvidenceMetadata(domain.EvidenceMediaImagePNG),
+		},
 		{
 			Label: "change summary", Artifact: "art-text", Digest: text.ComputeDigest(),
 			Text: &text, Provenance: provenance,
+			Metadata: testClaimTextEvidenceMetadata(text),
 		},
 	}
 }

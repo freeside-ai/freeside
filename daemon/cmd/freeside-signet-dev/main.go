@@ -484,6 +484,11 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 				SourceHeadSHA:        "cafebabe",
 				SensitivityClass:     domain.SensitivityNormal,
 			},
+			Metadata: domain.EvidenceMetadata{
+				MediaType: domain.EvidenceMediaTextMarkdown, SizeBytes: int64(len(text.Content)),
+				CreatedAt: time.Now().UTC(), Source: domain.EvidenceSourceClaim,
+				Availability: domain.EvidenceAvailable,
+			},
 		}}
 	}
 	runID := domain.RunID("run-" + req.ID)

@@ -350,6 +350,7 @@ func TestPutAttentionItemAuthenticatesSpecRevisionArtifacts(t *testing.T) {
 	}
 	forgedSummary.AgentClaims[1].Text = &forgedText
 	forgedSummary.AgentClaims[1].Digest = forgedText.ComputeDigest()
+	forgedSummary.AgentClaims[1].Metadata.SizeBytes = int64(len(forgedText.Content))
 	forgedSummary.ArtifactDigests = []domain.Digest{
 		forgedSummary.AgentClaims[0].Digest,
 		forgedSummary.AgentClaims[1].Digest,
@@ -527,6 +528,7 @@ func TestPutAttentionItemRejectsOmittedSpecRevisionHistory(t *testing.T) {
 			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-elaborate-run-1-2",
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: runMeta(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -548,6 +550,7 @@ func TestPutAttentionItemRejectsOmittedSpecRevisionHistory(t *testing.T) {
 	current, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: "spec-implementation-run-3", Type: domain.ArtifactKindSpecification,
 		Digest: domain.Digest(contentaddr.Sum([]byte(currentBody))), Provenance: currentProvenance,
+		Metadata: runMeta(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -561,6 +564,7 @@ func TestPutAttentionItemRejectsOmittedSpecRevisionHistory(t *testing.T) {
 	addressalsArtifact, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: "spec-addressals-implementation-run-3", Type: domain.ArtifactKindSpecification,
 		Digest: addressalsDigest, Provenance: currentProvenance,
+		Metadata: runMeta(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -580,14 +584,17 @@ func TestPutAttentionItemRejectsOmittedSpecRevisionHistory(t *testing.T) {
 				Label: "Specification", Artifact: current.ID, Digest: current.Digest,
 				Provenance: current.Provenance,
 				Text:       &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: currentBody},
+				Metadata:   claimTextMeta(domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: currentBody}),
 			},
 			{
 				Label: "freeside.summary", Artifact: "spec-summary-implementation-run-3",
 				Digest: summaryText.ComputeDigest(), Provenance: currentProvenance, Text: &summaryText,
+				Metadata: claimTextMeta(summaryText),
 			},
 			{
 				Label: "Addressals", Artifact: addressalsArtifact.ID,
 				Digest: addressalsDigest, Provenance: currentProvenance,
+				Metadata: claimMeta(domain.EvidenceMediaImagePNG),
 			},
 		},
 		SpecRevision: &domain.SpecRevisionFacts{
@@ -799,6 +806,7 @@ func specRevisionCardFact(t *testing.T) specRevisionCardFixture {
 		ID: "spec-implementation-run-1", Type: domain.ArtifactKindSpecification,
 		Digest:     domain.Digest(contentaddr.Sum([]byte(priorBody))),
 		Provenance: priorProvenance,
+		Metadata:   runMeta(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -806,6 +814,7 @@ func specRevisionCardFact(t *testing.T) specRevisionCardFixture {
 	current, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: "spec-implementation-run-2", Type: domain.ArtifactKindSpecification,
 		Digest: domain.Digest(contentaddr.Sum([]byte(currentBody))), Provenance: currentProvenance,
+		Metadata: runMeta(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -818,6 +827,7 @@ func specRevisionCardFact(t *testing.T) specRevisionCardFixture {
 			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-elaborate-run-1-1",
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: runMeta(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -831,6 +841,7 @@ func specRevisionCardFact(t *testing.T) specRevisionCardFixture {
 	addressalsArtifact, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: "spec-addressals-implementation-run-2", Type: domain.ArtifactKindSpecification, Digest: addressalsDigest,
 		Provenance: currentProvenance,
+		Metadata:   runMeta(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -847,7 +858,8 @@ func specRevisionCardFact(t *testing.T) specRevisionCardFixture {
 		},
 		AgentClaims: []domain.AgentClaim{{
 			Label: "Specification", Artifact: prior.ID, Digest: prior.Digest, Provenance: prior.Provenance,
-			Text: &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: priorBody},
+			Text:     &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: priorBody},
+			Metadata: claimTextMeta(domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: priorBody}),
 		}},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt: &at, Status: domain.StatusOpen,
@@ -876,12 +888,14 @@ func specRevisionCardFact(t *testing.T) specRevisionCardFixture {
 				Label: "Specification", Artifact: current.ID, Digest: current.Digest,
 				Provenance: current.Provenance,
 				Text:       &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: currentBody},
+				Metadata:   claimTextMeta(domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: currentBody}),
 			},
 			{
 				Label: "freeside.summary", Artifact: "spec-summary-implementation-run-2",
 				Digest: summaryText.ComputeDigest(), Provenance: currentProvenance, Text: &summaryText,
+				Metadata: claimTextMeta(summaryText),
 			},
-			{Label: "Addressals", Artifact: addressalsArtifact.ID, Digest: addressalsDigest, Provenance: currentProvenance},
+			{Label: "Addressals", Artifact: addressalsArtifact.ID, Digest: addressalsDigest, Provenance: currentProvenance, Metadata: claimMeta(domain.EvidenceMediaImagePNG)},
 		},
 		SpecRevision: &domain.SpecRevisionFacts{
 			Iteration: 2, PriorItemID: priorItem.ID,

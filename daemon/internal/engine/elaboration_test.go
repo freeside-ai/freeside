@@ -350,6 +350,7 @@ func testElaborationArtifact(
 			ProducerClass: producer, ProducerInvocationID: invocation,
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: runMeta(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -2850,6 +2851,7 @@ func TestVerifyElaborationApprovalClaimsAcceptsLegacyAndCanonicalDigests(t *test
 			ProducerClass: domain.ProducerAgent, ProducerInvocationID: request.InvocationID,
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: runMeta(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -2859,6 +2861,7 @@ func TestVerifyElaborationApprovalClaimsAcceptsLegacyAndCanonicalDigests(t *test
 		AgentClaims: []domain.AgentClaim{{
 			Label: "Specification", Artifact: specification.ID, Digest: specification.Digest,
 			Provenance: specification.Provenance,
+			Metadata:   claimMeta(domain.EvidenceMediaImagePNG),
 		}},
 		ArtifactDigests: []domain.Digest{specification.Digest},
 	}
@@ -2870,6 +2873,7 @@ func TestVerifyElaborationApprovalClaimsAcceptsLegacyAndCanonicalDigests(t *test
 	current.AgentClaims = append(current.AgentClaims, domain.AgentClaim{
 		Label: export.SummaryEvidenceLabel, Artifact: "spec-summary-implementation-run-1",
 		Digest: sharedText.ComputeDigest(), Provenance: specification.Provenance, Text: &sharedText,
+		Metadata: claimTextMeta(sharedText),
 	})
 	summaryDigest := sharedText.ComputeDigest()
 	if err := verifyElaborationApprovalClaims(current, request, specification, &summaryDigest); err != nil {

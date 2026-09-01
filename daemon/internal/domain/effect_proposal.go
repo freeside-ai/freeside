@@ -130,6 +130,13 @@ func (i ProposalInstance) EvidenceArtifact() (Artifact, error) {
 		return Artifact{}, err
 	}
 	recipe := EffectProposalRecipeDigest
+	// The digest names the canonical proposal JSON; its byte length is the
+	// evidence size. Availability is a placeholder here (the sync projection
+	// recomputes it from the blob store per synced item).
+	body, err := json.Marshal(i.Proposal.canonical())
+	if err != nil {
+		return Artifact{}, fmt.Errorf("proposal instance %s canonical body: %w", i.ID, err)
+	}
 	return NewArtifact(ArtifactInput{
 		ID:     ArtifactID("effect-proposal/" + string(i.ID) + "/" + contentaddr.Hex(string(i.Proposal.Digest))),
 		Type:   ArtifactKindEvidence,
@@ -138,6 +145,10 @@ func (i ProposalInstance) EvidenceArtifact() (Artifact, error) {
 			ProducerClass: ProducerDaemon, ProducerInvocationID: InvocationID("effect-proposal/" + string(i.ID)),
 			HeadBinding: HeadIndependent, VerificationRecipeDigest: &recipe,
 			SensitivityClass: SensitivityNormal,
+		},
+		Metadata: EvidenceMetadata{
+			MediaType: EvidenceMediaApplicationJSON, SizeBytes: int64(len(body)),
+			CreatedAt: i.CreatedAt, Source: EvidenceSourceRun, Availability: EvidenceAvailable,
 		},
 	}, map[Digest]bool{EffectProposalRecipeDigest: true})
 }

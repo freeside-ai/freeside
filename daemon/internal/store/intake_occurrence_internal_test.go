@@ -67,6 +67,7 @@ func seedBoundIntakeOccurrence(t *testing.T, ctx context.Context, tx *WriteTx) d
 			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-policy",
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: runMeta(),
 	}, nil)
 	if err != nil {
 		t.Fatalf("policy artifact: %v", err)

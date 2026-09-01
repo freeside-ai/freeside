@@ -408,10 +408,12 @@ func specRevisionInput(t *testing.T) domain.AttentionItemInput {
 		{
 			Label: "Specification", Artifact: "spec-run-2", Digest: "sha256:spec-2",
 			Provenance: provenance,
+			Metadata:   claimMeta(domain.EvidenceMediaImagePNG),
 		},
 		{
 			Label: "Addressals", Artifact: "spec-addressals-run-2", Digest: addressalsDigest,
 			Provenance: provenance,
+			Metadata:   claimMeta(domain.EvidenceMediaImagePNG),
 		},
 	}
 	in.SpecRevision = &domain.SpecRevisionFacts{

@@ -22,6 +22,33 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
+// putArtifactIdempotent write-once registers a content-addressed research
+// artifact without conflicting on a replay whose only difference is the
+// recorded created_at. The reconcile transitions that build these artifacts
+// (enqueueElaborationAnswer, enqueueSpecRevision, enqueueSpecDiscussion) re-run
+// on every engine tick while their answered item and command persist, and they
+// write the artifact before their outbox idempotence guard; a plain PutArtifact
+// of the byte-different (fresh created_at) artifact would raise
+// ErrImmutableConflict and wedge the reconcile loop. The artifact's identity is
+// a deterministic function of the immutable command and its content, so an
+// existing row with the same id names the same bytes: its digest must match,
+// and the original recorded time stays authoritative. A genuine content
+// divergence is still surfaced as a conflict.
+func putArtifactIdempotent(ctx context.Context, tx *store.WriteTx, artifact domain.Artifact) error {
+	existing, err := tx.GetArtifact(ctx, artifact.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return tx.PutArtifact(ctx, artifact)
+	}
+	if err != nil {
+		return err
+	}
+	if existing.Digest != artifact.Digest {
+		return fmt.Errorf("artifact %s digest %s, existing row %s: %w",
+			artifact.ID, artifact.Digest, existing.Digest, store.ErrImmutableConflict)
+	}
+	return nil
+}
+
 const (
 	// KindOperatorFeedbackInvocationRequested is the durable invocation intent
 	// created from answer_and_retry or return_to_agent.
@@ -361,6 +388,11 @@ func (e *Engine) enqueueElaborationAnswer(
 			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: source,
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaTextPlain, SizeBytes: int64(len(feedbackBody)),
+			CreatedAt: e.elaboration.now().UTC(), Source: domain.EvidenceSourceRun,
+			Availability: domain.EvidenceAvailable,
+		},
 	}, nil)
 	if err != nil {
 		return false, err
@@ -393,7 +425,7 @@ func (e *Engine) enqueueElaborationAnswer(
 			!operatorFeedbackCommandMatchesItem(stored, current) {
 			return errors.Join(err, domain.ErrParentKeyMismatch)
 		}
-		if err := tx.PutArtifact(ctx, feedback); err != nil {
+		if err := putArtifactIdempotent(ctx, tx, feedback); err != nil {
 			return err
 		}
 		if err := tx.PutAgentInvocation(ctx, invocation); err != nil {
@@ -539,6 +571,12 @@ func (e *Engine) persistImplementationFeedback(
 	artifact, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: request.InputArtifactID, Type: domain.ArtifactKindEvidence, Digest: digest,
 		Provenance: provenance,
+		// body is the JSON operator-feedback input the digest names.
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: int64(len(body)),
+			CreatedAt: e.productionPublication.now().UTC(), Source: domain.EvidenceSourceRun,
+			Availability: domain.EvidenceAvailable,
+		},
 	}, e.productionPublication.approvedRecipes)
 	if err != nil {
 		return false, err

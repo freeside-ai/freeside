@@ -101,6 +101,9 @@ var (
 	ErrInvalidJudgmentSite              = errors.New("invalid judgment site")
 	ErrInvalidUsageSource               = errors.New("invalid usage source")
 	ErrInvalidUsageMeasurementKind      = errors.New("invalid usage measurement kind")
+	ErrInvalidEvidenceMediaType         = errors.New("invalid evidence media type")
+	ErrInvalidEvidenceSource            = errors.New("invalid evidence source")
+	ErrInvalidEvidenceAvailability      = errors.New("invalid evidence availability")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -111,6 +114,9 @@ var (
 	ErrNoActions                    = errors.New("attention item offers no requested decision")
 	ErrNonPositiveSeq               = errors.New("message sequence must be positive")
 	ErrNonPositive                  = errors.New("value must be positive")
+	ErrNegativeSize                 = errors.New("size must be non-negative")
+	ErrEvidenceSourceMismatch       = errors.New("evidence metadata source does not match its container")
+	ErrClaimTextMediaTypeMismatch   = errors.New("claim text media type does not equal its evidence metadata media type")
 	ErrInvertedRange                = errors.New("line range start is greater than end")
 	ErrUnfingerprintableFinding     = errors.New("finding lacks the fields required for a cross-round fingerprint")
 	ErrParentKeyMismatch            = errors.New("child record's parent key does not match its enclosing record")
@@ -132,6 +138,7 @@ var (
 	ErrClaimTextNotUTF8             = errors.New("claim text content is not valid UTF-8")
 	ErrClaimTextTooLarge            = errors.New("claim text content exceeds the inline size cap")
 	ErrClaimTextDigestMismatch      = errors.New("claim digest does not match its text content")
+	ErrClaimTextSizeMismatch        = errors.New("claim size_bytes does not match its text content length")
 	ErrHighSensitivityClaimText     = errors.New("high-sensitivity claim content cannot be carried inline")
 	ErrBindingMismatch              = errors.New("artifact_digests does not equal the item's rendered evidence and claim digests")
 	ErrDigestsNotCanonical          = errors.New("artifact digests are not in canonical (sorted, deduplicated) order")

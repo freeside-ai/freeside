@@ -31,10 +31,12 @@ func agentClaimFixtures() (domain.AgentInvocation, []domain.AgentClaim, domain.C
 		{
 			Label: "screenshot", Artifact: "art-2", Digest: "sha256:img",
 			Provenance: agentProvenance,
+			Metadata:   claimMeta(domain.EvidenceMediaImagePNG),
 		},
 		{
 			Label: "change summary", Artifact: "art-3", Digest: claimText.ComputeDigest(),
 			Text: &claimText, Provenance: agentProvenance,
+			Metadata: claimTextMeta(claimText),
 		},
 	}
 	return invocation, claims, claimText
@@ -59,6 +61,7 @@ func TestAgentClaimsRoundTripAcrossReopen(t *testing.T) {
 			HeadBinding: domain.HeadBound, SourceHeadSHA: "deadbeef",
 			SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: claimMeta(domain.EvidenceMediaImagePNG),
 	}}
 
 	s, err := store.Open(ctx, path, store.Options{})
@@ -154,6 +157,7 @@ func TestAgentClaimsIdempotentAndConflict(t *testing.T) {
 			c := append([]domain.AgentClaim(nil), claims...)
 			c[1].Text = &rewrittenText
 			c[1].Digest = rewrittenText.ComputeDigest()
+			c[1].Metadata.SizeBytes = int64(len(rewrittenText.Content))
 			return c
 		}()},
 		{"order", []domain.AgentClaim{claims[1], claims[0]}},

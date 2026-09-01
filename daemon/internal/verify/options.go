@@ -63,6 +63,12 @@ type Options struct {
 	Changes []importer.Change
 	// GitPath is the git binary to run; empty means "git" from PATH.
 	GitPath string
+	// Now is the instant stamped as the emitted evidence's
+	// EvidenceMetadata.CreatedAt (§5.15). The daemon injects its own clock;
+	// a zero value defaults (and is normalized) to the current UTC time in
+	// withDefaults, so the producer (buildEvidence) never reads a wall clock
+	// directly and stays a deterministic function of its options.
+	Now time.Time
 	// Policy is the verification's policy surface.
 	Policy Policy
 }
@@ -92,6 +98,10 @@ func (o Options) withDefaults() Options {
 	if o.GitPath == "" {
 		o.GitPath = "git"
 	}
+	if o.Now.IsZero() {
+		o.Now = time.Now()
+	}
+	o.Now = o.Now.UTC()
 	o.Policy = o.Policy.withDefaults()
 	return o
 }

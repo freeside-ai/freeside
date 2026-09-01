@@ -190,9 +190,10 @@ func skipUntilJSONClose(dec *json.Decoder) error {
 // failure returns a typed error and no claims. Bad evidence fails the whole
 // import closed, exactly as the repo channel's integrity violations do.
 func buildClaims(
-	em export.EvidenceManifest, blobs map[export.Digest]blobInfo, pol Policy,
+	em export.EvidenceManifest, blobs map[export.Digest]blobInfo, opts Options,
 ) ([]domain.AgentClaim, []Finding, error) {
-	pol = pol.withDefaults()
+	pol := opts.Policy.withDefaults()
+	createdAt := opts.evidenceCreatedAt()
 	claims := make([]domain.AgentClaim, 0, len(em.Entries))
 	var findings []Finding
 	for _, e := range em.Entries {
@@ -209,11 +210,24 @@ func buildClaims(
 		if err != nil {
 			return nil, nil, err
 		}
+		// Carry the daemon-validated media type and size the importer already
+		// checked (§5.15 rule 3) instead of dropping them: an unrecognized
+		// media type fails the import closed, exactly like a magic-byte
+		// mismatch. Availability is a placeholder here (the sync projection
+		// recomputes it from the blob store per synced item).
+		mediaType, err := mapEvidenceMediaType(e.MediaType)
+		if err != nil {
+			return nil, nil, fmt.Errorf("evidence entry %q: %w", e.Label, err)
+		}
 		claim := domain.AgentClaim{
 			Label:      e.Label,
 			Artifact:   agentArtifactID(prov, e.Digest),
 			Digest:     domain.Digest(string(e.Digest)),
 			Provenance: prov,
+			Metadata: domain.EvidenceMetadata{
+				MediaType: mediaType, SizeBytes: e.Size, CreatedAt: createdAt,
+				Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+			},
 		}
 		if e.MediaType == "text/markdown" && e.Size <= pol.SecretMaxScanBytes {
 			body, readErr := readScanBlob(info, e.Digest)
@@ -318,6 +332,30 @@ func mapHeadBinding(b export.EvidenceHeadBinding) (domain.HeadBinding, error) {
 		return domain.HeadIndependent, nil
 	}
 	return "", fmt.Errorf("evidence head_binding %q: %w", b, ErrEvidenceInvalid)
+}
+
+// mapEvidenceMediaType converts a validated evidence entry's declared media
+// type into the domain enum. The cases are exactly the importer allow-set (the
+// opaque image set plus application/jsonl and text/markdown) that
+// validateEvidenceType enforces; any other string fails closed with an
+// ErrEvidenceMediaMismatch, so a mapping gap can never silently admit a claim
+// with an unmapped type.
+func mapEvidenceMediaType(mediaType string) (domain.EvidenceMediaType, error) {
+	switch mediaType {
+	case "image/png":
+		return domain.EvidenceMediaImagePNG, nil
+	case "image/jpeg":
+		return domain.EvidenceMediaImageJPEG, nil
+	case "image/gif":
+		return domain.EvidenceMediaImageGIF, nil
+	case "image/webp":
+		return domain.EvidenceMediaImageWEBP, nil
+	case "application/jsonl":
+		return domain.EvidenceMediaApplicationJSONL, nil
+	case "text/markdown":
+		return domain.EvidenceMediaTextMarkdown, nil
+	}
+	return "", fmt.Errorf("evidence media_type %q is not an allowed type: %w", mediaType, ErrEvidenceMediaMismatch)
 }
 
 func mapSensitivityClass(c export.EvidenceSensitivityClass) (domain.SensitivityClass, error) {

@@ -215,7 +215,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 				snoozedItems[item.Value.ID] = true
 				continue
 			}
-			out.AttentionItems = append(out.AttentionItems, itemSnapshot(item.Value, item.Snapshot))
+			out.AttentionItems = append(out.AttentionItems, itemSnapshot(item.Value, item.Snapshot, s.blobs))
 		}
 		for _, delivery := range deliveries {
 			if snoozedItems[delivery.Value.ItemID] {
@@ -313,7 +313,7 @@ func (s *Service) ListAttentionItems(ctx context.Context) ([]AttentionItemSnapsh
 				return fmt.Errorf("item %q snooze: %w", value.Value.ID, err)
 			}
 			if !snoozed {
-				out = append(out, itemSnapshot(value.Value, value.Snapshot))
+				out = append(out, itemSnapshot(value.Value, value.Snapshot, s.blobs))
 			}
 		}
 		return nil
@@ -350,7 +350,7 @@ func (s *Service) GetAttentionItem(ctx context.Context, id domain.ItemID) (Atten
 		if snoozed {
 			return ErrProposalSnoozed
 		}
-		out = itemSnapshot(item, snapshot)
+		out = itemSnapshot(item, snapshot, s.blobs)
 		return nil
 	})
 	if err != nil {
@@ -698,10 +698,57 @@ func validateSnapshot(state store.ServerState, snapshot store.Snapshot) error {
 	return nil
 }
 
-func itemSnapshot(item domain.AttentionItem, snapshot store.Snapshot) AttentionItemSnapshot {
+func itemSnapshot(item domain.AttentionItem, snapshot store.Snapshot, blobs *BlobStore) AttentionItemSnapshot {
+	normalized := projectEvidenceAvailability(normalizeAttentionItem(item), blobs)
 	return AttentionItemSnapshot{
-		AsOfRevision: snapshot.AsOfRevision, EntityVersion: snapshot.EntityVersion, Item: normalizeAttentionItem(item),
+		AsOfRevision: snapshot.AsOfRevision, EntityVersion: snapshot.EntityVersion, Item: normalized,
 	}
+}
+
+// projectEvidenceAvailability recomputes every evidence and claim reference's
+// EvidenceMetadata.Availability from the blob store immediately before
+// serialization (§5.15). Availability is a daemon read-time fact, never a
+// trusted persisted value (the same re-gate discipline as publish_eligible):
+// a digest whose bytes are in the store projects available, one held without
+// bytes projects bytes_absent. A nil blob store (none configured) or a store
+// that cannot confirm presence projects bytes_absent for everything, the
+// truthful conservative state, since a fetch could not be served either way.
+// The mutated slices are cloned first, so the store's decoded value is never
+// touched (nonNilSlice returns the input slice unchanged when non-nil).
+func projectEvidenceAvailability(item domain.AttentionItem, blobs *BlobStore) domain.AttentionItem {
+	availability := func(digest domain.Digest) domain.EvidenceAvailability {
+		if blobs == nil {
+			return domain.EvidenceBytesAbsent
+		}
+		has, err := blobs.Has(digest)
+		if err != nil || !has {
+			return domain.EvidenceBytesAbsent
+		}
+		return domain.EvidenceAvailable
+	}
+	if len(item.EvidenceSnapshot) > 0 {
+		evidence := slices.Clone(item.EvidenceSnapshot)
+		for i := range evidence {
+			evidence[i].Metadata.Availability = availability(evidence[i].Digest)
+		}
+		item.EvidenceSnapshot = evidence
+	}
+	if len(item.AgentClaims) > 0 {
+		claims := slices.Clone(item.AgentClaims)
+		for i := range claims {
+			// An inline text claim carries its content in-band (ClaimText), so
+			// the client renders it without a fetch: it is available regardless
+			// of blob-store state. Only a referenced claim (an image, or text
+			// carried out of line) is gated on the blob store.
+			if claims[i].Text != nil {
+				claims[i].Metadata.Availability = domain.EvidenceAvailable
+			} else {
+				claims[i].Metadata.Availability = availability(claims[i].Digest)
+			}
+		}
+		item.AgentClaims = claims
+	}
+	return item
 }
 
 func deliverySnapshot(delivery domain.AttentionDelivery, snapshot store.Snapshot) AttentionDeliverySnapshot {

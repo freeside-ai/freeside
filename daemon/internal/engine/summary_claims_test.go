@@ -2,10 +2,41 @@ package engine
 
 import (
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
+
+// evidenceMetaTime is the fixed, UTC creation time used by the evidence
+// metadata test helpers below so constructed evidence passes Validate.
+var evidenceMetaTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+// runMeta returns valid run-sourced evidence metadata for artifact fixtures.
+func runMeta() domain.EvidenceMetadata {
+	return domain.EvidenceMetadata{
+		MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 1, CreatedAt: evidenceMetaTime,
+		Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
+	}
+}
+
+// claimMeta returns valid claim-sourced evidence metadata whose media type
+// matches the claim's inline text (or the caller's supplied type).
+func claimMeta(mt domain.EvidenceMediaType) domain.EvidenceMetadata {
+	return domain.EvidenceMetadata{
+		MediaType: mt, SizeBytes: 1, CreatedAt: evidenceMetaTime,
+		Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+	}
+}
+
+// claimTextMeta is valid claim-source metadata for an inline text claim: it
+// derives both the media type and size_bytes from the content, so the fixture
+// satisfies AgentClaim.Validate's text/metadata bindings by construction.
+func claimTextMeta(text domain.ClaimText) domain.EvidenceMetadata {
+	m := claimMeta(domain.EvidenceMediaType(text.MediaType))
+	m.SizeBytes = int64(len(text.Content))
+	return m
+}
 
 func summaryClaimFixture(invocationID domain.InvocationID, content string) domain.AgentClaim {
 	text := domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: content}
@@ -16,6 +47,7 @@ func summaryClaimFixture(invocationID domain.InvocationID, content string) domai
 			ProducerClass: domain.ProducerAgent, ProducerInvocationID: invocationID,
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivitySensitive,
 		},
+		Metadata: claimTextMeta(text),
 	}
 }
 
@@ -28,6 +60,7 @@ func TestNormalizeSummaryClaimsRequiresOneInvocationBoundMarkdownClaim(t *testin
 			ProducerClass: domain.ProducerAgent, ProducerInvocationID: invocationID,
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: claimMeta(domain.EvidenceMediaImagePNG),
 	}
 
 	got := normalizeSummaryClaims([]domain.AgentClaim{ordinary, valid}, invocationID)

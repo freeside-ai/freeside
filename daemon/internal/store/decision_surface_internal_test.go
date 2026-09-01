@@ -66,6 +66,36 @@ func decisionSurfaceItem(t *testing.T, id domain.ItemID) domain.AttentionItem {
 	return item
 }
 
+// evidenceMetaTime is the fixed timestamp every internal test's evidence
+// metadata is stamped with, matching the fixtures' other UTC-fixed times.
+var evidenceMetaTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+// runMeta is valid run-source evidence metadata for an Artifact fixture.
+func runMeta() domain.EvidenceMetadata {
+	return domain.EvidenceMetadata{
+		MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 1, CreatedAt: evidenceMetaTime,
+		Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
+	}
+}
+
+// claimMeta is valid claim-source evidence metadata for an AgentClaim fixture;
+// mt matches the claim's Text media type when it carries text.
+func claimMeta(mt domain.EvidenceMediaType) domain.EvidenceMetadata {
+	return domain.EvidenceMetadata{
+		MediaType: mt, SizeBytes: 1, CreatedAt: evidenceMetaTime,
+		Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+	}
+}
+
+// claimTextMeta is valid claim-source metadata for an inline text claim: it
+// derives both the media type and size_bytes from the content, so the fixture
+// satisfies AgentClaim.Validate's text/metadata bindings by construction.
+func claimTextMeta(text domain.ClaimText) domain.EvidenceMetadata {
+	m := claimMeta(domain.EvidenceMediaType(text.MediaType))
+	m.SizeBytes = int64(len(text.Content))
+	return m
+}
+
 // surfaceClaim is a text claim that fills the agent_claims presentation slot.
 func surfaceClaim() domain.AgentClaim {
 	text := domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: "the diff touches only docs"}
@@ -76,6 +106,7 @@ func surfaceClaim() domain.AgentClaim {
 			HeadBinding: domain.HeadBound, SourceHeadSHA: "cafebabe",
 			SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: claimTextMeta(text),
 	}
 }
 

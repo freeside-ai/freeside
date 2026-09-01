@@ -147,6 +147,7 @@ func newAttentionDiscussionFixture(
 				HeadBinding: domain.HeadBound, SourceHeadSHA: head,
 				SensitivityClass: domain.SensitivityNormal,
 			},
+			Metadata: claimTextMeta(claimText),
 		}}
 	case domain.AttentionSpecApproval, domain.AttentionAgentQuestion,
 		domain.AttentionReviewDiminishing, domain.AttentionReviewContradiction,

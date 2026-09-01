@@ -95,7 +95,7 @@ func TestSignetWireGoldens(t *testing.T) {
 			value: BootstrapSnapshot{
 				SyncEpoch: "sync-epoch-569", Revision: 23,
 				AttentionItems: []AttentionItemSnapshot{
-					itemSnapshot(item, store.Snapshot{AsOfRevision: 18, EntityVersion: 3}),
+					itemSnapshot(item, store.Snapshot{AsOfRevision: 18, EntityVersion: 3}, nil),
 				},
 				AttentionDeliveries: []AttentionDeliverySnapshot{
 					deliverySnapshot(delivery, store.Snapshot{AsOfRevision: 19, EntityVersion: 1}),
@@ -141,7 +141,7 @@ func TestSignetWireGoldens(t *testing.T) {
 			value: staleVersionResponse{
 				Message: "stale item version",
 				ReplacementItem: itemSnapshot(
-					item, store.Snapshot{AsOfRevision: 26, EntityVersion: 4},
+					item, store.Snapshot{AsOfRevision: 26, EntityVersion: 4}, nil,
 				),
 			},
 		},

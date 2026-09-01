@@ -36,6 +36,11 @@ func TestBootstrapReconstructsInboxAfterMissedNotifications(t *testing.T) {
 			HeadBinding: domain.HeadBound, SourceHeadSHA: "cafebabe",
 			SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaTextMarkdown, SizeBytes: int64(len(summaryText.Content)),
+			CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+			Source:    domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+		},
 	})
 	second.ArtifactDigests = append(second.ArtifactDigests, summaryText.ComputeDigest())
 	slices.Sort(second.ArtifactDigests)
@@ -133,7 +138,7 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 	}
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		elaborationInvocationID := domain.InvocationID("inv-elaborate-" + string(elaborationRunID) + "-1")
-		source, err := domain.NewArtifact(domain.ArtifactInput{ID: "artifact-source", Type: domain.ArtifactKindSpecification, Digest: "sha256:source", Provenance: domain.Provenance{ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-elaborate", HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal}}, map[domain.Digest]bool{})
+		source, err := domain.NewArtifact(domain.ArtifactInput{ID: "artifact-source", Type: domain.ArtifactKindSpecification, Digest: "sha256:source", Provenance: domain.Provenance{ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-elaborate", HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal}, Metadata: domain.EvidenceMetadata{MediaType: domain.EvidenceMediaTextMarkdown, SizeBytes: 1, CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable}}, map[domain.Digest]bool{})
 		if err != nil {
 			return err
 		}
@@ -197,6 +202,11 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 				ProducerInvocationID: elaborationInvocationID, HeadBinding: domain.HeadIndependent,
 				SensitivityClass: domain.SensitivityNormal,
 			},
+			Metadata: domain.EvidenceMetadata{
+				MediaType: domain.EvidenceMediaTextMarkdown, SizeBytes: 1,
+				CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+				Source:    domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
+			},
 		}, map[domain.Digest]bool{})
 		if err != nil {
 			return err
@@ -233,6 +243,11 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 			AgentClaims: []domain.AgentClaim{{
 				Label: "Specification", Artifact: specification.ID,
 				Digest: specification.Digest, Provenance: specification.Provenance,
+				Metadata: domain.EvidenceMetadata{
+					MediaType: domain.EvidenceMediaTextMarkdown, SizeBytes: 1,
+					CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+					Source:    domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+				},
 			}},
 			ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
 			Status: domain.StatusOpen, CreatedAt: &createdAt,

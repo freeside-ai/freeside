@@ -657,6 +657,21 @@ const (
 	testArtifactD = domain.Digest("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 )
 
+// testEvidenceTime is the fixed UTC creation time used by the package's
+// evidence-metadata fixtures.
+var testEvidenceTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+// testRunMetadata is valid evidence metadata for a run-sourced artifact.
+func testRunMetadata() domain.EvidenceMetadata {
+	return domain.EvidenceMetadata{
+		MediaType:    domain.EvidenceMediaApplicationJSON,
+		SizeBytes:    1,
+		CreatedAt:    testEvidenceTime,
+		Source:       domain.EvidenceSourceRun,
+		Availability: domain.EvidenceAvailable,
+	}
+}
+
 func testApprovedRecipes() map[domain.Digest]bool {
 	return map[domain.Digest]bool{testRecipe: true}
 }
@@ -678,6 +693,7 @@ func testArtifact(t *testing.T, headSHA string) domain.Artifact {
 			VerificationRecipeDigest: &recipe,
 			SensitivityClass:         domain.SensitivityNormal,
 		},
+		Metadata: testRunMetadata(),
 	}, testApprovedRecipes())
 	if err != nil {
 		t.Fatalf("NewArtifact: %v", err)
@@ -2082,6 +2098,7 @@ func TestPublishRejectsRecipeMismatch(t *testing.T) {
 			VerificationRecipeDigest: &otherRecipe,
 			SensitivityClass:         domain.SensitivityNormal,
 		},
+		Metadata: testRunMetadata(),
 	}, recipes)
 	if err != nil {
 		t.Fatal(err)

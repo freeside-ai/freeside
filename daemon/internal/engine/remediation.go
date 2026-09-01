@@ -1087,6 +1087,12 @@ func (w *productionPublicationWorkflow) prepareRemediationIntent(
 			HeadBinding: domain.HeadBound, SourceHeadSHA: task.HeadSHA,
 			SensitivityClass: domain.SensitivityNormal,
 		},
+		// inputBody is the JSON remediation input the digest names.
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: int64(len(inputBody)),
+			CreatedAt: w.now().UTC(), Source: domain.EvidenceSourceRun,
+			Availability: domain.EvidenceAvailable,
+		},
 	}, w.approvedRecipes)
 	if err != nil {
 		return nil, err

@@ -32,7 +32,14 @@
         "verification_recipe_digest": "sha256:recipe-approved",
         "sensitivity_class": "normal"
       },
-      "publish_eligible": true
+      "publish_eligible": true,
+      "metadata": {
+        "media_type": "application/json",
+        "size_bytes": 1,
+        "created_at": "2026-01-02T03:04:05Z",
+        "source": "run",
+        "availability": "available"
+      }
     }
   ],
   "agent_claims": [
@@ -48,7 +55,14 @@
         "verification_recipe_digest": null,
         "sensitivity_class": "normal"
       },
-      "text": null
+      "text": null,
+      "metadata": {
+        "media_type": "image/png",
+        "size_bytes": 1,
+        "created_at": "2026-01-02T03:04:05Z",
+        "source": "claim",
+        "availability": "available"
+      }
     },
     {
       "label": "change summary",
@@ -65,6 +79,13 @@
       "text": {
         "media_type": "text/markdown",
         "content": "All checks green; the diff touches only docs."
+      },
+      "metadata": {
+        "media_type": "text/markdown",
+        "size_bytes": 45,
+        "created_at": "2026-01-02T03:04:05Z",
+        "source": "claim",
+        "availability": "available"
       }
     }
   ],

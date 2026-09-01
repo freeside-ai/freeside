@@ -68,7 +68,7 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 	// whole import closed, the same posture as the repo channel's integrity
 	// violations. Built before commit construction so no clean commit is
 	// produced for a handoff with hostile evidence.
-	claims, evidenceFindings, err := buildClaims(em, evidenceBlobs, opts.Policy)
+	claims, evidenceFindings, err := buildClaims(em, evidenceBlobs, opts)
 	if err != nil {
 		return Result{}, err
 	}

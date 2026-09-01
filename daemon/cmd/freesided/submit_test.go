@@ -730,6 +730,7 @@ func seedRemediationAuthorityFixture(
 			HeadBinding: domain.HeadBound, SourceHeadSHA: headSHA,
 			SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: testRunEvidenceMetadata(1),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -849,11 +850,11 @@ func TestSubmitCommandReplaysMatchingPreElaborationProductionRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy := submissionBytes(policyBody)
-	specArtifact, err := submissionArtifact(domain.ArtifactKindSpecification, spec.digest)
+	specArtifact, err := submissionArtifact(domain.ArtifactKindSpecification, spec.digest, domain.EvidenceMediaTextMarkdown, int64(len(spec.body)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	policyArtifact, err := submissionArtifact(domain.ArtifactKindPolicy, policy.digest)
+	policyArtifact, err := submissionArtifact(domain.ArtifactKindPolicy, policy.digest, domain.EvidenceMediaApplicationJSON, int64(len(policy.body)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1158,11 +1159,11 @@ func TestSubmissionArtifactIdentityRetainsFullDigest(t *testing.T) {
 	prefix := strings.Repeat("ab", 6)
 	firstDigest := domain.Digest("sha256:" + prefix + strings.Repeat("1", 52))
 	secondDigest := domain.Digest("sha256:" + prefix + strings.Repeat("2", 52))
-	first, err := submissionArtifact(domain.ArtifactKindSpecification, firstDigest)
+	first, err := submissionArtifact(domain.ArtifactKindSpecification, firstDigest, domain.EvidenceMediaTextMarkdown, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := submissionArtifact(domain.ArtifactKindSpecification, secondDigest)
+	second, err := submissionArtifact(domain.ArtifactKindSpecification, secondDigest, domain.EvidenceMediaTextMarkdown, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -298,6 +298,18 @@ func TestEnumValidity(t *testing.T) {
 		valids["ClaimMediaType"] = append(valids["ClaimMediaType"], v.valid)
 	}
 	invalids["ClaimMediaType"] = ClaimMediaType("").valid
+	for _, v := range AllEvidenceMediaTypes {
+		valids["EvidenceMediaType"] = append(valids["EvidenceMediaType"], v.valid)
+	}
+	invalids["EvidenceMediaType"] = EvidenceMediaType("").valid
+	for _, v := range AllEvidenceSources {
+		valids["EvidenceSource"] = append(valids["EvidenceSource"], v.valid)
+	}
+	invalids["EvidenceSource"] = EvidenceSource("").valid
+	for _, v := range AllEvidenceAvailabilities {
+		valids["EvidenceAvailability"] = append(valids["EvidenceAvailability"], v.valid)
+	}
+	invalids["EvidenceAvailability"] = EvidenceAvailability("").valid
 	for _, v := range AllCommitPlanModes {
 		valids["CommitPlanMode"] = append(valids["CommitPlanMode"], v.valid)
 	}

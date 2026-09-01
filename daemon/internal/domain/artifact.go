@@ -77,11 +77,12 @@ func (p Provenance) clone() Provenance {
 // trusted policy in NewArtifact and never taken from caller input; see
 // ArtifactInput.
 type Artifact struct {
-	ID              ArtifactID   `json:"id"`
-	Type            ArtifactKind `json:"type"`
-	Digest          Digest       `json:"digest"`
-	Provenance      Provenance   `json:"provenance"`
-	PublishEligible bool         `json:"publish_eligible"`
+	ID              ArtifactID       `json:"id"`
+	Type            ArtifactKind     `json:"type"`
+	Digest          Digest           `json:"digest"`
+	Provenance      Provenance       `json:"provenance"`
+	PublishEligible bool             `json:"publish_eligible"`
+	Metadata        EvidenceMetadata `json:"metadata"`
 }
 
 // Validate reports whether the artifact is well-formed. It is the backstop for
@@ -103,6 +104,16 @@ func (a Artifact) Validate() error {
 	}
 	if err := a.Provenance.Validate(); err != nil {
 		return err
+	}
+	// Evidence metadata is required on every artifact and rides the run channel:
+	// an Artifact always appears in an item's evidence_snapshot (agent output
+	// travels as an AgentClaim, source=claim), so its metadata source is pinned
+	// to run here. A decoded row that mislabels its channel is rejected.
+	if err := a.Metadata.Validate(); err != nil {
+		return fmt.Errorf("artifact %s: %w", a.ID, err)
+	}
+	if a.Metadata.Source != EvidenceSourceRun {
+		return fmt.Errorf("artifact %s metadata source %q: %w", a.ID, a.Metadata.Source, ErrEvidenceSourceMismatch)
 	}
 	if a.PublishEligible {
 		switch a.Provenance.ProducerClass {
@@ -167,6 +178,7 @@ type ArtifactInput struct {
 	Type       ArtifactKind
 	Digest     Digest
 	Provenance Provenance
+	Metadata   EvidenceMetadata
 }
 
 // NewArtifact builds a validated Artifact, computing PublishEligible from the
@@ -177,6 +189,7 @@ func NewArtifact(in ArtifactInput, approvedRecipes map[Digest]bool) (Artifact, e
 		Type:       in.Type,
 		Digest:     in.Digest,
 		Provenance: in.Provenance.clone(),
+		Metadata:   in.Metadata,
 	}
 	if err := a.Validate(); err != nil {
 		return Artifact{}, err

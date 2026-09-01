@@ -107,6 +107,7 @@ func seedRecipeGatedEvidence(t *testing.T, dbPath string) domain.Digest {
 			VerificationRecipeDigest: &recipe,
 			SensitivityClass:         domain.SensitivityNormal,
 		},
+		Metadata: testRunEvidenceMetadata(1),
 	}, approved)
 	if err != nil {
 		t.Fatalf("NewArtifact: %v", err)

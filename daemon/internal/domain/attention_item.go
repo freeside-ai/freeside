@@ -63,11 +63,12 @@ func (s Subject) Validate() error {
 // other producer class is invalid by construction, so a decoded claim cannot
 // launder agent output into a trusted producer class.
 type AgentClaim struct {
-	Label      string     `json:"label"`
-	Artifact   ArtifactID `json:"artifact_id"`
-	Digest     Digest     `json:"digest"`
-	Provenance Provenance `json:"provenance"`
-	Text       *ClaimText `json:"text"`
+	Label      string           `json:"label"`
+	Artifact   ArtifactID       `json:"artifact_id"`
+	Digest     Digest           `json:"digest"`
+	Provenance Provenance       `json:"provenance"`
+	Text       *ClaimText       `json:"text"`
+	Metadata   EvidenceMetadata `json:"metadata"`
 }
 
 // MaxClaimTextBytes caps a text claim's inline content. The content rides
@@ -168,6 +169,33 @@ func (c AgentClaim) Validate() error {
 		if computed := c.Text.ComputeDigest(); c.Digest != computed {
 			return fmt.Errorf("agent claim %q digest %q, text content resolves to %q: %w", c.Label, c.Digest, computed, ErrClaimTextDigestMismatch)
 		}
+	}
+	// Evidence metadata is required on every claim and rides the claim channel:
+	// a claim is the sync contract's claim-source reference, so its metadata
+	// source is pinned to claim here (an item's evidence_snapshot carries the
+	// run-source Artifacts). Validated after the text shape so an invalid inline
+	// media type still surfaces as ErrInvalidClaimMediaType, its own defect.
+	if err := c.Metadata.Validate(); err != nil {
+		return fmt.Errorf("agent claim %q: %w", c.Label, err)
+	}
+	if c.Metadata.Source != EvidenceSourceClaim {
+		return fmt.Errorf("agent claim %q metadata source %q: %w", c.Label, c.Metadata.Source, ErrEvidenceSourceMismatch)
+	}
+	// An inline text claim renders the same bytes the metadata describes, so
+	// the two media types must agree (they are distinct Go types over the same
+	// wire strings): a claim cannot display one type while the typed metadata a
+	// client reads asserts another.
+	if c.Text != nil && string(c.Text.MediaType) != string(c.Metadata.MediaType) {
+		return fmt.Errorf("agent claim %q text media_type %q, metadata media_type %q: %w",
+			c.Label, c.Text.MediaType, c.Metadata.MediaType, ErrClaimTextMediaTypeMismatch)
+	}
+	// The client renders metadata.size_bytes as a daemon-validated byte length,
+	// so for an inline text claim it must equal the content it displays: the
+	// digest binds the same bytes, and a size that disagrees is the same class
+	// of forged or corrupted metadata the digest check refuses.
+	if c.Text != nil && c.Metadata.SizeBytes != int64(len(c.Text.Content)) {
+		return fmt.Errorf("agent claim %q size_bytes %d, text content %d bytes: %w",
+			c.Label, c.Metadata.SizeBytes, len(c.Text.Content), ErrClaimTextSizeMismatch)
 	}
 	return nil
 }

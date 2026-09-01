@@ -10,5 +10,12 @@
     "verification_recipe_digest": "sha256:recipe-approved",
     "sensitivity_class": "normal"
   },
-  "publish_eligible": true
+  "publish_eligible": true,
+  "metadata": {
+    "media_type": "application/json",
+    "size_bytes": 1,
+    "created_at": "2026-01-02T03:04:05Z",
+    "source": "run",
+    "availability": "available"
+  }
 }

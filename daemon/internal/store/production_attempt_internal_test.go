@@ -186,13 +186,15 @@ func TestInitialApprovalClaimsRequireMarkdownAndCanonicalDigests(t *testing.T) {
 	specification := domain.Artifact{
 		ID: "spec-run-1-1", Type: domain.ArtifactKindSpecification,
 		Digest: text.ComputeDigest(), Provenance: provenance,
+		Metadata: runMeta(),
 	}
 	item := domain.AttentionItem{
 		AgentClaims: []domain.AgentClaim{
-			{Label: "Specification", Artifact: specification.ID, Digest: specification.Digest, Provenance: provenance},
+			{Label: "Specification", Artifact: specification.ID, Digest: specification.Digest, Provenance: provenance, Metadata: claimMeta(domain.EvidenceMediaImagePNG)},
 			{
 				Label: summaryEvidenceLabel, Artifact: "spec-summary-run-1-1",
 				Digest: text.ComputeDigest(), Provenance: provenance, Text: &text,
+				Metadata: claimTextMeta(text),
 			},
 		},
 		ArtifactDigests: []domain.Digest{specification.Digest},
@@ -223,6 +225,7 @@ func TestInitialApprovalClaimsRequireMarkdownAndCanonicalDigests(t *testing.T) {
 	item.AgentClaims = append(item.AgentClaims, domain.AgentClaim{
 		Label: "Addressals", Artifact: "spec-addressals-run-1-1",
 		Digest: addressalsDigest, Provenance: provenance,
+		Metadata: claimMeta(domain.EvidenceMediaImagePNG),
 	})
 	item.SpecRevision = &domain.SpecRevisionFacts{AddressalsDigest: addressalsDigest}
 	item.ArtifactDigests = append(item.ArtifactDigests, addressalsDigest)

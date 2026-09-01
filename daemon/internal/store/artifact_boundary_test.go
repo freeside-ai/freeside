@@ -25,6 +25,7 @@ func forgedEligibleArtifact() domain.Artifact {
 			SensitivityClass:         domain.SensitivityNormal,
 		},
 		PublishEligible: true,
+		Metadata:        runMeta(),
 	}
 }
 
@@ -69,6 +70,7 @@ func TestPutArtifactAllowsLegalNonEvidence(t *testing.T) {
 			ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-1",
 			HeadBinding: domain.HeadBound, SourceHeadSHA: "cafebabe", SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: runMeta(),
 	}
 	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutArtifact(ctx, agentArt) }); err != nil {
 		t.Fatalf("legal non-evidence artifact rejected: %v", err)
@@ -101,6 +103,7 @@ func TestHeadIndependentEvidenceRoundTrips(t *testing.T) {
 			VerificationRecipeDigest: &recipe,
 			SensitivityClass:         domain.SensitivityNormal,
 		},
+		Metadata: runMeta(),
 	}, approvedFixtureRecipes())
 	if err != nil {
 		t.Fatalf("NewArtifact: %v", err)

@@ -42,6 +42,7 @@ func evidenceArtifact(t *testing.T, id domain.ArtifactID, digest domain.Digest) 
 			VerificationRecipeDigest: &recipe,
 			SensitivityClass:         domain.SensitivityNormal,
 		},
+		Metadata: runMeta(),
 	}, map[domain.Digest]bool{recipe: true})
 	if err != nil {
 		t.Fatalf("NewArtifact: %v", err)

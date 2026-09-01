@@ -506,6 +506,7 @@ func TestRemediatorPushbackEscalatesWithoutClaimingFixed(t *testing.T) {
 			HeadBinding:          domain.HeadBound, SourceHeadSHA: f.task.HeadSHA,
 			SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: claimTextMeta(text),
 	}
 	if err := claim.Validate(); err != nil {
 		t.Fatal(err)
@@ -533,6 +534,7 @@ func TestMalformedRemediatorPushbackFailsClosedWithoutClaimingFixed(t *testing.T
 			HeadBinding:          domain.HeadBound, SourceHeadSHA: f.task.HeadSHA,
 			SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: claimTextMeta(text),
 	}
 	outcome, err := f.workflow.reconcileRemediationReview(
 		t.Context(), f.task, f.current, nil, []domain.AgentClaim{claim})
@@ -604,6 +606,7 @@ func TestArtifactBackedRemediatorPushbackClassifiesDeterministicAndOperationalFa
 					SourceHeadSHA:        f.task.HeadSHA,
 					SensitivityClass:     domain.SensitivityNormal,
 				},
+				Metadata: claimMeta(domain.EvidenceMediaImagePNG),
 			}
 			outcome, err := f.workflow.reconcileRemediationReview(
 				t.Context(), f.task, f.current, nil, []domain.AgentClaim{claim})
@@ -677,6 +680,7 @@ func TestMixedRemediatorPushbackParksWithExactFindingIdentities(t *testing.T) {
 			HeadBinding:          domain.HeadBound, SourceHeadSHA: f.task.HeadSHA,
 			SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: claimTextMeta(text),
 	}
 	reemitted := f.priors[1]
 	reemitted.ID = "finding-second-reemitted"
