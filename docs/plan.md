@@ -108,8 +108,8 @@ run the agent's inner loop. Freeside runs the outer loop. It controls:
 - when a human must decide; and
 - what state survives a crash.
 
-The self-brand register puts it plainly: *the harness runs the agent; you hold
-the reins.*
+The brand register's tagline puts it plainly: *the harness runs the agent;
+you hold the reins.*
 
 The supported reference deployment is a Mac Studio. The daemon core remains
 Linux-portable under Section 3.3.
@@ -121,8 +121,9 @@ Linux-portable under Section 3.3.
    by the daemon.
 3. I approve the specification in the attention inbox.
 4. An agent implements it in an isolated workspace with no GitHub credentials.
-5. After the agent exits, a proven workspace handoff carries the result into an
-   out-of-process hostile import boundary and then a fresh checkout.
+5. After the agent exits, a proven workspace handoff carries the result into
+   the hostile import boundary, which runs out of process, and then into a
+   fresh checkout.
 6. A trusted recipe verifies the candidate and captures evidence in a clean
    environment.
 7. Independent review, finding adjudication, and yield-driven remediation
@@ -181,7 +182,7 @@ maintenance still decide whether Freeside creates a positive return.
    import is hostile and out of process; verification recipes are trusted.
 6. **Contain CI privilege.** Agent-authored code never reaches secret-bearing or
    privileged CI and never changes automation-control paths through the ordinary
-   workflow. Trust profiles attest effective PR-job authority.
+   workflow. A trust profile attests the authority a PR job actually holds.
 7. **Operate remotely from iPhone.** The human judges at gates, then performs
    final review and merge on GitHub.
 8. **Let chat author artifacts and the engine execute them.**
@@ -199,9 +200,9 @@ maintenance still decide whether Freeside creates a positive return.
 ### Non-goals
 
 1. Freeside is not an IDE or code-review surface. Code review and merging stay
-   on GitHub; Freeside owns workflow decisions and approvals. Human merge
-   is the current accountability checkpoint; whether narrow, risk-bounded
-   classes of change ever earn automatic merge remains deliberately open.
+   on GitHub; Freeside owns workflow decisions and approvals. A human merge
+   is the current accountability checkpoint. Whether narrow, risk-bounded
+   classes of change ever earn automatic merge is deliberately left open.
 2. It is not a product for hypothetical users: no multi-tenancy or billing.
 3. It is **not a harness**. It uses sanctioned vendor batch interfaces and never
    owns a model loop.
@@ -215,14 +216,14 @@ maintenance still decide whether Freeside creates a positive return.
    auditor.
 7. It is not a general-purpose synchronization platform. Server-authoritative
    snapshots are enough; there is no client-facing event log and no CRDT.
-8. It never requires a Freeside-operated service. Phase 1 depends on no such
-   service, and the fully unmanaged deployment remains first-class
-   permanently. Future managed infrastructure (Section 5.1) may remove
-   operational friction; it is optional convenience, never control-plane
-   authority, and its loss may cost convenience (reachability, delivery, or
-   portable operation) but never local state or standalone workflow
-   authority. Portable-mode replica storage carries the one scoped head
-   trust, activation fencing and recovery frontier (Section 5.1).
+8. It never requires a service that Freeside operates. Phase 1 depends on no
+   such service, and the fully unmanaged deployment stays first-class
+   permanently. Managed infrastructure may come later (Section 5.1) to remove
+   operational friction, but it is optional convenience, never control-plane
+   authority. Losing it may cost convenience (reachability, delivery, or
+   portable operation), never local state or standalone workflow authority.
+   One scoped exception: in portable mode, replica storage carries head trust,
+   meaning activation fencing and the recovery frontier (Section 5.1).
 
 ## 3. Operating principles
 
@@ -232,10 +233,10 @@ Autonomy is the default. Gates exist only at trust-boundary crossings and the
 two designed judgment points.
 
 Repeated exceptional interruptions trigger a policy review. An eligible
-repetition may produce a policy-change proposal; promotion to a standing grant
-requires low risk, stable preconditions, and bounded downside, never
-repetition alone. Safety invariants and non-waivable gates never auto-promote
-and never offer a bypass.
+repetition may produce a policy-change proposal. Promoting a proposal to a
+standing grant requires low risk, stable preconditions, and bounded downside;
+repetition alone is never enough. Safety invariants and
+non-waivable gates never auto-promote and never offer a bypass.
 
 The following classes are non-waivable:
 
@@ -256,12 +257,14 @@ The following classes are non-waivable:
 Every AttentionItem is tagged `planned_gate` or `exceptional`. The exceptional
 rate is a health metric; a rising rate is a defect, subject to Section 3.1.
 
-**Self-service rule:** recurring eligible classes must let the user resolve the
-class through the control-plane proposal path.
+**Self-service rule:** when an eligible class of interruption recurs, the user
+must be able to resolve the whole class through the control-plane proposal
+path.
 
-**Rein is a convenience preset, not a security dial.** At run creation it
-expands into explicit resolved policy, stored with a digest and per-key
-provenance. Explicit keys visibly override preset defaults.
+**Rein is a convenience preset, not a security dial.** When a run is created,
+the preset expands into explicit resolved policy, stored with a digest and the
+provenance of each key. An explicitly set key overrides the preset default, and
+the override is visible.
 
 Accepted hot spot: work on Freeside itself often touches control-plane paths.
 
@@ -307,19 +310,21 @@ sync), `pr_head_sha`, `pr_reference? {repo, number}`, `item_version`,
 `codex_reenrollment_recovery_binding?`, `review_configuration_recovery?`, and
 `status`.
 
-`evidence_snapshot` contains engine facts and only verifier or daemon artifacts
-produced under an approved recipe (Section 5.15). Agent claims are labeled.
-Cards render image attachments directly from the artifact store by digest.
+`evidence_snapshot` holds engine facts and artifacts, and only artifacts the
+verifier or the daemon produced under an approved recipe (Section 5.15). Agent
+claims are labeled as claims. Cards render image attachments straight from the
+artifact store, addressed by digest.
 
 **AttentionDelivery** records one delivery attempt:
 
 `item_id`, `device_id`, `channel`, `attempt`, `submitted_at`,
 `channel_accepted_at`, `opened_at`, and `delivery_status`.
 
-Provider acceptance is never called “delivered.” Stronger language requires a
-real device receipt. Open-to-decision time is the headline attention-latency
-metric; the Section 1 per-unit measure governs. Item timing fields are
-aggregates derived from deliveries.
+A provider accepting a notification is never called “delivered.” Any stronger
+word needs a real receipt from the device. The headline attention-latency
+metric is the time from opening an item to deciding it; the Section 1 measure,
+useful, correct work per unit of attention, governs. An item's timing fields
+are aggregates derived from its deliveries.
 
 ### Phase 1 Item Types and Actions
 
@@ -329,17 +334,17 @@ Approval is not a universal action.
 | --- | --- |
 | `spec_approval` | Approve, request changes, discuss, or stop. Render the full specification. A revision shows the diff from the last reviewed version, prior comments, and claimed addressals. |
 | `review_diminishing_returns` | Finish now; apply the current batch and finish; continue under specified policy; or turn a recurring preference into a project-policy proposal PR. It never mutates policy directly. |
-| `review_dispute` | For routed findings, discuss or stop; the executable adjudication transaction is deferred (#1016). For observation-only shadow findings, approve continuation without routing the finding, discuss, or stop; only approve permits readiness, while stop terminalizes the run with the normal durable publication-blocked surface. |
+| `review_dispute` | For a routed finding: discuss or stop; the transaction that would execute the adjudication is deferred (#1016). For an observation-only shadow finding: approve continuation without routing the finding, discuss, or stop; only approve lets the run reach readiness, and stop ends the run and raises the normal durable publication-blocked surface. |
 | `finding_adjudication` | Accept the recommended route, choose an offered alternative, discuss, or stop (added with the Section 7 adjudication routing, 1B). Acceptance binds to the adjudication artifact digest and the item version; a Discuss response re-invokes adjudication against the same version bindings, and the new artifact supersedes the item. Stop leaves the run parked. |
 | `review_contradiction` | Recover only the exact persisted contradiction named by the card, or leave it parked. The card renders the bound run, invocation, round, base SHA, head SHA, and immutable failure-body digest; recovery preserves the original failure evidence. |
-| `review_configuration` | Adopt the review configuration (`adopt_review_configuration`), discuss, or stop. The run is parked, not terminal: adoption authorizes an operator-approved, review-configuration-only profile supersession of exactly the parked failure named by the card's binding, resolved at decision time as the repository's currently activated revision and re-gated on every read; stop concludes the run as a configuration failure always did. The card renders the same bound coordinates as `review_contradiction` plus the superseded profile digest. |
-| `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. When the failure is classified as provider quota, credential expiry, or capacity, the card additionally offers retry under a qualified alternate agent or wait (the explicit alternate-agent retry below). |
+| `review_configuration` | Adopt the review configuration (`adopt_review_configuration`), discuss, or stop. The run is parked, not terminal. Adopting authorizes one operator-approved profile supersession, limited to review configuration, for exactly the parked failure the card's binding names. The superseding profile is resolved at decision time as the repository's currently activated revision and re-gated on every read. Stop concludes the run as a configuration failure, as it always did. The card renders the same bound coordinates as `review_contradiction` plus the digest of the superseded profile. |
+| `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. When the failure is classified as provider quota, credential expiry, or capacity, the card also offers retry under a qualified alternate agent, or wait (see the explicit alternate-agent retry below). |
 | `agent_question` | Answer and retry, answer without retry, or stop. |
 | `publish_blocked` | Rerun trust evaluation, inspect the trust failure, or stop. Which publication path a repository uses is repository configuration, never a per-item choice (revision 44). |
 | `ready_for_final_review` | View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. |
 | `run_proposal` | Start, **start with changes**, decline, or snooze. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the run from the exact revised digest. It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
 | `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section 5.13 registry (added in 1B with the registry; first instance: follow-up issue filings in 1B.1, with proposed watches following once their schedule kind lands, Section 5.16). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `run_proposal`'s start-with-changes. `run_proposal` remains its own type. |
-| `system_health` | Acknowledge, run doctor, stop unattended operation, or, on the notice a stop raises, resume unattended operation. A revoked Codex identity marker additionally offers resolve re-enrollment (`resolve_reenrollment`) only after it carries the immutable binding for its exact latest verified re-enrollment operation; the command revalidates that operation and marker occurrence in the transaction that resolves the item. Acknowledge means seen, never resolved, and cannot clear revoked identity. Every item declares an immutable posture: `blocking` preserves the admission gate until the diagnostic clears, unattended operation is explicitly stopped, or a validated configuration supersedes it; `advisory` remains open and visible without blocking unrelated unattended admission. A stop is a durable operating transition: only the explicit resume reopens unattended admission, and a restart alone never does. |
+| `system_health` | Acknowledge, run doctor, stop unattended operation, or, on the notice a stop raises, resume unattended operation. A revoked Codex identity marker also offers resolve re-enrollment (`resolve_reenrollment`), but only once the marker carries the immutable binding for its exact latest verified re-enrollment operation; the command revalidates that operation and that marker occurrence inside the transaction that resolves the item. Acknowledge means seen, never resolved; it cannot clear a revoked identity. Every item declares an immutable posture. `blocking` keeps the admission gate in place until the diagnostic clears, unattended operation is explicitly stopped, or a validated configuration supersedes it. `advisory` stays open and visible without blocking unrelated unattended admission. A stop is a durable operating transition: only an explicit resume reopens unattended admission; a restart alone never does. |
 | `blocked` | Consolidates external waits that exceed Section 5.12 thresholds. It is read-only. |
 
 Section 9 governs each type's presentation: what its card leads with and what
@@ -369,35 +374,36 @@ review agent opens a new convergence segment (Section 7): the new
 reviewer's first pass is not the old reviewer's next round.
 
 **Recommendation authority.** An item may carry at most one
-`recommendation {action, reason, source, provenance, confidence?}`: it
-selects exactly one action from the item's own `requested_decision` with a
-stated reason, and never widens or reorders the offered set. `source` is
-part of the contract because the card renders judgment differently from
-fact, and its required immutable `provenance` is a closed source-specific
-union: `daemon_policy {rule_digest, input_digest}` for deterministic policy
-computed from canonical state; `agent_judgment {judgment_site,
-invocation_id, artifact_digest}` for the schema-validated output of a
-declared Section 5.13 judgment site; or `project_policy {policy_key,
-resolved_policy_digest, application_digest}` for an explicit human or
-project policy choice.
+`recommendation {action, reason, source, provenance, confidence?}`. It selects
+exactly one action from the item's own `requested_decision` and states a
+reason; it never widens or reorders the offered set. `source` is part of the
+contract because the card renders judgment differently from fact. The
+required, immutable `provenance` is a closed union with one shape per source:
+`daemon_policy {rule_digest, input_digest}` for deterministic policy computed
+from canonical state; `agent_judgment {judgment_site, invocation_id,
+artifact_digest}` for the schema-validated output of a declared Section 5.13
+judgment site; or `project_policy {policy_key, resolved_policy_digest,
+application_digest}` for an explicit human or project policy choice.
 
-Recommendation source selection is derived entirely from current authoritative
-state, never from the item or caller. At creation and reconstruction, the
-daemon enumerates every eligible source record whose source-specific
-applicability gate matches the current item decision surface. Eligibility is
-record-granular: two applicable daemon rules, two policy applications, or any
-other pair are multiple records even when their source class matches. Exactly
-one eligible record produces the canonical recommendation; zero or multiple
-eligible records produce an absent recommendation and equally weighted
-actions. There is no precedence, source map, selector policy, ranking, or
-tie-break. The stored optional recommendation must equal the exact derived
-output, including absence. A mismatch makes only the recommendation invalid
-and non-rendering, never the item or its decidable action set; an eligibility
-change can therefore suppress a prior lead safely.
+Which source supplies the recommendation is derived entirely from current
+authoritative state, never from the item or the caller. When it creates or
+reconstructs an item, the daemon enumerates every eligible source record:
+every record whose source-specific applicability gate matches the item's
+current decision surface. Eligibility is counted per record: two applicable
+daemon rules, two policy applications, or any other pair are two records, even
+when they share a source class. Exactly one eligible record produces the
+canonical recommendation. Zero or several eligible records produce no
+recommendation, and the actions are offered with equal weight. There is no
+precedence, source map, selector policy, ranking, or tie-break. The stored
+optional recommendation must equal the exact derived output, including when
+that output is absent. A mismatch invalidates only the recommendation, which
+then doesn't render; the item and its decidable action set stay valid. An
+eligibility change can therefore safely withdraw a recommendation that used to
+lead.
 
 Each authoritative source record commits to a daemon-owned decision-surface
-identity for its containing item, not to `item_version`. The identity is one
-persisted record per item:
+identity for the item that contains it, not to `item_version`. The identity is
+one persisted record per item:
 
 `DecisionSurface {item_id, epoch, subject, requested_decision, pr_head_sha,
 presented_artifact_digests, digest}`
@@ -411,10 +417,11 @@ the item, not on it; #917 projects `decision_surface {epoch, digest}` onto the
 synchronized item. The mechanism satisfies four invariants:
 
 - **Eligibility-independent:** Adding or removing an applicable source never
-  advances the identity, and neither does a change in which record is uniquely
-  eligible under the unique-or-none rule: a source record is never a member of
-  the presented set, so its admission or removal opens no epoch. A
-  once-authoritative record therefore never becomes permanently stranded.
+  advances the identity. Neither does a change in which record is the unique
+  eligible one under the unique-or-none rule. The reason: a source record is
+  never a member of the presented set, so admitting or removing one opens no
+  epoch. A record that was once authoritative therefore never becomes
+  permanently stranded.
 - **Telemetry-stable:** Delivery, open, timing, status, `decided_at`,
   `expires_when`, readiness, base freshness, the commit-plan notice, the PR
   reference, recovery bindings, and the recommendation field never advance the
@@ -427,69 +434,74 @@ synchronized item. The mechanism satisfies four invariants:
   different presented surfaces never share an identity. A reorder of
   `requested_decision` is not a change, and a field returning to a prior value
   is a new epoch, never a reuse.
-- **Non-cyclic:** The preimage holds no artifact digest, so no source artifact
-  commits to a digest set containing its own final `artifact_digest`, and the
-  identity of a prospective epoch is computable before the artifact that opens
-  it is finalized: the producer computes the next surface for the prospective
-  item, writes its digest into the artifact, finalizes, and the admitting item
-  write derives the same value.
+- **Non-cyclic:** The preimage holds no artifact digest. So no source artifact
+  ever commits to a digest set that contains its own final `artifact_digest`,
+  and the identity of a coming epoch can be computed before the artifact that
+  opens it is finalized. The producer computes the next surface for the
+  prospective item, writes the surface's digest into the artifact, finalizes
+  the artifact, and the item write that admits it derives the same value.
 
-The epoch starts at 1 when the item is created and is advanced only by the
-store's single item writer, when and only when the item's structural fields or
-its presented artifact set differ from the stored record. An artifact is
-presented if and only if a presentation slot of the item references it:
+The epoch starts at 1 when the item is created. Only the store's single item
+writer advances it, and it advances exactly when the item's structural fields
+or its presented artifact set differ from the stored record. An artifact is
+presented if and only if one of the item's presentation slots references it:
 `evidence_snapshot`, `agent_claims`, or a type-specific binding such as
 `finding_adjudication.adjudication_digest`. An artifact referenced only by a
-recommendation provenance slot is source-only and eligibility-correlated: it
+recommendation's provenance slot is source-only and tied to eligibility: it
 never enters the presented set. An artifact referenced by both a presentation
-slot and a provenance slot is presented, so superseding it is a genuine surface
-change (the finding-adjudicator case). `daemon_policy` rule and input digests
-and `project_policy` application records are not artifacts and are never
-members of `artifact_digests` or of the presented set, so the policy axis
+slot and a provenance slot is presented, so superseding it is a real surface
+change (this is the finding-adjudicator case). `daemon_policy` rule and input
+digests and `project_policy` application records are not artifacts; they are
+never members of `artifact_digests` or of the presented set, so the policy axis
 cannot strand a record. Readiness, base freshness, yield history, and other
-rendered facts are not surface members; a source that depends on them binds
-them through its own input digest, never through the identity.
+rendered facts are not surface members either; a source that depends on them
+binds them through its own input digest, never through the identity.
 
-The persisted daemon identity is authority. A decoded or caller-supplied value
-grants none. Item reconstruction fails the item closed when its record is
-missing or when the record's digest, structural fields, or presented set
-disagree with the item. Verifying a source record's committed digest against
-the current record then fails only the recommendation closed on mismatch.
+The persisted daemon identity is the authority. A decoded or caller-supplied
+value grants none. If the record is missing, or if its digest, structural
+fields, or presented set disagree with the item, item reconstruction fails the
+whole item closed. Checking a source record's committed digest against the
+current record comes after that and is narrower: a mismatch there fails only
+the recommendation closed.
 
-The rule digest content-addresses the rule semantics and is never reused.
-Each authoritative source record must itself commit to that decision-surface
-identity, so a valid source output cannot be replayed onto a foreign or newer
-decision surface. The identity is carried per source kind:
-it is part of `daemon_policy`'s canonical input; the finalized immutable
-`agent_judgment` artifact carries it, while the immutable invocation-to-artifact
-binding proves source authenticity; and `project_policy`'s daemon-authored,
-digest-addressed application record binds it alongside the policy key and
-resolved policy digest. `daemon_policy` and `project_policy` source records are
-not themselves bound artifacts. Pre-invocation inputs cannot carry a decision
-surface whose requested actions are derived from the invocation output, and a
-caller-supplied item digest is never authority.
+The rule digest is the content address of the rule's semantics and is never
+reused. Each authoritative source record must itself commit to the
+decision-surface identity, so a valid source output can't be replayed onto a
+foreign or newer decision surface. Each source kind carries the identity its
+own way: it is part of `daemon_policy`'s canonical input; the finalized
+immutable `agent_judgment` artifact carries it, and the immutable
+invocation-to-artifact binding proves the source is authentic; and
+`project_policy`'s daemon-authored, digest-addressed application record binds
+it alongside the policy key and the resolved policy digest. `daemon_policy` and
+`project_policy` source records are not themselves bound artifacts. Inputs
+prepared before an invocation cannot carry a decision surface whose requested
+actions derive from that invocation's output, and a caller-supplied item digest
+is never authority.
 
 For the uniquely eligible record, the daemon resolves and authenticates the
 provenance, recomputes the item's full canonical artifact-digest set, requires
-any provenance `artifact_digest` to occur in that full set, and requires the
+any provenance `artifact_digest` to appear in that full set, and requires the
 source record's committed digest to equal the current decision-surface digest.
-It then rederives the canonical
-`action`, `reason`, and optional `confidence` from the authenticated
-source-and-item pair. Full `AttentionItem.artifact_digests` equality and every
-approval or command binding continue to use the complete set, including the
-source artifact. Item-side binding-set equality therefore proves containment;
-the artifact-side commitment is the decision-surface digest, which names the
-item and the epoch its presented set belongs to without hashing any artifact,
-so it never requires the artifact's own final content hash. A foreign item binding, source mismatch, or payload difference
-rejects the recommendation; an invalid binding never renders.
+It then rederives the canonical `action`, `reason`, and optional `confidence`
+from the authenticated source-and-item pair. Full
+`AttentionItem.artifact_digests` equality, and every approval or command
+binding, still use the complete set, including the source artifact. Equality of
+the item-side binding set therefore proves containment. The artifact-side
+commitment is the decision-surface digest, which names the item and the epoch
+its presented set belongs to without hashing any artifact, so it never needs
+the artifact's own final content hash. A foreign item binding, a source
+mismatch, or a payload difference rejects the recommendation; an invalid
+binding never renders.
+
 An `agent_judgment` recommendation is a labeled proposal. The type case is the
-finding adjudicator's parked batch. Its item-level recommendation endorses the
+finding adjudicator's parked batch: the item-level recommendation endorses the
 accept-the-recommended-route action, while each finding's route, rationale,
-producer, and confidence stay in the Section 7 adjudication artifact, never
-collapsed into this one field. `confidence` appears only when the producer
-supplies it. An item without a recommendation offers equally weighted choices.
-A client never infers a recommendation, and the order of `requested_decision`
-carries no endorsement. Section 9 governs the recommendation-led presentation.
+producer, and confidence stay in the Section 7 adjudication artifact and are
+never collapsed into this one field. `confidence` appears only when the
+producer supplies it. An item without a recommendation offers equally weighted
+choices. A client never infers a recommendation, and the order of
+`requested_decision` carries no endorsement. Section 9 governs the
+recommendation-led presentation.
 
 ### Lifecycle Rules
 
@@ -499,8 +511,7 @@ carries no endorsement. Section 9 governs the recommendation-led presentation.
 - Resolutions are transactional and version-checked.
 - A stale submission receives a conflict and the replacement item.
 - Notifications are read-only hints, never authority.
-- Fault-class capture is suggested, can be corrected with one tap, and may
-  remain unknown.
+- A fault class is suggested; one tap corrects it, and it may stay unknown.
 - WIP caps apply to runs and initiatives. The all-work view is Freeside's
   deterministic initiative projection (Sections 5.18 and 11); GitHub Projects
   no longer serves that role (overturned, revision 25).
