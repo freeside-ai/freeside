@@ -47,6 +47,11 @@ why.
   - [5.2 The Daemon and Its Supervisor](#52-the-daemon-and-its-supervisor)
   - [5.3 Execution: StageDriver and ReviewSource](#53-execution-stagedriver-and-reviewsource)
   - [5.4 Credential Modes, Egress Profiles, and Concurrency](#54-credential-modes-egress-profiles-and-concurrency)
+    - [Admitted Agents](#admitted-agents)
+    - [The Stage Owns the Launch](#the-stage-owns-the-launch)
+    - [Admission](#admission)
+    - [Multi-Subscription per Provider](#multi-subscription-per-provider)
+    - [Observation, Never Authority](#observation-never-authority)
   - [5.5 The CI Trust Boundary](#55-the-ci-trust-boundary)
   - [5.6 The Gauntlet: Workspace Handoff, Import, and Clean Verification](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)
   - [5.7 The Ward: Runners, Handoff Gate, and Operating Modes](#57-the-ward-runners-handoff-gate-and-operating-modes)
@@ -902,7 +907,9 @@ If only one execution is safe, scheduling shows that constraint instead of
 hiding it in a lock. API-key fallback is always available. Vendor tooling stays
 native and unmodified.
 
-**Admitted agents.** Freeside admits what an agent consumes by digest: the
+#### Admitted Agents
+
+Freeside admits what an agent consumes by digest: the
 base commit, the prompt package, the vendor instructions, the policy, the
 input artifacts (Sections 5.8, 5.9, 5.12). Until this revision, the agent's
 own configuration was the one major input not admitted that way. An
@@ -983,7 +990,9 @@ tree. Identities, enrollments, generations, admissions, and observations are
 facts, so they are records. A record of a past selection is never upgraded
 through current configuration.
 
-**The stage owns the launch.** Elaboration, implementation, and review each
+#### The Stage Owns the Launch
+
+Elaboration, implementation, and review each
 define a launch: writer or read-only, output contract, severance, session
 mode, and an auxiliary-inference policy (`forbidden`, `declared`, or
 `observed`). The adapter maps the launch to harness-native controls or
@@ -996,7 +1005,9 @@ credentials withheld, review's fresh context and read-only workspace,
 base/head invalidation, and the role capability ceilings all hold whatever
 the agent.
 
-**Admission** puts an agent through the five steps admission already applies to
+#### Admission
+
+Admission puts an agent through the five steps admission already applies to
 every other input:
 
 1. *Resolve.* Resolve the name and every fragment against one control-plane
@@ -1112,7 +1123,9 @@ Deliberately not built:
 - Enforcement of auxiliary inference where the baseline cannot honour it.
 - A separate credential-pass record (it is a proved adapter capability).
 
-**Multi-subscription per provider.** Two identities of one provider (a work
+#### Multi-Subscription per Provider
+
+Two identities of one provider (a work
 and a personal subscription), each with its own enrollments and agents, are
 a supported shape. Selection among them is a lineup line or a carded
 per-attempt choice, never silent: no default is inferred from enrollment
@@ -1123,7 +1136,9 @@ The operator owns compliance with each provider's terms for multi-account
 use; Freeside attributes usage to a named identity and neither endorses nor
 polices the arrangement (Section 14, subscription-terms drift).
 
-**Observation, never authority.** A credential-bounded account probe may record,
+#### Observation, Never Authority
+
+A credential-bounded account probe may record,
 per identity:
 
 - A stable account fingerprint.
