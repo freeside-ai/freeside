@@ -3251,28 +3251,28 @@ The first managed repository is **not Freeside**. Freeside often changes
 control-plane paths, so it is the hardest possible starting case. It becomes the
 bootstrap test after the path works. The selected first target is
 `freeasinbird/gh-imgup`, a small TypeScript CLI. Language and toolchain are not
-selection criteria; the generic recipe and project-image model must verify the
+selection criteria. The generic recipe and project-image model must verify the
 repository honestly.
 
 The selected repository must:
 
-- have automation authority the current machine-readable `WorkflowAudit` and
-  `AutomationTrustProfile` can represent without repository-specific logic;
+- have automation authority that the current machine-readable `WorkflowAudit`
+  and `AutomationTrustProfile` can represent without repository-specific logic;
 - support deterministic, networkless clean verification through a trusted
   recipe, with its toolchain and dependency closure baked into the project
   image;
-- contain representative ordinary changes that can traverse the gauntlet
-  without inherently touching publish-blocking control-plane paths;
-- have enough genuine work for the several real items required by the 1A.2
-  exit; and
-- permit installation of the Freeside GitHub App and one-time human review of
-  the generated trust profile.
+- contain representative ordinary changes that can pass through the gauntlet
+  without needing to touch publish-blocking control-plane paths;
+- have enough genuine work for the several real items the 1A.2 exit requires;
+  and
+- allow installing the Freeside GitHub App and a one-time human review of the
+  generated trust profile.
 
-Prefer, without requiring, a small code and dependency surface, fast direct
+Prefer, but don't require: a small code and dependency surface, fast direct
 verification commands, low PR-reachable automation authority, no UI evidence
 requirement, and infrequent workflow or instruction-file changes. Ordinary
 repository features such as tag-only release automation belong in the audited,
-digest-bound trust profile; they are not prose exceptions.
+digest-bound trust profile. They are not prose exceptions.
 
 ### Phase 1A: the secure publish path, in three internal exits
 
@@ -3282,8 +3282,8 @@ Phase 1A proves the secure path from controlled input to published PR.
 
 The entire monorepo, including owned prior revisions, is licensed under
 AGPL-3.0-or-later and will become public after the licensing change lands. This
-moves only the packaging and visibility decision forward from Phase 4 so the
-project can use public-repository CI capacity. It does not advance Phase 4
+moves only the packaging and visibility decision forward from Phase 4, so the
+project can use public-repository CI capacity. It doesn't advance Phase 4
 features or create new support commitments. See
 [`docs/decisions/0001-license-freeside-under-agpl.md`](decisions/0001-license-freeside-under-agpl.md).
 
@@ -3332,7 +3332,7 @@ Exit requires:
 
 - green runner conformance, including the workspace-handoff gate;
 - no undeclared credential in any workspace;
-- the reusable project-image builder manually proven against the selected
+- the reusable project-image builder proven by hand against the selected
   repository at an exact commit and recipe, with its digest-pinned result
   available to an admitted run;
 - several real work items completed without terminal intervention; and
@@ -3370,8 +3370,8 @@ ready-for-final-review with yield history → human GitHub merge`
 
 External review activity on the published PR re-enters the workflow
 asynchronously when it arrives (deferred; #524, sharing the
-re-entry-after-terminal-state trigger shape with #502); it is not a stage
-of the chain and never a readiness prerequisite.
+re-entry-after-terminal-state trigger shape with #502). It is not a stage of the
+chain and never a readiness prerequisite.
 
 Phase 1B adds:
 
@@ -3388,65 +3388,64 @@ Phase 1B adds:
 - experimental `max_parallel_executions` per auth identity, visible to
   scheduling;
 - the Codex execution driver, an execution capacity hedge against
-  single-provider stalls (Section 14): the `agent-codex` agent base, the
-  project images the reusable builder derives from it (Section 5.7),
-  ward's second vendor topology, and the Codex adapter registration land
-  as separate follow-on units behind the admitted-agent contract (Section
-  5.4), sequenced after the 1A.2 exit and blocked on the #401 pre-adoption
-  gates; selection is a lineup line, never silent; and
+  single-provider stalls (Section 14). The `agent-codex` agent base, the project
+  images the reusable builder derives from it (Section 5.7), ward's second
+  vendor topology, and the Codex adapter registration land as separate follow-on
+  units behind the admitted-agent contract (Section 5.4). They are sequenced
+  after the 1A.2 exit and blocked on the #401 pre-adoption gates. Selection is a
+  lineup line, never silent; and
 - the run timeline screen.
 
 Precondition: the verified 1A exit. 1B proceeds in three internal exits.
 
 #### 1B.0: The Useful Loop
 
-The workload above, with the review step rebased onto the Freeside-invoked
-binding; the Section 5.13 judgment-call contracts, with the finding
-classifier as the first ceiling-bounded annotation site and the diagnostic as
-the first advisory-only site; the Section 6 verification state algebra; the
-Section 5.16 scheduler with the four consumer-backed timer kinds; the runs
-list (project-filterable, showing attached watches and deadlines) with the
-run timeline drill-down; and Section 5.18 capture hooks recording from the
-start.
+This exit covers the workload above, with the review step rebased onto the
+Freeside-invoked binding. It also covers the Section 5.13 judgment-call
+contracts, with the finding classifier as the first ceiling-bounded annotation
+site and the diagnostic as the first advisory-only site. It covers the Section 6
+verification state algebra and the Section 5.16 scheduler with the four
+consumer-backed timer kinds. It covers the runs list (project-filterable,
+showing attached watches and deadlines) with the run timeline drill-down, and
+Section 5.18 capture hooks recording from the start.
 
-Contract sequencing inside 1B.0: the scheduler and the Section 7
-review-stage chain (#427 and its substrate) gate first real-backlog use
-(revision 26, amending revision 25's scheduler-only statement); the state
-algebra and the effect-registry retrofit of `run_proposal` land within 1B.0
-behind them, serialized per contract discipline but off the loop's critical
-path. Real-backlog use begins during 1B.0 as soon as the minimal loop
-stands, at the close of wave 4 (this section's coordination table).
+Contract sequencing inside 1B.0: the scheduler and the Section 7 review-stage
+chain (#427 and its substrate) gate first real-backlog use (revision 26,
+amending revision 25's scheduler-only statement). The state algebra and the
+effect-registry retrofit of `run_proposal` land within 1B.0 behind them,
+serialized per contract discipline but off the loop's critical path.
+Real-backlog use begins during 1B.0 as soon as the minimal loop stands, at the
+close of wave 4 (this section's coordination table).
 
 #### 1B.1: Decision, Operational, and Provider Closure
 
-1B.1 spans waves 7 through 9 of this section's coordination table, the way
-1B.0 spanned waves 3 through 6. Each wave proves one outcome and ends with
-its own audit; the internal exit is evaluated once all three have closed.
+1B.1 spans waves 7 through 9 of this section's coordination table, the way 1B.0
+spanned waves 3 through 6. Each wave proves one outcome and ends with its own
+audit. The internal exit is evaluated once all three have closed.
 
-- **The decision surface closes (wave 7).** The revision-40
+- **The decision surface closes (wave 7).** This wave delivers the revision-40
   attention-presentation contracts, their daemon fact producers, and client
-  adoption: every Phase 1 card action executes on Mac and iPhone, every card
-  is self-contained at its Section 9 altitude, and facts stay distinct from
-  claims.
-- **Operation closes (wave 8).** Human-gated follow-up issue filing (Section
-  5.17), consuming the follow-up recommendations recorded by adjudicated
-  deferred dispositions (Section 7); the doctor credential-integrity probe
-  (Section 10); the stall heartbeat (Section 5.12); the external
-  daemon-liveness probe (Section 5.2); held-work and stopped-operation
-  signals; the clean-machine onboarding proof; the registry egress profile
-  and the policy-gated image rebuild; and re-entry of published-PR activity.
-- **Providers close (wave 9).** One agent vocabulary across execution,
-  review, and daemon judgment (Section 5.4); the Codex execution driver and
-  its enrollment cutover; and pi elaboration.
+  adoption: every Phase 1 card action executes on Mac and iPhone, every card is
+  self-contained at its Section 9 altitude, and facts stay distinct from claims.
+- **Operation closes (wave 8).** This wave delivers human-gated follow-up issue
+  filing (Section 5.17), which consumes the follow-up recommendations that
+  adjudicated deferred dispositions record (Section 7). It also delivers the
+  doctor credential-integrity probe (Section 10), the stall heartbeat (Section
+  5.12), the external daemon-liveness probe (Section 5.2), held-work and
+  stopped-operation signals, the clean-machine onboarding proof, the registry
+  egress profile and the policy-gated image rebuild, and re-entry of
+  published-PR activity.
+- **Providers close (wave 9).** This wave delivers one agent vocabulary across
+  execution, review, and daemon judgment (Section 5.4); the Codex execution
+  driver and its enrollment cutover; and pi elaboration.
 
 #### 1B.2: The Initiative View
 
 The Section 5.18 frontier projection and deterministic initiative view ship as
 one minimal deterministic projection (owner decision), under Section 5.18's
 rendering and coverage discipline. This placement materially overturns two
-statements recorded in Section 13: Section 4's
-GitHub-Projects-as-all-work-view and this section's former Phase 3 placement
-for the initiative view.
+statements recorded in Section 13: Section 4's GitHub Projects as the all-work
+view, and this section's former Phase 3 placement for the initiative view.
 
 Clients don't edit settings directly. Today every configuration change passes
 Section 5.8's control-plane gate through an operator-authored PR or, for
@@ -3454,14 +3453,14 @@ recurring preferences, the Section 4 policy-proposal path. When deferred
 settings surfaces ship, a configuration-change proposal kind joins the Section
 5.13 registry with those surfaces as its consumer. Approval cards, never edit
 forms, stay the client surface.
-Deferred past 1B, with provisional contracts where Section 5.19 records one:
-the planner judgment call, scoped consent grants, external findings
-ingestion, the pre-publication adversarial pass, the readiness registry, the
-project detail screen, past-work history, the system/schedules page,
-consent-grant UI, and plain-English scheduling (CLI-first and sequenced
+The following are deferred past 1B, with provisional contracts where Section
+5.19 records one: the planner judgment call, scoped consent grants, external
+findings ingestion, the pre-publication adversarial pass, the readiness
+registry, the project detail screen, past-work history, the system/schedules
+page, consent-grant UI, and plain-English scheduling (CLI-first and sequenced
 before any conversational surface; owner decision). Open question carried:
-daemon construction of meaningful multi-commit history without guessing
-intent (current fallback: a single clean re-authored commit).
+daemon construction of meaningful multi-commit history without guessing intent
+(current fallback: a single clean re-authored commit).
 
 Exit requires:
 
@@ -3476,9 +3475,9 @@ Exit requires:
 
 Approvals decidable from the phone covers every Phase 1 card action except
 turning a recurring diminishing-returns preference into a project-policy
-proposal (`convert_to_policy`), which waits for its deferred control-plane
-proposal surface (Section 4) and is omitted from the client's action
-surface, never rendered disabled, until that surface lands (revision 40).
+proposal (`convert_to_policy`). That action waits for its deferred control-plane
+proposal surface (Section 4). Until that surface lands, the client omits it from
+its action surface and never renders it disabled (revision 40).
 
 ### Implementation Coordination (Building Freeside with Agents)
 
@@ -3499,70 +3498,70 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **10 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section 5.18 capture records (#884, `exclusive-with` every open contract unit), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
 
 Wave 7's transaction closure also retires the `publish_blocked`
-`choose_alternate_profile` action (#936, revision 44). Which publication path
-a repository uses is repository configuration settled when the repository is
-onboarded, never a per-item choice, so the card keeps rerun, inspect, and
-stop. Publishing through a fork when the repository is not pushable is a plain
-publication feature deferred to #1042. The phone-decidability exit holds once
-no rendered action stays pending.
+`choose_alternate_profile` action (#936, revision 44). The publication path a
+repository uses is repository configuration, settled at onboarding, never a
+per-item choice. So the card keeps rerun, inspect, and stop. Publishing through
+a fork when the repository is not pushable is a plain publication feature,
+deferred to #1042. The phone-decidability exit holds once no rendered action
+stays pending.
 
-The deferral drain is bounded per row. Waves 7 through 9 each drain the
-clusters their row names and nothing else; a deferral outside them stays in
-the queue. The long tail, including the `kind:fix` items on production paths
-that no 1B exit proof depends on, does not drain in 1B: it binds to Phase
-2's hardening or to the issue's own trigger, and a wave sweep re-examines it
-only when a scheduled unit trips its recorded boundary condition.
+The deferral drain is bounded per row. Waves 7 through 9 each drain the clusters
+named in their row and nothing else. A deferral outside them stays in the queue.
+The long tail, including the `kind:fix` items on production paths that no 1B
+exit proof depends on, does not drain in 1B. It binds to Phase 2's hardening or
+to the issue's own trigger, and a wave sweep re-examines it only when a
+scheduled unit trips its recorded boundary condition.
 
 Review bandwidth limits parallel width. Every wave ends with a fresh-context
 adversarial review by an agent given only the repository and its documents,
-never this design history. `AGENTS.md` defines the issue protocol; each
-wave's unit list lives in its pinned tracking issue, while this table records
-shape and sequencing. The single source for resolving live wave status is a
-deterministic three-state resolver over every pinned issue whose title matches
-`^Wave [0-9]+ \([^)]*\) tracking$`, evaluated on the set of title matches
+never this design history. `AGENTS.md` defines the issue protocol. Each wave's
+unit list lives in its pinned tracking issue; this table records shape and
+sequencing. Live wave status has a single source: a deterministic three-state
+resolver over every pinned issue whose title matches
+`^Wave [0-9]+ \([^)]*\) tracking$`. It is evaluated on the set of title matches
 before filtering by issue state:
 
-1. **Active-wave:** exactly one matching tracker, open. It resolves the
-   current phase, wave, and active implementation front: its title gives the
-   wave and internal exit, this table's row gives the phase and shape, and its
+1. **Active-wave:** exactly one matching tracker, open. It resolves the current
+   phase, wave, and active implementation front. Its title gives the wave and
+   internal exit; this table's row gives the phase and shape; and its
    Implementation order digest gives the active front. The scheduling door is
    open.
 2. **Inter-wave:** exactly one matching tracker, closed. The closed tracker
-   records the just-completed wave; there is no active implementation front and
-   the scheduling door is closed. It is a legitimate observed state between a
-   wave's close and the next wave's planning, not a defect. Explicit `Plan #N`
-   and `Handle #N` fiat still proceed, because fiat is independent of wave
-   state; scheduled self-selection does not, because it needs an open current
-   tracker.
+   records the wave that just completed. There is no active implementation
+   front, and the scheduling door is closed. This is a legitimate observed state
+   between a wave's close and the next wave's planning, not a defect. Explicit
+   `Plan #N` and `Handle #N` fiat still proceed, because fiat is independent of
+   wave state. Scheduled self-selection does not proceed, because it needs an
+   open current tracker.
 3. **Invalid:** zero or multiple matching trackers. This is a spine-repair
-   error that must be escalated to the human, never guessed through: pinning
-   alone is insufficient because other tracker types may also be pinned, and
-   the resolver cannot choose among absent or competing authorities.
+   error. It must be escalated to the human, never guessed through. Pinning
+   alone is not enough, because other tracker types may also be pinned, and the
+   resolver cannot choose among absent or competing authorities.
 
-A wave-boundary procedure keeps exactly one wave-title-matching issue pinned;
-unrelated trackers (for example the standing audit and reliability trackers)
+A wave-boundary procedure keeps exactly one wave-title-matching issue pinned.
+Unrelated trackers (for example the standing audit and reliability trackers)
 stay pinned for their own purposes and never count toward wave state. Closing a
-wave leaves its closed tracker pinned as the inter-wave marker, and the next
+wave leaves its closed tracker pinned as the inter-wave marker. The next
 wave-planning operation moves that wave-title match to the new populated
-tracker. Because those standing pins occupy slots under GitHub's three-pin cap,
-the wave tracker holds a single swappable slot and the outgoing and incoming
-trackers cannot both be pinned at once; with no atomic pin swap the transition
+tracker. Those standing pins occupy slots under GitHub's three-pin cap. That
+leaves the wave tracker a single swappable slot, so the outgoing and incoming
+trackers cannot both be pinned at once. With no atomic pin swap, the transition
 is non-atomic. The spine's wave-planning operation performs it idempotently and
-recovery-safely, discovering and reusing any orphaned open-unpinned tracker
-rather than creating a second, and an invalid wave-title cardinality is what the
-resolver escalates on. The detailed interruption-safe procedure is owned by that
-executor; see docs/coordination.md and #828.
+recovery-safely: it discovers and reuses any orphaned open-unpinned tracker
+rather than creating a second, and the resolver escalates on an invalid
+wave-title cardinality. That executor owns the detailed interruption-safe
+procedure; see docs/coordination.md and #828.
 
 The digest remains a derived view of the authoritative Dependencies fields in
-the tracked unit issues. If they diverge, the unit issue wins and the tracker
-is repaired in the same operation; readers still use the tracker as the one
-entrypoint for live status rather than searching unit issues or stable files
+the tracked unit issues. If they diverge, the unit issue wins and the tracker is
+repaired in the same operation. Readers still use the tracker as the one
+entrypoint for live status, rather than searching unit issues or stable files
 for a competing projection.
 
-Stable repository documents point to that resolution rule instead of
-asserting live phase or wave status. Any competing assertion is a coherence
-defect. Verify the invariant with the following sweep, whose only result must
-be the resolution rule above:
+Stable repository documents point to that resolution rule instead of asserting
+live phase or wave status. Any competing assertion is a coherence defect. Verify
+the invariant with the sweep below; its only result must be the resolution rule
+above:
 
 ```sh
 grep -rniE "current (phase|wave)([^'[:alnum:]_]|$)|wave [0-9]+[^.]*underway" README.md AGENTS.md docs/
@@ -3679,12 +3678,12 @@ Revision 44 ("Retire the alternate-profile action"):
 | Risk | Current response |
 | --- | --- |
 | Provider credentials in `subscription_contained` | Document the residual; enforce egress floors; let the daemon fetch research for the most exposed stage; provide `api_key_isolated` as the escape. |
-| Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed; admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record; conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path, so a registry that co-hosts a write endpoint accepts an attacker-credentialed publish; exclude such hosts per project where the residual is not acceptable, and provide `api_key_isolated` as the escape for anything wider. |
+| Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed. Admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record. Conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path. So a registry that co-hosts a write endpoint accepts an attacker-credentialed publish. Exclude such hosts per project where the residual is not acceptable, and provide `api_key_isolated` as the escape for anything wider. |
 | CI privilege crossing | Attest effective authority; block candidate automation changes; fail closed on drift; prohibit the daemon host as a runner. |
-| Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories the human merge gate reads (Section 5.8). |
+| Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section 5.8). |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section 5.7); the same-VM fallback is refuted by execution, never implemented or declared. |
-| **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed: review is Freeside-invoked (Section 7), and native review is best-effort extra evidence. |
-| Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section 11); keep selection explicit as a lineup line, never silent (a lineup may name the switch per failure class, Section 4); usage remains observed telemetry (Section 8). |
+| **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section 7), and native review is best-effort extra evidence. |
+| Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section 11). Keep selection explicit as a lineup line, never silent (a lineup may name the switch per failure class, Section 4). Usage remains observed telemetry (Section 8). |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
 | Subscription-terms drift | Keep it as an explicit operating risk. |
 | Apple container immaturity | Prove actual runner capabilities and retain honest fallback classes. |
@@ -3705,7 +3704,7 @@ Revision 44 ("Retire the alternate-profile action"):
 
 | Name | Meaning |
 | --- | --- |
-| **Freeside** | Proper noun at `freeside.ai` and `github.com/freeside-ai`. Capitalize it wherever prose permits. Lowercase only where required by the medium, such as URLs and the daemon name. |
+| **Freeside** | Proper noun at `freeside.ai` and `github.com/freeside-ai`. Capitalize it wherever prose permits. Lowercase it only where the medium requires, such as in URLs and the daemon name. |
 | **Free as in Bird** | The organization. |
 | **an agent control plane** | Category line. |
 | **the harness runs the agent; you hold the reins** | Tagline. |
@@ -3723,8 +3722,8 @@ names.
 
 - Light surfaces are **Freeside**: vellum ground and bronze accent.
 - Dark surfaces are **Straylight**: umber ground and tawny accent.
-- Appearance follows the viewer's system setting. The distinction assigns
-  meaning, not audience.
+- Appearance follows the viewer's system setting. The distinction carries
+  meaning; it does not mark who the audience is.
 - Semantic colors never borrow the accent. Green remains success and go.
 - The mark is **the signet box**, a plain chambered box whose inlaid dividers
   suggest the maker's initial.
