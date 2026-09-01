@@ -2475,40 +2475,41 @@ run-bound artifacts cited by AttentionItems. False-ready tracking under Section
 
 ### The Verification State Algebra
 
-Every check's result is recorded honestly: passed with proof it ran against
-exactly this code and policy, failed, or not run; nothing passes by omission,
-and one check's proof cannot stand in for another's.
+Every check's result is recorded honestly. A check either passed, with proof
+that it ran against exactly this code and policy, or it failed, or it did not
+run. Nothing passes by omission, and one check's proof cannot stand in for
+another's.
 
-Every requirement resolution binds requirement identity, the requirement-set
-digest, the daemon-floor/registry generation, resolved policy, and any
-durable sampling decision, shared across both branches so a proof cannot
-structurally occupy another requirement's state. A pass carries proof: the
-candidate head; the base or prospective-merge identity for any requirement
-whose evidence depends on one (integration checks, Section 7 review passes);
-the recipe digest; and the resolution digest. The re-gate binds the current
-base alongside the requirement-set digest, so a base advance structurally
-mismatches base-dependent proofs and forces reruns; it never restores
-readiness from evidence bound to a prior base.
+Every requirement resolution binds the requirement identity, the
+requirement-set digest, the daemon-floor/registry generation, the resolved
+policy, and any durable sampling decision. Both branches share that binding, so
+a proof cannot structurally occupy another requirement's state. A pass carries
+proof: the candidate head; the base or prospective-merge identity for any
+requirement whose evidence depends on one (integration checks, Section 7 review
+passes); the recipe digest; and the resolution digest. The re-gate binds the
+current base alongside the requirement-set digest. So a base advance
+structurally mismatches base-dependent proofs and forces reruns. The re-gate
+never restores readiness from evidence bound to a prior base.
 
 Waivers exist only inside Failed and NotRun. They apply only to required checks
-in registered waiver-eligible classes, and they name the waived dimension and
-granting authority. The closed set of granting authorities contains explicit
-human approval and daemon-owned trusted configuration. Resolved policy alone
-can't mint a waiver, and inference may only propose one. Policy may tighten
-daemon-owned applicability and requiredness floors but never weaken them.
-Non-waivable classes have no waiver representation.
+in registered waiver-eligible classes. Each one names the waived dimension and
+the granting authority. The closed set of granting authorities contains
+explicit human approval and daemon-owned trusted configuration. Resolved policy
+alone can't mint a waiver, and inference may only propose one. Policy may
+tighten daemon-owned applicability and requiredness floors but never weaken
+them. Non-waivable classes have no waiver representation.
 
-Readiness evaluation starts from the complete current requirement set; an
-absent record evaluates as required plus NotRun, blocking. The aggregate
-verdict distinguishes Blocked, ReadyClean (every applicable check passed),
-and ReadyDegraded (any progress-permitting non-clean outcome: waived required
-checks and/or optional Failed/NotRun as advisory outcomes, at least one
-nonempty). Rendering exposes both classes; no downstream consumer receives a
-flattened boolean. The re-gate runs at the publication/admission effect
-boundary and binds the exact current requirement-set digest, floor/registry
-generation, policy, sampling decisions, and waiver lifecycle state;
-historical proofs match only on exact binding match. Historical
-applicability keeps its run-time digests.
+Readiness evaluation starts from the complete current requirement set. An
+absent record evaluates as required plus NotRun, which blocks. The aggregate
+verdict distinguishes Blocked; ReadyClean, where every applicable check passed;
+and ReadyDegraded, any non-clean outcome that still permits progress: waived
+required checks and/or optional Failed/NotRun as advisory outcomes, with at
+least one of those nonempty. Rendering exposes both classes; no downstream
+consumer receives a flattened boolean. The re-gate runs at the
+publication/admission effect boundary. It binds the exact current
+requirement-set digest, floor/registry generation, policy, sampling decisions,
+and waiver lifecycle state. A historical proof matches only when its binding
+matches exactly. Historical applicability keeps its run-time digests.
 
 Illustrative annex (non-binding):
 
@@ -2548,99 +2549,94 @@ Independent error detection is the goal. Provider diversity is one way to
 achieve it.
 
 **Review is a durable stage that Freeside invokes and orchestrates in the run
-workflow** (decider: user; revision 25). It requests and acknowledges review,
-ingests normalized findings, adjudicates them (Finding Adjudication, below),
-drives remediation, reverifies, re-reviews the new head, and escalates a stalled
-or exhausted loop to durable attention. The first production ReviewSource is a
-Freeside-invoked local Codex invocation.
-GitHub-native Codex review, when observed, is recorded as best-effort extra
-evidence; it never satisfies the review requirement. The trigger
-falsification behind this is recorded in Sections 5.3 and 13 and on #427.
+workflow** (decider: user; revision 25). The stage requests and acknowledges
+review, ingests normalized findings, adjudicates them (Finding Adjudication,
+below), drives remediation, reverifies, re-reviews the new head, and escalates
+a stalled or exhausted loop to durable attention. The first production
+ReviewSource is a local Codex invocation that Freeside invokes. When
+GitHub-native Codex review is observed, it is recorded as best-effort extra
+evidence; it never satisfies the review requirement. The trigger falsification
+behind this is recorded in Sections 5.3 and 13 and on #427.
 
 Each review pass binds the exact base and candidate head SHAs. A new candidate
 head or an advanced base invalidates the pass and requires re-review.
 Integration evidence follows the same rule: a base advance also invalidates
-verification and check evidence bound to the prior
-base, and readiness recomputes under the Section 6 re-gate before any ready
-state is restored. The pass runs with fresh context independent of the
-implementing invocation, a read-only workspace, and no publication
-credentials; it receives repository instructions and verification evidence,
-never the implementer's reasoning history. It returns normalized findings
-with severity, location, and explanation, from which a stable cross-round
-identity is derived (#702). It also records the provider, model configuration,
-invocation, cost owner, and completion evidence. The findings → adjudication →
-remediation → reverify → re-review loop is bounded by resolved policy;
-exhaustion or ambiguity produces a
-durable AttentionItem, never a silent stall. Failure classification matches
-the publication boundary: transient failures retry with backoff;
-configuration or quota failures create attention; durable contradictions
-fail loudly.
+verification and check evidence bound to the prior base, and readiness
+recomputes under the Section 6 re-gate before any ready state is restored. The
+pass runs with fresh context independent of the implementing invocation, in a
+read-only workspace, with no publication credentials. It receives repository
+instructions and verification evidence, never the implementer's reasoning
+history. It returns normalized findings with severity, location, and
+explanation, and a stable cross-round identity is derived from them (#702). It
+also records the provider, model configuration, invocation, cost owner, and
+completion evidence. Resolved policy bounds the loop: findings → adjudication →
+remediation → reverify → re-review. Exhaustion or ambiguity produces a durable
+AttentionItem, never a silent stall. Failure classification matches the
+publication boundary: transient failures retry with backoff; configuration or
+quota failures create attention; durable contradictions fail loudly.
 
-**Resolved fork (decider: user, 2026-08-05; revision 28): the review anchor
-is pre-publication.** Implement → verify → review → clean: publish; the PR
-opens already reviewed, and forge checks still gate merge. The stage as
-landed (#427, PR #490) reviews the published PR under the then-open fork;
-the implementation re-anchor is tracked in #527. The internal loop
-is the agent's pre-push work; the PR is the collaboration surface. The PR
-list stays a decision queue, not a work queue; post-publication state is the
-expensive place to be correct (the #496/#514 ready-identity class); PR
-comments are mutable, so the authoritative ReviewRecord lives in the store
-under either anchor, and PR-anchoring would mean building both surfaces; and
-the owner's own drill-down use (progress pulse, forensic drill-down on
-agent/forge disagreement, and disposition reconstruction) is served by computed
-readiness, the run timeline, and structured dispositions, not comment
-threads. The owner's condition on this resolution pins the
-EvidencePublisher's first slice (Section 5.15; #525, wave 5 per Section
-11): at publication the PR carries the disposition history, including review
-rounds, final dispositions with reasons for declined and deferred findings,
-and the readiness derivation. The merged PR is therefore forensically
-self-explanatory on the forge. The condition is not an immediate
-publication precondition. Until #525 lands the forge carries no
-disposition history. The store carries the durable review state: ReviewRecords
-(round outcomes, finding identity), raw findings, and classifications.
-Per-finding dispositions with reasons and the readiness
-derivation are not yet persisted anywhere; persisting them is a
-prerequisite both of #525's rendering and of any pre-#525 publication
-that treats the store as the authoritative disposition record. The
-trigger falsification forced
-neither anchor; a Freeside-invoked reviewer can review either surface. The
-PR-anchored shape remains the recorded, considered-and-rejected alternative
-(revision 25's fork text, docs/history/decisions.md); revisit when real
-usage shows the owner can't trust review they didn't watch. That remains the
-fallback.
+**Resolved fork (decider: user, 2026-08-05; revision 28): the review anchor is
+pre-publication.** Implement → verify → review → clean: publish. The PR opens
+already reviewed, and forge checks still gate merge. As landed (#427, PR #490),
+the stage reviews the published PR under the then-open fork. #527 tracks the
+implementation re-anchor. The internal loop is the agent's pre-push work; the
+PR is the collaboration surface. The PR list stays a decision queue, not a work
+queue. Post-publication state is the expensive place to be correct (the
+#496/#514 ready-identity class). PR comments are mutable, so the authoritative
+ReviewRecord lives in the store under either anchor, and PR-anchoring would
+mean building both surfaces. And the owner's own drill-down uses (a progress
+pulse, forensic drill-down when agent and forge disagree, and disposition
+reconstruction) are served by computed readiness, the run timeline, and
+structured dispositions, not by comment threads. The owner's condition on this
+resolution pins the EvidencePublisher's first slice (Section 5.15; #525, wave 5
+per Section 11). At publication, the PR carries the disposition history,
+including review rounds, final dispositions with reasons for declined and
+deferred findings, and the readiness derivation. So the merged PR explains
+itself forensically on the forge. The condition is not an immediate publication
+precondition. Until #525 lands, the forge carries no disposition history. The
+store carries the durable review state: ReviewRecords (round outcomes, finding
+identity), raw findings, and classifications. Per-finding dispositions with
+reasons and the readiness derivation are not yet persisted anywhere. Persisting
+them is a prerequisite both of #525's rendering and of any pre-#525 publication
+that treats the store as the authoritative disposition record. The trigger
+falsification forced neither anchor; a Freeside-invoked reviewer can review
+either surface. The PR-anchored shape stays the recorded,
+considered-and-rejected alternative (revision 25's fork text,
+docs/history/decisions.md). Revisit it when real usage shows the owner can't
+trust review they didn't watch. That stays the fallback.
 
 Review activity from outside the control plane includes human maintainers,
-GitHub-native Codex when it fires, and other bots. On a published PR, it is the
-deferred external review response capability (Section 11; #524); it never
-satisfies this section's requirement, which stays Freeside-invoked and
-pre-publication.
+GitHub-native Codex when it fires, and other bots. On a published PR, that
+activity is the deferred external review response capability (Section 11;
+#524). It never satisfies this section's requirement, which stays
+Freeside-invoked and pre-publication.
 
-Sequencing preserves independence (spine-confirmed on #427): the #427
-implementation unit, then production runs with Claude implementing and Codex
-reviewing, then the #397 Claude ReviewSource promotion, then #408 Codex
-execution routing. This order prevents Codex-implements plus Codex-reviews from
-becoming the default pairing. The first production Codex review pass is also
-gated on the applicable subset of the Codex pre-adoption probes (#401:
-credential handling, vendor-instruction binding, auth refresh,
-child-environment credential exposure), verified at #427 scheduling; a
-read-only workspace and withheld publication credentials do not by
-themselves close those provider-credential and instruction surfaces.
+The sequencing preserves independence (spine-confirmed on #427). It runs in
+this order: first the #427 implementation unit, then production runs with
+Claude implementing and Codex reviewing, then the #397 Claude ReviewSource
+promotion, then #408 Codex execution routing. This order prevents
+Codex-implements plus Codex-reviews from becoming the default pairing. The
+first production Codex review pass is also gated on the applicable subset of
+the Codex pre-adoption probes (#401: credential handling, vendor-instruction
+binding, auth refresh, child-environment credential exposure), verified when
+#427 is scheduled. A read-only workspace and withheld publication credentials
+do not close those provider-credential and instruction surfaces on their own.
 
 Routing comparisons use accumulated traces, including the 1B Claude shadow
 arm. Shadow findings are recorded but never routed, and comparisons are
 adjudicated blind where practical.
 
 Scheduled Codex execution (Section 11) will make Codex-executes plus
-Codex-reviews a same-vendor pairing, weakening the independence this section
-targets and raising the later value of a selectable Claude ReviewSource. The
-sequencing above and the deferred #397 promotion keep that pairing from
-becoming the default; shadow findings remain recorded and never routed.
-Once agents are admitted (Section 5.4), the independence rule reads the
-two selected agents' offers: by default their lineage groups differ, a
-project lineup may relax that with a stated reason, and every card and
-record carries which rule applied. Switching the review agent mid-run
-opens a new convergence segment, so the new reviewer's first pass is never
-counted as the old reviewer's next round by the yield policy.
+Codex-reviews a same-vendor pairing. That weakens the independence this section
+targets. It also makes a selectable Claude ReviewSource more valuable later.
+The sequencing above and the deferred #397 promotion keep that pairing from
+becoming the default; shadow findings stay recorded and never routed. Once
+agents are admitted (Section 5.4), the independence rule reads the two selected
+agents' offers. By default their lineage groups differ. A project lineup may
+relax that with a stated reason, and every card and record carries which rule
+applied. Switching the review agent mid-run opens a new convergence segment. So
+the yield policy never counts the new reviewer's first pass as the old
+reviewer's next round.
 
 The classifier is never the sole safety gate:
 
@@ -2650,29 +2646,27 @@ The classifier is never the sole safety gate:
   becomes an AttentionItem.
 - A credible critical or high shadow finding blocks ready status.
 
-Credibility is not a separate classifier output, and its guard is
-fail-safe: wherever this section says "credible", it names a
-deterministic guard anchored on review-contract severity, in which
-classification confidence can add protection but never remove it. A critical
-or high severity finding stays credible when classification is
-missing or low-confidence, because the landed classifier annotates
-materiality, not finding validity. No model output can mint or strip
-credibility. The boolean is total across the normalized scale: every
-finding, at every severity, is credible until a distinct validity
-signal exists and marks it otherwise at resolved-policy confidence. Today no
-landed signal can, so credibility filters nothing and the
-word's whole force is the critical/high ceiling. A finding marked
-non-credible never fast-paths and never disappears: it enters the
-model adjudication, where the critical/high second-adjudication
-ceiling still applies.
+Credibility is not a separate classifier output, and its guard is fail-safe.
+Wherever this section says "credible", it names a deterministic guard anchored
+on review-contract severity. Classification confidence can add protection to
+that guard but never remove it. A critical or high severity finding stays
+credible when classification is missing or low-confidence, because the landed
+classifier annotates materiality, not finding validity. No model output can
+mint or strip credibility. The boolean is total across the normalized scale.
+Every finding, at every severity, is credible until a distinct validity signal
+exists and marks it otherwise at resolved-policy confidence. Today no landed
+signal can do that. So credibility filters nothing, and the word's whole force
+is the critical/high ceiling. A finding marked non-credible never fast-paths
+and never disappears. It enters the model adjudication, and the critical/high
+second-adjudication ceiling still applies there.
 
 Severity resolves against a declared normalized scale: critical, high, medium,
-and low. Each ReviewSource binding declares a
-deterministic mapping from its native vocabulary to that scale, and a
-missing or unmapped value fails protective, treated as high. The first
-instance is Freeside's normalization choice for the production `codex_local`
-binding: P1 → high, P2 → medium, and P3 → low. This is Freeside's mapping
-decision, not a claim about the reviewer's own semantics.
+and low. Each ReviewSource binding declares a deterministic mapping from its
+native vocabulary to that scale. A missing or unmapped value fails protective
+and is treated as high. The first instance is Freeside's normalization choice
+for the production `codex_local` binding. It maps P1 → high, P2 → medium, and
+P3 → low. This is Freeside's mapping decision, not a claim about the reviewer's
+own semantics.
 
 Some contamination is accepted. Freeside does not pass or fail based on routing
 results.
@@ -2680,216 +2674,212 @@ results.
 ### Finding Adjudication
 
 **Every finding batch is adjudicated before remediation authority is
-exercised** (decider: user; revision 31; #697). Direct findings-to-remediation
-routing assigned nobody the judgment that decides what a finding means for
-the approved work unit: a credible finding can be required by the accepted
-outcome yet prohibited here by the repository's own work-unit rules, a
-legitimate adjacent improvement, a contradiction of the approved
-specification, or governed by instructions that are ambiguous. Sending every
-finding to a remediator risks silent scope expansion; treating every
-non-local fix as deferrable risks false-ready work whose acceptance criteria
-depend on the deferred fix. Adjudication distinguishes whether a finding is
-credible, whether the approved outcome requires it, whether the repository's
-own rules permit the proposed remediation to land in this work unit, and
-which safe route follows.
+exercised** (decider: user; revision 31; #697). Routing findings straight to
+remediation assigned nobody the judgment that decides what a finding means for
+the approved work unit. A credible finding can be required by the accepted
+outcome yet prohibited here by the repository's own work-unit rules. It can be
+a legitimate adjacent improvement. It can contradict the approved
+specification. Or the instructions that govern it can be ambiguous. Sending
+every finding to a remediator risks silent scope expansion. Treating every
+non-local fix as deferrable risks false-ready work, where the acceptance
+criteria depend on the deferred fix. Adjudication distinguishes whether a
+finding is credible, whether the approved outcome requires it, whether the
+repository's own rules permit the proposed remediation to land in this work
+unit, and which safe route follows.
 
 Each review round with findings produces one immutable, digest-addressed
-FindingAdjudication artifact bound to the run, the exact finding batch and
-round, the approved specification artifact digest, the trusted
+FindingAdjudication artifact. The artifact binds the run, the exact finding
+batch and round, the approved specification artifact digest, the trusted
 repository-instruction snapshot digest, and the resolved policy digest. Its
 inputs are the approved work-unit specification, the immutable raw findings
 with their versioned classifications, the proposed remediation surface, the
-work unit's declared path scope, repository instructions from the trusted
-base, prior disposition history, and any available structured repository
-facts (Section 5.18 capture); never the implementer's reasoning history.
+work unit's declared path scope, repository instructions from the trusted base,
+prior disposition history, and any available structured repository facts
+(Section 5.18 capture). The implementer's reasoning history is never an input.
 The engine derives each finding's proposed remediation surface from that
-finding's normalized locations. A model never supplies it. A batch never
-shares one union surface, so an out-of-scope sibling cannot
-strip an unrelated in-scope finding of its fast path. The surface is
-presumptive. Its enforcement backstops are the import boundary's path-scope enforcement
-and the remediator's labeled pushback, each re-entering adjudication as
-structured dissent when a correct fix must exceed it. Derivation fails
-closed: containment runs only over canonical repository-relative paths,
-their syntax validated against the trusted root and their existence
-resolved against either side of the bound base and candidate trees. A finding
-on a candidate-added or candidate-deleted file therefore keeps its
-deterministic route. A finding whose location is missing, non-path, or
-unresolvable in both trees yields no presumptive surface and never a vacuously
-contained `allowed`. When its goal relationship is `required`, it falls to
-`unknown` or attention. A non-`required` finding routes by its own row, which
-consumes no surface. For each finding, the artifact records two normalized
-axes, a recommended route, rationale and evidence, cited repository rules,
-assumptions, viable
+finding's normalized locations. A model never supplies it. A batch never shares
+one union surface. So an out-of-scope sibling cannot strip an unrelated
+in-scope finding of its fast path. The surface is presumptive. Its enforcement
+backstops are the import boundary's path-scope enforcement and the remediator's
+labeled pushback. When a correct fix must exceed the surface, each backstop
+re-enters adjudication as structured dissent. Derivation fails closed:
+containment runs only over canonical repository-relative paths, with their
+syntax validated against the trusted root and their existence resolved against
+either side of the bound base and candidate trees. So a finding on a file the
+candidate added or deleted keeps its deterministic route. A finding whose
+location is missing, non-path, or unresolvable in both trees yields no
+presumptive surface, and never a vacuously contained `allowed`. When its goal
+relationship is `required`, it falls to `unknown` or attention. A
+non-`required` finding routes by its own row, and that row consumes no surface.
+For each finding, the artifact records two normalized axes, a recommended
+route, rationale and evidence, cited repository rules, assumptions, viable
 alternatives, and open questions. The route is the decision; the axes are its
 evidence. A fast-path routing decision is an engine fact and carries no
-proposal or confidence field. An adjudicator proposal, which is a model-residue
-entry, also records a self-assessed proposal confidence on the declared ordinal
-scale. The engine labels it as model output and judges it against the same
-bounded-below resolved-policy threshold. A proposal whose confidence is absent, out of scale, or
-below threshold is the ceilings' low-confidence output: it is not
-accepted, and the batch parks to recommendation-led attention, with
-`unknown` as its compatibility representation only where compatibility
-exists (`required`). The vocabulary is repository-generic. Repository-specific
-language, such as a lane, serialized-contract rule, or ownership file, appears
-only inside cited instruction text and explanations, never in the normalized
-outcomes.
+proposal or confidence field. An adjudicator proposal is a model-residue entry.
+It also records a self-assessed proposal confidence on the declared ordinal
+scale. The engine labels that proposal as model output and judges it against
+the same bounded-below resolved-policy threshold. A proposal whose confidence
+is absent, out of scale, or below threshold is the ceilings' low-confidence
+output. It is not accepted, and the batch parks to recommendation-led
+attention. `unknown` is its compatibility representation only where
+compatibility exists (`required`). The vocabulary is repository-generic.
+Repository-specific language, such as a lane, a serialized-contract rule, or an
+ownership file, appears only inside cited instruction text and explanations,
+never in the normalized outcomes.
 
 The goal-relationship axis states what the approved outcome makes of the
 finding: `required`, `adjacent`, `contradictory`, or `unclear`. The
 work-unit-compatibility axis states whether the repository's rules let the
-proposed remediation land in this work unit: `allowed`,
+proposed remediation land in this work unit. Its values are `allowed`,
 `work_unit_revision_required`, `separate_work_required`,
 `human_decision_required`, or `unknown`. Validity constraints replace the raw
 cross product. Compatibility is present exactly when the goal relationship is
-`required`, the only case where remediating here is on the table. The route is
-a function of the axes:
+`required`. That is the only case where remediating here is on the table. The
+route is a function of the axes:
 
 | Goal relationship | Compatibility | Route |
 | --- | --- | --- |
 | `required` | `allowed` | remediator → clean verification → re-review |
-| `required` | `work_unit_revision_required` | park; recommend a specification revision through the `spec_approval` revision path where prose alone must change, or a replan (a new run under a revised work unit) where the trusted work-unit scope itself must change (declared paths, dependencies, serialization), which a same-unit revision cannot alter |
+| `required` | `work_unit_revision_required` | park; recommend a specification revision through the `spec_approval` revision path where prose alone must change, or a replan (a new run under a revised work unit) where the trusted work-unit scope itself must change (declared paths, dependencies, serialization), and a same-unit revision cannot alter that scope |
 | `required` | `separate_work_required` | park; recommend prerequisite work (a Section 5.17 proposal where it is an issue), wait or stop; never defer-and-ready |
 | `required` | `human_decision_required` | recommendation-led `finding_adjudication` attention |
 | `required` | `unknown` | park plus recommendation-led attention; no scope widening |
-| `adjacent` | absent | reasoned deferred disposition; its recorded reason and the adjudication artifact carry the follow-up recommendation that the Section 5.17 human-gated proposal path (1B.1) consumes when it lands |
+| `adjacent` | absent | reasoned deferred disposition; its recorded reason and the adjudication artifact carry the follow-up recommendation, and the Section 5.17 human-gated proposal path (1B.1) consumes that recommendation when it lands |
 | `contradictory` | absent | reasoned declined disposition, or the `review_dispute` item, where the human adjudicates, when the finding's severity is critical or high (the ceilings' second-adjudication case) or the self-assessed proposal confidence is below the resolved-policy threshold |
 | `unclear` | absent | recommendation-led attention with gating questions |
 
-These eight rows are the complete valid vocabulary; implementation fixtures
-enumerate them, not a sample of the cross product. A necessary finding that
-is incompatible with the current work unit parks or replans the run; the
+These eight rows are the complete valid vocabulary. Implementation fixtures
+enumerate them, not a sample of the cross product. A necessary finding that is
+incompatible with the current work unit parks or replans the run. The
 constraints make silent deferral structurally unrepresentable, because
 `required` has no route to a deferred disposition.
 
-Permission has a presumptive baseline, not an affirmative-citation
-requirement: remediation whose proposed surface stays within the work unit's
-declared paths is presumptively `allowed`, and `allowed` is representable
-only as an engine-derived value. The deterministic declared-path containment
-check is its sole producer, so model output cannot mint permission and the
-adjudicator structurally cannot infer permission to exit the declared
-surface. Rule interpretation is required only where remediation would exit
-that surface or a rule is affirmatively implicated; for that residue,
-missing, conflicting, stale, or low-confidence interpretation fails
-conservatively to `unknown` or human attention. Without the presumption,
-every ordinary in-scope fix would collapse to `unknown` and park the loop.
-On the deterministic path an affirmatively implicated rule reaches
-adjudication only through the structured residue signals below or the captured
-repository facts. That residual is accepted by decision: the downstream
-human merge gate, not fast-path rule interpretation, backstops it.
+Permission has a presumptive baseline, not an affirmative-citation requirement.
+Remediation is presumptively `allowed` when its proposed surface stays within
+the work unit's declared paths. And `allowed` is representable only as an
+engine-derived value. The deterministic declared-path containment check is its
+sole producer. So model output cannot mint permission, and the adjudicator
+structurally cannot infer permission to exit the declared surface. Rule
+interpretation is required only where remediation would exit that surface or a
+rule is affirmatively implicated. For that residue, an interpretation that is
+missing, conflicting, stale, or low-confidence fails conservatively to
+`unknown` or human attention. Without the presumption, every ordinary in-scope
+fix would collapse to `unknown` and park the loop. On the deterministic path, a
+rule that is affirmatively implicated reaches adjudication only through the
+structured residue signals below or the captured repository facts. That
+residual is accepted by decision: the downstream human merge gate backstops it,
+not fast-path rule interpretation.
 
 The stage is engine-run with a model residue (Section 5.13: deterministic
 policy jobs stay engine-run; a model is invoked only where judgment is the
 work). The engine derives compatibility deterministically wherever it is
-mechanically decidable, starting with declared-path containment, and consumes
+mechanically decidable, starting with declared-path containment. It consumes
 the classifier's materiality-with-confidence annotation as presumptive
 goal-relationship evidence. Both fields use declared ordinal scales of `low`,
-`medium`, and `high`. They match the landed classification vocabulary, so
-stored records need no migration. The fast-path predicate is exact:
-materiality and confidence must each meet or exceed their resolved-policy
-dispatch thresholds. The thresholds are bounded below at `medium` or `high`,
-never `low`, and default to `high`. A `low` value in either field is the
-low-confidence residue case by definition.
-A missing, unrecognized, or below-threshold value in either field never
-fast-paths; it fails into the model residue. Every term the dispatch predicate
-consumes (severity, credibility, materiality, confidence, location, and
-surface) carries a declared scale, a named producer, and a fail-closed fallback; a
-predicate input outside its scale is a malformed annotation, never a
-routing choice. The no-model fast path is one-directional,
-toward remediation. A credible, confidently material, in-surface finding
-routes to the remediator with no model adjudication call. The declared paths
-bound this preference for an in-surface fix, which is the loop's
-normal work. Selecting the `adjacent` deferral route always takes the
-model adjudication: the adjudicator is the only site that consumes the
-approved specification, and a spec-blind materiality annotation cannot
-decide a spec-relative route.
-The model residue is that deferral direction, boundary-exiting fixes,
-contradicted specifications, ambiguous goals or rules, low-confidence
-classification, and structured dissent. Structured dissent includes a
-remediator's labeled pushback, a human challenge, or an attempted fix rejected
-by the import boundary's path-scope enforcement. Each re-enters adjudication
-instead of looping silently.
+`medium`, and `high`. They match the landed classification vocabulary. So
+stored records need no migration. The fast-path predicate is exact. Materiality
+and confidence must each meet or exceed their resolved-policy dispatch
+thresholds. The thresholds are bounded below at `medium` or `high`, never
+`low`, and default to `high`. A `low` value in either field is the
+low-confidence residue case by definition. A value in either field that is
+missing, unrecognized, or below threshold never fast-paths. It fails into the
+model residue. Every term the dispatch predicate consumes (severity,
+credibility, materiality, confidence, location, and surface) carries a declared
+scale, a named producer, and a fail-closed fallback. A predicate input outside
+its scale is a malformed annotation, never a routing choice. The no-model fast
+path runs in one direction only, toward remediation. A credible, confidently
+material, in-surface finding routes to the remediator with no model
+adjudication call. The declared paths bound this preference for an in-surface
+fix, which is the loop's normal work. Selecting the `adjacent` deferral route
+always takes the model adjudication. The adjudicator is the only site that
+consumes the approved specification, and a spec-blind materiality annotation
+cannot decide a spec-relative route. The model residue is that deferral
+direction, boundary-exiting fixes, contradicted specifications, ambiguous goals
+or rules, low-confidence classification, and structured dissent. Structured
+dissent includes a remediator's labeled pushback, a human challenge, or an
+attempted fix that the import boundary's path-scope enforcement rejected. Each
+re-enters adjudication instead of looping silently.
 
 The adjudicator is a Section 5.13 ceiling-bounded annotation site on the
 daemon-side inference contract. Its output is a labeled proposal and
-explanation, never trust computation, transition legality, publication
-eligibility, or proof that a finding is fixed; it cannot widen issue scope,
-alter acceptance criteria, file an issue, or declare a finding fixed.
-Ceilings: a critical or high severity finding, credible or not, never routes to
-a declined or deferred disposition without a second adjudication, either
-deterministic or from a distinct agent, or a durable AttentionItem. Malformed,
+explanation. It is never trust computation, transition legality, publication
+eligibility, or proof that a finding is fixed. It cannot widen issue scope,
+alter acceptance criteria, file an issue, or declare a finding fixed. Ceilings:
+a critical or high severity finding, credible or not, never routes to a
+declined or deferred disposition without either a second adjudication
+(deterministic or from a distinct agent) or a durable AttentionItem. Malformed,
 missing, or low-confidence output is never accepted. The batch parks to
-recommendation-led attention, with `unknown` as its
-compatibility representation only under `required`;
-adjudication consumes the review loop's resolved-policy bounds and the
-cumulative Section 5.13 budgets attributed to root lineage; every site ships
-a deterministic fake. Routes terminate in the landed disposition vocabulary
-unchanged (fixed / declined / deferred, reasons mandatory): `fixed` still
-requires a later same-base, different-head remediation review where the
-finding's stable identity no longer appears. A re-emitted identity re-enters
-adjudication as a failed prior fix, never as
-a fresh finding whose disposition can strand the original. That absence
-proof keys on a finding identity stable across the remediation rounds of
-one work unit: the deterministic `domain.Finding` fingerprint (#702) over
-the finding's review source, location path, and whitespace-normalized
-explanation. It excludes the invocation, candidate head, severity, and line
-range, which can legitimately change between rounds. A finding without such an
-identity fails closed, so a finding whose fingerprint can't be computed is
-never declared fixed.
+recommendation-led attention, with `unknown` as its compatibility
+representation only under `required`. Adjudication consumes the review loop's
+resolved-policy bounds. It also consumes the cumulative Section 5.13 budgets
+attributed to root lineage. Every site ships a deterministic fake. Routes
+terminate in the landed disposition vocabulary unchanged (fixed / declined /
+deferred, reasons mandatory). `fixed` still requires a later remediation review
+on the same base with a different head, where the finding's stable identity no
+longer appears. A re-emitted identity re-enters adjudication as a failed prior
+fix, never as a fresh finding whose disposition can strand the original. That
+absence proof keys on a finding identity that stays stable across the
+remediation rounds of one work unit. That identity is the deterministic
+`domain.Finding` fingerprint (#702) over the finding's review source, location
+path, and whitespace-normalized explanation. The fingerprint excludes the
+invocation, candidate head, severity, and line range, which can legitimately
+change between rounds. A finding without such an identity fails closed, so a
+finding whose fingerprint can't be computed is never declared fixed.
 
-Adjudicated declines and deferrals cite the adjudication artifact digest in their
-recorded reason. Parked runs never publish, so the publication-time
-completeness rule (#525), exactly one final disposition per finding in the
-current lineage, is satisfied structurally, never by deferring a required
-finding. Review completion is disposition-aware: the review requirement is
-satisfied by a round where every finding carries a final disposition. `fixed`
-comes through remediation re-review; declined and deferred come through their
-adjudicated dispositions. A round fully dispositioned without remediation
-publishes without a futile re-review
-of the unchanged head. The landed clean-only publication check is the
-pre-adjudication interim; the wave 6 unit extends it to this
-derivation, which the #525 readiness derivation carries to the forge.
+Adjudicated declines and deferrals cite the adjudication artifact digest in
+their recorded reason. Parked runs never publish. So the publication-time
+completeness rule (#525) is satisfied structurally, never by deferring a
+required finding. That rule is exactly one final disposition per finding in the
+current lineage. Review completion is disposition-aware. A round satisfies the
+review requirement when every finding in it carries a final disposition.
+`fixed` comes through remediation re-review; declined and deferred come through
+their adjudicated dispositions. A round fully dispositioned without remediation
+publishes without a futile re-review of the unchanged head. The landed
+clean-only publication check is the interim before adjudication. The wave 6
+unit extends it to this derivation, which the #525 readiness derivation carries
+to the forge.
 
-Human-facing adjudication always leads with a recommended route and why,
-then assumptions, repository-rule citations, viable alternatives with their
-consequences, and a small set of gating questions; a bare "what should I do?"
-interruption is defective. The recommendation is a labeled model proposal;
-bindings, containment verdicts, and cited instruction text are daemon facts
-in a separate register (Section 5.13). The human can accept the
-recommendation, choose an alternative, answer a question, challenge an
-assumption, request further elaboration, discuss again, or stop and leave the
-run parked. Each Discuss response re-invokes the stage against the same
-version bindings and produces a new immutable artifact recording how the
-recommendation changed and which feedback changed it. Conversational text
-alone grants no authority. Route execution binds to the typed command, the
-artifact digest, and the item version (Section 5.14). The loop is
-policy-bounded and remains parked when unresolved.
+Human-facing adjudication always leads with a recommended route and why. Then
+come assumptions, repository-rule citations, viable alternatives with their
+consequences, and a small set of gating questions. A bare "what should I do?"
+interruption is defective. The recommendation is a labeled model proposal.
+Bindings, containment verdicts, and cited instruction text are daemon facts in
+a separate register (Section 5.13). The human can accept the recommendation,
+choose an alternative, answer a question, challenge an assumption, request
+further elaboration, discuss again, or stop and leave the run parked. Each
+Discuss response re-invokes the stage against the same version bindings. It
+produces a new immutable artifact that records how the recommendation changed
+and which feedback changed it. Conversational text alone grants no authority.
+Route execution binds to the typed command, the artifact digest, and the item
+version (Section 5.14). Policy bounds the loop, and the loop stays parked while
+unresolved.
 
-Repository rules may further restrict where work lands; they can never
-weaken Freeside's non-waivable safety, trust, verification, or publication
-gates (Section 3.1). Admitted external review activity (#524) consumes this
-same adjudication and routing rather than a second path; Section 5.19
-quarantine and source-specific admission remain upstream, and a quarantined
-finding never enters adjudication. Adjudication is not the deferred planner
-judgment call (Section 5.18): it consumes captured work-unit facts as inputs
-and never computes parallelism or frontier claims. The classifier and the
-adjudicator are separate sites by decision: they differ in inputs (a finding
-with code context versus the specification, declared scope, instructions,
-and disposition history), in binding cadence (per-finding versioned
-annotation at ingestion versus per-batch digest-bound proposal), and in
-authority contract (every site carries exactly one). The 1B sampled
+Repository rules may further restrict where work lands. They can never weaken
+Freeside's non-waivable safety, trust, verification, or publication gates
+(Section 3.1). Admitted external review activity (#524) consumes this same
+adjudication and routing, not a second path. Section 5.19 quarantine and
+source-specific admission stay upstream, and a quarantined finding never enters
+adjudication. Adjudication is not the deferred planner judgment call (Section
+5.18). It consumes captured work-unit facts as inputs and never computes
+parallelism or frontier claims. The classifier and the adjudicator are separate
+sites by decision. They differ in inputs, in binding cadence, and in authority
+contract. Inputs: a finding with code context versus the specification,
+declared scope, instructions, and disposition history. Binding cadence:
+per-finding versioned annotation at ingestion versus per-batch digest-bound
+proposal. Authority contract: every site carries exactly one. The 1B sampled
 classification accuracy measurement requires classifier output measured
 independently of routing pressure. The FindingAdjudication artifact, its
-persistence and sync exposure, the `finding_adjudication` item type, the
-engine dispatch, and the adjudicator site are later implementation units
-(Section 11, wave 6); any change to domain types, migrations,
-StageDriver/ReviewSource surfaces, or API schemas splits into serialized
-`kind:contract` units with their generated consumers. The normative-term
-discipline above requires a declared scale, named producer, and fail-closed
-fallback for every predicate input and proposal output, with the valid and
-failure cells and their interactions enumerated. This discipline is an
-acceptance requirement of that wave 6 `kind:contract` unit. Its typed schema
-and fixtures are the exhaustive enumeration, and this subsection states the
-design's constraints, not the field catalogue.
+persistence and sync exposure, the `finding_adjudication` item type, the engine
+dispatch, and the adjudicator site are later implementation units (Section 11,
+wave 6). Any change to domain types, migrations, StageDriver/ReviewSource
+surfaces, or API schemas splits into serialized `kind:contract` units with
+their generated consumers. The normative-term discipline above requires a
+declared scale, a named producer, and a fail-closed fallback for every
+predicate input and proposal output. It also requires the valid and failure
+cells and their interactions to be enumerated. This discipline is an acceptance
+requirement of that wave 6 `kind:contract` unit. Its typed schema and fixtures
+are the exhaustive enumeration. This subsection states the design's
+constraints, not the field catalogue.
 
 ## 8. Observability and optimization telemetry
 
@@ -2913,72 +2903,69 @@ Each run records:
 - outcome and human decisions.
 
 Defect issues reference their producing runs and may carry suggested fault
-classes, closing the attribution loop.
+classes. That closes the attribution loop.
 
 Attention telemetry uses `AttentionDelivery` rows with honest status fields.
-Open-to-decision time is the headline attention-latency metric; the Section 1
-per-unit measure governs. Interruption-class rates are
-tracked. Card drill-down opens are recorded per item and device, and sampled
-decision audits record comprehension defects; both feed the Section 9
-measurements. Passive baseline logging runs alongside Phase 1A. Usage is observed
-telemetry, never asserted quota state.
+Open-to-decision time is the headline attention-latency metric. The Section 1
+per-unit measure governs. Interruption-class rates are tracked. Card drill-down
+opens are recorded per item and device, and sampled decision audits record
+comprehension defects. Both feed the Section 9 measurements. Passive baseline
+logging runs alongside Phase 1A. Usage is observed telemetry, never asserted
+quota state.
 
-Routing policy sits above the harness and is informed by task class, quality,
-latency, usage, and cost, all drawn from these records. The provider
-balancing I do by hand today, including usage-limit-driven switching, is
-attention work: until routing absorbs it, it counts in the attention
-accounting.
+Routing policy sits above the harness. Task class, quality, latency, usage, and
+cost inform it, all drawn from these records. The provider balancing I do by
+hand today, including usage-limit-driven switching, is attention work: until
+routing absorbs it, it counts in the attention accounting.
 
 ## 9. Comprehension
 
-Comprehension is a first-class attention concern. Agents produce more text
-than anyone reads, and unread text pushes the human out of the loop, so a card
-is judged by whether it enables a fast, informed decision. The unit of
-presentation is the decision card; presentation order is normative, not a
+Comprehension is a first-class attention concern. Agents produce more text than
+anyone reads, and unread text pushes the human out of the loop. So a card is
+judged by whether it enables a fast, informed decision. The unit of
+presentation is the decision card. Presentation order is normative, not a
 rendering preference.
 
 ### Layering
 
-A card presents at most four layers, in this order; the per-item-type table
+A card presents at most four layers, in this order. The per-item-type table
 below governs which layers each type carries:
 
-1. **The ask and the facts**: `requested_decision`, the item's
-   recommendation when one exists (Section 4), and deterministic card facts
-   (verdicts, diff stats, counts, digests, timing). Facts are
-   daemon-produced only (Section 5.13). A recommendation renders in its
-   source register only after its Section 4 source-specific provenance has
-   been revalidated. A `daemon_policy` recommendation renders as a card fact,
-   an `agent_judgment` recommendation as a labeled proposal, and a
-   `project_policy` recommendation citing its exact policy key and digest. A card
-   that carries one leads with the recommendation and its reason
-   ahead of secondary actions and evidence: the recommendation-led
-   composition specified for `finding_adjudication` below generalizes to
-   every type that carries a recommendation.
-2. **The summary**: what happened, why, and what remains open, with
-   uncertainty preserved; absorbable in seconds. A labeled agent claim,
-   present only where the card concerns agent work: a purely mechanical card
+1. **The ask and the facts**: `requested_decision`, the item's recommendation
+   when one exists (Section 4), and deterministic card facts (verdicts, diff
+   stats, counts, digests, timing). Facts are daemon-produced only (Section
+   5.13). A recommendation renders in its source register only after its
+   Section 4 source-specific provenance has been revalidated. A `daemon_policy`
+   recommendation renders as a card fact. An `agent_judgment` recommendation
+   renders as a labeled proposal. A `project_policy` recommendation renders
+   citing its exact policy key and digest. A card that carries a recommendation
+   leads with it and its reason, ahead of secondary actions and evidence. The
+   recommendation-led composition specified for `finding_adjudication` below
+   generalizes to every type that carries a recommendation.
+2. **The summary**: what happened, why, and what remains open, with uncertainty
+   preserved. It is absorbable in seconds. It is a labeled agent claim and is
+   present only where the card concerns agent work. A purely mechanical card
    (`system_health`, `blocked`) carries daemon facts alone.
 3. **Evidence**: the `evidence_snapshot` packet (Section 5.15). Evidence
    precedes any long-form agent text.
 4. **Drill-down**: full artifacts, full specifications and diffs, and
    transcript pointers (Section 8).
 
-A client renders only the requested decisions it can faithfully collect
-and execute. An action outside the client's capability is omitted from the
-action surface and recorded in the drill-down layer, so an audit still
-shows what the daemon asked; when no faithful response is within the
-client's capability, the card states explicitly that the decision cannot
-be taken on this client and that the item stays open. An unimplemented
-action is never rendered as a disabled control, and roadmap language never
-appears in card copy.
+A client renders only the requested decisions it can faithfully collect and
+execute. An action outside the client's capability is omitted from the action
+surface and recorded in the drill-down layer. So an audit still shows what the
+daemon asked. When no faithful response is within the client's capability, the
+card says explicitly that the decision cannot be taken on this client and that
+the item stays open. An unimplemented action is never rendered as a disabled
+control, and roadmap language never appears in card copy.
 
 Three digests are required wherever their content appears:
 
 - **Change summaries** for candidate diffs: what changed and why, rendered
   before the diff itself.
 - **Plan altitude**: summaries and key questions high, detail lower. Altitude
-  becomes enforced structure once plans become structured artifacts; until
-  then it is prompt-level convention.
+  becomes enforced structure once plans become structured artifacts. Until then
+  it is prompt-level convention.
 - **Digested review feedback**: findings grouped by disposition, dissent
   preserved. A digest never silently drops an unresolved or
   low-confidence-classified finding (Section 7).
@@ -3014,28 +3001,28 @@ Two content classes, two producers:
    `agent_claims`, and rendered as a labeled claim. It never enters
    `evidence_snapshot` (Section 5.15).
 
-The same labeling covers any agent prose a card leads with (an agent's
-question, a proposal's intent line): it renders as a labeled claim, never as
+The same labeling covers any agent prose a card leads with, such as an agent's
+question or a proposal's intent line. It renders as a labeled claim, never as
 unlabeled authoritative text.
 
 In Phase 1 the summarizer is the stage agent whose work the card concerns,
 labeled with its `producer_invocation_id`. An independent invocation would
-still be `producer_class: agent`, so independence buys no trust-class
-upgrade, only resistance to self-serving framing; that risk is bounded by
-composition instead: a summary may not assert a verifiable fact except by
-citing the daemon fact or linking the artifact digest it compresses. Every
-summary is itself a trust surface: producer identified, uncertainty and
-dissent preserved, evidence linked.
+still be `producer_class: agent`. So independence buys no trust-class upgrade,
+only resistance to self-serving framing. Composition bounds that risk instead.
+A summary may not assert a verifiable fact except by citing the daemon fact or
+linking the artifact digest it compresses. Every summary is itself a trust
+surface: producer identified, uncertainty and dissent preserved, evidence
+linked.
 
-A labeled summary contradicted by its cited evidence is a **comprehension
-defect**: found by sampled decision audits and recorded in Section 8
-telemetry. It is not a Section 12 false-ready (claims are claims), but
-recurring contradictions promote summarization to an independent briefer
-invocation (Section 5.13) blind to the implementer's rationale. The claim
-contract currently carries labeled artifact references, not inline prose, so
-the summary layer requires a renderable text carrier on the claim path; that
-carrier is an explicit contract change that precedes the implementing work,
-never an ad hoc rendering choice.
+A labeled summary that its cited evidence contradicts is a **comprehension
+defect**: sampled decision audits find it, and Section 8 telemetry records it.
+It is not a Section 12 false-ready (claims are claims), but recurring
+contradictions promote summarization to an independent briefer invocation
+(Section 5.13) that is blind to the implementer's rationale. The claim contract
+currently carries labeled artifact references, not inline prose. So the summary
+layer requires a renderable text carrier on the claim path. That carrier is an
+explicit contract change that precedes the implementing work, never an ad hoc
+rendering choice.
 
 ### Measurement
 
@@ -3043,16 +3030,16 @@ never an ad hoc rendering choice.
   baseline. It must not degrade as evidence volume grows.
 - Reversal rate: decisions later reversed or work returned after approval.
 - Drill-down rate: the fraction of decisions made without opening the
-  drill-down layer. A health signal, never a target; it is trivially gamed by
-  hiding detail.
+  drill-down layer. A health signal, never a target. Hiding detail games it
+  trivially.
 - Recommendation override rate: the fraction of recommendation-bearing
-  decisions resolved by a non-recommended action, by item type and
+  decisions resolved by a non-recommended action, broken out by item type and
   recommendation source. A decision is a forced override only when its
   revalidated Section 5.14 `DecisionActionSurface` omitted the recommended
-  action; it is stratified separately and never counted in this rate. A
-  decision whose surface is missing or cannot be revalidated is unclassified
-  and excluded from both rates, never inferred as voluntary or forced.
-  A calibration signal on recommendation quality, never a target in
+  action. Forced overrides are stratified separately and never counted in this
+  rate. A decision whose surface is missing or cannot be revalidated is
+  unclassified and excluded from both rates, never inferred as voluntary or
+  forced. A calibration signal on recommendation quality, never a target in
   either direction.
 - Comprehension-defect count from sampled audits: the target is zero;
   occurrences are recorded; the tolerance is not zero.
@@ -3085,177 +3072,176 @@ Build the installer only after the underlying interfaces survive real use. The
 
 | Command | Function |
 | --- | --- |
-| `freesided setup` | Performs installation. On the Mac-first path the operator app registers the daemon LaunchAgent (Section 5.2) and no step is privileged; when a hardened deployment needs privileged steps (user creation, LaunchDaemon installation), they run through a narrow elevation helper; the daemon never retains root. |
-| `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls; a callback or `--resume` reopens the same review after approval. |
-| `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe). The integrity probe extends to the Section 5.4 account probe only after an empirical spike proves the Codex app-server probe runs against the access-only read snapshot and never triggers a refresh outside the mutation lease; until that spike passes, doctor reports integrity alone. Probe results are observation (Section 5.4): they file `advisory` `system_health` items and proposals, feed the operator-facing profile projection's display fields, and are read by nothing else. It runs on a schedule and files `system_health` items. |
-| `freesided auth add`, `auth adopt`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided identity and enrollment lifecycle (Section 5.4); `auth doctor` ships with the account-probe unit (#868), gated on the #866 spike like the probe itself, never with the enrollment unit. `add` enrolls one harness client against one route for a new or existing `AuthIdentity`, creating a `ClientEnrollment` with its sanitized single-route store and initial generation; the transaction records the enrolled mode and the account binding `re-enroll` later compares against, under the identity's lease, and refuses when the store cannot yield it, so an expired or corrupt store is enrolled as a new identity rather than adopted. For Codex it packages the import, rotate, and snapshot sequence that `enroll-codex` exposes as separate required flags; for Claude it captures a setup token interactively, validates its length and performs an auth check before storing it (the truncation class the 1B.1 integrity probe detects), and keeps the token out of argv, shell history, logs, and client responses; for pi it captures the ChatGPT login into a one-entry store and performs a daemon-driven refresh before accepting it. `adopt` is the cutover command: it adopts each interim identity's store as an enrollment and emits the proposed baseline patch (agents, deployment lineup, attended-run marks) for the operator to commit; it never writes the tree. `list` shows identities and their enrollments with the masked label; `doctor` runs the account probe for one identity on demand once #868 lands; `re-enroll` replaces one enrollment's credential through the daemon-owned transaction while no execution can use the identity, for the same account only: where the provider exposes an account identity (Codex, pi), the transaction compares the incoming credential's account against the one recorded at enrollment, authoritatively and independent of the probe, and refuses a mismatch; where it does not (the Claude floor), the operator attests same-account and the attestation is recorded; every re-enrollment appends a generation, so later records show the credential changed. A different account is a new identity, never a re-enrollment; `disable` sets the identity's `enabled` off, withdrawing every agent on it from selection without touching credentials, and `enable` reverses it. |
+| `freesided setup` | Performs installation. On the Mac-first path, the operator app registers the daemon LaunchAgent (Section 5.2) and no step is privileged. When a hardened deployment needs privileged steps (user creation, LaunchDaemon installation), they run through a narrow elevation helper. The daemon never retains root. |
+| `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If the installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls. A callback or `--resume` reopens the same review after approval. |
+| `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe). The integrity probe extends to the Section 5.4 account probe only after an empirical spike proves that the Codex app-server probe runs against the access-only read snapshot and never triggers a refresh outside the mutation lease. Until that spike passes, doctor reports integrity alone. Probe results are observation (Section 5.4). They file `advisory` `system_health` items and proposals, feed the operator-facing profile projection's display fields, and nothing else reads them. It runs on a schedule and files `system_health` items. |
+| `freesided auth add`, `auth adopt`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided identity and enrollment lifecycle (Section 5.4). `auth doctor` ships with the account-probe unit (#868), gated on the #866 spike like the probe itself, never with the enrollment unit. `add` enrolls one harness client against one route for a new or existing `AuthIdentity`. It creates a `ClientEnrollment` with its sanitized single-route store and initial generation. The transaction records the enrolled mode and the account binding that `re-enroll` later compares against, under the identity's lease. It refuses when the store cannot yield that binding, so an expired or corrupt store is enrolled as a new identity rather than adopted. For Codex, it packages the import, rotate, and snapshot sequence that `enroll-codex` exposes as separate required flags. For Claude, it captures a setup token interactively. It validates the token's length and performs an auth check before storing it (the truncation class the 1B.1 integrity probe detects), and keeps the token out of argv, shell history, logs, and client responses. For pi, it captures the ChatGPT login into a one-entry store and performs a daemon-driven refresh before accepting it. `adopt` is the cutover command: it adopts each interim identity's store as an enrollment and emits the proposed baseline patch (agents, deployment lineup, attended-run marks) for the operator to commit. It never writes the tree. `list` shows identities and their enrollments with the masked label. `doctor` runs the account probe for one identity on demand once #868 lands. `re-enroll` replaces one enrollment's credential through the daemon-owned transaction. It runs while no execution can use the identity, and for the same account only. Where the provider exposes an account identity (Codex, pi), the transaction compares the incoming credential's account against the one recorded at enrollment. It does so authoritatively and independent of the probe, and it refuses a mismatch. Where it does not (the Claude floor), the operator attests same-account and the attestation is recorded. Every re-enrollment appends a generation, so later records show the credential changed. A different account is a new identity, never a re-enrollment. `disable` sets the identity's `enabled` off, withdrawing every agent on it from selection without touching credentials, and `enable` reverses it. |
 | `freesided submit` | Registers a manually initiated source work item, starts elaboration, and reserves its future implementation run. |
-| `freesided reattempt --parent-run <run>` or `--campaign <campaign>` | Requires an operator reason and allocates the campaign's next attempt from an already approved specification; a live parent is refused. |
-| `freesided resume --run <run>` | Reattaches observation to one exact non-terminal run without creating a replacement; terminal runs are refused and point to `reattempt`. |
+| `freesided reattempt --parent-run <run>` or `--campaign <campaign>` | Requires an operator reason and allocates the campaign's next attempt from an already approved specification. It refuses a live parent. |
+| `freesided resume --run <run>` | Reattaches observation to one exact non-terminal run without creating a replacement. It refuses terminal runs and points to `reattempt`. |
 
 The project-image builder is an internal primitive, not an onboarding-only
-implementation. Phase 1A manually proves that primitive against the selected
-repository before the first real run, then `freesided onboard` packages the
-same primitive after the run path has survived real use. Onboarding must not
+implementation. Phase 1A proves that primitive by hand against the selected
+repository before the first real run. Then, after the run path has survived
+real use, `freesided onboard` packages the same primitive. Onboarding must not
 carry a second image builder or a second copy of recipe semantics.
 
 The operator client installs Mac-first: a locally built, personal-team-signed
 FreesideMac with a direct install-and-update script, an icon from the Section
-15 visual identity, and real device pairing land with 1B's first wave
-(Section 11). The iOS client
-follows mid-1B under free provisioning; the paid Apple Developer Program is
-deferred until APNs arrives in Phase 2, because client correctness never
-depends on push (Section 5.14).
+15 visual identity, and real device pairing land with 1B's first wave (Section
+11). The iOS client follows mid-1B under free provisioning. The paid Apple
+Developer Program waits until APNs arrives in Phase 2, because client
+correctness never depends on push (Section 5.14).
 
-From revision 27, the Mac app on the daemon host also owns the local
-daemon's lifecycle (Section 5.2): it registers the LaunchAgent, reads the
-daemon's published readiness file, and carries a menu bar presence showing
-liveness and version with start and stop through launchd. The menu bar is
-the out-of-band surface for the one failure the attention system cannot
-report, a dead daemon; richer operational state on that surface (doctor
-results, the 1B.1 signals) layers on later waves.
+From revision 27, the Mac app on the daemon host also owns the local daemon's
+lifecycle (Section 5.2). It registers the LaunchAgent and reads the daemon's
+published readiness file. It also carries a menu bar presence that shows
+liveness and version, with start and stop through launchd. The menu bar is the
+out-of-band surface for the one failure the attention system cannot report: a
+dead daemon. Richer operational state on that surface (doctor results, the 1B.1
+signals) layers on in later waves.
 
 ### GitHub App Agent Identity
 
-Each Freeside operator is a distinct agent principal and holds their own
-GitHub App registration or registrations. Registrations and private keys are
-never shared across operators. A principal may map to more than one numeric
-App ID under the work-account posture below, but every App ID is explicitly
-bound to exactly one trusted principal.
+Each Freeside operator is a distinct agent principal and holds their own GitHub
+App registration or registrations. Registrations and private keys are never
+shared across operators. A principal may map to more than one numeric App ID
+under the work-account posture below. But every App ID is explicitly bound to
+exactly one trusted principal.
 
 Registration topology is owner policy, not an architectural distinction:
 
-- **Default: one public App per operator.** The registration is owned by the
-  operator's personal account and installed separately on the operator's
-  personal account and each repository-owning organization through GitHub's
-  native install or approval flow, with repository-scoped selection. This
-  default is permitted only while the Section 5.5 mint gate applies
-  unconditionally, GitHub inputs can cause AttentionItems only through a
-  trusted principal and recorded installation-to-repository binding, there is
-  no unauthenticated GitHub write path into the attention system, and the
-  always-on installation-grant janitor below is active.
+- **Default: one public App per operator.** The operator's personal account
+  owns the registration. It is installed separately on the operator's personal
+  account and on each repository-owning organization, through GitHub's native
+  install or approval flow, with repository-scoped selection. This default is
+  permitted only while the Section 5.5 mint gate applies unconditionally;
+  GitHub inputs can cause AttentionItems only through a trusted principal and a
+  recorded installation-to-repository binding; there is no unauthenticated
+  GitHub write path into the attention system; and the always-on
+  installation-grant janitor below is active.
 - **Opt-in: one private App per repository-owning account.** An operator may
   choose this work-account posture when an organization must own and terminate
-  the credential. Each such registration still represents that operator and
-  is never shared with another operator. The same mint, attention, and
-  installation-grant reconciliation gates apply; private visibility is not
+  the credential. Each such registration still represents that operator and is
+  never shared with another operator. The same mint, attention, and
+  installation-grant reconciliation gates apply. Private visibility is not
   treated as a substitute for them.
 
-Before redirecting to create or approve an installation or to add a repository
-to an existing selected-repository installation, `freesided onboard`
-records exactly one single-use pending-install-or-expansion intent containing
-its `active_epoch`, `durable_intent_revision`, registration, expected numeric
-owner, installation ID when known, current trusted repository IDs, exact
-expected post-change repository IDs, required `repository_selection:
-selected`, callback nonce, and expiry. In portable mode, the redirect waits
-until the intent and its referenced state reach the remote durability
-frontier. The intent grants no authority beyond existing trusted bindings: in
-particular, the added repository cannot mint, publish, or reach attention. The
-janitor may leave exactly one remote installation matching that owner,
-installation ID when known, selected-repository mode, active epoch, durable
-intent revision, and exact post-change repository set untouched only until
-expiry. A same-session callback that matches the nonce is an acceleration, not
-the authority path. The active daemon also polls App-authenticated installation
-state for exact pending matches, and
+Before it redirects to create or approve an installation, or to add a
+repository to an existing selected-repository installation, `freesided onboard`
+records exactly one single-use pending-install-or-expansion intent. The intent
+contains its `active_epoch`, `durable_intent_revision`, registration, expected
+numeric owner, installation ID when known, current trusted repository IDs,
+exact expected post-change repository IDs, required
+`repository_selection: selected`, callback nonce, and expiry. In portable mode,
+the redirect waits until the intent and the state it references reach the
+remote durability frontier. The intent grants no authority beyond existing
+trusted bindings. In particular, the added repository cannot mint, publish, or
+reach attention. The janitor may leave untouched, and only until expiry,
+exactly one remote installation that matches that owner, installation ID when
+known, selected-repository mode, active epoch, durable intent revision, and
+exact post-change repository set. A same-session callback that matches the
+nonce is an acceleration, not the authority path. The active daemon also polls
+App-authenticated installation state for exact pending matches. And
 `freesided onboard <repo> --resume` reopens that state after another browser,
-session, or daemon restart.
-Either path moves the intent only to ready-for-review. Promotion still requires
-canonical owner, installation, selected mode, and post-change IDs plus
-acceptance of the local one-time trust review; that acceptance atomically
-creates the installation-to-repository binding. A missing, ambiguous,
-over-broad, replayed, stale-epoch, superseded-revision, or expired match fails
-closed, invalidates the intent, and lets ordinary reconciliation resume.
+session, or daemon restart. Either path moves the intent only to
+ready-for-review. Promotion still requires the canonical owner, installation,
+selected mode, and post-change IDs, plus acceptance of the local one-time trust
+review. That acceptance atomically creates the installation-to-repository
+binding. A missing, ambiguous, over-broad, replayed, stale-epoch,
+superseded-revision, or expired match fails closed, invalidates the intent, and
+lets ordinary reconciliation resume.
 
 Every registration, public or private, requires the always-on
 installation-grant janitor. The daemon refuses to operate a registration
 without it. The janitor enumerates every installation and its granted
-repositories against the recorded principal, owner, installation, and
-repository bindings. Before minting any installation token, it uses the
-App-authenticated installation record to require either a trusted binding (and,
-for a public registration, a trusted owner) or an unexpired pending envelope
-whose registration, expected owner, installation ID when known, active epoch,
-and durable intent revision match current state. This pre-token gate does not
-claim the pending repository set matches. It deletes and audit-logs every other
-installation from that metadata alone, without enumerating its repositories.
-For a candidate that passes this gate, the janitor first requires the canonical
-installation response's `repository_selection` to be `selected`; a missing or
-different mode is drift even when the current repository IDs happen to match.
-To make complete repository enumeration possible, the janitor alone may mint
-an installation token without `repository_ids`, narrowed to the
-minimum permission set accepted by GitHub's list-repositories endpoint. This
-credential remains in daemon memory, may call only that paginated read
-endpoint, is never logged, persisted, or exposed to a worker, and is revoked as
-soon as enumeration completes or fails. The returned repository pages are
-untrusted until pagination completes and their canonical IDs form the compared
-set. Only then does a pending envelope become an exact pending match by
-matching its expected post-change repository set. For that exact,
-unexpired match only, the expected owner and post-change
-repository set are temporarily exempt from the untrusted-owner and
-unrecorded-grant branches; the exception grants no authority and disappears on
-promotion or expiry. Outside that exception, any unrecorded repository grant,
-including `all repositories`, immediately suspends and audit-logs the whole
-affected installation. That suspension is
-terminal quarantine: Freeside records the observed grant set, deletes the
-installation with App authentication, invalidates its binding, and requires a
-fresh native installation through the pending-intent flow. It never
-automatically unsuspends a drifted installation or mints a token against it.
-Unsolicited installations and repository grants never authorize Freeside
-minting or reach the attention system.
+repositories. It checks them against the recorded principal, owner,
+installation, and repository bindings. Before it mints any installation token,
+it uses the App-authenticated installation record to require either a trusted
+binding (and, for a public registration, a trusted owner) or an unexpired
+pending envelope whose registration, expected owner, installation ID when
+known, active epoch, and durable intent revision match current state. This
+pre-token gate does not claim that the pending repository set matches. It
+deletes and audit-logs every other installation from that metadata alone. It
+does not enumerate that installation's repositories. For a candidate that
+passes this gate, the janitor first requires `repository_selection` in the
+canonical installation response to be `selected`. A missing or different mode
+is drift, even when the current repository IDs happen to match. The janitor
+alone may mint an installation token without `repository_ids`, so that complete
+repository enumeration is possible. That token is narrowed to the minimum
+permission set that GitHub's list-repositories endpoint accepts. This
+credential stays in daemon memory and may call only that paginated read
+endpoint. It is never logged, persisted, or exposed to a worker, and it is
+revoked as soon as enumeration completes or fails. The returned repository
+pages are untrusted until pagination completes and their canonical IDs form the
+compared set. Only then does a pending envelope become an exact pending match,
+and it does so by matching its expected post-change repository set. For that
+exact, unexpired match only, the expected owner and post-change repository set
+are temporarily exempt from the untrusted-owner branch and the unrecorded-grant
+branch. The exception grants no authority and disappears on promotion or
+expiry. Outside that exception, any unrecorded repository grant immediately
+suspends and audit-logs the whole affected installation. That includes
+`all repositories`. That suspension is terminal quarantine. Freeside records
+the observed grant set, deletes the installation with App authentication,
+invalidates its binding, and requires a fresh native installation through the
+pending-intent flow. It never automatically unsuspends a drifted installation
+or mints a token against it. Unsolicited installations and repository grants
+never authorize Freeside minting and never reach the attention system.
 
 Registration uses the manifest flow, and the initial key lands directly in
 protected storage. Each additional machine receives a distinct private key
-within the registration. Freeside computes and records for each machine the
-same SHA-256 public-key fingerprint GitHub displays in the App settings, and
-uses that fingerprint to identify the exact key the operator must delete when a
-machine is lost, retired, or compromised. A single key can therefore be revoked
-without replacing its siblings. Copying PEM files between machines is outside
-the contract.
+within the registration. For each machine, Freeside computes and records a
+SHA-256 public-key fingerprint. It is the same fingerprint GitHub displays in
+the App settings. Freeside uses that fingerprint to identify the exact key the
+operator must delete when a machine is lost, retired, or compromised. So a
+single key can be revoked without replacing its siblings. Copying PEM files
+between machines is outside the contract.
 
-GitHub App names are globally unique and limited to 34 characters while
-GitHub user and organization names can reach 39. Freeside generates a
-suggested name by truncating the account-derived portion while retaining a
-legible username, reserves room for a numeric collision suffix, and retries
-with increasing suffixes. The requested name is only a suggestion: the
-manifest conversion response supplies the canonical numeric App ID, name, and
-slug that Freeside stores. App names are thereafter effectively immutable
-policy because a rename churns the visible `[bot]` login; trust decisions
-continue to use only the numeric App ID.
+GitHub App names are globally unique and limited to 34 characters. GitHub user
+and organization names can reach 39. Freeside generates a suggested name by
+truncating the account-derived portion while keeping a legible username. It
+reserves room for a numeric collision suffix and retries with increasing
+suffixes. The requested name is only a suggestion. The manifest conversion
+response supplies the canonical numeric App ID, name, and slug that Freeside
+stores. After that, App names are effectively immutable policy, because a
+rename churns the visible `[bot]` login. Trust decisions continue to use only
+the numeric App ID.
 
 Daemon-authored agent commits use the selected GitHub App bot as their Git
-author and committer, with name `<app-slug>[bot]` and no-reply address
+author and committer. The name is `<app-slug>[bot]` and the no-reply address is
 `<bot-user-id>+<app-slug>[bot]@users.noreply.github.com`. This makes GitHub
 associate the commit with the same visible App principal and avatar that
 publishes it. Freeside resolves and records the bot account's numeric user ID
-from the canonical App slug and requires durable per-run attribution to match
-the registration selected by the repository-scoped installation token before
-execution or import. The bot user ID and slug are attribution metadata, not
-trust inputs. This human-readable provenance complements credential-level
-attribution and never substitutes for the App-ID, installation, repository,
-or token-mint checks.
+from the canonical App slug. Before execution or import, it requires the
+durable per-run attribution to match the registration that the
+repository-scoped installation token selected. The bot user ID and slug are
+attribution metadata, not trust inputs. This human-readable provenance
+complements credential-level attribution. It never substitutes for the App-ID,
+installation, repository, or token-mint checks.
 
 Defaults are hosted ntfy, embedded SQLite, one configuration directory, and
 `attended_dev` with honest isolation-class reporting.
 
-The Phase 1 reference deployment is fully unmanaged (Section 5.1): Tailscale
-for remote reachability, ntfy for notification delivery, `freesided` as
-workflow authority with local state and artifacts, an operator-selected
+The Phase 1 reference deployment is fully unmanaged (Section 5.1). It uses
+Tailscale for remote reachability, ntfy for notification delivery, `freesided`
+as workflow authority with local state and artifacts, an operator-selected
 conforming replica backend when portable mode is enabled, and an
 operator-controlled external probe for away-from-host monitoring. Future
 managed implementations (relay, push, storage, monitoring) may substitute
-convenience infrastructure without changing the authority model, a managed
-replica backend carrying Section 5.10's head trust (activation fencing and
-recovery frontier) as the one scoped exception; every one is deferred,
-none is scheduled in Phase 1,
-and the unmanaged deployment remains supported permanently.
+convenience infrastructure without changing the authority model. The one scoped
+exception is a managed replica backend. It carries Section 5.10's head trust
+(activation fencing and recovery frontier). Every managed implementation is
+deferred, none is scheduled in Phase 1, and the unmanaged deployment stays
+supported permanently.
 
 Phase 1A exit targets, verified on a clean VM or spare machine:
 
 - fresh machine to first run in under one hour; and
 - repository onboarding in under thirty minutes with exactly one Freeside
-  manual review when the selected App installation and any organization
-  approval are already complete. GitHub's native installation or approval is
-  an account-onboarding prerequisite measured separately; after it completes,
-  `freesided onboard` resumes the same onboarding transaction.
+  manual review, when the selected App installation and any organization
+  approval are already complete. GitHub's native installation or approval is an
+  account-onboarding prerequisite that is measured separately. After it
+  completes, `freesided onboard` resumes the same onboarding transaction.
 
 ## 11. Roadmap, Build Order, and Coordination
 
