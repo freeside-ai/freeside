@@ -1108,6 +1108,45 @@ func TestListenPrivilegedRejectsBeforeBind(t *testing.T) {
 	}
 }
 
+// TestConnectionModeOfBoundListener pins the pairing-facts derivation to
+// the two address classes listenPrivilegedWith admits, and refuses anything
+// else rather than inventing a mode.
+func TestConnectionModeOfBoundListener(t *testing.T) {
+	for _, tc := range []struct {
+		addr string
+		want domain.ConnectionMode
+	}{
+		{addr: "127.0.0.1:8443", want: domain.ConnectionLoopback},
+		{addr: "[::1]:8443", want: domain.ConnectionLoopback},
+		{addr: "100.64.0.7:8443", want: domain.ConnectionTailscale},
+		{addr: "[fd7a:115c:a1e0::7]:8443", want: domain.ConnectionTailscale},
+		{addr: "192.0.2.7:8443"},
+	} {
+		t.Run(tc.addr, func(t *testing.T) {
+			resolved, err := net.ResolveTCPAddr("tcp", tc.addr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := connectionModeOf(resolved)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatalf("connectionModeOf(%q) = %q, want an error", tc.addr, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("connectionModeOf(%q): %v", tc.addr, err)
+			}
+			if got != tc.want {
+				t.Errorf("connectionModeOf(%q) = %q, want %q", tc.addr, got, tc.want)
+			}
+		})
+	}
+	if _, err := connectionModeOf(&net.UnixAddr{Name: "/tmp/sock", Net: "unix"}); err == nil {
+		t.Fatal("connectionModeOf accepted a non-TCP address")
+	}
+}
+
 type listenerStub struct {
 	addr   net.Addr
 	closed bool

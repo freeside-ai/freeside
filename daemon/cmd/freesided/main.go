@@ -560,6 +560,21 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			_ = listener.Close()
 		}
 	}()
+	// The pairing surface's process-fixed facts (plan §5.14): the connection
+	// mode the bound listener implies and the host's name as a display label.
+	// Both are read once here; a host that cannot name itself must not pair
+	// devices under an empty name, so that failure is fatal at startup.
+	connectionMode, err := connectionModeOf(listener.Addr())
+	if err != nil {
+		return nil, err
+	}
+	hostName, err := os.Hostname()
+	if err != nil {
+		return nil, fmt.Errorf("read host name for pairing facts: %w", err)
+	}
+	if hostName == "" {
+		return nil, errors.New("read host name for pairing facts: empty host name")
+	}
 	ctx, cancel := context.WithCancel(parent)
 	defer func() {
 		if !success {
@@ -638,6 +653,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	)
 	attention := signet.NewService(st,
 		signet.WithPairingKey(pairingKey),
+		signet.WithHostFacts(signet.HostFacts{DisplayName: hostName, ConnectionMode: connectionMode}),
 		signet.WithClock(cfg.now),
 		signet.WithLogger(cfg.Logger),
 		signet.WithBlobStore(blobs),
@@ -1162,6 +1178,25 @@ func listenPrivilegedWith(
 		return nil, fmt.Errorf("listen %q bound unexpected address %q", addr, listener.Addr())
 	}
 	return listener, nil
+}
+
+// connectionModeOf names how clients reach a listener listenPrivilegedWith
+// bound: loopback for a loopback address, tailscale for a Tailscale-owned
+// one. Those are the only two addresses it admits, so any other bound
+// address is a composition defect, not a third mode; a relay mode arrives
+// with the §5.19 relay.
+func connectionModeOf(bound net.Addr) (domain.ConnectionMode, error) {
+	tcp, ok := bound.(*net.TCPAddr)
+	if !ok {
+		return "", fmt.Errorf("listener address %q is not a TCP address", bound)
+	}
+	switch {
+	case tcp.IP.IsLoopback():
+		return domain.ConnectionLoopback, nil
+	case isTailscaleIP(tcp.IP):
+		return domain.ConnectionTailscale, nil
+	}
+	return "", fmt.Errorf("listener address %q is neither loopback nor Tailscale-owned", bound)
 }
 
 func isTailscaleIP(ip net.IP) bool {

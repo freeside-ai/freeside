@@ -101,6 +101,9 @@ func TestHTTPOnlyHealthAndPairingAreUnauthenticated(t *testing.T) {
 	if response := bearerRequest(t, handler, http.MethodPost, "/pairing", "", nil); response.Code == http.StatusUnauthorized {
 		t.Fatal("POST /pairing unexpectedly required a credential")
 	}
+	if response := bearerRequest(t, handler, http.MethodPost, "/pairing/preview", "", nil); response.Code == http.StatusUnauthorized {
+		t.Fatal("POST /pairing/preview unexpectedly required a credential")
+	}
 }
 
 // TestHTTPPartialRefetchPreservesRevisionGap is §5.14 test 11's server half.
@@ -436,6 +439,124 @@ func TestHTTPPairingRejectionsAreUndifferentiated(t *testing.T) {
 				t.Fatalf("status = %d body=%s, want 400", response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+// TestHTTPPreviewPairingReportsFactsAndLeavesTheCodeRedeemable walks the
+// preview over the wire: 200 with the OpenAPI PairingFacts envelope for a
+// live code, no revision movement, and the same code then pairs with a grant
+// carrying the same facts.
+func TestHTTPPreviewPairingReportsFactsAndLeavesTheCodeRedeemable(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	handler := signet.NewHTTPHandler(f.service, signet.NewRequestAuthorizer(f.store))
+	plaintext, code, err := f.service.MintPairingCode(ctx)
+	if err != nil {
+		t.Fatalf("MintPairingCode: %v", err)
+	}
+	before := f.revision(t)
+
+	response := bearerRequest(t, handler, http.MethodPost, "/pairing/preview", "",
+		mustJSON(map[string]string{"pairing_code": plaintext}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("preview status = %d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var facts signet.PairingFacts
+	if err := json.Unmarshal(response.Body.Bytes(), &facts); err != nil {
+		t.Fatalf("decode facts: %v", err)
+	}
+	want := signet.PairingFacts{
+		HostDisplayName: "fixture-host.local", CodeExpiresAt: code.ExpiresAt.UTC(),
+		ConnectionMode: domain.ConnectionLoopback, GrantedScope: domain.DeviceScopeOperator,
+	}
+	if !facts.CodeExpiresAt.Equal(want.CodeExpiresAt) {
+		t.Errorf("code_expires_at = %v, want %v", facts.CodeExpiresAt, want.CodeExpiresAt)
+	}
+	facts.CodeExpiresAt = want.CodeExpiresAt
+	if facts != want {
+		t.Errorf("facts = %+v, want %+v", facts, want)
+	}
+	if after := f.revision(t); after != before {
+		t.Errorf("preview moved the server revision %d -> %d", before, after)
+	}
+
+	response = bearerRequest(t, handler, http.MethodPost, "/pairing", "",
+		mustJSON(map[string]string{"pairing_code": plaintext, "display_name": "Previewed"}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("pairing after preview status = %d body=%s, want 201", response.Code, response.Body.String())
+	}
+	var grant signet.PairingGrant
+	if err := json.Unmarshal(response.Body.Bytes(), &grant); err != nil {
+		t.Fatalf("decode grant: %v", err)
+	}
+	if grant.Facts.HostDisplayName != want.HostDisplayName || !grant.Facts.CodeExpiresAt.Equal(want.CodeExpiresAt) ||
+		grant.Facts.ConnectionMode != want.ConnectionMode || grant.Facts.GrantedScope != want.GrantedScope {
+		t.Errorf("grant facts = %+v, want the previewed %+v", grant.Facts, want)
+	}
+}
+
+// TestHTTPPreviewPairingRejectionsAreUndifferentiated mirrors
+// TestHTTPPairingRejectionsAreUndifferentiated for the preview: unknown,
+// expired, and consumed codes produce byte-identical 403 responses,
+// malformed requests fail 400, and an oversized body fails 413, none of it
+// touching pairing state.
+func TestHTTPPreviewPairingRejectionsAreUndifferentiated(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	handler := signet.NewHTTPHandler(f.service, signet.NewRequestAuthorizer(f.store))
+
+	expired, _, err := f.service.MintPairingCode(ctx)
+	if err != nil {
+		t.Fatalf("mint expired-case code: %v", err)
+	}
+	*f.now = f.now.Add(10 * time.Minute)
+	consumed, _, err := f.service.MintPairingCode(ctx)
+	if err != nil {
+		t.Fatalf("mint consumed-case code: %v", err)
+	}
+	if _, err := f.service.Pair(ctx, consumed, "First device"); err != nil {
+		t.Fatalf("consume code: %v", err)
+	}
+	before := f.revision(t)
+
+	previewBody := func(code string) []byte {
+		return mustJSON(map[string]string{"pairing_code": code})
+	}
+	responses := map[string]*httptest.ResponseRecorder{}
+	for name, code := range map[string]string{
+		"unknown": "AAAAAAAA", "expired": expired, "consumed": consumed,
+	} {
+		response := bearerRequest(t, handler, http.MethodPost, "/pairing/preview", "", previewBody(code))
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("%s code status = %d body=%s, want 403", name, response.Code, response.Body.String())
+		}
+		responses[name] = response
+	}
+	for name, response := range responses {
+		if response.Body.String() != responses["unknown"].Body.String() {
+			t.Errorf("%s rejection %q differs from unknown %q: the 403 must not distinguish causes",
+				name, response.Body.String(), responses["unknown"].Body.String())
+		}
+	}
+
+	for name, test := range map[string]struct {
+		body   []byte
+		status int
+	}{
+		"missing code":  {mustJSON(map[string]string{}), http.StatusBadRequest},
+		"empty code":    {previewBody(""), http.StatusBadRequest},
+		"unknown field": {mustJSON(map[string]string{"pairing_code": "AAAAAAAA", "display_name": "P"}), http.StatusBadRequest},
+		"oversized":     {[]byte(`{"pairing_code":"` + strings.Repeat("x", maxTestCommandBodyBytes) + `"}`), http.StatusRequestEntityTooLarge},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := bearerRequest(t, handler, http.MethodPost, "/pairing/preview", "", test.body)
+			if response.Code != test.status {
+				t.Fatalf("status = %d body=%s, want %d", response.Code, response.Body.String(), test.status)
+			}
+		})
+	}
+	if after := f.revision(t); after != before {
+		t.Errorf("rejected previews moved the server revision %d -> %d", before, after)
 	}
 }
 

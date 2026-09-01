@@ -252,6 +252,117 @@ func TestPairRejectsExpiredConsumedUnknownCodes(t *testing.T) {
 	}
 }
 
+// TestPreviewPairingReturnsFactsWithoutConsuming: a live code previews to
+// the four facts the pairing screen shows, the preview neither consumes the
+// code nor moves the server revision, and the same code then pairs, its
+// grant carrying the same facts.
+func TestPreviewPairingReturnsFactsWithoutConsuming(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	plaintext, code, err := f.service.MintPairingCode(ctx)
+	if err != nil {
+		t.Fatalf("MintPairingCode: %v", err)
+	}
+	before := f.revision(t)
+
+	facts, err := f.service.PreviewPairing(ctx, plaintext)
+	if err != nil {
+		t.Fatalf("PreviewPairing: %v", err)
+	}
+	want := signet.PairingFacts{
+		HostDisplayName: "fixture-host.local",
+		CodeExpiresAt:   code.ExpiresAt.UTC(),
+		ConnectionMode:  domain.ConnectionLoopback,
+		GrantedScope:    domain.DeviceScopeOperator,
+	}
+	if facts != want {
+		t.Errorf("facts = %+v, want %+v", facts, want)
+	}
+	if again, err := f.service.PreviewPairing(ctx, strings.ToLower(plaintext)); err != nil || again != want {
+		t.Errorf("second (hand-typed) preview = %+v, %v; want the same facts", again, err)
+	}
+	if after := f.revision(t); after != before {
+		t.Errorf("preview moved the server revision %d -> %d", before, after)
+	}
+
+	grant, err := f.service.Pair(ctx, plaintext, "Previewed device")
+	if err != nil {
+		t.Fatalf("Pair after preview: %v", err)
+	}
+	if grant.Facts != want {
+		t.Errorf("grant facts = %+v, want the previewed %+v", grant.Facts, want)
+	}
+}
+
+// TestPreviewPairingRejectsExpiredConsumedUnknownCodes is
+// TestPairRejectsExpiredConsumedUnknownCodes's preview twin: the same three
+// codes surface as the same undifferentiated rejection, and no preview moves
+// the server revision.
+func TestPreviewPairingRejectsExpiredConsumedUnknownCodes(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+
+	expiredCode, _, err := f.service.MintPairingCode(ctx)
+	if err != nil {
+		t.Fatalf("mint expired-case code: %v", err)
+	}
+	*f.now = f.now.Add(10 * time.Minute) // exactly the TTL boundary: already expired
+
+	consumedCode, _, err := f.service.MintPairingCode(ctx)
+	if err != nil {
+		t.Fatalf("mint consumed-case code: %v", err)
+	}
+	if _, err := f.service.Pair(ctx, consumedCode, "First device"); err != nil {
+		t.Fatalf("consume code: %v", err)
+	}
+
+	before := f.revision(t)
+	for name, code := range map[string]string{
+		"expired":  expiredCode,
+		"consumed": consumedCode,
+		"unknown":  "AAAAAAAA",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := f.service.PreviewPairing(ctx, code); !errors.Is(err, signet.ErrPairingRejected) {
+				t.Fatalf("PreviewPairing error = %v, want ErrPairingRejected", err)
+			}
+		})
+	}
+	if after := f.revision(t); after != before {
+		t.Errorf("rejected previews moved the server revision %d -> %d", before, after)
+	}
+}
+
+// TestPairingFailsClosedWithoutHostFacts: a composition that never supplied
+// WithHostFacts must not hand out an empty host name; preview and redemption
+// both refuse, and the refusal is a configuration error, not a code
+// rejection, so nothing is consumed.
+func TestPairingFailsClosedWithoutHostFacts(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	plaintext, _, err := f.service.MintPairingCode(ctx)
+	if err != nil {
+		t.Fatalf("MintPairingCode: %v", err)
+	}
+	unconfigured := signet.NewService(f.store,
+		signet.WithPairingKey(testPairingKey),
+		signet.WithClock(func() time.Time { return *f.now }),
+		signet.WithNtfy(signet.NtfyConfig{
+			BaseURL: "https://ntfy.example", TopicKey: testTopicKey,
+			ClickBaseURL: "https://daemon.example",
+		}),
+	)
+	if _, err := unconfigured.PreviewPairing(ctx, plaintext); err == nil || errors.Is(err, signet.ErrPairingRejected) {
+		t.Fatalf("PreviewPairing without host facts = %v, want a configuration error", err)
+	}
+	if _, err := unconfigured.Pair(ctx, plaintext, "Unconfigured"); err == nil || errors.Is(err, signet.ErrPairingRejected) {
+		t.Fatalf("Pair without host facts = %v, want a configuration error", err)
+	}
+	if _, err := f.service.Pair(ctx, plaintext, "Configured"); err != nil {
+		t.Fatalf("the refused pairing consumed the code: %v", err)
+	}
+}
+
 // TestPairSingleDevicePerCode is §5.14 test 14's redemption-policy half: one
 // code yields exactly one device, the second attempt failing with the same
 // undifferentiated rejection and no state change. The racing-writers half

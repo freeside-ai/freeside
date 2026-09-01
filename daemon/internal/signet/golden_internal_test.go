@@ -66,6 +66,12 @@ func TestSignetWireGoldens(t *testing.T) {
 		ID: "device-569", DisplayName: "Fixture iPhone",
 		Status: domain.DeviceActive, PairedAt: createdAt,
 	}
+	pairingFacts := PairingFacts{
+		HostDisplayName: "fixture-host.local",
+		CodeExpiresAt:   createdAt.Add(10 * time.Minute),
+		ConnectionMode:  domain.ConnectionLoopback,
+		GrantedScope:    domain.DeviceScopeOperator,
+	}
 	command := domain.Command{
 		CommandID: "command-569", DeviceID: device.ID, ItemID: item.ID,
 		ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA,
@@ -120,6 +126,7 @@ func TestSignetWireGoldens(t *testing.T) {
 		},
 		{name: "server-revision", value: ServerRevision{SyncEpoch: "sync-epoch-569", Revision: 23}},
 		{name: "run-timeline", value: runTimeline(observation, 23, acceptedAt)},
+		{name: "pairing-facts", value: pairingFacts},
 		{
 			name: "pairing-grant",
 			value: PairingGrant{
@@ -128,6 +135,7 @@ func TestSignetWireGoldens(t *testing.T) {
 				NtfySubscription: NtfySubscription{
 					ServerURL: "https://ntfy.example.test", Topic: "fs-55555555555555555555555555555555",
 				},
+				Facts: pairingFacts,
 			},
 		},
 		{

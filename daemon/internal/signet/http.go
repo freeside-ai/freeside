@@ -39,11 +39,13 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 	health.Status = "ok"
 	h := httpHandler{service: service, authorize: authorize, health: health}
 	mux := http.NewServeMux()
-	// GET /health and POST /pairing are the unauthenticated routes
-	// (api/openapi.yaml security: []). Health exposes only process liveness;
-	// pairing uses its short-lived code as the authenticator.
+	// GET /health, POST /pairing, and POST /pairing/preview are the
+	// unauthenticated routes (api/openapi.yaml security: []). Health exposes
+	// only process liveness; pairing and its preview use the short-lived
+	// code as the authenticator.
 	mux.Handle("GET /health", http.HandlerFunc(h.getHealth))
 	mux.Handle("POST /pairing", http.HandlerFunc(h.pairDevice))
+	mux.Handle("POST /pairing/preview", http.HandlerFunc(h.previewPairing))
 	mux.Handle("POST /devices/{device_id}/revoke", h.authenticated(h.revokeDevice))
 	mux.Handle("GET /sync/bootstrap", h.authenticated(h.getBootstrap))
 	mux.Handle("GET /sync/revision", h.authenticated(h.getRevision))
@@ -421,6 +423,40 @@ func (h httpHandler) pairDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, grant)
+}
+
+type pairingPreviewRequest struct {
+	PairingCode *string `json:"pairing_code"`
+}
+
+func (h httpHandler) previewPairing(w http.ResponseWriter, r *http.Request) {
+	var request pairingPreviewRequest
+	if err := decodeRequest(w, r, &request); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Message: "request body is too large"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
+		return
+	}
+	if request.PairingCode == nil || *request.PairingCode == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "pairing_code is required"})
+		return
+	}
+	facts, err := h.service.PreviewPairing(r.Context(), *request.PairingCode)
+	if err != nil {
+		if errors.Is(err, ErrPairingRejected) {
+			// The same undifferentiated 403 as pairDevice (api/openapi.yaml
+			// POST /pairing/preview): a preview must not be a finer validity
+			// oracle than redemption.
+			writeJSON(w, http.StatusForbidden, errorResponse{Message: "pairing rejected"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Message: "internal server error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, facts)
 }
 
 func (h httpHandler) revokeDevice(w http.ResponseWriter, r *http.Request, authenticatedDevice domain.DeviceID) {

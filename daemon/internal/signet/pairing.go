@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -51,6 +52,57 @@ type PairingGrant struct {
 	DeviceToken      string           `json:"device_token"`
 	Device           DeviceSnapshot   `json:"device"`
 	NtfySubscription NtfySubscription `json:"ntfy_subscription"`
+	Facts            PairingFacts     `json:"facts"`
+}
+
+// PairingFacts are the operational facts a pairing code carries, matching
+// api/openapi.yaml: what host is being joined, when the code dies, how the
+// client is reaching the daemon, and what authority the device gets. Display
+// facts only; none is a credential, key material, or the §5.9 host identity,
+// so a preview reveals nothing a successful pairing would not.
+type PairingFacts struct {
+	HostDisplayName string                `json:"host_display_name"`
+	CodeExpiresAt   time.Time             `json:"code_expires_at"`
+	ConnectionMode  domain.ConnectionMode `json:"connection_mode"`
+	GrantedScope    domain.DeviceScope    `json:"granted_scope"`
+}
+
+// HostFacts is the composition's process-fixed half of PairingFacts: the
+// host's display name (its OS hostname, read once at start) and the
+// connection mode the bound listener implies. A Service configured without
+// them fails every preview and pairing closed, because an empty name would
+// pass the wire contract's minLength only by accident.
+type HostFacts struct {
+	DisplayName    string
+	ConnectionMode domain.ConnectionMode
+}
+
+func (h HostFacts) validate() error {
+	if h.DisplayName == "" {
+		return fmt.Errorf("host display name: %w", domain.ErrEmptyField)
+	}
+	if !slices.Contains(domain.AllConnectionModes, h.ConnectionMode) {
+		return fmt.Errorf("connection mode %q is not registered", h.ConnectionMode)
+	}
+	return nil
+}
+
+// pairingFacts binds the stored code's expiry to the process-fixed host
+// facts; preview and pairing share it so the two surfaces cannot drift.
+func (s *Service) pairingFacts(code domain.PairingCode) PairingFacts {
+	return PairingFacts{
+		HostDisplayName: s.hostFacts.DisplayName,
+		CodeExpiresAt:   code.ExpiresAt.UTC(),
+		ConnectionMode:  s.hostFacts.ConnectionMode,
+		GrantedScope:    domain.DeviceScopeOperator,
+	}
+}
+
+// pairingCodeRedeemable is the one liveness rule preview and redemption
+// share: unconsumed and, judged against this service's clock, not yet
+// expired (the TTL boundary itself is expired).
+func pairingCodeRedeemable(code domain.PairingCode, now time.Time) bool {
+	return code.ConsumedAt == nil && now.Before(code.ExpiresAt)
 }
 
 // DeviceSnapshot is a Device with its store-stamped sync metadata, matching
@@ -98,6 +150,41 @@ func (s *Service) MintPairingCode(ctx context.Context) (string, domain.PairingCo
 	return plaintext, code, nil
 }
 
+// PreviewPairing reports the facts a live code would grant without
+// consuming it, creating anything, or moving the server revision: a
+// read-only look at the same row Pair redeems, under the same liveness
+// rule. Every code-related rejection wraps ErrPairingRejected,
+// undifferentiated, exactly as Pair's, so the preview is no finer a
+// validity oracle than redemption already is.
+func (s *Service) PreviewPairing(ctx context.Context, plaintext string) (PairingFacts, error) {
+	if err := s.hostFacts.validate(); err != nil {
+		return PairingFacts{}, fmt.Errorf("preview pairing: %w", err)
+	}
+	if len(s.pairingKey) == 0 {
+		return PairingFacts{}, fmt.Errorf("preview pairing: no pairing key: %w", ErrPairingRejected)
+	}
+	codeHash := s.pairingCodeHash(normalizePairingCode(plaintext))
+	var facts PairingFacts
+	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+		code, err := tx.GetPairingCode(ctx, codeHash)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return fmt.Errorf("preview pairing: %w", ErrPairingRejected)
+			}
+			return err
+		}
+		if !pairingCodeRedeemable(code, s.now()) {
+			return fmt.Errorf("preview pairing: %w", ErrPairingRejected)
+		}
+		facts = s.pairingFacts(code)
+		return nil
+	})
+	if err != nil {
+		return PairingFacts{}, err
+	}
+	return facts, nil
+}
+
 // Pair exchanges a pairing-code plaintext for a new active device and its
 // bearer token (§5.14 tests 13-14). Expiry is judged at redemption against
 // this service's clock; consumption, device creation, and credential
@@ -107,6 +194,10 @@ func (s *Service) MintPairingCode(ctx context.Context) (string, domain.PairingCo
 func (s *Service) Pair(ctx context.Context, plaintext, displayName string) (PairingGrant, error) {
 	if displayName == "" {
 		return PairingGrant{}, fmt.Errorf("pair device: display_name: %w", domain.ErrEmptyField)
+	}
+	if err := s.hostFacts.validate(); err != nil {
+		// A composition defect, surfaced before any code could be consumed.
+		return PairingGrant{}, fmt.Errorf("pair device: %w", err)
 	}
 	if len(s.pairingKey) == 0 {
 		// No key means no code was ever mintable; indistinguishable from an
@@ -133,7 +224,7 @@ func (s *Service) Pair(ctx context.Context, plaintext, displayName string) (Pair
 			return err
 		}
 		now := s.now()
-		if code.ConsumedAt != nil || !now.Before(code.ExpiresAt) {
+		if !pairingCodeRedeemable(code, now) {
 			return fmt.Errorf("pair device: %w", ErrPairingRejected)
 		}
 		// A clock rewound past the mint must not turn a valid code into a
@@ -172,6 +263,7 @@ func (s *Service) Pair(ctx context.Context, plaintext, displayName string) (Pair
 		}
 		grant = PairingGrant{
 			DeviceToken: token, Device: deviceSnapshot(device, snap), NtfySubscription: subscription,
+			Facts: s.pairingFacts(code),
 		}
 		return nil
 	})

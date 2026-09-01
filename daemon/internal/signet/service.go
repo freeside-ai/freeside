@@ -37,6 +37,11 @@ type Service struct {
 	// (delivery.go, ntfy.go). Nil means delivery submission is unavailable and
 	// fails closed; the daemon composition supplies it via WithNtfy.
 	ntfy *ntfyChannel
+	// hostFacts is the composition's half of PairingFacts (pairing.go): the
+	// host display name and listener-derived connection mode. Zero means
+	// unconfigured, and preview and pairing fail closed rather than emit an
+	// empty fact; the daemon composition supplies it via WithHostFacts.
+	hostFacts HostFacts
 	// effectiveReviewConfig reports the daemon's currently effective reviewer
 	// configuration digest for the decision-time adoption gate (issue #611,
 	// Codex round 4): an adoption whose resolved target does not approve that
@@ -76,6 +81,13 @@ func WithClock(now func() time.Time) Option {
 // and token secrets.
 func WithRand(r io.Reader) Option {
 	return func(s *Service) { s.rand = r }
+}
+
+// WithHostFacts supplies the daemon host's display name and the connection
+// mode its listener implies, the process-fixed half of every PairingFacts.
+// Without it, previewing and redeeming pairing codes fail closed.
+func WithHostFacts(facts HostFacts) Option {
+	return func(s *Service) { s.hostFacts = facts }
 }
 
 // WithBlobStore supplies the digest-addressed attachment store. Without it,

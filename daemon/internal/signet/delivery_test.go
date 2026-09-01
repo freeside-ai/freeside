@@ -72,6 +72,7 @@ func newDeliveryFixture(t *testing.T) deliveryFixture {
 	t.Cleanup(server.Close)
 	service := signet.NewService(f.store,
 		signet.WithPairingKey(testPairingKey),
+		signet.WithHostFacts(testHostFacts),
 		signet.WithClock(func() time.Time { return *f.now }),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL:      server.URL,
