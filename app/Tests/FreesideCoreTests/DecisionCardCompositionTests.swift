@@ -263,7 +263,7 @@ import Testing
         #expect(clean.rows.first?.result == .passed)
         #expect(clean.rows.first?.value == "Clean")
         #expect(clean.rows.first(where: { $0.label == "Commit plan" })?.result == .informational)
-        #expect(clean.summary == "Readiness checklist: all 2 checks passed; 1 informational note.")
+        #expect(clean.summary == "Readiness checklist: all 5 checks passed; 1 informational note.")
         #expect(
             clean.accessibilitySummary.contains(
                 "Commit plan: Plan present, not honored, informational"))
@@ -283,13 +283,14 @@ import Testing
         #expect(invalidatedChecklist.rows.first?.value == "Invalidated")
         #expect(
             invalidatedChecklist.summary
-                == "Readiness checklist: 1 of 2 checks need attention; 1 informational note.")
+                == "Readiness checklist: 3 of 6 checks need attention; 1 informational note.")
         #expect(
             invalidatedChecklist.accessibilitySummary.contains(
                 "Verification verdict: Invalidated, needs attention"))
 
         var legacyInvalidated = invalidated
         legacyInvalidated.readiness = nil
+        legacyInvalidated.readiness_detail = nil
         let legacyChecklist = try #require(DecisionChecklistPresentation(legacyInvalidated))
         #expect(legacyChecklist.rows.first?.result == .failed)
         #expect(legacyChecklist.rows.first?.value == "Invalidated")
@@ -299,6 +300,7 @@ import Testing
 
         var informationalOnly = AttentionFixtures.fixture(type: .ready_for_final_review).item
         informationalOnly.readiness = nil
+        informationalOnly.readiness_detail = nil
         informationalOnly.yield_history = nil
         informationalOnly.base_freshness = nil
         let informationalChecklist = try #require(
@@ -318,10 +320,78 @@ import Testing
 
         var currentWithoutVerdict = AttentionFixtures.fixture(type: .ready_for_final_review).item
         currentWithoutVerdict.readiness = nil
+        currentWithoutVerdict.readiness_detail = nil
         let currentChecklist = try #require(DecisionChecklistPresentation(currentWithoutVerdict))
         #expect(currentChecklist.rows.first?.value == "Unavailable")
         #expect(currentChecklist.summary.contains("checks need attention"))
         #expect(!currentChecklist.summary.contains("checks passed"))
+    }
+
+    @Test func checklistListsEveryRequirementWithItsWaiverAndBoundCoordinates() throws {
+        let clean = try #require(
+            DecisionChecklistPresentation(
+                AttentionFixtures.fixture(type: .ready_for_final_review).item))
+        #expect(
+            clean.rows.map(\.label) == [
+                "Verification verdict", "Bound to", "clean-verification", "independent-review",
+                "Commit plan", "Terminal review",
+            ])
+        #expect(
+            clean.rows[1] == .init(label: "Bound to", value: "cafebabe on main@deadbeef", result: .passed))
+        #expect(clean.rows[2] == .init(label: "clean-verification", value: "Passed", result: .passed))
+
+        let degraded = try #require(
+            DecisionChecklistPresentation(AttentionFixtures.degradedReady().item))
+        #expect(degraded.rows.first == .init(label: "Verification verdict", value: "Degraded", result: .failed))
+        #expect(
+            degraded.rows.first(where: { $0.label == "license-headers (optional)" })
+                == .init(label: "license-headers (optional)", value: "Not run (advisory)", result: .failed))
+        #expect(
+            degraded.rows.first(where: { $0.label == "repo-change-policy" })
+                == .init(
+                    label: "repo-change-policy",
+                    value: "Failed, waived for repo_change_policy by explicit human approval, waiver waiver-1",
+                    result: .failed))
+        #expect(degraded.summary == "Readiness checklist: 3 of 7 checks need attention; 1 informational note.")
+
+        // The daemon's invalidation demotes the verdict and its bound
+        // coordinates and shows both sides of the divergence.
+        let stale = try #require(DecisionChecklistPresentation(AttentionFixtures.staleReady().item))
+        #expect(stale.rows[0] == .init(label: "Verification verdict", value: "Invalidated", result: .failed))
+        #expect(stale.rows[1] == .init(label: "Bound to", value: "cafebabe on main@deadbeef", result: .failed))
+        #expect(
+            stale.rows[2]
+                == .init(label: "Head changed", value: "bound cafebabe, observed feedface", result: .failed))
+        #expect(stale.rows[3].result == .passed)
+
+        // A base advance the watch observed is the other staleness axis: the
+        // verdict is still the daemon's, but it no longer describes the base.
+        var advanced = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        advanced.base_freshness = .init(
+            value1: .init(
+                base_ref: "main", admitted_base_sha: "deadbeef", observed_base_sha: "0badf00d",
+                advanced: true, observed_at: AttentionFixtures.createdInstant))
+        let advancedChecklist = try #require(DecisionChecklistPresentation(advanced))
+        #expect(
+            advancedChecklist.rows[0]
+                == .init(label: "Verification verdict", value: "Clean, stale", result: .failed))
+        #expect(advancedChecklist.rows[1].result == .failed)
+        #expect(
+            advancedChecklist.rows.first(where: { $0.label == "Base freshness" })
+                == .init(
+                    label: "Base freshness", value: "Advanced past deadbeef, now 0badf00d",
+                    result: .failed))
+        #expect(
+            AttentionDisplay.shortRevision("0123456789abcdef0123456789abcdef01234567") == "0123456789ab")
+        // A base ref and a "repository_id#pr_number" identity are the other
+        // coordinates an invalidation carries, and both differ in the tail, so
+        // neither is truncated: a shortened pair would render two different
+        // coordinates identically and hide the change the row names.
+        #expect(AttentionDisplay.shortRevision("1071234567#1074") == "1071234567#1074")
+        #expect(AttentionDisplay.shortRevision("1071234567#1075") == "1071234567#1075")
+        #expect(
+            AttentionDisplay.shortRevision("release/2026-09-candidate")
+                == "release/2026-09-candidate")
     }
 
     @Test func checklistDerivesUnresolvedReviewStateFromDispositions() throws {

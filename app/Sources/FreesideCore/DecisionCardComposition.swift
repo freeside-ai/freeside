@@ -232,21 +232,52 @@ struct DecisionChecklistPresentation: Equatable {
 
     init?(_ item: Components.Schemas.AttentionItem) {
         var rows: [Row] = []
-        if item.readiness_invalidation != nil {
+        let detail = item.readiness_detail?.value1
+        let invalidation = item.readiness_invalidation?.value1
+        let freshness = item.base_freshness?.value1
+        // Staleness is a daemon fact on either axis: the superseding
+        // invalidation, or the base-advance watch observing a moved base. Both
+        // demote the verdict and its bound coordinates; the client compares
+        // nothing itself and derives no reason from the verdict class.
+        let stale = invalidation != nil || freshness?.advanced == true
+        if invalidation != nil {
             rows.append(
                 .init(label: "Verification verdict", value: "Invalidated", result: .failed))
         } else if let readiness = item.readiness?.value1 {
+            let verdict: String
             switch readiness._class {
-            case .ready_clean:
-                rows.append(
-                    .init(label: "Verification verdict", value: "Clean", result: .passed))
-            case .ready_degraded:
-                rows.append(
-                    .init(label: "Verification verdict", value: "Degraded", result: .failed))
+            case .ready_clean: verdict = "Clean"
+            case .ready_degraded: verdict = "Degraded"
             }
+            rows.append(
+                .init(
+                    label: "Verification verdict",
+                    value: stale ? "\(verdict), stale" : verdict,
+                    result: stale || readiness._class == .ready_degraded ? .failed : .passed))
         } else if item._type == .ready_for_final_review {
             rows.append(
                 .init(label: "Verification verdict", value: "Unavailable", result: .failed))
+        }
+        if let detail {
+            rows.append(
+                .init(
+                    label: "Bound to",
+                    value:
+                        "\(AttentionDisplay.shortRevision(detail.candidate_head)) on "
+                        + "\(detail.base.base_ref)@\(AttentionDisplay.shortRevision(detail.base.base_sha))",
+                    result: stale ? .failed : .passed))
+        }
+        if let invalidation {
+            rows.append(
+                .init(
+                    label: AttentionDisplay.label(invalidation.reason),
+                    value:
+                        "bound \(AttentionDisplay.shortRevision(invalidation.bound)), "
+                        + "observed \(AttentionDisplay.shortRevision(invalidation.observed))",
+                    result: .failed))
+        }
+        for requirement in detail?.requirements ?? [] {
+            rows.append(Self.requirementRow(requirement))
         }
         if let notice = item.commit_plan_notice?.value1 {
             rows.append(
@@ -255,11 +286,14 @@ struct DecisionChecklistPresentation: Equatable {
                     value: AttentionDisplay.label(notice),
                     result: .informational))
         }
-        if let freshness = item.base_freshness?.value1 {
+        if let freshness {
             rows.append(
                 .init(
                     label: "Base freshness",
-                    value: freshness.advanced ? "Advanced" : "Current",
+                    value: freshness.advanced
+                        ? "Advanced past \(AttentionDisplay.shortRevision(freshness.admitted_base_sha)), "
+                            + "now \(AttentionDisplay.shortRevision(freshness.observed_base_sha))"
+                        : "Current",
                     result: freshness.advanced ? .failed : .passed))
         }
         if let history = item.yield_history?.value1 {
@@ -311,6 +345,39 @@ struct DecisionChecklistPresentation: Equatable {
             + rows.map { row in
                 "\(row.label): \(row.value), \(row.result.accessibilityState)"
             }.joined(separator: "; ") + "."
+    }
+}
+
+extension DecisionChecklistPresentation {
+    /// One evaluated requirement as a checklist row. The label is the daemon's
+    /// requirement key; the value is its typed state, and a waived failure
+    /// names the waiver's identity, the dimension it covers, and its granting
+    /// authority (plan §6) while keeping the failure marker, so a degraded
+    /// card says why it is degraded without opening the technical details.
+    fileprivate static func requirementRow(
+        _ requirement: Components.Schemas.ReadinessRequirement
+    ) -> Row {
+        let advisory = requirement.kind == .optional
+        let label = advisory ? "\(requirement.requirement_key) (optional)" : requirement.requirement_key
+        let state = AttentionDisplay.label(requirement.state)
+        switch requirement.state {
+        case .passed:
+            return .init(label: label, value: state, result: .passed)
+        case .not_applicable:
+            return .init(label: label, value: state, result: .informational)
+        case .failed, .not_run:
+            if let waiver = requirement.waiver?.value1 {
+                return .init(
+                    label: label,
+                    value:
+                        "\(state), waived for \(waiver.dimension) by "
+                        + AttentionDisplay.label(waiver.authority).lowercased()
+                        + ", waiver \(waiver.id)",
+                    result: .failed)
+            }
+            return .init(
+                label: label, value: advisory ? "\(state) (advisory)" : state, result: .failed)
+        }
     }
 }
 

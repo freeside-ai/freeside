@@ -570,12 +570,40 @@ import Testing
             AttentionDisplay.readinessSummaryRows(clean) == [
                 .init(label: "Readiness", value: "Clean"),
                 .init(label: "Evaluation set", value: "sha256:evaluation-clean"),
+                .init(label: "Bound head", value: "cafebabe"),
+                .init(label: "Bound base", value: "main@deadbeef"),
+                .init(
+                    label: "Requirement clean-verification",
+                    value: "Clean verification, Required, Passed, proof sha256:recipe"),
+                .init(
+                    label: "Requirement independent-review",
+                    value: "Independent review, Required, Passed, proof sha256:review-config"),
             ])
+        let degradedRows = AttentionDisplay.readinessSummaryRows(degraded)
         #expect(
-            AttentionDisplay.readinessSummaryRows(degraded) == [
+            degradedRows.prefix(2) == [
                 .init(label: "Readiness", value: "Degraded"),
                 .init(label: "Evaluation set", value: "sha256:evaluation-degraded"),
             ])
+        #expect(
+            degradedRows.contains(
+                .init(
+                    label: "Requirement license-headers",
+                    value: "Repo change policy, Optional, Not run")))
+        #expect(
+            degradedRows.contains(
+                .init(
+                    label: "Requirement repo-change-policy",
+                    value: "Repo change policy, Required, Failed")))
+        #expect(
+            degradedRows.last
+                == .init(
+                    label: "Waiver waiver-1",
+                    value: "repo_change_policy, Explicit human approval, 2026-01-02T02:04:05Z"))
+
+        var legacy = clean
+        legacy.readiness_detail = nil
+        #expect(AttentionDisplay.readinessSummaryRows(legacy).count == 2)
     }
 
     @Test func readyReviewYieldRendersEveryRoundAndTerminalOutcome() {

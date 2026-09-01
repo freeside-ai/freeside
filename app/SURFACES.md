@@ -30,8 +30,7 @@ Mac and iOS match on every line unless a line says otherwise.
   graphic module set.
 - **Not yet:** one card type (`effect_proposal`), conversation attachments, the evidence
   packet viewer, proposal batches, the
-  initiative view, the remaining blocked-reason and waiver readiness display,
-  push notifications.
+  initiative view, push notifications.
 - **Open:** twelve placement questions, listed at the end.
 
 ## Screens
@@ -72,7 +71,7 @@ lists open issues that will change the card.
 | `execution_failure` | retry, retry with capabilities, discuss, stop | Done: the card leads with the typed outcome, failing stage, and invocation beside the stage-rail and diagnostic-claim composition; retry with capabilities is omitted until #921 lands its transaction | #869 adds "retry with another provider profile" for quota, expiry, and capacity failures: a profile picker, with cost owner and review independence shown before confirming |
 | `agent_question` | answer and retry, answer without retry, stop | Done: the labeled question claim leads with what is blocked and the enumerated options, so answering needs no transcript; both answer actions are omitted until #919 lands their transactions | #990 produces the typed question |
 | `publish_blocked` | rerun trust check, inspect the failure, stop | Done: the card leads with the failed trust rule or hold reason from the typed field; the alternate-profile action is retired from the vocabulary (#936, plan revision 44) | |
-| `ready_for_final_review` | view PR, return to agent, mark seen, dismiss, stop | Done: the card leads with the readiness checklist and per-round yield, keeping the typed diff stats last before the actions; change summary remains data-gated and return to agent is omitted until #919 | Remaining readiness display below |
+| `ready_for_final_review` | view PR, return to agent, mark seen, dismiss, stop | Done: the card leads with the readiness checklist (the bound head and base, every requirement of the evaluated set with its state, each waiver's id, dimension, and granting authority, and a stale verdict shown against the observed head or base) and per-round yield, keeping the typed diff stats last before the actions; change summary remains data-gated and return to agent is omitted until #919 | |
 | `run_proposal` | start, start with changes, decline, snooze | Done for actions and facts, including the declaration-bound path count shown read-only in revisions; the full proposal artifact and the revised-digest diff are Not yet | Batch grouping (see Screens) |
 | `effect_proposal` | approve, approve with changes, decline, snooze; target picked from a daemon-supplied list | Not yet | Lands with the §5.13 effect registry in 1B |
 | `system_health` | acknowledge, run doctor, stop or resume unattended, resolve re-enrollment | Done: the card and row lead with the typed diagnostic code and the capability it impairs, daemon facts only (posture badge and re-enrollment details shown) | #868 (account-probe items), #867 (retired-identity items) |
@@ -83,10 +82,10 @@ lists open issues that will change the card.
 | Rule | Status |
 | --- | --- |
 | Anything an agent wrote is visibly labeled as a claim, never shown as fact (plan §9) | Done: claims, agent summaries, and an agent-judgment recommendation each render in a labeled unverified register, and the mechanical `system_health` and `blocked` cards carry daemon facts alone |
-| Readiness shows as Blocked, ReadyClean, or ReadyDegraded with waiver IDs and who granted them, never a plain yes/no (plan §6) | Partial: ready final-review items show clean/degraded and the evaluation-set digest; blocked reasons and waiver identities are Not yet |
+| Readiness shows as Blocked, ReadyClean, or ReadyDegraded with waiver IDs and who granted them, never a plain yes/no (plan §6) | Done: a ready card shows clean or degraded, the evaluation-set digest, the bound head and base, and every requirement's state, with each waived requirement naming its waiver's id, dimension, and granting authority; a blocked verdict never becomes a ready card, because the daemon holds the run instead of creating a ready item, so the client renders its per-requirement states from the daemon's typed detail and never derives a reason from the verdict class |
 | Severity uses one scale: critical, high, medium, low (plan §7) | Not yet |
 | Images load from the artifact store by digest; agent images are labeled claims (plan §4, §5.15) | Done: every attachment has an explicit bounded state, and images expand into a memory-only zoomable sheet |
-| Evidence from an older head is not shown as current after a remediation head (plan §5.15) | Not yet |
+| Evidence from an older head is not shown as current after a remediation head (plan §5.15) | Partial: a ready verdict and its bound head and base render as stale, beside the observed values, once the daemon records `readiness_invalidation` or `base_freshness.advanced`; evidence attachments from an older head are Not yet (#922) |
 | Commit-plan notices (fallback, present-but-not-honored) appear as a labeled "Commit plan" fact (plan §5.6) | Done |
 | Fault-class capture at resolution: a suggested value, one tap to correct, allowed to stay unknown (plan §4) | Not yet |
 | A stale submission swaps in the replacement item and says so (plan §4) | Done |
