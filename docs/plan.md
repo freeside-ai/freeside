@@ -75,6 +75,8 @@ why.
 - [6. Verification](#6-verification)
   - [The Verification State Algebra](#the-verification-state-algebra)
 - [7. Review Policy](#7-review-policy)
+  - [The Pre-Publication Review Anchor](#the-pre-publication-review-anchor)
+  - [Review Independence, Credibility, and Severity](#review-independence-credibility-and-severity)
   - [Finding Adjudication](#finding-adjudication)
 - [8. Observability and Optimization Telemetry](#8-observability-and-optimization-telemetry)
 - [9. Comprehension](#9-comprehension)
@@ -2780,6 +2782,8 @@ never a silent stall. Failure classification matches the publication boundary:
 transient failures retry with backoff; configuration or quota failures create
 attention; durable contradictions fail loudly.
 
+### The Pre-Publication Review Anchor
+
 **Resolved fork (decider: user, 2026-08-05; revision 28): the review anchor is
 pre-publication.** Implement → verify → review → clean: publish. The PR opens
 already reviewed, and forge checks still gate merge. As landed (#427, PR #490),
@@ -2821,6 +2825,8 @@ GitHub-native Codex when it fires, and other bots. On a published PR, that
 activity is the deferred external review response capability (Section 11;
 #524). It never satisfies this section's requirement, which stays
 Freeside-invoked and pre-publication.
+
+### Review Independence, Credibility, and Severity
 
 The sequencing preserves independence (spine-confirmed on #427). It runs in
 this order: first the #427 implementation unit, then production runs with
