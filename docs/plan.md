@@ -3760,10 +3760,10 @@ conversation feedback → fake invocation → workflow transition`
 
 Exit requires:
 
-- all sixteen sync and device tests;
-- idempotent command retry;
-- kill-before and kill-after recovery with fakes; and
-- no dependency on containers, Claude, publication, or backup complexity.
+- All sixteen sync and device tests;
+- Idempotent command retry;
+- Kill-before and kill-after recovery with fakes; and
+- No dependency on containers, Claude, publication, or backup complexity.
 
 #### 1A.1: Secure Publication with a Fake Candidate
 
@@ -3774,13 +3774,13 @@ GitHub publication → ready item`
 
 Exit requires:
 
-- containment of malicious fixtures;
-- blocking candidate automation-control paths and surfacing
+- Containment of malicious fixtures;
+- Blocking candidate automation-control paths and surfacing
   reviewer-instruction edits as advisories;
-- verification bound to the exact recipe and head;
-- effectively-once PR creation;
-- successful checkpoint restore, with local-only acceptable; and
-- completion in `attended_dev`; unattended operation is not required.
+- Verification bound to the exact recipe and head;
+- Effectively-once PR creation;
+- Successful checkpoint restore, with local-only acceptable; and
+- Completion in `attended_dev`; unattended operation is not required.
 
 #### 1A.2: Real Unattended Execution
 
@@ -3794,12 +3794,12 @@ preconditions.
 
 Exit requires:
 
-- green runner conformance, including the workspace-handoff gate;
-- no undeclared credential in any workspace;
-- the reusable project-image builder proven by hand against the selected
+- Green runner conformance, including the workspace-handoff gate;
+- No undeclared credential in any workspace;
+- The reusable project-image builder proven by hand against the selected
   repository at an exact commit and recipe, with its digest-pinned result
   available to an admitted run;
-- several real work items completed without terminal intervention; and
+- Several real work items completed without terminal intervention; and
 - `setup`, `onboard`, and `doctor` packaging the proven manual operations,
   including that same project-image builder, and meeting the Section 10
   targets.
@@ -3938,14 +3938,14 @@ without guessing intent (current fallback: a single clean re-authored commit).
 
 Exit requires:
 
-- no patrol of agent windows;
-- no manual polling;
-- productive review rounds that run without prompting;
-- consolidated low-value interruptions;
-- approvals decidable from the phone;
-- useful, correct work per unit of attention materially above baseline;
-- a low exceptional-interruption rate; and
-- false-ready performance within Section 12.
+- No patrol of agent windows;
+- No manual polling;
+- Productive review rounds that run without prompting;
+- Consolidated low-value interruptions;
+- Approvals decidable from the phone;
+- Useful, correct work per unit of attention materially above baseline;
+- A low exceptional-interruption rate; and
+- False-ready performance within Section 12.
 
 Approvals decidable from the phone covers every Phase 1 card action except
 turning a recurring diminishing-returns preference into a project-policy
