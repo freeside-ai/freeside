@@ -38,6 +38,46 @@ import Testing
         #expect(MockContractValidation.itemValidityBreach(item) == nil)
     }
 
+    @Test func evidenceMetadataBreachesNameTheFailedInvariant() throws {
+        // The fixture carries valid §5.15 evidence and claim metadata.
+        let clean = AttentionFixtures.fixture(type: .spec_approval).item
+        #expect(MockContractValidation.itemValidityBreach(clean) == nil)
+
+        // Evidence rides the run channel: a claim-sourced artifact is corrupt.
+        var evidenceSourceMismatch = clean
+        evidenceSourceMismatch.evidence_snapshot[0].metadata.source = .claim
+        #expect(
+            MockContractValidation.itemValidityBreach(evidenceSourceMismatch)
+                == "evidence artifact art-log-spec_approval metadata source is not run")
+
+        var negativeEvidenceSize = clean
+        negativeEvidenceSize.evidence_snapshot[0].metadata.size_bytes = -1
+        #expect(
+            MockContractValidation.itemValidityBreach(negativeEvidenceSize)
+                == "negative evidence metadata size_bytes")
+
+        // Claims ride the claim channel: a run-sourced claim is corrupt.
+        var claimSourceMismatch = clean
+        claimSourceMismatch.agent_claims[0].metadata.source = .run
+        #expect(
+            MockContractValidation.itemValidityBreach(claimSourceMismatch)
+                == "claim \(clean.agent_claims[0].label) metadata source is not claim")
+
+        var negativeClaimSize = clean
+        negativeClaimSize.agent_claims[0].metadata.size_bytes = -1
+        #expect(
+            MockContractValidation.itemValidityBreach(negativeClaimSize)
+                == "negative claim metadata size_bytes")
+
+        // An inline text claim's media type must equal its metadata media type.
+        var textMediaMismatch = clean
+        let specIndex = textMediaMismatch.agent_claims.firstIndex { $0.text != nil }
+        textMediaMismatch.agent_claims[try #require(specIndex)].metadata.media_type = .text_sol_plain
+        #expect(
+            MockContractValidation.itemValidityBreach(textMediaMismatch)
+                == "claim text media_type disagrees with metadata media_type")
+    }
+
     @Test func capabilityManifestOffersUseTheDaemonCanonicalDigest() {
         let executionFailure = AttentionFixtures.fixture(type: .execution_failure).item
         #expect(MockContractValidation.itemValidityBreach(executionFailure) == nil)
@@ -660,6 +700,15 @@ import Testing
         #expect(
             MockContractValidation.itemValidityBreach(oversize)
                 == "claim text exceeds the inline size cap")
+
+        // size_bytes must equal the inline content's UTF-8 length (mirrors the
+        // daemon's ErrClaimTextSizeMismatch): perturb only the metadata size so
+        // the size binding is the one invariant the seed breaks.
+        var wrongSize = AttentionFixtures.fixture(type: .spec_approval).item
+        wrongSize.agent_claims[1].metadata.size_bytes += 1
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongSize)
+                == "claim size_bytes disagrees with its text content length")
     }
 
     // Pins the derivation to a fixed vector (FIPS 180-2 "abc"), so the Swift

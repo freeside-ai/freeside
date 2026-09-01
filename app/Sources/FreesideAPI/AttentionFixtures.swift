@@ -140,9 +140,9 @@ public enum AttentionFixtures {
             $0.label == "Specification"
         }) {
             let provenance = snapshot.item.agent_claims[specificationIndex].provenance
-            snapshot.item.agent_claims[specificationIndex] = .init(
+            snapshot.item.agent_claims[specificationIndex] = agentClaim(
                 label: "Specification",
-                artifact_id: "spec-run-spec_approval-2",
+                artifactID: "spec-run-spec_approval-2",
                 digest: MockContractValidation.sha256Digest(of: revisedSpecification),
                 provenance: provenance,
                 text: .init(media_type: .text_sol_markdown, content: revisedSpecification))
@@ -171,9 +171,9 @@ public enum AttentionFixtures {
                 claimed_addressals: addressals,
                 addressals_digest: addressalsDigest))
         snapshot.item.agent_claims.append(
-            .init(
+            agentClaim(
                 label: "Addressals",
-                artifact_id: "spec-addressals-fixture-2",
+                artifactID: "spec-addressals-fixture-2",
                 digest: addressalsDigest,
                 provenance: claimHeadIndependent(key: "spec_approval")))
         snapshot.item.artifact_digests = Array(
@@ -349,9 +349,9 @@ public enum AttentionFixtures {
         // stay text-free — blocked's unseeded screenshot digest keeps
         // exercising the missing-attachment placeholder.
         var agentClaims: [Components.Schemas.AgentClaim] = [
-            .init(
+            agentClaim(
                 label: "screenshot",
-                artifact_id: "art-img-\(key)",
+                artifactID: "art-img-\(key)",
                 digest: claimDigest,
                 provenance: claimProvenance
             )
@@ -374,9 +374,9 @@ public enum AttentionFixtures {
                 ## Verification
                 - Run the migration suite against a production-shaped snapshot.
                 """
-            agentClaims[0] = .init(
+            agentClaims[0] = agentClaim(
                 label: "Specification",
-                artifact_id: "spec-run-spec_approval-1",
+                artifactID: "spec-run-spec_approval-1",
                 digest: MockContractValidation.sha256Digest(of: specification),
                 provenance: claimProvenance,
                 text: .init(media_type: .text_sol_markdown, content: specification))
@@ -399,9 +399,9 @@ public enum AttentionFixtures {
             // The question leads the claim register: it is the reason the
             // card exists, and the screenshot claim is supporting context.
             agentClaims.insert(
-                .init(
+                agentClaim(
                     label: "Question (unverified)",
-                    artifact_id: "art-question-\(key)",
+                    artifactID: "art-question-\(key)",
                     digest: MockContractValidation.sha256Digest(of: question),
                     provenance: claimProvenance,
                     text: .init(media_type: .text_sol_markdown, content: question)
@@ -434,9 +434,9 @@ public enum AttentionFixtures {
                     preconditionFailure("Mechanical cards never carry agent claims")
                 }
             agentClaims.append(
-                .init(
+                agentClaim(
                     label: label,
-                    artifact_id: "art-sum-\(key)",
+                    artifactID: "art-sum-\(key)",
                     digest: MockContractValidation.sha256Digest(of: summary),
                     provenance: claimProvenance,
                     text: .init(media_type: .text_sol_markdown, content: summary)
@@ -444,9 +444,9 @@ public enum AttentionFixtures {
             if type == .review_dispute || type == .execution_failure {
                 let summary = "Work on **\(key)** stopped; the diagnostic claim above needs a decision."
                 agentClaims.append(
-                    .init(
+                    agentClaim(
                         label: "freeside.summary",
-                        artifact_id: "art-summary-\(key)",
+                        artifactID: "art-summary-\(key)",
                         digest: MockContractValidation.sha256Digest(of: summary),
                         provenance: claimProvenance,
                         text: .init(media_type: .text_sol_markdown, content: summary)
@@ -736,7 +736,10 @@ public enum AttentionFixtures {
                     _type: .verify_log,
                     digest: evidenceDigest,
                     provenance: provenance,
-                    publish_eligible: true
+                    publish_eligible: true,
+                    metadata: evidenceMetadata(
+                        mediaType: .text_sol_plain,
+                        sizeBytes: Data("verify log for \(key)\n".utf8).count)
                 )
             ],
             agent_claims: agentClaims,
@@ -803,6 +806,64 @@ public enum AttentionFixtures {
                 verification_recipe_digest: nil,
                 sensitivity_class: .normal
             ))
+    }
+
+    /// Valid claim metadata (plan §5.15): the claim channel, a fixed
+    /// creation instant, and a media type that agrees with any inline text
+    /// (the daemon rejects a text claim whose media type disagrees). A
+    /// no-text claim carries the fixture screenshot's image/png. The stored
+    /// availability is arbitrary because the mock recomputes it from its byte
+    /// store on every read; `.available` matches the daemon's producer stamp.
+    static func claimMetadata(
+        text: Components.Schemas.ClaimText?
+    ) -> Components.Schemas.EvidenceMetadata {
+        let mediaType: Components.Schemas.EvidenceMediaType
+        let sizeBytes: Int
+        if let text {
+            mediaType = text.media_type == .text_sol_markdown ? .text_sol_markdown : .text_sol_plain
+            sizeBytes = text.content.utf8.count
+        } else {
+            mediaType = .image_sol_png
+            sizeBytes = fixtureImagePNG.count
+        }
+        return .init(
+            media_type: mediaType,
+            size_bytes: Int64(sizeBytes),
+            created_at: createdInstant,
+            source: .claim,
+            availability: .available)
+    }
+
+    /// A labeled agent claim carrying valid claim-channel metadata derived
+    /// from its inline text (or the fixture image when it has none).
+    static func agentClaim(
+        label: String,
+        artifactID: String,
+        digest: Components.Schemas.Digest,
+        provenance: Components.Schemas.ClaimProvenance,
+        text: Components.Schemas.ClaimText? = nil
+    ) -> Components.Schemas.AgentClaim {
+        .init(
+            label: label,
+            artifact_id: artifactID,
+            digest: digest,
+            provenance: provenance,
+            text: text,
+            metadata: claimMetadata(text: text))
+    }
+
+    /// Valid run-channel evidence metadata (plan §5.15) for the fixture's
+    /// verify-log artifact. Availability is recomputed by the mock on read.
+    static func evidenceMetadata(
+        mediaType: Components.Schemas.EvidenceMediaType,
+        sizeBytes: Int
+    ) -> Components.Schemas.EvidenceMetadata {
+        .init(
+            media_type: mediaType,
+            size_bytes: Int64(sizeBytes),
+            created_at: createdInstant,
+            source: .run,
+            availability: .available)
     }
 
     private static func reason(type: Components.Schemas.AttentionType) -> String {

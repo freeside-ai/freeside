@@ -5,14 +5,42 @@ import Observation
 
 #if canImport(UIKit)
     import UIKit
-    /// The decoded-image currency per platform; the platform decoder is
-    /// also the "is this an image?" ground truth, since no attachment
-    /// field declares a media type.
+    /// The decoded-image currency per platform.
     public typealias PlatformImage = UIImage
 #elseif canImport(AppKit)
     import AppKit
     public typealias PlatformImage = NSImage
 #endif
+
+/// The daemon-validated facts a card needs to decide an attachment's state
+/// before any fetch (plan §5.15). The loader reads the media type and size
+/// from here rather than inferring them from fetched bytes, and honors the
+/// daemon's recomputed availability. A small FreesideCore value type keeps
+/// the generated wire shape out of the loader's decision logic; construct one
+/// from the reference's `EvidenceMetadata`.
+public struct AttachmentReference: Equatable, Sendable {
+    public enum Availability: Equatable, Sendable {
+        case available
+        case bytesAbsent
+    }
+
+    public let mediaType: String
+    public let sizeBytes: Int
+    public let availability: Availability
+
+    public init(mediaType: String, sizeBytes: Int, availability: Availability) {
+        self.mediaType = mediaType
+        self.sizeBytes = sizeBytes
+        self.availability = availability
+    }
+
+    public init(_ metadata: Components.Schemas.EvidenceMetadata) {
+        self.init(
+            mediaType: metadata.media_type.rawValue,
+            sizeBytes: Int(clamping: metadata.size_bytes),
+            availability: metadata.availability == .bytes_absent ? .bytesAbsent : .available)
+    }
+}
 
 /// Fetches attachment bytes by content digest and decodes images for
 /// inline rendering on decision cards (plan §4: cards render image
@@ -48,16 +76,25 @@ public final class AttachmentLoader {
 
         case loading
         case image(PlatformImage)
-        /// Fetched fine, but the bytes are not a decodable image (a verify
-        /// log, say). Eviction drops only the optional bytes: the explicit
-        /// state and observed size stay rendered, and opening refetches.
+        /// The metadata's media type is not an image (a verify log, say),
+        /// decided before any fetch. `bytes` is nil until the user opens the
+        /// attachment (`nonImageBytes(for:)`); the observed byte count comes
+        /// from the metadata. Eviction drops only the optional bytes: the
+        /// explicit state and size stay rendered, and opening refetches.
         case notImage(bytes: Data?, byteCount: Int)
-        /// Missing or failed fetch: the card shows a placeholder with
-        /// the digest still visible, and the decision stays bound to
-        /// the digest either way. Not settled — the next card visit
-        /// retries, so a transient failure (or a digest uploaded after
-        /// the first look) recovers without recreating the store.
+        /// The daemon reported `bytes_absent`: the digest is held but its
+        /// bytes are not, so there is nothing to fetch. Decided from the
+        /// metadata before any fetch and distinct from `.fetchFailed`. The
+        /// card shows a no-bytes placeholder with the digest still visible,
+        /// and the decision stays bound to the digest either way. Not settled
+        /// — the next card visit re-reads the metadata, so a digest whose
+        /// bytes arrive in a later sync recovers without recreating the store.
         case unavailable
+        /// A reference the metadata said was fetchable (an available image
+        /// within the byte cap) whose fetch failed transiently: a transport
+        /// error, a 404, or a timeout. Distinct from `.unavailable` (no bytes
+        /// exist to fetch). Not settled — the next card visit retries.
+        case fetchFailed
         /// The encoded stream or decoded bitmap crossed its inline cap.
         case tooLarge(TooLargeReason)
     }
@@ -199,9 +236,135 @@ public final class AttachmentLoader {
         discardRetainedPayload(for: digest)
     }
 
+    private enum Classification {
+        case fetchImage
+        case unavailable
+        case notImage(byteCount: Int)
+        case tooLargeDownload(sizeBytes: Int)
+    }
+
+    /// The daemon's closed image set (plan §5.15 rule 3). The media type is a
+    /// daemon-validated fact, so membership decides "is this an image?" without
+    /// a fetch, replacing the old decode-time inference.
+    static func isImageMediaType(_ mediaType: String) -> Bool {
+        switch mediaType {
+        case "image/png", "image/jpeg", "image/gif", "image/webp":
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Decides the phase from typed metadata alone, before any fetch. Order
+    /// matters: no-bytes wins first, then the device byte cap applies to any
+    /// available reference regardless of media type, then the image/non-image
+    /// split. The cap precedes the type split because the open path for a
+    /// non-image (`nonImageBytes`) uses the same capped downloader, so an
+    /// over-cap non-image offered as openable would fail on open and flip to
+    /// `.tooLarge`; classifying it too-large up front matches the image
+    /// disposition and the client-derived "oversized" state this contract
+    /// delivers.
+    private func classify(_ reference: AttachmentReference) -> Classification {
+        switch reference.availability {
+        case .bytesAbsent:
+            return .unavailable
+        case .available:
+            break
+        }
+        guard reference.sizeBytes <= maxBytes else {
+            return .tooLargeDownload(sizeBytes: reference.sizeBytes)
+        }
+        guard Self.isImageMediaType(reference.mediaType) else {
+            return .notImage(byteCount: reference.sizeBytes)
+        }
+        return .fetchImage
+    }
+
     /// Idempotent per digest while retained: immutable settled content is
-    /// served from memory, unavailable content and evicted non-image bytes
-    /// retry, and concurrent loads coalesce onto one request.
+    /// served from memory, a retryable state (`.unavailable`/`.fetchFailed`)
+    /// re-reads the metadata, and concurrent loads coalesce onto one request.
+    /// The decision is made from the reference's daemon-validated metadata
+    /// before any fetch; only an available image within the byte cap fetches.
+    public func load(_ digest: String, reference: AttachmentReference) async {
+        switch phases[digest] {
+        case .image:
+            // Retained image bytes render from memory; an upstream eviction
+            // after they were fetched does not unshow them. No fetch here.
+            return
+        case .notImage, .tooLarge:
+            // These hold no bytes yet (a non-image fetches only on open, a
+            // too-large image never fetches), so a reference that now reports
+            // bytes_absent must downgrade to the explicit no-bytes state:
+            // availability is mutable between reads, and a settled phase would
+            // otherwise keep offering content the daemon no longer serves.
+            if reference.availability == .bytesAbsent {
+                store(.unavailable, for: digest)
+            }
+            return
+        case .loading:
+            // In flight: coalesce onto the running request, then reconcile
+            // with this reference. Availability is mutable between reads and
+            // the coalesced result reflects whichever reference the running
+            // request captured, so a flip that arrives mid-load must not be
+            // dropped (an absent→available flip racing a failed request would
+            // otherwise stay .fetchFailed; an available→absent flip would show
+            // a transient error instead of the explicit no-bytes state).
+            _ = await resolvedDownload(for: digest)
+            await reconcileAfterCoalescedLoad(reference, for: digest)
+            return
+        case .unavailable, .fetchFailed, nil:
+            break
+        }
+        await applyClassification(reference, for: digest)
+    }
+
+    /// Applies the reference's pre-fetch classification, fetching only a
+    /// within-cap available image. The single decision point shared by a fresh
+    /// load and by re-applying a reference whose availability flipped.
+    private func applyClassification(
+        _ reference: AttachmentReference, for digest: String
+    ) async {
+        switch classify(reference) {
+        case .fetchImage:
+            _ = await resolvedDownload(for: digest)
+        case .unavailable:
+            store(.unavailable, for: digest)
+        case .notImage(let byteCount):
+            store(.notImage(bytes: nil, byteCount: byteCount), for: digest)
+        case .tooLargeDownload(let sizeBytes):
+            store(
+                .tooLarge(.download(bytesSeenAtLeast: sizeBytes, limit: maxBytes)),
+                for: digest)
+        }
+    }
+
+    /// Reconciles the phase settled by a coalesced in-flight request with the
+    /// newest reference. A flip to bytes_absent downgrades a no-bytes-holding
+    /// phase to `.unavailable`; a flip back to available re-runs classification
+    /// for a phase that yielded no content. A retained `.image` keeps its
+    /// in-memory bytes, and a result already consistent with the reference is
+    /// left untouched (including a concurrent `.loading` that a newer task owns).
+    private func reconcileAfterCoalescedLoad(
+        _ reference: AttachmentReference, for digest: String
+    ) async {
+        switch (reference.availability, phases[digest]) {
+        case (.bytesAbsent, .notImage), (.bytesAbsent, .tooLarge),
+            (.bytesAbsent, .fetchFailed):
+            store(.unavailable, for: digest)
+        case (.available, .unavailable), (.available, .fetchFailed):
+            await applyClassification(reference, for: digest)
+        default:
+            break
+        }
+    }
+
+    /// Loads an attachment whose daemon metadata is not carried on the wire:
+    /// a conversation message attachment is a bare digest (`Message.attachments`),
+    /// unlike an evidence or claim reference. Without typed metadata there is
+    /// nothing to decide from, so this fetches and inspects the bytes. The
+    /// metadata fast path in `load(_:reference:)` is used everywhere the sync
+    /// contract does carry the §5.15 facts. A failed fetch resolves to
+    /// `.fetchFailed`, so the next visit retries.
     public func load(_ digest: String) async {
         _ = await resolvedDownload(for: digest)
     }
@@ -234,7 +397,9 @@ public final class AttachmentLoader {
             height: height,
             pixelLimit: maxRetainedImagePixels)
         phases[digest] = nil
-        await load(digest)
+        // Re-run the fetch path without re-classifying: a budget denial only
+        // arises for an image that already passed classification.
+        _ = await resolvedDownload(for: digest)
     }
 
     /// Returns the coalesced task's value directly, so a concurrent cache
@@ -253,7 +418,7 @@ public final class AttachmentLoader {
                 break
             case .notImage(let bytes, _):
                 if let bytes { return .bytes(bytes) }
-            case .unavailable:
+            case .unavailable, .fetchFailed:
                 break
             }
         }
@@ -262,6 +427,15 @@ public final class AttachmentLoader {
         }
         phases[digest] = .loading
         let task = Task {
+            // Clear the in-flight entry as part of the task's own completion, so
+            // it is gone before ANY awaiter (the initiator or a coalescer)
+            // resumes. Clearing it in the initiator after `await task.value`
+            // instead would leave a completed task visible to a coalescer that
+            // resumes first, and a coalescer that re-fetches on that stale entry
+            // (the availability-flip reconcile does) would wrongly coalesce onto
+            // the finished request. The in-flight window during the actual fetch
+            // is unchanged; only the post-completion handoff is made race-free.
+            defer { inFlight[digest] = nil }
             do {
                 try await acquireDownloadSlot()
             } catch {
@@ -281,7 +455,6 @@ public final class AttachmentLoader {
         }
         inFlight[digest] = task
         let result = await task.value
-        inFlight[digest] = nil
         disappearedDuringInFlight.remove(digest)
         if visibleRows[digest] == nil, discardAfterFetch.remove(digest) != nil {
             discardRetainedPayload(for: digest)
@@ -293,7 +466,7 @@ public final class AttachmentLoader {
             case .tooLarge(.imageBudget):
                 retryVisibleImageBudgetDenials()
                 return result
-            case .unavailable, .notImage(bytes: nil, byteCount: _), nil:
+            case .unavailable, .fetchFailed, .notImage(bytes: nil, byteCount: _), nil:
                 phases[digest] = nil
                 return await resolvedDownload(for: digest)
             case .image, .loading, .notImage, .tooLarge:
@@ -381,7 +554,10 @@ public final class AttachmentLoader {
             if wasCancelled, visibleRows[digest] != nil, let retryBudgetReason {
                 phase = .tooLarge(retryBudgetReason)
             } else {
-                phase = .unavailable
+                // The loader only fetches references the metadata said were
+                // available, so a transport failure, 404, or timeout is a
+                // transient fetch failure, not a daemon-reported no-bytes state.
+                phase = .fetchFailed
             }
         }
         store(
@@ -552,7 +728,9 @@ public final class AttachmentLoader {
             phases[digest] = .notImage(bytes: nil, byteCount: byteCount)
         case .tooLarge(.imageBudget):
             phases[digest] = nil
-        case .unavailable:
+        case .unavailable, .fetchFailed:
+            // Both are retryable no-payload states; eviction clears them so
+            // the next visit re-decides (unavailable) or retries (fetchFailed).
             phases[digest] = nil
         case .loading, .notImage, .tooLarge, nil:
             break
@@ -597,7 +775,9 @@ public final class AttachmentLoader {
                     self.retryVisibleImageBudgetDenials()
                     return
                 }
-                await self.load(digest)
+                // Re-run the fetch path directly: these are within-cap images
+                // that already passed classification, so no re-decide is needed.
+                _ = await self.resolvedDownload(for: digest)
             }
         }
     }

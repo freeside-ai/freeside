@@ -896,7 +896,7 @@ public actor MockServer {
                 throw InvalidItemError(itemID: snapshot.item.id, reason: breach)
             }
         }
-        return snapshots
+        return snapshots.map(projectingEvidenceAvailability)
     }
 
     /// nil means truly absent (404); an invalid row is a thrown
@@ -909,7 +909,7 @@ public actor MockServer {
         if let breach = snapshotBreach(snapshot) {
             throw InvalidItemError(itemID: itemID, reason: breach)
         }
-        return snapshot
+        return projectingEvidenceAvailability(snapshot)
     }
 
     func runProposalFacts(
@@ -944,6 +944,33 @@ public actor MockServer {
         _ snapshot: Components.Schemas.AttentionItemSnapshot
     ) -> String? {
         MockContractValidation.snapshotBreach(snapshot, approvedRecipes: approvedRecipes)
+    }
+
+    /// Recomputes each evidence and claim reference's availability from the
+    /// byte store on the way out, mirroring signet.projectEvidenceAvailability
+    /// (plan §5.15): run evidence and referenced claims are available only
+    /// when the digest's bytes are held, and an inline text claim renders
+    /// in-band without a fetch, so it is always available. The persisted
+    /// availability is never trusted on the wire; it is recomputed per read
+    /// exactly as the daemon does immediately before serialization, so it can
+    /// differ from the stored value and between two reads of the same item.
+    func projectingEvidenceAvailability(
+        _ snapshot: Components.Schemas.AttentionItemSnapshot
+    ) -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = snapshot
+        func availability(of digest: String) -> Components.Schemas.EvidenceAvailability {
+            attachmentBytes(digest: digest) != nil ? .available : .bytes_absent
+        }
+        for index in snapshot.item.evidence_snapshot.indices {
+            snapshot.item.evidence_snapshot[index].metadata.availability =
+                availability(of: snapshot.item.evidence_snapshot[index].digest)
+        }
+        for index in snapshot.item.agent_claims.indices {
+            let claim = snapshot.item.agent_claims[index]
+            snapshot.item.agent_claims[index].metadata.availability =
+                claim.text != nil ? .available : availability(of: claim.digest)
+        }
+        return snapshot
     }
 
     func submitCommand(_ command: Components.Schemas.ClientCommand) throws -> SubmitOutcome {
@@ -1019,7 +1046,7 @@ public actor MockServer {
             return .stale(
                 .init(
                     message: "the item's lifecycle has concluded",
-                    replacement_item: current
+                    replacement_item: projectingEvidenceAvailability(current)
                 ))
         }
         let stale =
@@ -1034,7 +1061,7 @@ public actor MockServer {
             return .stale(
                 .init(
                     message: "the item changed after the decision was rendered",
-                    replacement_item: current
+                    replacement_item: projectingEvidenceAvailability(current)
                 ))
         }
         // The command binds the live item; the action must also be one it
@@ -1063,7 +1090,7 @@ public actor MockServer {
                 return .stale(
                     .init(
                         message: "the agent's reply is still pending",
-                        replacement_item: current))
+                        replacement_item: projectingEvidenceAvailability(current)))
             }
         case .revisesProposal:
             guard let revised = payload.run_proposal_revision?.value1 else {
@@ -1387,22 +1414,22 @@ public actor MockServer {
                     prior_comments: comments,
                     claimed_addressals: addressals,
                     addressals_digest: addressalsDigest))
-            let specificationClaim = Components.Schemas.AgentClaim(
+            let specificationClaim = AttentionFixtures.agentClaim(
                 label: "Specification",
-                artifact_id: "spec-mock-\(iteration)",
+                artifactID: "spec-mock-\(iteration)",
                 digest: MockContractValidation.sha256Digest(of: revisedSpecification),
                 provenance: priorSpecClaim.provenance,
                 text: .init(media_type: .text_sol_markdown, content: revisedSpecification))
             let summary = replacement.item.reason
-            let summaryClaim = Components.Schemas.AgentClaim(
+            let summaryClaim = AttentionFixtures.agentClaim(
                 label: "freeside.summary",
-                artifact_id: "spec-summary-mock-\(iteration)",
+                artifactID: "spec-summary-mock-\(iteration)",
                 digest: MockContractValidation.sha256Digest(of: summary),
                 provenance: priorSpecClaim.provenance,
                 text: .init(media_type: .text_sol_markdown, content: summary))
-            let addressalsClaim = Components.Schemas.AgentClaim(
+            let addressalsClaim = AttentionFixtures.agentClaim(
                 label: "Addressals",
-                artifact_id: "spec-addressals-mock-\(iteration)",
+                artifactID: "spec-addressals-mock-\(iteration)",
                 digest: addressalsDigest,
                 provenance: priorSpecClaim.provenance)
             replacement.item.agent_claims = [
