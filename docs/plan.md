@@ -12,16 +12,16 @@ Freeside, its required behavior, and the order we will build it in.
 
 Read it in this order:
 
-- Sections 1–4 define the product, its goals, and its human-attention model.
-- Section 5 defines the architecture and its binding contracts.
-- Sections 6–10 define verification, review, telemetry, comprehension, and
+- Sections [1](#1-what-freeside-is)–[4](#4-the-attention-model) define the product, its goals, and its human-attention model.
+- Section [5](#5-architecture) defines the architecture and its binding contracts.
+- Sections [6](#6-verification)–[10](#10-operations-and-onboarding) define verification, review, telemetry, comprehension, and
   operations.
-- Sections 11–12 define the roadmap and exit criteria.
-- Sections 13–15 record current decisions, risks, and naming.
+- Sections [11](#11-roadmap-build-order-and-coordination)–[12](#12-exit-criteria-definitions) define the roadmap and exit criteria.
+- Sections [13](#13-decisions-log)–[15](#15-naming-and-references) record current decisions, risks, and naming.
 
-The default-branch commit digest identifies the plan of record (Section 5.8).
-`revision` is only a human label. It changes when Section 9 classifies a change
-as material. Section 13 records the current revision, and its linked history
+The default-branch commit digest identifies the plan of record (Section [5.8](#58-control-plane-trust)).
+`revision` is only a human label. It changes when Section [9](#9-comprehension) classifies a change
+as material. Section [13](#13-decisions-log) records the current revision, and its linked history
 records every revision. PR bodies and decision notes explain what changed and
 why.
 
@@ -144,7 +144,7 @@ The brand register's tagline puts it plainly: *the harness runs the agent;
 you hold the reins.*
 
 The supported reference deployment is a Mac Studio. The daemon core remains
-Linux-portable under Section 3.3.
+Linux-portable under Section [3.3](#33-portability).
 
 ### The End-to-End Workflow
 
@@ -186,10 +186,10 @@ The project succeeds only if all four claims hold:
 1. **Useful, correct work per unit of my attention rises** against a
    passively logged, normalized baseline.
 2. **Decision quality is preserved.**
-3. **Safety invariants hold** under Section 12, verified by conformance and
+3. **Safety invariants hold** under Section [12](#12-exit-criteria-definitions), verified by conformance and
    adversarial tests, never read off telemetry.
 4. **Autonomy is preserved:** exceptional interruptions remain rare and trend
-   down under Section 3.2.
+   down under Section [3.2](#32-the-interruption-budget).
 
 These claims are gates, not the goal. Even if all four hold, cost and
 maintenance still decide whether Freeside creates a positive return.
@@ -203,11 +203,11 @@ maintenance still decide whether Freeside creates a positive return.
    synchronization, honest per-delivery status, push notification, and
    self-contained decision cards on iPhone and Mac.
 2. **Keep elaboration in the tested value proposition, but severable.** It uses
-   daemon-fetched research artifacts (Section 5.4). (Decider: user.)
+   daemon-fetched research artifacts (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). (Decider: user.)
 3. **Support autonomous initiation.** Manual, label, and scan initiators run in
    `propose` or `auto_start` mode.
 4. **Use yield-driven review remediation.** Round counts are emergency brakes,
-   not the normal stopping rule, and the Section 7 drift audit judges the
+   not the normal stopping rule, and the Section [7](#7-review-policy) drift audit judges the
    change as a whole, not only the stream of findings.
 5. **Bound execution.** Capabilities are fixed at spawn; no workspace receives
    GitHub credentials; every run declares a credential mode; every stage uses a
@@ -221,11 +221,11 @@ maintenance still decide whether Freeside creates a positive return.
 8. **Let chat author artifacts and the engine execute them.**
 9. **Let verification define completion.** It is deterministic, recipe-trusted,
    and clean-room. The verifier captures visual evidence; the implementer does
-   not claim it. Provenance is machine-enforced (Section 5.15).
+   not claim it. Provenance is machine-enforced (Section [5.15](#515-evidence-and-images)).
 10. **Make decisions durable.** Committed decisions survive restart; external
     effects converge; database and artifact state restore coherently from
     complete encrypted checkpoints; clients converge on daemon state.
-11. **Record enough instrumentation for agent-driven optimization** (Section 8).
+11. **Record enough instrumentation for agent-driven optimization** (Section [8](#8-observability-and-optimization-telemetry)).
 12. **Make operational simplicity a 1A exit criterion.** Automate setup only
     after interfaces survive real use. Privileged installation is a narrow
     elevation boundary, and the daemon never retains root. (Decider: user.)
@@ -244,19 +244,19 @@ maintenance still decide whether Freeside creates a positive return.
 5. Silent provider fallback, voice, a pipeline DSL, and briefings are out of
    scope until recorded outcomes from later phases justify them. A project
    lineup may name a switch for each failure class; that switch is explicit and
-   recorded, so it is not fallback (Section 4).
+   recorded, so it is not fallback (Section [4](#4-the-attention-model)).
 6. It is neither a formal pre-build validation study nor a generic CI security
    auditor.
 7. It is not a general-purpose synchronization platform. Server-authoritative
    snapshots are enough; there is no client-facing event log and no CRDT.
 8. It never requires a service that Freeside operates. Phase 1 depends on no
    such service, and the fully unmanaged deployment stays first-class
-   permanently. Managed infrastructure may come later (Section 5.1) to remove
+   permanently. Managed infrastructure may come later (Section [5.1](#51-overview)) to remove
    operational friction, but it is optional convenience, never control-plane
    authority. Losing it may cost convenience (reachability, delivery, or
    portable operation), never local state or standalone workflow authority.
    One scoped exception: in portable mode, replica storage carries head trust,
-   meaning activation fencing and the recovery frontier (Section 5.1).
+   meaning activation fencing and the recovery frontier (Section [5.1](#51-overview)).
 
 ## 3. Operating Principles
 
@@ -276,7 +276,7 @@ The following classes are non-waivable:
 - GitHub credential separation;
 - CI trust-profile validity;
 - candidate changes to automation-control paths (a reviewer-instruction
-  edit is advisory, Section 5.8);
+  edit is advisory, Section [5.8](#58-control-plane-trust));
 - control-plane modifications;
 - stale-approval rejection;
 - failed runner conformance, including the workspace-handoff gate;
@@ -288,7 +288,7 @@ The following classes are non-waivable:
 ### 3.2 The Interruption Budget
 
 Every AttentionItem is tagged `planned_gate` or `exceptional`. The exceptional
-rate is a health metric; a rising rate is a defect, subject to Section 3.1.
+rate is a health metric; a rising rate is a defect, subject to Section [3.1](#31-autonomy-inside-the-ward).
 
 **Self-service rule:** when an eligible class of interruption recurs, the user
 must be able to resolve the whole class through the control-plane proposal
@@ -314,15 +314,15 @@ that exposure must appear in the residual-risk documentation. (Decider: user.)
 ### 3.4 Simplicity
 
 Setup, onboarding, and upkeep are product features with committed targets
-(Section 10). A permissive first run uses the honest `attended_dev` operating
-mode (Section 5.7), never a bypass. Strict settings always gate `unattended`
+(Section [10](#10-operations-and-onboarding)). A permissive first run uses the honest `attended_dev` operating
+mode (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)), never a bypass. Strict settings always gate `unattended`
 operation.
 
 ### 3.5 Oversight
 
 Oversight is part of my contribution, not pure overhead. It catches failures
 early, so it can't be optional. Oversight also needs to be frictionless because
-chores get skipped. Sections 8 and 9 define the tools for that: honest attention
+chores get skipped. Sections [8](#8-observability-and-optimization-telemetry) and [9](#9-comprehension) define the tools for that: honest attention
 telemetry and sampled decision audits.
 
 ## 4. The Attention Model
@@ -344,7 +344,7 @@ sync), `pr_head_sha`, `pr_reference? {repo, number}`, `item_version`,
 `status`.
 
 `evidence_snapshot` holds engine facts and artifacts, and only artifacts the
-verifier or the daemon produced under an approved recipe (Section 5.15). Agent
+verifier or the daemon produced under an approved recipe (Section [5.15](#515-evidence-and-images)). Agent
 claims are labeled as claims. Cards render image attachments straight from the
 artifact store, addressed by digest.
 
@@ -355,7 +355,7 @@ artifact store, addressed by digest.
 
 A provider accepting a notification is never called “delivered.” Any stronger
 word needs a real receipt from the device. The headline attention-latency
-metric is the time from opening an item to deciding it; the Section 1 measure,
+metric is the time from opening an item to deciding it; the Section [1](#1-what-freeside-is) measure,
 useful, correct work per unit of attention, governs. An item's timing fields
 are aggregates derived from its deliveries.
 
@@ -368,7 +368,7 @@ Approval is not a universal action.
 | `spec_approval` | Approve, request changes, discuss, or stop. Render the full specification. A revision shows the diff from the last reviewed version, prior comments, and claimed addressals. |
 | `review_diminishing_returns` | Finish now; apply the current batch and finish; continue under specified policy; or turn a recurring preference into a project-policy proposal PR. It never mutates policy directly. |
 | `review_dispute` | For a routed finding: discuss or stop; the transaction that would execute the adjudication is deferred (#1016). For an observation-only shadow finding: approve continuation without routing the finding, discuss, or stop; only approve lets the run reach readiness, and stop ends the run and raises the normal durable publication-blocked surface. |
-| `finding_adjudication` | Accept the recommended route, choose an offered alternative, discuss, or stop (added with the Section 7 adjudication routing, 1B). Acceptance binds to the adjudication artifact digest and the item version; a Discuss response re-invokes adjudication against the same version bindings, and the new artifact supersedes the item. Stop leaves the run parked. |
+| `finding_adjudication` | Accept the recommended route, choose an offered alternative, discuss, or stop (added with the Section [7](#7-review-policy) adjudication routing, 1B). Acceptance binds to the adjudication artifact digest and the item version; a Discuss response re-invokes adjudication against the same version bindings, and the new artifact supersedes the item. Stop leaves the run parked. |
 | `review_contradiction` | Recover only the exact persisted contradiction named by the card, or leave it parked. The card renders the bound run, invocation, round, base SHA, head SHA, and immutable failure-body digest; recovery preserves the original failure evidence. |
 | `review_configuration` | Adopt the review configuration (`adopt_review_configuration`), discuss, or stop. The run is parked, not terminal. Adopting authorizes one operator-approved profile supersession, limited to review configuration, for exactly the parked failure the card's binding names. The superseding profile is resolved at decision time as the repository's currently activated revision and re-gated on every read. Stop concludes the run as a configuration failure, as it always did. The card renders the same bound coordinates as `review_contradiction` plus the digest of the superseded profile. |
 | `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. When the failure is classified as provider quota, credential expiry, or capacity, the card also offers retry under a qualified alternate agent, or wait (see the explicit alternate-agent retry below). |
@@ -376,9 +376,9 @@ Approval is not a universal action.
 | `publish_blocked` | Rerun trust evaluation, inspect the trust failure, or stop. Which publication path a repository uses is repository configuration, never a per-item choice (revision 44). |
 | `ready_for_final_review` | View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. |
 | `run_proposal` | Start, **start with changes**, decline, or snooze. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the run from the exact revised digest. It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
-| `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section 5.13 registry (added in 1B with the registry; first instance: follow-up issue filings in 1B.1, with proposed watches following once their schedule kind lands, Section 5.16). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `run_proposal`'s start-with-changes. `run_proposal` remains its own type. |
+| `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registry (added in 1B with the registry; first instance: follow-up issue filings in 1B.1, with proposed watches following once their schedule kind lands, Section [5.16](#516-the-durable-scheduler)). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `run_proposal`'s start-with-changes. `run_proposal` remains its own type. |
 | `system_health` | Acknowledge, run doctor, stop unattended operation, or, on the notice a stop raises, resume unattended operation; the rules follow the table. |
-| `blocked` | Consolidates external waits that exceed Section 5.12 thresholds. It is read-only. |
+| `blocked` | Consolidates external waits that exceed Section [5.12](#512-workflow-definition-initiators-and-artifacts) thresholds. It is read-only. |
 
 **`system_health` rules.** A revoked Codex identity marker also offers resolve
 re-enrollment (`resolve_reenrollment`), but only once the marker carries the
@@ -398,12 +398,12 @@ Every item declares an immutable posture:
 A stop is a durable operating transition: only an explicit resume reopens
 unattended admission; a restart alone never does.
 
-Section 9 governs each type's presentation: what its card leads with and what
+Section [9](#9-comprehension) governs each type's presentation: what its card leads with and what
 layers below.
 
 **Explicit alternate-agent retry.** A provider quota, credential expiry, or
 capacity failure offers three resolutions beyond discuss: retry under a
-qualified alternate agent (Section 5.4), wait, or stop. Qualified is
+qualified alternate agent (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)), wait, or stop. Qualified is
 failure-specific, read from recorded facts:
 
 - A quota failure needs an agent on a different usage pool (two harness clients
@@ -418,16 +418,16 @@ failure, including a review-side quota or expiry failure; it never widens a
 card's other actions.
 
 Each switch is a new recorded attempt that preserves the original failure and
-its evidence, re-evaluates cost owner and the Section 7 review-independence rule
+its evidence, re-evaluates cost owner and the Section [7](#7-review-policy) review-independence rule
 against the new agent, and continues provider state only where the adapter
-proves compatibility (Section 5.8; a different adapter is a fresh invocation).
+proves compatibility (Section [5.8](#58-control-plane-trust); a different adapter is a fresh invocation).
 
 By default the operator chooses from the card. A project lineup may instead name
 the switch per failure class; it then happens and is carded, a recorded choice
 like any other. Freeside never learns a preferred agent from past switches, and
-a switch is never silent (Section 2 item 5; Section 14, single-provider
+a switch is never silent (Section [2](#2-goals-and-non-goals) item 5; Section [14](#14-risks), single-provider
 execution capacity). Switching the review agent opens a new convergence segment
-(Section 7): the new reviewer's first pass is not the old reviewer's next round.
+(Section [7](#7-review-policy)): the new reviewer's first pass is not the old reviewer's next round.
 
 **Recommendation authority.** An item may carry at most one
 `recommendation {action, reason, source, provenance, confidence?}`. It selects
@@ -437,7 +437,7 @@ contract because the card renders judgment differently from fact. The
 required, immutable `provenance` is a closed union with one shape per source:
 `daemon_policy {rule_digest, input_digest}` for deterministic policy computed
 from canonical state; `agent_judgment {judgment_site, invocation_id,
-artifact_digest}` for the schema-validated output of a declared Section 5.13
+artifact_digest}` for the schema-validated output of a declared Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)
 judgment site; or `project_policy {policy_key, resolved_policy_digest,
 application_digest}` for an explicit human or project policy choice.
 
@@ -467,7 +467,7 @@ presented_artifact_digests, digest}`
 
 `digest` is the value a source record commits to: the content address of the
 canonical `{item_id, epoch, subject, requested_decision (sorted set),
-pr_head_sha}`. It already names the item and the epoch, and Section 5.14's
+pr_head_sha}`. It already names the item and the epoch, and Section [5.14](#514-client-synchronization-and-conversations)'s
 `item_decision_surface_digest` is this digest. `presented_artifact_digests` is
 transition state only and never enters the preimage. The record lives beside
 the item, not on it; #917 projects `decision_surface {epoch, digest}` onto the
@@ -561,11 +561,11 @@ renders.
 An `agent_judgment` recommendation is a labeled proposal. The type case is the
 finding adjudicator's parked batch: the item-level recommendation endorses the
 accept-the-recommended-route action, while each finding's route, rationale,
-producer, and confidence stay in the Section 7 adjudication artifact and are
+producer, and confidence stay in the Section [7](#7-review-policy) adjudication artifact and are
 never collapsed into this one field. `confidence` appears only when the
 producer supplies it. An item without a recommendation offers equally weighted
 choices. A client never infers a recommendation, and the order of
-`requested_decision` carries no endorsement. Section 9 governs the
+`requested_decision` carries no endorsement. Section [9](#9-comprehension) governs the
 recommendation-led presentation.
 
 ### Lifecycle Rules
@@ -578,7 +578,7 @@ recommendation-led presentation.
 - Notifications are read-only hints, never authority.
 - A fault class is suggested; one tap corrects it, and it may stay unknown.
 - WIP caps apply to runs and initiatives. The all-work view is Freeside's
-  deterministic initiative projection (Sections 5.18 and 11); GitHub Projects
+  deterministic initiative projection (Sections [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) and [11](#11-roadmap-build-order-and-coordination)); GitHub Projects
   no longer serves that role (overturned, revision 25).
 
 ## 5. Architecture
@@ -595,28 +595,28 @@ GitHub  <── reconciliation and publication ──>  freesided
 
 | Component | Responsibility |
 | --- | --- |
-| **GitHub** | Owns source, issues, PRs, reviews, checks, and merge. Native Codex review, when observed, is recorded as best-effort extra evidence (Section 7). Freeside reconciles each active resource independently; there is no global cursor. |
+| **GitHub** | Owns source, issues, PRs, reviews, checks, and merge. Native Codex review, when observed, is recorded as best-effort extra evidence (Section [7](#7-review-policy)). Freeside reconciles each active resource independently; there is no global cursor. |
 | **Event inbox** | Accepts reconciled GitHub state, intake scans, cron events, and manual events idempotently. |
 | **Workflow engine** | Runs code-defined state machines using policy from configuration. It records the resolved rein-policy digest and separate active, elapsed, and waiting clocks for each run. |
-| **Scheduler** | Owns the closed union of durable schedule kinds, fire-time validation, and transactional redelivery (Section 5.16). |
+| **Scheduler** | Owns the closed union of durable schedule kinds, fire-time validation, and transactional redelivery (Section [5.16](#516-the-durable-scheduler)). |
 | **signet** | Owns AttentionItems, deliveries, conversations, synchronization, device pairing, and ntfy integration. |
 | **Research fetcher** | Retrieves immutable, digest-addressed research artifacts for agents. |
-| **StageDriver** | Runs bounded local agent batch jobs: Claude in 1A, joined by Codex in 1B (Section 11). A permanent fake supports deterministic tests. |
-| **ReviewSource** | Runs the Freeside-invoked review stage; the first production binding is a local Codex invocation (Section 7). A permanent fake supports deterministic tests. |
+| **StageDriver** | Runs bounded local agent batch jobs: Claude in 1A, joined by Codex in 1B (Section [11](#11-roadmap-build-order-and-coordination)). A permanent fake supports deterministic tests. |
+| **ReviewSource** | Runs the Freeside-invoked review stage; the first production binding is a local Codex invocation (Section [7](#7-review-policy)). A permanent fake supports deterministic tests. |
 | **Finding classifier** | Adds versioned annotations to immutable raw review findings. |
 | **ward** | Provides runner capability classes, workspace-handoff capabilities, per-stage egress, operating modes, and conformance checks. |
 | **gauntlet** | Runs out of process. It normalizes export, treats import and evidence as hostile, builds a fresh checkout, and starts clean verification and evidence capture. |
 | **Git/publish** | Owns all GitHub credentials, deterministic external identities, invocation reconciliation, and, in 1B, the EvidencePublisher. |
-| **Store** | Uses SQLite with inbox/outbox and a content-addressed artifact store. Section 5.10 defines encrypted checkpointed backup. |
+| **Store** | Uses SQLite with inbox/outbox and a content-addressed artifact store. Section [5.10](#510-coherent-backup-encrypted-checkpoints) defines encrypted checkpointed backup. |
 | **Sync API** | Serves atomic snapshots with revision, epoch, and invalidation semantics. |
 | **Freeside app** | Provides the SwiftUI macOS and iOS inbox, decision detail, and run timeline using platform-protected caches. |
 
 **Core authority and replaceable infrastructure.** The daemon and clients own
-application semantics and authentication. Remote reachability (Section 5.2),
-notification delivery, replica storage (Section 5.10), and external health
+application semantics and authentication. Remote reachability (Section [5.2](#52-the-daemon-and-its-supervisor)),
+notification delivery, replica storage (Section [5.10](#510-coherent-backup-encrypted-checkpoints)), and external health
 monitoring are replaceable infrastructure boundaries. Each has a reference
 implementation the operator selects, and each may later get a Freeside-operated
-managed implementation. The Section 5.10 replica-store contract is the template:
+managed implementation. The Section [5.10](#510-coherent-backup-encrypted-checkpoints) replica-store contract is the template:
 a capability-based requirement set with a named first reference backend that is
 never an architectural assumption. One rule governs every such boundary: managed
 infrastructure may improve reachability, availability, storage, and delivery,
@@ -624,17 +624,17 @@ but it never becomes necessary for workflow authority or local operation, and it
 never increases Freeside's authority.
 
 One scoped exception is stated outright rather than implied away. In portable
-mode the Section 5.10 replica store is by design the oracle for both activation
+mode the Section [5.10](#510-coherent-backup-encrypted-checkpoints) replica store is by design the oracle for both activation
 fencing and the recovery frontier. So every replica backend, operator-selected
 or Freeside-managed, sits inside the authority trust boundary for host
 activation and for how current the restored frontier is. The unconditional rule
 covers reachability, notification delivery, and monitoring; a managed replica
-backend is admissible only under the Section 5.10 contract, with that fencing
+backend is admissible only under the Section [5.10](#510-coherent-backup-encrypted-checkpoints) contract, with that fencing
 trust acknowledged.
 
 Notification delivery follows the same pattern. ntfy (hosted or self-hosted) is
 the Phase 1 reference channel, and a Freeside-operated push service is a
-possible later channel. Section 4's AttentionDelivery semantics stay
+possible later channel. Section [4](#4-the-attention-model)'s AttentionDelivery semantics stay
 channel-neutral: no channel implementation type enters the contract, a provider
 accepting a notification stays distinct from delivery evidence, and
 notifications remain non-authoritative hints.
@@ -664,7 +664,7 @@ and the operator app.
   so unattended operation assumes a logged-in operator. The
   terminal-launched process this replaces had the same bound.
 - **Hardened (multi-user or server hosts, deferred):** a dedicated-user
-  LaunchDaemon or systemd unit installed through the Section 10 elevation
+  LaunchDaemon or systemd unit installed through the Section [10](#10-operations-and-onboarding) elevation
   helper. It gives boot-time start, logout survival, and operator isolation.
   It stays the end state but is not scheduled in Phase 1.
 
@@ -677,7 +677,7 @@ Tailscale.
 the process exits only involuntarily or to be restarted. Today's fatal-channel
 writers and exit paths fall into these classes:
 
-- **Durable stop** (close unattended admission durably through the Section 4
+- **Durable stop** (close unattended admission durably through the Section [4](#4-the-attention-model)
   gate: an operator stop appends the stop transition, and a system stop files a
   blocking `system_health` item; keep serving reads; only an explicit resume
   reopens admission, and a restart never does):
@@ -686,7 +686,7 @@ writers and exit paths fall into these classes:
     invariant on durable state recurs on restart, and a respawn loop would hide
     it;
   - local backup maintenance failure, meaning persistent disk or encryption
-    damage (Section 5.10);
+    damage (Section [5.10](#510-coherent-backup-encrypted-checkpoints));
   - a doctor or janitor pass failure with a local or definitively classified
     cause (an unreadable operational source, revoked or broken GitHub App
     authority). Health can no longer be asserted. This settles the doctor
@@ -711,7 +711,7 @@ classes; every durable-stop condition is consumed before it reaches the channel.
 
 **Restart policy.** Restart always, under the platform throttle. This is safe
 only because every deliberate stop is in-process and durable: a restart can
-resume only work the contract says is safe to resume, and Section 4's rule
+resume only work the contract says is safe to resume, and Section [4](#4-the-attention-model)'s rule
 stands (a restart never reopens unattended admission).
 
 **Stop.** Supervisor stop is SIGTERM with an effectively unlimited exit timeout,
@@ -723,14 +723,14 @@ kill-recovery covers them.
 
 **Reachability.** Signet's authenticated HTTP and WebSocket API is one
 application protocol, exposed unchanged over every reachability mode: direct
-loopback, Tailscale, and a possible future managed relay (Section 5.19).
+loopback, Tailscale, and a possible future managed relay (Section [5.19](#519-deferred-subsystems-provisional-contracts)).
 Tailscale is the Phase 1 reference remote-reachability mechanism, not an
 architectural property of Signet; neither Tailscale nor its address model is
 an architectural assumption. The Phase 1 security gate is unchanged: the
 production API binds only to loopback or an exact verified Tailscale-owned
 address. Reachability restricts who can contact Signet; it never
 authenticates anyone to it, because every mode presents the same Freeside
-device credential (Section 5.14). The seam stays architectural prose: no
+device credential (Section [5.14](#514-client-synchronization-and-conversations)). The seam stays architectural prose: no
 reachability abstraction enters the daemon until a second real
 implementation exists.
 
@@ -739,7 +739,7 @@ implementation exists.
 - Unauthenticated `GET /health` returns exactly `{status, version,
   started_at}`: liveness, version-skew detection, and crash-loop evidence (a
   moving start time under a supervisor). Everything richer stays on the
-  authenticated surfaces (Sections 4 and 5.14); the route tells an unpaired
+  authenticated surfaces (Sections [4](#4-the-attention-model) and [5.14](#514-client-synchronization-and-conversations)); the route tells an unpaired
   caller nothing more.
 - Under supervision, the unit file sets an explicit fixed loopback listen
   address, never the ephemeral default. Bare foreground runs keep
@@ -749,12 +749,12 @@ implementation exists.
   every start. Under a supervisor there is no terminal to read stdout, and
   same-user file readability is the same trust boundary as today's
   terminal. The stdout line remains for foreground runs.
-- The away-from-host liveness probe stays outside the process (Section 5.16
+- The away-from-host liveness probe stays outside the process (Section [5.16](#516-the-durable-scheduler)
   keeps process heartbeats as plain tickers). An external probe polls
   `/health` and notifies over ntfy when the daemon is unreachable or
   crash-looping; it lands in 1B.1. The local surface is the Mac app's menu
-  bar presence (Section 10). The probe is replaceable monitoring
-  infrastructure (Section 5.1): the Phase 1 reference is
+  bar presence (Section [10](#10-operations-and-onboarding)). The probe is replaceable monitoring
+  infrastructure (Section [5.1](#51-overview)): the Phase 1 reference is
   operator-controlled. A future managed monitor may observe relay-connector
   presence, but it reports only what it can prove: connector presence is
   not daemon health, and managed-service uncertainty is never reported as
@@ -781,11 +781,11 @@ accepted result. The workflow never advances twice.
 Phase 1 uses:
 
 - one harness adapter, **Claude Code**, in 1A. A second, the **Codex
-  CLI**, joins in 1B as an execution capacity hedge (Section 11), blocked
+  CLI**, joins in 1B as an execution capacity hedge (Section [11](#11-roadmap-build-order-and-coordination)), blocked
   on its pre-adoption gates (#401). Further adapters (pi first) follow as
-  consumers of the same admitted-agent contract (Section 5.4);
+  consumers of the same admitted-agent contract (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency));
 - one production review source, a **Freeside-invoked local Codex review**
-  binding (Section 7). GitHub-native Codex review is best-effort extra
+  binding (Section [7](#7-review-policy)). GitHub-native Codex review is best-effort extra
   evidence and never satisfies the review requirement; and
 - permanent fakes of both interfaces.
 
@@ -807,7 +807,7 @@ GitHub-native Codex review has no trigger path visible to the App.
 
 Each review pass is therefore a control-plane invocation reconciled by
 `invocation_id` like any other stage. Invocation failure closes safely under
-Section 7's classification. Nested `AGENTS.md` guidance is documented Codex
+Section [7](#7-review-policy)'s classification. Nested `AGENTS.md` guidance is documented Codex
 behavior. Automatic re-review of remediation heads is a standing 1B integration
 test. The Claude setup token's inference-only scope is contract-tested against
 the pinned CLI.
@@ -834,7 +834,7 @@ lives as a single read-only file on a per-identity credential volume. A
 daemon-owned enrollment transaction authors or replaces that volume while no
 execution can use the identity. Phase 1A mounts no per-identity writable Claude
 state. Ward instead supplies a read-only clean `CLAUDE_CONFIG_DIR`, a narrow
-per-invocation continuity mount, and per-launch scratch state (§5.8); none is
+per-invocation continuity mount, and per-launch scratch state ([§5.8](#58-control-plane-trust)); none is
 credential state, and none is reusable by a different invocation. Serializing
 writers on one shared directory would not work: it would not isolate a later
 invocation from settings or hooks an earlier writer persisted.
@@ -856,7 +856,7 @@ guarantees; the work unit's decision note lists them.
 Secret scanning is **best effort**, deliberately. It covers supported text
 formats. Size, type, provenance, and publication controls govern opaque
 artifacts. Universal detection across arbitrary encodings and images is
-impossible; Section 5.15 records the image residual.
+impossible; Section [5.15](#515-evidence-and-images) records the image residual.
 
 Every stage also receives an egress profile from control-plane policy. Profiles
 sit above the credential-mode floor and represent different risk classes:
@@ -895,7 +895,7 @@ CONNECT authority, so a registry entry cannot reach a shared-CDN neighbor. The
 tunnel cannot constrain HTTP method or path, so a registry that co-hosts a write
 endpoint (npm publish) leaves a residual: an injected writer holding an
 attacker-supplied registry credential could publish workspace content there.
-Section 14 records the residual; a project policy may exclude such hosts. This
+Section [14](#14-risks) records the residual; a project policy may exclude such hosts. This
 exposure is materially narrower than `provider_web_read` and is priced
 separately from it, never folded into that record.
 
@@ -933,7 +933,7 @@ native and unmodified.
 
 Freeside admits what an agent consumes by digest: the
 base commit, the prompt package, the vendor instructions, the policy, the
-input artifacts (Sections 5.8, 5.9, 5.12). Until this revision, the agent's
+input artifacts (Sections [5.8](#58-control-plane-trust), [5.9](#59-durability-effectively-once), [5.12](#512-workflow-definition-initiators-and-artifacts)). Until this revision, the agent's
 own configuration was the one major input not admitted that way. An
 **agent** is one operator-authored document in the control-plane tree,
 reviewed as a diff, with four lines and no role:
@@ -956,7 +956,7 @@ allows and the adapter can send; and the enrollment's identity is enabled.
 "Harness, model, effort" is how a client renders an agent. A **lineup** is a
 policy's map of roles to agents. The project lineup, or the deployment lineup
 beneath it, is the only standing selection and the only approval. The one
-per-attempt selection is the Section 4 alternate-agent card: a recorded choice
+per-attempt selection is the Section [4](#4-the-attention-model) alternate-agent card: a recorded choice
 among agents resolved from the same tree. It never approves an agent the tree
 does not carry and never changes the lineup.
 
@@ -1039,10 +1039,10 @@ every other input:
    keeps its closure by digest. An offer whose authored `not_after` precedes the
    attempt deadline does not resolve. A proposal binds `(name, digest)` and goes
    stale if either moves.
-2. *Selected.* The lineup names that digest for the role, or the Section 4
+2. *Selected.* The lineup names that digest for the role, or the Section [4](#4-the-attention-model)
    alternate-agent card records it as this attempt's choice. The admission
    snapshot says which.
-3. *Proved.* Runner conformance holds (Section 5.7, unchanged), and the adapter
+3. *Proved.* Runner conformance holds (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), unchanged), and the adapter
    build's conformance record has proved capabilities covering the launch. That
    record is one per build, produced by the stage contract suite. It proves the
    store contract too: a sanitized single-route store, read-only to the agent,
@@ -1086,13 +1086,13 @@ provenance entry per role), what was admitted (the step 5 snapshot), and
 what was observed (effective model and serving operator with provenance,
 usage redacted and sourced, auxiliary inference, routing). Observed facts
 never authorise a future selection; they are authoritative history. A
-versioned **treatment digest** groups runs for comparison (Section 8). It
+versioned **treatment digest** groups runs for comparison (Section [8](#8-observability-and-optimization-telemetry)). It
 covers route behaviour, adapter, launch, offer behaviour, and requested and
 effective effort, and it excludes enrollment, generation, cost owner,
 pricing, terms, deprecation, and labels. The agent digest stays the audit
 key.
 
-The Section 7 review-independence rule reads the offers. By default the review
+The Section [7](#7-review-policy) review-independence rule reads the offers. By default the review
 offer's lineage group differs from the implementation offer's. The group is
 derived per vendor family and curated conservatively; the same weights through
 any route are one group; unknown lineage fails closed. A project lineup may
@@ -1124,7 +1124,7 @@ The cutover rules of revision 36 carry forward unchanged. A nonterminal run or
 admission that carries an `auth_identity_id` but no agent digest is read under a
 permanent legacy rule: it keeps its admitted identity and credential mode and is
 never resolved against a current agent. An interim identity that cannot be
-adopted is retired; its nonterminal runs are cancelled through the Section 5.7
+adopted is retired; its nonterminal runs are cancelled through the Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)
 contract with an AttentionItem naming it, and its requests and policies stay
 unbound until the operator remaps them. Agent-only selection activates only
 after every such run has closed. A binding the cutover cannot classify, rewrite,
@@ -1156,7 +1156,7 @@ agent's identity on every selection and recorded with it, so one project can
 attribute a review to one subscription and an implementation to another.
 The operator owns compliance with each provider's terms for multi-account
 use; Freeside attributes usage to a named identity and neither endorses nor
-polices the arrangement (Section 14, subscription-terms drift).
+polices the arrangement (Section [14](#14-risks), subscription-terms drift).
 
 #### Observation, Never Authority
 
@@ -1191,7 +1191,7 @@ never a changed selection.
 
 What a probe can report is a pinned-CLI empirical contract. The Codex app-server
 probe is expected to report account and plan facts, subject to the
-refresh-safety spike Section 10 gates it on. The pinned Claude CLI offers a
+refresh-safety spike Section [10](#10-operations-and-onboarding) gates it on. The pinned Claude CLI offers a
 token digest plus an auth check; plan, quota, and expiry are not observable
 through it, so the Claude probe's realistic floor is integrity plus
 authentication, not account state.
@@ -1273,7 +1273,7 @@ The audit attests the PR job's **effective authority**, including:
 Phase 1A supports one repository with a machine-readable profile. A human
 reviews it once; the daemon binds it by digest; drift fails closed.
 
-Publication authenticates as a per-user agent principal under Section 10's
+Publication authenticates as a per-user agent principal under Section [10](#10-operations-and-onboarding)'s
 GitHub App identity model. Every trusted registration is bound to that principal
 by numeric App ID; App names and slugs are display metadata, never trust inputs.
 Installation-token minting fails closed unless the target repository is
@@ -1319,10 +1319,10 @@ Exactly two channels leave the agent workspace, and they never mix:
    untrusted data whose schema only the importer interprets and validates,
    never as git objects. The channel permits regular files only. Symlinks,
    submodules, special files, unusual modes, and automation-control changes
-   (Section 5.5) are publish-blocking; a reviewer-instruction change
-   (Section 5.8) is detected and published as an advisory finding.
+   (Section [5.5](#55-the-ci-trust-boundary)) are publish-blocking; a reviewer-instruction change
+   (Section [5.8](#58-control-plane-trust)) is detected and published as an advisory finding.
 2. The **evidence channel** carries typed, provenance-bearing artifacts under
-   Section 5.15.
+   Section [5.15](#515-evidence-and-images).
 
 The agent commits normally with git, but no trusted component ever reads or
 imports anything from its `.git`: no objects, hooks, configuration, or history
@@ -1345,7 +1345,7 @@ Published tree content is confined by construction to the trusted base and the
 validated final snapshot, so the tree-content publication surface equals the one
 a single-commit import publishes; the screened messages are the one new
 published surface. Intermediate commits are unattested ancestry, and evidence
-and publication identities bind to the single candidate head (Section 5.15).
+and publication identities bind to the single candidate head (Section [5.15](#515-evidence-and-images)).
 Agent commit SHAs, timestamps, and identities never cross.
 
 Publishing messages cross as validated, labeled claim text, screened as
@@ -1361,7 +1361,7 @@ surfaces a notice naming the reason class. A zero-change import under
 and surfaces a present plan as present-but-not-honored.
 
 Under `plan_preferred` a decoded secret anywhere in the plan's text is
-publish-blocking until remediated (Section 3.1, non-waivable). Under
+publish-blocking until remediated (Section [3.1](#31-autonomy-inside-the-ward), non-waivable). Under
 `single_commit` a plan is not decoded or honored, its presence is surfaced as a
 notice, and escaped credentials keep only the ward's literal best-effort
 coverage.
@@ -1375,7 +1375,7 @@ the preflight use a path-component boundary; near-prefix names such as
 
 The importer never trusts the workspace's `.git`, hooks, configuration, or
 agent-written manifests. It enforces the exact base SHA, canonical paths,
-allowlists, size limits, control-plane restrictions, and Section 5.4 best-effort
+allowlists, size limits, control-plane restrictions, and Section [5.4](#54-credential-modes-egress-profiles-and-concurrency) best-effort
 secret scanning.
 
 Permanent tests include malicious manifests, commit plans, blobs, and
@@ -1403,7 +1403,7 @@ silently downgrades. Named capabilities are:
   and direct connections. The realized proxy allowlist is conformance-checked
   against the requested profile, never trusted from configuration. This
   capability attests the enforcement mechanism, which is distinct from the
-  *requested* egress profile (Section 5.4).
+  *requested* egress profile (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)).
 
 #### The First Ward Gate
 
@@ -1467,7 +1467,7 @@ completes teardown and closes `canceled`; the driver then converges
 `ExecutionOutcomeCanceled`. Cancellation never makes the partial workspace
 a publication candidate or a clean-verifier input. For a graceful portable
 handoff, the intent sets `recovery_capture_required`. After quiescence,
-§5.10's normalized encrypted workspace capture completes, and its verified
+[§5.10](#510-coherent-backup-encrypted-checkpoints)'s normalized encrypted workspace capture completes, and its verified
 digest is durable in the ward journal before cleanup can erase its source or
 the ward can close `canceled`. Restore exposes that recovery object only as
 untrusted input to a new attempt.
@@ -1547,7 +1547,7 @@ when it stays inside the project's declared policy. The gate holds when:
 - The candidate's dependency-manifest delta is lockfile-consistent.
 - Every added or changed package resolves from an authority in the project
   policy's declared registry set (the same set `provider_registry` exposes to
-  the writer, Section 5.4; the builder reads it whatever the writer's profile,
+  the writer, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency); the builder reads it whatever the writer's profile,
   since builder fetch authorization and writer egress are different concerns).
 - The verification recipe is unchanged.
 
@@ -1600,7 +1600,7 @@ state.
 Phase 1A.2 exception (owner decision, 2026-07-26): unattended admission may
 waive the encryption-state dimension of backup health, and only that
 dimension. Checkpoint currency, artifact closure, and restore-test age still
-gate admission against the local owner-only checkpoint (§5.10). The waiver
+gate admission against the local owner-only checkpoint ([§5.10](#510-coherent-backup-encrypted-checkpoints)). The waiver
 applies only while all of the following hold, checked mechanically at
 admission:
 
@@ -1616,9 +1616,9 @@ admission:
 Admission without the waiver fails closed as before. Every admission under the
 waiver records it in the run's audit record and surfaces the degraded posture as
 a `system_health` item. The validated waiver configuration supersedes that
-item's blocking state (the §4 supersession rule), so the item stays visible
+item's blocking state (the [§4](#4-the-attention-model) supersession rule), so the item stays visible
 without blocking the later admissions the waiver exists to permit. The encrypted
-checkpoint must land before the Phase 1A exit; the doctor (§10) packages its
+checkpoint must land before the Phase 1A exit; the doctor ([§10](#10-operations-and-onboarding)) packages its
 encryption check.
 
 Bootstrap exception: SwiftUI work is exempt until a macOS execution class
@@ -1720,9 +1720,9 @@ The fork is what makes this work. On an ordinary resume, the pinned CLI kept the
 predecessor's system prompt. A fork accepted the fresh explicit bundle and still
 preserved conversation continuity.
 
-Resume is bound to one agent (Section 5.4) as well as to one invocation. A
-Section 4 alternate-agent retry defaults to a fresh invocation with no
-continuity remount, and the Section 5.7 operating modes do not relax this. The
+Resume is bound to one agent (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)) as well as to one invocation. A
+Section [4](#4-the-attention-model) alternate-agent retry defaults to a fresh invocation with no
+continuity remount, and the Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes) operating modes do not relax this. The
 adapter decides whether a successor agent may remount a predecessor's
 continuity volume. It decides over the two agents' process facts: adapter
 build, session format, launch, and, where the harness binds them, the
@@ -1759,7 +1759,7 @@ Freeside-invoked reviewer both compose their instructions from the exact trusted
 base, so the candidate's copy cannot govern its own review. A merged edit
 governs later runs, and the human merge gate, reading the surfaced advisory, is
 the judgment point for that. Every other control-plane category stays
-publish-blocking and non-waivable (Section 3.1).
+publish-blocking and non-waivable (Section [3.1](#31-autonomy-inside-the-ward)).
 
 ### 5.9 Durability: Effectively Once
 
@@ -1793,7 +1793,7 @@ storage. The host proves it holds that key when it authenticates to
 infrastructure services (a future relay connector, portable-store provisioning,
 health attestation). Purpose-specific credentials derive from that identity or
 sit beside it. No single omnipotent machine key exists, and the host key never
-becomes application authority: device pairing (Section 5.14) and GitHub App
+becomes application authority: device pairing (Section [5.14](#514-client-synchronization-and-conversations)) and GitHub App
 keys stay their own credentials. This is recorded now because inventing a
 second notion of "machine" after installations exist would be the expensive
 retrofit.
@@ -1817,7 +1817,7 @@ Portable mode is enabled only by a completed ceremony:
 
 1. provision independently revocable store credentials for each enrolled host;
 2. wrap the control-plane data key separately for every enrolled standby, and
-   create the offline recovery wrap that Section 5.10 requires;
+   create the offline recovery wrap that Section [5.10](#510-coherent-backup-encrypted-checkpoints) requires;
 3. create a complete seed checkpoint and start the local append-only journal at
    the same transaction boundary, then upload and verify that checkpoint and
    every blob it references while standalone work continues;
@@ -1909,7 +1909,7 @@ acknowledged. So a conversation message, decision, workflow transition, or
 other result presented as committed or completed must be recoverable by another
 enrolled host. An external effect in portable mode follows the same rule: its
 intent and every referenced artifact reach the head's durability frontier
-before it executes. This extends the Section 5.9 outbox discipline rather than
+before it executes. This extends the Section [5.9](#59-durability-effectively-once) outbox discipline rather than
 bypassing it.
 
 The replica store contract is capability-based:
@@ -1937,7 +1937,7 @@ portable external effects stop rather than risk an unfenced effect. The
 integrity trust is equally explicit. The head arbitrates which host activates,
 and it names the frontier a takeover restores. So the replica backend sits
 inside the authority trust boundary for host activation and for frontier
-currency (the Section 5.1 scoped exception).
+currency (the Section [5.1](#51-overview) scoped exception).
 
 A backend that equivocates over heads can misdirect activation. It can also
 serve an older, internally consistent head, which rolls back the restored
@@ -2001,7 +2001,7 @@ retention_by_artifact_class, last_completed_checkpoint, last_restore_test}`
   establishes the new epoch. Then the control-plane data key and the remaining
   host wraps rotate. Revocation prevents future access; it cannot erase
   ciphertext or keys a compromised host already copied.
-- GitHub App private keys are per-machine credentials under Section 10 and are
+- GitHub App private keys are per-machine credentials under Section [10](#10-operations-and-onboarding) and are
   excluded, as are provider credentials, unless a stronger recovery design
   encrypts them separately. So recovery may require reauthentication; copying a
   key from another machine is not a recovery mechanism.
@@ -2096,12 +2096,12 @@ Additional rules:
   bytes. `freesided resume` is different: it targets one exact live run and
   mints no identity, and a terminal run can only continue as a deliberate new
   attempt. This command-level resume is distinct from provider-session resume
-  in Section 5.7 and from AttentionItem actions in Section 4.
+  in Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes) and from AttentionItem actions in Section [4](#4-the-attention-model).
 - `auto_start` is bounded by WIP caps. The conservative default is `propose`.
 - Raw findings are immutable. Classification is a versioned annotation.
-- Low-confidence materiality enters the Section 7 adjudication residue and
+- Low-confidence materiality enters the Section [7](#7-review-policy) adjudication residue and
   defaults to continued remediation or human attention.
-- Neither the classifier nor the Section 7 adjudicator can declare a finding
+- Neither the classifier nor the Section [7](#7-review-policy) adjudicator can declare a finding
   fixed.
 - Artifacts are typed, immutable, and digest-addressed. Approvals bind to their
   digests.
@@ -2121,8 +2121,8 @@ The engine, not an agent, runs deterministic policy jobs:
 - cleanup.
 
 Agents appear where judgment is the work: elaborator, implementer, remediator,
-diagnostic, finding classifier, finding adjudicator (Section 7), drift auditor
-(Section 7), reviewer, shadow reviewer, and, later, briefer.
+diagnostic, finding classifier, finding adjudicator (Section [7](#7-review-policy)), drift auditor
+(Section [7](#7-review-policy)), reviewer, shadow reviewer, and, later, briefer.
 
 #### Daemon Judgment Calls
 
@@ -2133,12 +2133,12 @@ inference inherits its eventual sink. Repetition, starvation, attention
 creation, and telemetry reuse all count as sinks. Advisory output, meaning all
 explain sites and audit telemetry, lives in an advisory store that policy
 evaluation structurally cannot reach. That store stays separate from the
-Section 8 policy-input telemetry.
+Section [8](#8-observability-and-optimization-telemetry) policy-input telemetry.
 
 Every call site carries exactly one per-site authority contract:
 
 1. **Ceiling-bounded annotation** (type case: the finding classifier; the
-   Section 7 finding adjudicator and drift auditor are the other two). The site
+   Section [7](#7-review-policy) finding adjudicator and drift auditor are the other two). The site
    declares its behavioral lattice and deterministic fallback; which outputs
    reduce work; raw-severity ceilings; second-adjudication rules; cumulative
    bounds on attention, compute, and starvation; and tests for extreme outputs
@@ -2162,7 +2162,7 @@ under their declared defaults. They are never promised to complete. Every site
 is budgeted, untrusted-input sites carry sampled-audit telemetry, and every site
 has a deterministic fake.
 
-A Section 4 item recommendation is not a fifth authority mode. An
+A Section [4](#4-the-attention-model) item recommendation is not a fifth authority mode. An
 `agent_judgment` recommendation exists only as the schema-validated output of a
 site declared here, and it carries that site's immutable invocation and artifact
 binding. A `daemon_policy` recommendation binds its content-addressed
@@ -2171,15 +2171,15 @@ binds the applied key and resolved-policy digest plus its daemon-authored
 application record.
 
 Each authoritative source record commits to the containing item's
-decision-surface identity under Section 4. That identity is the epoch-and-digest
+decision-surface identity under Section [4](#4-the-attention-model). That identity is the epoch-and-digest
 `DecisionSurface` record. Its digest is eligibility-independent,
 telemetry-stable, surface-distinguishing, and non-cyclic. The item cannot select
 that record.
 
 Creation and reconstruction derive the complete eligible-record set from current
-authoritative state and apply Section 4's unique-or-none rule. A separately
+authoritative state and apply Section [4](#4-the-attention-model)'s unique-or-none rule. A separately
 supplied item digest grants no authority. Creation and reconstruction reject a
-source label without its matching Section 4 provenance variant. They reject a
+source label without its matching Section [4](#4-the-attention-model) provenance variant. They reject a
 stale or foreign source-to-item binding. And they reject any action, reason, or
 confidence that differs from the canonical projection rederived from that
 authenticated pair.
@@ -2187,7 +2187,7 @@ authenticated pair.
 A `daemon_policy` recommendation is a deterministic card fact like any other.
 Proposal cards keep two registers apart: "the proposal requests X" is a daemon
 fact from the artifact, while agent cost, safety, and scope assertions are
-labeled claims. Section 3.1's "designed judgment points" means human judgment
+labeled claims. Section [3.1](#31-autonomy-inside-the-ward)'s "designed judgment points" means human judgment
 points.
 
 Daemon-side inference is its own contract, not a reuse of `provider_only`. It
@@ -2203,7 +2203,7 @@ surface, or daemon-side inference asks the daemon to do. They exist only as
 typed, digest-addressed proposal artifacts that target a closed registry of
 effect kinds. Each kind has a fixed Go type, a trusted constructor, and a gate.
 Effects the trusted workflow performs itself (publication, notifications,
-installation maintenance) stay engine-run under Section 5.9 and the
+installation maintenance) stay engine-run under Section [5.9](#59-durability-effectively-once) and the
 deterministic-jobs list above; they are not proposal-gated. Proposals supply
 bounded parameters, never event bodies, target identities, or authority.
 Targets are daemon-selected context, or a selection among daemon-enumerated
@@ -2218,9 +2218,9 @@ ordinal. A deliberate repeat gets a new command ID; retrying the same
 occurrence keeps it. Semantic content never defines occurrence identity. The
 instance ID is the effect identity for idempotence, ledgering, and crash
 reconciliation; content digests bind approvals. Instances: `run_proposal`
-(existing), follow-up issue filings (Section 5.17, 1B.1), and proposed watches
+(existing), follow-up issue filings (Section [5.17](#517-follow-up-issue-filing), 1B.1), and proposed watches
 (a planned extension that lands with its schedule kind and consumer,
-Section 5.16). Gates read resolved policy; rein is not a security dial.
+Section [5.16](#516-the-durable-scheduler)). Gates read resolved policy; rein is not a security dial.
 
 ### 5.14 Client Synchronization and Conversations
 
@@ -2264,11 +2264,11 @@ never reusable plaintext. Devices can be revoked.
 
 Device identity is independent of network identity. Tailscale identity is never
 Freeside device identity or authorization. Every supported reachability mode
-(Section 5.2) presents the same Freeside device credential to Signet. So a
+(Section [5.2](#52-the-daemon-and-its-supervisor)) presents the same Freeside device credential to Signet. So a
 device that moves between reachability modes keeps its identity and needs no
 authorization migration. Pairing and revocation are daemon-owned under every
 mode. A managed service may transport pairing, discovery, or rendezvous traffic
-(end-to-end protected and unreadable by the transport; Section 5.19), but it
+(end-to-end protected and unreadable by the transport; Section [5.19](#519-deferred-subsystems-provisional-contracts)), but it
 can never enroll an authorized device on its own. A hosted account identity may
 prove that a caller is eligible to reach a pairing endpoint; it never confers
 application authority. The daemon alone turns a pairing ceremony into a device.
@@ -2285,7 +2285,7 @@ surface presented to that device before accepting the command:
 client_capability_digest, actions}`
 
 The record is content-addressed. `item_decision_surface_digest` is the `digest`
-of the item's current Section 4 `DecisionSurface` record. `actions` is the
+of the item's current Section [4](#4-the-attention-model) `DecisionSurface` record. `actions` is the
 canonical intersection of the item's requested decisions and a
 daemon-registered client-capability contract already bound to the device. A
 caller-supplied action list or digest is never authority. Before accepting a
@@ -2401,7 +2401,7 @@ Four machine-enforced rules govern evidence:
 4. **EvidencePublisher owns publication.** It lives in git/publish and follows
    effectively-once discipline through digest-derived names,
    check-before-create, and deterministic PR-section markers. It waits for 1B
-   because the first repository is deliberately non-UI (Section 11). Phase 1A
+   because the first repository is deliberately non-UI (Section [11](#11-roadmap-build-order-and-coordination)). Phase 1A
    ships the artifact schema, provenance enforcement, and client rendering; 1B
    adds external publication with the first evidence-bearing workflow.
 
@@ -2417,7 +2417,7 @@ The staleness watch's consumer is the base-freshness fact on
 `ready_for_final_review` items, which stay live until merge or close.
 
 The doctor, the janitor, and the onboarding pending-install-or-expansion poll
-already run before 1B on plain tickers under their Section 10 obligations. The
+already run before 1B on plain tickers under their Section [10](#10-operations-and-onboarding) obligations. The
 scheduler adopting them is a 1B migration that preserves those obligations,
 never a precondition for them.
 
@@ -2427,14 +2427,14 @@ kinds, and an approved watch proposal is representable only once its kind and
 consumer land. Scan activation stays Phase 2.
 
 Stateless process heartbeats stay plain tickers. Active-resource reconciliation
-(Section 5.11) also stays outside the kind union. Per-resource
+(Section [5.11](#511-github-integration-reconciliation-plus-intake)) also stays outside the kind union. Per-resource
 conditional-request polling observes PR state, checks, merge and close, and
 native review activity. That polling is a continuous process cadence on a plain
 ticker, and `ready_for_final_review` items observe merge or close through it.
 Schedule kinds carry durable, subject-bound deadlines and watches, never the
 reconciler's cadence.
 
-Proposed watches (Section 5.13's effect registry) require an expiry and are
+Proposed watches (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)'s effect registry) require an expiry and are
 bounded by a minimum cadence; per-subject, per-project, and global active-watch
 caps; maximum occurrences or explicit renewal; and coalescing of proposals,
 cards, and notifications.
@@ -2442,10 +2442,10 @@ cards, and notifications.
 Occurrence identity is (`schedule_id`, `generation`, `nominal_fire_at`). Missed
 fires coalesce to the latest nominal occurrence with a recorded gap. Fire-time
 validation runs before event construction. It covers project binding, resolved
-policy, expiry, activation state (Section 5.9), operating-mode eligibility
-(Section 5.7), and subject existence. Operating-mode eligibility is
+policy, expiry, activation state (Section [5.9](#59-durability-effectively-once)), operating-mode eligibility
+(Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)), and subject existence. Operating-mode eligibility is
 kind-specific. Permanent trusted-config jobs run in every operating mode, so the
-doctor and janitor keep their Section 10 obligations in `attended_dev`. Workload
+doctor and janitor keep their Section [10](#10-operations-and-onboarding) obligations in `attended_dev`. Workload
 kinds require the operating mode their consumer demands.
 
 The event carries the expected schedule generation and subject version, and the
@@ -2489,9 +2489,9 @@ reachable).
 
 Repository, filing identity, labels, and milestone derive from trusted policy
 and run lineage, never from proposal text. Every agent-controlled textual field
-is screened under a versioned ruleset on the Section 5.5
+is screened under a versioned ruleset on the Section [5.5](#55-the-ci-trust-boundary)
 commit-message-screening pattern. The effect identity is the proposal-instance
-ID (Section 5.13). Idempotent check-before-create and crash-after-create
+ID (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). Idempotent check-before-create and crash-after-create
 reconciliation key off it. Origin and canonical issue ID live in the immutable
 daemon ledger. Discovered candidates are validated (repository, App authorship,
 expected ledger bindings; markers in issue text are rendering hints, never
@@ -2521,7 +2521,7 @@ propose-only whatever the profile state.
 After a merge, the daemon recomputes its map of the project: what completed,
 what is now unblocked, and what could run in parallel. Capture hooks record
 work-unit bindings, completion criteria, dependencies, and scope from 1B.0.
-Projection computation and its UI land in 1B.2 (Section 11).
+Projection computation and its UI land in 1B.2 (Section [11](#11-roadmap-build-order-and-coordination)).
 
 A merge marks a unit done only through an exact daemon-recorded work-unit
 binding and completion criterion (for example, the bound issue closed by the
@@ -2592,17 +2592,17 @@ continues (an accepted cost; revisit at the 1B exit).
 
 Externally produced reviews are
 quarantined at entry. They enter as quota-bound advisory proposals (a future
-effect kind added to the Section 5.13 registry with this subsystem) with
+effect kind added to the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registry with this subsystem) with
 `external_untrusted` provenance, a raw-source digest, and a reconstructed
 project and head binding, never an asserted one. The authenticated ingestion
 actor is recorded separately from the claimed producer. The operator-selected
 ingestion target is recorded separately from the artifact's own source binding
 (exact / claimed / unknown; promotion to any blocking role requires exact).
 
-Quarantined findings cannot block readiness, enter Section 7 adjudication,
+Quarantined findings cannot block readiness, enter Section [7](#7-review-policy) adjudication,
 trigger remediation, or consume remediation budgets. Automatic blocking or
 remediation requires source-specific admission or explicit human promotion,
-deduplication, and a declared authority-site contract (Section 5.13). External
+deduplication, and a declared authority-site contract (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). External
 findings never satisfy ReviewSource freshness, independence, or
 review-completeness.
 
@@ -2615,8 +2615,8 @@ import, never the raw workspace. Each pass binds the exact candidate head and
 invocation inputs; resolved policy bounds when it stops; the pass holds no
 direct remediation or publication authority. Each remediation repeats the
 gauntlet, verification, and the adversarial pass itself. This is distinct from
-the Section 7 review requirement, which itself anchors pre-publication
-(revision 28): the Section 7 pass is required; this pass is optional and
+the Section [7](#7-review-policy) review requirement, which itself anchors pre-publication
+(revision 28): the Section [7](#7-review-policy) pass is required; this pass is optional and
 deferred.
 
 #### Managed Reachability Relay (Deferred, Unscheduled)
@@ -2624,29 +2624,29 @@ deferred.
 A future managed relay
 may provide authenticated bidirectional byte transport between an enrolled host
 and its paired clients. `freesided` stays loopback-bound and holds an outbound
-connector authenticated by the Section 5.9 host identity; clients use ordinary
-HTTPS/WSS; the transported protocol is Signet, unchanged (Section 5.2).
+connector authenticated by the Section [5.9](#59-durability-effectively-once) host identity; clients use ordinary
+HTTPS/WSS; the transported protocol is Signet, unchanged (Section [5.2](#52-the-daemon-and-its-supervisor)).
 
 The Signet channel is end-to-end protected and daemon-anchored. A relay that
 terminates edge transport TLS carries only an opaque inner channel. The client
 authenticates that channel against a Freeside-owned control-plane identity. That
 identity is independent of relay-controlled hostnames or PKI, and it stays
-stable across enrolled-host takeover (Sections 5.9 and 5.10). So a paired client
+stable across enrolled-host takeover (Sections [5.9](#59-durability-effectively-once) and [5.10](#510-coherent-backup-encrypted-checkpoints)). So a paired client
 survives a graceful or crash takeover without re-pairing. The per-host Section
-5.9 key authenticates the host to the relay, never the daemon to clients.
+[5.9](#59-durability-effectively-once) key authenticates the host to the relay, never the daemon to clients.
 
 Anchor succession is a control-plane ceremony: only the control plane's own
 existing anchor authority may admit a successor, never the relay or any hosted
 service. Stability across legitimate takeover never licenses one copied,
-unrevocable private key; the Section 5.9 no-omnipotent-key rule applies.
+unrevocable private key; the Section [5.9](#59-durability-effectively-once) no-omnipotent-key rule applies.
 Compromise recovery may rotate the anchor and force re-pairing rather than leave
 a compromised anchor trusted.
 
-Connector admission and continued routing bind to the current Section 5.9 active
+Connector admission and continued routing bind to the current Section [5.9](#59-durability-effectively-once) active
 host and epoch. An enrolled standby or a returning stale host holds a valid host
 identity but never presents as the serving daemon, and a host that is not active
-refuses authoritative Signet service regardless of routing (the Sections 5.9 and
-5.10 fencing stays the authority backstop). So relay misrouting degrades to
+refuses authoritative Signet service regardless of routing (the Sections [5.9](#59-durability-effectively-once) and
+[5.10](#510-coherent-backup-encrypted-checkpoints) fencing stays the authority backstop). So relay misrouting degrades to
 reachability loss, never to stale state or premature command acceptance.
 
 Pairing bootstraps from the pairing secret itself, not from any certificate the
@@ -2687,7 +2687,7 @@ regardless.
 #### Readiness Registry (Deferred)
 
 When built, it is a projection over current
-typed proofs, recomputed on read, never a stored ready bit. The Section 10
+typed proofs, recomputed on read, never a stored ready bit. The Section [10](#10-operations-and-onboarding)
 doctor consumes it.
 
 ## 6. Verification
@@ -2695,7 +2695,7 @@ doctor consumes it.
 Verification defines “done.” It is deterministic, engine-run, clean-room, and
 controlled by a trusted recipe. It includes evidence capture. Its outputs are
 run-bound artifacts cited by AttentionItems. False-ready tracking under Section
-12 starts on day one.
+[12](#12-exit-criteria-definitions) starts on day one.
 
 ### The Verification State Algebra
 
@@ -2709,7 +2709,7 @@ requirement-set digest, the daemon-floor/registry generation, the resolved
 policy, and any durable sampling decision. Both branches share that binding, so
 a proof cannot structurally occupy another requirement's state. A pass carries
 proof: the candidate head; the base or prospective-merge identity for any
-requirement whose evidence depends on one (integration checks, Section 7 review
+requirement whose evidence depends on one (integration checks, Section [7](#7-review-policy) review
 passes); the recipe digest; and the resolution digest. The re-gate binds the
 current base alongside the requirement-set digest. So a base advance
 structurally mismatches base-dependent proofs and forces reruns. The re-gate
@@ -2780,13 +2780,13 @@ a stalled or exhausted loop to durable attention. The first production
 ReviewSource is a local Codex invocation that Freeside invokes. When
 GitHub-native Codex review is observed, it is recorded as best-effort extra
 evidence; it never satisfies the review requirement. The trigger falsification
-behind this is recorded in Sections 5.3 and 13 and on #427.
+behind this is recorded in Sections [5.3](#53-execution-stagedriver-and-reviewsource) and [13](#13-decisions-log) and on #427.
 
 Each review pass binds the exact base and candidate head SHAs. A new candidate
 head or an advanced base invalidates the pass and requires re-review.
 Integration evidence follows the same rule: a base advance also invalidates
 verification and check evidence bound to the prior base, and readiness
-recomputes under the Section 6 re-gate before any ready state is restored.
+recomputes under the Section [6](#6-verification) re-gate before any ready state is restored.
 
 The pass runs with fresh context independent of the implementing invocation, in
 a read-only workspace, with no publication credentials. It receives repository
@@ -2821,7 +2821,7 @@ readiness, the run timeline, and structured dispositions, not by comment
 threads.
 
 The owner's condition on this resolution pins the EvidencePublisher's first
-slice (Section 5.15; #525, wave 5 per Section 11). At publication, the PR
+slice (Section [5.15](#515-evidence-and-images); #525, wave 5 per Section [11](#11-roadmap-build-order-and-coordination)). At publication, the PR
 carries the disposition history, including review rounds, final dispositions
 with reasons for declined and deferred findings, and the readiness derivation.
 So the merged PR explains itself forensically on the forge.
@@ -2842,7 +2842,7 @@ trust review they didn't watch. That stays the fallback.
 
 Review activity from outside the control plane includes human maintainers,
 GitHub-native Codex when it fires, and other bots. On a published PR, that
-activity is the deferred external review response capability (Section 11;
+activity is the deferred external review response capability (Section [11](#11-roadmap-build-order-and-coordination);
 #524). It never satisfies this section's requirement, which stays
 Freeside-invoked and pre-publication.
 
@@ -2863,12 +2863,12 @@ Routing comparisons use accumulated traces, including the 1B Claude shadow
 arm. Shadow findings are recorded but never routed, and comparisons are
 adjudicated blind where practical.
 
-Scheduled Codex execution (Section 11) will make Codex-executes plus
+Scheduled Codex execution (Section [11](#11-roadmap-build-order-and-coordination)) will make Codex-executes plus
 Codex-reviews a same-vendor pairing. That weakens the independence this section
 targets. It also makes a selectable Claude ReviewSource more valuable later.
 The sequencing above and the deferred #397 promotion keep that pairing from
 becoming the default; shadow findings stay recorded and never routed. Once
-agents are admitted (Section 5.4), the independence rule reads the two selected
+agents are admitted (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)), the independence rule reads the two selected
 agents' offers. By default their lineage groups differ. A project lineup may
 relax that with a stated reason, and every card and record carries which rule
 applied. Switching the review agent mid-run opens a new convergence segment. So
@@ -2934,7 +2934,7 @@ repository-instruction snapshot digest, and the resolved policy digest. Its
 inputs are the approved work-unit specification, the immutable raw findings with
 their versioned classifications, the proposed remediation surface, the work
 unit's declared path scope, repository instructions from the trusted base, prior
-disposition history, and any available structured repository facts (Section 5.18
+disposition history, and any available structured repository facts (Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection)
 capture). The implementer's reasoning history is never an input.
 
 The engine derives each finding's proposed remediation surface from that
@@ -2987,10 +2987,10 @@ route is a function of the axes:
 | --- | --- | --- |
 | `required` | `allowed` | remediator → clean verification → re-review |
 | `required` | `work_unit_revision_required` | park; recommend a specification revision through the `spec_approval` revision path where prose alone must change, or a replan (a new run under a revised work unit) where the trusted work-unit scope itself must change (declared paths, dependencies, serialization), and a same-unit revision cannot alter that scope |
-| `required` | `separate_work_required` | park; recommend prerequisite work (a Section 5.17 proposal where it is an issue), wait or stop; never defer-and-ready |
+| `required` | `separate_work_required` | park; recommend prerequisite work (a Section [5.17](#517-follow-up-issue-filing) proposal where it is an issue), wait or stop; never defer-and-ready |
 | `required` | `human_decision_required` | recommendation-led `finding_adjudication` attention |
 | `required` | `unknown` | park plus recommendation-led attention; no scope widening |
-| `adjacent` | absent | reasoned deferred disposition; its recorded reason and the adjudication artifact carry the follow-up recommendation, and the Section 5.17 human-gated proposal path (1B.1) consumes that recommendation when it lands |
+| `adjacent` | absent | reasoned deferred disposition; its recorded reason and the adjudication artifact carry the follow-up recommendation, and the Section [5.17](#517-follow-up-issue-filing) human-gated proposal path (1B.1) consumes that recommendation when it lands |
 | `contradictory` | absent | reasoned declined disposition, or the `review_dispute` item, where the human adjudicates, when the finding's severity is critical or high (the ceilings' second-adjudication case) or the self-assessed proposal confidence is below the resolved-policy threshold |
 | `unclear` | absent | recommendation-led attention with gating questions |
 
@@ -3017,7 +3017,7 @@ structured residue signals below or the captured repository facts. That residual
 is accepted by decision: the downstream human merge gate backstops it, not
 fast-path rule interpretation.
 
-The stage is engine-run with a model residue (Section 5.13: deterministic policy
+The stage is engine-run with a model residue (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry): deterministic policy
 jobs stay engine-run; a model is invoked only where judgment is the work). The
 engine derives compatibility deterministically wherever it is mechanically
 decidable, starting with declared-path containment. It consumes the classifier's
@@ -3055,7 +3055,7 @@ remediator's labeled pushback, a human challenge, or an attempted fix that the
 import boundary's path-scope enforcement rejected. Each re-enters adjudication
 instead of looping silently.
 
-The adjudicator is a Section 5.13 ceiling-bounded annotation site on the
+The adjudicator is a Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) ceiling-bounded annotation site on the
 daemon-side inference contract. Its output is a labeled proposal and
 explanation. It is never trust computation, transition legality, publication
 eligibility, or proof that a finding is fixed. It cannot widen issue scope,
@@ -3069,7 +3069,7 @@ recommendation-led attention, with `unknown` as its compatibility representation
 only under `required`.
 
 Adjudication consumes the review loop's resolved-policy bounds. It also consumes
-the cumulative Section 5.13 budgets attributed to root lineage. Every site ships
+the cumulative Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) budgets attributed to root lineage. Every site ships
 a deterministic fake. Routes terminate in the landed disposition vocabulary
 unchanged (fixed / declined / deferred, reasons mandatory).
 
@@ -3105,7 +3105,7 @@ come assumptions, repository-rule citations, viable alternatives with their
 consequences, and a small set of gating questions. A bare "what should I do?"
 interruption is defective. The recommendation is a labeled model proposal.
 Bindings, containment verdicts, and cited instruction text are daemon facts in a
-separate register (Section 5.13).
+separate register (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)).
 
 The human can accept the recommendation, choose an alternative, answer a
 question, challenge an assumption, request further elaboration, discuss again,
@@ -3113,16 +3113,16 @@ or stop and leave the run parked. Each Discuss response re-invokes the stage
 against the same version bindings. It produces a new immutable artifact that
 records how the recommendation changed and which feedback changed it.
 Conversational text alone grants no authority. Route execution binds to the
-typed command, the artifact digest, and the item version (Section 5.14). Policy
+typed command, the artifact digest, and the item version (Section [5.14](#514-client-synchronization-and-conversations)). Policy
 bounds the loop, and the loop stays parked while unresolved.
 
 Repository rules may further restrict where work lands. They can never weaken
 Freeside's non-waivable safety, trust, verification, or publication gates
-(Section 3.1). Admitted external review activity (#524) consumes this same
-adjudication and routing, not a second path. Section 5.19 quarantine and
+(Section [3.1](#31-autonomy-inside-the-ward)). Admitted external review activity (#524) consumes this same
+adjudication and routing, not a second path. Section [5.19](#519-deferred-subsystems-provisional-contracts) quarantine and
 source-specific admission stay upstream, and a quarantined finding never enters
 adjudication. Adjudication is not the deferred planner judgment call (Section
-5.18). It consumes captured work-unit facts as inputs and never computes
+[5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection)). It consumes captured work-unit facts as inputs and never computes
 parallelism or frontier claims.
 
 The classifier and the adjudicator are separate sites by decision. They differ
@@ -3139,7 +3139,7 @@ measured independently of routing pressure.
 
 The FindingAdjudication artifact, its persistence and sync exposure, the
 `finding_adjudication` item type, the engine dispatch, and the adjudicator site
-are later implementation units (Section 11, wave 6). Any change to domain types,
+are later implementation units (Section [11](#11-roadmap-build-order-and-coordination), wave 6). Any change to domain types,
 migrations, StageDriver/ReviewSource surfaces, or API schemas splits into
 serialized `kind:contract` units with their generated consumers.
 
@@ -3224,14 +3224,14 @@ policy already required.
 **The audit.** When `review.drift_audit_after` is set to N, a review round with
 findings from round N on runs a drift audit after the batch is adjudicated and
 convergence is evaluated, and before remediation. A round that any deterministic
-cause stopped runs no audit. The audit is a model call under the Section 5.13
+cause stopped runs no audit. The audit is a model call under the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)
 ceilings: it annotates and proposes, never decides; it ships with a
 deterministic fake; and it runs under the adjudicator's independence rule, so by
 default its lineage group differs from the implementing agent's.
 
 Its allowlisted inputs are the approved specification, the round-1 diff, the
 current diff, the dispositions and adjudication entries so far, the instruction
-snapshot, and the round's diff metrics. Section 5.13 registers it beside the
+snapshot, and the round's diff metrics. Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registers it beside the
 adjudicator as the second site that may consume the approved specification; it
 proposes reversals and routes no finding, so the adjudicator stays the only site
 whose spec-relative judgment routes one. The implementer's reasoning history is
@@ -3245,7 +3245,7 @@ Each reversal names a finding identity, what to undo, and why the specification
 does not need it. The audit is off when the key is unset.
 
 **Fail-safe default.** The audit degrades; it never blocks the run or parks it
-on its own failure. When the call times out, exhausts its Section 5.13 budget,
+on its own failure. When the call times out, exhausts its Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) budget,
 or returns no schema-valid artifact, the round records the failure as an engine
 fact, produces no verdict, and the loop continues under the deterministic floor
 and the landed stop causes, exactly as it does with the audit off. The site
@@ -3302,7 +3302,7 @@ routes automatically either. `drift_audit_route` is a policy flag so the default
 can flip on evidence without a code change; the replay evidence unit decides the
 shipped default.
 
-The card's actions are the landed ones (Section 4). `continue_under_policy` runs
+The card's actions are the landed ones (Section [4](#4-the-attention-model)). `continue_under_policy` runs
 the simplification round the audit proposed only when the card carries a
 validated reversal list. Otherwise it keeps its landed meaning exactly: the loop
 resumes with an ordinary next review round and no simplification work. That
@@ -3352,7 +3352,7 @@ Each run records:
 - stage and all governing digests;
 - per-key rein preset or override provenance;
 - the admitted agent and launch digests, the treatment digest, and the
-  requested, admitted, and observed selection facts (Section 5.4);
+  requested, admitted, and observed selection facts (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency));
 - driver, credential mode, egress profile, and operating mode;
 - artifacts and their provenance;
 - tokens and cost, as billable cost, reported usage, and quota consumed
@@ -3367,10 +3367,10 @@ Defect issues reference their producing runs and may carry suggested fault
 classes. That closes the attribution loop.
 
 Attention telemetry uses `AttentionDelivery` rows with honest status fields.
-Open-to-decision time is the headline attention-latency metric. The Section 1
+Open-to-decision time is the headline attention-latency metric. The Section [1](#1-what-freeside-is)
 per-unit measure governs. Interruption-class rates are tracked. Card drill-down
 opens are recorded per item and device, and sampled decision audits record
-comprehension defects. Both feed the Section 9 measurements. Passive baseline
+comprehension defects. Both feed the Section [9](#9-comprehension) measurements. Passive baseline
 logging runs alongside Phase 1A. Usage is observed telemetry, never asserted
 quota state.
 
@@ -3393,10 +3393,10 @@ A card presents at most four layers, in this order. The per-item-type table
 below governs which layers each type carries:
 
 1. **The ask and the facts**: `requested_decision`, the item's recommendation
-   when one exists (Section 4), and deterministic card facts (verdicts, diff
+   when one exists (Section [4](#4-the-attention-model)), and deterministic card facts (verdicts, diff
    stats, counts, digests, timing). Facts are daemon-produced only (Section
-   5.13). A recommendation renders in its source register only after its
-   Section 4 source-specific provenance has been revalidated. A `daemon_policy`
+   [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). A recommendation renders in its source register only after its
+   Section [4](#4-the-attention-model) source-specific provenance has been revalidated. A `daemon_policy`
    recommendation renders as a card fact. An `agent_judgment` recommendation
    renders as a labeled proposal. A `project_policy` recommendation renders
    citing its exact policy key and digest. A card that carries a recommendation
@@ -3407,10 +3407,10 @@ below governs which layers each type carries:
    preserved. It is absorbable in seconds. It is a labeled agent claim and is
    present only where the card concerns agent work. A purely mechanical card
    (`system_health`, `blocked`) carries daemon facts alone.
-3. **Evidence**: the `evidence_snapshot` packet (Section 5.15). Evidence
+3. **Evidence**: the `evidence_snapshot` packet (Section [5.15](#515-evidence-and-images)). Evidence
    precedes any long-form agent text.
 4. **Drill-down**: full artifacts, full specifications and diffs, and
-   transcript pointers (Section 8).
+   transcript pointers (Section [8](#8-observability-and-optimization-telemetry)).
 
 A client renders only the requested decisions it can faithfully collect and
 execute. An action outside the client's capability is omitted from the action
@@ -3429,11 +3429,11 @@ Three digests are required wherever their content appears:
   it is prompt-level convention.
 - **Digested review feedback**: findings grouped by disposition, dissent
   preserved. A digest never silently drops an unresolved or
-  low-confidence-classified finding (Section 7).
+  low-confidence-classified finding (Section [7](#7-review-policy)).
 
 ### Presentation per Item Type
 
-Actions and lifecycle live in Section 4; presentation is specified here.
+Actions and lifecycle live in Section [4](#4-the-attention-model); presentation is specified here.
 
 | Item type | Leads with | Below |
 | --- | --- | --- |
@@ -3446,7 +3446,7 @@ Actions and lifecycle live in Section 4; presentation is specified here.
 | `publish_blocked` | The trust rule that failed (daemon fact). | The failing artifact or scan detail. |
 | `ready_for_final_review` | The ask, a labeled change summary, and daemon verification verdicts with diff stats. | Digested review history, then the evidence packet, and the PR link last (navigation, not resolution). |
 | `run_proposal` | One line per candidate: intent plus expected cost and scope facts. | Full proposal artifact; “start with changes” shows the revised-digest diff. |
-| `effect_proposal` | The requested effect as a daemon fact from the validated artifact (Section 5.13): kind, daemon-resolved target, and bounded parameters. Agent cost, safety, and scope assertions are labeled claims, never merged into the fact line. | Full proposal artifact; “approve with changes” shows the revised-digest diff. |
+| `effect_proposal` | The requested effect as a daemon fact from the validated artifact (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)): kind, daemon-resolved target, and bounded parameters. Agent cost, safety, and scope assertions are labeled claims, never merged into the fact line. | Full proposal artifact; “approve with changes” shows the revised-digest diff. |
 | `system_health` | The diagnostic fact and the unattended capability it impairs. | Doctor output. |
 | `blocked` | What is waited on and since when. Daemon facts only; no agent prose. | The waiting run's context. |
 
@@ -3455,12 +3455,12 @@ Actions and lifecycle live in Section 4; presentation is specified here.
 Two content classes, two producers:
 
 1. Every objective assertion in the ask-and-facts layer is a daemon-produced
-   card fact (Section 5.13). A false or stale card fact is a mechanical
-   false-ready (Section 12).
+   card fact (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). A false or stale card fact is a mechanical
+   false-ready (Section [12](#12-exit-criteria-definitions)).
 2. Every judgment summary (the summary layer, change summaries, plan
    altitude, digested feedback) is `producer_class: agent`, carried in
    `agent_claims`, and rendered as a labeled claim. It never enters
-   `evidence_snapshot` (Section 5.15).
+   `evidence_snapshot` (Section [5.15](#515-evidence-and-images)).
 
 The same labeling covers any agent prose a card leads with, such as an agent's
 question or a proposal's intent line. It renders as a labeled claim, never as
@@ -3476,10 +3476,10 @@ surface: producer identified, uncertainty and dissent preserved, evidence
 linked.
 
 A labeled summary that its cited evidence contradicts is a **comprehension
-defect**: sampled decision audits find it, and Section 8 telemetry records it.
-It is not a Section 12 false-ready (claims are claims), but recurring
+defect**: sampled decision audits find it, and Section [8](#8-observability-and-optimization-telemetry) telemetry records it.
+It is not a Section [12](#12-exit-criteria-definitions) false-ready (claims are claims), but recurring
 contradictions promote summarization to an independent briefer invocation
-(Section 5.13) that is blind to the implementer's rationale. The claim contract
+(Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) that is blind to the implementer's rationale. The claim contract
 currently carries labeled artifact references, not inline prose. So the summary
 layer requires a renderable text carrier on the claim path. That carrier is an
 explicit contract change that precedes the implementing work, never an ad hoc
@@ -3496,7 +3496,7 @@ rendering choice.
 - Recommendation override rate: the fraction of recommendation-bearing
   decisions resolved by a non-recommended action, broken out by item type and
   recommendation source. A decision is a forced override only when its
-  revalidated Section 5.14 `DecisionActionSurface` omitted the recommended
+  revalidated Section [5.14](#514-client-synchronization-and-conversations) `DecisionActionSurface` omitted the recommended
   action. Forced overrides are stratified separately and never counted in this
   rate. A decision whose surface is missing or cannot be revalidated is
   unclassified and excluded from both rates, never inferred as voluntary or
@@ -3508,11 +3508,11 @@ rendering choice.
   workload, never as raw counts.
 - Maintenance accounting: time and CI spend consumed operating and
   maintaining Freeside itself are recorded and netted against the return;
-  per-run cost telemetry remains Section 8.
+  per-run cost telemetry remains Section [8](#8-observability-and-optimization-telemetry).
 
 Speed counts only alongside correctness: an open-to-decision improvement is
 claimed only with the reversal rate, the comprehension-defect count, and
-Section 12 substantive false-ready held level or better.
+Section [12](#12-exit-criteria-definitions) substantive false-ready held level or better.
 
 ### Document Change Discipline
 
@@ -3533,21 +3533,21 @@ Build the installer only after the underlying interfaces survive real use. The
 
 | Command | Function |
 | --- | --- |
-| `freesided setup` | Performs installation. On the Mac-first path, the operator app registers the daemon LaunchAgent (Section 5.2) and no step is privileged. When a hardened deployment needs privileged steps (user creation, LaunchDaemon installation), they run through a narrow elevation helper. The daemon never retains root. |
+| `freesided setup` | Performs installation. On the Mac-first path, the operator app registers the daemon LaunchAgent (Section [5.2](#52-the-daemon-and-its-supervisor)) and no step is privileged. When a hardened deployment needs privileged steps (user creation, LaunchDaemon installation), they run through a narrow elevation helper. The daemon never retains root. |
 | `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If the installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls. A callback or `--resume` reopens the same review after approval. |
 | `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe); the probe rules follow the table. |
-| `freesided auth add`, `auth adopt`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided identity and enrollment lifecycle (Section 5.4); each subcommand's rules follow the table. |
+| `freesided auth add`, `auth adopt`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided identity and enrollment lifecycle (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); each subcommand's rules follow the table. |
 | `freesided submit` | Registers a manually initiated source work item, starts elaboration, and reserves its future implementation run. |
 | `freesided reattempt --parent-run <run>` or `--campaign <campaign>` | Requires an operator reason and allocates the campaign's next attempt from an already approved specification. It refuses a live parent. |
 | `freesided resume --run <run>` | Reattaches observation to one exact non-terminal run without creating a replacement. It refuses terminal runs and points to `reattempt`. |
 
 **`freesided doctor` probe rules.** The integrity probe extends to the Section
-5.4 account probe only after an empirical spike proves that the Codex app-server
+[5.4](#54-credential-modes-egress-profiles-and-concurrency) account probe only after an empirical spike proves that the Codex app-server
 probe runs against the access-only read snapshot and never triggers a refresh
 outside the mutation lease. Until that spike passes, doctor reports integrity
 alone.
 
-Probe results are observation (Section 5.4). They file `advisory`
+Probe results are observation (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). They file `advisory`
 `system_health` items and proposals, feed the operator-facing profile
 projection's display fields, and nothing else reads them. It runs on a schedule
 and files `system_health` items.
@@ -3600,13 +3600,13 @@ carry a second image builder or a second copy of recipe semantics.
 
 The operator client installs Mac-first: a locally built, personal-team-signed
 FreesideMac with a direct install-and-update script, an icon from the Section
-15 visual identity, and real device pairing land with 1B's first wave (Section
-11). The iOS client follows mid-1B under free provisioning. The paid Apple
+[15](#15-naming-and-references) visual identity, and real device pairing land with 1B's first wave (Section
+[11](#11-roadmap-build-order-and-coordination)). The iOS client follows mid-1B under free provisioning. The paid Apple
 Developer Program waits until APNs arrives in Phase 2, because client
-correctness never depends on push (Section 5.14).
+correctness never depends on push (Section [5.14](#514-client-synchronization-and-conversations)).
 
 From revision 27, the Mac app on the daemon host also owns the local daemon's
-lifecycle (Section 5.2). It registers the LaunchAgent and reads the daemon's
+lifecycle (Section [5.2](#52-the-daemon-and-its-supervisor)). It registers the LaunchAgent and reads the daemon's
 published readiness file. It also carries a menu bar presence that shows
 liveness and version, with start and stop through launchd. The menu bar is the
 out-of-band surface for the one failure the attention system cannot report: a
@@ -3627,7 +3627,7 @@ Registration topology is owner policy, not an architectural distinction:
   owns the registration. It is installed separately on the operator's personal
   account and on each repository-owning organization, through GitHub's native
   install or approval flow, with repository-scoped selection. This default is
-  permitted only while the Section 5.5 mint gate applies unconditionally;
+  permitted only while the Section [5.5](#55-the-ci-trust-boundary) mint gate applies unconditionally;
   GitHub inputs can cause AttentionItems only through a trusted principal and a
   recorded installation-to-repository binding; there is no unauthenticated
   GitHub write path into the attention system; and the always-on
@@ -3742,14 +3742,14 @@ installation, repository, or token-mint checks.
 Defaults are hosted ntfy, embedded SQLite, one configuration directory, and
 `attended_dev` with honest isolation-class reporting.
 
-The Phase 1 reference deployment is fully unmanaged (Section 5.1). It uses
+The Phase 1 reference deployment is fully unmanaged (Section [5.1](#51-overview)). It uses
 Tailscale for remote reachability, ntfy for notification delivery, `freesided`
 as workflow authority with local state and artifacts, an operator-selected
 conforming replica backend when portable mode is enabled, and an
 operator-controlled external probe for away-from-host monitoring. Future
 managed implementations (relay, push, storage, monitoring) may substitute
 convenience infrastructure without changing the authority model. The one scoped
-exception is a managed replica backend. It carries Section 5.10's head trust
+exception is a managed replica backend. It carries Section [5.10](#510-coherent-backup-encrypted-checkpoints)'s head trust
 (activation fencing and recovery frontier). Every managed implementation is
 deferred, none is scheduled in Phase 1, and the unmanaged deployment stays
 supported permanently.
@@ -3857,7 +3857,7 @@ Exit requires:
   available to an admitted run;
 - Several real work items completed without terminal intervention; and
 - `setup`, `onboard`, and `doctor` packaging the proven manual operations,
-  including that same project-image builder, and meeting the Section 10
+  including that same project-image builder, and meeting the Section [10](#10-operations-and-onboarding)
   targets.
 
 #### Phase 1A Build Order
@@ -3882,10 +3882,10 @@ largest runtime unknown. It blocks only 1A.2, never 1A.0 or 1A.1.
 Phase 1B turns the secure path into the useful daily workflow:
 
 `labeled issue → daemon-fetched research → elaboration → spec approval →
-implementation → gauntlet → Freeside-invoked review (Section 7,
+implementation → gauntlet → Freeside-invoked review (Section [7](#7-review-policy),
 pre-publication) → finding adjudication → yield-driven remediation and
 pattern sweeps → diminishing-returns or dispute item → clean: PR under a
-trust profile, carrying the Section 7 disposition history (#525) → checks →
+trust profile, carrying the Section [7](#7-review-policy) disposition history (#525) → checks →
 ready-for-final-review with yield history → human GitHub merge`
 
 External review activity on the published PR re-enters the workflow
@@ -3897,21 +3897,21 @@ Phase 1B adds:
 
 - the elaborator and research fetcher;
 - label-initiator intake (scan-query initiators stay Phase 2);
-- the Freeside-invoked review stage (Section 7; implementation #427;
+- the Freeside-invoked review stage (Section [7](#7-review-policy); implementation #427;
   pre-publication re-anchor #527), with ReviewSource freshness verification
   and automatic re-review testing;
 - finding classification with sampled accuracy and second adjudication;
-- finding adjudication between classification and remediation (Section 7;
+- finding adjudication between classification and remediation (Section [7](#7-review-policy);
   #697);
 - convergence policy and the shadow arm;
 - provenance-gated EvidencePublisher;
 - experimental `max_parallel_executions` per auth identity, visible to
   scheduling;
 - the Codex execution driver, an execution capacity hedge against
-  single-provider stalls (Section 14). The `agent-codex` agent base, the project
-  images the reusable builder derives from it (Section 5.7), ward's second
+  single-provider stalls (Section [14](#14-risks)). The `agent-codex` agent base, the project
+  images the reusable builder derives from it (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)), ward's second
   vendor topology, and the Codex adapter registration land as separate follow-on
-  units behind the admitted-agent contract (Section 5.4). They are sequenced
+  units behind the admitted-agent contract (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). They are sequenced
   after the 1A.2 exit and blocked on the #401 pre-adoption gates. Selection is a
   lineup line, never silent; and
 - the run timeline screen.
@@ -3921,15 +3921,15 @@ Precondition: the verified 1A exit. 1B proceeds in three internal exits.
 #### 1B.0: The Useful Loop
 
 This exit covers the workload above, with the review step rebased onto the
-Freeside-invoked binding. It also covers the Section 5.13 judgment-call
+Freeside-invoked binding. It also covers the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) judgment-call
 contracts, with the finding classifier as the first ceiling-bounded annotation
-site and the diagnostic as the first advisory-only site. It covers the Section 6
-verification state algebra and the Section 5.16 scheduler with the four
+site and the diagnostic as the first advisory-only site. It covers the Section [6](#6-verification)
+verification state algebra and the Section [5.16](#516-the-durable-scheduler) scheduler with the four
 consumer-backed timer kinds. It covers the runs list (project-filterable,
 showing attached watches and deadlines) with the run timeline drill-down, and
-Section 5.18 capture hooks recording from the start.
+Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture hooks recording from the start.
 
-Contract sequencing inside 1B.0: the scheduler and the Section 7 review-stage
+Contract sequencing inside 1B.0: the scheduler and the Section [7](#7-review-policy) review-stage
 chain (#427 and its substrate) gate first real-backlog use (revision 26,
 amending revision 25's scheduler-only statement). The state algebra and the
 effect-registry retrofit of `run_proposal` land within 1B.0 behind them,
@@ -3946,36 +3946,36 @@ audit. The internal exit is evaluated once all three have closed.
 - **The decision surface closes (wave 7).** This wave delivers the revision-40
   attention-presentation contracts, their daemon fact producers, and client
   adoption: every Phase 1 card action executes on Mac and iPhone, every card is
-  self-contained at its Section 9 altitude, and facts stay distinct from claims.
+  self-contained at its Section [9](#9-comprehension) altitude, and facts stay distinct from claims.
 - **Operation closes (wave 8).** This wave delivers human-gated follow-up issue
-  filing (Section 5.17), which consumes the follow-up recommendations that
-  adjudicated deferred dispositions record (Section 7). It also delivers the
-  doctor credential-integrity probe (Section 10), the stall heartbeat (Section
-  5.12), the external daemon-liveness probe (Section 5.2), held-work and
+  filing (Section [5.17](#517-follow-up-issue-filing)), which consumes the follow-up recommendations that
+  adjudicated deferred dispositions record (Section [7](#7-review-policy)). It also delivers the
+  doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)), the stall heartbeat (Section
+  [5.12](#512-workflow-definition-initiators-and-artifacts)), the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor)), held-work and
   stopped-operation signals, the clean-machine onboarding proof, the registry
   egress profile and the policy-gated image rebuild, and re-entry of
   published-PR activity.
 - **Providers close (wave 9).** This wave delivers one agent vocabulary across
-  execution, review, and daemon judgment (Section 5.4); the Codex execution
+  execution, review, and daemon judgment (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); the Codex execution
   driver and its enrollment cutover; and pi elaboration.
 
 #### 1B.2: The Initiative View
 
-The Section 5.18 frontier projection and deterministic initiative view ship as
-one minimal deterministic projection (owner decision), under Section 5.18's
+The Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) frontier projection and deterministic initiative view ship as
+one minimal deterministic projection (owner decision), under Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection)'s
 rendering and coverage discipline. This placement materially overturns two
-statements recorded in Section 13: Section 4's GitHub Projects as the all-work
+statements recorded in Section [13](#13-decisions-log): Section [4](#4-the-attention-model)'s GitHub Projects as the all-work
 view, and this section's former Phase 3 placement for the initiative view.
 
 Clients don't edit settings directly. Today every configuration change passes
-Section 5.8's control-plane gate through an operator-authored PR or, for
-recurring preferences, the Section 4 policy-proposal path. When deferred
+Section [5.8](#58-control-plane-trust)'s control-plane gate through an operator-authored PR or, for
+recurring preferences, the Section [4](#4-the-attention-model) policy-proposal path. When deferred
 settings surfaces ship, a configuration-change proposal kind joins the Section
-5.13 registry with those surfaces as its consumer. Approval cards, never edit
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registry with those surfaces as its consumer. Approval cards, never edit
 forms, stay the client surface.
 
 The following are deferred past 1B, with provisional contracts where Section
-5.19 records one:
+[5.19](#519-deferred-subsystems-provisional-contracts) records one:
 
 - The planner judgment call.
 - Scoped consent grants.
@@ -4001,12 +4001,12 @@ Exit requires:
 - Approvals decidable from the phone;
 - Useful, correct work per unit of attention materially above baseline;
 - A low exceptional-interruption rate; and
-- False-ready performance within Section 12.
+- False-ready performance within Section [12](#12-exit-criteria-definitions).
 
 Approvals decidable from the phone covers every Phase 1 card action except
 turning a recurring diminishing-returns preference into a project-policy
 proposal (`convert_to_policy`). That action waits for its deferred control-plane
-proposal surface (Section 4). Until that surface lands, the client omits it from
+proposal surface (Section [4](#4-the-attention-model)). Until that surface lands, the client omits it from
 its action surface and never renders it disabled (revision 40).
 
 ### Implementation Coordination (Building Freeside with Agents)
@@ -4018,14 +4018,14 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **0: foundations** | Serial | Module, dual-platform CI, domain package, schema and migrations, outbox, interfaces, fakes, and provisional API schema. Domain and migration PRs are exclusive. Shared-interface work is `kind:contract`. |
 | **1: subsystems** | Parallel lanes | signet, gauntlet, publish, ward, and the saddle pair. |
 | **2: convergence** | Integrated | Workflow engine, real driver, end-to-end fakes, and real work. The **spine** owns integration and contract adjudication. |
-| **3 (1B.0): loop foundations** | Parallel lanes | Spine, serialized: the Section 5.16 scheduler (four timer kinds, trusted-job ticker migration), then Section 5.18 capture-hook recording. Ward: #401 gates 1/2/4/5 as parallel probes, then the #404 base image pinned per gate 2's outcome. App: Mac-first operator access (Section 10). |
-| **4 (1B.0): the review stage** | Serial | The spine rescopes #406/#407 into review cores and execution remainders, then lands the review-selection contract core, the review ward-topology slice, #405 only if review needs a project-derived image, and #427 (landed PR-anchored under the then-open Section 7 fork, resolved pre-publication in revision 28; the implementation re-anchor is #527, unscheduled). Its close stands the minimal loop; real-backlog use begins. |
-| **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section 5.13 classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section 7 disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section 6 state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section 5.2 contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
-| **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section 7 finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section 10). 1B.0 exit. |
-| **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, one serialized chain whose positions the spine assigns at planning: the revision-40 attention-presentation cluster (the Section 4 recommendation shape and Section 9 typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section 5.15 evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section 8/9 comprehension-telemetry contracts the wave-10 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section 9 summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section 9 altitude; facts stay distinct from claims. |
-| **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. Human-gated follow-up filing with the `effect_proposal` card (Section 5.17); the doctor credential-integrity probe (Section 10); the stall heartbeat (Section 5.12); the external daemon-liveness probe (Section 5.2, #510); the held-work item (#766); the review drift audit (Section 7; the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); the clean-machine onboarding proof (#428); and the egress floor's first capabilities above it (Sections 5.4, 5.7): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters. Exit proof: a clean machine reaches an unattended real run; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
-| **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), whether daemon judgment roles consume lineups (#900, decided before any utility agent exists), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on the wave-6 shadow evidence, then the StageDriver binding (#408, `merges-after` #873; Section 7 keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). Ward fronts with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866) and guided enrollment with the two-step cutover (#867). The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and elaboration agent (#895) `starts-after` #897 and #867, elaboration only, with its pre-adoption gates run against the pinned build. The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because tracker titles must match this section's resolver pattern. Deferral drain: the agent and provider clusters. Exit proof: a real unattended Codex run and a pi elaboration; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. 1B.1 exit evaluation. |
-| **10 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section 5.18 capture records (#884, `exclusive-with` every open contract unit), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
+| **3 (1B.0): loop foundations** | Parallel lanes | Spine, serialized: the Section [5.16](#516-the-durable-scheduler) scheduler (four timer kinds, trusted-job ticker migration), then Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture-hook recording. Ward: #401 gates 1/2/4/5 as parallel probes, then the #404 base image pinned per gate 2's outcome. App: Mac-first operator access (Section [10](#10-operations-and-onboarding)). |
+| **4 (1B.0): the review stage** | Serial | The spine rescopes #406/#407 into review cores and execution remainders, then lands the review-selection contract core, the review ward-topology slice, #405 only if review needs a project-derived image, and #427 (landed PR-anchored under the then-open Section [7](#7-review-policy) fork, resolved pre-publication in revision 28; the implementation re-anchor is #527, unscheduled). Its close stands the minimal loop; real-backlog use begins. |
+| **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section [7](#7-review-policy) disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section [6](#6-verification) state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section [5.2](#52-the-daemon-and-its-supervisor) contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
+| **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section [7](#7-review-policy) finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section [10](#10-operations-and-onboarding)). 1B.0 exit. |
+| **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, one serialized chain whose positions the spine assigns at planning: the revision-40 attention-presentation cluster (the Section [4](#4-the-attention-model) recommendation shape and Section [9](#9-comprehension) typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section [5.15](#515-evidence-and-images) evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section [8](#8-observability-and-optimization-telemetry)/9 comprehension-telemetry contracts the wave-10 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section [9](#9-comprehension) summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section [9](#9-comprehension) altitude; facts stay distinct from claims. |
+| **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. Human-gated follow-up filing with the `effect_proposal` card (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); the clean-machine onboarding proof (#428); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters. Exit proof: a clean machine reaches an unattended real run; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
+| **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), whether daemon judgment roles consume lineups (#900, decided before any utility agent exists), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on the wave-6 shadow evidence, then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). Ward fronts with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866) and guided enrollment with the two-step cutover (#867). The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and elaboration agent (#895) `starts-after` #897 and #867, elaboration only, with its pre-adoption gates run against the pinned build. The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because tracker titles must match this section's resolver pattern. Deferral drain: the agent and provider clusters. Exit proof: a real unattended Codex run and a pi elaboration; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. 1B.1 exit evaluation. |
+| **10 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, `exclusive-with` every open contract unit), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
 
 Wave 7's transaction closure also retires the `publish_blocked`
 `choose_alternate_profile` action (#936, revision 44). The publication path a
@@ -4175,8 +4175,8 @@ Record material changes here by revision, with the decider in parentheses.
 
 Revision 45 ("Review drift audit"):
 
-1. **A drift audit joins the review loop** (Section 7, with Sections 1, 5,
-   9, 11, and 14): the loop now judges the change as a whole against the
+1. **A drift audit joins the review loop** (Section [7](#7-review-policy), with Sections [1](#1-what-freeside-is), [5](#5-architecture),
+   [9](#9-comprehension), [11](#11-roadmap-build-order-and-coordination), and [14](#14-risks)): the loop now judges the change as a whole against the
    approved specification, not only the stream of findings. As landed,
    `EvaluateReviewConvergence` stops on a low-value streak, a fixed
    finding's recurrence, or final-review findings, and nothing in the loop
@@ -4214,15 +4214,15 @@ Revision 45 ("Review drift audit"):
 | Provider credentials in `subscription_contained` | Document the residual; enforce egress floors; let the daemon fetch research for the most exposed stage; provide `api_key_isolated` as the escape. |
 | Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed. Admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record. Conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path. So a registry that co-hosts a write endpoint accepts an attacker-credentialed publish. Exclude such hosts per project where the residual is not acceptable, and provide `api_key_isolated` as the escape for anything wider. |
 | CI privilege crossing | Attest effective authority; block candidate automation changes; fail closed on drift; prohibit the daemon host as a runner. |
-| Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section 5.8). |
-| **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section 5.7); the same-VM fallback is refuted by execution, never implemented or declared. |
-| **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section 7), and native review is best-effort extra evidence. |
-| Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section 11). Keep selection explicit as a lineup line, never silent (a lineup may name the switch per failure class, Section 4). Usage remains observed telemetry (Section 8). |
+| Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section [5.8](#58-control-plane-trust)). |
+| **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
+| **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
+| Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section [11](#11-roadmap-build-order-and-coordination)). Keep selection explicit as a lineup line, never silent (a lineup may name the switch per failure class, Section [4](#4-the-attention-model)). Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)). |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
 | Subscription-terms drift | Keep it as an explicit operating risk. |
 | Apple container immaturity | Prove actual runner capabilities and retain honest fallback classes. |
 | Vendor CLI churn | Pin tooling in golden images and verify its contracts. |
-| Review saturation | Bound work by review bandwidth and use yield policy; the Section 7 drift audit stops a loop that converges finding by finding into an over-built change. |
+| Review saturation | Bound work by review bandwidth and use yield policy; the Section [7](#7-review-policy) drift audit stops a loop that converges finding by finding into an over-built change. |
 | Interruption creep | Measure exceptional interruptions and treat a rising rate as a defect. |
 | Setup and upkeep burden | Make operational simplicity a Phase 1A exit criterion. |
 | Synchronization complexity creep | Keep the daemon authoritative and clients disposable; test the sixteen permanent cases. |
