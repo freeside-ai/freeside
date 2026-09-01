@@ -203,7 +203,16 @@ func run(ctx context.Context, cfg config) (_ *harness, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("open blob store: %w", err)
 	}
-	options := []signet.Option{signet.WithPairingKey(pairingKey), signet.WithBlobStore(blobs)}
+	options := []signet.Option{
+		signet.WithPairingKey(pairingKey),
+		signet.WithBlobStore(blobs),
+		// Fixed dev facts: the harness always listens on loopback
+		// (listenLoopback), and a fixed name keeps the convergence pass
+		// deterministic across machines.
+		signet.WithHostFacts(signet.HostFacts{
+			DisplayName: "freeside-signet-dev", ConnectionMode: domain.ConnectionLoopback,
+		}),
+	}
 	if cfg.NtfyURL != "" {
 		// topicKey was resolved before store.Open (above); the deep link points
 		// at this process's own contract listener.

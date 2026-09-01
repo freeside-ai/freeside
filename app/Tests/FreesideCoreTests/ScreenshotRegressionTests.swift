@@ -852,12 +852,14 @@
                             .screenshotContent(timeline)
                     )))
 
+            await server.seedPairingCode("483911")
             let pairing = PairingModel(
                 client: client,
                 credentials: InMemoryCredentialStore(),
                 pairingCode: "483911"
             )
             pairing.displayName = "Operator's iPhone"
+            await pairing.refreshFacts()
             surfaces.append(
                 Surface(
                     name: "pairing",

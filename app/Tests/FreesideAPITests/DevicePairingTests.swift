@@ -53,6 +53,8 @@ private func client(server: MockServer, token: String? = nil) -> Client {
             return
         }
         #expect(active.display_name == "Ben's iPhone")
+        // The grant carries the same facts a preview would have shown.
+        #expect(grant.facts == MockServer.pairingFacts)
 
         // The code is consumed (test 13's consumed half): a second
         // exchange creates nothing.
@@ -76,6 +78,46 @@ private func client(server: MockServer, token: String? = nil) -> Client {
                 body: .json(.init(pairing_code: code, display_name: "probe")))
             messages.insert(try output.forbidden.body.json.message)
         }
+        #expect(messages.count == 1)
+    }
+
+    @Test func previewReportsFactsAndLeavesTheCodeRedeemable() async throws {
+        // Plan §5.14 pairing facts: a preview names what the code would
+        // join without consuming it, so the same code then pairs.
+        let server = MockServer()
+        await server.seedPairingCode("483911")
+        let api = client(server: server)
+
+        let facts = try await api.previewPairing(body: .json(.init(pairing_code: "483911")))
+            .ok.body.json
+        #expect(facts.host_display_name == "mock-daemon.local")
+        #expect(facts.connection_mode == .loopback)
+        #expect(facts.granted_scope == ._operator)
+        #expect(facts == MockServer.pairingFacts)
+
+        let grant = try await api.pairDevice(
+            body: .json(.init(pairing_code: "483911", display_name: "Ben's iPhone"))
+        ).created.body.json
+        #expect(grant.facts == facts)
+        #expect(facts.code_expires_at > MockServer.pairingFacts.code_expires_at - 601)
+    }
+
+    @Test func previewRejectionNeverDistinguishesUnknownExpiredOrConsumed() async throws {
+        // The preview's 403 is byte-identical to pairing's: it is no finer
+        // a validity oracle than redemption already is (test 13).
+        let server = MockServer()
+        await server.seedPairingCode("expired", state: .expired)
+        await server.seedPairingCode("consumed", state: .consumed)
+        let api = client(server: server)
+
+        var messages: Set<String> = []
+        for code in ["expired", "consumed", "never-minted"] {
+            let output = try await api.previewPairing(body: .json(.init(pairing_code: code)))
+            messages.insert(try output.forbidden.body.json.message)
+        }
+        let pairing = try await api.pairDevice(
+            body: .json(.init(pairing_code: "never-minted", display_name: "probe")))
+        messages.insert(try pairing.forbidden.body.json.message)
         #expect(messages.count == 1)
     }
 

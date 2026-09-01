@@ -15,6 +15,39 @@ private struct FailingCredentialStore: DeviceCredentialStore {
 }
 
 @Suite @MainActor struct PairingModelTests {
+    @Test func previewFactsFollowTheCodeAndClearOnRejection() async throws {
+        // Plan §5.14 pairing facts: a live code previews to the daemon's
+        // facts without being consumed; editing the code drops them until
+        // the daemon answers again; a dead code shows nothing, never why.
+        let server = MockServer(
+            authMode: .enforcing, pairingCodes: ["483911": .valid, "USEDUP": .consumed])
+        let model = PairingModel(
+            client: APIClientFactory.mock(server: server), credentials: InMemoryCredentialStore())
+        await model.refreshFacts()
+        #expect(model.facts == nil)
+
+        model.pairingCode = "4839-11"
+        await model.refreshFacts()
+        let facts = try #require(model.facts)
+        #expect(facts == MockServer.pairingFacts)
+        #expect(PairingModel.connectionLabel(facts.connection_mode) == "Local")
+        #expect(
+            PairingModel.scopeLabel(facts.granted_scope)
+                == "Full operator control, revocable from the host")
+
+        model.pairingCode = "USEDUP"
+        #expect(model.facts == nil)
+        await model.refreshFacts()
+        #expect(model.facts == nil)
+
+        // The previewed code is still redeemable.
+        model.pairingCode = "483911"
+        model.displayName = "Ben's iPhone"
+        await model.refreshFacts()
+        #expect(model.facts != nil)
+        #expect(await model.pair() != nil)
+    }
+
     @Test func pairingStoresTheCredentialAndReturnsIt() async throws {
         let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])
         let credentials = InMemoryCredentialStore()

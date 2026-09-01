@@ -32,6 +32,11 @@ type fixture struct {
 	now     *time.Time
 }
 
+// testHostFacts is the fixture's process-fixed half of PairingFacts.
+var testHostFacts = signet.HostFacts{
+	DisplayName: "fixture-host.local", ConnectionMode: domain.ConnectionLoopback,
+}
+
 // testPairingKey is fixture key material, not a credential.
 var testPairingKey = []byte("signet-test-pairing-key")
 
@@ -74,6 +79,7 @@ func newFixture(t *testing.T) fixture {
 	now := start
 	service := signet.NewService(s,
 		signet.WithPairingKey(testPairingKey),
+		signet.WithHostFacts(testHostFacts),
 		signet.WithClock(func() time.Time { return now }),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: "https://ntfy.example", TopicKey: testTopicKey,

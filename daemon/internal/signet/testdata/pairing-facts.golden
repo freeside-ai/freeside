@@ -1,0 +1,6 @@
+{
+  "host_display_name": "fixture-host.local",
+  "code_expires_at": "2026-08-10T12:44:56Z",
+  "connection_mode": "loopback",
+  "granted_scope": "operator"
+}

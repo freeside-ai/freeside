@@ -310,6 +310,14 @@ func TestEnumValidity(t *testing.T) {
 		valids["EvidenceAvailability"] = append(valids["EvidenceAvailability"], v.valid)
 	}
 	invalids["EvidenceAvailability"] = EvidenceAvailability("").valid
+	for _, v := range AllConnectionModes {
+		valids["ConnectionMode"] = append(valids["ConnectionMode"], v.valid)
+	}
+	invalids["ConnectionMode"] = ConnectionMode("").valid
+	for _, v := range AllDeviceScopes {
+		valids["DeviceScope"] = append(valids["DeviceScope"], v.valid)
+	}
+	invalids["DeviceScope"] = DeviceScope("").valid
 	for _, v := range AllCommitPlanModes {
 		valids["CommitPlanMode"] = append(valids["CommitPlanMode"], v.valid)
 	}
