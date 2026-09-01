@@ -23,6 +23,30 @@ import Testing
 @Suite(.serialized, .enabled(if: ConvergenceEnvironment.isConfigured))
 @MainActor
 struct RealDaemonConvergenceTests {
+    // MARK: - Pairing facts (plan §5.14)
+
+    @Test func pairingPreviewReportsHostFactsAndLeavesTheCodeRedeemable() async throws {
+        // A real daemon names what a live code would join: loopback (the
+        // harness's only listener), a host name, an expiry still ahead,
+        // and the operator scope; the preview consumes nothing, so the
+        // same code then pairs with a grant carrying the same facts.
+        let apiURL = try #require(ConvergenceEnvironment.apiURL)
+        let code = try await ConvergenceHarness.control().mintPairingCode()
+        let api = APIClientFactory.live(serverURL: apiURL)
+
+        let facts = try await api.previewPairing(body: .json(.init(pairing_code: code)))
+            .ok.body.json
+        #expect(facts.connection_mode == .loopback)
+        #expect(!facts.host_display_name.isEmpty)
+        #expect(facts.code_expires_at > Date())
+        #expect(facts.granted_scope == ._operator)
+
+        let grant = try await api.pairDevice(
+            body: .json(.init(pairing_code: code, display_name: "Convergence preview"))
+        ).created.body.json
+        #expect(grant.facts == facts)
+    }
+
     // MARK: - Cache semantics (tests 8 and 11)
 
     @Test func epochChangeDiscardsTheCacheAndBootstraps() async throws {
