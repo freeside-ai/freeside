@@ -75,9 +75,11 @@ retry-only states an explicit reconcile-pass bound. It runs under ordinary
 
 - `internal/engine/durable_transition.go` is the engine registry.
   `internal/engine/elaboration_test.go` owns elaboration outcome and
-  specification-approval rows; `internal/integration/production_publication_test.go`
-  owns verification, review request/result, publication, ready-item, and
-  terminal rows plus the registry-completeness check.
+  specification-approval rows; `internal/engine/operator_feedback_test.go`
+  owns elaboration-answer and operator-feedback rows;
+  `internal/integration/production_publication_test.go` owns verification,
+  review request/result, publication, ready-item, and terminal rows plus the
+  registry-completeness check.
 - `internal/exec/stage/recovery_test.go` is the sibling registry for seed
   handoff and execution export. Its durable phases feed the deeper per-phase
   recovery fixtures that assert single handoff, credential attachment, export,

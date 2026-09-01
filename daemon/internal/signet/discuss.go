@@ -22,6 +22,13 @@ const kindAgentInvocationRequested = string(domain.AgentInvocationRequestedKind)
 // elaboration loop persists and repeatedly replays it as agent input.
 const MaxRequestChangesMessageBytes = domain.MaxSpecRevisionCommentBytes
 
+// The answer and return-feedback actions use the same bounded human-input
+// channel as specification revision feedback.
+const (
+	MaxAnswerMessageBytes         = domain.MaxSpecRevisionCommentBytes
+	MaxReturnFeedbackMessageBytes = domain.MaxSpecRevisionCommentBytes
+)
+
 // MaxDiscussCommandIDBytes bounds the command id so identities derived for a
 // discussion cannot bloat a later elaboration request past its aggregate
 // protocol limit.
@@ -106,6 +113,29 @@ func (s *Service) validateCommandContent(command domain.Command) error {
 			return fmt.Errorf("action %q: %w", command.Action, ErrMessageRequired)
 		}
 		if len(command.Message) > MaxRequestChangesMessageBytes {
+			return fmt.Errorf("action %q message is %d bytes: %w",
+				command.Action, len(command.Message), domain.ErrClaimTextTooLarge)
+		}
+		if len(command.Attachments) > 0 {
+			return fmt.Errorf("action %q: %w", command.Action, ErrContentNotAllowed)
+		}
+		return nil
+	}
+	if command.Action == domain.ActionAnswerAndRetry ||
+		command.Action == domain.ActionAnswerWithoutRetry ||
+		command.Action == domain.ActionReturnToAgent {
+		if len(command.CommandID) > MaxRequestChangesCommandIDBytes {
+			return fmt.Errorf("action %q command id is %d bytes: %w",
+				command.Action, len(command.CommandID), domain.ErrClaimTextTooLarge)
+		}
+		if strings.TrimSpace(command.Message) == "" {
+			return fmt.Errorf("action %q: %w", command.Action, ErrMessageRequired)
+		}
+		limit := MaxAnswerMessageBytes
+		if command.Action == domain.ActionReturnToAgent {
+			limit = MaxReturnFeedbackMessageBytes
+		}
+		if len(command.Message) > limit {
 			return fmt.Errorf("action %q message is %d bytes: %w",
 				command.Action, len(command.Message), domain.ErrClaimTextTooLarge)
 		}

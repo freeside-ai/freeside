@@ -34,6 +34,8 @@ func applyDataMigration(
 		return backfillAttentionDecisionSurfaces(ctx, tx)
 	case version == 59 && name == attentionDecisionSurfaceBodiesMigration:
 		return backfillAttentionDecisionSurfaceBodies(ctx, tx)
+	case version == 62 && name == readyReturnActionMigration:
+		return addReturnActionToProductionReadyItems(ctx, tx)
 	default:
 		return nil
 	}

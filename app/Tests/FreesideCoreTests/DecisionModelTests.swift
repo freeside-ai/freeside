@@ -585,6 +585,42 @@ import Testing
         #expect(await server.snapshot(itemID: "item-spec_approval") == before)
     }
 
+    @Test func answerAndRetrySubmitsTheTrimmedAnswer() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-agent_question")
+        await model.validate()
+
+        let claimed = await model.submitAnswer(
+            .answer_and_retry, message: "  Support the current and previous versions.  ")
+
+        #expect(claimed)
+        #expect(model.appliedRecord?.action == .answer_and_retry)
+        #expect(model.appliedRecord?.message == "Support the current and previous versions.")
+        #expect(model.snapshot?.item.status == .superseded)
+    }
+
+    @Test func returnToAgentRequiresBoundedFeedback() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-ready_for_final_review")
+        await model.validate()
+        let before = await server.snapshot(itemID: "item-ready_for_final_review")
+
+        let empty = await model.submitReturnToAgent(message: " \n ")
+        #expect(!empty)
+        #expect(
+            model.submissionError
+                == "describe what the agent should change before returning the work")
+        #expect(await server.snapshot(itemID: "item-ready_for_final_review") == before)
+
+        let oversized = await model.submitReturnToAgent(
+            message: String(repeating: "a", count: 8193))
+        #expect(!oversized)
+        #expect(model.submissionError == "the message must be 8 KiB or less")
+        #expect(await server.snapshot(itemID: "item-ready_for_final_review") == before)
+    }
+
     @Test func awaitingConversationDisablesASecondDiscuss() async {
         let server = MockServer()
         let store = await makeStore(server: server)

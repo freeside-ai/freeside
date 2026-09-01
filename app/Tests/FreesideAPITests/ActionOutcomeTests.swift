@@ -14,13 +14,13 @@ import Testing
             .convert_to_policy: .pending,
             .retry: .concludes(.resolved),
             .retry_with_capabilities: .pending,
-            .answer_and_retry: .pending,
-            .answer_without_retry: .pending,
+            .answer_and_retry: .concludes(.superseded),
+            .answer_without_retry: .concludes(.resolved),
             .rerun_trust_evaluation: .concludes(.resolved),
             .choose_alternate_profile: .pending,
             .inspect_trust_failure: .records,
             .open_pr: .records,
-            .return_to_agent: .pending,
+            .return_to_agent: .concludes(.superseded),
             .mark_seen: .records,
             .dismiss: .concludes(.dismissed),
             .start: .concludes(.resolved),
@@ -45,8 +45,7 @@ import Testing
         #expect(
             Set(expected.compactMap { $0.value == .pending ? $0.key : nil }) == [
                 .convert_to_policy, .retry_with_capabilities,
-                .choose_alternate_profile, .answer_and_retry, .answer_without_retry,
-                .return_to_agent,
+                .choose_alternate_profile,
             ])
     }
 }

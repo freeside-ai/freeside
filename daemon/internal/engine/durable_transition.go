@@ -12,7 +12,9 @@ type DurableTransition string
 
 const (
 	DurableTransitionElaborationOutcome    DurableTransition = "elaboration_outcome"
+	DurableTransitionElaborationAnswer     DurableTransition = "elaboration_answer"
 	DurableTransitionSpecificationApproval DurableTransition = "specification_approval"
+	DurableTransitionOperatorFeedback      DurableTransition = "operator_feedback"
 	DurableTransitionVerificationEvidence  DurableTransition = "verification_evidence"
 	DurableTransitionReviewRequest         DurableTransition = "review_request"
 	DurableTransitionReviewResult          DurableTransition = "review_result"
@@ -27,7 +29,9 @@ const (
 // sibling registries in their owning test suites.
 var AllDurableTransitions = []DurableTransition{
 	DurableTransitionElaborationOutcome,
+	DurableTransitionElaborationAnswer,
 	DurableTransitionSpecificationApproval,
+	DurableTransitionOperatorFeedback,
 	DurableTransitionVerificationEvidence,
 	DurableTransitionReviewRequest,
 	DurableTransitionReviewResult,
@@ -40,7 +44,9 @@ var AllDurableTransitions = []DurableTransition{
 func (transition DurableTransition) valid() bool {
 	switch transition {
 	case DurableTransitionElaborationOutcome,
+		DurableTransitionElaborationAnswer,
 		DurableTransitionSpecificationApproval,
+		DurableTransitionOperatorFeedback,
 		DurableTransitionVerificationEvidence,
 		DurableTransitionReviewRequest,
 		DurableTransitionReviewResult,

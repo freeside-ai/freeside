@@ -221,11 +221,15 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 	}
 	prior := newArtifact("prior-1", domain.ArtifactKindEvidence, digest("1"))
 	image := newArtifact("image-1", imageInputArtifactType, digest("2"))
+	specification := newArtifact("spec-1", domain.ArtifactKindSpecification, digest("4"))
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutArtifact(ctx, prior); err != nil {
 			return err
 		}
-		return tx.PutArtifact(ctx, image)
+		if err := tx.PutArtifact(ctx, image); err != nil {
+			return err
+		}
+		return tx.PutArtifact(ctx, specification)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -367,6 +371,31 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 		errors.Is(err, ErrProductionInputUndeliverable) ||
 		errors.Is(err, ErrRemediationInputUndeliverable) {
 		t.Fatalf("transient remediation admission = admitted %t, err %v", admitted, err)
+	}
+	operatorFeedbackID := operatorFeedbackInvocationID("command-1")
+	operatorFeedbackInvocation, err := domain.NewAgentInvocation(
+		operatorFeedbackID, []domain.ArtifactID{specification.ID, prior.ID}, nil, 0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operatorFeedbackBinding := binding
+	operatorFeedbackBinding.invocation = operatorFeedbackInvocation
+	operatorFeedbackAdmission, admitted, err := e.admitAttempt(ctx, operatorFeedbackBinding, domain.Stage{
+		ID: operatorFeedbackStageID(operatorFeedbackID), Name: productionStageName,
+	}, operatorFeedbackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !admitted || operatorFeedbackAdmission.StageInputs == nil {
+		t.Fatalf("operator-feedback admitted = %t, stage inputs = %v",
+			admitted, operatorFeedbackAdmission.StageInputs)
+	}
+	if got := operatorFeedbackAdmission.StageInputs.PromptPackageDigest; got != digest("8") {
+		t.Fatalf("operator-feedback prompt package = %s, want %s", got, digest("8"))
+	}
+	if got := operatorFeedbackAdmission.StageInputs.PriorArtifactDigests; len(got) != 1 || got[0] != prior.Digest {
+		t.Fatalf("operator-feedback prior artifacts = %v, want [%s]", got, prior.Digest)
 	}
 	if admission.StageInputs.ConversationDigest == nil {
 		t.Fatal("conversation-bound admission has no conversation digest")

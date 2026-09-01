@@ -106,6 +106,9 @@ func productionVerificationInvocationIDForProducer(
 	if round, ok := remediationRoundForInvocation(runID, producer); ok {
 		return domain.InvocationID(fmt.Sprintf("verify-remediation-%d-%s", round, runID))
 	}
+	if strings.HasPrefix(string(producer), "inv-operator-feedback-") {
+		return domain.InvocationID("verify-" + string(producer))
+	}
 	return ""
 }
 
@@ -1131,6 +1134,16 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 	if !ok || attempt.StageID != stage.ID {
 		return false, fmt.Errorf("attempt binding disagrees with run: %w", domain.ErrParentKeyMismatch)
 	}
+	operatorFeedback := false
+	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		operatorFeedback, err = authenticateOperatorFeedbackAttempt(
+			ctx, tx, attempt.InvocationID, run.ID, attempt.StageID,
+		)
+		return err
+	}); err != nil {
+		return false, fmt.Errorf("authenticate operator-feedback attempt: %w", err)
+	}
 	request, err := (&productionPublicationWorkflow{store: e.store}).loadProductionRequest(ctx, run)
 	if err != nil {
 		return false, err
@@ -1183,7 +1196,7 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 				return false, nil
 			}
 		}
-		if !legacy && e.productionPublication != nil {
+		if !legacy && !operatorFeedback && e.productionPublication != nil {
 			durable, err := e.productionPublication.authenticatesTerminal(ctx, run, *recorded)
 			if err != nil {
 				return false, err
@@ -1197,7 +1210,7 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		}
 		return false, nil
 	}
-	if !legacy && e.productionPublication != nil {
+	if !legacy && !operatorFeedback && e.productionPublication != nil {
 		queued, err := e.productionPublication.hasQueuedCompletion(ctx, run, attempt.InvocationID)
 		if err != nil {
 			return false, err
@@ -1243,6 +1256,13 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 			return false, err
 		}
 		if legacy {
+			accepted, err := e.recordProductionTerminal(ctx, run, terminal)
+			if MutableAdmissionPolicyRefusal(err) {
+				return false, nil
+			}
+			return accepted, err
+		}
+		if operatorFeedback {
 			accepted, err := e.recordProductionTerminal(ctx, run, terminal)
 			if MutableAdmissionPolicyRefusal(err) {
 				return false, nil
@@ -2014,6 +2034,9 @@ func productionQuarantineNoticeFor(prefix, reason string) bool {
 	}
 	if prefix == remediationMarkerQuarantinePrefix {
 		return reason == remediationQuarantineUnreadable
+	}
+	if prefix == operatorFeedbackMarkerQuarantinePrefix {
+		return reason == operatorFeedbackQuarantineUnreadable
 	}
 	return reason == productionQuarantineUnsupportedVersion ||
 		reason == productionQuarantineUnreadable

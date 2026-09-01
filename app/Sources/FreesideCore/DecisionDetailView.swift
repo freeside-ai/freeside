@@ -44,6 +44,9 @@ struct DecisionDetailView: View {
     private enum MessageEditor: String, Identifiable {
         case discuss
         case requestChanges
+        case answerAndRetry
+        case answerWithoutRetry
+        case returnToAgent
         var id: String { rawValue }
     }
 
@@ -188,6 +191,30 @@ struct DecisionDetailView: View {
                         byteLimit: 8192
                     ) { message in
                         await model.submitRequestChanges(message: message)
+                    }
+                case .answerAndRetry:
+                    MessageComposerSheet(
+                        title: "Answer and retry",
+                        prompt: "Answer the agent's question and retry the blocked work.",
+                        submitLabel: "Answer and retry", byteLimit: 8192
+                    ) { message in
+                        await model.submitAnswer(.answer_and_retry, message: message)
+                    }
+                case .answerWithoutRetry:
+                    MessageComposerSheet(
+                        title: "Answer without retry",
+                        prompt: "Record the answer and conclude the question without restarting work.",
+                        submitLabel: "Record answer", byteLimit: 8192
+                    ) { message in
+                        await model.submitAnswer(.answer_without_retry, message: message)
+                    }
+                case .returnToAgent:
+                    MessageComposerSheet(
+                        title: "Return to agent",
+                        prompt: "Describe what the agent should change before the work returns for review.",
+                        submitLabel: "Return to agent", byteLimit: 8192
+                    ) { message in
+                        await model.submitReturnToAgent(message: message)
                     }
                 }
             }
@@ -2334,6 +2361,12 @@ struct DecisionDetailView: View {
             messageEditor = .discuss
         case .request_changes:
             messageEditor = .requestChanges
+        case .answer_and_retry:
+            messageEditor = .answerAndRetry
+        case .answer_without_retry:
+            messageEditor = .answerWithoutRetry
+        case .return_to_agent:
+            messageEditor = .returnToAgent
         case .start_with_changes:
             proposalEditor = .revision
         case .snooze:

@@ -2257,7 +2257,9 @@ func TestElaborationInputOrderAcceptsPreChainVerifierRevisionResearch(t *testing
 	research := domain.ArtifactID("research")
 	priorSpec := domain.ArtifactID("prior-spec")
 	feedback := domain.ArtifactID("feedback")
-	canonical := elaborationInputs(source, []domain.ArtifactID{research}, &priorSpec, []domain.ArtifactID{feedback})
+	canonical := elaborationInputs(
+		source, []domain.ArtifactID{research}, &priorSpec, []domain.ArtifactID{feedback}, nil,
+	)
 	legacy := []domain.ArtifactID{source, priorSpec, feedback, research}
 
 	if !acceptsElaborationInputOrder(legacy, canonical, legacy) {

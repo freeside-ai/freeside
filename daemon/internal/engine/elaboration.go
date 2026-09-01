@@ -171,6 +171,7 @@ type elaborationRequest struct {
 	InputArtifactIDs    []domain.ArtifactID              `json:"input_artifact_ids"`
 	PriorSpecArtifactID *domain.ArtifactID               `json:"prior_spec_artifact_id,omitempty"`
 	FeedbackArtifactIDs []domain.ArtifactID              `json:"feedback_artifact_ids"`
+	AnswerArtifactIDs   []domain.ArtifactID              `json:"answer_artifact_ids,omitempty"`
 	PolicyArtifactID    domain.ArtifactID                `json:"policy_artifact_id"`
 	Publication         ProductionPublication            `json:"publication"`
 	PublicationDigest   domain.Digest                    `json:"publication_digest,omitempty"`
@@ -207,6 +208,15 @@ type elaborationPriorArtifactEnvelope struct {
 	Body    string                    `json:"body"`
 }
 
+func elaborationFeedbackEnvelopeID(id domain.ArtifactID) string {
+	for _, prefix := range []string{"spec-feedback-", "answer-"} {
+		if value, ok := strings.CutPrefix(string(id), prefix); ok && value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func (e *Engine) encodeElaborationPriorArtifact(
 	ctx context.Context, artifact domain.Artifact,
 ) ([]byte, error) {
@@ -216,7 +226,8 @@ func (e *Engine) encodeElaborationPriorArtifact(
 		role = "prior_specification"
 	case domain.ArtifactKindResearch:
 		role = "research"
-		if strings.HasPrefix(string(artifact.ID), "spec-feedback-") {
+		if strings.HasPrefix(string(artifact.ID), "spec-feedback-") ||
+			strings.HasPrefix(string(artifact.ID), "answer-") {
 			role = "human_feedback"
 		} else if strings.HasPrefix(string(artifact.ID), "spec-discussion-") {
 			role = "discussion"
@@ -270,8 +281,8 @@ func (e *Engine) encodeElaborationPriorArtifact(
 		source = &evidence.Source
 	}
 	if role == "human_feedback" {
-		envelopeID = strings.TrimPrefix(string(artifact.ID), "spec-feedback-")
-		if envelopeID == "" || envelopeID == string(artifact.ID) {
+		envelopeID = elaborationFeedbackEnvelopeID(artifact.ID)
+		if envelopeID == "" {
 			return nil, fmt.Errorf("human feedback artifact %q has no comment id: %w",
 				artifact.ID, domain.ErrParentKeyMismatch)
 		}
@@ -950,6 +961,22 @@ func (r elaborationRequest) validate() error {
 		}
 		feedback[id] = struct{}{}
 	}
+	answers := make(map[domain.ArtifactID]struct{}, len(r.AnswerArtifactIDs))
+	for _, id := range r.AnswerArtifactIDs {
+		if id == "" || !strings.HasPrefix(string(id), "answer-") {
+			return fmt.Errorf("invalid answer artifact %q: %w", id, domain.ErrParentKeyMismatch)
+		}
+		if _, ok := seen[id]; !ok {
+			return fmt.Errorf("answer artifact is not an invocation input: %w", domain.ErrParentKeyMismatch)
+		}
+		if _, duplicate := answers[id]; duplicate {
+			return domain.ErrDuplicate
+		}
+		if _, duplicate := feedback[id]; duplicate {
+			return domain.ErrDuplicate
+		}
+		answers[id] = struct{}{}
+	}
 	return nil
 }
 
@@ -1171,6 +1198,7 @@ func sameElaborationRequest(left, right elaborationRequest) bool {
 		slices.Equal(left.InputArtifactIDs, right.InputArtifactIDs) &&
 		sameArtifactID(left.PriorSpecArtifactID, right.PriorSpecArtifactID) &&
 		slices.Equal(left.FeedbackArtifactIDs, right.FeedbackArtifactIDs) &&
+		slices.Equal(left.AnswerArtifactIDs, right.AnswerArtifactIDs) &&
 		left.PolicyArtifactID == right.PolicyArtifactID &&
 		left.Publication == right.Publication &&
 		left.PublicationDigest == right.PublicationDigest &&
@@ -1195,14 +1223,53 @@ func elaborationInputs(
 	research []domain.ArtifactID,
 	priorSpec *domain.ArtifactID,
 	feedback []domain.ArtifactID,
+	answers []domain.ArtifactID,
 ) []domain.ArtifactID {
-	inputs := make([]domain.ArtifactID, 0, 1+len(research)+len(feedback)+boolCount(priorSpec != nil))
+	inputs := make([]domain.ArtifactID, 0, 1+len(research)+len(feedback)+len(answers)+boolCount(priorSpec != nil))
 	inputs = append(inputs, source)
 	inputs = append(inputs, research...)
 	if priorSpec != nil {
 		inputs = append(inputs, *priorSpec)
 	}
-	return append(inputs, feedback...)
+	inputs = append(inputs, feedback...)
+	return append(inputs, answers...)
+}
+
+func elaborationResearchArtifactIDs(request elaborationRequest) []domain.ArtifactID {
+	return slices.DeleteFunc(slices.Clone(request.InputArtifactIDs[1:]), func(id domain.ArtifactID) bool {
+		return request.PriorSpecArtifactID != nil && id == *request.PriorSpecArtifactID ||
+			slices.Contains(request.FeedbackArtifactIDs, id) ||
+			slices.Contains(request.AnswerArtifactIDs, id)
+	})
+}
+
+func nextElaborationAnswerRequest(
+	request elaborationRequest, answerID domain.ArtifactID,
+) elaborationRequest {
+	next := request
+	next.Iteration++
+	next.InvocationID = elaborationInvocationID(request.ElaborationRunID, next.Iteration)
+	next.AnswerArtifactIDs = append(slices.Clone(request.AnswerArtifactIDs), answerID)
+	next.InputArtifactIDs = elaborationInputs(
+		request.InputArtifactIDs[0], elaborationResearchArtifactIDs(request),
+		request.PriorSpecArtifactID, request.FeedbackArtifactIDs, next.AnswerArtifactIDs,
+	)
+	return next
+}
+
+func nextElaborationRevisionRequest(
+	request elaborationRequest, priorSpec, feedbackID domain.ArtifactID,
+) elaborationRequest {
+	next := request
+	next.Iteration++
+	next.InvocationID = elaborationInvocationID(request.ElaborationRunID, next.Iteration)
+	next.PriorSpecArtifactID = &priorSpec
+	next.FeedbackArtifactIDs = append(slices.Clone(request.FeedbackArtifactIDs), feedbackID)
+	next.InputArtifactIDs = elaborationInputs(
+		request.InputArtifactIDs[0], elaborationResearchArtifactIDs(request),
+		next.PriorSpecArtifactID, next.FeedbackArtifactIDs, request.AnswerArtifactIDs,
+	)
+	return next
 }
 
 // acceptsElaborationInputOrder recognizes the current role-canonical vector
@@ -1232,6 +1299,60 @@ func requireElaborationOutputProvenance(
 		provenance.SensitivityClass != domain.SensitivityNormal {
 		return fmt.Errorf("elaboration artifact %q has unauthorized type or provenance: %w",
 			artifact.ID, domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+func authenticateElaborationAnswerTransition(
+	ctx context.Context,
+	tx *store.ReadTx,
+	run domain.Run,
+	request, next elaborationRequest,
+	answerID domain.ArtifactID,
+) error {
+	commandID, ok := strings.CutPrefix(string(answerID), "answer-")
+	if !ok || commandID == "" {
+		return domain.ErrParentKeyMismatch
+	}
+	command, err := tx.GetCommand(ctx, commandID)
+	if err != nil {
+		return err
+	}
+	item, err := tx.GetAttentionItemRecord(ctx, command.ItemID)
+	if err != nil {
+		return err
+	}
+	if command.Action != domain.ActionAnswerAndRetry ||
+		!operatorFeedbackCommandMatchesItem(command, item) ||
+		item.Type != domain.AttentionAgentQuestion || item.Subject.Type != domain.SubjectRun ||
+		item.Subject.RunID == nil || *item.Subject.RunID != run.ID ||
+		item.Subject.ID != domain.SubjectID(run.ID) || item.ProjectID != run.ProjectID {
+		return domain.ErrParentKeyMismatch
+	}
+	sourceClaims := 0
+	for _, claim := range item.AgentClaims {
+		if claim.Provenance.ProducerInvocationID == request.InvocationID {
+			sourceClaims++
+		}
+	}
+	if sourceClaims == 0 {
+		return domain.ErrParentKeyMismatch
+	}
+	artifact, err := tx.GetArtifact(ctx, answerID)
+	if err != nil {
+		return err
+	}
+	if artifact.Digest != domain.Digest(contentaddr.Sum([]byte(strings.TrimSpace(command.Message)))) {
+		return domain.ErrParentKeyMismatch
+	}
+	if err := requireElaborationOutputProvenance(
+		artifact, domain.ArtifactKindResearch, domain.ProducerDaemon, request.InvocationID,
+	); err != nil {
+		return err
+	}
+	expected := nextElaborationAnswerRequest(request, answerID)
+	if !sameElaborationRequest(next, expected) {
+		return domain.ErrParentKeyMismatch
 	}
 	return nil
 }
@@ -1444,6 +1565,7 @@ func verifyElaborationChain(
 
 	research := []domain.ArtifactID{}
 	feedback := []domain.ArtifactID{}
+	answers := []domain.ArtifactID{}
 	var priorSpec *domain.ArtifactID
 	var legacyPostRevisionResearch []domain.ArtifactID
 	var currentInvocation domain.AgentInvocation
@@ -1457,12 +1579,13 @@ func verifyElaborationChain(
 		if err != nil {
 			return verifiedElaborationBinding{}, err
 		}
-		expectedInputs := elaborationInputs(sourceID, research, priorSpec, feedback)
+		expectedInputs := elaborationInputs(sourceID, research, priorSpec, feedback, answers)
 		if !sameElaborationRoot(request, root) || request.InvocationID != invocationID ||
 			request.Iteration != iteration ||
 			!acceptsElaborationInputOrder(request.InputArtifactIDs, expectedInputs, legacyPostRevisionResearch) ||
 			!sameArtifactID(request.PriorSpecArtifactID, priorSpec) ||
-			!slices.Equal(request.FeedbackArtifactIDs, feedback) {
+			!slices.Equal(request.FeedbackArtifactIDs, feedback) ||
+			!slices.Equal(request.AnswerArtifactIDs, answers) {
 			return verifiedElaborationBinding{}, fmt.Errorf(
 				"elaboration request %q is not authorized by its preceding transition: %w",
 				invocationID, domain.ErrParentKeyMismatch)
@@ -1485,6 +1608,27 @@ func verifyElaborationChain(
 		if iteration == current.Iteration {
 			currentInvocation = invocation
 			break
+		}
+
+		nextEntry, err := tx.GetOutbox(ctx, string(elaborationInvocationID(run.ID, iteration+1)))
+		if err != nil {
+			return verifiedElaborationBinding{}, err
+		}
+		nextRequest, err := decodeElaborationRequest(nextEntry)
+		if err != nil {
+			return verifiedElaborationBinding{}, err
+		}
+		if len(nextRequest.AnswerArtifactIDs) == len(answers)+1 &&
+			slices.Equal(nextRequest.AnswerArtifactIDs[:len(answers)], answers) {
+			answerID := nextRequest.AnswerArtifactIDs[len(answers)]
+			if err := authenticateElaborationAnswerTransition(
+				ctx, tx, run, request, nextRequest, answerID,
+			); err != nil {
+				return verifiedElaborationBinding{}, err
+			}
+			answers = append(answers, answerID)
+			legacyPostRevisionResearch = nil
+			continue
 		}
 
 		terminalEntry, err := tx.GetInbox(ctx, string(invocationID))
@@ -2090,13 +2234,11 @@ func (e *Engine) acceptResearchRequests(ctx context.Context, run domain.Run, req
 	// Revision feedback and the current prior specification trail all
 	// terminal-authorized research, even when research is fetched after a
 	// request_changes transition.
-	research := slices.DeleteFunc(slices.Clone(request.InputArtifactIDs[1:]), func(id domain.ArtifactID) bool {
-		return request.PriorSpecArtifactID != nil && id == *request.PriorSpecArtifactID ||
-			slices.Contains(request.FeedbackArtifactIDs, id)
-	})
+	research := elaborationResearchArtifactIDs(request)
 	research = append(research, ids...)
 	inputs := elaborationInputs(
-		request.InputArtifactIDs[0], research, request.PriorSpecArtifactID, request.FeedbackArtifactIDs,
+		request.InputArtifactIDs[0], research, request.PriorSpecArtifactID,
+		request.FeedbackArtifactIDs, request.AnswerArtifactIDs,
 	)
 	next := request
 	next.Iteration++
@@ -3039,29 +3181,10 @@ func (e *Engine) enqueueSpecRevision(ctx context.Context, run domain.Run, reques
 	if err != nil {
 		return err
 	}
-	next := request
-	next.Iteration++
-	next.InvocationID = elaborationInvocationID(request.ElaborationRunID, next.Iteration)
-	next.PriorSpecArtifactID = &priorSpec
-	next.FeedbackArtifactIDs = append(slices.Clone(request.FeedbackArtifactIDs), feedbackID)
-	// Retire the superseded prior specification before appending the new one.
-	// loadElaborationBinding tolerates exactly one non-source Specification
-	// input (the current PriorSpec), so a stale prior spec left in the inputs
-	// binds as ErrParentKeyMismatch and the revision can never dispatch: a
-	// second request_changes round would otherwise enqueue an invocation that
-	// no reconcile pass can decode. Feedback stays research-typed and
-	// accumulates.
-	retained := slices.DeleteFunc(slices.Clone(request.InputArtifactIDs), func(id domain.ArtifactID) bool {
-		return request.PriorSpecArtifactID != nil && id == *request.PriorSpecArtifactID ||
-			slices.Contains(request.FeedbackArtifactIDs, id)
-	})
-	if !slices.Contains(retained, priorSpec) {
-		retained = append(retained, priorSpec)
-	}
-	// Keep the prompt-facing roles addressable without widening the durable
-	// stage-input contract: research stays first, then the current prior spec,
-	// then every human-feedback artifact in chronological order.
-	next.InputArtifactIDs = append(retained, next.FeedbackArtifactIDs...)
+	// Rebuild by role so the current prior specification and chronological
+	// feedback precede every operator answer, regardless of which transition
+	// produced the persisted input order being revised.
+	next := nextElaborationRevisionRequest(request, priorSpec, feedbackID)
 	payload, err := encodeElaborationRequest(next)
 	if err != nil {
 		return err

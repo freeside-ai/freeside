@@ -62,6 +62,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		pendingElaboration []store.QueueEntry
 		pendingDiscussion  []store.QueueEntry
 		pendingRemediation []store.QueueEntry
+		pendingFeedback    []store.QueueEntry
 		held               bool
 		holdReason         domain.RunHoldReason
 	)
@@ -117,6 +118,10 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			return err
 		}
 		pendingRemediation, err = tx.ListPendingOutbox(ctx, KindRemediationInvocationRequested)
+		if err != nil {
+			return err
+		}
+		pendingFeedback, err = tx.ListPendingOutbox(ctx, KindOperatorFeedbackInvocationRequested)
 		return err
 	})
 	if err != nil {
@@ -180,6 +185,22 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			binding, err := e.loadRemediationBinding(ctx, request)
 			if err != nil {
 				quarantined, quarantineErr := e.quarantinePendingRemediationMarker(ctx, entry, err)
+				if quarantineErr != nil {
+					return 0, quarantineErr
+				}
+				if quarantined {
+					continue
+				}
+				return 0, err
+			}
+			if err := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, holdReason); err != nil {
+				return 0, err
+			}
+		}
+		for _, entry := range pendingFeedback {
+			request, binding, err := e.loadOperatorFeedbackBinding(ctx, entry)
+			if err != nil {
+				quarantined, quarantineErr := e.quarantinePendingOperatorFeedbackMarker(ctx, entry, err)
 				if quarantineErr != nil {
 					return 0, quarantineErr
 				}
@@ -565,6 +586,48 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			// conformant backend. Exiting here would mean a daemon started
 			// before its conformance record was produced could never pick the
 			// work up, which is the opposite of running unattended.
+			if unattendedDispatchRefusal(err) {
+				return started, nil
+			}
+			return started, err
+		}
+		if hold {
+			return started, nil
+		}
+	}
+	for _, entry := range pendingFeedback {
+		request, binding, err := e.loadOperatorFeedbackBinding(ctx, entry)
+		if err != nil {
+			quarantined, quarantineErr := e.quarantinePendingOperatorFeedbackMarker(ctx, entry, err)
+			if quarantineErr != nil {
+				return started, quarantineErr
+			}
+			if quarantined {
+				continue
+			}
+			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
+		}
+		if err := releaseProductionQuarantine(
+			ctx, e.store, e.signet, operatorFeedbackMarkerQuarantinePrefix, binding.run.ID,
+		); err != nil {
+			return started, err
+		}
+		stage, ok := findOperatorFeedbackStage(binding.run, request.InvocationID)
+		if !ok {
+			return started, fmt.Errorf("intent %q: run %q has no operator-feedback stage",
+				entry.IdempotencyKey, binding.run.ID)
+		}
+		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
+		started += boolCount(startedNow)
+		if err != nil {
+			if reason, ok := dispatchHoldReason(err); ok {
+				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason); obsErr != nil {
+					return started, obsErr
+				}
+			}
+			if invocationDispatchHold(err) {
+				continue
+			}
 			if unattendedDispatchRefusal(err) {
 				return started, nil
 			}

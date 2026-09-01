@@ -268,6 +268,14 @@ func (e *Engine) admitAttempt(
 		isProduction = true
 		promptPackageDigest = e.productionPublication.remediationPromptPackage
 	}
+	if stage.ID == operatorFeedbackStageID(invocationID) && stage.Name == productionStageName {
+		if e.productionPublication == nil ||
+			!contentaddr.Valid(string(e.productionPublication.remediationPromptPackage)) {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q: operator-feedback prompt package is unavailable", invocationID)
+		}
+		promptPackageDigest = e.productionPublication.remediationPromptPackage
+	}
 	stageInputs, err := e.stageInputSnapshot(
 		ctx, binding, inputDigest, promptPackageDigest, isElaboration,
 	)
