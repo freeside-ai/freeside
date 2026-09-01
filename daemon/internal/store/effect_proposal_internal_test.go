@@ -289,6 +289,7 @@ func TestProposalLedgerRejectsMismatchedCommandAuthority(t *testing.T) {
 				HeadBinding:          domain.HeadIndependent, VerificationRecipeDigest: &recipe,
 				SensitivityClass: domain.SensitivityNormal,
 			},
+			Metadata: runMeta(),
 		}, map[domain.Digest]bool{recipe: true})
 		if err != nil {
 			return err

@@ -161,5 +161,19 @@ import Testing
             item.evidence_snapshot.map(\.digest) + item.agent_claims.map(\.digest)
             + (item.finding_adjudication.map { [$0.value1.adjudication_digest] } ?? [])
         #expect(item.artifact_digests == Array(Set(union)).sorted())
+        // Every reference carries valid §5.15 metadata: evidence on the run
+        // channel, claims on the claim channel, non-negative sizes, and a text
+        // claim whose media type agrees with its metadata.
+        for artifact in item.evidence_snapshot {
+            #expect(artifact.metadata.source == .run)
+            #expect(artifact.metadata.size_bytes >= 0)
+        }
+        for claim in item.agent_claims {
+            #expect(claim.metadata.source == .claim)
+            #expect(claim.metadata.size_bytes >= 0)
+            if let text = claim.text {
+                #expect(text.media_type.rawValue == claim.metadata.media_type.rawValue)
+            }
+        }
     }
 }

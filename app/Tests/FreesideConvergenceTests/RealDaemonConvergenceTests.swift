@@ -448,7 +448,15 @@ struct RealDaemonConvergenceTests {
             AttentionFixtures.fixtureImagePNG, on: device)
         let loader = AttachmentLoader(client: device.client)
 
-        await loader.load(digest)
+        // The daemon projects `available` for a stored image; the loader
+        // classifies it as a within-cap image and fetches it to the .image
+        // phase (plan §5.15 typed states).
+        await loader.load(
+            digest,
+            reference: AttachmentReference(
+                mediaType: "image/png",
+                sizeBytes: AttentionFixtures.fixtureImagePNG.count,
+                availability: .available))
 
         guard case .image = loader.phase(for: digest) else {
             Issue.record("expected .image, got \(String(describing: loader.phase(for: digest)))")
@@ -457,15 +465,18 @@ struct RealDaemonConvergenceTests {
     }
 
     @Test func anUnstoredDigestRendersTheUnavailablePlaceholder() async throws {
-        // The negative half: a well-formed but unstored digest gets the
-        // daemon's authoritative 404, which the loader maps to
-        // .unavailable (the card's placeholder branch) rather than a hang
-        // or a crash.
+        // The negative half: the daemon holds no bytes for this digest, so it
+        // projects `bytes_absent`, which the loader renders as the no-bytes
+        // `.unavailable` placeholder from the typed metadata alone — no fetch,
+        // and distinct from a transient `.fetchFailed`.
         let device = try await ConvergenceHarness.pairDevice(displayName: "Convergence 128N")
         let unstored = "sha256:" + String(repeating: "11", count: 32)
         let loader = AttachmentLoader(client: device.client)
 
-        await loader.load(unstored)
+        await loader.load(
+            unstored,
+            reference: AttachmentReference(
+                mediaType: "image/png", sizeBytes: 256, availability: .bytesAbsent))
 
         #expect(loader.phase(for: unstored) == .unavailable)
     }
@@ -493,6 +504,12 @@ struct RealDaemonConvergenceTests {
         #expect(text.media_type == .text_sol_markdown)
         #expect(text.content == summary)
         #expect(item.artifact_digests.contains(claim.digest))
+        // The §5.15 metadata rides the claim channel, agrees with the inline
+        // text's media type, and is always available (rendered in-band, so the
+        // daemon's projection never gates it on the blob store).
+        #expect(claim.metadata.source == .claim)
+        #expect(claim.metadata.media_type == .text_sol_markdown)
+        #expect(claim.metadata.availability == .available)
     }
 
     // MARK: - Policy matrix parity (issue #204)

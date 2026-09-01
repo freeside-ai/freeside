@@ -264,6 +264,11 @@ func TestAnswerAndRetryRecordsElaborationInputAndEnqueuesNextIteration(t *testin
 	if strings.TrimSpace(string(body)) != answer {
 		t.Fatalf("recorded answer = %q, want %q", body, answer)
 	}
+	// Advance the clock so the replay stamps a different answer-artifact
+	// created_at: the transition must stay idempotent against the
+	// byte-different re-put of the content-addressed artifact (#922), not
+	// conflict on it and wedge the reconcile loop.
+	*f.now = f.now.Add(time.Hour)
 	if replay, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || replay != 0 {
 		t.Fatalf("replayed feedback reconciliation = %d, %v", replay, err)
 	}
@@ -362,6 +367,7 @@ func TestReturnToAgentRecordsFeedbackAndCandidatePatchForResumedWork(t *testing.
 		store: f.store, signet: f.signet,
 		productionPublication: &productionPublicationWorkflow{
 			store: f.store, attention: f.signet, artifacts: f.blobs,
+			now: func() time.Time { return *f.now },
 		},
 	}
 	created, err := engine.persistImplementationFeedback(
@@ -623,6 +629,7 @@ func TestOversizedOperatorFeedbackInputParksOnlyItsRun(t *testing.T) {
 		store: f.store, signet: f.signet,
 		productionPublication: &productionPublicationWorkflow{
 			store: f.store, attention: f.signet, artifacts: f.blobs,
+			now: func() time.Time { return *f.now },
 		},
 	}
 	if transitions, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || transitions != 0 {
@@ -955,6 +962,7 @@ func assertImplementationFeedbackRestart(
 	}
 	workflow := &productionPublicationWorkflow{
 		store: f.store, attention: f.signet, artifacts: f.blobs, transitionHook: hook,
+		now: func() time.Time { return *f.now },
 	}
 	engine := &Engine{store: f.store, signet: f.signet, productionPublication: workflow}
 	patch := []byte("diff --git a/parser.go b/parser.go\n")
@@ -964,7 +972,10 @@ func assertImplementationFeedbackRestart(
 		t.Fatalf("injected %s crash = %v, reached %t", side, err, *injected)
 	}
 	f = f.reopen(t)
-	workflow = &productionPublicationWorkflow{store: f.store, attention: f.signet, artifacts: f.blobs}
+	workflow = &productionPublicationWorkflow{
+		store: f.store, attention: f.signet, artifacts: f.blobs,
+		now: func() time.Time { return *f.now },
+	}
 	engine = &Engine{store: f.store, signet: f.signet, productionPublication: workflow}
 	created, err := engine.persistImplementationFeedback(
 		t.Context(), item, result.Record, run, root, sourceID, base, head, patch,

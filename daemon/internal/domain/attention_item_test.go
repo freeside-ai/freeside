@@ -96,9 +96,12 @@ func textClaims(text domain.ClaimText, digest domain.Digest) []domain.AgentClaim
 	if digest == "" {
 		digest = text.ComputeDigest()
 	}
+	meta := claimMeta(domain.EvidenceMediaType(text.MediaType))
+	meta.SizeBytes = int64(len(text.Content))
 	return []domain.AgentClaim{{
 		Label: "summary", Artifact: "art-1", Digest: digest,
 		Text: &text, Provenance: provenance(domain.ProducerAgent, nil),
+		Metadata: meta,
 	}}
 }
 
@@ -239,6 +242,7 @@ func TestNewAttentionItemDetachesInput(t *testing.T) {
 	verifierArt := domain.Artifact{
 		ID: "art-good", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:g",
 		Provenance: provenance(domain.ProducerVerifier, &recipe),
+		Metadata:   runMeta(),
 	}
 	in := validItemInput(domain.AttentionReadyForFinalReview)
 	in.EvidenceSnapshot = []domain.Artifact{verifierArt}
@@ -248,7 +252,7 @@ func TestNewAttentionItemDetachesInput(t *testing.T) {
 	}
 
 	// Swapping the caller's slice element must not change the validated item.
-	in.EvidenceSnapshot[0] = domain.Artifact{ID: "art-bad", Type: domain.ArtifactKindImage, Digest: "sha256:b", Provenance: provenance(domain.ProducerAgent, nil)}
+	in.EvidenceSnapshot[0] = domain.Artifact{ID: "art-bad", Type: domain.ArtifactKindImage, Digest: "sha256:b", Provenance: provenance(domain.ProducerAgent, nil), Metadata: runMeta()}
 	if item.EvidenceSnapshot[0].Provenance.ProducerClass == domain.ProducerAgent {
 		t.Error("mutating the input evidence slice changed the validated item")
 	}
@@ -283,6 +287,7 @@ func TestNewAttentionItemRecomputesEvidenceEligibility(t *testing.T) {
 		ID: "art-1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:g",
 		Provenance:      provenance(domain.ProducerVerifier, &recipe),
 		PublishEligible: false, // caller lie: it is actually eligible
+		Metadata:        runMeta(),
 	}
 	in := validItemInput(domain.AttentionReadyForFinalReview)
 	in.EvidenceSnapshot = []domain.Artifact{understated}
@@ -307,6 +312,7 @@ func TestAgentClaimWireExcludesPublishEligible(t *testing.T) {
 	claim := domain.AgentClaim{
 		Label: "shot", Artifact: "c1", Digest: "sha256:aaa",
 		Provenance: provenance(domain.ProducerAgent, nil),
+		Metadata:   claimMeta(domain.EvidenceMediaImagePNG),
 	}
 	if err := claim.Validate(); err != nil {
 		t.Fatalf("fixture must be valid: %v", err)
@@ -324,15 +330,18 @@ func TestNewAttentionItemDerivesBindingSet(t *testing.T) {
 	recipe := approvedRecipe
 	// Two evidence artifacts sharing a digest and one claim; the union
 	// deduplicates and sorts. "sha256:aaa" < "sha256:zzz" gives the order.
-	ev1 := domain.Artifact{ID: "e1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:zzz", Provenance: provenance(domain.ProducerVerifier, &recipe)}
-	ev2 := domain.Artifact{ID: "e2", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:zzz", Provenance: provenance(domain.ProducerVerifier, &recipe)}
-	claim := domain.AgentClaim{Label: "shot", Artifact: "c1", Digest: "sha256:aaa", Provenance: provenance(domain.ProducerAgent, nil)}
+	ev1 := domain.Artifact{ID: "e1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:zzz", Provenance: provenance(domain.ProducerVerifier, &recipe), Metadata: runMeta()}
+	ev2 := domain.Artifact{ID: "e2", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:zzz", Provenance: provenance(domain.ProducerVerifier, &recipe), Metadata: runMeta()}
+	claim := domain.AgentClaim{Label: "shot", Artifact: "c1", Digest: "sha256:aaa", Provenance: provenance(domain.ProducerAgent, nil), Metadata: claimMeta(domain.EvidenceMediaImagePNG)}
 	// A text claim joins the binding set through its computed content digest,
 	// so an approval over the item binds the rendered summary too.
 	text := domain.ClaimText{MediaType: domain.MediaTypeTextPlain, Content: "summary"}
+	textMeta := claimMeta(domain.EvidenceMediaTextPlain)
+	textMeta.SizeBytes = int64(len(text.Content))
 	textClaim := domain.AgentClaim{
 		Label: "summary", Artifact: "c2", Digest: text.ComputeDigest(),
 		Text: &text, Provenance: provenance(domain.ProducerAgent, nil),
+		Metadata: textMeta,
 	}
 	in := validItemInput(domain.AttentionReadyForFinalReview)
 	in.PRHeadSHA = "abc123" // matches provenance() so evidence head-binding passes
@@ -360,7 +369,7 @@ func TestHeadIndependentEvidenceSurvivesRemediation(t *testing.T) {
 	indepProv := provenance(domain.ProducerVerifier, &recipe)
 	indepProv.HeadBinding = domain.HeadIndependent
 	indepProv.SourceHeadSHA = ""
-	indep := domain.Artifact{ID: "lic", Type: domain.ArtifactKindLicenseScan, Digest: "sha256:lic", Provenance: indepProv}
+	indep := domain.Artifact{ID: "lic", Type: domain.ArtifactKindLicenseScan, Digest: "sha256:lic", Provenance: indepProv, Metadata: runMeta()}
 
 	// Same head-independent artifact under two different remediation heads: both
 	// preserve it, since it is decoupled from head.
@@ -375,7 +384,7 @@ func TestHeadIndependentEvidenceSurvivesRemediation(t *testing.T) {
 
 	// Control: a head-bound artifact whose head does not match the (remediated)
 	// item head is still invalidated.
-	bound := domain.Artifact{ID: "log", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe)} // SourceHeadSHA "abc123"
+	bound := domain.Artifact{ID: "log", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe), Metadata: runMeta()} // SourceHeadSHA "abc123"
 	in := validItemInput(domain.AttentionReadyForFinalReview)
 	in.PRHeadSHA = "head-B-remediation"
 	in.EvidenceSnapshot = []domain.Artifact{bound}
@@ -444,7 +453,7 @@ func TestValidateRejectsBindingMismatch(t *testing.T) {
 		recipe := approvedRecipe
 		in := validItemInput(domain.AttentionReadyForFinalReview)
 		in.PRHeadSHA = "abc123"
-		in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
+		in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe), Metadata: runMeta()}}
 		item, err := domain.NewAttentionItem(in, approvedRecipes())
 		if err != nil {
 			t.Fatal(err)
@@ -494,7 +503,7 @@ func TestValidateRejectsInvalidationWithoutSupersession(t *testing.T) {
 	readyItem := func() domain.AttentionItem {
 		in := validItemInput(domain.AttentionReadyForFinalReview)
 		in.PRHeadSHA = "abc123"
-		in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
+		in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe), Metadata: runMeta()}}
 		item, err := domain.NewAttentionItem(in, approvedRecipes())
 		if err != nil {
 			t.Fatal(err)
@@ -778,26 +787,30 @@ func TestNewAttentionItemRejects(t *testing.T) {
 			wantErr: domain.ErrInvalidCommitPlanNotice,
 		},
 		{
-			name:    "agent claim without label",
-			mutate:  func(in *domain.AttentionItemInput) { in.AgentClaims = []domain.AgentClaim{{Artifact: "art-1"}} },
+			name: "agent claim without label",
+			mutate: func(in *domain.AttentionItemInput) {
+				in.AgentClaims = []domain.AgentClaim{{Artifact: "art-1", Metadata: claimMeta(domain.EvidenceMediaImagePNG)}}
+			},
 			wantErr: domain.ErrEmptyField,
 		},
 		{
-			name:    "agent claim without artifact",
-			mutate:  func(in *domain.AttentionItemInput) { in.AgentClaims = []domain.AgentClaim{{Label: "note"}} },
+			name: "agent claim without artifact",
+			mutate: func(in *domain.AttentionItemInput) {
+				in.AgentClaims = []domain.AgentClaim{{Label: "note", Metadata: claimMeta(domain.EvidenceMediaImagePNG)}}
+			},
 			wantErr: domain.ErrEmptyID,
 		},
 		{
 			name: "agent claim without digest",
 			mutate: func(in *domain.AttentionItemInput) {
-				in.AgentClaims = []domain.AgentClaim{{Label: "shot", Artifact: "art-1"}}
+				in.AgentClaims = []domain.AgentClaim{{Label: "shot", Artifact: "art-1", Metadata: claimMeta(domain.EvidenceMediaImagePNG)}}
 			},
 			wantErr: domain.ErrEmptyField,
 		},
 		{
 			name: "agent claim without provenance",
 			mutate: func(in *domain.AttentionItemInput) {
-				in.AgentClaims = []domain.AgentClaim{{Label: "shot", Artifact: "art-1", Digest: "sha256:s"}}
+				in.AgentClaims = []domain.AgentClaim{{Label: "shot", Artifact: "art-1", Digest: "sha256:s", Metadata: claimMeta(domain.EvidenceMediaImagePNG)}}
 			},
 			wantErr: domain.ErrInvalidProducerClass,
 		},
@@ -807,6 +820,7 @@ func TestNewAttentionItemRejects(t *testing.T) {
 				in.AgentClaims = []domain.AgentClaim{{
 					Label: "shot", Artifact: "art-1", Digest: "sha256:s",
 					Provenance: provenance(domain.ProducerVerifier, nil),
+					Metadata:   claimMeta(domain.EvidenceMediaImagePNG),
 				}}
 			},
 			wantErr: domain.ErrNonAgentClaim,
@@ -817,6 +831,7 @@ func TestNewAttentionItemRejects(t *testing.T) {
 				in.AgentClaims = []domain.AgentClaim{{
 					Label: "shot", Artifact: "art-1", Digest: "sha256:s",
 					Provenance: provenance(domain.ProducerDaemon, nil),
+					Metadata:   claimMeta(domain.EvidenceMediaImagePNG),
 				}}
 			},
 			wantErr: domain.ErrNonAgentClaim,
@@ -872,6 +887,18 @@ func TestNewAttentionItemRejects(t *testing.T) {
 			wantErr: domain.ErrClaimTextDigestMismatch,
 		},
 		{
+			name: "text claim size not equal to its content",
+			mutate: func(in *domain.AttentionItemInput) {
+				// The client renders size_bytes as a daemon-validated length,
+				// so a size that disagrees with the inline content is refused
+				// like the digest binding: perturb the auto-sized fixture.
+				claims := textClaims(domain.ClaimText{MediaType: domain.MediaTypeTextPlain, Content: "shown text"}, "")
+				claims[0].Metadata.SizeBytes++
+				in.AgentClaims = claims
+			},
+			wantErr: domain.ErrClaimTextSizeMismatch,
+		},
+		{
 			name:    "non-positive item_version",
 			mutate:  func(in *domain.AttentionItemInput) { in.ItemVersion = 0 },
 			wantErr: domain.ErrNonPositive,
@@ -888,7 +915,7 @@ func TestNewAttentionItemRejects(t *testing.T) {
 			name: "duplicate evidence artifact",
 			mutate: func(in *domain.AttentionItemInput) {
 				recipe := approvedRecipe
-				a := domain.Artifact{ID: "dup", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:d", Provenance: provenance(domain.ProducerVerifier, &recipe)}
+				a := domain.Artifact{ID: "dup", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:d", Provenance: provenance(domain.ProducerVerifier, &recipe), Metadata: runMeta()}
 				in.EvidenceSnapshot = []domain.Artifact{a, a}
 			},
 			wantErr: domain.ErrDuplicate,
@@ -922,7 +949,7 @@ func TestNewAttentionItemRejects(t *testing.T) {
 			mutate: func(in *domain.AttentionItemInput) {
 				recipe := approvedRecipe
 				in.PRHeadSHA = "head-A"
-				in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:e", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
+				in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:e", Provenance: provenance(domain.ProducerVerifier, &recipe), Metadata: runMeta()}}
 			},
 			wantErr: domain.ErrEvidenceHeadMismatch,
 		},
@@ -931,8 +958,8 @@ func TestNewAttentionItemRejects(t *testing.T) {
 			mutate: func(in *domain.AttentionItemInput) {
 				recipe := approvedRecipe
 				in.PRHeadSHA = "abc123" // matches provenance() SourceHeadSHA so head-binding passes
-				in.EvidenceSnapshot = []domain.Artifact{{ID: "shared", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:e", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
-				in.AgentClaims = []domain.AgentClaim{{Label: "x", Artifact: "shared", Digest: "sha256:c", Provenance: provenance(domain.ProducerAgent, nil)}}
+				in.EvidenceSnapshot = []domain.Artifact{{ID: "shared", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:e", Provenance: provenance(domain.ProducerVerifier, &recipe), Metadata: runMeta()}}
+				in.AgentClaims = []domain.AgentClaim{{Label: "x", Artifact: "shared", Digest: "sha256:c", Provenance: provenance(domain.ProducerAgent, nil), Metadata: claimMeta(domain.EvidenceMediaImagePNG)}}
 			},
 			wantErr: domain.ErrArtifactIdentityConflict,
 		},
@@ -940,8 +967,8 @@ func TestNewAttentionItemRejects(t *testing.T) {
 			name: "claim id maps to two digests",
 			mutate: func(in *domain.AttentionItemInput) {
 				in.AgentClaims = []domain.AgentClaim{
-					{Label: "a", Artifact: "c1", Digest: "sha256:x", Provenance: provenance(domain.ProducerAgent, nil)},
-					{Label: "b", Artifact: "c1", Digest: "sha256:y", Provenance: provenance(domain.ProducerAgent, nil)},
+					{Label: "a", Artifact: "c1", Digest: "sha256:x", Provenance: provenance(domain.ProducerAgent, nil), Metadata: claimMeta(domain.EvidenceMediaImagePNG)},
+					{Label: "b", Artifact: "c1", Digest: "sha256:y", Provenance: provenance(domain.ProducerAgent, nil), Metadata: claimMeta(domain.EvidenceMediaImagePNG)},
 				}
 			},
 			wantErr: domain.ErrArtifactIdentityConflict,

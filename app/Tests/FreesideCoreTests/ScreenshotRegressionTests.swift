@@ -126,6 +126,34 @@
             }
         }
 
+        /// Mirrors the mock's read-time availability projection so the store's
+        /// pre-loaded phases match what production renders after sync: an image
+        /// or referenced claim is available only when its digest's bytes are
+        /// held, and an inline text claim renders in-band (no load needed).
+        private func preloadReferences(
+            _ item: Components.Schemas.AttentionItem,
+            into store: InboxStore
+        ) async {
+            let attachments = AttentionFixtures.defaultAttachments()
+            func reference(
+                _ metadata: Components.Schemas.EvidenceMetadata,
+                digest: String
+            ) -> AttachmentReference {
+                var metadata = metadata
+                metadata.availability = attachments[digest] != nil ? .available : .bytes_absent
+                return AttachmentReference(metadata)
+            }
+            for artifact in item.evidence_snapshot {
+                await store.attachments.load(
+                    artifact.digest,
+                    reference: reference(artifact.metadata, digest: artifact.digest))
+            }
+            for claim in item.agent_claims where claim.text == nil {
+                await store.attachments.load(
+                    claim.digest, reference: reference(claim.metadata, digest: claim.digest))
+            }
+        }
+
         private func makeSurfaces(at dynamicTypeSize: DynamicTypeSize) async throws -> [Surface] {
             let server = MockServer()
             let client = APIClientFactory.mock(server: server)
@@ -134,9 +162,7 @@
             store.replaceAll(with: inbox)
             store.replaceAllConversations(with: AttentionFixtures.defaultConversations())
             for snapshot in inbox {
-                for digest in snapshot.item.artifact_digests {
-                    await store.attachments.load(digest)
-                }
+                await preloadReferences(snapshot.item, into: store)
             }
 
             var surfaces = [
@@ -958,6 +984,8 @@
                         attachments: [digest: Data("fixture verification log\n".utf8)])))
             let unavailableLoader = AttachmentLoader(
                 client: APIClientFactory.mock(server: MockServer(attachments: [:])))
+            let fetchFailedLoader = AttachmentLoader(
+                client: APIClientFactory.mock(server: MockServer(attachments: [:])))
             let tooLargeLoader = AttachmentLoader(
                 client: APIClientFactory.mock(
                     server: MockServer(
@@ -970,7 +998,14 @@
 
             await imageLoader.load(digest)
             await notImageLoader.load(digest)
-            await unavailableLoader.load(digest)
+            // A bytes_absent reference is the daemon-reported no-bytes state
+            // (decided with no fetch); the metadata-free failed fetch below is
+            // the distinct transient fetch failure.
+            await unavailableLoader.load(
+                digest,
+                reference: AttachmentReference(
+                    mediaType: "image/png", sizeBytes: 256, availability: .bytesAbsent))
+            await fetchFailedLoader.load(digest)
             await tooLargeLoader.load(digest)
 
             return AnyView(
@@ -992,6 +1027,10 @@
                         loadsAttachments: false,
                         rendersInteractiveControls: false)
                     DecisionDetailView.AttachmentRow(
+                        label: "verify_log", digest: digest, attachments: fetchFailedLoader,
+                        loadsAttachments: false,
+                        rendersInteractiveControls: false)
+                    DecisionDetailView.AttachmentRow(
                         label: "verify_log", digest: digest, attachments: tooLargeLoader,
                         loadsAttachments: false,
                         rendersInteractiveControls: false)
@@ -1009,7 +1048,10 @@
             let blocked = AttentionFixtures.fixture(type: .blocked)
             let store = InboxStore(client: client)
             store.replaceAll(with: [blocked])
-            await store.attachments.load("sha256:img-blocked")
+            // blocked's screenshot claim digest is deliberately unseeded, so
+            // the daemon projects bytes_absent; the card shows the no-bytes
+            // state, decided from metadata with no fetch.
+            await preloadReferences(blocked.item, into: store)
             #expect(store.attachments.phase(for: "sha256:img-blocked") == .unavailable)
             let detail = DecisionDetailView(
                 store: store,
@@ -1030,7 +1072,12 @@
             let approval = AttentionFixtures.fixture(type: .spec_approval)
             let store = InboxStore(client: client)
             store.replaceAll(with: [approval])
-            await store.attachments.load("sha256:img-spec_approval")
+            await store.attachments.load(
+                "sha256:img-spec_approval",
+                reference: AttachmentReference(
+                    mediaType: "image/png",
+                    sizeBytes: AttentionFixtures.fixtureImagePNG.count,
+                    availability: .available))
             guard case .image = store.attachments.phase(for: "sha256:img-spec_approval") else {
                 throw ScreenshotError.missingSeededImage
             }

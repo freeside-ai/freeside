@@ -2611,6 +2611,12 @@ components:
               verification_recipe_digest: "sha256:recipe-approved"
               sensitivity_class: "normal"
             publish_eligible: true
+            metadata:
+              media_type: "application/json"
+              size_bytes: 512
+              created_at: "2026-01-02T03:04:05Z"
+              source: "run"
+              availability: "available"
         agent_claims:
           - label: "screenshot"
             artifact_id: "art-2"
@@ -2623,6 +2629,12 @@ components:
               source_head_sha: "cafebabe"
               verification_recipe_digest: null
               sensitivity_class: "normal"
+            metadata:
+              media_type: "image/png"
+              size_bytes: 4096
+              created_at: "2026-01-02T03:04:05Z"
+              source: "claim"
+              availability: "available"
         artifact_digests: ["sha256:img", "sha256:log"]
         pr_head_sha: "cafebabe"
         pr_reference:
@@ -2765,7 +2777,7 @@ components:
         claim path carries prose under the same digest discipline as
         every other artifact.
       additionalProperties: false
-      required: [label, artifact_id, digest, provenance, text]
+      required: [label, artifact_id, digest, provenance, text, metadata]
       properties:
         label:
           type: string
@@ -2779,6 +2791,8 @@ components:
           $ref: "#/components/schemas/ClaimProvenance"
         text:
           $ref: "#/components/schemas/ClaimText"
+        metadata:
+          $ref: "#/components/schemas/EvidenceMetadata"
 
     ClaimText:
       type: object
@@ -2815,6 +2829,89 @@ components:
         media_type: "text/markdown"
         content: "All checks green; the diff touches only docs."
 
+    EvidenceMediaType:
+      type: string
+      description: >
+        The daemon-validated media type of an evidence or claim reference
+        (plan §5.15 rule 3; domain.EvidenceMediaType). The daemon validates
+        magic bytes, type, and size, so a client reads the type from this
+        field rather than inferring it from a fetch. The set is closed;
+        adding a member is a contract change (the generated client's enum
+        rejects an unknown value).
+      enum:
+        - image/png
+        - image/jpeg
+        - image/gif
+        - image/webp
+        - text/plain
+        - text/markdown
+        - application/json
+        - application/jsonl
+
+    EvidenceSource:
+      type: string
+      description: >
+        Which sync-contract container an evidence reference rides in
+        (domain.EvidenceSource): run for every artifact in an item's
+        evidence_snapshot, claim for every entry in agent_claims. The daemon
+        pins the value to its container, so a reference cannot mislabel its
+        channel.
+      enum: [run, claim]
+
+    EvidenceAvailability:
+      type: string
+      description: >
+        Whether the bytes the digest names are currently in the daemon's
+        blob store (domain.EvidenceAvailability): available means present and
+        fetchable at GET /attachments/{digest}; bytes_absent means the digest
+        is held but the bytes are not, so a fetch would 404. It is a daemon
+        read-time fact, recomputed from the blob store immediately before
+        serialization on every synced item and never a trusted persisted
+        value, so it can differ between two reads of the same item version.
+      enum: [available, bytes_absent]
+
+    EvidenceMetadata:
+      type: object
+      description: >
+        The §5.15 daemon-validated facts about an evidence or claim
+        reference (domain.EvidenceMetadata), so a client renders an explicit
+        evidence state from typed fields alone rather than inferring it from
+        a fetch. "Oversized" and "unsupported" are deliberately absent: they
+        are client dispositions derived from size_bytes and media_type
+        against a device-specific render cap (today 8 MiB on iOS, 64 MiB on
+        macOS), and over-cap content never passes the daemon's own validation
+        gates, so the daemon carries no such disposition. availability is
+        recomputed at serialization (see EvidenceAvailability); the other
+        fields are fixed at the artifact's or claim's creation.
+      additionalProperties: false
+      required: [media_type, size_bytes, created_at, source, availability]
+      properties:
+        media_type:
+          $ref: "#/components/schemas/EvidenceMediaType"
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            The byte length of the content the digest names, as the daemon
+            validated it.
+        created_at:
+          type: string
+          format: date-time
+          description: >
+            RFC 3339 UTC time at which the daemon recorded the artifact or
+            claim.
+        source:
+          $ref: "#/components/schemas/EvidenceSource"
+        availability:
+          $ref: "#/components/schemas/EvidenceAvailability"
+      example:
+        media_type: "image/png"
+        size_bytes: 4096
+        created_at: "2026-01-02T03:04:05Z"
+        source: "claim"
+        availability: "available"
+
     EvidenceArtifact:
       type: object
       description: >
@@ -2831,7 +2928,7 @@ components:
         as evidence only when the same approved-recipe computation that
         drives publish_eligible succeeds
         (domain.EligibleForEvidenceSnapshot).
-      required: [id, type, digest, provenance, publish_eligible]
+      required: [id, type, digest, provenance, publish_eligible, metadata]
       properties:
         id:
           type: string
@@ -2855,6 +2952,8 @@ components:
         publish_eligible:
           type: boolean
           enum: [true]
+        metadata:
+          $ref: "#/components/schemas/EvidenceMetadata"
       example:
         id: "art-1"
         type: "verify_log"
@@ -2867,6 +2966,12 @@ components:
           verification_recipe_digest: "sha256:recipe-approved"
           sensitivity_class: "normal"
         publish_eligible: true
+        metadata:
+          media_type: "application/json"
+          size_bytes: 512
+          created_at: "2026-01-02T03:04:05Z"
+          source: "run"
+          availability: "available"
 
     EvidenceProvenance:
       description: >

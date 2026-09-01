@@ -722,6 +722,7 @@ struct DecisionDetailView: View {
                     AttachmentRow(
                         label: "Summary",
                         digest: claim.digest,
+                        metadata: claim.metadata,
                         attachments: attachments,
                         loadsAttachments: loadsAttachments,
                         text: claim.text,
@@ -878,6 +879,7 @@ struct DecisionDetailView: View {
                     AttachmentRow(
                         label: title,
                         digest: specification.digest,
+                        metadata: specification.metadata,
                         attachments: attachments,
                         loadsAttachments: loadsAttachments,
                         rendersInteractiveControls: rendersInteractiveControls)
@@ -1081,6 +1083,7 @@ struct DecisionDetailView: View {
         ForEach(Array(claims.enumerated()), id: \.offset) { _, claim in
             AttachmentRow(
                 label: claim.label, digest: claim.digest,
+                metadata: claim.metadata,
                 attachments: attachments,
                 loadsAttachments: loadsAttachments,
                 text: claim.text,
@@ -1103,6 +1106,7 @@ struct DecisionDetailView: View {
                 ForEach(item.evidence_snapshot, id: \.id) { artifact in
                     AttachmentRow(
                         label: artifact._type.rawValue, digest: artifact.digest,
+                        metadata: artifact.metadata,
                         attachments: attachments,
                         loadsAttachments: loadsAttachments,
                         rendersInteractiveControls: rendersInteractiveControls)
@@ -1182,6 +1186,7 @@ struct DecisionDetailView: View {
                                 AttachmentRow(
                                     label: artifact._type.rawValue,
                                     digest: artifact.digest,
+                                    metadata: artifact.metadata,
                                     attachments: attachments,
                                     loadsAttachments: loadsAttachments,
                                     rendersInteractiveControls: rendersInteractiveControls)
@@ -1759,10 +1764,24 @@ struct DecisionDetailView: View {
     struct AttachmentRow: View {
         let label: String
         let digest: String
+        /// The reference's daemon-validated §5.15 metadata. Nil only for a
+        /// conversation message attachment, which the wire carries as a bare
+        /// digest with no metadata; that row falls back to fetch-and-inspect
+        /// and shows no typed media/size caption.
+        var metadata: Components.Schemas.EvidenceMetadata? = nil
         let attachments: AttachmentLoader
         let loadsAttachments: Bool
         var text: Components.Schemas.ClaimText? = nil
         var rendersInteractiveControls = true
+
+        // Task identity for the attachment load: the digest fixes the content,
+        // and availability is the one mutable field that must re-trigger the
+        // load when it changes between reads.
+        private struct AttachmentLoadIdentity: Equatable {
+            let digest: String
+            let availability: AttachmentReference.Availability?
+        }
+
         @State private var showsImagePreview = false
         @State private var showsNonImagePreview = false
         @State private var nonImagePreview: NonImagePreview?
@@ -1781,10 +1800,28 @@ struct DecisionDetailView: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
+                    let reference = metadata.map(AttachmentReference.init)
                     fetchedAttachment
-                        .task(id: digest) {
-                            if loadsAttachments { await attachments.load(digest) }
+                        // Keyed on availability as well as the digest: the
+                        // contract lets a refresh flip availability for the same
+                        // digest without an item-version change, and SwiftUI
+                        // reuses this row, so a digest-only id would never re-run
+                        // the load and the loader's downgrade/recovery logic
+                        // would never see the new reference.
+                        .task(
+                            id: AttachmentLoadIdentity(
+                                digest: digest, availability: reference?.availability)
+                        ) {
+                            guard loadsAttachments else { return }
+                            if let reference {
+                                await attachments.load(digest, reference: reference)
+                            } else {
+                                await attachments.load(digest)
+                            }
                         }
+                    if let metadata {
+                        metadataCaption(metadata)
+                    }
                 }
                 digestCaption
             }
@@ -1878,9 +1915,9 @@ struct DecisionDetailView: View {
                 )
             case .unavailable:
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("Unavailable", systemImage: "photo.badge.exclamationmark")
+                    Label("No bytes available", systemImage: "photo.badge.exclamationmark")
                         .font(FreesideFont.sans(.caption, weight: .semibold))
-                    Text("The attachment bytes could not be fetched")
+                    Text("The daemon reports the attachment bytes are not available")
                         .font(FreesideFont.caption)
                 }
                 .padding(10)
@@ -1888,7 +1925,27 @@ struct DecisionDetailView: View {
                 .background(Color.waxWash, in: RoundedRectangle(cornerRadius: 8))
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(
-                    "\(label) attachment unavailable. The attachment bytes could not be fetched"
+                    "\(label) attachment has no bytes available. The daemon reports the attachment bytes are not available"
+                )
+            case .fetchFailed:
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Couldn't load", systemImage: "arrow.clockwise.circle")
+                        .font(FreesideFont.sans(.caption, weight: .semibold))
+                    Text("The fetch failed. Try again.")
+                        .font(FreesideFont.caption)
+                    if rendersInteractiveControls, loadsAttachments {
+                        Button("Retry") { retryFetch() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .accessibilityLabel("Retry loading \(label) attachment")
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.waxWash, in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(
+                    "\(label) attachment failed to load. The fetch failed. Try again."
                 )
             case .tooLarge(let reason):
                 VStack(alignment: .leading, spacing: 4) {
@@ -1952,6 +2009,21 @@ struct DecisionDetailView: View {
             }
         }
 
+        /// The daemon-validated media type and size (plan §5.15), read from
+        /// the reference's typed metadata rather than inferred from a fetch.
+        private func metadataCaption(
+            _ metadata: Components.Schemas.EvidenceMetadata
+        ) -> some View {
+            Text("\(metadata.media_type.rawValue) · \(byteCount(Int(metadata.size_bytes)))")
+                .font(FreesideFont.mono(.caption2))
+                .foregroundStyle(Color.inkDim)
+                .lineLimit(1)
+                .textSelection(.enabled)
+                .accessibilityLabel(
+                    "\(label): \(metadata.media_type.rawValue), \(byteCount(Int(metadata.size_bytes)))"
+                )
+        }
+
         private var digestCaption: some View {
             HStack(spacing: 8) {
                 Text("Digest \(digest)")
@@ -1981,6 +2053,18 @@ struct DecisionDetailView: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(digest, forType: .string)
             #endif
+        }
+
+        private func retryFetch() {
+            let requestedDigest = digest
+            let reference = metadata.map(AttachmentReference.init)
+            Task {
+                if let reference {
+                    await attachments.load(requestedDigest, reference: reference)
+                } else {
+                    await attachments.load(requestedDigest)
+                }
+            }
         }
 
         private func openNonImage(_ bytes: Data?) {

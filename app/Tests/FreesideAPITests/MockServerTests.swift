@@ -206,6 +206,31 @@ import Testing
         _ = try missing.notFound
     }
 
+    @Test func evidenceAvailabilityIsRecomputedFromTheByteStore() async throws {
+        // The mock recomputes availability at read time, mirroring
+        // signet.projectEvidenceAvailability (plan §5.15): the persisted value
+        // is never trusted on the wire.
+        let client = APIClientFactory.mock(server: MockServer())
+
+        // A seeded evidence digest is available; a claim carrying inline text
+        // renders in-band and is available regardless of the byte store.
+        let approval =
+            try await client
+            .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
+        #expect(approval.item.evidence_snapshot[0].metadata.availability == .available)
+        let textClaim = try #require(approval.item.agent_claims.first { $0.text != nil })
+        #expect(textClaim.metadata.availability == .available)
+
+        // blocked's screenshot claim digest is deliberately unseeded: no bytes
+        // are held, so the referenced (no-text) claim projects bytes_absent.
+        let blocked =
+            try await client
+            .getAttentionItem(path: .init(item_id: "item-blocked")).ok.body.json
+        let referencedClaim = try #require(blocked.item.agent_claims.first { $0.text == nil })
+        #expect(referencedClaim.digest == "sha256:img-blocked")
+        #expect(referencedClaim.metadata.availability == .bytes_absent)
+    }
+
     @Test func freshCommandAppliesAndRecordsTheDecision() async throws {
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)

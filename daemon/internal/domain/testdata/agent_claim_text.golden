@@ -13,5 +13,12 @@
   "text": {
     "media_type": "text/markdown",
     "content": "All checks green; the diff touches only docs."
+  },
+  "metadata": {
+    "media_type": "text/markdown",
+    "size_bytes": 45,
+    "created_at": "2026-01-02T03:04:05Z",
+    "source": "claim",
+    "availability": "available"
   }
 }

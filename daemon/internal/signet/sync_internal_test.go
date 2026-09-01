@@ -43,6 +43,11 @@ func TestAuthenticateElaborationDiscussionArtifact(t *testing.T) {
 			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: producer,
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 1,
+			CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+			Source:    domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
+		},
 	}
 	if !authenticatesElaborationDiscussionArtifact(valid, id, digest, producer) {
 		t.Fatal("valid discussion artifact was rejected")

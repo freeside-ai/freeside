@@ -213,6 +213,7 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 				HeadBinding:          domain.HeadIndependent,
 				SensitivityClass:     domain.SensitivityNormal,
 			},
+			Metadata: runMeta(),
 		}, nil)
 		if err != nil {
 			t.Fatal(err)

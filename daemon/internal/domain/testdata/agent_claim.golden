@@ -10,5 +10,12 @@
     "verification_recipe_digest": null,
     "sensitivity_class": "normal"
   },
-  "text": null
+  "text": null,
+  "metadata": {
+    "media_type": "image/png",
+    "size_bytes": 4096,
+    "created_at": "2026-01-02T03:04:05Z",
+    "source": "claim",
+    "availability": "available"
+  }
 }

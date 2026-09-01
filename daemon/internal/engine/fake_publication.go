@@ -1888,6 +1888,11 @@ func (w *fakePublicationWorkflow) buildCandidateCheckpoint(
 		InvocationID: task.VerificationInvocationID,
 		RecipeSource: verify.ConfigRecipe(recipe), RecipePath: task.RecipePath,
 		Room: w.newRoom(home), ApprovedRecipes: w.approvedRecipes, Changes: imported.Changes,
+		// A stable per-task time, not a wall clock: the emitted evidence is
+		// content-addressed and write-once, and this checkpoint can re-run, so
+		// the evidence metadata must converge byte-identically on replay
+		// (mirrors the checkpoint's CandidateAuthorization CreatedAt).
+		Now: task.StartedAt,
 		Policy: verify.Policy{ExtraVerificationControlPatterns: slices.Clone(
 			profile.ProtectedPaths.ExtraVerificationControlPatterns,
 		)},

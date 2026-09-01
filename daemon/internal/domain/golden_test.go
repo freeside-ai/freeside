@@ -34,6 +34,10 @@ func TestGolden(t *testing.T) {
 	}
 	artifact, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: "art-1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:log", Provenance: provenance,
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 512, CreatedAt: ts,
+			Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
+		},
 	}, approved)
 	if err != nil {
 		t.Fatal(err)
@@ -52,6 +56,12 @@ func TestGolden(t *testing.T) {
 	}
 	indepArtifact, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: "art-3", Type: domain.ArtifactKindLicenseScan, Digest: "sha256:lic", Provenance: indepProvenance,
+		// Availability bytes_absent so a standalone golden pins that member: the
+		// digest is held but its bytes are not currently in the blob store.
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 128, CreatedAt: ts,
+			Source: domain.EvidenceSourceRun, Availability: domain.EvidenceBytesAbsent,
+		},
 	}, approved)
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +88,10 @@ func TestGolden(t *testing.T) {
 			SourceHeadSHA:        "cafebabe",
 			SensitivityClass:     domain.SensitivityNormal,
 		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaImagePNG, SizeBytes: 4096, CreatedAt: ts,
+			Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+		},
 	}
 	// A text claim's digest is computed, never hand-written: Validate
 	// recomputes it over the content bytes, so a placeholder would make the
@@ -95,6 +109,11 @@ func TestGolden(t *testing.T) {
 			HeadBinding:          domain.HeadBound,
 			SourceHeadSHA:        "cafebabe",
 			SensitivityClass:     domain.SensitivityNormal,
+		},
+		// The metadata media type must equal the inline text's (text/markdown).
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaTextMarkdown, SizeBytes: int64(len(claimText.Content)), CreatedAt: ts,
+			Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
 		},
 	}
 	subject := domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID}

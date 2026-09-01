@@ -598,6 +598,17 @@ enum MockContractValidation {
                 }
                 if free.verification_recipe_digest.isEmpty { return "empty recipe digest" }
             }
+            // Evidence metadata (plan §5.15) mirrors domain.EvidenceMetadata
+            // and Artifact.Validate. The generated struct makes a missing
+            // metadata object and an invalid enum member unrepresentable
+            // (both fail decode); what stays checkable is the non-negative
+            // size and the run-channel source the container pins.
+            if artifact.metadata.source != .run {
+                return "evidence artifact \(artifact.id) metadata source is not run"
+            }
+            if artifact.metadata.size_bytes < 0 {
+                return "negative evidence metadata size_bytes"
+            }
             if !evidenceIDs.insert(artifact.id).inserted {
                 return "duplicate evidence artifact id"
             }
@@ -609,6 +620,18 @@ enum MockContractValidation {
             if claim.label.isEmpty { return "empty claim label" }
             if claim.artifact_id.isEmpty { return "empty claim artifact_id" }
             if claim.digest.isEmpty { return "empty claim digest" }
+            // Claim metadata (plan §5.15) mirrors domain.EvidenceMetadata and
+            // AgentClaim.Validate. Missing metadata and invalid enum members
+            // are unrepresentable in the generated struct; what stays
+            // checkable is the non-negative size and the claim-channel source
+            // the container pins (the text-vs-metadata media type is checked
+            // with the inline-text carrier below).
+            if claim.metadata.source != .claim {
+                return "claim \(claim.label) metadata source is not claim"
+            }
+            if claim.metadata.size_bytes < 0 {
+                return "negative claim metadata size_bytes"
+            }
             // Claim provenance is agent-pinned by the schema's producer enum,
             // but the generated recipe-digest container accepts any JSON
             // value, so the representable invariants to check are the
@@ -658,6 +681,19 @@ enum MockContractValidation {
                 }
                 if sha256Digest(of: text.content) != claim.digest {
                     return "claim digest does not match its text content"
+                }
+                // An inline text claim renders the same bytes the metadata
+                // describes, so the two media types must agree (mirrors
+                // AgentClaim.Validate's ErrClaimTextMediaTypeMismatch; they
+                // are distinct generated enums over the same wire strings).
+                if text.media_type.rawValue != claim.metadata.media_type.rawValue {
+                    return "claim text media_type disagrees with metadata media_type"
+                }
+                // size_bytes is a daemon-validated length the client renders,
+                // so for inline content it must equal the bytes displayed
+                // (mirrors AgentClaim.Validate's ErrClaimTextSizeMismatch).
+                if claim.metadata.size_bytes != Int64(text.content.utf8.count) {
+                    return "claim size_bytes disagrees with its text content length"
                 }
             }
             if evidenceIDs.contains(claim.artifact_id) {

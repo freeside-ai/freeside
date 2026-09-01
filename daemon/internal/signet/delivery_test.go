@@ -268,6 +268,11 @@ func TestReportDeliveryOpenedRegatesItemOnReplay(t *testing.T) {
 			VerificationRecipeDigest: &recipe,
 			SensitivityClass:         domain.SensitivityNormal,
 		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 1,
+			CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+			Source:    domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
+		},
 	}, approved)
 	if err != nil {
 		t.Fatalf("NewArtifact: %v", err)
@@ -292,6 +297,11 @@ func TestReportDeliveryOpenedRegatesItemOnReplay(t *testing.T) {
 				HeadBinding:          domain.HeadBound,
 				SourceHeadSHA:        "cafebabe",
 				SensitivityClass:     domain.SensitivityNormal,
+			},
+			Metadata: domain.EvidenceMetadata{
+				MediaType: domain.EvidenceMediaImagePNG, SizeBytes: 1,
+				CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+				Source:    domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
 			},
 		}},
 		PRHeadSHA: "cafebabe", ItemVersion: 1,

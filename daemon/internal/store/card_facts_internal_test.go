@@ -123,6 +123,7 @@ func internalSpecRevisionFixture(
 		t.Helper()
 		value, err := domain.NewArtifact(domain.ArtifactInput{
 			ID: id, Type: kind, Digest: domain.Digest(contentaddr.Sum([]byte(body))), Provenance: p,
+			Metadata: runMeta(),
 		}, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -158,7 +159,8 @@ func internalSpecRevisionFixture(
 		},
 		AgentClaims: []domain.AgentClaim{{
 			Label: "Specification", Artifact: prior.ID, Digest: prior.Digest, Provenance: prior.Provenance,
-			Text: &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: priorBody},
+			Text:     &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: priorBody},
+			Metadata: claimTextMeta(domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: priorBody}),
 		}},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt: &at, Status: domain.StatusOpen,
@@ -184,14 +186,17 @@ func internalSpecRevisionFixture(
 				Label: "Specification", Artifact: current.ID, Digest: current.Digest,
 				Provenance: current.Provenance,
 				Text:       &domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: currentBody},
+				Metadata:   claimTextMeta(domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: currentBody}),
 			},
 			{
 				Label: summaryEvidenceLabel, Artifact: "spec-summary-implementation-run-2",
 				Digest: summaryText.ComputeDigest(), Provenance: currentProvenance, Text: &summaryText,
+				Metadata: claimTextMeta(summaryText),
 			},
 			{
 				Label: "Addressals", Artifact: addressalsArtifact.ID,
 				Digest: addressalsArtifact.Digest, Provenance: currentProvenance,
+				Metadata: claimMeta(domain.EvidenceMediaImagePNG),
 			},
 		},
 		SpecRevision: &domain.SpecRevisionFacts{
@@ -387,6 +392,7 @@ func TestAttentionItemReadAuthenticatesBlockedWait(t *testing.T) {
 			ProducerClass: domain.ProducerAgent, ProducerInvocationID: invocationID,
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: runMeta(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -399,6 +405,7 @@ func TestAttentionItemReadAuthenticatesBlockedWait(t *testing.T) {
 		AgentClaims: []domain.AgentClaim{{
 			Label: "Specification", Artifact: specification.ID, Digest: specification.Digest,
 			Provenance: specification.Provenance,
+			Metadata:   claimMeta(domain.EvidenceMediaImagePNG),
 		}},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt: &at, Status: domain.StatusOpen,
@@ -580,6 +587,7 @@ func TestBlockedWaitTerminalSummaryMatchesApproval(t *testing.T) {
 	specification, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: "spec-implementation-run-1", Type: domain.ArtifactKindSpecification,
 		Digest: "sha256:specification", Provenance: provenance,
+		Metadata: runMeta(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -592,10 +600,12 @@ func TestBlockedWaitTerminalSummaryMatchesApproval(t *testing.T) {
 		{
 			Label: "Specification", Artifact: specification.ID,
 			Digest: specification.Digest, Provenance: provenance,
+			Metadata: claimMeta(domain.EvidenceMediaImagePNG),
 		},
 		{
 			Label: export.SummaryEvidenceLabel, Artifact: "spec-summary-implementation-run-1",
 			Digest: summaryDigest, Provenance: provenance, Text: &summaryText,
+			Metadata: claimTextMeta(summaryText),
 		},
 	}}
 	terminal := blockedWaitElaborationTerminal{SummaryDigest: &summaryDigest}

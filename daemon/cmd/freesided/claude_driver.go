@@ -1154,9 +1154,16 @@ func (a artifactStore) RecordClaims(
 	}
 	return a.store.Write(ctx, func(tx *store.WriteTx) error {
 		for _, claim := range claims {
+			// The artifact row names the same bytes the claim does, so it carries
+			// the claim's validated media type, size, and recorded time. The
+			// source flips to run: an Artifact rides the run channel (the claim
+			// is the claim-channel reference for the same digest).
+			artifactMetadata := claim.Metadata
+			artifactMetadata.Source = domain.EvidenceSourceRun
 			artifact, err := domain.NewArtifact(domain.ArtifactInput{
 				ID: claim.Artifact, Type: domain.ArtifactKindEvidence, Digest: claim.Digest,
 				Provenance: claim.Provenance,
+				Metadata:   artifactMetadata,
 			}, nil)
 			if err != nil {
 				return fmt.Errorf("agent claim %q: %w", claim.Label, err)

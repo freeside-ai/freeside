@@ -31,7 +31,7 @@ func TestWriteCommandErrorClassifiesAuthorityRejections(t *testing.T) {
 		domain.ErrTransitionUnbacked,
 	} {
 		recorder := httptest.NewRecorder()
-		writeCommandError(recorder, fmt.Errorf("submit adopt: %w", sentinel))
+		writeCommandError(recorder, nil, fmt.Errorf("submit adopt: %w", sentinel))
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("%v -> %d, want %d", sentinel, recorder.Code, http.StatusBadRequest)
 		}
@@ -41,7 +41,7 @@ func TestWriteCommandErrorClassifiesAuthorityRejections(t *testing.T) {
 		}
 	}
 	recorder := httptest.NewRecorder()
-	writeCommandError(recorder, errors.New("disk unplugged"))
+	writeCommandError(recorder, nil, errors.New("disk unplugged"))
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("ambiguous error -> %d, want %d", recorder.Code, http.StatusInternalServerError)
 	}
@@ -53,7 +53,7 @@ func TestWriteCommandErrorClassifiesAuthorityRejections(t *testing.T) {
 func TestWriteCommandErrorClassifiesOversizedRequestChanges(t *testing.T) {
 	t.Parallel()
 	recorder := httptest.NewRecorder()
-	writeCommandError(recorder, fmt.Errorf("action %q message is too long: %w",
+	writeCommandError(recorder, nil, fmt.Errorf("action %q message is too long: %w",
 		domain.ActionRequestChanges, domain.ErrClaimTextTooLarge))
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("oversized request_changes -> %d, want %d", recorder.Code, http.StatusBadRequest)
@@ -67,7 +67,7 @@ func TestWriteCommandErrorClassifiesOversizedRequestChanges(t *testing.T) {
 func TestNoOpProposalRevisionHTTPMappingIsAuthoritative(t *testing.T) {
 	t.Parallel()
 	recorder := httptest.NewRecorder()
-	writeCommandError(recorder, fmt.Errorf("submit revision: %w", ErrInvalidProposalDecisionPayload))
+	writeCommandError(recorder, nil, fmt.Errorf("submit revision: %w", ErrInvalidProposalDecisionPayload))
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("no-op proposal revision -> %d, want %d", recorder.Code, http.StatusBadRequest)
 	}
@@ -99,7 +99,7 @@ func TestCapabilityManifestSelectionHTTPMappingsAreAuthoritative(t *testing.T) {
 		ErrCapabilityManifestNotOffered,
 	} {
 		recorder := httptest.NewRecorder()
-		writeCommandError(recorder, fmt.Errorf("submit capability retry: %w", sentinel))
+		writeCommandError(recorder, nil, fmt.Errorf("submit capability retry: %w", sentinel))
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("%v -> %d, want %d", sentinel, recorder.Code, http.StatusBadRequest)
 		}
@@ -113,7 +113,7 @@ func TestCapabilityManifestSelectionHTTPMappingsAreAuthoritative(t *testing.T) {
 func TestSnoozedProposalHTTPMappingsAreAuthoritative(t *testing.T) {
 	t.Parallel()
 	command := httptest.NewRecorder()
-	writeCommandError(command, fmt.Errorf("submit: %w", ErrProposalSnoozed))
+	writeCommandError(command, nil, fmt.Errorf("submit: %w", ErrProposalSnoozed))
 	if command.Code != http.StatusBadRequest {
 		t.Fatalf("snoozed command -> %d, want %d", command.Code, http.StatusBadRequest)
 	}

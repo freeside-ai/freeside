@@ -360,6 +360,18 @@ func submissionDigest(runID, role string) domain.Digest {
 
 // registerSubmissionArtifacts persists the digest-addressed specification and
 // policy artifacts submit binds a run to.
+// testRunEvidenceMetadata is valid run-sourced evidence metadata for the
+// integration package's artifact fixtures.
+func testRunEvidenceMetadata(sizeBytes int64) domain.EvidenceMetadata {
+	return domain.EvidenceMetadata{
+		MediaType:    domain.EvidenceMediaApplicationJSON,
+		SizeBytes:    sizeBytes,
+		CreatedAt:    time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		Source:       domain.EvidenceSourceRun,
+		Availability: domain.EvidenceAvailable,
+	}
+}
+
 func registerSubmissionArtifacts(
 	t *testing.T, st *store.Store, runID string,
 ) (domain.Artifact, domain.Artifact, domain.ResolvedPolicy) {
@@ -392,6 +404,7 @@ func registerSubmissionArtifactsWithPolicyKeys(
 			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: domain.InvocationID("submit-" + runID),
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: testRunEvidenceMetadata(int64(len(specBody))),
 	}, nil)
 	if err != nil {
 		t.Fatalf("new spec artifact: %v", err)
@@ -407,6 +420,7 @@ func registerSubmissionArtifactsWithPolicyKeys(
 			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: domain.InvocationID("submit-" + runID),
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: testRunEvidenceMetadata(1),
 	}, nil)
 	if err != nil {
 		t.Fatalf("new policy artifact: %v", err)

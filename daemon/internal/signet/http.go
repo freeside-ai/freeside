@@ -378,7 +378,7 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 		Payload:               payload,
 	})
 	if err != nil {
-		writeCommandError(w, err)
+		writeCommandError(w, h.service.blobs, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, normalizeCommandResult(result))
@@ -459,25 +459,25 @@ type errorResponse struct {
 	Message string `json:"message"`
 }
 
-func writeCommandError(w http.ResponseWriter, err error) {
+func writeCommandError(w http.ResponseWriter, blobs *BlobStore, err error) {
 	var stale *StaleVersionError
 	if errors.As(err, &stale) {
 		writeJSON(w, http.StatusConflict, staleVersionResponse{
-			Message: err.Error(), ReplacementItem: itemSnapshot(stale.Replacement, stale.Snapshot),
+			Message: err.Error(), ReplacementItem: itemSnapshot(stale.Replacement, stale.Snapshot, blobs),
 		})
 		return
 	}
 	var closed *ClosedItemError
 	if errors.As(err, &closed) {
 		writeJSON(w, http.StatusConflict, staleVersionResponse{
-			Message: err.Error(), ReplacementItem: itemSnapshot(closed.Item, closed.Snapshot),
+			Message: err.Error(), ReplacementItem: itemSnapshot(closed.Item, closed.Snapshot, blobs),
 		})
 		return
 	}
 	var pending *AgentPendingError
 	if errors.As(err, &pending) {
 		writeJSON(w, http.StatusConflict, staleVersionResponse{
-			Message: err.Error(), ReplacementItem: itemSnapshot(pending.Item, pending.Snapshot),
+			Message: err.Error(), ReplacementItem: itemSnapshot(pending.Item, pending.Snapshot, blobs),
 		})
 		return
 	}

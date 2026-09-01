@@ -47,6 +47,7 @@ func attentionItemWithEvidence(
 			VerificationRecipeDigest: &recipe,
 			SensitivityClass:         domain.SensitivityNormal,
 		},
+		Metadata: runMeta(),
 	}, approved)
 	if err != nil {
 		t.Fatalf("NewArtifact: %v", err)

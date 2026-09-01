@@ -70,6 +70,13 @@ type Options struct {
 	// zero value means the current time. Pinning it makes the produced
 	// commit SHA deterministic for a given base and change set.
 	CommitDate time.Time
+	// Now is the instant stamped as each imported evidence claim's
+	// EvidenceMetadata.CreatedAt (§5.15). Claims are content-addressed and
+	// persisted write-once, so it must be stable across a replayed import for
+	// the persisted claim to converge; the daemon pins it. The zero value
+	// falls back to CommitDate (also pinned for the same determinism), then to
+	// the current time, and is normalized to UTC by evidenceCreatedAt.
+	Now time.Time
 	// GitPath is the git binary to run; empty means "git" from PATH.
 	GitPath string
 	// Policy is the import's policy surface.
@@ -177,6 +184,21 @@ func (o Options) withDefaults() Options {
 	}
 	o.Policy = o.Policy.withDefaults()
 	return o
+}
+
+// evidenceCreatedAt is the UTC instant stamped on each imported evidence
+// claim's metadata: the pinned Now, else the pinned CommitDate, else the
+// current time. Preferring a pinned value keeps the persisted, content-addressed
+// claim byte-stable across a replayed import.
+func (o Options) evidenceCreatedAt() time.Time {
+	switch {
+	case !o.Now.IsZero():
+		return o.Now.UTC()
+	case !o.CommitDate.IsZero():
+		return o.CommitDate.UTC()
+	default:
+		return time.Now().UTC()
+	}
 }
 
 func (p Policy) withDefaults() Policy {

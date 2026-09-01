@@ -697,23 +697,27 @@ private struct StreamingAttachmentTransport: ClientTransport {
                 == DecisionDetailView.NonImagePreview.textByteLimit - 1)
     }
 
-    @Test func aMissingDigestAndATransportFailureAreUnavailable() async throws {
+    @Test func aMissingDigestAndATransportFailureAreFetchFailed() async throws {
+        // A metadata-free load (a conversation attachment) fetches, so a
+        // 404 or transport error is a transient fetch failure, distinct from
+        // the daemon-reported no-bytes `.unavailable` a bytes_absent
+        // reference produces.
         let server = MockServer()
         let loader = AttachmentLoader(client: APIClientFactory.mock(server: server))
 
         // The deliberately unseeded fixture digest: an authoritative 404.
         await loader.load("sha256:img-blocked")
-        #expect(loader.phase(for: "sha256:img-blocked") == .unavailable)
+        #expect(loader.phase(for: "sha256:img-blocked") == .fetchFailed)
 
         await server.setBeforeRespond { operationID in
             if operationID == "getAttachment" { throw InjectedFailure() }
         }
         await loader.load("sha256:img-agent_question")
-        #expect(loader.phase(for: "sha256:img-agent_question") == .unavailable)
+        #expect(loader.phase(for: "sha256:img-agent_question") == .fetchFailed)
     }
 
-    @Test func anUnavailableDigestRetriesOnTheNextVisit() async throws {
-        // Unavailable is not settled (Codex P2 on #126): a transient
+    @Test func aFailedFetchRetriesOnTheNextVisit() async throws {
+        // fetchFailed is not settled (Codex P2 on #126): a transient
         // failure at first look must not stick the placeholder for the
         // whole session — the next card visit retries and recovers.
         let server = MockServer()
@@ -722,7 +726,7 @@ private struct StreamingAttachmentTransport: ClientTransport {
             if operationID == "getAttachment" { throw InjectedFailure() }
         }
         await loader.load("sha256:img-spec_approval")
-        #expect(loader.phase(for: "sha256:img-spec_approval") == .unavailable)
+        #expect(loader.phase(for: "sha256:img-spec_approval") == .fetchFailed)
 
         await server.setBeforeRespond(nil)
         await loader.load("sha256:img-spec_approval")
@@ -730,6 +734,259 @@ private struct StreamingAttachmentTransport: ClientTransport {
             Issue.record("expected the retry to recover the image")
             return
         }
+    }
+
+    // MARK: - Reference-metadata classification (plan §5.15)
+
+    private func reference(
+        mediaType: String,
+        sizeBytes: Int,
+        availability: AttachmentReference.Availability
+    ) -> AttachmentReference {
+        AttachmentReference(
+            mediaType: mediaType, sizeBytes: sizeBytes, availability: availability)
+    }
+
+    private func countingServer() async -> (MockServer, RequestCounter) {
+        let server = MockServer()
+        let counter = RequestCounter()
+        await server.setBeforeRespond { operationID in
+            if operationID == "getAttachment" { await counter.record() }
+        }
+        return (server, counter)
+    }
+
+    @Test func bytesAbsentMetadataIsUnavailableWithoutFetching() async throws {
+        let (server, counter) = await countingServer()
+        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server))
+
+        await loader.load(
+            "sha256:img-spec_approval",
+            reference: reference(
+                mediaType: "image/png", sizeBytes: 256, availability: .bytesAbsent))
+
+        #expect(loader.phase(for: "sha256:img-spec_approval") == .unavailable)
+        #expect(await counter.count == 0)
+    }
+
+    @Test func aNonImageMediaTypeClassifiesToNotImageWithoutFetching() async throws {
+        let (server, counter) = await countingServer()
+        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server))
+
+        await loader.load(
+            "sha256:log-spec_approval",
+            reference: reference(
+                mediaType: "text/plain", sizeBytes: 42, availability: .available))
+
+        #expect(
+            loader.phase(for: "sha256:log-spec_approval")
+                == .notImage(bytes: nil, byteCount: 42))
+        #expect(await counter.count == 0)
+    }
+
+    @Test func anOversizedImageClassifiesToTooLargeWithoutFetching() async throws {
+        let (server, counter) = await countingServer()
+        let loader = AttachmentLoader(
+            client: APIClientFactory.mock(server: server), maxBytes: 16)
+
+        await loader.load(
+            "sha256:img-spec_approval",
+            reference: reference(
+                mediaType: "image/png", sizeBytes: 64, availability: .available))
+
+        #expect(
+            loader.phase(for: "sha256:img-spec_approval")
+                == .tooLarge(.download(bytesSeenAtLeast: 64, limit: 16)))
+        #expect(await counter.count == 0)
+    }
+
+    @Test func aSettledNonImageDowngradesWhenAvailabilityFlipsToBytesAbsent() async throws {
+        let (server, counter) = await countingServer()
+        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server))
+
+        await loader.load(
+            "sha256:log-spec_approval",
+            reference: reference(
+                mediaType: "text/plain", sizeBytes: 42, availability: .available))
+        #expect(
+            loader.phase(for: "sha256:log-spec_approval")
+                == .notImage(bytes: nil, byteCount: 42))
+
+        // Availability is mutable between reads: a later bytes_absent reference
+        // reclassifies the settled non-image to the explicit no-bytes state
+        // rather than keep offering content the daemon no longer serves.
+        await loader.load(
+            "sha256:log-spec_approval",
+            reference: reference(
+                mediaType: "text/plain", sizeBytes: 42, availability: .bytesAbsent))
+        #expect(loader.phase(for: "sha256:log-spec_approval") == .unavailable)
+        #expect(await counter.count == 0)
+    }
+
+    @Test func aSettledTooLargeDowngradesWhenAvailabilityFlipsToBytesAbsent() async throws {
+        let (server, counter) = await countingServer()
+        let loader = AttachmentLoader(
+            client: APIClientFactory.mock(server: server), maxBytes: 16)
+
+        await loader.load(
+            "sha256:img-spec_approval",
+            reference: reference(
+                mediaType: "image/png", sizeBytes: 64, availability: .available))
+        #expect(
+            loader.phase(for: "sha256:img-spec_approval")
+                == .tooLarge(.download(bytesSeenAtLeast: 64, limit: 16)))
+
+        await loader.load(
+            "sha256:img-spec_approval",
+            reference: reference(
+                mediaType: "image/png", sizeBytes: 64, availability: .bytesAbsent))
+        #expect(loader.phase(for: "sha256:img-spec_approval") == .unavailable)
+        #expect(await counter.count == 0)
+    }
+
+    @Test func aRetainedImageStaysDisplayableWhenAvailabilityFlipsToBytesAbsent() async throws {
+        // A fetched image holds its bytes in memory, so an upstream eviction
+        // (bytes_absent on a later read) does not unshow it: only the no-bytes
+        // phases that hold nothing downgrade.
+        let loader = AttachmentLoader(client: APIClientFactory.mock(server: MockServer()))
+
+        await loader.load(
+            "sha256:img-spec_approval",
+            reference: reference(
+                mediaType: "image/png",
+                sizeBytes: AttentionFixtures.fixtureImagePNG.count,
+                availability: .available))
+        guard case .image = loader.phase(for: "sha256:img-spec_approval") else {
+            Issue.record("expected .image from the fetch path")
+            return
+        }
+
+        await loader.load(
+            "sha256:img-spec_approval",
+            reference: reference(
+                mediaType: "image/png",
+                sizeBytes: AttentionFixtures.fixtureImagePNG.count,
+                availability: .bytesAbsent))
+        guard case .image = loader.phase(for: "sha256:img-spec_approval") else {
+            Issue.record("a retained image must stay displayable after bytes_absent")
+            return
+        }
+    }
+
+    @Test func availabilityFlipToBytesAbsentDuringLoadEndsUnavailable() async throws {
+        // A refresh flips availability to bytes_absent while a fetch is in
+        // flight. The coalesced request fails (unseeded digest), and the newest
+        // reference must land the row on the explicit no-bytes state rather
+        // than the transient fetch error the running request produced.
+        let digest = "sha256:img-inflight-absent"
+        let gate = ManualGate()
+        let server = MockServer()
+        await server.setBeforeRespond { operationID in
+            guard operationID == "getAttachment" else { return }
+            try await gate.wait()
+        }
+        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server))
+
+        async let first: Void = loader.load(
+            digest,
+            reference: reference(mediaType: "image/png", sizeBytes: 64, availability: .available))
+        await gate.waitUntilSuspended()
+        #expect(loader.phase(for: digest) == .loading)
+        async let second: Void = loader.load(
+            digest,
+            reference: reference(
+                mediaType: "image/png", sizeBytes: 64, availability: .bytesAbsent))
+        await gate.open()
+        _ = await (first, second)
+
+        #expect(loader.phase(for: digest) == .unavailable)
+    }
+
+    @Test func availabilityRecoveryDuringLoadRefetchesAndResolves() async throws {
+        // The mirror direction: the in-flight fetch fails, but a refresh that
+        // keeps the reference available must trigger a re-fetch after the
+        // coalesced request rather than leaving the row stuck on .fetchFailed.
+        let digest = "sha256:img-inflight-recover"
+        let bytes = try makeTIFF(frames: [makeImage(width: 1, height: 1)])
+        let gate = ManualGate()
+        let counter = RequestCounter()
+        let server = MockServer(attachments: [digest: bytes])
+        await server.setBeforeRespond { operationID in
+            guard operationID == "getAttachment" else { return }
+            // Fail only the first (in-flight) fetch; the reconcile re-fetch
+            // then serves the seeded bytes.
+            if await counter.record() == 1 {
+                try await gate.wait()
+                throw MockServer.ForcedStatus(500)
+            }
+        }
+        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server))
+        let available = reference(
+            mediaType: "image/png", sizeBytes: bytes.count, availability: .available)
+
+        async let first: Void = loader.load(digest, reference: available)
+        await gate.waitUntilSuspended()
+        #expect(loader.phase(for: digest) == .loading)
+        async let second: Void = loader.load(digest, reference: available)
+        await gate.open()
+        _ = await (first, second)
+
+        guard case .image = loader.phase(for: digest) else {
+            Issue.record("expected recovery to .image after the in-flight fetch failed")
+            return
+        }
+        #expect(await counter.count == 2)
+    }
+
+    @Test func anOversizedNonImageClassifiesToTooLargeWithoutFetching() async throws {
+        // A non-image over the device cap must classify too-large up front
+        // rather than offer an "Open" that the same capped downloader cannot
+        // satisfy; the cap applies before the media-type split.
+        let (server, counter) = await countingServer()
+        let loader = AttachmentLoader(
+            client: APIClientFactory.mock(server: server), maxBytes: 16)
+
+        await loader.load(
+            "sha256:log-spec_approval",
+            reference: reference(
+                mediaType: "text/plain", sizeBytes: 64, availability: .available))
+
+        #expect(
+            loader.phase(for: "sha256:log-spec_approval")
+                == .tooLarge(.download(bytesSeenAtLeast: 64, limit: 16)))
+        #expect(await counter.count == 0)
+    }
+
+    @Test func anAvailableImageWithinTheCapFetchesAndDecodes() async throws {
+        let loader = AttachmentLoader(client: APIClientFactory.mock(server: MockServer()))
+
+        await loader.load(
+            "sha256:img-spec_approval",
+            reference: reference(
+                mediaType: "image/png",
+                sizeBytes: AttentionFixtures.fixtureImagePNG.count,
+                availability: .available))
+
+        guard case .image = loader.phase(for: "sha256:img-spec_approval") else {
+            Issue.record("expected .image from the fetch path")
+            return
+        }
+    }
+
+    @Test func anAvailableImageWhoseFetchFailsIsFetchFailedNotUnavailable() async throws {
+        // The metadata says available, so the loader fetches; the bytes are
+        // not actually present (an unseeded digest 404s). That is a transient
+        // fetch failure, NOT the daemon-reported no-bytes state, and the two
+        // must stay distinct.
+        let loader = AttachmentLoader(client: APIClientFactory.mock(server: MockServer()))
+
+        await loader.load(
+            "sha256:img-blocked",
+            reference: reference(
+                mediaType: "image/png", sizeBytes: 256, availability: .available))
+
+        #expect(loader.phase(for: "sha256:img-blocked") == .fetchFailed)
+        #expect(loader.phase(for: "sha256:img-blocked") != .unavailable)
     }
 
     @Test func anOversizedAttachmentSettlesWithoutRetrying() async throws {
@@ -775,7 +1032,7 @@ private struct StreamingAttachmentTransport: ClientTransport {
 
         await timeout.open()
         await stalledLoad.value
-        #expect(loader.phase(for: "sha256:img-spec_approval") == .unavailable)
+        #expect(loader.phase(for: "sha256:img-spec_approval") == .fetchFailed)
 
         await server.setBeforeRespond(nil)
         await loader.load("sha256:img-spec_approval")
@@ -844,7 +1101,7 @@ private struct StreamingAttachmentTransport: ClientTransport {
 
         for timer in timers { await timer.open() }
         await load.value
-        #expect(loader.phase(for: "sha256:empty-stream") == .unavailable)
+        #expect(loader.phase(for: "sha256:empty-stream") == .fetchFailed)
         chunks.finish()
     }
 

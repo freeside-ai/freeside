@@ -176,6 +176,7 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 			VerificationRecipeDigest: &recipe,
 			SensitivityClass:         domain.SensitivityNormal,
 		},
+		Metadata: testRunMetadata(),
 	}, approved)
 	if err != nil {
 		t.Fatalf("NewArtifact: %v", err)

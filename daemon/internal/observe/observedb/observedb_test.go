@@ -346,6 +346,11 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 			HeadBinding: domain.HeadIndependent, VerificationRecipeDigest: &staleRecipe,
 			SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 1,
+			CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+			Source:    domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
+		},
 	}, staleRecipes)
 	if err != nil {
 		t.Fatalf("NewArtifact(stale evidence): %v", err)

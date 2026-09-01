@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"slices"
 	"syscall"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -368,19 +369,21 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, fmt.Errorf("submit: store policy bytes: %w", err)
 	}
 
-	specArtifact, err := submissionArtifact(domain.ArtifactKindSpecification, spec.digest)
+	specArtifact, err := submissionArtifact(
+		domain.ArtifactKindSpecification, spec.digest, domain.EvidenceMediaTextMarkdown, int64(len(spec.body)))
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
-	policyArtifact, err := submissionArtifact(domain.ArtifactKindPolicy, policy.digest)
+	policyArtifact, err := submissionArtifact(
+		domain.ArtifactKindPolicy, policy.digest, domain.EvidenceMediaApplicationJSON, int64(len(policy.body)))
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
-		if err := tx.PutArtifact(ctx, specArtifact); err != nil {
+		if err := registerSubmissionArtifact(ctx, tx, specArtifact); err != nil {
 			return err
 		}
-		return tx.PutArtifact(ctx, policyArtifact)
+		return registerSubmissionArtifact(ctx, tx, policyArtifact)
 	}); err != nil {
 		return submitResult{}, fmt.Errorf("submit: register artifacts: %w", err)
 	}
@@ -603,7 +606,14 @@ func defaultSubmissionRunID(
 // run-derived), so two runs submitting the same bytes converge on one
 // write-once artifact row instead of conflicting; the daemon-produced
 // provenance carries no recipe, so the artifact is never publish-eligible.
-func submissionArtifact(role domain.ArtifactKind, digest domain.Digest) (domain.Artifact, error) {
+//
+// The evidence metadata's created_at is the host clock at registration, so a
+// re-registration of the same content produces a byte-different row; callers
+// that persist go through registerSubmissionArtifact, which keeps the existing
+// write-once row and never re-puts, preserving the convergence guarantee.
+func submissionArtifact(
+	role domain.ArtifactKind, digest domain.Digest, mediaType domain.EvidenceMediaType, sizeBytes int64,
+) (domain.Artifact, error) {
 	hexDigits := string(digest[len("sha256:"):])
 	return domain.NewArtifact(domain.ArtifactInput{
 		ID:     domain.ArtifactID("artifact-" + string(role) + "-" + hexDigits),
@@ -615,5 +625,34 @@ func submissionArtifact(role domain.ArtifactKind, digest domain.Digest) (domain.
 			HeadBinding:          domain.HeadIndependent,
 			SensitivityClass:     domain.SensitivityNormal,
 		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: mediaType, SizeBytes: sizeBytes, CreatedAt: time.Now().UTC(),
+			Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
+		},
 	}, nil)
+}
+
+// registerSubmissionArtifact write-once registers a content-addressed input
+// artifact idempotently. The artifact ID embeds the content digest, so an
+// existing row with the same ID names the same bytes and provenance; only the
+// recorded created_at could differ across a replayed submit or a repeated
+// reconcile pass, so the original row stays authoritative and is never re-put
+// (a plain PutArtifact would reject the byte-different re-registration). A row
+// whose digest diverges from the submission is a restored or corrupted
+// inconsistency, not this input, so it is refused fail-closed rather than
+// silently binding the run to different bytes than were submitted (mirrors
+// putArtifactIdempotent).
+func registerSubmissionArtifact(ctx context.Context, tx *store.WriteTx, a domain.Artifact) error {
+	existing, err := tx.GetArtifact(ctx, a.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return tx.PutArtifact(ctx, a)
+	}
+	if err != nil {
+		return err
+	}
+	if existing.Digest != a.Digest {
+		return fmt.Errorf("artifact %s digest %s, existing row %s: %w",
+			a.ID, a.Digest, existing.Digest, store.ErrImmutableConflict)
+	}
+	return nil
 }

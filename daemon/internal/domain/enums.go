@@ -473,6 +473,98 @@ func (t ClaimMediaType) valid() bool {
 	}
 }
 
+// EvidenceMediaType is the daemon-validated media type carried on every synced
+// evidence and claim reference (plan §5.15 rule 3). The daemon validates
+// magic/type/size, so this is a fact clients read directly rather than infer
+// from a fetch. The set is closed: it is the union of the run-evidence types
+// the verifier and engine producers emit (application/json, text/plain,
+// text/markdown) and the agent-claim types the importer admits (the opaque
+// image set, application/jsonl, text/markdown). The zero value is invalid, and
+// adding a member is a contract change (a closed client enum rejects an unknown
+// value). It overlaps ClaimMediaType by string value but is a distinct type
+// because it also names binary image types that never ride inline.
+type EvidenceMediaType string
+
+const (
+	EvidenceMediaImagePNG         EvidenceMediaType = "image/png"
+	EvidenceMediaImageJPEG        EvidenceMediaType = "image/jpeg"
+	EvidenceMediaImageGIF         EvidenceMediaType = "image/gif"
+	EvidenceMediaImageWEBP        EvidenceMediaType = "image/webp"
+	EvidenceMediaTextPlain        EvidenceMediaType = "text/plain"
+	EvidenceMediaTextMarkdown     EvidenceMediaType = "text/markdown"
+	EvidenceMediaApplicationJSON  EvidenceMediaType = "application/json"
+	EvidenceMediaApplicationJSONL EvidenceMediaType = "application/jsonl"
+)
+
+// AllEvidenceMediaTypes is the single registration point for evidence media
+// types.
+var AllEvidenceMediaTypes = []EvidenceMediaType{
+	EvidenceMediaImagePNG, EvidenceMediaImageJPEG, EvidenceMediaImageGIF,
+	EvidenceMediaImageWEBP, EvidenceMediaTextPlain, EvidenceMediaTextMarkdown,
+	EvidenceMediaApplicationJSON, EvidenceMediaApplicationJSONL,
+}
+
+func (t EvidenceMediaType) valid() bool {
+	switch t {
+	case EvidenceMediaImagePNG, EvidenceMediaImageJPEG, EvidenceMediaImageGIF,
+		EvidenceMediaImageWEBP, EvidenceMediaTextPlain, EvidenceMediaTextMarkdown,
+		EvidenceMediaApplicationJSON, EvidenceMediaApplicationJSONL:
+		return true
+	default:
+		return false
+	}
+}
+
+// EvidenceSource names which sync-contract container an evidence reference
+// rides in: run for every artifact in an item's evidence_snapshot, claim for
+// every entry in agent_claims (plan §5.15 rule 2). Domain validation pins the
+// value to its container, so a decoded reference cannot mislabel its channel.
+// The zero value is invalid.
+type EvidenceSource string
+
+const (
+	EvidenceSourceRun   EvidenceSource = "run"
+	EvidenceSourceClaim EvidenceSource = "claim"
+)
+
+// AllEvidenceSources is the single registration point for evidence sources.
+var AllEvidenceSources = []EvidenceSource{EvidenceSourceRun, EvidenceSourceClaim}
+
+func (s EvidenceSource) valid() bool {
+	switch s {
+	case EvidenceSourceRun, EvidenceSourceClaim:
+		return true
+	default:
+		return false
+	}
+}
+
+// EvidenceAvailability is the daemon read-time fact of whether the bytes the
+// digest names are in the blob store. available means present; bytes_absent
+// means the digest is held but the bytes are not (so a fetch would 404). It is
+// recomputed by the sync projection from the blob store immediately before
+// serialization, on the same re-gate pattern as publish_eligible: a persisted
+// value is never trusted for the wire. The zero value is invalid.
+type EvidenceAvailability string
+
+const (
+	EvidenceAvailable   EvidenceAvailability = "available"
+	EvidenceBytesAbsent EvidenceAvailability = "bytes_absent"
+)
+
+// AllEvidenceAvailabilities is the single registration point for evidence
+// availabilities.
+var AllEvidenceAvailabilities = []EvidenceAvailability{EvidenceAvailable, EvidenceBytesAbsent}
+
+func (a EvidenceAvailability) valid() bool {
+	switch a {
+	case EvidenceAvailable, EvidenceBytesAbsent:
+		return true
+	default:
+		return false
+	}
+}
+
 // HeadBinding records how an artifact's provenance relates to repository head
 // (plan §5.15 rule 2). Head-bound evidence is produced against a specific
 // candidate head and is invalidated by a remediation head; head-independent

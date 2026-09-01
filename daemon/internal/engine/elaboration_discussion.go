@@ -372,6 +372,12 @@ func (e *Engine) enqueueSpecDiscussion(
 			ProducerInvocationID: base.InvocationID, HeadBinding: domain.HeadIndependent,
 			SensitivityClass: domain.SensitivityNormal,
 		},
+		// prefix is the JSON-encoded conversation prefix the digest names.
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: int64(len(prefix)),
+			CreatedAt: e.elaboration.now().UTC(), Source: domain.EvidenceSourceRun,
+			Availability: domain.EvidenceAvailable,
+		},
 	}, nil)
 	if err != nil {
 		return false, err
@@ -429,7 +435,7 @@ func (e *Engine) enqueueSpecDiscussion(
 			*item.ConversationID != request.ConversationID || generic.Dispatched() || generic.Quarantined() {
 			return domain.ErrParentKeyMismatch
 		}
-		if err := tx.PutArtifact(ctx, artifact); err != nil {
+		if err := putArtifactIdempotent(ctx, tx, artifact); err != nil {
 			return err
 		}
 		if err := tx.PutAgentInvocation(ctx, invocation); err != nil {

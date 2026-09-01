@@ -471,6 +471,11 @@ func shadowReviewFindingClaims(
 				SensitivityClass: domain.SensitivitySensitive,
 			},
 			Text: &text,
+			Metadata: domain.EvidenceMetadata{
+				MediaType: domain.EvidenceMediaTextMarkdown, SizeBytes: int64(len(chunk)),
+				CreatedAt: record.CompletedAt.UTC(), Source: domain.EvidenceSourceClaim,
+				Availability: domain.EvidenceAvailable,
+			},
 		}
 	}
 	return claims, nil

@@ -101,10 +101,11 @@ func buildEvidence(opts Options, recipeDigest domain.Digest, rep report, transcr
 	var out []Evidence
 	for _, e := range []struct {
 		artifactType domain.ArtifactKind
+		mediaType    domain.EvidenceMediaType
 		content      []byte
 	}{
-		{ArtifactTypeVerificationReport, reportBytes},
-		{ArtifactTypeCommandTranscript, transcript},
+		{ArtifactTypeVerificationReport, domain.EvidenceMediaApplicationJSON, reportBytes},
+		{ArtifactTypeCommandTranscript, domain.EvidenceMediaTextPlain, transcript},
 	} {
 		digest := contentDigest(e.content)
 		artifact, err := domain.NewArtifact(domain.ArtifactInput{
@@ -126,6 +127,18 @@ func buildEvidence(opts Options, recipeDigest domain.Digest, rep report, transcr
 				SourceHeadSHA:            opts.HeadSHA,
 				VerificationRecipeDigest: &recipeDigest,
 				SensitivityClass:         domain.SensitivityNormal,
+			},
+			// §5.15 rule 3 facts the daemon already knows at emission: the
+			// validated media type and the exact byte length of the content
+			// the digest names. Availability is a read-time fact the sync
+			// projection recomputes from the blob store; a producer stamps
+			// available because its bytes are stored before the item syncs.
+			Metadata: domain.EvidenceMetadata{
+				MediaType:    e.mediaType,
+				SizeBytes:    int64(len(e.content)),
+				CreatedAt:    opts.Now,
+				Source:       domain.EvidenceSourceRun,
+				Availability: domain.EvidenceAvailable,
 			},
 		}, opts.ApprovedRecipes)
 		if err != nil {

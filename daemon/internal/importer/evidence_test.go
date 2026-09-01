@@ -9,9 +9,15 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
+
+// evidenceNowFixture is the fixed stamp buildClaims tests pin as each claim's
+// EvidenceMetadata.CreatedAt, so the persisted claim is byte-deterministic.
+var evidenceNowFixture = time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 
 // Evidence blob contents. Each carries a real image magic signature so
 // validateEvidenceType accepts it; the trailing bytes are inert filler. The
@@ -356,7 +362,7 @@ func TestBuildClaimsInlinesConformingMarkdown(t *testing.T) {
 			entry.Provenance.SensitivityClass = tc.sensitivity
 			claims, findings, err := buildClaims(evidenceManifest(entry), map[export.Digest]blobInfo{
 				entry.Digest: {size: entry.Size, verifiedPath: p},
-			}, Policy{SecretMaxScanBytes: tc.scanBytes})
+			}, Options{Policy: Policy{SecretMaxScanBytes: tc.scanBytes}, Now: evidenceNowFixture})
 			if err != nil {
 				t.Fatalf("buildClaims: %v", err)
 			}
@@ -461,13 +467,31 @@ func TestAgentArtifactIdentityIncludesCompleteProvenance(t *testing.T) {
 		entry.Digest: {size: entry.Size, verifiedPath: path},
 	}
 	first, findings, err := buildClaims(
-		evidenceManifest(entry), blobs, Policy{},
+		evidenceManifest(entry), blobs, Options{Now: evidenceNowFixture},
 	)
 	if err != nil {
 		t.Fatalf("build first claim: %v", err)
 	}
 	if len(findings) != 0 {
 		t.Fatalf("build first claim findings: %+v", findings)
+	}
+	// #922: the importer carries the daemon-validated media type and size onto
+	// the claim's evidence metadata instead of discarding them; the entry is an
+	// image/png, and the metadata rides the claim channel.
+	if len(first) != 1 {
+		t.Fatalf("expected one claim, got %d", len(first))
+	}
+	if first[0].Metadata.MediaType != domain.EvidenceMediaImagePNG {
+		t.Fatalf("claim media_type = %q, want image/png", first[0].Metadata.MediaType)
+	}
+	if first[0].Metadata.SizeBytes != entry.Size {
+		t.Fatalf("claim size_bytes = %d, want %d", first[0].Metadata.SizeBytes, entry.Size)
+	}
+	if first[0].Metadata.Source != domain.EvidenceSourceClaim {
+		t.Fatalf("claim metadata source = %q, want claim", first[0].Metadata.Source)
+	}
+	if first[0].Metadata.CreatedAt != evidenceNowFixture {
+		t.Fatalf("claim created_at = %s, want %s", first[0].Metadata.CreatedAt, evidenceNowFixture)
 	}
 	for _, tc := range []struct {
 		name   string
@@ -487,7 +511,7 @@ func TestAgentArtifactIdentityIncludesCompleteProvenance(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			changed := entry
 			tc.mutate(&changed.Provenance)
-			second, findings, err := buildClaims(evidenceManifest(changed), blobs, Policy{})
+			second, findings, err := buildClaims(evidenceManifest(changed), blobs, Options{Now: evidenceNowFixture})
 			if err != nil {
 				t.Fatalf("build changed claim: %v", err)
 			}

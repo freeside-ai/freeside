@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
@@ -139,6 +140,11 @@ func TestAgentArtifactCannotEnterEvidence(t *testing.T) {
 			HeadBinding:          domain.HeadBound,
 			SourceHeadSHA:        "0123456789abcdef0123456789abcdef01234567",
 			SensitivityClass:     domain.SensitivityNormal,
+		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaImagePNG, SizeBytes: 1,
+			CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+			Source:    domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
 		},
 	}, approved)
 	if err != nil {

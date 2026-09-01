@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -185,11 +186,22 @@ func artifactsClaimSet(id domain.InvocationID) []domain.AgentClaim {
 		SourceHeadSHA:        "cafebabe",
 		SensitivityClass:     domain.SensitivityNormal,
 	}
+	createdAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	return []domain.AgentClaim{
-		{Label: "screenshot", Artifact: "art-image", Digest: "sha256:img", Provenance: provenance},
+		{
+			Label: "screenshot", Artifact: "art-image", Digest: "sha256:img", Provenance: provenance,
+			Metadata: domain.EvidenceMetadata{
+				MediaType: domain.EvidenceMediaImagePNG, SizeBytes: 4096, CreatedAt: createdAt,
+				Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+			},
+		},
 		{
 			Label: "change summary", Artifact: "art-text", Digest: text.ComputeDigest(),
 			Text: &text, Provenance: provenance,
+			Metadata: domain.EvidenceMetadata{
+				MediaType: domain.EvidenceMediaTextMarkdown, SizeBytes: int64(len(text.Content)), CreatedAt: createdAt,
+				Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+			},
 		},
 	}
 }

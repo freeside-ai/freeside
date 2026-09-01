@@ -5201,6 +5201,11 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 		InvocationID: task.verificationInvocationID(), RecipeSource: verify.ConfigRecipe(recipe),
 		RecipePath: verify.DefaultRecipePath, Room: room,
 		ApprovedRecipes: w.approvedRecipes, Changes: imported.Changes,
+		// A stable per-verification time, not a wall clock: the emitted evidence
+		// is content-addressed and write-once, and this checkpoint can re-run, so
+		// the evidence metadata must converge byte-identically on replay (mirrors
+		// the checkpoint's CandidateAuthorization CreatedAt).
+		Now: binding.export.RecordedAt,
 		Policy: verify.Policy{ExtraVerificationControlPatterns: slices.Clone(
 			binding.profile.ProtectedPaths.ExtraVerificationControlPatterns,
 		)},

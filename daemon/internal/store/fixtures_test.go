@@ -7,6 +7,36 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
+// evidenceMetaTime is the fixed timestamp every test's evidence metadata is
+// stamped with, matching the fixtures' other UTC-fixed times.
+var evidenceMetaTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+// runMeta is valid run-source evidence metadata for an Artifact fixture.
+func runMeta() domain.EvidenceMetadata {
+	return domain.EvidenceMetadata{
+		MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 1, CreatedAt: evidenceMetaTime,
+		Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
+	}
+}
+
+// claimMeta is valid claim-source evidence metadata for an AgentClaim fixture;
+// mt matches the claim's Text media type when it carries text.
+func claimMeta(mt domain.EvidenceMediaType) domain.EvidenceMetadata {
+	return domain.EvidenceMetadata{
+		MediaType: mt, SizeBytes: 1, CreatedAt: evidenceMetaTime,
+		Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+	}
+}
+
+// claimTextMeta is valid claim-source metadata for an inline text claim: it
+// derives both the media type and size_bytes from the content, so the fixture
+// satisfies AgentClaim.Validate's text/metadata bindings by construction.
+func claimTextMeta(text domain.ClaimText) domain.EvidenceMetadata {
+	m := claimMeta(domain.EvidenceMediaType(text.MediaType))
+	m.SizeBytes = int64(len(text.Content))
+	return m
+}
+
 // fixtures is one valid instance of every persisted aggregate root, built the
 // same way as the domain package's golden fixtures so the two stay
 // recognizably the same shapes. Referential order matters for the foreign
@@ -54,6 +84,7 @@ func newFixtures(t *testing.T) fixtures {
 			VerificationRecipeDigest: &recipe,
 			SensitivityClass:         domain.SensitivityNormal,
 		},
+		Metadata: runMeta(),
 	}, approved)
 	if err != nil {
 		t.Fatalf("NewArtifact: %v", err)
@@ -101,6 +132,7 @@ func newFixtures(t *testing.T) fixtures {
 				SourceHeadSHA:        "cafebabe",
 				SensitivityClass:     domain.SensitivityNormal,
 			},
+			Metadata: claimMeta(domain.EvidenceMediaImagePNG),
 		}, {
 			// A text claim (#217): the digest is computed over the content, so
 			// the persisted item exercises the decode-side re-validation of
@@ -114,6 +146,7 @@ func newFixtures(t *testing.T) fixtures {
 				SourceHeadSHA:        "cafebabe",
 				SensitivityClass:     domain.SensitivityNormal,
 			},
+			Metadata: claimTextMeta(claimText),
 		}},
 		PRHeadSHA: "cafebabe", PRReference: &domain.PRReference{Repo: "owner/repo", Number: 123},
 		DisplayNames: &displayNames, DiffStats: &diffStats,

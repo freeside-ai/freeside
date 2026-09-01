@@ -36,6 +36,7 @@ func putIntakePolicyArtifact(t *testing.T, ctx context.Context, tx *store.WriteT
 			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-intake-policy",
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: runMeta(),
 	}, nil)
 	if err != nil {
 		t.Fatalf("build policy artifact: %v", err)
@@ -262,6 +263,7 @@ func TestIntakeAdmissionAuthenticatesPolicyArtifact(t *testing.T) {
 							ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-wrong",
 							HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 						},
+						Metadata: runMeta(),
 					}, nil)
 					if err != nil {
 						return err

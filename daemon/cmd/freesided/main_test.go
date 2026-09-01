@@ -29,6 +29,42 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
+// testEvidenceTime is the fixed UTC creation time for the package's
+// evidence-metadata fixtures.
+var testEvidenceTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+// testRunEvidenceMetadata is valid run-sourced evidence metadata.
+func testRunEvidenceMetadata(sizeBytes int64) domain.EvidenceMetadata {
+	return domain.EvidenceMetadata{
+		MediaType:    domain.EvidenceMediaApplicationJSON,
+		SizeBytes:    sizeBytes,
+		CreatedAt:    testEvidenceTime,
+		Source:       domain.EvidenceSourceRun,
+		Availability: domain.EvidenceAvailable,
+	}
+}
+
+// testClaimEvidenceMetadata is valid claim-sourced evidence metadata for
+// the given media type.
+func testClaimEvidenceMetadata(mediaType domain.EvidenceMediaType) domain.EvidenceMetadata {
+	return domain.EvidenceMetadata{
+		MediaType:    mediaType,
+		SizeBytes:    1,
+		CreatedAt:    testEvidenceTime,
+		Source:       domain.EvidenceSourceClaim,
+		Availability: domain.EvidenceAvailable,
+	}
+}
+
+// testClaimTextEvidenceMetadata derives the media type and size from an inline
+// text claim's content, so the fixture satisfies AgentClaim.Validate's
+// text/metadata bindings by construction.
+func testClaimTextEvidenceMetadata(text domain.ClaimText) domain.EvidenceMetadata {
+	m := testClaimEvidenceMetadata(domain.EvidenceMediaType(text.MediaType))
+	m.SizeBytes = int64(len(text.Content))
+	return m
+}
+
 func TestEnabledShadowReviewRate(t *testing.T) {
 	t.Parallel()
 	if got := enabledShadowReviewRate(nil, 0.2); got != 0 {
@@ -839,6 +875,7 @@ func TestConfigStoreOptionsCarryDoctorRecipePolicy(t *testing.T) {
 			HeadBinding: domain.HeadBound, SourceHeadSHA: strings.Repeat("c", 40),
 			VerificationRecipeDigest: &recipe, SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: testRunEvidenceMetadata(int64(len(artifactBody))),
 	}, options.ApprovedRecipes)
 	if err != nil {
 		t.Fatal(err)

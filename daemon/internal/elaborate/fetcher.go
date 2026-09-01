@@ -269,6 +269,14 @@ func (f *Fetcher) Fetch(
 			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: producer,
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
+		// The digest names the JSON research envelope. This registration is
+		// replay-guarded by recover (an existing artifact is authenticated and
+		// reused, never re-put), so a wall-clock created_at is stamped once.
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: int64(len(envelope)),
+			CreatedAt: time.Now().UTC(), Source: domain.EvidenceSourceRun,
+			Availability: domain.EvidenceAvailable,
+		},
 	}, nil)
 	if err != nil {
 		return ResearchArtifact{}, err

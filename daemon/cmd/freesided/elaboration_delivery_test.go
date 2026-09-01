@@ -198,6 +198,7 @@ func putDeliveryArtifact(
 			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-elaborate-test-1",
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
+		Metadata: testRunEvidenceMetadata(int64(len(body))),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)

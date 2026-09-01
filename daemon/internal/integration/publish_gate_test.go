@@ -204,6 +204,7 @@ func evidenceArtifact(t *testing.T, headSHA string) domain.Artifact {
 			VerificationRecipeDigest: &r,
 			SensitivityClass:         domain.SensitivityNormal,
 		},
+		Metadata: testRunEvidenceMetadata(1),
 	}, map[domain.Digest]bool{testRecipe: true})
 	if err != nil {
 		t.Fatalf("NewArtifact: %v", err)

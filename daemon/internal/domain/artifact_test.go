@@ -5,11 +5,38 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 const approvedRecipe = domain.Digest("sha256:recipe-approved")
+
+// metaTime is a fixed UTC instant for evidence-metadata fixtures.
+var metaTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+// runMeta returns valid run-channel evidence metadata for Artifact fixtures.
+func runMeta() domain.EvidenceMetadata {
+	return domain.EvidenceMetadata{
+		MediaType:    domain.EvidenceMediaApplicationJSON,
+		SizeBytes:    1,
+		CreatedAt:    metaTime,
+		Source:       domain.EvidenceSourceRun,
+		Availability: domain.EvidenceAvailable,
+	}
+}
+
+// claimMeta returns valid claim-channel evidence metadata for AgentClaim
+// fixtures, with the media type pinned to the claim's Text media type.
+func claimMeta(mt domain.EvidenceMediaType) domain.EvidenceMetadata {
+	return domain.EvidenceMetadata{
+		MediaType:    mt,
+		SizeBytes:    1,
+		CreatedAt:    metaTime,
+		Source:       domain.EvidenceSourceClaim,
+		Availability: domain.EvidenceAvailable,
+	}
+}
 
 func approvedRecipes() map[domain.Digest]bool {
 	return map[domain.Digest]bool{approvedRecipe: true}
@@ -45,14 +72,14 @@ func TestEligibleForEvidenceSnapshot(t *testing.T) {
 	}
 	// The gate validates the artifact before the trust decision: a malformed
 	// artifact under an approved recipe must not slip into evidence.
-	malformed := domain.Artifact{ID: "", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:x", Provenance: provenance(domain.ProducerVerifier, ptr(approvedRecipe))}
+	malformed := domain.Artifact{ID: "", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:x", Provenance: provenance(domain.ProducerVerifier, ptr(approvedRecipe)), Metadata: runMeta()}
 	if err := domain.EligibleForEvidenceSnapshot(malformed, approvedRecipes()); !errors.Is(err, domain.ErrEmptyID) {
 		t.Fatalf("gate admitted a malformed artifact: %v", err)
 	}
 	// A stale publish_eligible must be rejected by the gate: an approved
 	// verifier artifact that reads not-publishable contradicts trusted policy,
 	// so the reconstruction path re-running the gate cannot admit it.
-	stale := domain.Artifact{ID: "a1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:x", Provenance: provenance(domain.ProducerVerifier, ptr(approvedRecipe)), PublishEligible: false}
+	stale := domain.Artifact{ID: "a1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:x", Provenance: provenance(domain.ProducerVerifier, ptr(approvedRecipe)), PublishEligible: false, Metadata: runMeta()}
 	if err := domain.EligibleForEvidenceSnapshot(stale, approvedRecipes()); !errors.Is(err, domain.ErrPublishEligibleInconsistent) {
 		t.Fatalf("gate admitted a stale publish_eligible: %v", err)
 	}
@@ -60,7 +87,7 @@ func TestEligibleForEvidenceSnapshot(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// The eligibility bit must match policy for approved cases (nil
 			// wantErr); the error cases are rejected before the bit is checked.
-			a := domain.Artifact{ID: "a1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:x", Provenance: provenance(tt.class, tt.recipe), PublishEligible: tt.wantErr == nil}
+			a := domain.Artifact{ID: "a1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:x", Provenance: provenance(tt.class, tt.recipe), PublishEligible: tt.wantErr == nil, Metadata: runMeta()}
 			err := domain.EligibleForEvidenceSnapshot(a, approvedRecipes())
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("error = %v, want %v", err, tt.wantErr)
@@ -92,7 +119,7 @@ func TestValidatePublishEligibility(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := domain.Artifact{ID: "a1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:x", Provenance: provenance(tt.class, tt.recipe), PublishEligible: tt.eligible}
+			a := domain.Artifact{ID: "a1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:x", Provenance: provenance(tt.class, tt.recipe), PublishEligible: tt.eligible, Metadata: runMeta()}
 			if err := domain.ValidatePublishEligibility(a, approvedRecipes()); !errors.Is(err, tt.wantErr) {
 				t.Fatalf("error = %v, want %v", err, tt.wantErr)
 			}
@@ -100,7 +127,7 @@ func TestValidatePublishEligibility(t *testing.T) {
 	}
 	// Self-standing: a malformed artifact is rejected before the bit is checked,
 	// so a reconstruction path re-running the gate cannot admit it.
-	malformed := domain.Artifact{ID: "", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:x", Provenance: provenance(domain.ProducerVerifier, ptr(approvedRecipe))}
+	malformed := domain.Artifact{ID: "", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:x", Provenance: provenance(domain.ProducerVerifier, ptr(approvedRecipe)), Metadata: runMeta()}
 	if err := domain.ValidatePublishEligibility(malformed, approvedRecipes()); !errors.Is(err, domain.ErrEmptyID) {
 		t.Fatalf("gate admitted a malformed artifact: %v", err)
 	}
@@ -111,6 +138,7 @@ func TestArtifactRejectsUnknownKind(t *testing.T) {
 	artifact := domain.Artifact{
 		ID: "a1", Type: "unknown", Digest: "sha256:x",
 		Provenance: provenance(domain.ProducerAgent, nil),
+		Metadata:   runMeta(),
 	}
 	if err := artifact.Validate(); !errors.Is(err, domain.ErrInvalidArtifactKind) {
 		t.Fatalf("unknown artifact kind = %v, want %v", err, domain.ErrInvalidArtifactKind)
@@ -120,7 +148,7 @@ func TestArtifactRejectsUnknownKind(t *testing.T) {
 // TestAgentArtifactRejectedFromItemEvidence checks the gate is wired into item
 // construction: an agent artifact in the evidence snapshot fails NewAttentionItem.
 func TestAgentArtifactRejectedFromItemEvidence(t *testing.T) {
-	agentArt := domain.Artifact{ID: "a1", Type: domain.ArtifactKindImage, Digest: "sha256:x", Provenance: provenance(domain.ProducerAgent, nil)}
+	agentArt := domain.Artifact{ID: "a1", Type: domain.ArtifactKindImage, Digest: "sha256:x", Provenance: provenance(domain.ProducerAgent, nil), Metadata: runMeta()}
 	in := validItemInput(domain.AttentionReadyForFinalReview)
 	in.EvidenceSnapshot = []domain.Artifact{agentArt}
 	_, err := domain.NewAttentionItem(in, approvedRecipes())
@@ -128,7 +156,7 @@ func TestAgentArtifactRejectedFromItemEvidence(t *testing.T) {
 		t.Fatalf("error = %v, want ErrAgentArtifactInEvidence", err)
 	}
 
-	verifierArt := domain.Artifact{ID: "a2", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:y", Provenance: provenance(domain.ProducerVerifier, ptr(approvedRecipe))}
+	verifierArt := domain.Artifact{ID: "a2", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:y", Provenance: provenance(domain.ProducerVerifier, ptr(approvedRecipe)), Metadata: runMeta()}
 	in.EvidenceSnapshot = []domain.Artifact{verifierArt}
 	if _, err := domain.NewAttentionItem(in, approvedRecipes()); err != nil {
 		t.Fatalf("verifier artifact under approved recipe rejected: %v", err)
@@ -144,6 +172,7 @@ func TestNewArtifactDetachesRecipePointer(t *testing.T) {
 	a, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: "a", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:z",
 		Provenance: provenance(domain.ProducerVerifier, &recipe),
+		Metadata:   runMeta(),
 	}, approvedRecipes())
 	if err != nil {
 		t.Fatal(err)
@@ -162,11 +191,11 @@ func TestNewArtifactDetachesRecipePointer(t *testing.T) {
 // inconsistent with its provenance is rejected by Validate without needing the
 // approved-recipe set.
 func TestValidateRejectsInconsistentPublishEligible(t *testing.T) {
-	agent := domain.Artifact{ID: "a", Type: domain.ArtifactKindImage, Digest: "sha256:x", Provenance: provenance(domain.ProducerAgent, nil), PublishEligible: true}
+	agent := domain.Artifact{ID: "a", Type: domain.ArtifactKindImage, Digest: "sha256:x", Provenance: provenance(domain.ProducerAgent, nil), PublishEligible: true, Metadata: runMeta()}
 	if err := agent.Validate(); !errors.Is(err, domain.ErrPublishEligibleInconsistent) {
 		t.Fatalf("agent artifact marked publishable validated: %v", err)
 	}
-	noRecipe := domain.Artifact{ID: "b", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:y", Provenance: provenance(domain.ProducerVerifier, nil), PublishEligible: true}
+	noRecipe := domain.Artifact{ID: "b", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:y", Provenance: provenance(domain.ProducerVerifier, nil), PublishEligible: true, Metadata: runMeta()}
 	if err := noRecipe.Validate(); !errors.Is(err, domain.ErrPublishEligibleInconsistent) {
 		t.Fatalf("verifier artifact eligible without a recipe validated: %v", err)
 	}
@@ -179,7 +208,7 @@ func TestValidateRejectsInconsistentPublishEligible(t *testing.T) {
 	if err := emptyRecipe.Validate(); !errors.Is(err, domain.ErrEmptyField) {
 		t.Fatalf("empty recipe digest behind a non-nil pointer validated: %v", err)
 	}
-	consistent := domain.Artifact{ID: "c", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:z", Provenance: provenance(domain.ProducerVerifier, ptr(approvedRecipe)), PublishEligible: true}
+	consistent := domain.Artifact{ID: "c", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:z", Provenance: provenance(domain.ProducerVerifier, ptr(approvedRecipe)), PublishEligible: true, Metadata: runMeta()}
 	if err := consistent.Validate(); err != nil {
 		t.Fatalf("consistent eligible artifact rejected: %v", err)
 	}
@@ -210,7 +239,7 @@ func TestProvenanceRequiresSourceHead(t *testing.T) {
 		t.Fatalf("Provenance.Validate error = %v, want ErrEmptyField", err)
 	}
 	_, err := domain.NewArtifact(domain.ArtifactInput{
-		ID: "a", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:z", Provenance: prov,
+		ID: "a", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:z", Provenance: prov, Metadata: runMeta(),
 	}, approvedRecipes())
 	if !errors.Is(err, domain.ErrEmptyField) {
 		t.Fatalf("NewArtifact error = %v, want ErrEmptyField", err)
@@ -279,7 +308,7 @@ func TestPublishEligibleNotAgentSettable(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			a, err := domain.NewArtifact(domain.ArtifactInput{
-				ID: "a", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:z", Provenance: provenance(tt.class, tt.recipe),
+				ID: "a", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:z", Provenance: provenance(tt.class, tt.recipe), Metadata: runMeta(),
 			}, approvedRecipes())
 			if err != nil {
 				t.Fatal(err)
