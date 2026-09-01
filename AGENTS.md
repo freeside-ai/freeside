@@ -376,7 +376,7 @@ not ordinary prose to retitle.
 
 - **Login/account:** `chatgpt-codex-connector` (the `chatgpt-codex-connector[bot]` form appears on inline review comments and in the pulls review-comments API).
 - **Triggered:** automatically on PR open-for-review, mark-ready, and each push (it re-reviewed after every push this session); also on demand via an `@codex review` comment.
-- **Status signals:** on a **clean pass** (no findings) it posts no review and reacts 👍 (`+1`, i.e. `THUMBS_UP`) on the PR description a few minutes after the triggering event; that reaction, dated after the trigger, is the completion signal a review-watch keys off. On a **findings pass** it posts a `COMMENTED` review whose inline comments are each tagged by priority badge (P1/P2/P3) and invite a 👍/👎 reaction.
+- **Status signals:** Codex maintains one `codex-pull-request-review-summary` comment: it posts the comment on the first trigger and updates it in place on later triggers, with the reviewed commit, trigger, and completion time. On a **clean pass** (no findings) it posts no review and reacts 👍 (`+1`, i.e. `THUMBS_UP`) on the PR description a few minutes after the triggering event; that reaction, dated after the trigger, is the completion signal a review-watch keys off. On a **findings pass** it posts a `COMMENTED` review whose inline comments are each tagged by priority badge (P1/P2/P3) and invite a 👍/👎 reaction.
 
 ## Freeside Review-Loop Bound
 
