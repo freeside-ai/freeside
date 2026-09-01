@@ -636,6 +636,55 @@ func (s DeviceStatus) valid() bool {
 	}
 }
 
+// ConnectionMode is how a client reaches the daemon, as a pairing-time
+// display fact (plan §5.14 pairing facts): loopback when the daemon's
+// listener is bound to a loopback address, tailscale when it is bound to a
+// Tailscale-owned address, the only two listeners freesided admits. The
+// daemon derives it from its bound listener once at start; it is a fact
+// about reachability, not a trust decision, and a relay mode arrives with
+// the §5.19 relay rather than here. The zero value is invalid.
+type ConnectionMode string
+
+const (
+	ConnectionLoopback  ConnectionMode = "loopback"
+	ConnectionTailscale ConnectionMode = "tailscale"
+)
+
+// AllConnectionModes lists every valid ConnectionMode.
+var AllConnectionModes = []ConnectionMode{ConnectionLoopback, ConnectionTailscale}
+
+func (m ConnectionMode) valid() bool {
+	switch m {
+	case ConnectionLoopback, ConnectionTailscale:
+		return true
+	default:
+		return false
+	}
+}
+
+// DeviceScope is the authority a pairing grants the new device (plan §5.14).
+// There is no device role model today, so the vocabulary has one member:
+// operator, the operator's full authority over this daemon (every
+// ClientCommand), revocable from the host. It is named so the pairing
+// surface can state what is being granted, and so a narrower scope has a
+// registered place to land. The zero value is invalid.
+type DeviceScope string
+
+// DeviceScopeOperator grants the operator's full authority over the daemon.
+const DeviceScopeOperator DeviceScope = "operator"
+
+// AllDeviceScopes lists every valid DeviceScope.
+var AllDeviceScopes = []DeviceScope{DeviceScopeOperator}
+
+func (s DeviceScope) valid() bool {
+	switch s {
+	case DeviceScopeOperator:
+		return true
+	default:
+		return false
+	}
+}
+
 // DeviceCredentialKind is the stored shape of a paired device's credential
 // (plan §5.14): the digest of an issued bearer token, or the device's public
 // key. The vocabulary deliberately has no plaintext member, so a reusable
