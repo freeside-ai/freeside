@@ -547,37 +547,36 @@ GitHub  <── reconciliation and publication ──>  freesided
 | **Freeside app** | Provides the SwiftUI macOS and iOS inbox, decision detail, and run timeline using platform-protected caches. |
 
 **Core authority and replaceable infrastructure.** The daemon and clients own
-application semantics and authentication; remote reachability (Section 5.2),
+application semantics and authentication. Remote reachability (Section 5.2),
 notification delivery, replica storage (Section 5.10), and external health
-monitoring are replaceable infrastructure boundaries, each with an
-operator-selected reference implementation and, possibly, a future
-Freeside-operated managed implementation. The Section 5.10 replica-store
-contract is the template: a capability-based requirement set with a named
-first reference backend that is never an architectural assumption. The rule
-that governs every such boundary: managed infrastructure may improve
-reachability, availability, storage, and delivery, but never becomes
-necessary for workflow authority or local operation, and never increases
-Freeside's authority. One scoped exception is explicit rather than implied
-away: in portable mode the Section 5.10 replica store is the oracle for
-both activation fencing and the recovery frontier by design, so every
-replica backend, operator-selected or Freeside-managed, sits inside the
-authority trust boundary for host activation and for the currency of the
-restored frontier; the unconditional rule covers reachability,
-notification delivery, and monitoring, and a managed replica backend is
-admissible only under the Section 5.10 contract with that fencing trust
-acknowledged. Notification delivery follows the same pattern: ntfy
-(hosted or self-hosted) is the Phase 1 reference channel, a Freeside-operated
-push service is a possible later channel, and Section 4's AttentionDelivery
-semantics stay channel-neutral (no channel implementation type enters the
-contract; provider acceptance stays distinct from delivery evidence;
-notifications remain non-authoritative hints). This boundary is deliberately
-narrow: authoritative components (SQLite workflow state, conversations,
-AttentionItems, scheduling, approvals, agent execution, verification, GitHub
-and provider credentials, artifact authority) get no cloud seam.
+monitoring are replaceable infrastructure boundaries. Each has a reference
+implementation the operator selects, and each may later get a Freeside-operated
+managed implementation. The Section 5.10 replica-store contract is the template:
+a capability-based requirement set with a named first reference backend that is
+never an architectural assumption. One rule governs every such boundary: managed
+infrastructure may improve reachability, availability, storage, and delivery,
+but it never becomes necessary for workflow authority or local operation, and it
+never increases Freeside's authority. One scoped exception is stated outright
+rather than implied away. In portable mode the Section 5.10 replica store is by
+design the oracle for both activation fencing and the recovery frontier. So
+every replica backend, operator-selected or Freeside-managed, sits inside the
+authority trust boundary for host activation and for how current the restored
+frontier is. The unconditional rule covers reachability, notification delivery,
+and monitoring; a managed replica backend is admissible only under the Section
+5.10 contract, with that fencing trust acknowledged. Notification delivery
+follows the same pattern. ntfy (hosted or self-hosted) is the Phase 1 reference
+channel, and a Freeside-operated push service is a possible later channel.
+Section 4's AttentionDelivery semantics stay channel-neutral: no channel
+implementation type enters the contract, a provider accepting a notification
+stays distinct from delivery evidence, and notifications remain
+non-authoritative hints. This boundary is deliberately narrow. The authoritative
+components (SQLite workflow state, conversations, AttentionItems, scheduling,
+approvals, agent execution, verification, GitHub and provider credentials,
+artifact authority) get no cloud seam.
 
 ### 5.2 The Daemon and Its Supervisor
 
-`freesided` is a single static Go binary. A supervisor keeps it running; the
+`freesided` is a single static Go binary. A supervisor keeps it running. The
 daemon never supervises itself, and launchd/systemd knowledge never enters
 `daemon/`: unit files and their registration live with the install tooling
 and the operator app.
@@ -587,73 +586,73 @@ and the operator app.
 - **Mac-first single-operator (Phase 1):** a per-user launchd LaunchAgent in
   the operator's login session, registered by the Freeside Mac app through
   `SMAppService` from a plist shipped in the app bundle, with `KeepAlive`.
-  The app is installer and trigger; launchd is the supervisor. This path has
-  no privileged step: the daemon drives Apple `container`, per-user tooling,
-  and the operator account is the isolation boundary (state and credentials
-  stay `0700`/`0600` under it, so other accounts cannot access them). Cost,
-  accepted for Phase 1: the daemon lives in the login session, so unattended
-  operation assumes a logged-in operator, a bound already true of the
-  terminal-launched process this replaces.
+  The app installs and triggers; launchd supervises. This path has no
+  privileged step: the daemon drives Apple `container` and per-user
+  tooling, and the operator account is the isolation boundary (state and
+  credentials stay `0700`/`0600` under it, so other accounts cannot access
+  them). The accepted Phase 1 cost: the daemon lives in the login session,
+  so unattended operation assumes a logged-in operator. The
+  terminal-launched process this replaces had the same bound.
 - **Hardened (multi-user or server hosts, deferred):** a dedicated-user
   LaunchDaemon or systemd unit installed through the Section 10 elevation
-  helper, for boot-time start, logout survival, and operator isolation.
-  Retained as the end state, not scheduled in Phase 1.
+  helper. It gives boot-time start, logout survival, and operator isolation.
+  It stays the end state but is not scheduled in Phase 1.
 
-**The daemon never runs as root.** One-time privileged work, such as user
-creation and LaunchDaemon installation on the hardened path, lives in a
+**The daemon never runs as root.** One-time privileged work, such as creating
+the user and installing the LaunchDaemon on the hardened path, lives in a
 narrow elevation helper. Privileged services bind only to loopback or
 Tailscale.
 
-**Exit discipline.** Every deliberate stop is durable and in-process; the
-process exits only involuntarily or to be restarted. Classification of
-today's fatal-channel writers and exit paths:
+**Exit discipline.** Every deliberate stop is durable and happens in-process;
+the process exits only involuntarily or to be restarted. Today's fatal-channel
+writers and exit paths fall into these classes:
 
 - **Durable stop** (close unattended admission durably through the Section 4
-  gate: operator stops append the stop transition, while system stops file a
-  blocking `system_health` item; keep serving reads; only explicit resume
+  gate: an operator stop appends the stop transition, and a system stop files a
+  blocking `system_health` item; keep serving reads; only an explicit resume
   reopens admission, and a restart never does):
-  - store I/O and correctness failures in any long-running loop (the
-    workflow reconcile loop, a scheduler pass, active-resource enumeration
-    or commit): an invariant on durable state recurs on restart, and a
-    respawn loop would hide it;
-  - local backup maintenance failure: persistent disk or encryption damage
-    (Section 5.10);
-  - a doctor or janitor pass failure with a local or definitively
-    classified cause (an unreadable operational source, revoked or broken
-    GitHub App authority): health can no longer be asserted, resolving the
-    doctor source-error posture deferred by the operational-command
-    packaging decision;
-  - an externally caused pass or lane failure once persistence is
-    established (a consecutive-failure threshold the implementation unit
-    sets). A transient external failure alone never stops or exits: it
-    retries on its cadence or backoff and is recorded.
-- **Restart-safe exit:** a post-bind HTTP serve fault. Without the API
-  surface the daemon cannot serve even read-only state, and a fresh bind
-  plausibly clears the fault.
-- **Process exit (involuntary):** panics and invariant violations, and
-  startup failures from flag validation through migrations and the initial
-  doctor pass. A pre-store startup failure cannot record a durable stop by
-  construction. The supervisor restarts these under its throttle;
-  crash-looping is visible as `started_at` churn on `/health` and, from
-  1B.1, as the external probe's alarm.
+  - store I/O and correctness failures in any long-running loop (the workflow
+    reconcile loop, a scheduler pass, active-resource enumeration or commit). An
+    invariant on durable state recurs on restart, and a respawn loop would hide
+    it;
+  - local backup maintenance failure, meaning persistent disk or encryption
+    damage (Section 5.10);
+  - a doctor or janitor pass failure with a local or definitively classified
+    cause (an unreadable operational source, revoked or broken GitHub App
+    authority). Health can no longer be asserted. This settles the doctor
+    source-error posture, which the operational-command packaging decision had
+    deferred;
+  - an externally caused pass or lane failure once it persists (the
+    implementation unit sets the consecutive-failure threshold). A transient
+    external failure alone never stops or exits: it retries on its cadence or
+    backoff and is recorded.
+- **Restart-safe exit:** a post-bind HTTP serve fault. Without the API surface
+  the daemon cannot serve even read-only state, and a fresh bind plausibly
+  clears the fault.
+- **Process exit (involuntary):** panics and invariant violations, and startup
+  failures from flag validation through migrations and the initial doctor pass.
+  A startup failure before the store opens cannot record a durable stop, by
+  construction. The supervisor restarts these under its throttle. Crash-looping
+  shows as `started_at` churn on `/health` and, from 1B.1, as the external
+  probe's alarm.
 
 After this contract the daemon's fatal channel carries only the two exit
-classes; every durable-stop condition is consumed before reaching it.
+classes; every durable-stop condition is consumed before it reaches the channel.
 
-**Restart policy.** Restart-always with the platform throttle. This is safe
+**Restart policy.** Restart always, under the platform throttle. This is safe
 only because every deliberate stop is in-process and durable: a restart can
 resume only work the contract says is safe to resume, and Section 4's rule
 stands (a restart never reopens unattended admission).
 
-**Stop.** Supervisor stop is SIGTERM with an effectively unlimited exit
-timeout, because credential-lease teardown is unbounded by design (decider:
-user; the stop-wait fork closes on the unlimited side: any finite grace
-recreates SIGKILL-mid-lease, and a bounded credential-safe teardown is
-deferred hardening, not a tunable). SIGKILL and power loss remain
-crash-equivalent, covered by kill-recovery.
+**Stop.** Supervisor stop is SIGTERM with an effectively unlimited exit timeout,
+because credential-lease teardown is unbounded by design (decider: user; the
+stop-wait fork is decided on the unlimited side, because any finite grace period
+recreates SIGKILL mid-lease, and a bounded credential-safe teardown is deferred
+hardening, not a tunable). SIGKILL and power loss remain crash-equivalent;
+kill-recovery covers them.
 
 **Reachability.** Signet's authenticated HTTP and WebSocket API is one
-application protocol exposed unchanged over every reachability mode: direct
+application protocol, exposed unchanged over every reachability mode: direct
 loopback, Tailscale, and a possible future managed relay (Section 5.19).
 Tailscale is the Phase 1 reference remote-reachability mechanism, not an
 architectural property of Signet; neither Tailscale nor its address model is
@@ -670,26 +669,27 @@ implementation exists.
 - Unauthenticated `GET /health` returns exactly `{status, version,
   started_at}`: liveness, version-skew detection, and crash-loop evidence (a
   moving start time under a supervisor). Everything richer stays on the
-  authenticated surfaces (Sections 4 and 5.14); the route widens what an
-  unpaired caller learns by nothing else.
-- Under supervision the listen address is explicit fixed loopback
-  configuration in the unit file, never the ephemeral default; bare
-  foreground runs keep `127.0.0.1:0`.
+  authenticated surfaces (Sections 4 and 5.14); the route tells an unpaired
+  caller nothing more.
+- Under supervision, the unit file sets an explicit fixed loopback listen
+  address, never the ephemeral default. Bare foreground runs keep
+  `127.0.0.1:0`.
 - The daemon durably publishes readiness (`{api_url, pairing_code}`, today's
   one-shot stdout line) to a `0600` runtime file in the state directory on
-  every start: under a supervisor no terminal exists to read stdout, and
+  every start. Under a supervisor there is no terminal to read stdout, and
   same-user file readability is the same trust boundary as today's
   terminal. The stdout line remains for foreground runs.
 - The away-from-host liveness probe stays outside the process (Section 5.16
-  keeps process heartbeats as plain tickers): an external probe polls
-  `/health` and notifies over ntfy on unreachability or crash-loop, landing
-  in 1B.1. The local surface is the Mac app's menu bar presence (Section
-  10). The probe is replaceable monitoring infrastructure (Section 5.1): the
-  Phase 1 reference is operator-controlled; a future managed monitor may
-  observe relay-connector presence, but reports only what it can prove:
-  connector presence is not daemon health, and managed-service uncertainty
-  is never reported as host failure. Monitoring stays observational and
-  never becomes workflow authority.
+  keeps process heartbeats as plain tickers). An external probe polls
+  `/health` and notifies over ntfy when the daemon is unreachable or
+  crash-looping; it lands in 1B.1. The local surface is the Mac app's menu
+  bar presence (Section 10). The probe is replaceable monitoring
+  infrastructure (Section 5.1): the Phase 1 reference is
+  operator-controlled. A future managed monitor may observe relay-connector
+  presence, but it reports only what it can prove: connector presence is
+  not daemon health, and managed-service uncertainty is never reported as
+  host failure. Monitoring stays observational and never becomes workflow
+  authority.
 
 Storage and CI invariants:
 
@@ -700,7 +700,7 @@ Storage and CI invariants:
 ### 5.3 Execution: StageDriver and ReviewSource
 
 Every stage is a bounded batch job. The daemon assigns an `invocation_id` to
-every external start, then reconciles all later operations by that ID:
+every external start, then reconciles every later operation by that ID:
 
 - execution: start, inspect, stream, cancel, collect;
 - review: `request_review`, inspect, poll, verify.
@@ -710,12 +710,12 @@ accepted result. The workflow never advances twice.
 
 Phase 1 uses:
 
-- one harness adapter, **Claude Code**, in 1A; a second, the **Codex
+- one harness adapter, **Claude Code**, in 1A. A second, the **Codex
   CLI**, joins in 1B as an execution capacity hedge (Section 11), blocked
-  on its pre-adoption gates (#401); further adapters (pi first) follow as
+  on its pre-adoption gates (#401). Further adapters (pi first) follow as
   consumers of the same admitted-agent contract (Section 5.4);
 - one production review source, a **Freeside-invoked local Codex review**
-  binding (Section 7); GitHub-native Codex review is best-effort extra
+  binding (Section 7). GitHub-native Codex review is best-effort extra
   evidence and never satisfies the review requirement; and
 - permanent fakes of both interfaces.
 
@@ -723,26 +723,26 @@ The 1B shadow arm runs a fresh-context Claude review against the same head.
 Freeside records its findings but never routes them. It is the dry run for
 promoting a selectable Claude ReviewSource (#397).
 
-**Freeside invokes review directly** (decider: user; revision 25, replacing
-"one primary review source, CodexGitHubReview" and the former
-control-plane-triggered review step). The 2026-07-31 live-run falsification
-(#427) showed GitHub-native
-Codex review has no App-visible trigger path: automatic review never starts
-for App-authored PRs; an App-authored `@codex review` request fails at
-account resolution; reviews are head-bound, so every remediation push needs
-another valid trigger; and a human-PAT trigger binds unattended operation to
-one person's account linkage, token lifecycle, quota, and attribution,
-rejected as a production dependency. Each review pass is therefore a
-control-plane invocation reconciled by `invocation_id` like any other stage.
-Invocation failure closes safely under Section 7's classification. Nested
-`AGENTS.md` guidance is documented Codex behavior. Automatic re-review of
-remediation heads is a standing 1B integration test. The Claude setup token's
-inference-only scope is contract-tested against the pinned CLI.
+**Freeside invokes review directly** (decider: user; revision 25, replacing "one
+primary review source, CodexGitHubReview" and the former control-plane-triggered
+review step). The 2026-07-31 live-run falsification (#427) showed that
+GitHub-native Codex review has no trigger path visible to the App. Automatic
+review never starts for App-authored PRs. An App-authored `@codex review`
+request fails at account resolution. Reviews are head-bound, so every
+remediation push needs another valid trigger. A human-PAT trigger ties
+unattended operation to one person's account linkage, token lifecycle, quota,
+and attribution; that trigger was rejected as a production dependency. Each
+review pass is therefore a control-plane invocation reconciled by
+`invocation_id` like any other stage. Invocation failure closes safely under
+Section 7's classification. Nested `AGENTS.md` guidance is documented Codex
+behavior. Automatic re-review of remediation heads is a standing 1B integration
+test. The Claude setup token's inference-only scope is contract-tested against
+the pinned CLI.
 
 **Session durability contract:** transcripts and artifacts are durable.
 Workflow recovery is guaranteed from stage inputs, workspace state, and
 artifacts; provider session resume is best effort. Capabilities are fixed at
-spawn. If they are insufficient, the stage emits a typed request and exits.
+spawn. If they are not enough, the stage emits a typed request and exits.
 
 ### 5.4 Credential modes, egress profiles, and concurrency
 
@@ -756,33 +756,31 @@ Every run declares and records one credential mode:
 | `api_key_isolated` | Supported in Phase 2. |
 | `local_trusted` | Permitted only for explicitly trusted inputs. |
 
-**Credential delivery under `subscription_contained` (Claude).** The setup
-token lives as a single read-only file on a per-identity credential volume
-authored or replaced by a daemon-owned enrollment transaction while no
-execution can use that identity. Phase 1A mounts no per-identity writable
-Claude state. Ward instead supplies a read-only clean
-`CLAUDE_CONFIG_DIR`, a narrow per-invocation continuity mount, and
-per-launch scratch state (§5.8); none is credential state or reusable by a
-different invocation. Serializing writers on one shared directory would not
-isolate a later invocation from settings or hooks an earlier writer
-persisted.
+**Credential delivery under `subscription_contained` (Claude).** The setup token
+lives as a single read-only file on a per-identity credential volume. A
+daemon-owned enrollment transaction authors or replaces that volume while no
+execution can use the identity. Phase 1A mounts no per-identity writable Claude
+state. Ward instead supplies a read-only clean `CLAUDE_CONFIG_DIR`, a narrow
+per-invocation continuity mount, and per-launch scratch state (§5.8); none is
+credential state, and none is reusable by a different invocation. Serializing
+writers on one shared directory would not work: it would not isolate a later
+invocation from settings or hooks an earlier writer persisted.
 
-The daemon-supplied launcher argv reads the token file into the vendor's
-environment variable at exec; the writer's spec environment carries no
-credential and the driver's fixed environment rides the launcher, not the
-spec. The token value never appears in argv text, inspect reports, ward
-journals, or driver state; the credential mount path and the launcher text
-are the only durable traces. The credential remains ambient in the writer
-process tree (children inherit it; the mounted file is readable at agent
-privilege): that is the documented residual this mode accepts, backstopped
-by `provider_only` egress and export secret scanning. Vendor behaviors this
-path depends on are pinned-CLI empirical contracts, re-proved on every CLI
-version bump, not vendor-documented guarantees; the work unit's decision
-note enumerates them.
+The launcher command the daemon supplies as argv reads the token file into the
+vendor's environment variable at exec. The writer's spec environment carries no
+credential, and the driver's fixed environment rides the launcher, not the spec.
+The token value never appears in argv text, inspect reports, ward journals, or
+driver state; the credential mount path and the launcher text are the only
+durable traces. The credential stays ambient in the writer process tree
+(children inherit it, and the mounted file is readable at agent privilege). That
+is the documented residual this mode accepts, backstopped by `provider_only`
+egress and export secret scanning. The vendor behaviors this path depends on are
+pinned-CLI empirical contracts, re-proved on every CLI version bump, not
+vendor-documented guarantees; the work unit's decision note lists them.
 
-Secret scanning is intentionally described as **best effort**. It covers
-supported text formats. Size, type, provenance, and publication controls govern
-opaque artifacts. Universal detection across arbitrary encodings and images is
+Secret scanning is **best effort**, deliberately. It covers supported text
+formats. Size, type, provenance, and publication controls govern opaque
+artifacts. Universal detection across arbitrary encodings and images is
 impossible; Section 5.15 records the image residual.
 
 Every stage also receives an egress profile from control-plane policy. Profiles
@@ -790,18 +788,18 @@ sit above the credential-mode floor and represent different risk classes:
 
 | Profile | Access and risk |
 | --- | --- |
-| `provider_only` | Default. The writer has one host-only network: direct external and guest-DNS paths are absent, and the provider API is reachable only through the daemon's allowlisting proxy. The host gateway remains a network neighbor. The production API is isolated by its loopback-or-Tailscale-owned listener gate; every other host service needs its own declared binding policy, and the ward proxy is the intentional agent-reachable exception. |
-| `provider_registry` | Opt-in per project policy; `provider_only` stays the default. The writer keeps the same single host-only network and the same daemon CONNECT proxy; the proxy additionally admits the project policy's short, declared set of package-registry authorities, consumed read-only (initially `proxy.golang.org`, `sum.golang.org`, `registry.npmjs.org`, `pypi.org`, and `files.pythonhosted.org`). The set is control-plane policy: a writer change to it is publish-blocked like any other control-plane path, and a per-project addition is a reviewed operator change admitting only a public package registry that the project's dependency manifests resolve against. Any other authority is not a registry entry; admitting it is a `provider_web_read` decision with that profile's explicit wider-exposure record, because an arbitrary tunnel endpoint the operator does not vet is exactly the attacker-observable host this class excludes. Under that criterion the risk class on its merits: no DNS, no direct egress, no attacker-operated host, and exfiltration bounded to what those registries' own endpoints accept from a client the attacker does not control. The proxy allowlist is per authority with the TLS server name pinned to the CONNECT authority, so a registry entry cannot reach a shared-CDN neighbor. The tunnel cannot constrain HTTP method or path, so a registry that co-hosts a write endpoint (npm publish) leaves a residual: an injected writer holding an attacker-supplied registry credential could publish workspace content there. The residual is recorded in Section 14; a project policy may exclude such hosts. This is a materially narrower exposure than `provider_web_read` and is priced separately from it, never folded into that record. |
+| `provider_only` | Default. The writer has one host-only network: no direct external path and no guest DNS, and the provider API is reachable only through the daemon's allowlisting proxy. The host gateway remains a network neighbor. The production API is isolated by its loopback-or-Tailscale-owned listener gate; every other host service needs its own declared binding policy, and the ward proxy is the one intentional agent-reachable exception. |
+| `provider_registry` | Opt-in per project policy; `provider_only` stays the default. The writer keeps the same single host-only network and the same daemon CONNECT proxy. The proxy also admits the project policy's short, declared set of package-registry authorities, consumed read-only (initially `proxy.golang.org`, `sum.golang.org`, `registry.npmjs.org`, `pypi.org`, and `files.pythonhosted.org`). The set is control-plane policy: a writer change to it is publish-blocked like any other control-plane path, and a per-project addition is a reviewed operator change that admits only a public package registry the project's dependency manifests resolve against. Any other authority is not a registry entry. Admitting one is a `provider_web_read` decision with that profile's explicit wider-exposure record, because an arbitrary tunnel endpoint the operator has not vetted is exactly the attacker-observable host this class excludes. Under that criterion, the risk class on its merits is: no DNS, no direct egress, no attacker-operated host, and exfiltration bounded to what those registries' own endpoints accept from a client the attacker does not control. The proxy allowlist is per authority, with the TLS server name pinned to the CONNECT authority, so a registry entry cannot reach a shared-CDN neighbor. The tunnel cannot constrain HTTP method or path, so a registry that co-hosts a write endpoint (npm publish) leaves a residual: an injected writer holding an attacker-supplied registry credential could publish workspace content there. Section 14 records the residual; a project policy may exclude such hosts. This exposure is materially narrower than `provider_web_read` and is priced separately from it, never folded into that record. |
 | `provider_web_read` | Materially wider credential-exfiltration exposure. Read-only HTTP can still exfiltrate through URLs, headers, bodies, redirects, and DNS while the provider credential shares the trust domain. It requires an explicit record of the wider exposure and a small trusted-domain allowlist. |
 | Clean verification | No network access. |
 
-The 1B elaborator does not receive general web access. It runs under
-`provider_only` and emits typed fetch requests. The daemon fetches allowed URLs
-and returns immutable, digest-addressed research artifacts, then reinvokes the
+The 1B elaborator gets no general web access. It runs under `provider_only`
+and emits typed fetch requests. The daemon fetches allowed URLs and returns
+immutable, digest-addressed research artifacts, then reinvokes the
 elaborator for a bounded number of iterations. This removes the broadest
-credential-exfiltration surface from the injection-exposed stage and makes
-research inputs provenance-bound, cacheable, and reproducible. Invocations bind
-to artifact IDs, not live web state.
+credential-exfiltration surface from the injection-exposed stage, and it
+makes research inputs provenance-bound, cacheable, and reproducible.
+Invocations bind to artifact IDs, not live web state.
 
 Provider concurrency has two independent controls:
 
@@ -827,10 +825,10 @@ native and unmodified.
 
 **Admitted agents.** Freeside admits what an agent consumes by digest: the
 base commit, the prompt package, the vendor instructions, the policy, the
-input artifacts (Sections 5.8, 5.9, 5.12). The agent's own configuration is
-the one major input not admitted that way until this revision. An **agent**
-is one operator-authored document in the control-plane tree, reviewed as a
-diff, with four lines and no role:
+input artifacts (Sections 5.8, 5.9, 5.12). Until this revision, the agent's
+own configuration was the one major input not admitted that way. An
+**agent** is one operator-authored document in the control-plane tree,
+reviewed as a diff, with four lines and no role:
 
 ```text
 agent sol-via-pi
@@ -840,49 +838,49 @@ agent sol-via-pi
   asking   offer       gpt-5.6-sol, effort max
 ```
 
-The source uses names; the canonical body, which is what is hashed, holds
+The source uses names. The canonical body, which is what gets hashed, holds
 the resolved enrollment id, the route, adapter, and offer digests, and the
-effort value. Names live in the tree's name-to-digest map and are never
-part of a digest. Resolution validates the join: the enrollment's route and
-client kind are the agent's route and the adapter's client kind; the effort
-is one the offer allows and the adapter can send; the enrollment's identity
-is enabled. "Harness, model, effort" is how a client renders an agent. A
-**lineup** is a policy's map of roles to agents; the project lineup, or the
+effort value. Names live in the tree's name-to-digest map and are never part
+of a digest. Resolution validates the join: the enrollment's route and client
+kind are the agent's route and the adapter's client kind; the effort is one
+the offer allows and the adapter can send; and the enrollment's identity is
+enabled. "Harness, model, effort" is how a client renders an agent. A
+**lineup** is a policy's map of roles to agents. The project lineup, or the
 deployment lineup beneath it, is the only standing selection and the only
 approval. The one per-attempt selection is the Section 4 alternate-agent
-card, a recorded choice among agents resolved from the same tree; it never
+card: a recorded choice among agents resolved from the same tree. It never
 approves an agent the tree does not carry and never changes the lineup.
 
 The lines:
 
-- `who` names a record, a `ClientEnrollment`: one `AuthIdentity` × one
-  harness client × one route × one auth method, carrying `credential_mode`.
-  One identity has many enrollments (pi and the Codex CLI on one ChatGPT
-  subscription are one identity, one lease, one budget, two enrollments
+- `who` names a record, a `ClientEnrollment`: one `AuthIdentity` × one harness
+  client × one route × one auth method, carrying `credential_mode`. One
+  identity has many enrollments (pi and the Codex CLI on one ChatGPT
+  subscription are one identity, one lease, one budget, and two enrollments
   with distinct sanitized stores). The revision 36 rule holds: an account
-  binding is unique across identities, and every enrollment and
-  generation carries the account binding its identity carries: enrollment,
-  adoption, reconstruction, and admission reject a second identity for one
-  account and a credential whose account differs from its identity's, so
-  one subscription never holds two leases or two budgets and no usage is
+  binding is unique across identities, and every enrollment and generation
+  carries the account binding its identity carries. Enrollment, adoption,
+  reconstruction, and admission reject a second identity for one account, and
+  they reject a credential whose account differs from its identity's. So one
+  subscription never holds two leases or two budgets, and no usage is
   attributed to the wrong account. Every successful store mutation (login,
-  refresh, re-enrollment) appends an immutable generation entry (lease
-  fence, store manifest digest, account binding, token expiry) under the
-  enrollment and changes no agent; admission records the generation it
-  mounted. The stage receives a daemon-owned, single-route store, never a
-  harness's multi-provider home. `AuthIdentity` keeps the account binding,
-  the usage pool, the account budget and concurrency limit, the one
-  conservative mutation lease that fences every store mutation with
-  enrollment id, generation, exact locator, and manifest digest, and two
-  operator fields, `enabled` and `cost_owner`. The exact store locator,
-  refresh strategy, and snapshot support it carried before this revision
-  are client facts and move to the enrollment and its generations.
+  refresh, re-enrollment) appends an immutable generation entry (lease fence,
+  store manifest digest, account binding, token expiry) under the enrollment
+  and changes no agent; admission records the generation it mounted. The stage
+  receives a daemon-owned, single-route store, never a harness's
+  multi-provider home. `AuthIdentity` keeps the account binding, the usage
+  pool, the account budget and concurrency limit, the one conservative
+  mutation lease that fences every store mutation with enrollment id,
+  generation, exact locator, and manifest digest, and two operator fields,
+  `enabled` and `cost_owner`. The exact store locator, refresh strategy, and
+  snapshot support that the identity carried before this revision are client
+  facts; they move to the enrollment and its generations.
 - `route` is a content-addressed fragment with a stable logical id: service
   operator, protocol, inference authorities, billing mode, fallback policy,
-  and a dated terms basis. An endpoint or terms edit changes the route
-  digest and every agent naming it, never the enrollment.
-- `adapter` is a content-addressed fragment naming the Freeside adapter
-  build and the exact harness build it pins, and declaring the launch
+  and a dated terms basis. Editing an endpoint or the terms changes the
+  route digest and every agent naming it, never the enrollment.
+- `adapter` is a content-addressed fragment. It names the Freeside adapter
+  build and the exact harness build it pins, and it declares the launch
   capabilities it honours in a closed vocabulary of its own (read tools,
   mutation tools, exact resume, instruction delivery, structured output,
   context severance, auxiliary-inference control, store contract per
@@ -892,146 +890,144 @@ The lines:
   with its route model id, lineage group, `identity_stability` (pinned,
   rolling, or opaque), allowed effort levels, pricing revision, and an
   authored `not_after`. The same model through two routes is two offers.
-- `effort` is a value the offer allows; the adapter translates it and the
-  run records the requested and the effective native value. A clamp is
-  rendered as `max → xhigh`, never silently.
+- `effort` is a value the offer allows. The adapter translates it, and the
+  run records both the requested value and the effective native value. A
+  clamp is rendered as `max → xhigh`, never silently.
 
-Fragments are operator-authored authority and therefore configuration in
-the tree; identities, enrollments, generations, admissions, and
-observations are facts and therefore records. A record of a past selection
-is never upgraded through current configuration.
+Fragments are operator-authored authority, so they are configuration in the
+tree. Identities, enrollments, generations, admissions, and observations are
+facts, so they are records. A record of a past selection is never upgraded
+through current configuration.
 
 **The stage owns the launch.** Elaboration, implementation, and review each
 define a launch: writer or read-only, output contract, severance, session
 mode, and an auxiliary-inference policy (`forbidden`, `declared`, or
 `observed`). The adapter maps the launch to harness-native controls or
-declares it cannot. Any stage therefore runs on any adapter whose proved
+declares that it cannot. So any stage runs on any adapter whose proved
 capabilities cover its launch, and an agent carries no role. Review and
 experiment arms require `forbidden`; the Claude baseline runs `observed`.
-An agent narrows behaviour inside a stage and never waives or widens the
+An agent narrows behaviour inside a stage. It never waives or widens the
 stage's floors: no GitHub write credential in a workspace, publication
 credentials withheld, review's fresh context and read-only workspace,
-base/head invalidation, and the role capability ceilings all hold
-whatever the agent.
+base/head invalidation, and the role capability ceilings all hold whatever
+the agent.
 
-**Admission**, in five steps, is what admission already does to every
-other input:
+**Admission** puts an agent through the five steps admission already applies to
+every other input:
 
 1. *Resolve.* Resolve the name and every fragment against one control-plane
-   revision, build and hash the canonical body, and validate the join. Only
-   agents whose closure is present in the current approved revision
-   resolve; removing an agent from the tree withdraws it from new
-   selection, and its history keeps its closure by digest. An offer whose
-   authored `not_after` precedes the attempt deadline does not resolve. A
-   proposal binds `(name, digest)` and goes stale if either moves.
+   revision, build and hash the canonical body, and validate the join. An agent
+   resolves only if its closure is present in the current approved revision.
+   Removing an agent from the tree withdraws it from new selection; its history
+   keeps its closure by digest. An offer whose authored `not_after` precedes the
+   attempt deadline does not resolve. A proposal binds `(name, digest)` and goes
+   stale if either moves.
 2. *Selected.* The lineup names that digest for the role, or the Section 4
-   alternate-agent card records it as this attempt's choice; the admission
+   alternate-agent card records it as this attempt's choice. The admission
    snapshot says which.
-3. *Proved.* Runner conformance holds (Section 5.7, unchanged), and the
-   adapter build's conformance record, one per build from the stage
-   contract suite, has proved capabilities covering the launch. That record
-   proves the store contract too: sanitized single-route store, read-only
-   to the agent, daemon-owned refresh under the identity lease, refresh
-   hosts reachable by the daemon only, harness update and telemetry hosts
-   absent from the proxy allowlist.
-4. *Credentialed.* The enrollment has a valid generation: its current one,
-   not retired, revoked, or marked by the credential-integrity probe. The
-   enrollment's auth method says whether expiry is observable. Where it is
-   (the Codex and pi OAuth tokens), the generation records the expiry and
-   it must cover the attempt deadline plus margin; otherwise the daemon
-   refreshes first, and a harness that fails against a read-only store at
-   refresh time (pi does) is contained by this rule, not by trusting the
-   harness. Where it is not (the Claude setup token), the generation
-   records no expiry, no refresh exists, and an authentication failure at
-   use fails the attempt closed and raises the existing revoked-identity
-   marker; that is the admission the Claude baseline cuts over under.
-5. *Snapshot.* `ExecutionAdmission` records the agent digest, the launch
-   digest, the lineup revision, the enrollment id and generation, the store
-   manifest digest, the effective egress allowlist, and whether the attempt
-   is attended, and derives its existing fields (identity, image,
-   credential mode, endpoints, instruction delivery) from them.
-   Reconstruction reads by digest and rechecks the derivations.
+3. *Proved.* Runner conformance holds (Section 5.7, unchanged), and the adapter
+   build's conformance record has proved capabilities covering the launch. That
+   record is one per build, produced by the stage contract suite. It proves the
+   store contract too: a sanitized single-route store, read-only to the agent,
+   daemon-owned refresh under the identity lease, refresh hosts reachable by the
+   daemon only, and harness update and telemetry hosts absent from the proxy
+   allowlist.
+4. *Credentialed.* The enrollment has a valid generation: its current one, not
+   retired, revoked, or marked by the credential-integrity probe. The
+   enrollment's auth method says whether expiry is observable. Where it is (the
+   Codex and pi OAuth tokens), the generation records the expiry, and the expiry
+   must cover the attempt deadline plus margin; otherwise the daemon refreshes
+   first. This rule, not trust in the harness, is what contains a harness that
+   fails against a read-only store at refresh time; pi is such a harness. Where
+   expiry is not observable (the Claude setup token), the generation records no
+   expiry and no refresh exists; an authentication failure at use fails the
+   attempt closed and raises the existing revoked-identity marker. The Claude
+   baseline cuts over under that admission.
+5. *Snapshot.* `ExecutionAdmission` records the agent digest, the launch digest,
+   the lineup revision, the enrollment id and generation, the store manifest
+   digest, the effective egress allowlist, and whether the attempt is attended.
+   It derives its existing fields (identity, image, credential mode, endpoints,
+   instruction delivery) from them. Reconstruction reads by digest and rechecks
+   the derivations.
 
-A new agent × launch pair runs attended until an operator, having looked
-at a run, marks it unattended-eligible beside the agent in the tree
-(outside the hashed body, like the name). The mark names the exact agent
-digest and launch digest it was given for; a line edit is a different
-agent with a different digest, so the mark does not carry to it and the
-changed pair runs attended again. The mark is the approval; there is no
-smoke-record type. Harness × model is not pre-proved beyond that
-first run: a request works or fails closed against the stage's output
-validation, and an observed model, serving operator, or route that
-contradicts a pinned admitted value fails the attempt as a durable
-contradiction, never a log line. Pre-proving a rolling upstream would be
-fiction; offers say so with `identity_stability`, and records claim only
-what the route exposed.
+A new agent × launch pair runs attended until an operator, having looked at
+a run, marks it unattended-eligible beside the agent in the tree (outside
+the hashed body, like the name). The mark names the exact agent digest and
+launch digest it was given for. A line edit makes a different agent with a
+different digest, so the mark does not carry over, and the changed pair runs
+attended again. The mark is the approval; there is no smoke-record type.
+Harness × model is not pre-proved beyond that first run: a request works or
+fails closed against the stage's output validation. An observed model,
+serving operator, or route that contradicts a pinned admitted value fails
+the attempt as a durable contradiction, never a log line. Pre-proving a
+rolling upstream would be fiction; offers say so with `identity_stability`,
+and records claim only what the route exposed.
 
 Every run records what was requested (agent name and bound digest, one
 provenance entry per role), what was admitted (the step 5 snapshot), and
 what was observed (effective model and serving operator with provenance,
 usage redacted and sourced, auxiliary inference, routing). Observed facts
 never authorise a future selection; they are authoritative history. A
-versioned **treatment digest** over route behaviour, adapter, launch, offer
-behaviour, and requested and effective effort, excluding enrollment,
-generation, cost owner, pricing, terms, deprecation, and labels, groups
-runs for comparison (Section 8); the agent digest stays the audit key.
+versioned **treatment digest** groups runs for comparison (Section 8). It
+covers route behaviour, adapter, launch, offer behaviour, and requested and
+effective effort, and it excludes enrollment, generation, cost owner,
+pricing, terms, deprecation, and labels. The agent digest stays the audit
+key.
 
-The Section 7 review-independence rule reads the offers: by default the
-review offer's lineage group differs from the implementation offer's, with
-the group derived at vendor-family granularity, curated conservatively, the
-same weights through any route one group, and unknown lineage failing
-closed. A project lineup may relax it with a stated reason; every card and
-record then carries which rule applied. This supersedes the
-provider-plus-identity comparison: stricter by default, explicit when not.
+The Section 7 review-independence rule reads the offers. By default the review
+offer's lineage group differs from the implementation offer's. The group is
+derived per vendor family and curated conservatively; the same weights through
+any route are one group; unknown lineage fails closed. A project lineup may
+relax the rule with a stated reason; every card and record then carries which
+rule applied. This supersedes the provider-plus-identity comparison: stricter by
+default, explicit when not.
 
-The `ProviderProfile` of revision 36 is superseded: its approval role moved
+The `ProviderProfile` of revision 36 is superseded. Its approval role moved
 to agents and lineups in the tree, and its remaining facts, `enabled` and
 `cost_owner`, are identity fields. `freesided auth` keeps the profile name
 for the operator. The cutover has two steps because the daemon never writes
-the control-plane tree. The first lands the schemas, dual-read, and
+the control-plane tree. The first step lands the schemas, dual-read, and
 enrollment adoption while the interim flag selection stays active. The
-second is the operator's: `freesided auth adopt` adopts each interim
+second step is the operator's: `freesided auth adopt` adopts each interim
 identity's store as an enrollment with an initial generation and emits a
 proposed baseline patch (the baseline agents, the deployment lineup, and
-their attended-run marks, carrying resolved enrollment ids); a human
-commits it; selection activates and queued inputs are rewritten to agent
-digests; the flags are removed once every baseline role admits. The
-baseline is honest: today's Claude path passes neither a model nor an
-effort flag, so its offer is `claude-code-native-default` with
-`identity_stability` rolling-or-opaque and `effort harness_default`;
-choosing an explicit Claude model later is a change, not migration. The
-cutover rules of revision 36 carry forward unchanged: a nonterminal run or
-admission that carries an `auth_identity_id` but no agent digest is read
-under a permanent legacy rule that keeps its admitted identity and
-credential mode and is never resolved against a current agent; an interim
-identity that cannot be adopted is retired, its nonterminal runs are
-cancelled through the Section 5.7 contract with an AttentionItem naming
-it, and its requests and policies stay unbound until the operator remaps
-them; agent-only selection activates only after every such run has
-closed; a binding the cutover cannot classify, rewrite, or retire fails
-closed.
+their attended-run marks, carrying resolved enrollment ids). A human commits
+it. Selection activates and queued inputs are rewritten to agent digests.
+The flags are removed once every baseline role admits. The baseline is
+honest: today's Claude path passes neither a model nor an effort flag, so
+its offer is `claude-code-native-default` with `identity_stability`
+rolling-or-opaque and `effort harness_default`. Choosing an explicit Claude
+model later is a change, not migration. The cutover rules of revision 36
+carry forward unchanged. A nonterminal run or admission that carries an
+`auth_identity_id` but no agent digest is read under a permanent legacy
+rule: it keeps its admitted identity and credential mode and is never
+resolved against a current agent. An interim identity that cannot be
+adopted is retired; its nonterminal runs are cancelled through the Section
+5.7 contract with an AttentionItem naming it, and its requests and policies
+stay unbound until the operator remaps them. Agent-only selection activates
+only after every such run has closed. A binding the cutover cannot classify,
+rewrite, or retire fails closed.
 
 This section fixes the principle, the objects, the cardinalities, and the
-admission steps; field-level schema, the canonical encodings, the adapter
-capability vocabulary, and the lifecycle command set are settled by the
-admitted-agent contract unit and the enrollment unit (#867), not enumerated
+admission steps. The field-level schema, the canonical encodings, the
+adapter capability vocabulary, and the lifecycle command set are settled by
+the admitted-agent contract unit and the enrollment unit (#867), not listed
 here. Deliberately not built: a qualification ledger with projections and
 supersession (two proofs suffice, the adapter suite per build and the
-attended first run per agent × launch); alias and withdrawal machinery
-(the tree is the active set and git its history); stored projections
-beyond the treatment digest; named independence policies beyond the one
-rule and its knob; enforcement of auxiliary inference where the baseline
-cannot honour it; a separate credential-pass record (it is a proved
-adapter capability).
+attended first run per agent × launch); alias and withdrawal machinery (the
+tree is the active set and git is its history); stored projections beyond
+the treatment digest; named independence policies beyond the one rule and
+its knob; enforcement of auxiliary inference where the baseline cannot
+honour it; and a separate credential-pass record (it is a proved adapter
+capability).
 
-**Multi-subscription per provider.** Two identities of one provider (a
-work and a personal subscription), each with its own enrollments and
-agents, are a supported shape. Selection among them is a lineup line or a
-carded per-attempt choice, never silent: no default is inferred from
-enrollment order, recency, or availability. Cost owner is read from the
-selected agent's identity on every selection and recorded with it, so one
-project can attribute a review to one subscription and an implementation
-to another.
+**Multi-subscription per provider.** Two identities of one provider (a work
+and a personal subscription), each with its own enrollments and agents, are
+a supported shape. Selection among them is a lineup line or a carded
+per-attempt choice, never silent: no default is inferred from enrollment
+order, recency, or availability. Cost owner is read from the selected
+agent's identity on every selection and recorded with it, so one project can
+attribute a review to one subscription and an implementation to another.
 The operator owns compliance with each provider's terms for multi-account
 use; Freeside attributes usage to a named identity and neither endorses nor
 polices the arrangement (Section 14, subscription-terms drift).
@@ -1041,30 +1037,31 @@ record, per identity: a stable account fingerprint; a masked label for
 operator display only, never written to evidence, composition manifests,
 run records, or export; auth type; plan type; expiry and revocation state;
 CLI version; a model and capability snapshot; the last probe time; and the
-last execution time. Probe output feeds `system_health` items, proposals, and the
-operator-facing identity projection (`freesided auth list` and the
-clients' display, which show the masked label) only, and every
-probe-derived item carries the `advisory` posture, so an
+last execution time. Probe output feeds only `system_health` items,
+proposals, and the operator-facing identity projection
+(`freesided auth list` and the clients' display, which show the masked
+label). Every probe-derived item carries the `advisory` posture, so an
 observed expiry, revocation, or plan change informs the operator without
 closing the unattended admission gate; the operator's explicit stop action
 and the existing credential-integrity and revoked-identity markers keep
-their own postures. The gate is an exclusion list: no probe value is read by preflight,
-by scheduling, by the `max_parallel_executions` limit, or by any driver;
-those consumers read only the operator's explicit identity and enrollment
-records, the tree, and the resolved policy. A probe that observes a newer
-model, a lapsed plan, or spare capacity produces a card or a proposed
-offer diff in the tree, never a changed selection. What a probe can report
-is a pinned-CLI empirical contract: the Codex app-server probe is expected to report account and plan
-facts, subject to the refresh-safety spike Section 10 gates it on; the
-pinned Claude CLI offers a token digest plus an auth check, and plan,
-quota, and expiry are not observable through it, so the Claude probe's
-realistic floor is integrity plus authentication, not account state.
+their own postures. The gate is an exclusion list: no probe value is read
+by preflight, by scheduling, by the `max_parallel_executions` limit, or by any
+driver. Those consumers read only the operator's explicit identity and
+enrollment records, the tree, and the resolved policy. A probe that
+observes a newer model, a lapsed plan, or spare capacity produces a card or
+a proposed offer diff in the tree, never a changed selection. What a probe
+can report is a pinned-CLI empirical contract. The Codex app-server probe
+is expected to report account and plan facts, subject to the refresh-safety
+spike Section 10 gates it on. The pinned Claude CLI offers a token digest
+plus an auth check; plan, quota, and expiry are not observable through it,
+so the Claude probe's realistic floor is integrity plus authentication, not
+account state.
 
 ### 5.5 The CI Trust Boundary
 
 An agent branch can modify scripts that a privileged GitHub Actions job later
-executes. Same-repository PRs do not receive the protections of fork PRs. A
-job's implicit `GITHUB_TOKEN` and OIDC identity are authority even when the YAML
+runs. Same-repository PRs do not get the protections of fork PRs. A job's
+implicit `GITHUB_TOKEN` and OIDC identity are authority even when the YAML
 names no secret.
 
 Every onboarded repository therefore has an **automation trust profile**:
@@ -1138,20 +1135,19 @@ Phase 1A supports one repository with a machine-readable profile. A human
 reviews it once; the daemon binds it by digest; drift fails closed.
 
 Publication authenticates as a per-user agent principal under Section 10's
-GitHub App identity model. Every trusted registration is bound by numeric App
-ID to that principal; App names and slugs are display metadata, never trust
-inputs. Installation-token minting fails closed unless the target repository
-is onboarded and trusted and the specific installation is recorded as known
-for that repository under a known registration bound to the principal,
-regardless of whether that registration uses the public default or the private
-work-account posture. Every worker-bound publication mint request supplies
-`repository_ids` containing only the target repository's canonical numeric ID
-and narrows `permissions` to the profile-approved operation. The response is
-untrusted until Freeside verifies that it names exactly that repository, grants
-no permission beyond the approved effective set, includes every permission the
-operation requires, and has the expected bounded expiry. A missing or
-mismatched field discards the token before any worker can receive it and fails
-closed.
+GitHub App identity model. Every trusted registration is bound to that principal
+by numeric App ID; App names and slugs are display metadata, never trust inputs.
+Installation-token minting fails closed unless the target repository is
+onboarded and trusted, and the specific installation is recorded as known for
+that repository under a known registration bound to the principal. This holds
+whether the registration uses the public default or the private work-account
+posture. Every worker-bound publication mint request supplies `repository_ids`
+containing only the target repository's canonical numeric ID and narrows
+`permissions` to the profile-approved operation. The response is untrusted until
+Freeside verifies that it names exactly that repository, grants no permission
+beyond the approved effective set, includes every permission the operation
+requires, and has the expected bounded expiry. A missing or mismatched field
+discards the token before any worker can receive it and fails closed.
 
 **Standing prohibition:** the daemon host is never a self-hosted Actions runner
 for a managed repository.
@@ -1176,76 +1172,68 @@ reviewed candidate ──▶ git/publish ──▶ GitHub PR (under trust profil
 
 Exactly two channels leave the agent workspace, and they never mix:
 
-1. The **repo-change channel** contains content blobs, a normalized manifest,
-   and an optional agent-proposed commit plan: how the validated changes group
-   into commits, in what order, with what messages, carried as plain untrusted
-   data whose schema only the importer interprets and validates, never as git
-   objects.
-   It permits regular files only. Symlinks, submodules, special files, unusual
-   modes, and automation-control changes (Section 5.5) are publish-blocking;
-   a reviewer-instruction change (Section 5.8) is detected and published as
-   an advisory finding.
-2. The **evidence channel** contains typed, provenance-bearing artifacts under
+1. The **repo-change channel** carries content blobs, a normalized manifest,
+   and an optional agent-proposed commit plan: how the validated changes
+   group into commits, in what order, with what messages, carried as plain
+   untrusted data whose schema only the importer interprets and validates,
+   never as git objects. The channel permits regular files only. Symlinks,
+   submodules, special files, unusual modes, and automation-control changes
+   (Section 5.5) are publish-blocking; a reviewer-instruction change
+   (Section 5.8) is detected and published as an advisory finding.
+2. The **evidence channel** carries typed, provenance-bearing artifacts under
    Section 5.15.
 
-The agent commits normally with git, but nothing of its `.git` is ever read
-or imported by any trusted component: no objects, hooks, configuration, or
-history as git state. What
-may cross is a **commit plan** the agent writes as ordinary data at a
-reserved workspace path, proposing how the final validated change set splits
-into commits; it crosses as a declared member of the handoff output, so the
-ward's stray rule admits it and the ward's whole-output secret scan covers
-it like every other exported byte, in every mode. Under `plan_preferred`, the
-daemon derives the
-authoritative base-to-final change set
-itself and accepts the plan only as an exact cover of it: every derived
-change in exactly one ordered group, no unknown paths, every interpolated
-intermediate tree structurally valid, every resolved non-empty group's
-publishing message screened. For a non-empty import, it re-authors one
-clean commit per resolved non-empty group when a plan is accepted, or one
-daemon-authored commit under `single_commit` and the
-enumerated `plan_preferred` fallback cases described below. A blocking
-failure authors no candidate. Published tree content is confined to the
-trusted base and the validated final snapshot by construction, so the
-tree-content publication surface equals the single-commit import's, and the
-screened messages are the one new published surface; intermediate commits
-are unattested ancestry, and evidence and publication identities bind to the
-single candidate head (Section 5.15). Agent commit SHAs, timestamps, and
-identities never cross; publishing messages cross as validated, labeled claim
-text screened as automation-control surface under the profile's
-`message_ruleset`; under `plan_preferred`, an empty remainder's
-non-publishing message skips those checks after the plan-wide secret scan. On
-a non-empty import under `plan_preferred`, an absent plan or
-one rejected for an enumerated agent-caused structural or non-secret
-screening failure falls back to the single clean commit with a surfaced notice
-naming the reason class. A zero-change import under `plan_preferred` takes the
-deliberate empty-commit path after the tolerant scan and surfaces a present
-plan as present-but-not-honored, while under `plan_preferred` a decoded secret
-anywhere in the plan's text is publish-blocking until remediated
-(Section 3.1 non-waivable). Under `single_commit` a plan is not decoded or
-honored, its presence is surfaced as a notice, and escaped credentials retain
-only the ward's literal best-effort coverage. Before either mode dispatches, a
-trusted
-base that tracks the reserved plan path or any descendant beneath it blocks
-construction: the reserved name can be a Git tree even though the plan
-channel itself is one regular file, and that entire namespace is excluded
-from the derived change set. The walk exclusion and preflight use a
-path-component boundary;
-near-prefix names such as `.freeside-commit-plan.json.bak` remain ordinary
-repository content.
-The importer
-never trusts the workspace's `.git`, hooks, configuration, or agent-written
-manifests. It enforces the exact base SHA, canonical paths, allowlists, size
-limits, control-plane restrictions, and Section 5.4 best-effort secret
-scanning.
+The agent commits normally with git, but no trusted component ever reads or
+imports anything from its `.git`: no objects, hooks, configuration, or history
+as git state. What may cross is a **commit plan**: ordinary data the agent
+writes at a reserved workspace path, proposing how the final validated change
+set splits into commits. It crosses as a declared member of the handoff output,
+so the ward's stray rule admits it and the ward's whole-output secret scan
+covers it like every other exported byte, in every mode. Under `plan_preferred`,
+the daemon derives the authoritative base-to-final change set itself and accepts
+the plan only as an exact cover of it: every derived change in exactly one
+ordered group, no unknown paths, every interpolated intermediate tree
+structurally valid, and every resolved non-empty group's publishing message
+screened. For a non-empty import, the daemon re-authors one clean commit per
+resolved non-empty group when it accepts a plan, or one daemon-authored commit
+under `single_commit` and in the enumerated `plan_preferred` fallback cases
+below. A blocking failure authors no candidate. Published tree content is
+confined by construction to the trusted base and the validated final snapshot,
+so the tree-content publication surface equals the one a single-commit import
+publishes; the screened messages are the one new published surface. Intermediate
+commits are unattested ancestry, and evidence and publication identities bind to
+the single candidate head (Section 5.15). Agent commit SHAs, timestamps, and
+identities never cross. Publishing messages cross as validated, labeled claim
+text, screened as automation-control surface under the profile's
+`message_ruleset`. Under `plan_preferred`, an empty remainder's non-publishing
+message skips those screening checks after the plan-wide secret scan. On a
+non-empty import under `plan_preferred`, the daemon falls back to the single
+clean commit when the plan is absent, or when the plan is rejected for an
+enumerated agent-caused structural or non-secret screening failure. The fallback
+surfaces a notice naming the reason class. A zero-change import under
+`plan_preferred` takes the deliberate empty-commit path after the tolerant scan
+and surfaces a present plan as present-but-not-honored. Under `plan_preferred` a
+decoded secret anywhere in the plan's text is publish-blocking until remediated
+(Section 3.1, non-waivable). Under `single_commit` a plan is not decoded or
+honored, its presence is surfaced as a notice, and escaped credentials keep only
+the ward's literal best-effort coverage. Construction is blocked before either
+mode dispatches if the trusted base tracks the reserved plan path or any
+descendant beneath it: the reserved name can be a Git tree even though the plan
+channel itself is one regular file, and that entire namespace is excluded from
+the derived change set. The walk exclusion and the preflight use a
+path-component boundary; near-prefix names such as
+`.freeside-commit-plan.json.bak` remain ordinary repository content. The
+importer never trusts the workspace's `.git`, hooks, configuration, or
+agent-written manifests. It enforces the exact base SHA, canonical paths,
+allowlists, size limits, control-plane restrictions, and Section 5.4 best-effort
+secret scanning.
 
 Permanent tests include malicious manifests, commit plans, blobs, and
-evidence. Trusted
-verification recipes load only from approved control-plane configuration or the
-trusted base commit. Freeside mechanically identifies, risk-flags, and gates
-changes to verification-control files.
+evidence. Trusted verification recipes load only from approved control-plane
+configuration or the trusted base commit. Freeside mechanically identifies,
+risk-flags, and gates changes to verification-control files.
 
-Named residual risk: candidate test code executes inside the warded verifier.
+Named residual risk: candidate test code runs inside the warded verifier.
 
 ### 5.7 The ward: runners, handoff gate, and operating modes
 
@@ -1261,10 +1249,10 @@ silently downgrades. Named capabilities are:
 - `supports_enforced_provider_egress`: the proven writer-egress boundary. The
   agent workspace reaches only the declared provider authorities and, under
   `provider_registry`, the declared registry authorities through the daemon's
-  CONNECT proxy on a host-only network. Live in-writer probes refute DNS and
-  direct connections. The realized proxy allowlist
-  is conformance-checked against the requested profile, never trusted from
-  configuration. It attests the enforcement mechanism, distinct from the
+  CONNECT proxy on a host-only network. Live probes inside the writer refute DNS
+  and direct connections. The realized proxy allowlist is conformance-checked
+  against the requested profile, never trusted from configuration. This
+  capability attests the enforcement mechanism, which is distinct from the
   *requested* egress profile (Section 5.4).
 
 #### The first ward gate
@@ -1277,83 +1265,83 @@ The actual runtime must prove this sequence:
 4. Export it without exposing provider credentials, daemon state, or host
    credentials.
 
-Candidate mechanisms include a detachable volume, host-controlled block image,
-snapshot/export, or separate export VM.
+Candidate mechanisms include a detachable volume, a host-controlled block
+image, snapshot/export, or a separate export VM.
 
 The declared strong class for Apple container 1.1.0 is
 `fresh_vm_read_only_volume_handoff`, conditional on the conformance checks
 below; the name is the runner backend's declared identity.
 
 The same-VM fallback (terminate the agent process, detach credentials, and
-export from the same VM) is refuted on this runtime by execution, not merely
-weaker: release 1.1.0 exposes no host hot-detach, and a guest unmount is not a
-credential-device detach; the credential block device stays attached and
+export from the same VM) is not merely weaker; running it on this runtime
+refutes it. Release 1.1.0 exposes no host hot-detach, and a guest unmount is not
+a credential-device detach: the credential block device stays attached and
 remountable. Freeside must not implement or declare that class.
 
 #### Writer Outcome Authority
 
-Apple container 1.1.0 exposes no process exit status: the runtime models
-only running and stopped, so a stopped writer is indistinguishable from a
-crashed one at the inspection surface. The exit status's value is
+Apple container 1.1.0 exposes no process exit status. The runtime models
+only running and stopped, so at the inspection surface a stopped writer is
+indistinguishable from a crashed one. The exit status's value is
 agent-controlled under every delivery mechanism (an agent process chooses
 its own exit code), so exit status is crash and refusal detection, never
-adversarial proof; acceptance authority stays with output verification and
-the export gates. What the gate trusts is freshness and delivery: it
-authors a per-invocation nonce, journals it before start, and passes it in
-the launcher argv; the launcher's final act writes the nonce and the CLI's
-exit status to a fixed evidence path and exits with that status.
+adversarial proof. Acceptance authority stays with output verification and
+the export gates. What the gate trusts is freshness and delivery: it authors
+a per-invocation nonce, journals it before start, and passes it in the
+launcher argv. The launcher's final act writes the nonce and the CLI's exit
+status to a fixed evidence path and exits with that status.
 
-The write-once `ExecutionOutcome` is canonical terminal authority for a
-failed, canceled, or lost invocation; `ExecutionExport` is canonical
+The write-once `ExecutionOutcome` is the canonical terminal authority for a
+failed, canceled, or lost invocation; `ExecutionExport` is the canonical
 completed authority. The ward journal is the crash bridge and cleanup
-authority, not a competing execution result. In addition to the nonce and
+authority, not a competing execution result. Besides the nonce and
 `WriterComplete`, its open record can carry a durable
 `CancellationIntent {reason, recovery_capture_required}`, an optional
 validated nonzero `WriterFailureStatus`, and an optional
-`RecoveryCaptureDigest`; its terminal outcomes include `completed`,
-`failed`, `canceled`, and `loss`. After restart as well as in the live path,
-the driver idempotently maps `completed` to `ExecutionExport` and every
-other closed outcome to the corresponding `ExecutionOutcome`.
+`RecoveryCaptureDigest`. Its terminal outcomes include `completed`,
+`failed`, `canceled`, and `loss`. After a restart, as in the live path, the
+driver idempotently maps `completed` to `ExecutionExport` and every other
+closed outcome to the matching `ExecutionOutcome`.
 
-`WriterComplete` is the successful release predicate: the writer is stopped
-or proven absent, the marker is present with the journalled nonce and status
-zero, and the live daemon observed the proxy healthy throughout the writer's
-life. Only that live daemon may set the bit after all four facts hold.
-Recovery never reconstructs the lost proxy-health observation from a zero
-marker.
+`WriterComplete` is the successful release predicate. It holds when the
+writer is stopped or proven absent, the marker is present with the
+journalled nonce and status zero, and the live daemon observed the proxy
+healthy throughout the writer's life. Only that live daemon may set the bit
+after all four facts hold. Recovery never reconstructs the lost proxy-health
+observation from a zero marker.
 
 A daemon-commanded cancellation durably records `CancellationIntent` before
-issuing stop, and that intent takes precedence over marker classification.
+it issues stop, and that intent takes precedence over marker classification.
 After proving quiescence and satisfying any capture requirement, ward
 completes teardown and closes `canceled`; the driver then converges
 `ExecutionOutcomeCanceled`. Cancellation never makes the partial workspace
-a publication candidate or clean-verifier input. For graceful portable
-handoff, the intent sets `recovery_capture_required`; after quiescence,
-§5.10's normalized encrypted workspace capture completes and its verified
+a publication candidate or a clean-verifier input. For a graceful portable
+handoff, the intent sets `recovery_capture_required`. After quiescence,
+§5.10's normalized encrypted workspace capture completes, and its verified
 digest is durable in the ward journal before cleanup can erase its source or
 the ward can close `canceled`. Restore exposes that recovery object only as
 untrusted input to a new attempt.
 
-For an uncommanded stop, a matching nonzero marker is terminal failure.
-Ward validates the nonce and status, persists `WriterFailureStatus` before
-any cleanup can erase the marker-bearing workspace, completes teardown,
-and closes `failed`; export is refused even when partial edits exist.
-Recovery dispatches durable amendments before inspecting marker state:
-`CancellationIntent` takes first precedence, then an existing
-`WriterFailureStatus` remains the failure classification while recovery
-finishes teardown and closes `failed`, even when cleanup already erased the
-marker. Marker classification runs only when neither amendment exists. After
-stopped or absence proof, a missing, malformed, or mismatched marker
-classifies loss; ward completes teardown before closing `loss`. A matching
-zero marker permits recovery adoption only when `WriterComplete` was already
-durable: recovery revalidates the surviving marker and absence facts but
-never synthesizes the bit. Zero without that bit classifies loss and follows
-the same teardown-before-close ordering; nonzero closes `failed` even if a
-stale or legacy completion bit exists. If any required amendment, capture,
-teardown, or close fails, the journal remains open for recovery to retry.
-The writer's transcript is evidence, never an outcome signal: the pinned
-CLI's terminal stream event can report success alongside an authentication
-error, and only the exit status distinguishes them.
+For an uncommanded stop, a matching nonzero marker is terminal failure. Ward
+validates the nonce and status, persists `WriterFailureStatus` before any
+cleanup can erase the marker-bearing workspace, completes teardown, and closes
+`failed`. Export is refused even when partial edits exist. Recovery checks the
+durable amendments first and branches on them before it inspects marker state:
+`CancellationIntent` takes first precedence; then an existing
+`WriterFailureStatus` remains the failure classification while recovery finishes
+teardown and closes `failed`, even when cleanup already erased the marker.
+Marker classification runs only when neither amendment exists. After a stopped
+or absence proof, a missing, malformed, or mismatched marker classifies as loss;
+ward completes teardown before closing `loss`. A matching zero marker permits
+recovery adoption only when `WriterComplete` was already durable: recovery
+revalidates the surviving marker and absence facts but never synthesizes the
+bit. Zero without that bit classifies as loss and follows the same
+teardown-before-close order; nonzero closes `failed` even if a stale or legacy
+completion bit exists. If any required amendment, capture, teardown, or close
+fails, the journal stays open for recovery to retry. The writer's transcript is
+evidence, never an outcome signal: the pinned CLI's terminal stream event can
+report success alongside an authentication error, and only the exit status tells
+them apart.
 
 #### Golden Agent and Project Images
 
@@ -1376,79 +1364,80 @@ enter or the container starts. The current inspect report exposes no user
 field, so source and build validation must also require the runtime-default root
 user for the root-owned workspace.
 
-Inherited base metadata such as the fixed `PATH`, or a default `CMD` that the
-daemon-supplied command replaces, is acceptable only when the probe proves the
-required realized shape. A derived project image is checked again; a compliant
-base does not make the extension trusted.
+Inherited base metadata, such as the fixed `PATH` or a default `CMD` that the
+daemon-supplied command replaces, is acceptable only when the probe proves
+the required realized shape. A derived project image is checked again; a
+compliant base does not make the extension trusted.
 
-A reusable builder consumes the canonical repository identity, an exact commit,
-and the trusted verification recipe. It derives a project image from the
-approved agent base, bakes the dependency closure and tool configuration as
-files, records the repository, commit, recipe, and base-image provenance, and
-returns a digest-pinned image reference. Per-project image definitions and
-copied dependency manifests do not live in the Freeside control-plane source.
-A changed dependency manifest therefore rebuilds the runtime artifact without a
-Freeside source change.
+A reusable builder consumes the canonical repository identity, an exact
+commit, and the trusted verification recipe. It derives a project image from
+the approved agent base, bakes the dependency closure and tool configuration
+in as files, records the repository, commit, recipe, and base-image
+provenance, and returns a digest-pinned image reference. Per-project image
+definitions and copied dependency manifests do not live in the Freeside
+control-plane source, so a changed dependency manifest rebuilds the runtime
+artifact without a Freeside source change.
 
 The declared verification recipe runs verbatim with networking disabled. The
 builder proves both that this clean run passes and that the baked dependency
-material is load-bearing: a negative probe masks that material and must fail by
-attempting the registry or network access the positive run did not need. A
-candidate that changes the dependency closure beyond the baked inputs fails
-loudly and requires a new reviewed project image, unless the policy-gated
-rebuild below applies; verification never fetches a missing dependency.
+material is load-bearing. For the second, a negative probe masks that
+material and must fail by attempting the registry or network access the
+positive run did not need. A candidate that changes the dependency closure
+beyond the baked inputs fails loudly and requires a new reviewed project
+image, unless the policy-gated rebuild below applies. Verification never
+fetches a missing dependency.
 
 **Policy-gated rebuild.** A dependency change stops costing a human round trip
 when it stays inside the project's declared policy. The gate holds when the
-candidate's dependency-manifest delta is lockfile-consistent, every added or
-changed package resolves from an authority in the project policy's declared
-registry set (the same set `provider_registry` exposes to the writer, Section
-5.4; the builder reads it whatever the writer's profile, since builder fetch
-authorization and writer egress are different concerns), and the verification
-recipe is unchanged. Under those
-conditions the reusable builder rebuilds the project image from the trusted
-recipe, reruns the networkless positive run and the negative probe, records the
-new provenance, and the run resumes against the new digest-pinned reference
-without an AttentionItem. Any other delta (a new authority, an unpinned or VCS
-source, a recipe change, a failed positive run or probe) keeps the fail-loud
-path above. The gate is a machine check, never a widening of the writer's
-network: the writer still never fetches during verification, and the human
-still sees every dependency change in the PR diff and in the image provenance
-record.
+candidate's dependency-manifest delta is lockfile-consistent; every added
+or changed package resolves from an authority in the project policy's
+declared registry set (the same set `provider_registry` exposes to the
+writer, Section 5.4; the builder reads it whatever the writer's profile,
+since builder fetch authorization and writer egress are different
+concerns); and the verification recipe is unchanged.
+Under those conditions the reusable builder rebuilds the project image from
+the trusted recipe, reruns the networkless positive run and the negative
+probe, and records the new provenance, and the run resumes against the new
+digest-pinned reference without an AttentionItem. Any other delta (a new
+authority, an unpinned or VCS source, a recipe change, a failed positive run
+or probe) keeps the fail-loud path above. The gate is a machine check, never
+a widening of the writer's network: the writer still never fetches during
+verification, and the human still sees every dependency change in the PR
+diff and in the image provenance record.
 
-Every runnable agent-base and project-image reference is
-registry-resolvable `name@sha256:<digest>` and is admitted by digest, never by
-tag. A local content-store digest without a registry identity is not a runnable
-reference on Apple `container` 1.1.0. Where that runtime also cannot use a
-locally built `name@digest` as a build base, the builder may use a tag only for
-that build-time hop after verifying its digest, and must record the exact base
-digest in the derived image. The image supplied to ward remains a
-registry-resolved digest reference.
+Every runnable agent-base and project-image reference is a
+registry-resolvable `name@sha256:<digest>` and is admitted by digest, never
+by tag. A local content-store digest without a registry identity is not a
+runnable reference on Apple `container` 1.1.0. Where that runtime also
+cannot use a locally built `name@digest` as a build base, the builder may
+use a tag for that build-time hop only, after verifying its digest, and must
+record the exact base digest in the derived image. The image supplied to
+ward remains a registry-resolved digest reference.
 
 #### Operating modes
 
 | Mode | Requirements and limits |
 | --- | --- |
 | `attended_dev` | May use a weaker runner class. Disables `auto_start`, automatic publication, and unattended escalation. Reports its isolation class honestly. |
-| `unattended` | Requires successful conformance including the handoff gate, a valid trust profile, an approved credential mode, all runner minimums including the proven `supports_networkless_export` exporter boundary and the proven `supports_enforced_provider_egress` writer egress boundary, current backup health including encryption status, and no blocking `system_health` item. |
+| `unattended` | Requires all of these: successful conformance including the handoff gate; a valid trust profile; an approved credential mode; every runner minimum, including the proven `supports_networkless_export` exporter boundary and the proven `supports_enforced_provider_egress` writer egress boundary; current backup health including encryption status; and no blocking `system_health` item. |
 
 Run the full conformance suite at startup, after configuration changes, and on
 the doctor's schedule. Run a lightweight probe before every unattended job.
 Golden images pin CLI versions. Workspaces use VM-local disk.
 
 Each completed, generation-current full pass durably records the backend's
-proven class and capabilities with a monotonic proof generation and time; a
-beginning recheck first durably supersedes the previous declaration, so it
-cannot admit while the recheck is pending; a
-failed pass records the failure and invalidates the declaration, and an
-unpersisted proof is not a proof (the pass fails and the capabilities are
-never declared: publication follows the durable append). A recorded declaration can never exceed its class's registered
-provable ceiling, and an unattended admission is refused at the write
-boundary unless its capability snapshot sits within the named backend's
-current durable conformance record; a conformance lapse closes new admission
-without making recorded history unreadable. The declaration a new unattended
-admission is gated against is therefore reconstructed from persisted
-conformance evidence, never from transient process state.
+proven class and capabilities with a monotonic proof generation and time. When a
+recheck begins, it first durably supersedes the previous declaration, so that
+declaration cannot admit while the recheck is pending. A failed pass records the
+failure and invalidates the declaration. An unpersisted proof is not a proof:
+the pass fails and the capabilities are never declared, because publication
+follows the durable append. A recorded declaration can never exceed its class's
+registered provable ceiling. An unattended admission is refused at the write
+boundary unless its capability snapshot sits within the named backend's current
+durable conformance record; a conformance lapse closes new admission without
+making recorded history unreadable. So the declaration that gates a new
+unattended admission is reconstructed from persisted conformance evidence, never
+from transient process state.
 
 Phase 1A.2 exception (owner decision, 2026-07-26): unattended admission may
 waive the encryption-state dimension of backup health, and only that
@@ -1466,13 +1455,13 @@ admission:
   `BackupCheckpoint`. A build that carries it rejects the waiver as invalid
   configuration and retires the exception.
 
-Admission without the waiver fails closed as
-before, and every admission under it records the waiver in the run's audit
-record and surfaces the degraded posture as a `system_health` item whose
-blocking state the validated waiver configuration supersedes (the §4
-supersession rule), keeping it visible without blocking the subsequent
-admissions the waiver exists to permit. The encrypted checkpoint must land
-before the Phase 1A exit; the doctor (§10) packages its encryption check.
+Admission without the waiver fails closed as before. Every admission under the
+waiver records it in the run's audit record and surfaces the degraded posture as
+a `system_health` item. The validated waiver configuration supersedes that
+item's blocking state (the §4 supersession rule), so the item stays visible
+without blocking the later admissions the waiver exists to permit. The encrypted
+checkpoint must land before the Phase 1A exit; the doctor (§10) packages its
+encryption check.
 
 Bootstrap exception: SwiftUI work is exempt until a macOS execution class
 exists.
