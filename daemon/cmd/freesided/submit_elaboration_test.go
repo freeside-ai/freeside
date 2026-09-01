@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -31,32 +32,75 @@ func (submitElaborationBackend) Capabilities() exec.CapabilitySet {
 
 func TestSubmitCommandElaboratesBeforeCreatingProductionRun(t *testing.T) {
 	tests := []struct {
-		name           string
-		acceptedBody   string
-		wantSameDigest bool
+		name                  string
+		acceptedBody          string
+		wantSameDigest        bool
+		preallocateRetry      bool
+		preallocateForeignRun bool
 	}{
 		{
-			name:           "byte-identical specification",
-			acceptedBody:   "# Work item\n\nImplement the thing.",
-			wantSameDigest: true,
+			name:             "byte-identical specification",
+			acceptedBody:     "# Work item\n\nImplement the thing.",
+			wantSameDigest:   true,
+			preallocateRetry: true,
 		},
 		{
 			name:           "revised specification",
 			acceptedBody:   "# Work item\n\nImplement the improved thing.",
 			wantSameDigest: false,
 		},
+		{
+			name:                  "allocated retry run identity collision",
+			acceptedBody:          "# Work item\n\nImplement the thing.",
+			wantSameDigest:        true,
+			preallocateRetry:      true,
+			preallocateForeignRun: true,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			testSubmitCommandElaborationDigest(t, tc.acceptedBody, tc.wantSameDigest)
+			testSubmitCommandElaborationDigest(
+				t, tc.acceptedBody, tc.wantSameDigest,
+				tc.preallocateRetry, tc.preallocateForeignRun,
+			)
 		})
 	}
 }
 
-func testSubmitCommandElaborationDigest(t *testing.T, acceptedBody string, wantSameDigest bool) {
+func testSubmitCommandElaborationDigest(
+	t *testing.T, acceptedBody string, wantSameDigest,
+	preallocateRetry, preallocateForeignRun bool,
+) {
 	t.Helper()
 	root := t.TempDir()
 	specPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	manifest, err := domain.NewCapabilityManifest("Provider web read", domain.EgressProviderWebRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestBody, err := json.Marshal([]domain.CapabilityManifest{manifest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policyKeys []domain.PolicyKey
+	if err := json.Unmarshal(
+		[]byte(submissionPolicyBody("daemon/**", strings.Repeat("ab", 32))), &policyKeys,
+	); err != nil {
+		t.Fatal(err)
+	}
+	policyKeys = append(policyKeys, domain.PolicyKey{
+		Key: domain.CapabilityManifestPolicyKey, Value: string(manifestBody),
+		Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride, Digest: "sha256:capability-policy",
+		},
+	})
+	policyBody, err := json.Marshal(policyKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(policyPath, policyBody, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	sourceBody := "# Work item\n\nImplement the thing."
 	if err := os.WriteFile(specPath, []byte(sourceBody), 0o600); err != nil {
 		t.Fatal(err)
@@ -92,7 +136,7 @@ func testSubmitCommandElaborationDigest(t *testing.T, acceptedBody string, wantS
 			return err
 		}
 		return tx.RecordAuthIdentity(t.Context(), domain.AuthIdentity{
-			ID: "auth-submit", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+			ID: "auth-submit", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 2,
 			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand},
 		}, now)
 	}); err != nil {
@@ -238,6 +282,53 @@ func testSubmitCommandElaborationDigest(t *testing.T, acceptedBody string, wantS
 	}); err == nil || !strings.Contains(err.Error(), "use resume while it is live") {
 		t.Fatalf("live-parent reattempt = %v, want resume refusal", err)
 	}
+	if len(implementationRun.Stages) != 1 {
+		t.Fatalf("implementation stages = %+v, want one", implementationRun.Stages)
+	}
+	stage := implementationRun.Stages[0]
+	attempt := domain.Attempt{
+		ID:      domain.AttemptID("attempt-" + string(submitted.ImplementationInvocationID)),
+		StageID: stage.ID, Number: 1, InvocationID: submitted.ImplementationInvocationID,
+	}
+	stage.Attempts = append(stage.Attempts, attempt)
+	implementationRun.Stages[0] = stage
+	var implementationInputDigest domain.Digest
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		invocation, err := tx.GetAgentInvocation(t.Context(), submitted.ImplementationInvocationID)
+		if err != nil {
+			return err
+		}
+		implementationInputDigest, err = invocation.ComputeInputDigest()
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: submitted.ImplementationInvocationID, RunID: implementationRun.ID,
+		StageID: stage.ID, AttemptID: attempt.ID, Backend: submitElaborationBackend{}.Name(),
+		Capabilities:  domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile: domain.EgressProviderOnly,
+		ImageRef:      domain.ImageRef("agent@sha256:" + strings.Repeat("a", 64)),
+		SpecDigest:    implementationRun.SpecDigest, PolicyDigest: implementationRun.PolicyDigest,
+		InputDigest: implementationInputDigest,
+		Base: domain.BaseRevision{
+			Repo: "owner/repo", RepositoryID: 1,
+			BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
+		},
+		Workspace: "workspace-submit", AuthIdentityID: &identity, AdmittedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		if err := tx.PutRun(t.Context(), implementationRun); err != nil {
+			return err
+		}
+		return tx.RecordExecutionAdmission(t.Context(), admission)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	terminal := domain.ObservedStatusFailed
 	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
 		return tx.AppendRunMilestone(t.Context(), domain.RunMilestone{
@@ -248,20 +339,188 @@ func testSubmitCommandElaborationDigest(t *testing.T, acceptedBody string, wantS
 	}); err != nil {
 		t.Fatal(err)
 	}
-	retry, err := engine.ReattemptProductionRun(t.Context(), st, engine.ProductionReattemptSpec{
-		ParentRunID: implementationRun.ID, Reason: "retry after acceptance rig repair",
-	})
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.RecordExecutionOutcome(t.Context(), domain.ExecutionOutcome{
+			InvocationID: submitted.ImplementationInvocationID, AdmissionID: admission.ID,
+			Status: domain.ExecutionOutcomeFailed, Summary: "fixture failure",
+			RecordedAt: now.Add(time.Minute),
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	createdAt := now.Add(time.Minute)
+	failureItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "execution-failure-command-capability", ProjectID: implementationRun.ProjectID,
+		Subject: domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(implementationRun.ID), RunID: &implementationRun.ID,
+		},
+		Type: domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
+		Reason: "implementation failed",
+		RequestedDecision: []domain.Action{
+			domain.ActionRetryWithCapability, domain.ActionDiscuss, domain.ActionStop,
+		},
+		ExecutionFailure: &domain.ExecutionFailureFacts{
+			Outcome: domain.ExecutionOutcomeFailed, Stage: domain.StageNameImplementation,
+			InvocationID:     submitted.ImplementationInvocationID,
+			OfferedManifests: []domain.CapabilityManifestOffer{manifest.Offer()},
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt: &createdAt, Status: domain.StatusOpen,
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if retry.Attempt.CampaignID != submitted.CampaignID || retry.Attempt.AttemptNumber != 2 ||
-		retry.Attempt.ParentRunID != implementationRun.ID ||
-		retry.Attempt.ApprovedSpecDigest != implementationRun.SpecDigest ||
-		retry.Attempt.SourceDigest != submitted.SourceDigest ||
-		retry.Attempt.PublicationDigest != submitted.PublicationDigest ||
-		retry.RootSourceArtifactID != submitted.SourceArtifactID ||
-		retry.Run.Run.SpecDigest != implementationRun.SpecDigest ||
-		retry.Run.Run.ID == implementationRun.ID {
+	if err := attention.PutItem(t.Context(), failureItem); err != nil {
+		t.Fatal(err)
+	}
+	var failureSnapshot store.Snapshot
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		_, failureSnapshot, err = tx.GetAttentionItemSnapshot(t.Context(), failureItem.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manifestDigest := manifest.Digest
+	if _, err := attention.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "command-capability", DeviceID: "device-submit",
+		ExpectedEntityVersion: failureSnapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: failureItem.ID, Action: domain.ActionRetryWithCapability,
+			ItemVersion:              failureItem.ItemVersion,
+			CapabilityManifestDigest: &manifestDigest,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	workflowAdmission := engine.AdmissionEnvironment{
+		OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile: domain.EgressProviderOnly,
+		EnforceableEgressProfiles: []domain.EgressProfile{
+			domain.EgressProviderOnly, domain.EgressProviderWebRead,
+		},
+		ImageRef:            domain.ImageRef("agent@sha256:" + strings.Repeat("a", 64)),
+		PromptPackageDigest: promptDigest,
+		VendorInstructions: engine.VendorInstructionConfig{
+			Vendor: domain.AgentVendorCodex, Delivery: domain.VendorInstructionDeliveryAppendFile,
+			HostPath: vendorPath,
+		},
+		Base: domain.BaseRevision{
+			Repo: "owner/repo", RepositoryID: 1,
+			BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
+		},
+		Workspace: "workspace-submit", AuthIdentityID: &identity,
+	}
+	if preallocateRetry {
+		retryRunID, err := engine.ProductionAttemptRunID(submitted.CampaignID, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		commandID := "command-capability"
+		retryOf := submitted.ImplementationInvocationID
+		if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+			if preallocateForeignRun {
+				if err := tx.PutRun(t.Context(), domain.Run{
+					ID: retryRunID, ProjectID: "project-foreign",
+					SpecDigest: "sha256:foreign-spec", PolicyDigest: "sha256:foreign-policy",
+				}); err != nil {
+					return err
+				}
+			}
+			return tx.PutProductionAttempt(t.Context(), domain.ProductionAttempt{
+				CampaignID: submitted.CampaignID, AttemptNumber: 2,
+				Kind:        domain.ProductionAttemptRetry,
+				Reason:      "operator capability retry " + commandID,
+				ParentRunID: implementationRun.ID, SourceDigest: submitted.SourceDigest,
+				PublicationDigest:   submitted.PublicationDigest,
+				ApprovedSpecDigest:  implementationRun.SpecDigest,
+				ElaborationRunID:    initialAttempt.ElaborationRunID,
+				ImplementationRunID: retryRunID,
+				OperatorCommandID:   &commandID, RetryOfInvocationID: &retryOf,
+				CapabilityManifestDigest: &manifestDigest,
+			})
+		}); err != nil {
+			t.Fatal(err)
+		}
+		workflowAdmission.EnforceableEgressProfiles = []domain.EgressProfile{
+			domain.EgressProviderOnly,
+		}
+	}
+	retryWorkflow, err := engine.New(st, attention, driver,
+		engine.WithAdmission(submitElaborationBackend{}, []exec.Capability{exec.CapPostExitExport},
+			workflowAdmission, func() time.Time { return now }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciled, err := retryWorkflow.Reconcile(t.Context())
+	if preallocateForeignRun {
+		if err == nil || !strings.Contains(err.Error(), "fixed bindings disagree with stored run") {
+			t.Fatalf("capability retry collision error = %v", err)
+		}
+		if replayed, replayErr := retryWorkflow.Reconcile(t.Context()); replayErr == nil ||
+			!strings.Contains(replayErr.Error(), "fixed bindings disagree with stored run") {
+			t.Fatalf("capability retry collision replay = %+v, %v", replayed, replayErr)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.RunTransitions != 1 {
+		t.Fatalf("capability retry transitions = %+v, want one", reconciled)
+	}
+	var retry domain.ProductionAttempt
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		retry, err = tx.LatestProductionAttempt(t.Context(), submitted.CampaignID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if retry.CampaignID != submitted.CampaignID || retry.AttemptNumber != 2 ||
+		retry.ParentRunID != implementationRun.ID ||
+		retry.ApprovedSpecDigest != implementationRun.SpecDigest ||
+		retry.SourceDigest != submitted.SourceDigest ||
+		retry.PublicationDigest != submitted.PublicationDigest {
 		t.Fatalf("retry = %+v, want new attempt over unchanged approved/source digests", retry)
+	}
+	if retry.OperatorCommandID == nil || *retry.OperatorCommandID != "command-capability" ||
+		retry.RetryOfInvocationID == nil || *retry.RetryOfInvocationID != submitted.ImplementationInvocationID ||
+		retry.CapabilityManifestDigest == nil || *retry.CapabilityManifestDigest != manifest.Digest {
+		t.Fatalf("retry operator bindings = %+v", retry)
+	}
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		_, err := tx.GetRun(t.Context(), retry.ImplementationRunID)
+		return err
+	}); err != nil {
+		t.Fatalf("capability retry implementation run: %v", err)
+	}
+	withoutAdmission, err := engine.New(st, attention, driver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restrictedAdmission := workflowAdmission
+	restrictedAdmission.EnforceableEgressProfiles = []domain.EgressProfile{domain.EgressProviderOnly}
+	withoutSelectedProfile, err := engine.New(st, attention, driver,
+		engine.WithAdmission(submitElaborationBackend{}, []exec.Capability{exec.CapPostExitExport},
+			restrictedAdmission, func() time.Time { return now }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, restarted := range map[string]*engine.Engine{
+		"admission disabled":       withoutAdmission,
+		"selected profile removed": withoutSelectedProfile,
+	} {
+		t.Run(name, func(t *testing.T) {
+			replayed, err := restarted.Reconcile(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if replayed.RunTransitions != 0 {
+				t.Fatalf("capability retry replay = %+v, want no transition", replayed)
+			}
+		})
 	}
 }

@@ -78,15 +78,30 @@ func (c CostSoFar) Validate() error {
 // ExecutionFailureFacts identifies the failed terminal outcome and the stage
 // and invocation that produced it.
 type ExecutionFailureFacts struct {
-	Outcome      ExecutionOutcomeStatus `json:"outcome"`
-	Stage        StageName              `json:"stage"`
-	InvocationID InvocationID           `json:"invocation_id"`
+	Outcome          ExecutionOutcomeStatus    `json:"outcome"`
+	Stage            StageName                 `json:"stage"`
+	InvocationID     InvocationID              `json:"invocation_id"`
+	OfferedManifests []CapabilityManifestOffer `json:"offered_manifests,omitempty"`
 }
 
 func (f ExecutionFailureFacts) Validate() error {
 	if !f.Outcome.valid() || !f.Stage.valid() || f.InvocationID == "" {
 		return fmt.Errorf("execution failure outcome %q stage %q invocation %q: %w",
 			f.Outcome, f.Stage, f.InvocationID, ErrCardFactInconsistent)
+	}
+	seen := make(map[Digest]struct{}, len(f.OfferedManifests))
+	for index, offer := range f.OfferedManifests {
+		if err := offer.Validate(); err != nil {
+			return fmt.Errorf("execution failure offered manifest[%d]: %w", index, err)
+		}
+		if index > 0 && f.OfferedManifests[index-1].Name >= offer.Name {
+			return fmt.Errorf("execution failure manifest %q after %q: %w",
+				offer.Name, f.OfferedManifests[index-1].Name, ErrKeysNotCanonical)
+		}
+		if _, duplicate := seen[offer.Digest]; duplicate {
+			return fmt.Errorf("execution failure manifest digest %q: %w", offer.Digest, ErrDuplicate)
+		}
+		seen[offer.Digest] = struct{}{}
 	}
 	return nil
 }

@@ -662,7 +662,23 @@ public enum AttentionFixtures {
             : nil
         let executionFailure: Components.Schemas.AttentionItem.execution_failurePayload? =
             type == .execution_failure
-            ? .init(value1: .init(outcome: .failed, stage: .implementation, invocation_id: "inv-\(key)"))
+            ? .init(
+                value1: .init(
+                    outcome: .failed, stage: .implementation, invocation_id: "inv-\(key)",
+                    offered_manifests: [
+                        .init(
+                            name: "No network verification",
+                            egress_profile: .clean_verification,
+                            digest: MockContractValidation.capabilityManifestDigest(
+                                name: "No network verification",
+                                egressProfile: "clean_verification")),
+                        .init(
+                            name: "Provider web read",
+                            egress_profile: .provider_web_read,
+                            digest: MockContractValidation.capabilityManifestDigest(
+                                name: "Provider web read",
+                                egressProfile: "provider_web_read")),
+                    ]))
             : nil
         let publishBlock: Components.Schemas.AttentionItem.publish_blockPayload? =
             type == .publish_blocked

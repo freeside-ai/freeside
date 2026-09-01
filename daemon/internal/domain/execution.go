@@ -15,10 +15,11 @@ import (
 // to every admission's identity, so it is versioned explicitly rather than
 // left implicit in the struct's field order.
 const (
-	admissionEncodingVersion              = "freeside.execution.admission/v1"
-	admissionInputEncodingVersion         = "freeside.execution.admission/v2"
-	admissionBackendConfigEncodingVersion = "freeside.execution.admission/v3"
-	admissionAgentEncodingVersion         = "freeside.execution.admission/v4"
+	admissionEncodingVersion                   = "freeside.execution.admission/v1"
+	admissionInputEncodingVersion              = "freeside.execution.admission/v2"
+	admissionBackendConfigEncodingVersion      = "freeside.execution.admission/v3"
+	admissionAgentEncodingVersion              = "freeside.execution.admission/v4"
+	admissionCapabilityManifestEncodingVersion = "freeside.execution.admission/v5"
 )
 
 // digestPinnedImage binds an image reference to one full lowercase sha256
@@ -136,6 +137,7 @@ type ExecutionAdmission struct {
 	OperatingMode              OperatingMode  `json:"operating_mode"`
 	CredentialMode             CredentialMode `json:"credential_mode"`
 	EgressProfile              EgressProfile  `json:"egress_profile"`
+	CapabilityManifestDigest   *Digest        `json:"capability_manifest_digest,omitempty"`
 	ImageRef                   ImageRef       `json:"image_ref"`
 	SpecDigest                 Digest         `json:"spec_digest"`
 	PolicyDigest               Digest         `json:"policy_digest"`
@@ -269,6 +271,7 @@ type ExecutionAdmissionInput struct {
 	OperatingMode              OperatingMode
 	CredentialMode             CredentialMode
 	EgressProfile              EgressProfile
+	CapabilityManifestDigest   *Digest
 	ImageRef                   ImageRef
 	SpecDigest                 Digest
 	PolicyDigest               Digest
@@ -307,6 +310,7 @@ func NewExecutionAdmission(in ExecutionAdmissionInput) (ExecutionAdmission, erro
 		OperatingMode:              in.OperatingMode,
 		CredentialMode:             in.CredentialMode,
 		EgressProfile:              in.EgressProfile,
+		CapabilityManifestDigest:   clonePtr(in.CapabilityManifestDigest),
 		ImageRef:                   in.ImageRef,
 		SpecDigest:                 in.SpecDigest,
 		PolicyDigest:               in.PolicyDigest,
@@ -347,6 +351,7 @@ type canonicalAdmission struct {
 	OperatingMode              OperatingMode           `json:"operating_mode"`
 	CredentialMode             CredentialMode          `json:"credential_mode"`
 	EgressProfile              EgressProfile           `json:"egress_profile"`
+	CapabilityManifestDigest   *Digest                 `json:"capability_manifest_digest,omitempty"`
 	ImageRef                   ImageRef                `json:"image_ref"`
 	SpecDigest                 Digest                  `json:"spec_digest"`
 	PolicyDigest               Digest                  `json:"policy_digest"`
@@ -379,6 +384,9 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 	if a.AgentBinding != nil {
 		version = admissionAgentEncodingVersion
 	}
+	if a.CapabilityManifestDigest != nil {
+		version = admissionCapabilityManifestEncodingVersion
+	}
 	body, err := json.Marshal(canonicalAdmission{
 		Version:                    version,
 		InvocationID:               a.InvocationID,
@@ -391,6 +399,7 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 		OperatingMode:              a.OperatingMode,
 		CredentialMode:             a.CredentialMode,
 		EgressProfile:              a.EgressProfile,
+		CapabilityManifestDigest:   a.CapabilityManifestDigest,
 		ImageRef:                   a.ImageRef,
 		SpecDigest:                 a.SpecDigest,
 		PolicyDigest:               a.PolicyDigest,
@@ -487,6 +496,11 @@ func (a ExecutionAdmission) Validate() error {
 	}
 	if err := a.validateAuthIdentity(); err != nil {
 		return err
+	}
+	if a.CapabilityManifestDigest != nil &&
+		!contentaddr.Valid(string(*a.CapabilityManifestDigest)) {
+		return fmt.Errorf("execution admission %s capability_manifest_digest %q: %w",
+			a.InvocationID, *a.CapabilityManifestDigest, ErrInvalidDigest)
 	}
 	if err := a.validateTrustBinding(); err != nil {
 		return err

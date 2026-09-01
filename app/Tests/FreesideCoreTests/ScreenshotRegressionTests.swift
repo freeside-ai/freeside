@@ -436,6 +436,18 @@
                                 at: dynamicTypeSize,
                                 proposalFacts: proposalFacts))))
 
+                if snapshot.item._type == .execution_failure {
+                    surfaces.append(
+                        Surface(
+                            name: "decision-execution_failure-phone",
+                            width: 390,
+                            view: AnyView(
+                                detail.screenshotCard(
+                                    snapshot.item,
+                                    at: dynamicTypeSize,
+                                    proposalFacts: proposalFacts))))
+                }
+
                 if snapshot.item._type == .spec_approval {
                     let phoneDetail = DecisionDetailView(
                         store: store,
@@ -1003,7 +1015,8 @@
                 store: store,
                 itemID: blocked.item.id,
                 loadsAttachments: false,
-                showsValidationProgress: false)
+                showsValidationProgress: false,
+                now: screenshotNow)
             return Surface(
                 name: "decision-blocked-unavailable",
                 view: AnyView(detail.screenshotCard(blocked.item, at: dynamicTypeSize)))

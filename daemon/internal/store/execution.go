@@ -621,6 +621,44 @@ func (tx *ReadTx) gateAdmissionWithReviewConfigurationRecovery(
 				domain.ErrAdmissionDerivationMismatch)
 		}
 	}
+	attempt, attemptErr := tx.GetProductionAttemptByRun(ctx, admission.RunID)
+	if attemptErr != nil && !errors.Is(attemptErr, ErrNotFound) {
+		return fmt.Errorf("admission %q capability retry attempt: %w", admission.InvocationID, attemptErr)
+	}
+	attemptManifest := attempt.CapabilityManifestDigest
+	if (attemptManifest == nil) != (admission.CapabilityManifestDigest == nil) {
+		return fmt.Errorf("admission %q capability manifest presence disagrees with attempt: %w",
+			admission.InvocationID, domain.ErrAdmissionDerivationMismatch)
+	}
+	if admission.CapabilityManifestDigest != nil {
+		if attemptErr != nil {
+			return fmt.Errorf("admission %q capability retry attempt: %w", admission.InvocationID, attemptErr)
+		}
+		if *attemptManifest != *admission.CapabilityManifestDigest {
+			return fmt.Errorf("admission %q capability manifest attempt binding: %w",
+				admission.InvocationID, domain.ErrAdmissionDerivationMismatch)
+		}
+		resolved, err := tx.GetResolvedPolicy(ctx, admission.RunID)
+		if err != nil {
+			return fmt.Errorf("admission %q capability retry policy: %w", admission.InvocationID, err)
+		}
+		manifests, err := domain.CapabilityManifestsFromPolicy(resolved)
+		if err != nil {
+			return fmt.Errorf("admission %q capability retry policy: %w", admission.InvocationID, err)
+		}
+		matched := false
+		for _, manifest := range manifests {
+			if manifest.Digest == *admission.CapabilityManifestDigest &&
+				manifest.EgressProfile == admission.EgressProfile {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("admission %q capability manifest is not policy-derived: %w",
+				admission.InvocationID, domain.ErrAdmissionDerivationMismatch)
+		}
+	}
 	if !admission.RequiresTrustProfile() {
 		return nil
 	}

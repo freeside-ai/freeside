@@ -511,6 +511,12 @@ struct RealDaemonConvergenceTests {
         let control = try ConvergenceHarness.control()
         let allowed = try #require(AttentionFixtures.phase1ActionSets[type])
         let allowedSet = Set(allowed)
+        // Capability retry is parameterized by authenticated failure facts and
+        // a policy-derived manifest. This generic seed route deliberately
+        // constructs neither, so exercising that cell would test malformed-card
+        // rejection before the action policy. The daemon integration test covers
+        // its full offer, acceptance, allocation, and replay path instead.
+        let constructibleAllowed = allowed.filter { $0 != .retry_with_capabilities }
 
         // The whole allowed set reaches the post-policy boundary (blocked: the
         // empty set). Run proposals then fail with the specialized-admission
@@ -519,7 +525,7 @@ struct RealDaemonConvergenceTests {
         // earlier with the distinct policy error.
         let whole = try await control.seedItemOutcome(
             id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-all"),
-            type: type, actions: allowed)
+            type: type, actions: constructibleAllowed)
         if type == .run_proposal {
             #expect(whole.statusCode == 400)
             #expect(
@@ -535,7 +541,7 @@ struct RealDaemonConvergenceTests {
         // classification: allowed → accepted; otherwise → the typed
         // ErrActionNotAllowedForType 400. Removing an action from either side
         // alone flips exactly these cells.
-        for action in AttentionFixtures.phase1Actions {
+        for action in AttentionFixtures.phase1Actions where action != .retry_with_capabilities {
             let outcome = try await control.seedItemOutcome(
                 id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-\(action.rawValue)"),
                 type: type, actions: [action])

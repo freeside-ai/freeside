@@ -13,7 +13,7 @@ import Testing
             .continue_under_policy: .concludes(.resolved),
             .convert_to_policy: .pending,
             .retry: .concludes(.resolved),
-            .retry_with_capabilities: .pending,
+            .retry_with_capabilities: .concludes(.superseded),
             .answer_and_retry: .concludes(.superseded),
             .answer_without_retry: .concludes(.resolved),
             .rerun_trust_evaluation: .concludes(.resolved),
@@ -44,8 +44,7 @@ import Testing
         }
         #expect(
             Set(expected.compactMap { $0.value == .pending ? $0.key : nil }) == [
-                .convert_to_policy, .retry_with_capabilities,
-                .choose_alternate_profile,
+                .convert_to_policy, .choose_alternate_profile,
             ])
     }
 }

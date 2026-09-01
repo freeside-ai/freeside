@@ -508,6 +508,16 @@ public final class DecisionModel {
             reviewedSnapshot: nil)
     }
 
+    public func submitCapabilityRetry(
+        manifestDigest: String,
+        reviewedSnapshot: Components.Schemas.AttentionItemSnapshot
+    ) async {
+        await submit(
+            .retry_with_capabilities, capabilityManifestDigest: manifestDigest,
+            revision: nil, snoozeUntil: nil, alternativeChoices: nil,
+            reviewedSnapshot: reviewedSnapshot)
+    }
+
     func submitConfirmed(
         _ action: Components.Schemas.Action,
         reviewedSnapshot: Components.Schemas.AttentionItemSnapshot
@@ -530,6 +540,7 @@ public final class DecisionModel {
 
     private func submit(
         _ action: Components.Schemas.Action,
+        capabilityManifestDigest: String? = nil,
         revision: Components.Schemas.RunProposalRevisionInput? = nil,
         snoozeUntil: Date? = nil,
         alternativeChoices: [Components.Schemas.AlternativeChoice]? = nil,
@@ -541,6 +552,7 @@ public final class DecisionModel {
             guard Self.hasSameDecisionBindings(reviewedSnapshot, snapshot) else { return }
         }
         guard (action == .start_with_changes) == (revision != nil),
+            (action == .retry_with_capabilities) == (capabilityManifestDigest != nil),
             (action == .snooze) == (snoozeUntil != nil),
             (action == .choose_alternative_route) == (alternativeChoices != nil),
             ([
@@ -575,6 +587,9 @@ public final class DecisionModel {
                 pr_head_sha: snapshot.item.pr_head_sha,
                 artifact_digests: snapshot.item.artifact_digests,
                 message: message,
+                capability_manifest_digest: capabilityManifestDigest.map {
+                    .init(value1: $0)
+                },
                 run_proposal_revision: revision.map {
                     .init(value1: $0)
                 },

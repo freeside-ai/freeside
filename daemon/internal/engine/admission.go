@@ -35,7 +35,10 @@ type AdmissionEnvironment struct {
 	OperatingMode  domain.OperatingMode
 	CredentialMode domain.CredentialMode
 	EgressProfile  domain.EgressProfile
-	ImageRef       domain.ImageRef
+	// EnforceableEgressProfiles is the closed set this composition can
+	// truthfully materialize. Capability retries may select only from it.
+	EnforceableEgressProfiles []domain.EgressProfile
+	ImageRef                  domain.ImageRef
 	// PromptPackageDigest is the trusted default-branch prompt artifact for
 	// every stage this environment admits. It is configuration because the
 	// prompt package is control-plane authority, not invocation-owned input.
@@ -60,6 +63,7 @@ type AdmissionEnvironment struct {
 
 // clone detaches the environment from the caller's pointers.
 func (e AdmissionEnvironment) clone() AdmissionEnvironment {
+	e.EnforceableEgressProfiles = slices.Clone(e.EnforceableEgressProfiles)
 	if e.AuthIdentityID != nil {
 		identity := *e.AuthIdentityID
 		e.AuthIdentityID = &identity
@@ -182,6 +186,41 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 		if err := env.VendorInstructions.validate(); err != nil {
 			return fmt.Errorf("with admission: %w", err)
 		}
+		if len(env.EnforceableEgressProfiles) == 0 &&
+			slices.Contains(domain.AllEgressProfiles, env.EgressProfile) {
+			env.EnforceableEgressProfiles = []domain.EgressProfile{env.EgressProfile}
+		}
+		seenEgress := make(map[domain.EgressProfile]struct{}, len(env.EnforceableEgressProfiles))
+		for _, profile := range env.EnforceableEgressProfiles {
+			if !slices.Contains(domain.AllEgressProfiles, profile) {
+				return fmt.Errorf("with admission: enforceable egress profile %q is invalid", profile)
+			}
+			if _, duplicate := seenEgress[profile]; duplicate {
+				return fmt.Errorf("with admission: enforceable egress profile %q is duplicated", profile)
+			}
+			seenEgress[profile] = struct{}{}
+			// A declaration is authority only when this exact composition can
+			// construct a valid admission for the profile. Provider-reaching
+			// profiles retain the configured identity; clean verification must
+			// have none. A single admitter cannot truthfully promise both shapes.
+			switch profile {
+			case domain.EgressProviderOnly, domain.EgressProviderWebRead:
+				if env.AuthIdentityID == nil || *env.AuthIdentityID == "" {
+					return fmt.Errorf(
+						"with admission: enforceable egress profile %q has no auth identity", profile)
+				}
+			case domain.EgressCleanVerification:
+				if env.AuthIdentityID != nil {
+					return fmt.Errorf(
+						"with admission: enforceable egress profile %q retains an auth identity", profile)
+				}
+			}
+		}
+		if len(env.EnforceableEgressProfiles) != 0 {
+			if _, ok := seenEgress[env.EgressProfile]; !ok {
+				return fmt.Errorf("with admission: default egress profile %q is not enforceable", env.EgressProfile)
+			}
+		}
 		// Detached from the caller's values before they become live
 		// configuration: an environment or floor that followed later edits
 		// could weaken the gate, or retarget the credential and waiver
@@ -276,6 +315,29 @@ func (e *Engine) admitAttempt(
 		}
 		promptPackageDigest = e.productionPublication.remediationPromptPackage
 	}
+	var capabilityManifestDigest *domain.Digest
+	if stage.Name == productionStageName {
+		var attempt domain.ProductionAttempt
+		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			attempt, err = tx.GetProductionAttemptByRun(ctx, binding.run.ID)
+			return err
+		}); err != nil {
+			if !errors.Is(err, store.ErrNotFound) {
+				return domain.ExecutionAdmission{}, false, fmt.Errorf(
+					"admit invocation %q production attempt: %w", invocationID, err)
+			}
+		} else if attempt.CapabilityManifestDigest != nil {
+			manifest, err := e.capabilityManifestForRun(ctx, binding.run, *attempt.CapabilityManifestDigest)
+			if err != nil {
+				return domain.ExecutionAdmission{}, false, fmt.Errorf(
+					"admit invocation %q capability manifest: %w", invocationID, err)
+			}
+			env.EgressProfile = manifest.EgressProfile
+			digest := manifest.Digest
+			capabilityManifestDigest = &digest
+		}
+	}
 	stageInputs, err := e.stageInputSnapshot(
 		ctx, binding, inputDigest, promptPackageDigest, isElaboration,
 	)
@@ -328,6 +390,7 @@ func (e *Engine) admitAttempt(
 		OperatingMode:              env.OperatingMode,
 		CredentialMode:             env.CredentialMode,
 		EgressProfile:              env.EgressProfile,
+		CapabilityManifestDigest:   capabilityManifestDigest,
 		ImageRef:                   env.ImageRef,
 		SpecDigest:                 binding.run.SpecDigest,
 		PolicyDigest:               binding.run.PolicyDigest,

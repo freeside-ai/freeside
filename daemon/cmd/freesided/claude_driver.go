@@ -1614,6 +1614,7 @@ func composeClaudeDriver(
 		OperatingMode:             cfg.OperatingMode,
 		CredentialMode:            domain.CredentialSubscriptionContained,
 		EgressProfile:             domain.EgressProviderOnly,
+		EnforceableEgressProfiles: []domain.EgressProfile{domain.EgressProviderOnly},
 		ImageRef:                  cfg.AgentImage,
 		PromptPackageDigest:       promptPackage,
 		ReviewConfigurationDigest: reviewConfigurationDigest,

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -47,7 +48,7 @@ func TestExecutionFailureFactsReuseDriverOutcome(t *testing.T) {
 		Outcome: domain.ExecutionOutcomeFailed, Stage: domain.StageNameImplementation,
 		InvocationID: attempt.InvocationID,
 	}
-	if facts == nil || *facts != *want {
+	if facts == nil || !reflect.DeepEqual(facts, want) {
 		t.Fatalf("facts = %#v, want %#v", facts, want)
 	}
 }

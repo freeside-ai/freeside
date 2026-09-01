@@ -73,6 +73,43 @@ func TestNoOpProposalRevisionHTTPMappingIsAuthoritative(t *testing.T) {
 	}
 }
 
+func TestCapabilityManifestDigestHTTPMapping(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{
+		"command_id":"command-capability","device_id":"device-1",
+		"expected_entity_version":1,"expected_bindings":{},
+		"payload":{"item_id":"item-1","action":"retry_with_capabilities",
+		"item_version":1,"pr_head_sha":"","artifact_digests":[],
+		"capability_manifest_digest":"sha256:capability"}}
+	`)
+	var request clientCommandRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Payload.CapabilityManifestDigest == nil ||
+		*request.Payload.CapabilityManifestDigest != "sha256:capability" {
+		t.Fatalf("capability manifest digest = %v", request.Payload.CapabilityManifestDigest)
+	}
+}
+
+func TestCapabilityManifestSelectionHTTPMappingsAreAuthoritative(t *testing.T) {
+	t.Parallel()
+	for _, sentinel := range []error{
+		ErrInvalidCapabilityRetryDecisionPayload,
+		ErrCapabilityManifestNotOffered,
+	} {
+		recorder := httptest.NewRecorder()
+		writeCommandError(recorder, fmt.Errorf("submit capability retry: %w", sentinel))
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("%v -> %d, want %d", sentinel, recorder.Code, http.StatusBadRequest)
+		}
+		var body errorResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || body.Message == "" {
+			t.Fatalf("%v body = %q, %v; want an error message", sentinel, recorder.Body.String(), err)
+		}
+	}
+}
+
 func TestSnoozedProposalHTTPMappingsAreAuthoritative(t *testing.T) {
 	t.Parallel()
 	command := httptest.NewRecorder()

@@ -229,6 +229,11 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 		return ReconcileResult{}, fmt.Errorf("reconcile operator feedback: %w", err)
 	}
 	runTransitions += feedbackTransitions
+	capabilityRetries, err := e.reconcileCapabilityRetries(ctx)
+	if err != nil {
+		return ReconcileResult{}, fmt.Errorf("reconcile capability retries: %w", err)
+	}
+	runTransitions += capabilityRetries
 	started, accepted, err := e.reconcileInvocations(ctx)
 	if err != nil {
 		return ReconcileResult{}, fmt.Errorf("reconcile invocations: %w", err)

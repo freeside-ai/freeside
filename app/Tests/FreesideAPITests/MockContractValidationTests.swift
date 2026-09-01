@@ -38,6 +38,18 @@ import Testing
         #expect(MockContractValidation.itemValidityBreach(item) == nil)
     }
 
+    @Test func capabilityManifestOffersUseTheDaemonCanonicalDigest() {
+        let executionFailure = AttentionFixtures.fixture(type: .execution_failure).item
+        #expect(MockContractValidation.itemValidityBreach(executionFailure) == nil)
+
+        var forged = executionFailure
+        forged.execution_failure?.value1.offered_manifests?[0].digest =
+            MockContractValidation.sha256Digest(of: "descriptive label only")
+        #expect(
+            MockContractValidation.itemValidityBreach(forged)
+                == "invalid execution_failure capability manifests")
+    }
+
     @Test func recommendationAndDecisionSurfaceBreachesNameTheFailedInvariant() {
         let finding = AttentionFixtures.fixture(type: .finding_adjudication).item
         #expect(MockContractValidation.itemValidityBreach(finding) == nil)

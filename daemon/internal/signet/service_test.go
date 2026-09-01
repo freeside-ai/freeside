@@ -656,15 +656,13 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 
 	t.Run("pending-unit actions rejected without side effects", func(t *testing.T) {
 		// The remaining pending class: actions whose transaction a later unit
-		// owns, whose decision carries parameters DecisionPayload
-		// cannot represent yet, or whose conversation-borne answer's workflow
-		// effect is the Wave 2 engine's. Each must fail loudly instead of
+		// owns or whose decision carries parameters DecisionPayload cannot
+		// represent yet. Each must fail loudly instead of
 		// recording a command whose data is silently dropped. Discuss left
 		// this class with #68's conversation transaction (conversation_test.go).
 		before := f.revision(t)
 		pending := []domain.Action{
 			domain.ActionConvertToPolicy,
-			domain.ActionRetryWithCapability,
 			domain.ActionChooseAlternate,
 		}
 		for _, action := range pending {
