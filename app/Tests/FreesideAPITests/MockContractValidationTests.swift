@@ -246,6 +246,7 @@ import Testing
 
         var legacy = clean
         legacy.readiness = nil
+        legacy.readiness_detail = nil
         #expect(MockContractValidation.itemValidityBreach(legacy) == nil)
 
         var emptyDigest = clean
@@ -259,6 +260,87 @@ import Testing
         #expect(
             MockContractValidation.itemValidityBreach(wrongType)
                 == "readiness on a non-ready_for_final_review item")
+    }
+
+    @Test func readinessDetailIsBoundToReadinessAndTheHead() {
+        let clean = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        #expect(MockContractValidation.itemValidityBreach(clean) == nil)
+        #expect(MockContractValidation.itemValidityBreach(AttentionFixtures.degradedReady().item) == nil)
+        #expect(MockContractValidation.itemValidityBreach(AttentionFixtures.staleReady().item) == nil)
+
+        var legacy = clean
+        legacy.readiness_detail = nil
+        #expect(MockContractValidation.itemValidityBreach(legacy) == nil)
+
+        var wrongType = AttentionFixtures.fixture(type: .spec_approval).item
+        wrongType.readiness_detail = clean.readiness_detail
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "readiness_detail on a non-ready_for_final_review item")
+
+        var withoutSummary = clean
+        withoutSummary.readiness = nil
+        #expect(
+            MockContractValidation.itemValidityBreach(withoutSummary)
+                == "readiness_detail without readiness")
+
+        var digestMismatch = clean
+        digestMismatch.readiness_detail?.value1.evaluation_set_digest = "sha256:other"
+        #expect(
+            MockContractValidation.itemValidityBreach(digestMismatch)
+                == "readiness_detail evaluation_set_digest disagrees with readiness")
+
+        var headMismatch = clean
+        headMismatch.readiness_detail?.value1.candidate_head = "feedface"
+        #expect(
+            MockContractValidation.itemValidityBreach(headMismatch)
+                == "readiness_detail candidate_head disagrees with pr_head_sha")
+
+        var classMismatch = AttentionFixtures.degradedReady().item
+        classMismatch.readiness?.value1._class = .ready_clean
+        #expect(
+            MockContractValidation.itemValidityBreach(classMismatch)
+                == "readiness_detail class disagrees with readiness")
+
+        var blocked = AttentionFixtures.degradedReady().item
+        blocked.readiness_detail?.value1.requirements[3].waiver = nil
+        #expect(
+            MockContractValidation.itemValidityBreach(blocked)
+                == "readiness_detail implies blocked")
+
+        var proofOnFailure = clean
+        proofOnFailure.readiness_detail?.value1.requirements[0].state = .failed
+        #expect(
+            MockContractValidation.itemValidityBreach(proofOnFailure)
+                == "readiness_detail proof disagrees with its state")
+
+        var waiverOnPass = clean
+        waiverOnPass.readiness_detail?.value1.requirements[0].waiver = .init(
+            value1: .init(
+                id: "waiver-1", dimension: "repo_change_policy",
+                authority: .explicit_human_approval, granted_at: AttentionFixtures.createdInstant))
+        #expect(
+            MockContractValidation.itemValidityBreach(waiverOnPass)
+                == "readiness_detail waiver on an ineligible requirement")
+
+        var emptyProof = clean
+        emptyProof.readiness_detail?.value1.requirements[0].proof_recipe_digest = .init(value1: "")
+        #expect(
+            MockContractValidation.itemValidityBreach(emptyProof)
+                == "empty readiness_detail proof_recipe_digest")
+
+        var zeroGrant = AttentionFixtures.degradedReady().item
+        zeroGrant.readiness_detail?.value1.requirements[3].waiver?.value1.granted_at = Date(
+            timeIntervalSince1970: -62_135_596_800)
+        #expect(
+            MockContractValidation.itemValidityBreach(zeroGrant)
+                == "zero readiness_detail waiver granted_at")
+
+        var unordered = clean
+        unordered.readiness_detail?.value1.requirements.reverse()
+        #expect(
+            MockContractValidation.itemValidityBreach(unordered)
+                == "readiness_detail requirements out of key order")
     }
 
     @Test func reviewYieldHistoryIsTypeScopedConsistentAndLegacyOptional() {

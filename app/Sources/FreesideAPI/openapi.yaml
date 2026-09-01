@@ -1930,6 +1930,143 @@ components:
         evaluation_set_digest:
           $ref: "#/components/schemas/Digest"
 
+    ReadinessRequirementState:
+      type: string
+      description: >
+        One requirement's outcome as the ready card lists it (plan §6;
+        domain.ReadinessRequirementState): the applicable proof/failure
+        sum flattened to a closed vocabulary. A pass carries its proof
+        recipe; a required failure or not_run stays on a ready item only
+        under a waiver.
+      enum:
+        - passed
+        - failed
+        - not_run
+        - not_applicable
+
+    VerificationCheckClass:
+      type: string
+      description: >
+        A registered §6 requirement class (domain.VerificationCheckClass).
+        Only repo_change_policy admits a waiver; clean_verification and
+        independent_review never do.
+      enum:
+        - clean_verification
+        - independent_review
+        - repo_change_policy
+
+    RequirementKind:
+      type: string
+      description: >
+        Whether an applicable check is required for readiness or advisory
+        only (domain.RequirementKind). An optional non-pass degrades the
+        verdict; a required one blocks it unless waived.
+      enum:
+        - required
+        - optional
+
+    WaiverGrantingAuthority:
+      type: string
+      description: >
+        The closed set that can accept degraded readiness (plan §6;
+        domain.WaiverGrantingAuthority). Resolved policy and agent inference
+        are intentionally absent.
+      enum:
+        - explicit_human_approval
+        - daemon_trusted_configuration
+
+    ReadinessWaiver:
+      type: object
+      description: >
+        The waiver that lets a required failure stay ready (plan §6; mirrors
+        domain.ReadinessWaiver): its identity, the dimension it covers, the
+        authority that granted it, and when.
+      additionalProperties: false
+      required: [id, dimension, authority, granted_at]
+      properties:
+        id:
+          type: string
+          minLength: 1
+        dimension:
+          type: string
+          minLength: 1
+        authority:
+          $ref: "#/components/schemas/WaiverGrantingAuthority"
+        granted_at:
+          type: string
+          format: date-time
+
+    ReadinessRequirement:
+      type: object
+      description: >
+        One evaluated requirement as the ready card lists it (mirrors
+        domain.ReadinessRequirement). proof_recipe_digest is present exactly
+        when the state is passed; waiver is present only on a required,
+        waiver-eligible failure or not_run. The client renders the entry
+        from these typed fields and derives no reason from the verdict class.
+      additionalProperties: false
+      required: [requirement_key, check_class, kind, state, proof_recipe_digest, waiver]
+      properties:
+        requirement_key:
+          type: string
+          minLength: 1
+        check_class:
+          $ref: "#/components/schemas/VerificationCheckClass"
+        kind:
+          $ref: "#/components/schemas/RequirementKind"
+        state:
+          $ref: "#/components/schemas/ReadinessRequirementState"
+        proof_recipe_digest:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Digest"
+          description: The recipe digest of the proof behind a passed entry.
+        waiver:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ReadinessWaiver"
+
+    ReadinessBoundBase:
+      type: object
+      description: The base the evaluation's proofs were bound to.
+      additionalProperties: false
+      required: [base_ref, base_sha]
+      properties:
+        base_ref:
+          type: string
+          minLength: 1
+        base_sha:
+          type: string
+          minLength: 1
+
+    ReadinessDetail:
+      type: object
+      description: >
+        The evaluation behind a ready item's verdict (plan §6; mirrors
+        domain.ReadinessDetail): the evaluation-set digest, the exact
+        candidate head and base the proofs bind, and every requirement of
+        the evaluated set in key order with its state, proof recipe, or
+        waiver. Built by the daemon from the same evaluation that produced
+        readiness, so its digest equals readiness.evaluation_set_digest and
+        its candidate_head equals pr_head_sha. Clients compare only these
+        daemon-supplied coordinates against readiness_invalidation and
+        base_freshness to render a stale verdict as stale.
+      additionalProperties: false
+      required: [evaluation_set_digest, candidate_head, base, requirements]
+      properties:
+        evaluation_set_digest:
+          $ref: "#/components/schemas/Digest"
+        candidate_head:
+          type: string
+          minLength: 1
+        base:
+          $ref: "#/components/schemas/ReadinessBoundBase"
+        requirements:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ReadinessRequirement"
+
     ReviewYieldRound:
       type: object
       description: >
@@ -2415,6 +2552,7 @@ components:
         - pr_head_sha
         - pr_reference
         - readiness
+        - readiness_detail
         - yield_history
         - commit_plan_notice
         - base_freshness
@@ -2517,6 +2655,19 @@ components:
             domain.AttentionItem.Readiness). Production-created ready items
             always carry it; null is tolerated for legacy persisted items and
             fake-mode items that did not run Section 6 verification. It is
+            fixed at creation and never client-set.
+        readiness_detail:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ReadinessDetail"
+          description: >
+            The evaluation behind readiness for this ready_for_final_review
+            item (plan §6; mirrors domain.AttentionItem.ReadinessDetail):
+            the bound head and base and every requirement's state, proof
+            recipe, or waiver identity and granting authority.
+            Production-created ready items always carry it beside
+            readiness; null is tolerated for legacy persisted items and
+            fake-mode items, and it never appears without readiness. It is
             fixed at creation and never client-set.
         yield_history:
           nullable: true
@@ -2767,6 +2918,25 @@ components:
         readiness:
           class: "ready_clean"
           evaluation_set_digest: "sha256:evaluation"
+        readiness_detail:
+          evaluation_set_digest: "sha256:evaluation"
+          candidate_head: "cafebabe"
+          base:
+            base_ref: "main"
+            base_sha: "deadbeef"
+          requirements:
+            - requirement_key: "clean-verification"
+              check_class: "clean_verification"
+              kind: "required"
+              state: "passed"
+              proof_recipe_digest: "sha256:recipe"
+              waiver: null
+            - requirement_key: "independent-review"
+              check_class: "independent_review"
+              kind: "required"
+              state: "passed"
+              proof_recipe_digest: "sha256:review-config"
+              waiver: null
         yield_history:
           rounds:
             - round: 1

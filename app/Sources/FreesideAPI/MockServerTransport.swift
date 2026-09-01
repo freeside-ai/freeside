@@ -519,6 +519,11 @@ public struct MockServerTransport: ClientTransport {
             object["readiness"] = NSNull()
         }
         if object["item_version"] != nil, object["requested_decision"] != nil,
+            !object.keys.contains("readiness_detail")
+        {
+            object["readiness_detail"] = NSNull()
+        }
+        if object["item_version"] != nil, object["requested_decision"] != nil,
             !object.keys.contains("yield_history")
         {
             object["yield_history"] = NSNull()

@@ -69,6 +69,69 @@ enum MockContractValidation {
     /// subject, and caller-set publish_eligible. Recipe approval is
     /// runtime policy: snapshotBreach re-runs that gate against the
     /// server's approved set, since Validate holds no policy.
+    /// The daemon's rules for the readiness detail (domain.ReadinessDetail and
+    /// AttentionItem.Validate): ready items only, never without the summary it
+    /// explains, bound to the summary's digest and class and to the published
+    /// head, entries in key order, a proof exactly on a pass, a waiver only on
+    /// a required waiver-eligible non-pass, and never a blocked shape.
+    static func readinessDetailBreach(
+        _ detail: Components.Schemas.ReadinessDetail,
+        item: Components.Schemas.AttentionItem
+    ) -> String? {
+        if item._type != .ready_for_final_review {
+            return "readiness_detail on a non-ready_for_final_review item"
+        }
+        guard let readiness = item.readiness?.value1 else {
+            return "readiness_detail without readiness"
+        }
+        if detail.evaluation_set_digest != readiness.evaluation_set_digest {
+            return "readiness_detail evaluation_set_digest disagrees with readiness"
+        }
+        if detail.candidate_head != item.pr_head_sha {
+            return "readiness_detail candidate_head disagrees with pr_head_sha"
+        }
+        if detail.base.base_ref.isEmpty || detail.base.base_sha.isEmpty {
+            return "empty readiness_detail base"
+        }
+        if detail.requirements.isEmpty { return "empty readiness_detail requirements" }
+        var previousKey = ""
+        var impliedClass = Components.Schemas.ReadinessSummary._classPayload.ready_clean
+        for requirement in detail.requirements {
+            if requirement.requirement_key.isEmpty || requirement.requirement_key <= previousKey {
+                return "readiness_detail requirements out of key order"
+            }
+            previousKey = requirement.requirement_key
+            if (requirement.proof_recipe_digest != nil) != (requirement.state == .passed) {
+                return "readiness_detail proof disagrees with its state"
+            }
+            if requirement.proof_recipe_digest?.value1.isEmpty == true {
+                return "empty readiness_detail proof_recipe_digest"
+            }
+            let nonPassing = requirement.state == .failed || requirement.state == .not_run
+            if let waiver = requirement.waiver?.value1 {
+                if !nonPassing || requirement.kind != .required
+                    || requirement.check_class != .repo_change_policy
+                {
+                    return "readiness_detail waiver on an ineligible requirement"
+                }
+                if waiver.id.isEmpty || waiver.dimension.isEmpty {
+                    return "empty readiness_detail waiver identity"
+                }
+                if waiver.granted_at.timeIntervalSince1970 < -62_000_000_000 {
+                    return "zero readiness_detail waiver granted_at"
+                }
+                impliedClass = .ready_degraded
+            } else if nonPassing {
+                if requirement.kind == .required { return "readiness_detail implies blocked" }
+                impliedClass = .ready_degraded
+            }
+        }
+        if impliedClass != readiness._class {
+            return "readiness_detail class disagrees with readiness"
+        }
+        return nil
+    }
+
     static func itemValidityBreach(
         _ item: Components.Schemas.AttentionItem
     ) -> String? {
@@ -112,6 +175,9 @@ enum MockContractValidation {
             if readiness.evaluation_set_digest.isEmpty {
                 return "empty readiness evaluation_set_digest"
             }
+        }
+        if let detail = item.readiness_detail?.value1 {
+            if let breach = readinessDetailBreach(detail, item: item) { return breach }
         }
         if let history = item.yield_history?.value1 {
             if item._type != .ready_for_final_review

@@ -96,6 +96,40 @@ import Testing
         #expect(degraded.yield_history == clean.yield_history)
     }
 
+    @Test func readyFixturesCarryTheEvaluationBehindTheirVerdict() throws {
+        let clean = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        let cleanDetail = try #require(clean.readiness_detail?.value1)
+        #expect(cleanDetail.evaluation_set_digest == clean.readiness?.value1.evaluation_set_digest)
+        #expect(cleanDetail.candidate_head == clean.pr_head_sha)
+        #expect(cleanDetail.base == .init(base_ref: "main", base_sha: "deadbeef"))
+        #expect(
+            cleanDetail.requirements.map(\.requirement_key)
+                == ["clean-verification", "independent-review"])
+        #expect(cleanDetail.requirements.allSatisfy { $0.state == .passed && $0.waiver == nil })
+
+        let degraded = AttentionFixtures.degradedReady().item
+        let degradedDetail = try #require(degraded.readiness_detail?.value1)
+        #expect(
+            degradedDetail.evaluation_set_digest
+                == degraded.readiness?.value1.evaluation_set_digest)
+        let waived = try #require(
+            degradedDetail.requirements.first { $0.requirement_key == "repo-change-policy" })
+        #expect(waived.state == .failed)
+        #expect(waived.waiver?.value1.id == "waiver-1")
+        #expect(waived.waiver?.value1.authority == .explicit_human_approval)
+        let advisory = try #require(
+            degradedDetail.requirements.first { $0.requirement_key == "license-headers" })
+        #expect(advisory.kind == .optional)
+        #expect(advisory.state == .not_run)
+        #expect(advisory.waiver == nil)
+
+        let stale = AttentionFixtures.staleReady().item
+        #expect(stale.status == .superseded)
+        #expect(stale.readiness_invalidation?.value1.bound == stale.readiness_detail?.value1.candidate_head)
+        #expect(stale.readiness_invalidation?.value1.observed == "feedface")
+        #expect(AttentionFixtures.fixture(type: .spec_approval).item.readiness_detail == nil)
+    }
+
     @Test func diminishingFixtureCarriesReviewYieldHistory() {
         let item = AttentionFixtures.fixture(type: .review_diminishing_returns).item
 

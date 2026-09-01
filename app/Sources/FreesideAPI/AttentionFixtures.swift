@@ -219,9 +219,38 @@ public enum AttentionFixtures {
         ]
     }
 
+    /// The evaluation behind the ready fixture's clean verdict, matching the
+    /// daemon's golden: the production set's two required checks passed
+    /// against the published head and the admitted base.
+    static func cleanReadinessDetail(head: String) -> Components.Schemas.ReadinessDetail {
+        .init(
+            evaluation_set_digest: "sha256:evaluation-clean",
+            candidate_head: head,
+            base: .init(base_ref: "main", base_sha: "deadbeef"),
+            requirements: [
+                .init(
+                    requirement_key: "clean-verification",
+                    check_class: .clean_verification,
+                    kind: .required,
+                    state: .passed,
+                    proof_recipe_digest: .init(value1: "sha256:recipe"),
+                    waiver: nil),
+                .init(
+                    requirement_key: "independent-review",
+                    check_class: .independent_review,
+                    kind: .required,
+                    state: .passed,
+                    proof_recipe_digest: .init(value1: "sha256:review-config"),
+                    waiver: nil),
+            ])
+    }
+
     /// A ready fixture carrying the other valid readiness class. The default
     /// inbox remains clean; tests and screenshots can opt into this one to
-    /// prove degraded readiness survives sync and renders distinctly.
+    /// prove degraded readiness survives sync and renders distinctly. Its
+    /// detail carries the waived required policy failure, with the waiver's
+    /// identity and granting authority, beside an optional check that never
+    /// ran, so the card can list why the verdict is degraded.
     public static func degradedReady() -> Components.Schemas.AttentionItemSnapshot {
         var snapshot = fixture(type: .ready_for_final_review)
         snapshot.item.id = "item-ready_for_final_review-degraded"
@@ -230,6 +259,49 @@ public enum AttentionFixtures {
                 _class: .ready_degraded,
                 evaluation_set_digest: "sha256:evaluation-degraded"
             ))
+        var detail = cleanReadinessDetail(head: snapshot.item.pr_head_sha)
+        detail.evaluation_set_digest = "sha256:evaluation-degraded"
+        detail.requirements.append(
+            .init(
+                requirement_key: "license-headers",
+                check_class: .repo_change_policy,
+                kind: .optional,
+                state: .not_run,
+                proof_recipe_digest: nil,
+                waiver: nil))
+        detail.requirements.append(
+            .init(
+                requirement_key: "repo-change-policy",
+                check_class: .repo_change_policy,
+                kind: .required,
+                state: .failed,
+                proof_recipe_digest: nil,
+                waiver: .init(
+                    value1: .init(
+                        id: "waiver-1",
+                        dimension: "repo_change_policy",
+                        authority: .explicit_human_approval,
+                        granted_at: createdInstant.addingTimeInterval(-3600)))))
+        snapshot.item.readiness_detail = .init(value1: detail)
+        return snapshot
+    }
+
+    /// A ready fixture whose verdict the daemon has invalidated: the item is
+    /// superseded because the pull request's head moved past the head the
+    /// detail was bound to (`readiness_invalidation.bound`), so the card must
+    /// render the bound verdict as stale beside the observed head, never as
+    /// the current verdict.
+    public static func staleReady() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .ready_for_final_review)
+        snapshot.item.id = "item-ready_for_final_review-stale"
+        snapshot.item.status = .superseded
+        snapshot.item.item_version = 2
+        snapshot.item.readiness_invalidation = .init(
+            value1: .init(
+                reason: .head_changed,
+                bound: snapshot.item.pr_head_sha,
+                observed: "feedface",
+                observed_at: createdInstant.addingTimeInterval(3000)))
         return snapshot
     }
 
@@ -478,6 +550,9 @@ public enum AttentionFixtures {
                     evaluation_set_digest: "sha256:evaluation-clean"
                 ))
             : nil
+        let readinessDetail: Components.Schemas.AttentionItem.readiness_detailPayload? =
+            type == .ready_for_final_review
+            ? .init(value1: cleanReadinessDetail(head: prHeadSHA)) : nil
         let yieldHistory: Components.Schemas.AttentionItem.yield_historyPayload?
         switch type {
         case .ready_for_final_review:
@@ -748,6 +823,7 @@ public enum AttentionFixtures {
             pr_head_sha: prHeadSHA,
             pr_reference: prReference,
             readiness: readiness,
+            readiness_detail: readinessDetail,
             yield_history: yieldHistory,
             commit_plan_notice: commitPlanNotice,
             review_recovery_binding: reviewRecoveryBinding,
