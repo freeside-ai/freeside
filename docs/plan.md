@@ -62,6 +62,11 @@ why.
   - [5.17 Follow-Up Issue Filing](#517-follow-up-issue-filing)
   - [5.18 The World Model: Post-Merge Recompute and Frontier Projection](#518-the-world-model-post-merge-recompute-and-frontier-projection)
   - [5.19 Deferred Subsystems: Provisional Contracts](#519-deferred-subsystems-provisional-contracts)
+    - [Scoped Consent Grants (Deferred past 1B)](#scoped-consent-grants-deferred-past-1b)
+    - [External Findings Ingestion (Deferred)](#external-findings-ingestion-deferred)
+    - [Pre-Publication Adversarial Pass (Deferred)](#pre-publication-adversarial-pass-deferred)
+    - [Managed Reachability Relay (Deferred, Unscheduled)](#managed-reachability-relay-deferred-unscheduled)
+    - [Readiness Registry (Deferred)](#readiness-registry-deferred)
 - [6. Verification](#6-verification)
   - [The Verification State Algebra](#the-verification-state-algebra)
 - [7. Review Policy](#7-review-policy)
@@ -2497,7 +2502,9 @@ scope serializes. The planner judgment call waits past 1B.
 The contracts below are design constraints for deferred subsystems, recorded
 now and re-reviewed at implementation. None is scheduled inside 1B.
 
-**Scoped consent grants (deferred past 1B).** A standing permission binds:
+#### Scoped Consent Grants (Deferred past 1B)
+
+A standing permission binds:
 
 - The canonical repository ID.
 - The effect kind.
@@ -2544,7 +2551,9 @@ Grants pre-answer a risk acknowledgement only; digest- and head-bound approvals
 and non-waivable gates are untouched. Until this is built, per-run authorization
 continues (an accepted cost; revisit at the 1B exit).
 
-**External findings ingestion (deferred).** Externally produced reviews are
+#### External Findings Ingestion (Deferred)
+
+Externally produced reviews are
 quarantined at entry. They enter as quota-bound advisory proposals (a future
 effect kind added to the Section 5.13 registry with this subsystem) with
 `external_untrusted` provenance, a raw-source digest, and a reconstructed
@@ -2560,7 +2569,9 @@ deduplication, and a declared authority-site contract (Section 5.13). External
 findings never satisfy ReviewSource freshness, independence, or
 review-completeness.
 
-**Pre-publication adversarial pass (deferred).** An optional adversarial
+#### Pre-Publication Adversarial Pass (Deferred)
+
+An optional adversarial
 self-review before a PR opens, so the external reviewer starts from a higher
 floor. It reviews the daemon-constructed publication candidate after hostile
 import, never the raw workspace. Each pass binds the exact candidate head and
@@ -2571,7 +2582,9 @@ the Section 7 review requirement, which itself anchors pre-publication
 (revision 28): the Section 7 pass is required; this pass is optional and
 deferred.
 
-**Managed reachability relay (deferred, unscheduled).** A future managed relay
+#### Managed Reachability Relay (Deferred, Unscheduled)
+
+A future managed relay
 may provide authenticated bidirectional byte transport between an enrolled host
 and its paired clients. `freesided` stays loopback-bound and holds an outbound
 connector authenticated by the Section 5.9 host identity; clients use ordinary
@@ -2634,7 +2647,9 @@ for large artifacts is a separate deferred concern, taken up only if measured
 payloads demand it, and artifact authority stays local and digest-addressed
 regardless.
 
-**Readiness registry (deferred).** When built, it is a projection over current
+#### Readiness Registry (Deferred)
+
+When built, it is a projection over current
 typed proofs, recomputed on read, never a stored ready bit. The Section 10
 doctor consumes it.
 
