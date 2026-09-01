@@ -1480,6 +1480,13 @@ components:
             answer_without_retry, and return_to_agent; absent for pure
             decisions. The daemon binds it to the versioned command and
             applies each action's size and attachment policy.
+        capability_manifest_digest:
+          allOf:
+            - $ref: "#/components/schemas/Digest"
+          description: >
+            The offered capability manifest selected by
+            retry_with_capabilities. Required only for that action; the daemon
+            re-derives the manifest from the run's current resolved policy.
         attachments:
           type: array
           items:
@@ -2029,6 +2036,30 @@ components:
         invocation_id:
           type: string
           minLength: 1
+        offered_manifests:
+          type: array
+          items:
+            $ref: "#/components/schemas/CapabilityManifestOffer"
+          description: >
+            Canonically name-sorted capability alternatives that the current
+            daemon composition can enforce and that differ from the failed
+            admission. Presence is what authorizes retry_with_capabilities.
+
+    CapabilityManifestOffer:
+      type: object
+      description: A policy-derived capability manifest offered for an execution retry.
+      additionalProperties: false
+      required: [name, egress_profile, digest]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '^[ -~]+$'
+        egress_profile:
+          type: string
+          enum: [provider_only, provider_web_read, clean_verification]
+        digest:
+          $ref: "#/components/schemas/Digest"
 
     TrustRule:
       type: string

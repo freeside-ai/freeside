@@ -144,7 +144,7 @@ func (s *Service) validateCommandContent(command domain.Command) error {
 		}
 		return nil
 	}
-	if kind != outcomeDiscusses {
+	if kind != outcomeDiscusses && kind != outcomeRetriesWithCapabilities {
 		if command.Message != "" || len(command.Attachments) > 0 {
 			return fmt.Errorf("action %q: %w", command.Action, ErrContentNotAllowed)
 		}

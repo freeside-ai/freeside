@@ -374,6 +374,22 @@ enum MockContractValidation {
             guard case .run(let subject) = item.subject, subject.run_id != nil else {
                 return "execution_failure facts on a non-run subject"
             }
+            let offers = failure.offered_manifests ?? []
+            if offers.map(\.name) != offers.map(\.name).sorted()
+                || Set(offers.map(\.name)).count != offers.count
+                || Set(offers.map(\.digest)).count != offers.count
+                || offers.contains(where: {
+                    $0.name.isEmpty
+                        || $0.digest
+                            != capabilityManifestDigest(
+                                name: $0.name, egressProfile: $0.egress_profile.rawValue)
+                })
+            {
+                return "invalid execution_failure capability manifests"
+            }
+            if item.requested_decision.contains(.retry_with_capabilities) != !offers.isEmpty {
+                return "retry_with_capabilities does not match offered manifests"
+            }
         }
         if let block = item.publish_block?.value1 {
             if item._type != .publish_blocked {
@@ -728,9 +744,19 @@ enum MockContractValidation {
             MockServer.MalformedCommandError(commandID: command.command_id, reason: reason)
         }
         switch command.payload.action {
+        case .retry_with_capabilities:
+            guard let digest = command.payload.capability_manifest_digest?.value1,
+                !digest.isEmpty,
+                (command.payload.message ?? "").isEmpty,
+                (command.payload.attachments ?? []).isEmpty,
+                command.payload.run_proposal_revision == nil,
+                command.payload.snooze_until == nil,
+                command.payload.alternative_choices == nil
+            else { throw malformed("invalid capability manifest selection") }
         case .discuss:
             guard let message = command.payload.message,
                 !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                command.payload.capability_manifest_digest == nil,
                 command.payload.run_proposal_revision == nil,
                 command.payload.snooze_until == nil,
                 command.payload.alternative_choices == nil
@@ -741,6 +767,7 @@ enum MockContractValidation {
                 message.lengthOfBytes(using: .utf8) <= 8192,
                 command.command_id.lengthOfBytes(using: .utf8) <= 256,
                 (command.payload.attachments ?? []).isEmpty,
+                command.payload.capability_manifest_digest == nil,
                 command.payload.run_proposal_revision == nil,
                 command.payload.snooze_until == nil,
                 command.payload.alternative_choices == nil
@@ -751,6 +778,7 @@ enum MockContractValidation {
                 message.lengthOfBytes(using: .utf8) <= 8192,
                 command.command_id.lengthOfBytes(using: .utf8) <= 256,
                 (command.payload.attachments ?? []).isEmpty,
+                command.payload.capability_manifest_digest == nil,
                 command.payload.run_proposal_revision == nil,
                 command.payload.snooze_until == nil,
                 command.payload.alternative_choices == nil
@@ -761,6 +789,7 @@ enum MockContractValidation {
                 (command.payload.message ?? "").isEmpty,
                 (command.payload.attachments ?? []).isEmpty,
                 command.payload.alternative_choices == nil,
+                command.payload.capability_manifest_digest == nil,
                 revision.expected_cost_units >= 1,
                 revision.expected_cost_units <= 1_000_000,
                 revision.scope.component_count >= 1,
@@ -773,7 +802,8 @@ enum MockContractValidation {
                 command.payload.run_proposal_revision == nil,
                 (command.payload.message ?? "").isEmpty,
                 (command.payload.attachments ?? []).isEmpty,
-                command.payload.alternative_choices == nil
+                command.payload.alternative_choices == nil,
+                command.payload.capability_manifest_digest == nil
             else { throw malformed("invalid snooze_until") }
         case .choose_alternative_route:
             guard let choices = command.payload.alternative_choices, !choices.isEmpty,
@@ -782,19 +812,22 @@ enum MockContractValidation {
                 (command.payload.message ?? "").isEmpty,
                 (command.payload.attachments ?? []).isEmpty,
                 command.payload.run_proposal_revision == nil,
-                command.payload.snooze_until == nil
+                command.payload.snooze_until == nil,
+                command.payload.capability_manifest_digest == nil
             else { throw malformed("invalid alternative_choices") }
         case .accept_recommended_route:
             guard command.payload.alternative_choices == nil,
                 (command.payload.message ?? "").isEmpty,
                 (command.payload.attachments ?? []).isEmpty,
                 command.payload.run_proposal_revision == nil,
-                command.payload.snooze_until == nil
+                command.payload.snooze_until == nil,
+                command.payload.capability_manifest_digest == nil
             else { throw malformed("finding adjudication input on accept") }
         default:
             guard command.payload.run_proposal_revision == nil,
                 command.payload.snooze_until == nil,
                 command.payload.alternative_choices == nil,
+                command.payload.capability_manifest_digest == nil,
                 (command.payload.message ?? "").isEmpty,
                 (command.payload.attachments ?? []).isEmpty
             else { throw malformed("proposal input on unrelated action") }
@@ -994,6 +1027,15 @@ enum MockContractValidation {
     /// fixtures and the validation mirror share.
     static func sha256Digest(of content: String) -> String {
         "sha256:" + SHA256.hash(data: Data(content.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Mirrors CapabilityManifest.ComputeDigest's versioned Go struct
+    /// encoding. Keep the field order exact because the digest addresses
+    /// those bytes, not an unordered JSON object.
+    static func capabilityManifestDigest(name: String, egressProfile: String) -> String {
+        sha256Digest(
+            of: "{\"encoding_version\":1,\"name\":\(goJSONString(name)),"
+                + "\"egress_profile\":\(goJSONString(egressProfile))}")
     }
 
     /// Mirrors Go's `json.Marshal([]SpecAddressalClaim)` byte-for-byte for

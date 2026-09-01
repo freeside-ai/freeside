@@ -265,7 +265,10 @@ var (
 	// #894). ErrInvalidDigest is the generic shape refusal for a field that
 	// must be a content address; digest-vs-content mismatches keep their
 	// per-type sentinels.
-	ErrInvalidDigest          = errors.New("digest is not a valid content address")
+	ErrInvalidDigest                    = errors.New("digest is not a valid content address")
+	ErrCapabilityManifestInvalid        = errors.New("capability manifest is invalid")
+	ErrCapabilityManifestDigestMismatch = errors.New(
+		"capability manifest digest does not match its canonical content")
 	ErrAccountBindingMismatch = errors.New(
 		"credential account binding does not match its identity's")
 	ErrAccountBindingTaken = errors.New(

@@ -259,7 +259,7 @@ enum AttentionDisplay {
         case .continue_under_policy: return "Continue under policy"
         case .convert_to_policy: return "Convert to policy"
         case .retry: return "Retry"
-        case .retry_with_capabilities: return "Retry with capabilities"
+        case .retry_with_capabilities: return "Retry with profile"
         case .answer_and_retry: return "Answer and retry"
         case .answer_without_retry: return "Answer without retry"
         case .rerun_trust_evaluation: return "Rerun trust evaluation"

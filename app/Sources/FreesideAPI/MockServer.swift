@@ -1044,6 +1044,17 @@ public actor MockServer {
             throw ActionNotOfferedError(
                 commandID: command.command_id, action: payload.action, itemID: payload.item_id)
         }
+        if payload.action == .retry_with_capabilities {
+            guard let digest = payload.capability_manifest_digest?.value1,
+                current.item.execution_failure?.value1.offered_manifests?.contains(where: {
+                    $0.digest == digest
+                }) == true
+            else {
+                throw MalformedCommandError(
+                    commandID: command.command_id,
+                    reason: "capability manifest was not offered")
+            }
+        }
         switch ActionOutcome.of(payload.action) {
         case .discusses:
             if let conversationID = current.item.conversation_id,

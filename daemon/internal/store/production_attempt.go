@@ -414,6 +414,10 @@ func (tx *WriteTx) PutProductionAttempt(ctx context.Context, attempt domain.Prod
 				attempt.CampaignID, attempt.AttemptNumber, domain.ErrParentKeyMismatch)
 		}
 	}
+	if err := tx.authenticateCapabilityRetryAttempt(ctx, attempt); err != nil {
+		return fmt.Errorf("put production attempt %s/%d capability retry: %w",
+			attempt.CampaignID, attempt.AttemptNumber, err)
+	}
 	body, err := encode(attempt)
 	if err != nil {
 		return fmt.Errorf("put production attempt %s/%d: %w", attempt.CampaignID, attempt.AttemptNumber, err)
@@ -548,6 +552,9 @@ func (tx *ReadTx) authenticateReconstructedProductionAttempt(ctx context.Context
 	if attempt.AttemptNumber < 2 {
 		return domain.ErrParentKeyMismatch
 	}
+	if err := tx.authenticateCapabilityRetryAttempt(ctx, attempt); err != nil {
+		return err
+	}
 	parent, err := tx.productionAttemptByRun(ctx, attempt.ParentRunID)
 	if err != nil {
 		return err
@@ -559,6 +566,54 @@ func (tx *ReadTx) authenticateReconstructedProductionAttempt(ctx context.Context
 		return domain.ErrParentKeyMismatch
 	}
 	return tx.authenticateReconstructedProductionAttempt(ctx, parent)
+}
+
+func (tx *ReadTx) authenticateCapabilityRetryAttempt(
+	ctx context.Context, attempt domain.ProductionAttempt,
+) error {
+	if attempt.OperatorCommandID == nil {
+		return nil
+	}
+	command, err := tx.GetCommand(ctx, *attempt.OperatorCommandID)
+	if err != nil {
+		return err
+	}
+	item, err := tx.GetAttentionItemRecord(ctx, command.ItemID)
+	if err != nil {
+		return err
+	}
+	if command.Action != domain.ActionRetryWithCapability ||
+		attempt.RetryOfInvocationID == nil || attempt.CapabilityManifestDigest == nil ||
+		command.Message != string(*attempt.CapabilityManifestDigest) ||
+		command.ItemID != item.ID || command.ItemVersion+1 != item.ItemVersion ||
+		command.PRHeadSHA != item.PRHeadSHA ||
+		!slices.Equal(command.ArtifactDigests, item.ArtifactDigests) ||
+		item.Status != domain.StatusSuperseded || item.DecidedAt == nil ||
+		item.Type != domain.AttentionExecutionFailure || item.ExecutionFailure == nil ||
+		item.ExecutionFailure.Stage != domain.StageNameImplementation ||
+		item.ExecutionFailure.InvocationID != *attempt.RetryOfInvocationID ||
+		item.Subject.RunID == nil || *item.Subject.RunID != attempt.ParentRunID ||
+		!slices.ContainsFunc(item.ExecutionFailure.OfferedManifests,
+			func(offer domain.CapabilityManifestOffer) bool {
+				return offer.Digest == *attempt.CapabilityManifestDigest
+			}) {
+		return domain.ErrParentKeyMismatch
+	}
+	policy, err := tx.GetResolvedPolicy(ctx, attempt.ParentRunID)
+	if err != nil {
+		return err
+	}
+	manifests, err := domain.CapabilityManifestsFromPolicy(policy)
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(manifests, func(manifest domain.CapabilityManifest) bool {
+		return manifest.Digest == *attempt.CapabilityManifestDigest &&
+			slices.Contains(item.ExecutionFailure.OfferedManifests, manifest.Offer())
+	}) {
+		return domain.ErrParentKeyMismatch
+	}
+	return nil
 }
 
 func (tx *ReadTx) GetProductionAttemptByRun(

@@ -1504,6 +1504,25 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 			if err != nil {
 				return err
 			}
+			if facts != nil && e.admission != nil {
+				policy, policyErr := tx.GetResolvedPolicy(ctx, run.ID)
+				admission, admissionErr := tx.GetExecutionAdmissionRecord(ctx, terminal.InvocationID)
+				if policyErr != nil {
+					return policyErr
+				}
+				if admissionErr != nil {
+					return admissionErr
+				}
+				manifests, manifestErr := domain.CapabilityManifestsFromPolicy(policy)
+				if manifestErr == nil {
+					for _, manifest := range manifests {
+						if manifest.EgressProfile != admission.EgressProfile &&
+							slices.Contains(e.admission.environment.EnforceableEgressProfiles, manifest.EgressProfile) {
+							facts.OfferedManifests = append(facts.OfferedManifests, manifest.Offer())
+						}
+					}
+				}
+			}
 			names, err := tx.DisplayNamesFor(ctx, run.ProjectID, domain.Subject{
 				Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,
 			})
@@ -1689,8 +1708,8 @@ func (e *Engine) recordProductionDeliveryRefusal(
 // productionFailureItem is the §4 execution_failure notice for a production
 // stage that ended without an accepted result. Deterministic identity and
 // content, so a replayed pass converges instead of raising a second item.
-// Discuss and stop are executable now. Retry remains absent until its own
-// transaction lands.
+// Discuss and stop are always executable. A capability retry is offered only
+// when the failure facts carry a policy-derived, enforceable alternative.
 func productionFailureItem(
 	run domain.Run, terminal productionTerminalRecord, createdAt time.Time,
 	facts *domain.ExecutionFailureFacts, displayNames *domain.DisplayNames,
@@ -1701,13 +1720,17 @@ func productionFailureItem(
 	if terminal.Summary != "" {
 		reason += " Summary: " + terminal.Summary
 	}
+	actions := []domain.Action{domain.ActionDiscuss, domain.ActionStop}
+	if facts != nil && len(facts.OfferedManifests) != 0 {
+		actions = append([]domain.Action{domain.ActionRetryWithCapability}, actions...)
+	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID:        domain.ItemID("execution-failure-" + string(terminal.InvocationID)),
 		ProjectID: run.ProjectID,
 		Subject:   domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
 		Type:      domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
 		Reason:            reason,
-		RequestedDecision: []domain.Action{domain.ActionDiscuss, domain.ActionStop},
+		RequestedDecision: actions,
 		ExecutionFailure:  facts,
 		DisplayNames:      displayNames,
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,

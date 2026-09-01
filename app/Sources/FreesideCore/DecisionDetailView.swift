@@ -59,6 +59,7 @@ struct DecisionDetailView: View {
     @State private var messageEditor: MessageEditor?
     @State private var specApprovalReader: SpecApprovalReader?
     @State private var pendingConfirmation: PendingConfirmation?
+    @State private var capabilityRetrySnapshot: Components.Schemas.AttentionItemSnapshot?
     @State private var sectionPreferences: DecisionSectionPreferences
     @State private var inspectorPresented: Bool
     @State private var detailWidth: CGFloat = 0
@@ -218,6 +219,30 @@ struct DecisionDetailView: View {
                     }
                 }
             }
+            .confirmationDialog(
+                "Choose retry capabilities",
+                isPresented: capabilityRetryIsPresented,
+                titleVisibility: .visible
+            ) {
+                if let reviewedSnapshot = capabilityRetrySnapshot {
+                    ForEach(
+                        reviewedSnapshot.item.execution_failure?.value1.offered_manifests ?? [],
+                        id: \.digest
+                    ) { manifest in
+                        Button("\(manifest.name) · \(manifest.egress_profile.rawValue)") {
+                            capabilityRetrySnapshot = nil
+                            Task {
+                                await model.submitCapabilityRetry(
+                                    manifestDigest: manifest.digest,
+                                    reviewedSnapshot: reviewedSnapshot)
+                            }
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) { capabilityRetrySnapshot = nil }
+            } message: {
+                Text("The daemon will verify the selected manifest again before admission.")
+            }
             #if os(iOS)
                 .sheet(item: $specApprovalReader) { reader in
                     if let item = model.snapshot?.item {
@@ -253,6 +278,7 @@ struct DecisionDetailView: View {
             }
             .onChange(of: model.snapshot?.item.item_version) {
                 pendingConfirmation = nil
+                capabilityRetrySnapshot = nil
                 // A new item version can carry a different recommendation. The
                 // sticky action would otherwise stay reachable from the last
                 // version's scroll position, offering a replacement action
@@ -372,6 +398,14 @@ struct DecisionDetailView: View {
             get: { pendingConfirmation != nil },
             set: { presented in
                 if !presented { pendingConfirmation = nil }
+            })
+    }
+
+    private var capabilityRetryIsPresented: Binding<Bool> {
+        Binding(
+            get: { capabilityRetrySnapshot != nil },
+            set: { presented in
+                if !presented { capabilityRetrySnapshot = nil }
             })
     }
 
@@ -2374,6 +2408,8 @@ struct DecisionDetailView: View {
         case .choose_alternative_route:
             guard let binding = item?.finding_adjudication?.value1 else { return }
             Task { await model.submitFindingAlternatives(selectedAlternatives(binding)) }
+        case .retry_with_capabilities:
+            capabilityRetrySnapshot = model.snapshot
         default:
             Task { await model.submit(action) }
         }
@@ -2412,6 +2448,7 @@ struct DecisionDetailView: View {
             proposalEditor = nil
             messageEditor = nil
             pendingConfirmation = nil
+            capabilityRetrySnapshot = nil
         }
     #endif
 }

@@ -625,7 +625,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		FindingAdjudication:              cloneFindingAdjudicationBinding(in.FindingAdjudication),
 		DisplayNames:                     clonePtr(in.DisplayNames),
 		BillableCostSoFar:                clonePtr(in.BillableCostSoFar),
-		ExecutionFailure:                 clonePtr(in.ExecutionFailure),
+		ExecutionFailure:                 cloneExecutionFailureFacts(in.ExecutionFailure),
 		PublishBlock:                     clonePublishBlockFacts(in.PublishBlock),
 		DiffStats:                        clonePtr(in.DiffStats),
 		BlockedOn:                        cloneBlockedWait(in.BlockedOn),
@@ -677,6 +677,15 @@ func cloneReviewYieldHistory(history *ReviewYieldHistory) *ReviewYieldHistory {
 	}
 	cloned := *history
 	cloned.Rounds = slices.Clone(history.Rounds)
+	return &cloned
+}
+
+func cloneExecutionFailureFacts(facts *ExecutionFailureFacts) *ExecutionFailureFacts {
+	if facts == nil {
+		return nil
+	}
+	cloned := *facts
+	cloned.OfferedManifests = slices.Clone(facts.OfferedManifests)
 	return &cloned
 }
 
@@ -860,6 +869,14 @@ func (i AttentionItem) Validate() error {
 			return fmt.Errorf("item %s execution failure has no run subject: %w",
 				i.ID, ErrCardFactInconsistent)
 		}
+		offersRetry := i.Offers(ActionRetryWithCapability)
+		if offersRetry != (len(i.ExecutionFailure.OfferedManifests) > 0) {
+			return fmt.Errorf("item %s capability retry offer disagrees with offered manifests: %w",
+				i.ID, ErrCardFactInconsistent)
+		}
+	} else if i.Offers(ActionRetryWithCapability) {
+		return fmt.Errorf("item %s offers capability retry without execution failure facts: %w",
+			i.ID, ErrCardFactInconsistent)
 	}
 	if i.PublishBlock != nil {
 		if i.Type != AttentionPublishBlocked {

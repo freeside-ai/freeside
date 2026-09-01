@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // ProductionAttemptKind distinguishes a campaign's content-addressed initial
@@ -46,10 +48,13 @@ type ProductionAttempt struct {
 	// Publication is the exact daemon-authored metadata bytes admitted with an
 	// initial attempt. It lets a delayed start reuse the approved publication
 	// rather than silently recomputing it from later initiator configuration.
-	Publication         json.RawMessage `json:"publication,omitempty"`
-	ApprovedSpecDigest  Digest          `json:"approved_spec_digest,omitempty"`
-	ElaborationRunID    RunID           `json:"elaboration_run_id"`
-	ImplementationRunID RunID           `json:"implementation_run_id"`
+	Publication              json.RawMessage `json:"publication,omitempty"`
+	ApprovedSpecDigest       Digest          `json:"approved_spec_digest,omitempty"`
+	ElaborationRunID         RunID           `json:"elaboration_run_id"`
+	ImplementationRunID      RunID           `json:"implementation_run_id"`
+	OperatorCommandID        *string         `json:"operator_command_id,omitempty"`
+	RetryOfInvocationID      *InvocationID   `json:"retry_of_invocation_id,omitempty"`
+	CapabilityManifestDigest *Digest         `json:"capability_manifest_digest,omitempty"`
 }
 
 // Validate reports whether the attempt's identity and lineage are coherent.
@@ -74,9 +79,35 @@ func (a ProductionAttempt) Validate() error {
 		if a.AttemptNumber != 1 {
 			return fmt.Errorf("initial attempt number %d: %w", a.AttemptNumber, ErrProductionAttemptInconsistent)
 		}
+		if a.OperatorCommandID != nil || a.RetryOfInvocationID != nil || a.CapabilityManifestDigest != nil {
+			return fmt.Errorf("initial attempt carries operator retry bindings: %w", ErrProductionAttemptInconsistent)
+		}
 	case ProductionAttemptRetry:
 		if a.AttemptNumber < 2 || a.ApprovedSpecDigest == "" {
 			return fmt.Errorf("retry attempt lacks retry ordinal or approved spec: %w", ErrProductionAttemptInconsistent)
+		}
+		bindingCount := 0
+		if a.OperatorCommandID != nil {
+			bindingCount++
+			if *a.OperatorCommandID == "" {
+				return fmt.Errorf("retry operator command id: %w", ErrEmptyID)
+			}
+		}
+		if a.RetryOfInvocationID != nil {
+			bindingCount++
+			if *a.RetryOfInvocationID == "" {
+				return fmt.Errorf("retry source invocation id: %w", ErrEmptyID)
+			}
+		}
+		if a.CapabilityManifestDigest != nil {
+			bindingCount++
+			if !contentaddr.Valid(string(*a.CapabilityManifestDigest)) {
+				return fmt.Errorf("retry capability manifest digest %q: %w",
+					*a.CapabilityManifestDigest, ErrInvalidDigest)
+			}
+		}
+		if bindingCount != 0 && bindingCount != 3 {
+			return fmt.Errorf("retry carries partial operator bindings: %w", ErrProductionAttemptInconsistent)
 		}
 	}
 	return nil

@@ -600,6 +600,23 @@ import Testing
         #expect(model.snapshot?.item.status == .superseded)
     }
 
+    @Test func capabilityRetrySubmitsTheSelectedManifestDigest() async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-execution_failure")
+        await model.validate()
+        let reviewedSnapshot = try #require(model.snapshot)
+        let manifest = try #require(
+            reviewedSnapshot.item.execution_failure?.value1.offered_manifests?.first)
+
+        await model.submitCapabilityRetry(
+            manifestDigest: manifest.digest, reviewedSnapshot: reviewedSnapshot)
+
+        #expect(model.appliedRecord?.action == .retry_with_capabilities)
+        #expect(model.appliedRecord?.message == manifest.digest)
+        #expect(model.snapshot?.item.status == .superseded)
+    }
+
     @Test func returnToAgentRequiresBoundedFeedback() async {
         let server = MockServer()
         let store = await makeStore(server: server)

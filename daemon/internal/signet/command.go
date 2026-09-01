@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
@@ -47,9 +48,10 @@ type DecisionPayload struct {
 	// two parameterized run-proposal decisions. Submit canonicalizes exactly
 	// one of them into the durable Command.Message representation so retries
 	// retain the existing write-once command identity.
-	RunProposalRevision *RunProposalRevisionInput
-	SnoozeUntil         *time.Time
-	AlternativeChoices  []AlternativeChoice
+	RunProposalRevision      *RunProposalRevisionInput
+	SnoozeUntil              *time.Time
+	AlternativeChoices       []AlternativeChoice
+	CapabilityManifestDigest *domain.Digest
 }
 
 // AlternativeChoice replaces one finding's recommended route with an offered
@@ -80,7 +82,7 @@ func decisionMessage(payload DecisionPayload) (string, error) {
 	switch payload.Action {
 	case domain.ActionStartWithChanges:
 		if payload.RunProposalRevision == nil || payload.SnoozeUntil != nil || payload.Message != "" ||
-			payload.AlternativeChoices != nil {
+			payload.AlternativeChoices != nil || payload.CapabilityManifestDigest != nil {
 			return "", ErrInvalidProposalDecisionPayload
 		}
 		if err := payload.RunProposalRevision.validate(); err != nil {
@@ -93,24 +95,36 @@ func decisionMessage(payload DecisionPayload) (string, error) {
 		return string(body), nil
 	case domain.ActionSnooze:
 		if payload.SnoozeUntil == nil || payload.RunProposalRevision != nil || payload.Message != "" ||
-			payload.SnoozeUntil.Location() != time.UTC || payload.AlternativeChoices != nil {
+			payload.SnoozeUntil.Location() != time.UTC || payload.AlternativeChoices != nil ||
+			payload.CapabilityManifestDigest != nil {
 			return "", ErrInvalidProposalDecisionPayload
 		}
 		return payload.SnoozeUntil.Format(time.RFC3339Nano), nil
 	case domain.ActionChooseAlternativeRoute:
 		if payload.RunProposalRevision != nil || payload.SnoozeUntil != nil ||
-			payload.Message != "" || len(payload.AlternativeChoices) == 0 {
+			payload.Message != "" || len(payload.AlternativeChoices) == 0 ||
+			payload.CapabilityManifestDigest != nil {
 			return "", ErrInvalidFindingAdjudicationDecisionPayload
 		}
 		return canonicalAlternativeChoices(payload.AlternativeChoices)
 	case domain.ActionAcceptRecommendedRoute:
 		if payload.RunProposalRevision != nil || payload.SnoozeUntil != nil ||
-			payload.Message != "" || payload.AlternativeChoices != nil {
+			payload.Message != "" || payload.AlternativeChoices != nil ||
+			payload.CapabilityManifestDigest != nil {
 			return "", ErrInvalidFindingAdjudicationDecisionPayload
 		}
 		return "", nil
+	case domain.ActionRetryWithCapability:
+		if payload.RunProposalRevision != nil || payload.SnoozeUntil != nil ||
+			payload.Message != "" || payload.AlternativeChoices != nil ||
+			payload.CapabilityManifestDigest == nil ||
+			!contentaddr.Valid(string(*payload.CapabilityManifestDigest)) {
+			return "", ErrInvalidCapabilityRetryDecisionPayload
+		}
+		return string(*payload.CapabilityManifestDigest), nil
 	default:
-		if payload.RunProposalRevision != nil || payload.SnoozeUntil != nil || payload.AlternativeChoices != nil {
+		if payload.RunProposalRevision != nil || payload.SnoozeUntil != nil ||
+			payload.AlternativeChoices != nil || payload.CapabilityManifestDigest != nil {
 			return "", ErrInvalidProposalDecisionPayload
 		}
 		return payload.Message, nil

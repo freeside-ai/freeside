@@ -268,6 +268,10 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 				if err := concludeItem(ctx, tx, item, status, s.now().UTC()); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
+			case outcomeRetriesWithCapabilities:
+				if err := s.applyCapabilityRetryDecision(ctx, tx, command, item, status); err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
 			case outcomeStopsUnattended:
 				if err := s.applyStopUnattended(ctx, tx, command, item, status); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
@@ -408,6 +412,10 @@ const (
 	// input and creates the next invocation exactly once.
 	outcomeAnswersAndRetries
 	outcomeReturnsToAgent
+	// outcomeRetriesWithCapabilities validates the selected manifest against
+	// the displayed offer and concludes the carrier as superseded. The engine
+	// consumes the durable command into a new production attempt.
+	outcomeRetriesWithCapabilities
 )
 
 // actionOutcome maps an action to what its acceptance does, following plan
@@ -455,6 +463,8 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		return domain.StatusResolved, outcomeConcludes
 	case domain.ActionReturnToAgent:
 		return domain.StatusSuperseded, outcomeReturnsToAgent
+	case domain.ActionRetryWithCapability:
+		return domain.StatusSuperseded, outcomeRetriesWithCapabilities
 	case domain.ActionStopUnattended:
 		return domain.StatusResolved, outcomeStopsUnattended
 	case domain.ActionResumeUnattended:
@@ -482,7 +492,7 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		return "", outcomeRecords
 	case domain.ActionDiscuss:
 		return "", outcomeDiscusses
-	case domain.ActionConvertToPolicy, domain.ActionRetryWithCapability,
+	case domain.ActionConvertToPolicy,
 		domain.ActionChooseAlternate:
 		return "", outcomePending
 	}

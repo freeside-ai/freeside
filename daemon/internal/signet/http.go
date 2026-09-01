@@ -313,11 +313,12 @@ type decisionPayloadRequest struct {
 	// pure decisions omit them); the service's per-action content policy
 	// decides whether their presence or absence is an error, so nil maps to
 	// the zero values rather than a required-field 400 here.
-	Message             *string                   `json:"message"`
-	Attachments         *[]domain.Digest          `json:"attachments"`
-	RunProposalRevision *RunProposalRevisionInput `json:"run_proposal_revision"`
-	SnoozeUntil         *time.Time                `json:"snooze_until"`
-	AlternativeChoices  []AlternativeChoice       `json:"alternative_choices"`
+	Message                  *string                   `json:"message"`
+	Attachments              *[]domain.Digest          `json:"attachments"`
+	RunProposalRevision      *RunProposalRevisionInput `json:"run_proposal_revision"`
+	SnoozeUntil              *time.Time                `json:"snooze_until"`
+	AlternativeChoices       []AlternativeChoice       `json:"alternative_choices"`
+	CapabilityManifestDigest *domain.Digest            `json:"capability_manifest_digest"`
 }
 
 func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authenticatedDevice domain.DeviceID) {
@@ -360,6 +361,10 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 		RunProposalRevision: request.Payload.RunProposalRevision,
 		SnoozeUntil:         request.Payload.SnoozeUntil,
 		AlternativeChoices:  request.Payload.AlternativeChoices,
+	}
+	if request.Payload.CapabilityManifestDigest != nil {
+		digest := *request.Payload.CapabilityManifestDigest
+		payload.CapabilityManifestDigest = &digest
 	}
 	if request.Payload.Message != nil {
 		payload.Message = *request.Payload.Message
@@ -495,7 +500,8 @@ func isCommandRequestError(err error) bool {
 	for _, target := range []error{
 		ErrActionNotAllowedForType, ErrUnsupportedAction,
 		ErrInvalidProposalDecisionPayload, ErrInvalidFindingAdjudicationDecisionPayload,
-		ErrAlternativeNotOffered,
+		ErrAlternativeNotOffered, ErrInvalidCapabilityRetryDecisionPayload,
+		ErrCapabilityManifestNotOffered,
 		ErrMessageRequired, ErrContentNotAllowed, ErrAttachmentNotStored,
 		// An over-limit request_changes message is deterministic invalid
 		// client input, rejected by validateCommandContent before the write,
