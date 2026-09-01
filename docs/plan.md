@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 43
+revision: 44
 status: active
-updated: 2026-08-28
+updated: 2026-09-01
 ---
 
 # Freeside
@@ -335,7 +335,7 @@ Approval is not a universal action.
 | `review_configuration` | Adopt the review configuration (`adopt_review_configuration`), discuss, or stop. The run is parked, not terminal: adoption authorizes an operator-approved, review-configuration-only profile supersession of exactly the parked failure named by the card's binding, resolved at decision time as the repository's currently activated revision and re-gated on every read; stop concludes the run as a configuration failure always did. The card renders the same bound coordinates as `review_contradiction` plus the superseded profile digest. |
 | `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. When the failure is classified as provider quota, credential expiry, or capacity, the card additionally offers retry under a qualified alternate agent or wait (the explicit alternate-agent retry below). |
 | `agent_question` | Answer and retry, answer without retry, or stop. |
-| `publish_blocked` | Rerun trust evaluation, choose an approved alternate publication profile, inspect the trust failure, or stop. |
+| `publish_blocked` | Rerun trust evaluation, inspect the trust failure, or stop. Which publication path a repository uses is repository configuration, never a per-item choice (revision 44). |
 | `ready_for_final_review` | View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. |
 | `run_proposal` | Start, **start with changes**, decline, or snooze. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the run from the exact revised digest. It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
 | `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section 5.13 registry (added in 1B with the registry; first instance: follow-up issue filings in 1B.1, with proposed watches following once their schedule kind lands, Section 5.16). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `run_proposal`'s start-with-changes. `run_proposal` remains its own type. |
@@ -2995,7 +2995,7 @@ Actions and lifecycle live in Section 4; presentation is specified here.
 | `finding_adjudication` | The recommended route and why, as a labeled proposal; the finding and the daemon's binding and containment facts in a separate register. | Assumptions, cited repository instructions, alternatives with consequences, gating questions, then the full artifact and code context. |
 | `execution_failure` | Daemon facts: failure class and failing step. Labeled diagnostic claim: probable cause. | Log excerpt and transcript pointer. |
 | `agent_question` | The question as a labeled agent claim, self-contained: what is blocked and any enumerated options. Answering never requires the transcript. | The agent's supporting context. |
-| `publish_blocked` | The trust rule that failed (daemon fact) and the approved alternate profiles. | The failing artifact or scan detail. |
+| `publish_blocked` | The trust rule that failed (daemon fact). | The failing artifact or scan detail. |
 | `ready_for_final_review` | The ask, a labeled change summary, and daemon verification verdicts with diff stats. | Digested review history, then the evidence packet, and the PR link last (navigation, not resolution). |
 | `run_proposal` | One line per candidate: intent plus expected cost and scope facts. | Full proposal artifact; “start with changes” shows the revised-digest diff. |
 | `effect_proposal` | The requested effect as a daemon fact from the validated artifact (Section 5.13): kind, daemon-resolved target, and bounded parameters. Agent cost, safety, and scope assertions are labeled claims, never merged into the fact line. | Full proposal artifact; “approve with changes” shows the revised-digest diff. |
@@ -3507,16 +3507,18 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **4 (1B.0): the review stage** | Serial | The spine rescopes #406/#407 into review cores and execution remainders, then lands the review-selection contract core, the review ward-topology slice, #405 only if review needs a project-derived image, and #427 (landed PR-anchored under the then-open Section 7 fork, resolved pre-publication in revision 28; the implementation re-anchor is #527, unscheduled). Its close stands the minimal loop; real-backlog use begins. |
 | **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section 5.13 classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section 7 disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section 6 state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section 5.2 contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section 7 finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section 10). 1B.0 exit. |
-| **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, one serialized chain whose positions the spine assigns at planning: the revision-40 attention-presentation cluster (the Section 4 recommendation shape and Section 9 typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921, and `choose_alternate_profile` under #936), then Section 5.15 evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section 8/9 comprehension-telemetry contracts the wave-10 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section 9 summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section 9 altitude; facts stay distinct from claims. |
+| **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, one serialized chain whose positions the spine assigns at planning: the revision-40 attention-presentation cluster (the Section 4 recommendation shape and Section 9 typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section 5.15 evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section 8/9 comprehension-telemetry contracts the wave-10 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section 9 summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section 9 altitude; facts stay distinct from claims. |
 | **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. Human-gated follow-up filing with the `effect_proposal` card (Section 5.17); the doctor credential-integrity probe (Section 10); the stall heartbeat (Section 5.12); the external daemon-liveness probe (Section 5.2, #510); the held-work item (#766); the standing stopped-operation indicator (#980); device listing and revocation (#981); the clean-machine onboarding proof (#428); and the egress floor's first capabilities above it (Sections 5.4, 5.7): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters. Exit proof: a clean machine reaches an unattended real run; daemon death, crash loops, stalls, held work, a stopped state, and external review each alert without terminal patrol or manual polling. |
 | **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), whether daemon judgment roles consume lineups (#900, decided before any utility agent exists), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on the wave-6 shadow evidence, then the StageDriver binding (#408, `merges-after` #873; Section 7 keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). Ward fronts with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866) and guided enrollment with the two-step cutover (#867). The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and elaboration agent (#895) `starts-after` #897 and #867, elaboration only, with its pre-adoption gates run against the pinned build. The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because tracker titles must match this section's resolver pattern. Deferral drain: the agent and provider clusters. Exit proof: a real unattended Codex run and a pi elaboration; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. 1B.1 exit evaluation. |
 | **10 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section 5.18 capture records (#884, `exclusive-with` every open contract unit), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
 
-Wave 7's transaction closure also includes the `publish_blocked`
-`choose_alternate_profile` transaction (#936). It binds a selected approved
-publication-profile digest and re-runs trust evaluation; it is distinct from
-#869's alternate-agent retry. The phone-decidability exit therefore cannot
-pass while that action remains pending.
+Wave 7's transaction closure also retires the `publish_blocked`
+`choose_alternate_profile` action (#936, revision 44). Which publication path
+a repository uses is repository configuration settled when the repository is
+onboarded, never a per-item choice, so the card keeps rerun, inspect, and
+stop. Publishing through a fork when the repository is not pushable is a plain
+publication feature deferred to #1042. The phone-decidability exit holds once
+no rendered action stays pending.
 
 The deferral drain is bounded per row. Waves 7 through 9 each drain the
 clusters their row names and nothing else; a deferral outside them stays in
@@ -3654,27 +3656,37 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 43 ("Decision-surface identity"):
+Revision 44 ("Retire the alternate-profile action"):
 
-1. **The decision surface is an epoch, not a content address** (Sections
-   4, 5.13, 5.14): each attention item carries one daemon-owned
-   `DecisionSurface {item_id, epoch, subject, requested_decision,
-   pr_head_sha, presented_artifact_digests, digest}` record whose digest
-   hashes only the item id, epoch, and structural fields. The epoch
-   advances by exactly one when and only when those fields or the
-   presented artifact set change, and every recommendation source record
-   commits to that digest. The presented set is exactly the union of the
-   item's presentation slots; a source-only provenance artifact and the
-   policy records never enter it, so eligibility never advances the
-   identity. The persisted record is authority: item reconstruction fails
-   closed when it is missing or disagrees with the item. Rejected:
-   binding to `item_version` (telemetry strands the delivered card);
-   content-addressing the presented set minus the derived record's own
-   artifact (eligibility-coupled, so the first of two applicable sources
-   is stranded); dropping the sibling-artifact surface from the
-   commitment (two judgment outputs on one surface collapse to one
-   digest).
-   (User; devlog 2026-08-28-2036-decision-surface-identity.md; #942.)
+1. **`publish_blocked` no longer offers `choose_alternate_profile`**
+   (Sections 4, 9, 11): the card keeps rerun trust evaluation, inspect the
+   trust failure, and stop. Revision 4 meant the action as a per-item pick
+   among pre-approved trust profiles whose `pr_execution` mode differs
+   (same-repository PR, fork PR, local only): the escape hatch when the
+   audited same-repository path is blocked. Which publication path a
+   repository uses is repository configuration settled at onboarding, and
+   fork versus same-repository follows from whether Freeside can push to
+   the repository, so nothing is chosen per run. A choice offered while a
+   run is blocked is exactly where the weaker path gets picked under
+   pressure, which the no-remembered-defaults and no-automatic-fallback
+   rules exist to prevent; the plan already keeps `convert_to_policy` off
+   the phone for the same reason. Of the four trust rules only
+   `trust_profile_drift` could be helped by a different path, and its fix
+   is re-approving the repository's configuration on the Mac, then
+   rerunning. At this revision the daemon holds one activated profile per
+   repository, never produces `fork_untrusted` or `local_only`, and offers
+   the action on no item, so retiring it removes a pending enum member and
+   nothing a card renders. Rejected: building the approved set
+   (multi-profile approval, fork publication, and local-only handoff:
+   three subsystems for one block cause); offering only the current
+   profile on drift (a one-item picker over `rerun_trust_evaluation`, a
+   decorative control revision 40 forbids); keeping the action pending
+   (fails the wave-7 exit). Fork publication for a non-pushable
+   repository is deferred as a plain publication feature (#1042). The
+   wider finding, that Section 5.5's CI audit is outside an agent control
+   plane's job and Section 5.8's protected paths are the control that
+   matters, is recorded for its own revision (#1041), not made here.
+   (User; devlog 2026-09-01-0841-retire-alternate-profile.md; #936.)
 
 ## 14. Risks
 

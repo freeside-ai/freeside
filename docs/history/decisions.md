@@ -1418,3 +1418,27 @@ Revision 42 ("Advisory instruction paths"):
    hand); re-pinning the reviewer to the base (already the design); the
    operator-authored PR as the only route (the status quo).
    (User; devlog 2026-08-28-1130-advisory-instruction-paths.md; ADR 0002.)
+
+## Revision 43
+
+Revision 43 ("Decision-surface identity"):
+
+1. **The decision surface is an epoch, not a content address** (Sections
+   4, 5.13, 5.14): each attention item carries one daemon-owned
+   `DecisionSurface {item_id, epoch, subject, requested_decision,
+   pr_head_sha, presented_artifact_digests, digest}` record whose digest
+   hashes only the item id, epoch, and structural fields. The epoch
+   advances by exactly one when and only when those fields or the
+   presented artifact set change, and every recommendation source record
+   commits to that digest. The presented set is exactly the union of the
+   item's presentation slots; a source-only provenance artifact and the
+   policy records never enter it, so eligibility never advances the
+   identity. The persisted record is authority: item reconstruction fails
+   closed when it is missing or disagrees with the item. Rejected:
+   binding to `item_version` (telemetry strands the delivered card);
+   content-addressing the presented set minus the derived record's own
+   artifact (eligibility-coupled, so the first of two applicable sources
+   is stranded); dropping the sibling-artifact surface from the
+   commitment (two judgment outputs on one surface collapse to one
+   digest).
+   (User; devlog 2026-08-28-2036-decision-surface-identity.md; #942.)
