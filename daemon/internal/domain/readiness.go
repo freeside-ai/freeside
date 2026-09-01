@@ -655,6 +655,232 @@ func (s ReadinessSummary) Validate() error {
 	return nil
 }
 
+// ReadinessRequirementState is one requirement's outcome as the ready card
+// shows it: the applicable proof/failure sum flattened to a closed vocabulary.
+// The zero value is invalid.
+type ReadinessRequirementState string
+
+const (
+	ReadinessRequirementPassed        ReadinessRequirementState = "passed"
+	ReadinessRequirementFailed        ReadinessRequirementState = "failed"
+	ReadinessRequirementNotRun        ReadinessRequirementState = "not_run"
+	ReadinessRequirementNotApplicable ReadinessRequirementState = "not_applicable"
+)
+
+var AllReadinessRequirementStates = []ReadinessRequirementState{
+	ReadinessRequirementPassed, ReadinessRequirementFailed,
+	ReadinessRequirementNotRun, ReadinessRequirementNotApplicable,
+}
+
+func (s ReadinessRequirementState) valid() bool {
+	switch s {
+	case ReadinessRequirementPassed, ReadinessRequirementFailed,
+		ReadinessRequirementNotRun, ReadinessRequirementNotApplicable:
+		return true
+	default:
+		return false
+	}
+}
+
+// nonPassing reports whether the state is an applicable non-pass, the only
+// states a waiver can attach to or that can degrade or block a verdict.
+func (s ReadinessRequirementState) nonPassing() bool {
+	return s == ReadinessRequirementFailed || s == ReadinessRequirementNotRun
+}
+
+// ReadinessWaiver names the waiver that lets a required failure stay ready:
+// its identity, the dimension it covers, the authority that granted it (plan
+// §6), and when. It is the card-facing projection of ValidatedDegradedWaiver
+// without the digests that bind the grant to the store.
+type ReadinessWaiver struct {
+	ID        WaiverID                `json:"id"`
+	Dimension string                  `json:"dimension"`
+	Authority WaiverGrantingAuthority `json:"authority"`
+	GrantedAt time.Time               `json:"granted_at"`
+}
+
+// Validate reports whether the waiver names a complete grant.
+func (w ReadinessWaiver) Validate() error {
+	if w.ID == "" {
+		return fmt.Errorf("readiness waiver id: %w", ErrEmptyID)
+	}
+	if w.Dimension == "" {
+		return fmt.Errorf("readiness waiver dimension: %w", ErrEmptyField)
+	}
+	if !w.Authority.valid() {
+		return fmt.Errorf("readiness waiver authority %q: %w", w.Authority, ErrInvalidWaiverGrantingAuthority)
+	}
+	if w.GrantedAt.IsZero() || w.GrantedAt.Location() != time.UTC {
+		return fmt.Errorf("readiness waiver granted_at: %w", ErrTimestampNotUTC)
+	}
+	return nil
+}
+
+// ReadinessRequirement is one evaluated requirement as the ready card lists
+// it. ProofRecipeDigest is present exactly when the state is passed; Waiver
+// is present only on a required, waiver-eligible non-pass.
+type ReadinessRequirement struct {
+	RequirementKey    RequirementKey            `json:"requirement_key"`
+	CheckClass        VerificationCheckClass    `json:"check_class"`
+	Kind              RequirementKind           `json:"kind"`
+	State             ReadinessRequirementState `json:"state"`
+	ProofRecipeDigest *Digest                   `json:"proof_recipe_digest"`
+	Waiver            *ReadinessWaiver          `json:"waiver"`
+}
+
+// Validate reports whether the entry is internally consistent: a proof only
+// on a pass, a waiver only where the verification algebra admits one.
+func (r ReadinessRequirement) Validate() error {
+	switch {
+	case r.RequirementKey == "":
+		return fmt.Errorf("readiness requirement key: %w", ErrEmptyID)
+	case !r.CheckClass.valid():
+		return fmt.Errorf("readiness requirement %q class %q: %w", r.RequirementKey, r.CheckClass, ErrInvalidVerificationCheckClass)
+	case !r.Kind.valid():
+		return fmt.Errorf("readiness requirement %q kind %q: %w", r.RequirementKey, r.Kind, ErrInvalidRequirementKind)
+	case !r.State.valid():
+		return fmt.Errorf("readiness requirement %q state %q: %w", r.RequirementKey, r.State, ErrInvalidReadinessRequirementState)
+	case (r.ProofRecipeDigest != nil) != (r.State == ReadinessRequirementPassed):
+		return fmt.Errorf("readiness requirement %q proof against state %q: %w", r.RequirementKey, r.State, ErrReadinessDetailInconsistent)
+	case r.ProofRecipeDigest != nil && *r.ProofRecipeDigest == "":
+		return fmt.Errorf("readiness requirement %q proof recipe: %w", r.RequirementKey, ErrEmptyField)
+	}
+	if r.Waiver == nil {
+		return nil
+	}
+	if !r.State.nonPassing() || r.Kind != RequirementRequired || !r.CheckClass.WaiverEligible() {
+		return fmt.Errorf("readiness requirement %q waiver on %s %s %q: %w",
+			r.RequirementKey, r.Kind, r.CheckClass, r.State, ErrReadinessDetailInconsistent)
+	}
+	if err := r.Waiver.Validate(); err != nil {
+		return fmt.Errorf("readiness requirement %q: %w", r.RequirementKey, err)
+	}
+	return nil
+}
+
+// ReadinessBoundBase is the base the evaluation's proofs were bound to.
+type ReadinessBoundBase struct {
+	BaseRef string `json:"base_ref"`
+	BaseSHA string `json:"base_sha"`
+}
+
+// ReadinessDetail is the card-facing projection of the §6 evaluation behind a
+// ready item's verdict (issue #982): the evaluation-set identity, the exact
+// candidate head and base the proofs bind, and every requirement of the
+// evaluated set with its state, proof recipe, or waiver. It is built by
+// NewReadinessDetail from the same inputs and output as the verdict, fixed at
+// creation, and carries facts only; the client derives no reason from the
+// verdict class. Blocked is representable here (a required non-pass without a
+// waiver) so goldens can pin the shape, but AttentionItem rejects it because
+// ReadinessSummary admits only the ready classes.
+type ReadinessDetail struct {
+	EvaluationSetDigest Digest                 `json:"evaluation_set_digest"`
+	CandidateHead       string                 `json:"candidate_head"`
+	Base                ReadinessBoundBase     `json:"base"`
+	Requirements        []ReadinessRequirement `json:"requirements"`
+}
+
+// Validate reports whether the detail is a complete, key-ordered projection.
+func (d ReadinessDetail) Validate() error {
+	if d.EvaluationSetDigest == "" || d.CandidateHead == "" ||
+		d.Base.BaseRef == "" || d.Base.BaseSHA == "" {
+		return fmt.Errorf("readiness detail binding: %w", ErrEmptyField)
+	}
+	if len(d.Requirements) == 0 {
+		return fmt.Errorf("readiness detail requirements: %w", ErrRequirementSetEmpty)
+	}
+	for index, requirement := range d.Requirements {
+		if err := requirement.Validate(); err != nil {
+			return err
+		}
+		if index > 0 && d.Requirements[index-1].RequirementKey >= requirement.RequirementKey {
+			return fmt.Errorf("readiness detail requirement %q out of key order: %w",
+				requirement.RequirementKey, ErrReadinessDetailInconsistent)
+		}
+	}
+	return nil
+}
+
+// Class derives the verdict class the entries imply, by the same rule
+// EvaluateReadiness applies: a required non-pass without a waiver blocks, any
+// waiver or optional non-pass degrades, everything else is clean.
+func (d ReadinessDetail) Class() ReadinessVerdictClass {
+	class := ReadinessReadyClean
+	for _, requirement := range d.Requirements {
+		if !requirement.State.nonPassing() {
+			continue
+		}
+		if requirement.Kind == RequirementRequired && requirement.Waiver == nil {
+			return ReadinessBlocked
+		}
+		class = ReadinessReadyDegraded
+	}
+	return class
+}
+
+// NewReadinessDetail projects the evaluation that produced a ready verdict.
+// It takes the verdict's own target and recorded states, never recomputes
+// the evaluation-set digest, and fails unless the class its entries imply is
+// the verdict's, so an item can never carry two disagreeing verdicts.
+func NewReadinessDetail(target EvaluationTarget, verdict ReadinessVerdict, recorded []CheckState) (ReadinessDetail, error) {
+	if err := verdict.Validate(); err != nil {
+		return ReadinessDetail{}, err
+	}
+	if target.Base == nil {
+		return ReadinessDetail{}, fmt.Errorf("readiness detail base: %w", ErrEmptyField)
+	}
+	requirements := make([]ReadinessRequirement, 0, len(recorded))
+	for _, state := range recorded {
+		if err := state.Validate(); err != nil {
+			return ReadinessDetail{}, err
+		}
+		requirements = append(requirements, projectReadinessRequirement(state))
+	}
+	sort.Slice(requirements, func(i, j int) bool {
+		return requirements[i].RequirementKey < requirements[j].RequirementKey
+	})
+	detail := ReadinessDetail{
+		EvaluationSetDigest: verdict.EvaluationSetDigest,
+		CandidateHead:       target.CandidateHead,
+		Base:                ReadinessBoundBase{BaseRef: target.Base.BaseRef, BaseSHA: target.Base.BaseSHA},
+		Requirements:        requirements,
+	}
+	if err := detail.Validate(); err != nil {
+		return ReadinessDetail{}, err
+	}
+	if class := detail.Class(); class != verdict.Class {
+		return ReadinessDetail{}, fmt.Errorf("readiness detail implies %q against verdict %q: %w",
+			class, verdict.Class, ErrReadinessDetailInconsistent)
+	}
+	return detail, nil
+}
+
+func projectReadinessRequirement(state CheckState) ReadinessRequirement {
+	requirement := ReadinessRequirement{
+		RequirementKey: state.Resolution.RequirementKey,
+		CheckClass:     state.Resolution.CheckClass,
+		Kind:           state.Resolution.Kind,
+	}
+	switch {
+	case state.NotApplicable:
+		requirement.State = ReadinessRequirementNotApplicable
+	case state.Applicable.Proof != nil:
+		requirement.State = ReadinessRequirementPassed
+		recipe := state.Applicable.Proof.RecipeDigest
+		requirement.ProofRecipeDigest = &recipe
+	default:
+		failure := state.Applicable.Failure
+		requirement.State = ReadinessRequirementState(failure.outcome)
+		if waiver := failure.waiver; waiver != nil {
+			requirement.Waiver = &ReadinessWaiver{
+				ID: waiver.ID, Dimension: waiver.Dimension,
+				Authority: waiver.Authority, GrantedAt: waiver.GrantedAt,
+			}
+		}
+	}
+	return requirement
+}
+
 // ReadinessVerdict carries one of the three aggregate classes without a
 // flattened boolean. EvaluationSetDigest is present for both ready classes.
 type ReadinessVerdict struct {

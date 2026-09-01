@@ -75,6 +75,7 @@ var (
 	ErrInvalidRequirementKind           = errors.New("invalid requirement kind")
 	ErrInvalidAdvisoryOutcome           = errors.New("invalid advisory outcome")
 	ErrInvalidReadinessVerdictClass     = errors.New("invalid readiness verdict class")
+	ErrInvalidReadinessRequirementState = errors.New("invalid readiness requirement state")
 	ErrInvalidWaiverGrantingAuthority   = errors.New("invalid waiver granting authority")
 	ErrInvalidVerificationCheckClass    = errors.New("invalid verification check class")
 	ErrInvalidWaiverLifecycleStatus     = errors.New("invalid waiver lifecycle status")
@@ -168,6 +169,7 @@ var (
 	ErrCheckStateInconsistent       = errors.New("check state does not match its requirement resolution")
 	ErrReadinessVerdictInconsistent = errors.New("readiness verdict does not match its payload")
 	ErrReadinessSummaryInconsistent = errors.New("readiness summary does not match a ready verdict")
+	ErrReadinessDetailInconsistent  = errors.New("readiness detail does not match its verdict")
 	ErrUsageObservationConflict     = errors.New("usage observation identity has conflicting content")
 	ErrUsageQuantityOverflow        = errors.New("usage projection quantity overflows int64")
 

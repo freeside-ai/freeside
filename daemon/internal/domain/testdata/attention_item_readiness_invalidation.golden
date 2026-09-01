@@ -78,6 +78,32 @@
     "class": "ready_clean",
     "evaluation_set_digest": "sha256:evaluation-clean"
   },
+  "readiness_detail": {
+    "evaluation_set_digest": "sha256:evaluation-clean",
+    "candidate_head": "cafebabe",
+    "base": {
+      "base_ref": "main",
+      "base_sha": "deadbeef"
+    },
+    "requirements": [
+      {
+        "requirement_key": "clean-verification",
+        "check_class": "clean_verification",
+        "kind": "required",
+        "state": "passed",
+        "proof_recipe_digest": "sha256:recipe",
+        "waiver": null
+      },
+      {
+        "requirement_key": "independent-review",
+        "check_class": "independent_review",
+        "kind": "required",
+        "state": "passed",
+        "proof_recipe_digest": "sha256:review-config",
+        "waiver": null
+      }
+    ]
+  },
   "yield_history": {
     "rounds": [
       {

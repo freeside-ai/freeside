@@ -126,6 +126,14 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		return fmt.Errorf("attention item %s: readiness summary would change: %w",
 			updated.ID, ErrImmutableTransition)
 	}
+	sameReadinessDetail, err := jsonEqual(old.ReadinessDetail, updated.ReadinessDetail)
+	if err != nil {
+		return fmt.Errorf("attention item %s: %w", updated.ID, err)
+	}
+	if !sameReadinessDetail {
+		return fmt.Errorf("attention item %s: readiness detail would change: %w",
+			updated.ID, ErrImmutableTransition)
+	}
 	sameYieldHistory, err := jsonEqual(old.YieldHistory, updated.YieldHistory)
 	if err != nil {
 		return fmt.Errorf("attention item %s: %w", updated.ID, err)

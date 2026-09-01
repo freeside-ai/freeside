@@ -28,6 +28,7 @@
     "number": 42
   },
   "readiness": null,
+  "readiness_detail": null,
   "yield_history": null,
   "commit_plan_notice": null,
   "base_freshness": null,
