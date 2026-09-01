@@ -44,17 +44,16 @@ struct PairingView: View {
                 }
                 .listRowBackground(Color.ground2)
                 Section {
-                    LabeledContent("Host", value: "Freeside daemon")
-                    LabeledContent("Code expiry", value: "Expires shortly")
-                    LabeledContent("Connection", value: "Local or relayed")
+                    if let facts = model.facts {
+                        ForEach(Self.detailRows(facts), id: \.label) { row in
+                            LabeledContent(row.label, value: row.value)
+                        }
+                    } else {
+                        Text("Enter a code to see host details")
+                            .foregroundStyle(Color.inkDim)
+                    }
                 } header: {
                     Text("Pairing details")
-                } footer: {
-                    Text(
-                        "Exact host identity, code expiry, and connection mode appear here when the daemon provides them."
-                    )
-                    .font(FreesideFont.caption)
-                    .foregroundStyle(Color.inkDim)
                 }
                 .listRowBackground(Color.ground2)
                 if case .failed(let message) = model.phase {
@@ -94,6 +93,31 @@ struct PairingView: View {
                     dynamicTypeSize.isAccessibilitySize ? .inline : .large)
             #endif
         }
+        // One preview per pause in typing: the task restarts on every code
+        // change, so keystrokes inside the delay never reach the daemon, and
+        // the details refresh once the operator stops.
+        .task(id: model.pairingCode) {
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            await model.refreshFacts()
+        }
+    }
+
+    struct DetailRow {
+        let label: String
+        let value: String
+    }
+
+    /// The four pairing facts as the operator reads them (plan §5.14): what
+    /// is being joined, when the code dies, how the phone reaches the
+    /// daemon, and what it may do once paired.
+    static func detailRows(_ facts: Components.Schemas.PairingFacts) -> [DetailRow] {
+        [
+            DetailRow(label: "Host", value: facts.host_display_name),
+            DetailRow(label: "Code expiry", value: facts.code_expires_at.formatted(.iso8601)),
+            DetailRow(label: "Connection", value: PairingModel.connectionLabel(facts.connection_mode)),
+            DetailRow(label: "Access", value: PairingModel.scopeLabel(facts.granted_scope)),
+        ]
     }
 
     /// The project-owned pairing composition without Form and TextField,
@@ -114,6 +138,38 @@ struct PairingView: View {
             }
             .padding(14)
             .freesideCard()
+            VStack(alignment: .leading, spacing: 6) {
+                KeywordLabel(text: "Pairing details")
+                if let facts = model.facts {
+                    ForEach(Self.detailRows(facts), id: \.label) { row in
+                        if screenshotDynamicTypeSize.isAccessibilitySize {
+                            // Stacked so a timestamp never wraps mid-token.
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(row.label)
+                                    .foregroundStyle(Color.inkDim)
+                                Text(row.value)
+                            }
+                            .font(FreesideFont.body)
+                        } else {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(row.label)
+                                    .foregroundStyle(Color.inkDim)
+                                Spacer(minLength: 12)
+                                Text(row.value)
+                                    .multilineTextAlignment(.trailing)
+                            }
+                            .font(FreesideFont.body)
+                        }
+                    }
+                } else {
+                    Text("Enter a code to see host details")
+                        .font(FreesideFont.body)
+                        .foregroundStyle(Color.inkDim)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .freesideCard()
             Text(
                 "Run the pairing command on the daemon host and enter its one-time code."
             )
@@ -128,6 +184,13 @@ struct PairingView: View {
         .padding(24)
         .frame(maxWidth: 560, alignment: .leading)
         .foregroundStyle(Color.ink)
+    }
+
+    /// The size the screenshot composition renders at: the regression
+    /// test's pinned size when one is set, since the environment is not
+    /// populated when `screenshotContent()` is called outside `body`.
+    private var screenshotDynamicTypeSize: DynamicTypeSize {
+        FreesideFont.screenshotDynamicTypeSize ?? dynamicTypeSize
     }
 
     private var pasteButton: some View {

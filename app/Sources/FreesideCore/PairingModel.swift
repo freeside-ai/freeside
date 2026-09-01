@@ -25,10 +25,20 @@ public final class PairingModel {
             if !isApplyingPairingCodePrefill {
                 pairingCodeWasEdited = true
             }
+            // Facts belong to one code; a changed code shows none until the
+            // daemon answers for the new one.
+            if Self.canonicalPairingCode(pairingCode) != Self.canonicalPairingCode(oldValue) {
+                facts = nil
+            }
         }
     }
     public var displayName: String
     public private(set) var phase: PhaseState = .idle
+    /// What the current code would join (plan §5.14 pairing facts), as the
+    /// daemon last reported it for this code; nil until a preview succeeds
+    /// and again whenever the code changes or the daemon rejects it. Display
+    /// facts only: nothing here is a credential.
+    public private(set) var facts: Components.Schemas.PairingFacts?
 
     private let client: any APIProtocol
     private let credentials: any DeviceCredentialStore
@@ -69,6 +79,49 @@ public final class PairingModel {
 
     public func applyPairingCodeInput(_ code: String) {
         pairingCode = Self.canonicalPairingCode(code)
+    }
+
+    /// Asks the daemon what the current code would join, without redeeming
+    /// it. Any rejection or failure clears the facts rather than explaining
+    /// itself: the daemon never says why a code is dead (test 13), and the
+    /// pairing attempt is where that outcome is reported.
+    public func refreshFacts() async {
+        let code = Self.canonicalPairingCode(pairingCode)
+        guard !code.isEmpty else {
+            facts = nil
+            return
+        }
+        let previewed: Components.Schemas.PairingFacts?
+        do {
+            let output = try await client.previewPairing(body: .json(.init(pairing_code: code)))
+            if case .ok(let ok) = output {
+                previewed = try ok.body.json
+            } else {
+                previewed = nil
+            }
+        } catch {
+            previewed = nil
+        }
+        // The answer is for the code that was asked about; a code edited
+        // meanwhile keeps its own (cleared) state.
+        guard Self.canonicalPairingCode(pairingCode) == code else { return }
+        facts = previewed
+    }
+
+    /// Fixed copy for a connection mode (plan §5.14): how this device is
+    /// reaching the daemon.
+    public static func connectionLabel(_ mode: Components.Schemas.ConnectionMode) -> String {
+        switch mode {
+        case .loopback: "Local"
+        case .tailscale: "Tailscale"
+        }
+    }
+
+    /// Fixed copy for a granted scope: the authority the new device gets.
+    public static func scopeLabel(_ scope: Components.Schemas.DeviceScope) -> String {
+        switch scope {
+        case ._operator: "Full operator control, revocable from the host"
+        }
     }
 
     /// Exchanges the code; on success the credential is already saved.
