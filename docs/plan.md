@@ -345,8 +345,26 @@ Approval is not a universal action.
 | `ready_for_final_review` | View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. |
 | `run_proposal` | Start, **start with changes**, decline, or snooze. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the run from the exact revised digest. It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
 | `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section 5.13 registry (added in 1B with the registry; first instance: follow-up issue filings in 1B.1, with proposed watches following once their schedule kind lands, Section 5.16). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `run_proposal`'s start-with-changes. `run_proposal` remains its own type. |
-| `system_health` | Acknowledge, run doctor, stop unattended operation, or, on the notice a stop raises, resume unattended operation. A revoked Codex identity marker also offers resolve re-enrollment (`resolve_reenrollment`), but only once the marker carries the immutable binding for its exact latest verified re-enrollment operation; the command revalidates that operation and that marker occurrence inside the transaction that resolves the item. Acknowledge means seen, never resolved; it cannot clear a revoked identity. Every item declares an immutable posture. `blocking` keeps the admission gate in place until the diagnostic clears, unattended operation is explicitly stopped, or a validated configuration supersedes it. `advisory` stays open and visible without blocking unrelated unattended admission. A stop is a durable operating transition: only an explicit resume reopens unattended admission; a restart alone never does. |
+| `system_health` | Acknowledge, run doctor, stop unattended operation, or, on the notice a stop raises, resume unattended operation; the rules follow the table. |
 | `blocked` | Consolidates external waits that exceed Section 5.12 thresholds. It is read-only. |
+
+**`system_health` rules.** A revoked Codex identity marker also offers resolve
+re-enrollment (`resolve_reenrollment`), but only once the marker carries the
+immutable binding for its exact latest verified re-enrollment operation; the
+command revalidates that operation and that marker occurrence inside the
+transaction that resolves the item. Acknowledge means seen, never resolved; it
+cannot clear a revoked identity.
+
+Every item declares an immutable posture:
+
+- `blocking` keeps the admission gate in place until the diagnostic clears,
+  unattended operation is explicitly stopped, or a validated configuration
+  supersedes it.
+- `advisory` stays open and visible without blocking unrelated unattended
+  admission.
+
+A stop is a durable operating transition: only an explicit resume reopens
+unattended admission; a restart alone never does.
 
 Section 9 governs each type's presentation: what its card leads with and what
 layers below.
@@ -814,9 +832,40 @@ sit above the credential-mode floor and represent different risk classes:
 | Profile | Access and risk |
 | --- | --- |
 | `provider_only` | Default. The writer has one host-only network: no direct external path and no guest DNS, and the provider API is reachable only through the daemon's allowlisting proxy. The host gateway remains a network neighbor. The production API is isolated by its loopback-or-Tailscale-owned listener gate; every other host service needs its own declared binding policy, and the ward proxy is the one intentional agent-reachable exception. |
-| `provider_registry` | Opt-in per project policy; `provider_only` stays the default. The writer keeps the same single host-only network and the same daemon CONNECT proxy. The proxy also admits the project policy's short, declared set of package-registry authorities, consumed read-only (initially `proxy.golang.org`, `sum.golang.org`, `registry.npmjs.org`, `pypi.org`, and `files.pythonhosted.org`). The set is control-plane policy: a writer change to it is publish-blocked like any other control-plane path, and a per-project addition is a reviewed operator change that admits only a public package registry the project's dependency manifests resolve against. Any other authority is not a registry entry. Admitting one is a `provider_web_read` decision with that profile's explicit wider-exposure record, because an arbitrary tunnel endpoint the operator has not vetted is exactly the attacker-observable host this class excludes. Under that criterion, the risk class on its merits is: no DNS, no direct egress, no attacker-operated host, and exfiltration bounded to what those registries' own endpoints accept from a client the attacker does not control. The proxy allowlist is per authority, with the TLS server name pinned to the CONNECT authority, so a registry entry cannot reach a shared-CDN neighbor. The tunnel cannot constrain HTTP method or path, so a registry that co-hosts a write endpoint (npm publish) leaves a residual: an injected writer holding an attacker-supplied registry credential could publish workspace content there. Section 14 records the residual; a project policy may exclude such hosts. This exposure is materially narrower than `provider_web_read` and is priced separately from it, never folded into that record. |
+| `provider_registry` | Opt-in per project policy; `provider_only` stays the default, and the rules follow the table. |
 | `provider_web_read` | Materially wider credential-exfiltration exposure. Read-only HTTP can still exfiltrate through URLs, headers, bodies, redirects, and DNS while the provider credential shares the trust domain. It requires an explicit record of the wider exposure and a small trusted-domain allowlist. |
 | Clean verification | No network access. |
+
+**`provider_registry` rules.** The writer keeps the same single host-only
+network and the same daemon CONNECT proxy. The proxy also admits the project
+policy's short, declared set of package-registry authorities, consumed read-only
+(initially `proxy.golang.org`, `sum.golang.org`, `registry.npmjs.org`,
+`pypi.org`, and `files.pythonhosted.org`).
+
+The set is control-plane policy: a writer change to it is publish-blocked like
+any other control-plane path, and a per-project addition is a reviewed operator
+change that admits only a public package registry the project's dependency
+manifests resolve against. Any other authority is not a registry entry.
+Admitting one is a `provider_web_read` decision with that profile's explicit
+wider-exposure record, because an arbitrary tunnel endpoint the operator has not
+vetted is exactly the attacker-observable host this class excludes.
+
+Under that criterion, the risk class on its merits is:
+
+- No DNS;
+- No direct egress;
+- No attacker-operated host; and
+- Exfiltration bounded to what those registries' own endpoints accept from a
+  client the attacker does not control.
+
+The proxy allowlist is per authority, with the TLS server name pinned to the
+CONNECT authority, so a registry entry cannot reach a shared-CDN neighbor. The
+tunnel cannot constrain HTTP method or path, so a registry that co-hosts a write
+endpoint (npm publish) leaves a residual: an injected writer holding an
+attacker-supplied registry credential could publish workspace content there.
+Section 14 records the residual; a project policy may exclude such hosts. This
+exposure is materially narrower than `provider_web_read` and is priced
+separately from it, never folded into that record.
 
 The 1B elaborator gets no general web access. It runs under `provider_only`
 and emits typed fetch requests. The daemon fetches allowed URLs and returns
@@ -3430,11 +3479,62 @@ Build the installer only after the underlying interfaces survive real use. The
 | --- | --- |
 | `freesided setup` | Performs installation. On the Mac-first path, the operator app registers the daemon LaunchAgent (Section 5.2) and no step is privileged. When a hardened deployment needs privileged steps (user creation, LaunchDaemon installation), they run through a narrow elevation helper. The daemon never retains root. |
 | `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If the installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls. A callback or `--resume` reopens the same review after approval. |
-| `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe). The integrity probe extends to the Section 5.4 account probe only after an empirical spike proves that the Codex app-server probe runs against the access-only read snapshot and never triggers a refresh outside the mutation lease. Until that spike passes, doctor reports integrity alone. Probe results are observation (Section 5.4). They file `advisory` `system_health` items and proposals, feed the operator-facing profile projection's display fields, and nothing else reads them. It runs on a schedule and files `system_health` items. |
-| `freesided auth add`, `auth adopt`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided identity and enrollment lifecycle (Section 5.4). `auth doctor` ships with the account-probe unit (#868), gated on the #866 spike like the probe itself, never with the enrollment unit. `add` enrolls one harness client against one route for a new or existing `AuthIdentity`. It creates a `ClientEnrollment` with its sanitized single-route store and initial generation. The transaction records the enrolled mode and the account binding that `re-enroll` later compares against, under the identity's lease. It refuses when the store cannot yield that binding, so an expired or corrupt store is enrolled as a new identity rather than adopted. For Codex, it packages the import, rotate, and snapshot sequence that `enroll-codex` exposes as separate required flags. For Claude, it captures a setup token interactively. It validates the token's length and performs an auth check before storing it (the truncation class the 1B.1 integrity probe detects), and keeps the token out of argv, shell history, logs, and client responses. For pi, it captures the ChatGPT login into a one-entry store and performs a daemon-driven refresh before accepting it. `adopt` is the cutover command: it adopts each interim identity's store as an enrollment and emits the proposed baseline patch (agents, deployment lineup, attended-run marks) for the operator to commit. It never writes the tree. `list` shows identities and their enrollments with the masked label. `doctor` runs the account probe for one identity on demand once #868 lands. `re-enroll` replaces one enrollment's credential through the daemon-owned transaction. It runs while no execution can use the identity, and for the same account only. Where the provider exposes an account identity (Codex, pi), the transaction compares the incoming credential's account against the one recorded at enrollment. It does so authoritatively and independent of the probe, and it refuses a mismatch. Where it does not (the Claude floor), the operator attests same-account and the attestation is recorded. Every re-enrollment appends a generation, so later records show the credential changed. A different account is a new identity, never a re-enrollment. `disable` sets the identity's `enabled` off, withdrawing every agent on it from selection without touching credentials, and `enable` reverses it. |
+| `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe); the probe rules follow the table. |
+| `freesided auth add`, `auth adopt`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided identity and enrollment lifecycle (Section 5.4); each subcommand's rules follow the table. |
 | `freesided submit` | Registers a manually initiated source work item, starts elaboration, and reserves its future implementation run. |
 | `freesided reattempt --parent-run <run>` or `--campaign <campaign>` | Requires an operator reason and allocates the campaign's next attempt from an already approved specification. It refuses a live parent. |
 | `freesided resume --run <run>` | Reattaches observation to one exact non-terminal run without creating a replacement. It refuses terminal runs and points to `reattempt`. |
+
+**`freesided doctor` probe rules.** The integrity probe extends to the Section
+5.4 account probe only after an empirical spike proves that the Codex app-server
+probe runs against the access-only read snapshot and never triggers a refresh
+outside the mutation lease. Until that spike passes, doctor reports integrity
+alone.
+
+Probe results are observation (Section 5.4). They file `advisory`
+`system_health` items and proposals, feed the operator-facing profile
+projection's display fields, and nothing else reads them. It runs on a schedule
+and files `system_health` items.
+
+**`freesided auth` subcommand rules.** `auth doctor` ships with the
+account-probe unit (#868), gated on the #866 spike like the probe itself, never
+with the enrollment unit.
+
+`add` enrolls one harness client against one route for a new or existing
+`AuthIdentity`. It creates a `ClientEnrollment` with its sanitized single-route
+store and initial generation. The transaction records the enrolled mode and the
+account binding that `re-enroll` later compares against, under the identity's
+lease. It refuses when the store cannot yield that binding, so an expired or
+corrupt store is enrolled as a new identity rather than adopted.
+
+- For Codex, it packages the import, rotate, and snapshot sequence that
+  `enroll-codex` exposes as separate required flags.
+- For Claude, it captures a setup token interactively. It validates the token's
+  length and performs an auth check before storing it (the truncation class the
+  1B.1 integrity probe detects), and keeps the token out of argv, shell history,
+  logs, and client responses.
+- For pi, it captures the ChatGPT login into a one-entry store and performs a
+  daemon-driven refresh before accepting it.
+
+`adopt` is the cutover command: it adopts each interim identity's store as an
+enrollment and emits the proposed baseline patch (agents, deployment lineup,
+attended-run marks) for the operator to commit. It never writes the tree.
+
+`list` shows identities and their enrollments with the masked label. `doctor`
+runs the account probe for one identity on demand once #868 lands.
+
+`re-enroll` replaces one enrollment's credential through the daemon-owned
+transaction. It runs while no execution can use the identity, and for the same
+account only. Where the provider exposes an account identity (Codex, pi), the
+transaction compares the incoming credential's account against the one recorded
+at enrollment. It does so authoritatively and independent of the probe, and it
+refuses a mismatch. Where it does not (the Claude floor), the operator attests
+same-account and the attestation is recorded. Every re-enrollment appends a
+generation, so later records show the credential changed. A different account is
+a new identity, never a re-enrollment.
+
+`disable` sets the identity's `enabled` off, withdrawing every agent on it from
+selection without touching credentials, and `enable` reverses it.
 
 The project-image builder is an internal primitive, not an onboarding-only
 implementation. Phase 1A proves that primitive by hand against the selected
