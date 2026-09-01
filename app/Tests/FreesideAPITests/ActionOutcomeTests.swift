@@ -17,7 +17,6 @@ import Testing
             .answer_and_retry: .concludes(.superseded),
             .answer_without_retry: .concludes(.resolved),
             .rerun_trust_evaluation: .concludes(.resolved),
-            .choose_alternate_profile: .pending,
             .inspect_trust_failure: .records,
             .open_pr: .records,
             .return_to_agent: .concludes(.superseded),
@@ -44,7 +43,7 @@ import Testing
         }
         #expect(
             Set(expected.compactMap { $0.value == .pending ? $0.key : nil }) == [
-                .convert_to_policy, .choose_alternate_profile,
+                .convert_to_policy
             ])
     }
 }

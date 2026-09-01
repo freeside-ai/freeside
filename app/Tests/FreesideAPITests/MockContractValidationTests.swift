@@ -738,6 +738,27 @@ import Testing
         try MockContractValidation.validate(command(against: snapshot))
     }
 
+    /// #936 (plan revision 44) removed choose_alternate_profile from the Action
+    /// vocabulary. A command payload still carrying the string is rejected at
+    /// the transport decode boundary the mock validates behind, as an invalid
+    /// action, not accepted as a pending action. The well-formed sibling proves
+    /// the action token is the only difference.
+    @Test func retiredChooseAlternateProfileFailsCommandDecode() throws {
+        let snapshot = AttentionFixtures.fixture(type: .publish_blocked)
+        var valid = command(against: snapshot)
+        valid.payload.action = .rerun_trust_evaluation
+        let encoded = try JSONEncoder().encode(valid)
+        _ = try JSONDecoder().decode(Components.Schemas.ClientCommand.self, from: encoded)
+
+        let retired = String(decoding: encoded, as: UTF8.self)
+            .replacingOccurrences(
+                of: "\"rerun_trust_evaluation\"", with: "\"choose_alternate_profile\"")
+        #expect(throws: Error.self) {
+            try JSONDecoder().decode(
+                Components.Schemas.ClientCommand.self, from: Data(retired.utf8))
+        }
+    }
+
     @Test func malformedCommandThrowsWithTheReason() {
         let snapshot = AttentionFixtures.fixture(type: .spec_approval)
 

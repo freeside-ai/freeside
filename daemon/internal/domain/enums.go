@@ -610,7 +610,6 @@ const (
 	ActionAnswerAndRetry           Action = "answer_and_retry"
 	ActionAnswerWithoutRetry       Action = "answer_without_retry"
 	ActionRerunTrustEvaluation     Action = "rerun_trust_evaluation"
-	ActionChooseAlternate          Action = "choose_alternate_profile"
 	ActionInspectTrustFailure      Action = "inspect_trust_failure"
 	ActionOpenPR                   Action = "open_pr"
 	ActionReturnToAgent            Action = "return_to_agent"
@@ -637,7 +636,7 @@ var AllActions = []Action{
 	ActionFinishNow, ActionApplyThenFinish, ActionContinueUnderPolicy, ActionConvertToPolicy,
 	ActionRetry, ActionRetryWithCapability,
 	ActionAnswerAndRetry, ActionAnswerWithoutRetry,
-	ActionRerunTrustEvaluation, ActionChooseAlternate, ActionInspectTrustFailure,
+	ActionRerunTrustEvaluation, ActionInspectTrustFailure,
 	ActionOpenPR, ActionReturnToAgent, ActionMarkSeen, ActionDismiss,
 	ActionStart, ActionStartWithChanges, ActionDecline, ActionSnooze,
 	ActionAcknowledge, ActionRunDoctor, ActionStopUnattended,
@@ -651,7 +650,7 @@ func (a Action) valid() bool {
 		ActionFinishNow, ActionApplyThenFinish, ActionContinueUnderPolicy, ActionConvertToPolicy,
 		ActionRetry, ActionRetryWithCapability,
 		ActionAnswerAndRetry, ActionAnswerWithoutRetry,
-		ActionRerunTrustEvaluation, ActionChooseAlternate, ActionInspectTrustFailure,
+		ActionRerunTrustEvaluation, ActionInspectTrustFailure,
 		ActionOpenPR, ActionReturnToAgent, ActionMarkSeen, ActionDismiss,
 		ActionStart, ActionStartWithChanges, ActionDecline, ActionSnooze,
 		ActionAcknowledge, ActionRunDoctor, ActionStopUnattended,

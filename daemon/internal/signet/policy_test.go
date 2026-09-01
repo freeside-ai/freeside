@@ -38,7 +38,7 @@ func TestAllowedActionsByType(t *testing.T) {
 			domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry, domain.ActionStop,
 		},
 		domain.AttentionPublishBlocked: {
-			domain.ActionRerunTrustEvaluation, domain.ActionChooseAlternate,
+			domain.ActionRerunTrustEvaluation,
 			domain.ActionInspectTrustFailure, domain.ActionStop,
 		},
 		domain.AttentionReadyForFinalReview: {

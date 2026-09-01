@@ -663,7 +663,6 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 		before := f.revision(t)
 		pending := []domain.Action{
 			domain.ActionConvertToPolicy,
-			domain.ActionChooseAlternate,
 		}
 		for _, action := range pending {
 			cmd := f.command("cmd-pending-"+string(action), action)
@@ -673,6 +672,21 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 		}
 		if after := f.revision(t); after != before {
 			t.Errorf("pending-action rejection moved the revision %d → %d", before, after)
+		}
+	})
+
+	t.Run("retired choose_alternate_profile rejected as invalid action", func(t *testing.T) {
+		// The action left the vocabulary with #936 (plan revision 44). A command
+		// still carrying the string fails at command decode as an invalid action,
+		// not as a pending action: the enum no longer knows it, so it never
+		// reaches the pending gate. No revision is consumed.
+		before := f.revision(t)
+		cmd := f.command("cmd-retired-profile", domain.Action("choose_alternate_profile"))
+		if _, err := f.service.Submit(ctx, cmd); !errors.Is(err, domain.ErrInvalidAction) {
+			t.Errorf("error = %v, want ErrInvalidAction", err)
+		}
+		if after := f.revision(t); after != before {
+			t.Errorf("invalid-action rejection moved the revision %d → %d", before, after)
 		}
 	})
 

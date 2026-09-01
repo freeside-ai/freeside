@@ -36,7 +36,7 @@ var allowedActionsByType = map[domain.AttentionType]map[domain.Action]struct{}{
 		domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry, domain.ActionStop,
 	),
 	domain.AttentionPublishBlocked: actionSet(
-		domain.ActionRerunTrustEvaluation, domain.ActionChooseAlternate,
+		domain.ActionRerunTrustEvaluation,
 		domain.ActionInspectTrustFailure, domain.ActionStop,
 	),
 	domain.AttentionReadyForFinalReview: actionSet(

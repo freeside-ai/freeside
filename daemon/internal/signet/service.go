@@ -436,10 +436,9 @@ const (
 // discuss semantics; applyDiscuss). Pending actions are rejected before any
 // transaction because their accepted effect cannot be represented yet: snooze
 // needs the timing update; start_with_changes needs the revised proposal
-// artifact and supersede transaction (plan §4); convert_to_policy,
-// retry_with_capabilities, and choose_alternate_profile carry decision
-// parameters DecisionPayload has no
-// field for (a #22 contract widening when their consumers land); and
+// artifact and supersede transaction (plan §4); convert_to_policy carries
+// decision parameters DecisionPayload has no
+// field for (a #22 contract widening when its consumer lands); and
 // answer_and_retry, answer_without_retry, and return_to_agent ride the conversation channel but are decisions about a
 // prior agent turn, whose accepted effect (what the workflow does with the
 // answer) is the Wave 2 engine's, not a plain discuss append. Recording any
@@ -492,8 +491,7 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		return "", outcomeRecords
 	case domain.ActionDiscuss:
 		return "", outcomeDiscusses
-	case domain.ActionConvertToPolicy,
-		domain.ActionChooseAlternate:
+	case domain.ActionConvertToPolicy:
 		return "", outcomePending
 	}
 	// Invalid zero value: unreachable past NewCommand's validation and

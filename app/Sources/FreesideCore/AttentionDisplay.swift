@@ -263,7 +263,6 @@ enum AttentionDisplay {
         case .answer_and_retry: return "Answer and retry"
         case .answer_without_retry: return "Answer without retry"
         case .rerun_trust_evaluation: return "Rerun trust evaluation"
-        case .choose_alternate_profile: return "Choose alternate profile"
         case .inspect_trust_failure: return "Inspect trust failure"
         case .open_pr: return "View PR"
         case .return_to_agent: return "Return to agent"
@@ -295,7 +294,7 @@ enum AttentionDisplay {
         case .approve, .request_changes, .discuss, .finish_now, .apply_then_finish,
             .continue_under_policy, .convert_to_policy,
             .retry_with_capabilities, .answer_and_retry, .answer_without_retry,
-            .rerun_trust_evaluation, .choose_alternate_profile,
+            .rerun_trust_evaluation,
             .inspect_trust_failure, .mark_seen, .dismiss, .start,
             .start_with_changes, .decline, .acknowledge, .run_doctor,
             .resume_unattended, .recover_review, .adopt_review_configuration,
@@ -332,7 +331,7 @@ enum AttentionDisplay {
         case .approve, .request_changes, .discuss, .finish_now, .apply_then_finish,
             .continue_under_policy, .convert_to_policy, .retry,
             .retry_with_capabilities, .answer_and_retry, .answer_without_retry,
-            .rerun_trust_evaluation, .choose_alternate_profile,
+            .rerun_trust_evaluation,
             .inspect_trust_failure, .open_pr, .return_to_agent, .mark_seen,
             .start, .start_with_changes, .snooze, .acknowledge, .run_doctor,
             .resume_unattended, .recover_review, .adopt_review_configuration,
