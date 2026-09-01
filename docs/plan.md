@@ -47,25 +47,49 @@ why.
   - [5.2 The Daemon and Its Supervisor](#52-the-daemon-and-its-supervisor)
   - [5.3 Execution: StageDriver and ReviewSource](#53-execution-stagedriver-and-reviewsource)
   - [5.4 Credential Modes, Egress Profiles, and Concurrency](#54-credential-modes-egress-profiles-and-concurrency)
+    - [Admitted Agents](#admitted-agents)
+    - [The Stage Owns the Launch](#the-stage-owns-the-launch)
+    - [Admission](#admission)
+    - [Multi-Subscription per Provider](#multi-subscription-per-provider)
+    - [Observation, Never Authority](#observation-never-authority)
   - [5.5 The CI Trust Boundary](#55-the-ci-trust-boundary)
   - [5.6 The Gauntlet: Workspace Handoff, Import, and Clean Verification](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)
   - [5.7 The Ward: Runners, Handoff Gate, and Operating Modes](#57-the-ward-runners-handoff-gate-and-operating-modes)
+    - [The First Ward Gate](#the-first-ward-gate)
+    - [Writer Outcome Authority](#writer-outcome-authority)
+    - [Golden Agent and Project Images](#golden-agent-and-project-images)
+    - [Operating Modes](#operating-modes)
   - [5.8 Control-Plane Trust](#58-control-plane-trust)
   - [5.9 Durability: Effectively Once](#59-durability-effectively-once)
   - [5.10 Coherent Backup: Encrypted Checkpoints](#510-coherent-backup-encrypted-checkpoints)
   - [5.11 GitHub Integration: Reconciliation plus Intake](#511-github-integration-reconciliation-plus-intake)
   - [5.12 Workflow Definition, Initiators, and Artifacts](#512-workflow-definition-initiators-and-artifacts)
   - [5.13 Deterministic Components, Judgment Calls, and the Effect Registry](#513-deterministic-components-judgment-calls-and-the-effect-registry)
+    - [Daemon Judgment Calls](#daemon-judgment-calls)
+    - [The Closed Effect Registry](#the-closed-effect-registry)
   - [5.14 Client Synchronization and Conversations](#514-client-synchronization-and-conversations)
+    - [Authority and Consistency](#authority-and-consistency)
+    - [Revision, Epoch, and Cache Semantics](#revision-epoch-and-cache-semantics)
+    - [Devices, Commands, and Caches](#devices-commands-and-caches)
+    - [Conversations and Discuss](#conversations-and-discuss)
+    - [Permanent Phase 1A Sync and Device Tests](#permanent-phase-1a-sync-and-device-tests)
   - [5.15 Evidence and Images](#515-evidence-and-images)
   - [5.16 The Durable Scheduler](#516-the-durable-scheduler)
   - [5.17 Follow-Up Issue Filing](#517-follow-up-issue-filing)
   - [5.18 The World Model: Post-Merge Recompute and Frontier Projection](#518-the-world-model-post-merge-recompute-and-frontier-projection)
   - [5.19 Deferred Subsystems: Provisional Contracts](#519-deferred-subsystems-provisional-contracts)
+    - [Scoped Consent Grants (Deferred past 1B)](#scoped-consent-grants-deferred-past-1b)
+    - [External Findings Ingestion (Deferred)](#external-findings-ingestion-deferred)
+    - [Pre-Publication Adversarial Pass (Deferred)](#pre-publication-adversarial-pass-deferred)
+    - [Managed Reachability Relay (Deferred, Unscheduled)](#managed-reachability-relay-deferred-unscheduled)
+    - [Readiness Registry (Deferred)](#readiness-registry-deferred)
 - [6. Verification](#6-verification)
   - [The Verification State Algebra](#the-verification-state-algebra)
 - [7. Review Policy](#7-review-policy)
+  - [The Pre-Publication Review Anchor](#the-pre-publication-review-anchor)
+  - [Review Independence, Credibility, and Severity](#review-independence-credibility-and-severity)
   - [Finding Adjudication](#finding-adjudication)
+  - [Review Drift](#review-drift)
 - [8. Observability and Optimization Telemetry](#8-observability-and-optimization-telemetry)
 - [9. Comprehension](#9-comprehension)
   - [Layering](#layering)
@@ -78,7 +102,15 @@ why.
 - [11. Roadmap, Build Order, and Coordination](#11-roadmap-build-order-and-coordination)
   - [The First Repository Is Deliberately Boring](#the-first-repository-is-deliberately-boring)
   - [Phase 1A: The Secure Publish Path, in Three Internal Exits](#phase-1a-the-secure-publish-path-in-three-internal-exits)
+    - [Open-Source Publication, Accelerated](#open-source-publication-accelerated)
+    - [1A.0: Control Plane with Fakes](#1a0-control-plane-with-fakes)
+    - [1A.1: Secure Publication with a Fake Candidate](#1a1-secure-publication-with-a-fake-candidate)
+    - [1A.2: Real Unattended Execution](#1a2-real-unattended-execution)
+    - [Phase 1A Build Order](#phase-1a-build-order)
   - [Phase 1B: The Useful Workflow, in Three Internal Exits](#phase-1b-the-useful-workflow-in-three-internal-exits)
+    - [1B.0: The Useful Loop](#1b0-the-useful-loop)
+    - [1B.1: Decision, Operational, and Provider Closure](#1b1-decision-operational-and-provider-closure)
+    - [1B.2: The Initiative View](#1b2-the-initiative-view)
   - [Implementation Coordination (Building Freeside with Agents)](#implementation-coordination-building-freeside-with-agents)
   - [Phase 2: Breadth and Hardening](#phase-2-breadth-and-hardening)
   - [Phase 3: Comprehension and Interaction](#phase-3-comprehension-and-interaction)
@@ -897,7 +929,9 @@ If only one execution is safe, scheduling shows that constraint instead of
 hiding it in a lock. API-key fallback is always available. Vendor tooling stays
 native and unmodified.
 
-**Admitted agents.** Freeside admits what an agent consumes by digest: the
+#### Admitted Agents
+
+Freeside admits what an agent consumes by digest: the
 base commit, the prompt package, the vendor instructions, the policy, the
 input artifacts (Sections 5.8, 5.9, 5.12). Until this revision, the agent's
 own configuration was the one major input not admitted that way. An
@@ -978,7 +1012,9 @@ tree. Identities, enrollments, generations, admissions, and observations are
 facts, so they are records. A record of a past selection is never upgraded
 through current configuration.
 
-**The stage owns the launch.** Elaboration, implementation, and review each
+#### The Stage Owns the Launch
+
+Elaboration, implementation, and review each
 define a launch: writer or read-only, output contract, severance, session
 mode, and an auxiliary-inference policy (`forbidden`, `declared`, or
 `observed`). The adapter maps the launch to harness-native controls or
@@ -991,7 +1027,9 @@ credentials withheld, review's fresh context and read-only workspace,
 base/head invalidation, and the role capability ceilings all hold whatever
 the agent.
 
-**Admission** puts an agent through the five steps admission already applies to
+#### Admission
+
+Admission puts an agent through the five steps admission already applies to
 every other input:
 
 1. *Resolve.* Resolve the name and every fragment against one control-plane
@@ -1107,7 +1145,9 @@ Deliberately not built:
 - Enforcement of auxiliary inference where the baseline cannot honour it.
 - A separate credential-pass record (it is a proved adapter capability).
 
-**Multi-subscription per provider.** Two identities of one provider (a work
+#### Multi-Subscription per Provider
+
+Two identities of one provider (a work
 and a personal subscription), each with its own enrollments and agents, are
 a supported shape. Selection among them is a lineup line or a carded
 per-attempt choice, never silent: no default is inferred from enrollment
@@ -1118,7 +1158,9 @@ The operator owns compliance with each provider's terms for multi-account
 use; Freeside attributes usage to a named identity and neither endorses nor
 polices the arrangement (Section 14, subscription-terms drift).
 
-**Observation, never authority.** A credential-bounded account probe may record,
+#### Observation, Never Authority
+
+A credential-bounded account probe may record,
 per identity:
 
 - A stable account fingerprint.
@@ -2497,7 +2539,9 @@ scope serializes. The planner judgment call waits past 1B.
 The contracts below are design constraints for deferred subsystems, recorded
 now and re-reviewed at implementation. None is scheduled inside 1B.
 
-**Scoped consent grants (deferred past 1B).** A standing permission binds:
+#### Scoped Consent Grants (Deferred past 1B)
+
+A standing permission binds:
 
 - The canonical repository ID.
 - The effect kind.
@@ -2544,7 +2588,9 @@ Grants pre-answer a risk acknowledgement only; digest- and head-bound approvals
 and non-waivable gates are untouched. Until this is built, per-run authorization
 continues (an accepted cost; revisit at the 1B exit).
 
-**External findings ingestion (deferred).** Externally produced reviews are
+#### External Findings Ingestion (Deferred)
+
+Externally produced reviews are
 quarantined at entry. They enter as quota-bound advisory proposals (a future
 effect kind added to the Section 5.13 registry with this subsystem) with
 `external_untrusted` provenance, a raw-source digest, and a reconstructed
@@ -2560,7 +2606,9 @@ deduplication, and a declared authority-site contract (Section 5.13). External
 findings never satisfy ReviewSource freshness, independence, or
 review-completeness.
 
-**Pre-publication adversarial pass (deferred).** An optional adversarial
+#### Pre-Publication Adversarial Pass (Deferred)
+
+An optional adversarial
 self-review before a PR opens, so the external reviewer starts from a higher
 floor. It reviews the daemon-constructed publication candidate after hostile
 import, never the raw workspace. Each pass binds the exact candidate head and
@@ -2571,7 +2619,9 @@ the Section 7 review requirement, which itself anchors pre-publication
 (revision 28): the Section 7 pass is required; this pass is optional and
 deferred.
 
-**Managed reachability relay (deferred, unscheduled).** A future managed relay
+#### Managed Reachability Relay (Deferred, Unscheduled)
+
+A future managed relay
 may provide authenticated bidirectional byte transport between an enrolled host
 and its paired clients. `freesided` stays loopback-bound and holds an outbound
 connector authenticated by the Section 5.9 host identity; clients use ordinary
@@ -2634,7 +2684,9 @@ for large artifacts is a separate deferred concern, taken up only if measured
 payloads demand it, and artifact authority stays local and digest-addressed
 regardless.
 
-**Readiness registry (deferred).** When built, it is a projection over current
+#### Readiness Registry (Deferred)
+
+When built, it is a projection over current
 typed proofs, recomputed on read, never a stored ready bit. The Section 10
 doctor consumes it.
 
@@ -2750,6 +2802,8 @@ never a silent stall. Failure classification matches the publication boundary:
 transient failures retry with backoff; configuration or quota failures create
 attention; durable contradictions fail loudly.
 
+### The Pre-Publication Review Anchor
+
 **Resolved fork (decider: user, 2026-08-05; revision 28): the review anchor is
 pre-publication.** Implement → verify → review → clean: publish. The PR opens
 already reviewed, and forge checks still gate merge. As landed (#427, PR #490),
@@ -2791,6 +2845,8 @@ GitHub-native Codex when it fires, and other bots. On a published PR, that
 activity is the deferred external review response capability (Section 11;
 #524). It never satisfies this section's requirement, which stays
 Freeside-invoked and pre-publication.
+
+### Review Independence, Credibility, and Severity
 
 The sequencing preserves independence (spine-confirmed on #427). It runs in
 this order: first the #427 implementation unit, then production runs with
