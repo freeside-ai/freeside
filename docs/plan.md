@@ -175,7 +175,8 @@ maintenance still decide whether Freeside creates a positive return.
 3. **Support autonomous initiation.** Manual, label, and scan initiators run in
    `propose` or `auto_start` mode.
 4. **Use yield-driven review remediation.** Round counts are emergency brakes,
-   not the normal stopping rule.
+   not the normal stopping rule, and the Section 7 drift audit judges the
+   change as a whole, not only the stream of findings.
 5. **Bound execution.** Capabilities are fixed at spawn; no workspace receives
    GitHub credentials; every run declares a credential mode; every stage uses a
    named egress profile with an honest risk class; post-agent handoff is proven;
@@ -1886,6 +1887,9 @@ review:
   low_value_streak_before_attention: 2
   hard_active_time: 8h                  # active review/remediation clock
   hard_round_limit: 25                  # emergency brakes only
+  drift_growth_streak_before_attention: 3   # off when unset
+  drift_audit_after: 6                  # off when unset
+  drift_audit_route: auto               # or park
 verification:   {recipe: trusted,
                  commands: [[npm, ci], [npm, run, lint],
                             [npm, run, typecheck], [npm, test]],
@@ -1948,8 +1952,8 @@ The engine, not an agent, runs deterministic policy jobs:
 - cleanup.
 
 Agents appear where judgment is the work: elaborator, implementer, remediator,
-diagnostic, finding classifier, finding adjudicator (Section 7), reviewer,
-shadow reviewer, and, later, briefer.
+diagnostic, finding classifier, finding adjudicator (Section 7), drift auditor
+(Section 7), reviewer, shadow reviewer, and, later, briefer.
 
 #### Daemon Judgment Calls
 
@@ -1965,11 +1969,11 @@ Section 8 policy-input telemetry.
 Every call site carries exactly one per-site authority contract:
 
 1. **Ceiling-bounded annotation** (type case: the finding classifier; the
-   Section 7 finding adjudicator is the second site). The site declares its
-   behavioral lattice and deterministic fallback; which outputs reduce work;
-   raw-severity ceilings; second-adjudication rules; cumulative bounds on
-   attention, compute, and starvation; and tests for extreme outputs and
-   repeated calls. Existing classifier ceilings stay verbatim.
+   Section 7 finding adjudicator and drift auditor are the other two). The site
+   declares its behavioral lattice and deterministic fallback; which outputs
+   reduce work; raw-severity ceilings; second-adjudication rules; cumulative
+   bounds on attention, compute, and starvation; and tests for extreme outputs
+   and repeated calls. Existing classifier ceilings stay verbatim.
    Monotone-conservative annotation is a stricter subtype.
 2. **Advisory-only**: human and advisory-store consumers only.
 3. **Proposal** into the closed effect registry below.
@@ -2791,11 +2795,13 @@ path runs in one direction only, toward remediation. A credible, confidently
 material, in-surface finding routes to the remediator with no model
 adjudication call. The declared paths bound this preference for an in-surface
 fix, which is the loop's normal work. Selecting the `adjacent` deferral route
-always takes the model adjudication. The adjudicator is the only site that
-consumes the approved specification, and a spec-blind materiality annotation
-cannot decide a spec-relative route. The model residue is that deferral
-direction, boundary-exiting fixes, contradicted specifications, ambiguous goals
-or rules, low-confidence classification, and structured dissent. Structured
+always takes the model adjudication. Within this dispatch the adjudicator is the
+only site that consumes the approved specification, and a spec-blind materiality
+annotation cannot decide a spec-relative route. The Review Drift audit below
+also consumes the specification, but it proposes reversals and routes no
+finding. The model residue is that deferral direction, boundary-exiting fixes,
+contradicted specifications, ambiguous goals or rules, low-confidence
+classification, and structured dissent. Structured
 dissent includes a remediator's labeled pushback, a human challenge, or an
 attempted fix that the import boundary's path-scope enforcement rejected. Each
 re-enters adjudication instead of looping silently.
@@ -2880,6 +2886,181 @@ cells and their interactions to be enumerated. This discipline is an acceptance
 requirement of that wave 6 `kind:contract` unit. Its typed schema and fixtures
 are the exhaustive enumeration. This subsection states the design's
 constraints, not the field catalogue.
+
+### Review Drift
+
+**The loop also judges the change as a whole against the approved
+specification, not only the stream of findings** (decider: user, 2026-09-01;
+revision 45; #1054). A drift audit asks whether the change has grown more
+defensive than the specification needs. A deterministic floor, diff metrics
+plus a growth stop rule, ships first; the model-backed audit follows once the
+floor has measured how often it would fire.
+
+As landed, the loop watches findings and nothing else.
+`EvaluateReviewConvergence` stops a convergence segment on exactly three causes:
+`low_value_streak` (consecutive rounds with findings but no new material
+finding, counted since the last `continue_under_policy` decision, reach
+`low_value_streak_before_attention`), `fixed_recurrence` (a finding whose
+identity was dispositioned `fixed` earlier in the segment appears again), and
+`final_review_findings` (the final review returns findings). Yield history
+records per-round finding counts and the round outcome, nothing about the diff.
+`hard_round_limit` is not a stop cause: reaching it narrows the
+`review_diminishing_returns` card to `finish_now`, and the controller does not
+evaluate rounds past it. The adjudicator (Finding Adjudication, above) sees the
+specification, instructions, policy, declared paths, and the current batch with
+its prior dispositions. No gate in the loop sees the diff's shape or how much it
+has grown since round 1.
+
+That misses one way of being stuck. Every gate judges one finding at a time,
+and a reasonable finding can pass every gate while the change as a whole drifts
+past the specification. A run can end over-built with a clean disposition
+history, and the human finds out at `ready_for_final_review`. Today the owner
+catches this by hand: after seven to ten rounds, a fresh-context agent is asked
+whether the review has fallen into an over-hardening hole. Wave 8's charter is
+that Freeside runs unattended and says when it is stuck, so the daemon must
+detect this state itself.
+
+**Diff metrics.** From round 1, the daemon computes each round's diff shape from
+the ReviewRecord's bound base and candidate head: files touched, lines added,
+and lines removed, for the round and cumulative. Both comparisons are named
+pairs. The cumulative metrics compare the bound base with this round's candidate
+head. The round metrics compare the previous round's candidate head with this
+round's, and in round 1 the bound base with the round-1 candidate head, so the
+two agree in round 1. The metrics are engine facts recorded in yield history,
+never model output. They are also an allowlisted adjudication input from the
+round they describe.
+
+**Growth without blockers.** The floor's stop rule reads those metrics. When
+`review.drift_growth_streak_before_attention` is set to N, and N consecutive
+rounds with findings each grew the cumulative diff without ingesting a credible
+critical or high finding, convergence evaluation stops with cause
+`growth_without_blockers`. Growth is one scalar: the cumulative diff's net size,
+cumulative lines added minus cumulative lines removed against the bound base. A
+round grew the diff when that net is strictly greater than the previous recorded
+round's; equal or lower is not growth and resets the streak. Round 1 has no
+predecessor, so it never counts as a growth round. Files touched and the raw
+added and removed counts stay recorded facts and adjudication inputs, not part
+of this ordering. The streak counts since the last `continue_under_policy`
+decision, exactly as `low_value_streak` does, so continuing opens a fresh growth
+window instead of parking on the next growing round. The card offers the landed
+actions. The rule is off when the key is unset, so existing policies behave as
+they do today. Convergence evaluation runs first each round, and every
+deterministic stop cause wins: when `growth_without_blockers`,
+`low_value_streak`, `fixed_recurrence`, or `final_review_findings` stops the
+loop, the audit below does not run that round. A parked round needs no verdict,
+and no audit verdict can route past a stop that policy already required.
+
+**The audit.** When `review.drift_audit_after` is set to N, a review round with
+findings from round N on runs a drift audit after the batch is adjudicated and
+convergence is evaluated, and before remediation. A round that any deterministic
+cause stopped runs no audit. The audit is a model call under the Section 5.13
+ceilings: it annotates and proposes, never decides; it ships with a
+deterministic fake; and it runs under the adjudicator's independence rule, so
+by default its lineage group differs from the implementing agent's. Its
+allowlisted inputs are the approved specification, the round-1 diff, the current
+diff, the dispositions and adjudication entries so far, the instruction
+snapshot, and the round's diff metrics. Section 5.13 registers it beside the
+adjudicator as the second site that may consume the approved specification; it
+proposes reversals and routes no finding, so the adjudicator stays the only site
+whose spec-relative judgment routes one. The implementer's reasoning history is
+never an input. Its output is one immutable, digest-addressed
+`DriftAudit` artifact bound to the run, round, base, head, approved
+specification digest, and resolved policy digest. The artifact carries a
+verdict, a self-assessed confidence on the existing `low` / `medium` / `high`
+scale, a reversal list, and an explanation. Each reversal names a finding
+identity, what to undo, and why the specification does not need it. The audit
+is off when the key is unset.
+
+**Fail-safe default.** The audit degrades; it never blocks the run or parks it
+on its own failure. When the call times out, exhausts its Section 5.13 budget,
+or returns no schema-valid artifact, the round records the failure as an engine
+fact, produces no verdict, and the loop continues under the deterministic floor
+and the landed stop causes, exactly as it does with the audit off. The site
+does not retry beyond its budget. A failed audit never routes a simplification
+round and never counts as the run's first `over_hardened` verdict.
+
+**Verdicts.** `converged`: the change matches the specification and nothing
+needs undoing. `over_hardened`: the change carries defensive work the
+specification does not need, and the reversal list names it. `stuck`: rounds
+keep producing findings and the change is converging neither way. The zero value
+is invalid. The reversal list's cardinality is part of the verdict, and decoding
+and reconstruction both enforce it: `over_hardened` requires a nonempty list of
+distinct finding identities, and `converged` and `stuck` require an empty one.
+An artifact that breaks this is not schema-valid, so it takes the fail-safe
+default above and produces no verdict.
+
+**Routing.** At most one automatic simplification round runs per run: only
+the run's first `over_hardened` verdict can route to one. `converged` records
+the artifact and the loop continues. `stuck` parks the run to
+`review_diminishing_returns` with cause `drift_audit`. `over_hardened` routes
+by `review.drift_audit_route`:
+
+- `auto`, on the run's first `over_hardened` verdict and only when a review
+  round remains: one simplification round. It is a remediation round whose
+  instruction carries the reversal list beside the batch's routed fixes. Its
+  re-review is an ordinary round in the same convergence segment and counts
+  toward the hard limits, so the route requires that re-review to fit within
+  the resolved `hard_round_limit`. At the limit the verdict parks instead,
+  because the landed controller refuses a round past the limit and the card
+  already narrows to `finish_now` there.
+- Any later `over_hardened` verdict in the run, or `park`: the run parks to
+  `review_diminishing_returns` with cause `drift_audit`, and the card leads
+  with the verdict and the reversal list.
+
+The Finding Adjudication ceilings apply unchanged. A reversal list is model
+output, so the route gate validates it before it can do anything: every entry
+must name a finding of this run whose effective latest disposition is `fixed`.
+An entry naming an unknown identity, a finding from the round's own batch, or a
+finding already declined or deferred fails the gate, and the verdict parks with
+cause `drift_audit` rather than routing. Reconstruction re-proves the same
+check, so a stored supersession always has the earlier `fixed` disposition it
+replaces. Reversing the fix of a critical or high severity finding needs a
+second adjudication (deterministic or from a distinct agent) or a durable
+AttentionItem; without one, the verdict parks with cause `drift_audit` rather
+than routing. A verdict whose confidence is missing, out of scale, or below the
+resolved-policy threshold (the adjudication threshold, bounded below at
+`medium`, so `low` always parks) never routes automatically and parks the same
+way. A parked verdict still counts as the run's first, so no later verdict
+routes automatically either. `drift_audit_route` is a policy flag so the default
+can flip on evidence without a code change; the replay evidence unit decides the
+shipped default.
+
+The card's actions are the landed ones (Section 4). `continue_under_policy` runs
+the simplification round the audit proposed only when the card carries a
+validated reversal list. Otherwise it keeps its landed meaning exactly: the loop
+resumes with an ordinary next review round and no simplification work. That
+covers a `stuck` verdict, which carries no reversal list, and an `over_hardened`
+verdict whose list failed the route gate, which the card says plainly so the
+human is not offered work the daemon would refuse to run. `apply_then_finish`
+and `finish_now` keep their landed meaning throughout. So the human can finish,
+apply and finish, or simplify and continue, without a new item type or action.
+
+**A reversed fix is a decline, not a recurrence.** A reversal must be
+representable. Dispositions are immutable and keyed by finding and round, and
+the store re-runs the binding that the round's review record lists that finding
+(`daemon/internal/store/review.go`). So a reversal can neither overwrite the
+earlier `fixed` row nor attach a decline to the remediation round that performs
+it. The contract unit therefore carries a supersession record. It is one
+immutable row bound to the run, the reversing round, the superseded disposition,
+the `DriftAudit` digest that proposed the reversal, and the authority that
+ordered it, which is the re-derived auto-route gate record for an automatic
+simplification round or the item, item version, and command identity for a human
+`continue_under_policy`. Reconstruction re-proves that authority against current
+state and fails closed, so the artifact alone never supersedes a disposition. A
+finding's effective latest disposition resolves through that record, and the
+reversal reads as `declined` from the reversing round on. A finding whose
+effective latest disposition is already `declined` or `deferred` never appears
+on a reversal list. The recurrence rule must read each finding's effective
+latest disposition, so the finding's re-emission on the next review is a known
+decline and never `fixed_recurrence`. Today the rule counts every `fixed`
+disposition in the segment; the routing unit changes that.
+
+The contract unit (#1048) carries the policy schema, the yield-history metric
+fields (`ReviewYieldRound` is a synced type), the artifact, the verdict enum,
+the disposition supersession record, and the new causes with their generated
+consumers. The metrics computation and growth stop rule, the audit site, the
+routing, the card rendering, and the replay evidence follow it in that order
+(#1049 through #1053), floor before model site.
 
 ## 8. Observability and optimization telemetry
 
@@ -2977,7 +3158,7 @@ Actions and lifecycle live in Section 4; presentation is specified here.
 | Item type | Leads with | Below |
 | --- | --- | --- |
 | `spec_approval` | The ask and a plan-altitude summary: intent, then key questions and decisions. A revision leads with the diff-from-last-reviewed summary and claimed addressals mapped to prior comments. | Full specification and full diff. |
-| `review_diminishing_returns` | Daemon facts: rounds, finding-rate trend, cost so far. Agent claim: what remains. | Per-finding list. |
+| `review_diminishing_returns` | Daemon facts: rounds, finding-rate trend, diff growth, cost so far; the drift verdict and reversal list when the item carries one. Agent claim: what remains. | Per-finding list. |
 | `review_dispute` | The disputed finding with both positions side by side. Dissent is the content; it is never summarized away. | Code context and the full thread. |
 | `finding_adjudication` | The recommended route and why, as a labeled proposal; the finding and the daemon's binding and containment facts in a separate register. | Assumptions, cited repository instructions, alternatives with consequences, gating questions, then the full artifact and code context. |
 | `execution_failure` | Daemon facts: failure class and failing step. Labeled diagnostic claim: probable cause. | Log excerpt and transcript pointer. |
@@ -3493,7 +3674,7 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section 5.13 classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section 7 disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section 6 state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section 5.2 contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section 7 finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section 10). 1B.0 exit. |
 | **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, one serialized chain whose positions the spine assigns at planning: the revision-40 attention-presentation cluster (the Section 4 recommendation shape and Section 9 typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section 5.15 evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section 8/9 comprehension-telemetry contracts the wave-10 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section 9 summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section 9 altitude; facts stay distinct from claims. |
-| **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. Human-gated follow-up filing with the `effect_proposal` card (Section 5.17); the doctor credential-integrity probe (Section 10); the stall heartbeat (Section 5.12); the external daemon-liveness probe (Section 5.2, #510); the held-work item (#766); the standing stopped-operation indicator (#980); device listing and revocation (#981); the clean-machine onboarding proof (#428); and the egress floor's first capabilities above it (Sections 5.4, 5.7): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters. Exit proof: a clean machine reaches an unattended real run; daemon death, crash loops, stalls, held work, a stopped state, and external review each alert without terminal patrol or manual polling. |
+| **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. Human-gated follow-up filing with the `effect_proposal` card (Section 5.17); the doctor credential-integrity probe (Section 10); the stall heartbeat (Section 5.12); the external daemon-liveness probe (Section 5.2, #510); the held-work item (#766); the review drift audit (Section 7; the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); the clean-machine onboarding proof (#428); and the egress floor's first capabilities above it (Sections 5.4, 5.7): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters. Exit proof: a clean machine reaches an unattended real run; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
 | **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), whether daemon judgment roles consume lineups (#900, decided before any utility agent exists), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on the wave-6 shadow evidence, then the StageDriver binding (#408, `merges-after` #873; Section 7 keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). Ward fronts with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866) and guided enrollment with the two-step cutover (#867). The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and elaboration agent (#895) `starts-after` #897 and #867, elaboration only, with its pre-adoption gates run against the pinned build. The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because tracker titles must match this section's resolver pattern. Deferral drain: the agent and provider clusters. Exit proof: a real unattended Codex run and a pi elaboration; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. 1B.1 exit evaluation. |
 | **10 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section 5.18 capture records (#884, `exclusive-with` every open contract unit), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
 
