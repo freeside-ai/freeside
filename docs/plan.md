@@ -27,37 +27,37 @@ why.
 
 ## Contents
 
-- [1. What Freeside is](#1-what-freeside-is)
-  - [The end-to-end workflow](#the-end-to-end-workflow)
-- [2. Goals and non-goals](#2-goals-and-non-goals)
+- [1. What Freeside Is](#1-what-freeside-is)
+  - [The End-to-End Workflow](#the-end-to-end-workflow)
+- [2. Goals and Non-Goals](#2-goals-and-non-goals)
   - [Goals](#goals)
-  - [Non-goals](#non-goals)
-- [3. Operating principles](#3-operating-principles)
-  - [3.1 Autonomy inside the ward](#31-autonomy-inside-the-ward)
-  - [3.2 The interruption budget](#32-the-interruption-budget)
+  - [Non-Goals](#non-goals)
+- [3. Operating Principles](#3-operating-principles)
+  - [3.1 Autonomy Inside the Ward](#31-autonomy-inside-the-ward)
+  - [3.2 The Interruption Budget](#32-the-interruption-budget)
   - [3.3 Portability](#33-portability)
   - [3.4 Simplicity](#34-simplicity)
   - [3.5 Oversight](#35-oversight)
 - [4. The Attention Model](#4-the-attention-model)
-  - [Core records](#core-records)
+  - [Core Records](#core-records)
   - [Phase 1 Item Types and Actions](#phase-1-item-types-and-actions)
   - [Lifecycle Rules](#lifecycle-rules)
 - [5. Architecture](#5-architecture)
   - [5.1 Overview](#51-overview)
   - [5.2 The Daemon and Its Supervisor](#52-the-daemon-and-its-supervisor)
   - [5.3 Execution: StageDriver and ReviewSource](#53-execution-stagedriver-and-reviewsource)
-  - [5.4 Credential modes, egress profiles, and concurrency](#54-credential-modes-egress-profiles-and-concurrency)
+  - [5.4 Credential Modes, Egress Profiles, and Concurrency](#54-credential-modes-egress-profiles-and-concurrency)
   - [5.5 The CI Trust Boundary](#55-the-ci-trust-boundary)
-  - [5.6 The gauntlet: workspace handoff, import, and clean verification](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)
-  - [5.7 The ward: runners, handoff gate, and operating modes](#57-the-ward-runners-handoff-gate-and-operating-modes)
+  - [5.6 The Gauntlet: Workspace Handoff, Import, and Clean Verification](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)
+  - [5.7 The Ward: Runners, Handoff Gate, and Operating Modes](#57-the-ward-runners-handoff-gate-and-operating-modes)
   - [5.8 Control-Plane Trust](#58-control-plane-trust)
   - [5.9 Durability: Effectively Once](#59-durability-effectively-once)
   - [5.10 Coherent Backup: Encrypted Checkpoints](#510-coherent-backup-encrypted-checkpoints)
-  - [5.11 GitHub integration: reconciliation plus intake](#511-github-integration-reconciliation-plus-intake)
+  - [5.11 GitHub Integration: Reconciliation plus Intake](#511-github-integration-reconciliation-plus-intake)
   - [5.12 Workflow Definition, Initiators, and Artifacts](#512-workflow-definition-initiators-and-artifacts)
   - [5.13 Deterministic Components, Judgment Calls, and the Effect Registry](#513-deterministic-components-judgment-calls-and-the-effect-registry)
   - [5.14 Client Synchronization and Conversations](#514-client-synchronization-and-conversations)
-  - [5.15 Evidence and images](#515-evidence-and-images)
+  - [5.15 Evidence and Images](#515-evidence-and-images)
   - [5.16 The Durable Scheduler](#516-the-durable-scheduler)
   - [5.17 Follow-Up Issue Filing](#517-follow-up-issue-filing)
   - [5.18 The World Model: Post-Merge Recompute and Frontier Projection](#518-the-world-model-post-merge-recompute-and-frontier-projection)
@@ -66,7 +66,7 @@ why.
   - [The Verification State Algebra](#the-verification-state-algebra)
 - [7. Review Policy](#7-review-policy)
   - [Finding Adjudication](#finding-adjudication)
-- [8. Observability and optimization telemetry](#8-observability-and-optimization-telemetry)
+- [8. Observability and Optimization Telemetry](#8-observability-and-optimization-telemetry)
 - [9. Comprehension](#9-comprehension)
   - [Layering](#layering)
   - [Presentation per Item Type](#presentation-per-item-type)
@@ -77,24 +77,24 @@ why.
   - [GitHub App Agent Identity](#github-app-agent-identity)
 - [11. Roadmap, Build Order, and Coordination](#11-roadmap-build-order-and-coordination)
   - [The First Repository Is Deliberately Boring](#the-first-repository-is-deliberately-boring)
-  - [Phase 1A: the secure publish path, in three internal exits](#phase-1a-the-secure-publish-path-in-three-internal-exits)
+  - [Phase 1A: The Secure Publish Path, in Three Internal Exits](#phase-1a-the-secure-publish-path-in-three-internal-exits)
   - [Phase 1B: The Useful Workflow, in Three Internal Exits](#phase-1b-the-useful-workflow-in-three-internal-exits)
   - [Implementation Coordination (Building Freeside with Agents)](#implementation-coordination-building-freeside-with-agents)
-  - [Phase 2: breadth and hardening](#phase-2-breadth-and-hardening)
+  - [Phase 2: Breadth and Hardening](#phase-2-breadth-and-hardening)
   - [Phase 3: Comprehension and Interaction](#phase-3-comprehension-and-interaction)
-  - [Phase 4: generalization](#phase-4-generalization)
-- [12. Exit criteria definitions](#12-exit-criteria-definitions)
+  - [Phase 4: Generalization](#phase-4-generalization)
+- [12. Exit Criteria Definitions](#12-exit-criteria-definitions)
 - [13. Decisions Log](#13-decisions-log)
 - [14. Risks](#14-risks)
-- [15. Naming and references](#15-naming-and-references)
-  - [Product and subsystem names](#product-and-subsystem-names)
-  - [Visual identity](#visual-identity)
-  - [Coordination names](#coordination-names)
-  - [Reference shelf](#reference-shelf)
+- [15. Naming and References](#15-naming-and-references)
+  - [Product and Subsystem Names](#product-and-subsystem-names)
+  - [Visual Identity](#visual-identity)
+  - [Coordination Names](#coordination-names)
+  - [Reference Shelf](#reference-shelf)
 
 ---
 
-## 1. What Freeside is
+## 1. What Freeside Is
 
 **Freeside is a local, durable workflow controller that grants agents the autonomy to turn work items into evidence-backed pull requests and interrupts me only when judgment is required.**
 
@@ -114,7 +114,7 @@ you hold the reins.*
 The supported reference deployment is a Mac Studio. The daemon core remains
 Linux-portable under Section 3.3.
 
-### The end-to-end workflow
+### The End-to-End Workflow
 
 1. A manual submission, labeled issue, or scanner proposal creates a work item.
 2. An elaborator turns it into a specification using research artifacts fetched
@@ -162,7 +162,7 @@ The project succeeds only if all four claims hold:
 These claims are gates, not the goal. Even if all four hold, cost and
 maintenance still decide whether Freeside creates a positive return.
 
-## 2. Goals and non-goals
+## 2. Goals and Non-Goals
 
 ### Goals
 
@@ -198,7 +198,7 @@ maintenance still decide whether Freeside creates a positive return.
     after interfaces survive real use. Privileged installation is a narrow
     elevation boundary, and the daemon never retains root. (Decider: user.)
 
-### Non-goals
+### Non-Goals
 
 1. Freeside is not an IDE or code-review surface. Code review and merging stay
    on GitHub; Freeside owns workflow decisions and approvals. A human merge
@@ -226,9 +226,9 @@ maintenance still decide whether Freeside creates a positive return.
    One scoped exception: in portable mode, replica storage carries head trust,
    meaning activation fencing and the recovery frontier (Section 5.1).
 
-## 3. Operating principles
+## 3. Operating Principles
 
-### 3.1 Autonomy inside the ward
+### 3.1 Autonomy Inside the Ward
 
 Autonomy is the default. Gates exist only at trust-boundary crossings and the
 two designed judgment points.
@@ -253,7 +253,7 @@ The following classes are non-waivable:
 - secret detection; and
 - capability escalation outside approved manifests.
 
-### 3.2 The interruption budget
+### 3.2 The Interruption Budget
 
 Every AttentionItem is tagged `planned_gate` or `exceptional`. The exceptional
 rate is a health metric; a rising rate is a defect, subject to Section 3.1.
@@ -295,7 +295,7 @@ telemetry and sampled decision audits.
 
 ## 4. The Attention Model
 
-### Core records
+### Core Records
 
 **AttentionItem** contains:
 
@@ -745,7 +745,7 @@ Workflow recovery is guaranteed from stage inputs, workspace state, and
 artifacts; provider session resume is best effort. Capabilities are fixed at
 spawn. If they are not enough, the stage emits a typed request and exits.
 
-### 5.4 Credential modes, egress profiles, and concurrency
+### 5.4 Credential Modes, Egress Profiles, and Concurrency
 
 **No GitHub write credential ever enters any workspace.**
 
@@ -1153,7 +1153,7 @@ discards the token before any worker can receive it and fails closed.
 **Standing prohibition:** the daemon host is never a self-hosted Actions runner
 for a managed repository.
 
-### 5.6 The gauntlet: workspace handoff, import, and clean verification
+### 5.6 The Gauntlet: Workspace Handoff, Import, and Clean Verification
 
 ```
 daemon-owned base repo ──exact base SHA──▶ agent workspace
@@ -1236,7 +1236,7 @@ risk-flags, and gates changes to verification-control files.
 
 Named residual risk: candidate test code runs inside the warded verifier.
 
-### 5.7 The ward: runners, handoff gate, and operating modes
+### 5.7 The Ward: Runners, Handoff Gate, and Operating Modes
 
 Runner backends declare capabilities; policy declares minimums. Freeside never
 silently downgrades. Named capabilities are:
@@ -1256,7 +1256,7 @@ silently downgrades. Named capabilities are:
   capability attests the enforcement mechanism, which is distinct from the
   *requested* egress profile (Section 5.4).
 
-#### The first ward gate
+#### The First Ward Gate
 
 The actual runtime must prove this sequence:
 
@@ -1415,7 +1415,7 @@ use a tag for that build-time hop only, after verifying its digest, and must
 record the exact base digest in the derived image. The image supplied to
 ward remains a registry-resolved digest reference.
 
-#### Operating modes
+#### Operating Modes
 
 | Mode | Requirements and limits |
 | --- | --- |
@@ -1844,7 +1844,7 @@ retention_by_artifact_class, last_completed_checkpoint, last_restore_test}`
 Encrypted backup is required before unattended mode uses a private repository
 with remote replication. A local-only development checkpoint may come first.
 
-### 5.11 GitHub integration: reconciliation plus intake
+### 5.11 GitHub Integration: Reconciliation plus Intake
 
 Freeside reconciles each active GitHub resource independently with conditional
 requests. Intake scanners discover new work with overlapping scans and
@@ -2197,7 +2197,7 @@ steering wait until Phase 3.
 16. Retrying a previously recorded command after revocation may return its
     recorded result but causes no new side effect.
 
-### 5.15 Evidence and images
+### 5.15 Evidence and Images
 
 Four machine-enforced rules govern evidence:
 
@@ -3062,7 +3062,7 @@ consumers. The metrics computation and growth stop rule, the audit site, the
 routing, the card rendering, and the replay evidence follow it in that order
 (#1049 through #1053), floor before model site.
 
-## 8. Observability and optimization telemetry
+## 8. Observability and Optimization Telemetry
 
 Telemetry uses typed relational rows with stable join keys. Transcripts are
 drill-down pointers, not the primary data model.
@@ -3455,11 +3455,11 @@ requirement, and infrequent workflow or instruction-file changes. Ordinary
 repository features such as tag-only release automation belong in the audited,
 digest-bound trust profile. They are not prose exceptions.
 
-### Phase 1A: the secure publish path, in three internal exits
+### Phase 1A: The Secure Publish Path, in Three Internal Exits
 
 Phase 1A proves the secure path from controlled input to published PR.
 
-#### Open-source publication, accelerated
+#### Open-Source Publication, Accelerated
 
 The entire monorepo, including owned prior revisions, is licensed under
 AGPL-3.0-or-later and will become public after the licensing change lands. This
@@ -3468,7 +3468,7 @@ project can use public-repository CI capacity. It doesn't advance Phase 4
 features or create new support commitments. See
 [`docs/decisions/0001-license-freeside-under-agpl.md`](decisions/0001-license-freeside-under-agpl.md).
 
-#### 1A.0: control plane with fakes
+#### 1A.0: Control Plane with Fakes
 
 Flow:
 
@@ -3482,7 +3482,7 @@ Exit requires:
 - kill-before and kill-after recovery with fakes; and
 - no dependency on containers, Claude, publication, or backup complexity.
 
-#### 1A.1: secure publication with a fake candidate
+#### 1A.1: Secure Publication with a Fake Candidate
 
 Flow:
 
@@ -3499,7 +3499,7 @@ Exit requires:
 - successful checkpoint restore, with local-only acceptable; and
 - completion in `attended_dev`; unattended operation is not required.
 
-#### 1A.2: real unattended execution
+#### 1A.2: Real Unattended Execution
 
 Flow:
 
@@ -3750,7 +3750,7 @@ grep -rniE "current (phase|wave)([^'[:alnum:]_]|$)|wave [0-9]+[^.]*underway" REA
 
 The 1A backlog also serves as elaborator fixtures.
 
-### Phase 2: breadth and hardening
+### Phase 2: Breadth and Hardening
 
 Expand beyond the first constrained path:
 
@@ -3772,12 +3772,12 @@ Add ACP interactive attachment, best-effort resume, material plan-change gates,
 briefings, usage display, evidence-informed routing, WIP views, and mature
 `auto_start` behavior. The initiative view moved to 1B.2 (revision 25).
 
-### Phase 4: generalization
+### Phase 4: Generalization
 
 After three real workflow shapes, consider a pipeline DSL. Add more agents and
 skills, a macOS runner class, App Intents, widgets, Live Activities, and voice.
 
-## 12. Exit criteria definitions
+## 12. Exit Criteria Definitions
 
 | Criterion | Definition | Tolerance |
 | --- | --- | --- |
@@ -3881,9 +3881,9 @@ Revision 45 ("Review drift audit"):
 | Reviewer monoculture | Require a fresh-context adversarial review at every implementation wave exit. |
 | Prompt injection, the organizing threat | Keep write credentials out of workspaces; prove handoff; import through the out-of-process two-channel gauntlet; use trusted overlays; block automation paths and surface instruction-path edits; enforce egress floors; fetch research through the daemon; gate irreversible actions; use budgets and brakes. |
 
-## 15. Naming and references
+## 15. Naming and References
 
-### Product and subsystem names
+### Product and Subsystem Names
 
 | Name | Meaning |
 | --- | --- |
@@ -3901,7 +3901,7 @@ Subsystem names follow the binding-and-summoning register: rare,
 single-metaphor words with ordinary surface meanings. Code uses functional
 names.
 
-### Visual identity
+### Visual Identity
 
 - Light surfaces are **Freeside**: vellum ground and bronze accent.
 - Dark surfaces are **Straylight**: umber ground and tawny accent.
@@ -3915,14 +3915,14 @@ names.
 The full identity system and rejected alternatives are in
 `devlog/2026-07-17-0050-brand-register.md`.
 
-### Coordination names
+### Coordination Names
 
 Coordination vocabulary sits outside the subsystem register. A lane takes a
 subsystem name where one exists. The client lane is informally the **saddle**.
 The integration role is the **spine**, a role rather than a territory.
 `docs/coordination.md` owns the canonical lane glossary.
 
-### Reference shelf
+### Reference Shelf
 
 - Anthropic devcontainer, Agent SDK, and credential documentation;
 - OpenAI Codex SDK, sandbox design, and cloud-review documentation;
