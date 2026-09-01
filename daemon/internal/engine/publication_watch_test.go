@@ -247,6 +247,40 @@ func TestCompatibleTerminalItemAcceptsLegacyNilReadinessOnly(t *testing.T) {
 	}
 }
 
+// TestCompatibleTerminalItemAcceptsLegacyNilReadinessDetailOnly: a ready item
+// persisted before the detail existed recovers against the freshly derived
+// shape, while a persisted detail that disagrees with it is foreign.
+func TestCompatibleTerminalItemAcceptsLegacyNilReadinessDetailOnly(t *testing.T) {
+	st := watchTestStore(t)
+	current := watchTestItem(t, st, domain.StatusOpen)
+	recipe := domain.Digest("sha256:recipe")
+	detail := domain.ReadinessDetail{
+		EvaluationSetDigest: "sha256:evaluation", CandidateHead: current.PRHeadSHA,
+		Base: domain.ReadinessBoundBase{BaseRef: "main", BaseSHA: "base"},
+		Requirements: []domain.ReadinessRequirement{{
+			RequirementKey: "clean-verification", CheckClass: domain.CheckClassCleanVerification,
+			Kind: domain.RequirementRequired, State: domain.ReadinessRequirementPassed,
+			ProofRecipeDigest: &recipe,
+		}},
+	}
+	expected := current
+	expected.Readiness = &domain.ReadinessSummary{
+		Class: domain.ReadinessReadyClean, EvaluationSetDigest: "sha256:evaluation",
+	}
+	expected.ReadinessDetail = &detail
+	if !compatibleTerminalItem(expected, current) {
+		t.Fatal("legacy nil readiness detail rejected during recovery compatibility")
+	}
+
+	foreign := expected
+	foreignDetail := detail
+	foreignDetail.Base.BaseSHA = "other-base"
+	foreign.ReadinessDetail = &foreignDetail
+	if compatibleTerminalItem(expected, foreign) {
+		t.Fatal("conflicting persisted readiness detail accepted during recovery compatibility")
+	}
+}
+
 func TestCompatibleTerminalItemAcceptsLegacyNilCardPresentation(t *testing.T) {
 	st := watchTestStore(t)
 	current := watchTestItem(t, st, domain.StatusOpen)

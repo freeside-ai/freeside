@@ -2319,6 +2319,10 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 		// keep nil as the transition baseline below.
 		normalized.Readiness = expected.Readiness
 	}
+	legacyReadinessDetail := current.ReadinessDetail == nil && expected.ReadinessDetail != nil
+	if legacyReadinessDetail {
+		normalized.ReadinessDetail = expected.ReadinessDetail
+	}
 	legacyYieldHistory := current.YieldHistory == nil && expected.YieldHistory != nil
 	if legacyYieldHistory {
 		normalized.YieldHistory = expected.YieldHistory
@@ -2358,6 +2362,9 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	}
 	if legacyReadiness {
 		expected.Readiness = nil
+	}
+	if legacyReadinessDetail {
+		expected.ReadinessDetail = nil
 	}
 	if legacyYieldHistory {
 		expected.YieldHistory = nil
