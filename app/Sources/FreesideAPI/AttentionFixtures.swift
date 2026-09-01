@@ -50,7 +50,7 @@ public enum AttentionFixtures {
         ],
         .ready_for_final_review: [.open_pr, .return_to_agent, .mark_seen, .dismiss, .stop],
         .publish_blocked: [
-            .rerun_trust_evaluation, .choose_alternate_profile, .inspect_trust_failure, .stop,
+            .rerun_trust_evaluation, .inspect_trust_failure, .stop,
         ],
         .run_proposal: [.start, .start_with_changes, .decline, .snooze],
         .system_health: [
@@ -71,7 +71,7 @@ public enum AttentionFixtures {
         .finish_now, .apply_then_finish, .continue_under_policy, .convert_to_policy,
         .retry, .retry_with_capabilities,
         .answer_and_retry, .answer_without_retry,
-        .rerun_trust_evaluation, .choose_alternate_profile, .inspect_trust_failure,
+        .rerun_trust_evaluation, .inspect_trust_failure,
         .open_pr, .return_to_agent, .mark_seen, .dismiss,
         .start, .start_with_changes, .decline, .snooze,
         .acknowledge, .run_doctor, .stop_unattended,

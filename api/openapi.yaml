@@ -3526,7 +3526,6 @@ components:
         - answer_and_retry
         - answer_without_retry
         - rerun_trust_evaluation
-        - choose_alternate_profile
         - inspect_trust_failure
         - open_pr
         - return_to_agent

@@ -21,7 +21,7 @@ import Testing
         .execution_failure: [.retry, .retry_with_capabilities, .discuss, .stop],
         .agent_question: [.answer_and_retry, .answer_without_retry, .stop],
         .publish_blocked: [
-            .rerun_trust_evaluation, .choose_alternate_profile, .inspect_trust_failure, .stop,
+            .rerun_trust_evaluation, .inspect_trust_failure, .stop,
         ],
         .ready_for_final_review: [.open_pr, .return_to_agent, .mark_seen, .dismiss, .stop],
         .run_proposal: [.start, .start_with_changes, .decline, .snooze],
@@ -44,11 +44,11 @@ import Testing
     /// phase1Actions is the enumeration universe the cross-language policy
     /// parity suite walks; if it dropped an action, that action's cells would
     /// go unchecked. Pin it to exactly the union of the per-type sets (every
-    /// action is offered by at least one type) and to a duplicate-free 33.
+    /// action is offered by at least one type) and to a duplicate-free 31.
     @Test func phase1ActionsCoverEveryOfferedActionWithoutDuplicates() {
         let offered = Set(AttentionFixtures.phase1ActionSets.values.flatMap { $0 })
         #expect(Set(AttentionFixtures.phase1Actions) == offered)
-        #expect(AttentionFixtures.phase1Actions.count == 32)
+        #expect(AttentionFixtures.phase1Actions.count == 31)
         #expect(Set(AttentionFixtures.phase1Actions).count == AttentionFixtures.phase1Actions.count)
     }
 
