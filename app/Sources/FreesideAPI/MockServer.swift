@@ -411,6 +411,31 @@ public actor MockServer {
     /// deterministic under test equality.
     private static let decidedInstant = Date(timeIntervalSince1970: 1_767_330_245)
 
+    /// The process-fixed pairing facts the mock daemon reports (plan
+    /// §5.14): a stable host name, the code's expiry ten minutes past the
+    /// pairing instant, loopback, and the single operator scope. Fixed
+    /// like the pairing instants so previews and grants stay deterministic
+    /// under test equality.
+    public static let pairingFacts = Components.Schemas.PairingFacts(
+        host_display_name: "mock-daemon.local",
+        code_expires_at: pairedInstant.addingTimeInterval(600),
+        connection_mode: .loopback,
+        granted_scope: ._operator
+    )
+
+    /// Reports the facts a live code would grant without consuming it: the
+    /// code's state never changes here, so a previewed code still pairs
+    /// exactly once, and a dead code is rejected exactly as pairing
+    /// rejects it (test 13's undifferentiated 403).
+    func previewPairing(
+        _ request: Components.Schemas.PairingPreviewRequest
+    ) throws -> Components.Schemas.PairingFacts {
+        guard pairingCodes[request.pairing_code] == .valid else {
+            throw PairingRejectedError()
+        }
+        return Self.pairingFacts
+    }
+
     func pairDevice(
         _ request: Components.Schemas.PairingRequest
     ) throws -> Components.Schemas.PairingGrant {
@@ -463,7 +488,8 @@ public actor MockServer {
         return .init(
             device_token: token,
             device: snapshot,
-            ntfy_subscription: subscription
+            ntfy_subscription: subscription,
+            facts: Self.pairingFacts
         )
     }
 

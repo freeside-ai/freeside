@@ -513,6 +513,51 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /pairing/preview:
+    post:
+      operationId: previewPairing
+      tags: [devices]
+      summary: Preview what a pairing code would join
+      # Unauthenticated for the same reason as POST /pairing: the requester
+      # holds no credential yet, and the code is the authenticator. The
+      # preview reveals nothing a successful pairing would not.
+      security: []
+      description: |
+        Reports, for a live pairing code, the operational facts the pairing
+        screen shows before the code is redeemed (plan §5.14): which host
+        the device is about to join, when the code expires, how the client
+        is reaching the daemon, and what authority the new device gets.
+        A preview never consumes the code, never creates a device, and
+        never moves the server revision; the same code then pairs through
+        POST /pairing, whose grant carries the same facts. The response
+        holds no credential, key material, or §5.9 host identity: the host
+        name is a display fact only.
+      requestBody:
+        required: true
+        description: The pairing code to look up.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairingPreviewRequest"
+      responses:
+        "200":
+          description: The facts the code would grant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingFacts"
+        "403":
+          description: >
+            The pairing code is unknown, expired, or already consumed. One
+            undifferentiated rejection, exactly as POST /pairing: the
+            response never distinguishes which, so an unauthenticated caller
+            cannot probe code validity beyond what redemption already tells
+            it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /devices/{device_id}/revoke:
     post:
       operationId: revokeDevice
@@ -1693,6 +1738,78 @@ components:
         pairing_code: "483911"
         display_name: "Ben's iPhone"
 
+    PairingPreviewRequest:
+      type: object
+      description: >
+        The pairing preview's input: the short-lived code read off the
+        daemon host, looked up but never consumed.
+      required: [pairing_code]
+      additionalProperties: false
+      properties:
+        pairing_code:
+          type: string
+          minLength: 1
+          description: >
+            The code plaintext as displayed, normalized and hashed exactly
+            as POST /pairing does; the daemon stores no plaintext.
+      example:
+        pairing_code: "483911"
+
+    PairingFacts:
+      type: object
+      description: >
+        The operational facts a pairing code carries (plan §5.14): what is
+        being joined, when the code dies, how the client is reaching the
+        daemon, and what authority the device gets. Display facts only:
+        nothing here is a credential, key material, or the §5.9 host
+        identity, and the preview reveals nothing a successful pairing
+        would not. Returned by POST /pairing/preview and carried on every
+        PairingGrant.
+      required: [host_display_name, code_expires_at, connection_mode, granted_scope]
+      additionalProperties: false
+      properties:
+        host_display_name:
+          type: string
+          minLength: 1
+          description: >
+            The daemon host's name as the daemon read it at start (its OS
+            hostname). A label for the operator's eyes; it proves nothing.
+        code_expires_at:
+          type: string
+          format: date-time
+          description: >
+            When the presented code stops being redeemable, as stored at
+            mint (RFC 3339, UTC). Judged against the daemon's clock at
+            redemption; a client renders it and need not count down.
+        connection_mode:
+          $ref: "#/components/schemas/ConnectionMode"
+        granted_scope:
+          $ref: "#/components/schemas/DeviceScope"
+      example:
+        host_display_name: "bens-mac.local"
+        code_expires_at: "2026-01-02T03:14:05Z"
+        connection_mode: "loopback"
+        granted_scope: "operator"
+
+    ConnectionMode:
+      type: string
+      description: >
+        How the client is reaching the daemon (domain.ConnectionMode),
+        derived from the daemon's bound listener: loopback when the listener
+        is bound to a loopback address, tailscale when it is bound to a
+        Tailscale-owned address, the only two the daemon admits. A relay
+        mode arrives with the §5.19 relay.
+      enum: [loopback, tailscale]
+
+    DeviceScope:
+      type: string
+      description: >
+        The authority a pairing grants the new device (domain.DeviceScope).
+        There is no device role model today, so the vocabulary has one
+        member: operator, the operator's full authority over this daemon
+        (every ClientCommand), revocable from the host.
+      enum: [operator]
+
     PairingGrant:
       type: object
       description: >
@@ -1702,7 +1819,7 @@ components:
         Device or through sync, so another device cannot enumerate the topic.
         The daemon stores only the token's digest, so a lost token means
         revoking the device and pairing again.
-      required: [device_token, device, ntfy_subscription]
+      required: [device_token, device, ntfy_subscription, facts]
       additionalProperties: false
       properties:
         device_token:
@@ -1716,6 +1833,8 @@ components:
           $ref: "#/components/schemas/DeviceSnapshot"
         ntfy_subscription:
           $ref: "#/components/schemas/NtfySubscription"
+        facts:
+          $ref: "#/components/schemas/PairingFacts"
       example:
         device_token: "fsd1.ZGV2aWNlLTE.3q2-8fPXm4kQzT1vY6wA9rB0cD5eF7gH8jK2lM4nP6s"
         device:
@@ -1730,6 +1849,11 @@ components:
         ntfy_subscription:
           server_url: "https://ntfy.sh"
           topic: "fs-4f18d17fc6a57b18b4e4fc8f2c3c85e4"
+        facts:
+          host_display_name: "bens-mac.local"
+          code_expires_at: "2026-01-02T03:14:05Z"
+          connection_mode: "loopback"
+          granted_scope: "operator"
 
     NtfySubscription:
       type: object

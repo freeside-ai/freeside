@@ -38,10 +38,11 @@ public struct MockServerTransport: ClientTransport {
         operationID: String
     ) async throws -> (HTTPResponse, HTTPBody?) {
         // The daemon authorizes before any handler runs and fails closed
-        // (#105). Pairing and health are the two unauthenticated operations
-        // (plan §5.2); every synchronized or mutating surface stays gated.
+        // (#105). Pairing, its preview, and health are the unauthenticated
+        // operations (plan §5.2); every synchronized or mutating surface
+        // stays gated.
         var authenticatedDevice: String?
-        if operationID != "pairDevice" && operationID != "getHealth" {
+        if !["pairDevice", "previewPairing", "getHealth"].contains(operationID) {
             switch await server.authenticate(
                 authorization: request.headerFields[.authorization])
             {
@@ -222,6 +223,24 @@ public struct MockServerTransport: ClientTransport {
             do {
                 return try Self.json(status: .created, body: try await server.pairDevice(pairing))
             } catch is MockServer.PairingRejectedError {
+                return try Self.json(
+                    status: .forbidden,
+                    body: Components.Schemas._Error(
+                        message: "the pairing code is unknown, expired, or already consumed")
+                )
+            }
+        case "previewPairing":
+            guard let body else {
+                return (HTTPResponse(status: .badRequest), nil)
+            }
+            let data = try await Data(collecting: body, upTo: 1 << 20)
+            let preview = try Self.decoder.decode(
+                Components.Schemas.PairingPreviewRequest.self, from: data)
+            do {
+                return try Self.json(status: .ok, body: try await server.previewPairing(preview))
+            } catch is MockServer.PairingRejectedError {
+                // Byte-identical to pairDevice's rejection: the preview is no
+                // finer a validity oracle than redemption.
                 return try Self.json(
                     status: .forbidden,
                     body: Components.Schemas._Error(

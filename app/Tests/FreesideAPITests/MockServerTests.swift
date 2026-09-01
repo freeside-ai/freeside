@@ -28,6 +28,29 @@ import Testing
         }
     }
 
+    @Test func pairingPreviewNeverMovesTheCodeState() async throws {
+        // The preview handler's one state rule: a code's lifecycle (valid,
+        // expired, consumed) is untouched by any number of previews, so a
+        // previewed valid code still pairs exactly once, and a consumed
+        // code stays consumed for every later preview.
+        let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])
+        let client = APIClientFactory.mock(server: server)
+
+        for _ in 0..<3 {
+            _ = try await client.previewPairing(body: .json(.init(pairing_code: "483911")))
+                .ok.body.json
+        }
+        let grant = try await client.pairDevice(
+            body: .json(.init(pairing_code: "483911", display_name: "Ben's iPhone"))
+        ).created.body.json
+        #expect(grant.facts == MockServer.pairingFacts)
+
+        _ = try await client.previewPairing(body: .json(.init(pairing_code: "483911"))).forbidden
+        _ = try await client.pairDevice(
+            body: .json(.init(pairing_code: "483911", display_name: "second"))
+        ).forbidden
+    }
+
     @Test func listReturnsTheSeededInbox() async throws {
         let client = APIClientFactory.mock(server: MockServer())
         let snapshots = try await client.listAttentionItems().ok.body.json
