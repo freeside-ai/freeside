@@ -1482,116 +1482,118 @@ approved default-branch commit. Every running stage snapshots the trusted
 configuration digests. Copies inside an agent workspace are untrusted data.
 
 Host vendor instructions are the narrow second trust class. At admission,
-Freeside snapshots the exact regular-file bytes reached through the configured
-operator-host path (the final path may be a symlink), records their content
-digest as a role distinct from the stage prompt, and stores those bytes in the
-artifact closure. A genuinely missing path records explicit absence; a
-dangling, unreadable, non-regular, unstable, or oversized source fails
-admission. The live host path is never mounted. Materialization re-verifies the
-recorded digest, then ward places only the admitted file, or an empty overlay
-for admitted absence, read-only at a fixed staging mount outside the
-workspace.
+Freeside follows the configured operator-host path and snapshots the exact
+regular-file bytes it reaches. The final path may be a symlink. It records
+their content digest as a role distinct from the stage prompt and stores the
+bytes in the artifact closure. A path that is genuinely missing records
+explicit absence. A dangling, unreadable, non-regular, unstable, or oversized
+source fails admission. The live host path is never mounted. Materialization
+re-verifies the recorded digest. Ward then places only the admitted file (or an
+empty overlay for admitted absence), read-only, at a fixed staging mount
+outside the workspace.
 
-The pinned Claude CLI co-locates instructions, executable configuration, and
-session data under `CLAUDE_CONFIG_DIR`. Phase 1A therefore never mounts a
-shared identity directory there. For each gate-mediated launch, ward creates
-a fresh clean config-root volume with exactly two pre-created empty mountpoint
-directories, `projects/` and `session-env/`. Before the credential enters or
-a writer process exists, a networkless, credential-free observer verifies the
-complete root manifest, including ownership, modes, entry types, and absence
-of unknown entries, links, or special files, then records its digest and
-binding in the open ward journal. Observation failure refuses launch. The
-config root is mounted read-only, including against root in the writer.
+The pinned Claude CLI keeps instructions, executable configuration, and session
+data together under `CLAUDE_CONFIG_DIR`. So Phase 1A never mounts a shared
+identity directory there. For each gate-mediated launch, ward creates a fresh,
+clean config-root volume with exactly two pre-created empty mountpoint
+directories, `projects/` and `session-env/`. Before the credential enters and
+before any writer process exists, a networkless, credential-free observer
+verifies the complete root manifest, including ownership, modes, entry types,
+and the absence of unknown entries, links, or special files, then records its
+digest and binding in the open ward journal. If observation fails, the launch
+is refused. The config root is mounted read-only, and that holds even against
+root in the writer.
 
 Only two nested paths are writable. A `projects/` continuity volume is created
 for one invocation, mounted at `$CLAUDE_CONFIG_DIR/projects`, and never reused
 by another invocation. A fresh per-launch scratch volume is mounted at
 `$CLAUDE_CONFIG_DIR/session-env` and never carried to a later launch. No other
-config path is writable. Both surfaces are untrusted activity: the continuity
-volume is retained only because the provider transcript is needed for an
-exact same-invocation resume, while the scratch volume carries shell
-initialization needed by that process.
+config path is writable. Both surfaces are untrusted activity. The continuity
+volume exists only because an exact same-invocation resume needs the provider
+transcript, and the scratch volume carries the shell initialization that
+process needs.
 
-Ward creates every state volume under a non-reusable opaque identity and
-refuses a pre-existing or ambiguous object. A credential-free observer proves
-the continuity volume empty before its invocation's first launch and each
-scratch volume empty before its sole launch, then journals their runtime
-fingerprints, lifecycle bindings, exact mount targets, and expected options.
-Immediately before every writer start, runtime inspection must match the
-journalled root, continuity, and scratch fingerprints; exact source objects,
-targets, and read-only/read-write options; and absence of any extra mount.
-Resume permits the bound continuity volume's now-untrusted contents but
-re-verifies that it is the same invocation object. Pre-existence,
+Ward creates every state volume under an opaque identity that is never reused,
+and it refuses a pre-existing or ambiguous object. A credential-free observer
+proves the continuity volume empty before its invocation's first launch, and
+proves each scratch volume empty before its sole launch. It then journals their
+runtime fingerprints, lifecycle bindings, exact mount targets, and expected
+options. Immediately before every writer start, runtime inspection must match
+three things: the journalled root, continuity, and scratch fingerprints; the
+exact source objects, targets, and read-only or read-write options; and the
+absence of any extra mount. Resume permits the bound continuity volume's
+contents, now untrusted, but re-verifies that it is the same invocation object.
+Any of these fails closed before the credential is delivered: pre-existence,
 substitution, unexpected initial scratch or continuity contents, an
-uninspectable object, or any mismatch fails closed before credential delivery.
+uninspectable object, or any mismatch.
 
-Every gate-mediated launch uses the pinned CLI's `--safe-mode`, which disables
-user and project instructions, hooks, plugins, MCP configuration, skills,
-commands, agents, styles, workflows, themes, and keybindings while retaining
+Every gate-mediated launch uses the pinned CLI's `--safe-mode`. That flag
+disables user and project instructions, hooks, plugins, MCP configuration,
+skills, commands, agents, styles, workflows, themes, and keybindings. It keeps
 the image-owned administrator policy at
-`/etc/claude-code/managed-settings.json`. Ward separately mounts a
+`/etc/claude-code/managed-settings.json`. Separately, ward mounts a
 digest-bound instruction bundle read-only and passes it explicitly with
 `--append-system-prompt-file`. That bundle deterministically composes the
 admitted host instruction (including explicit absence) with the repository
-vendor instructions resolved from the exact trusted base, preserving their
-path scopes and precedence. Its source digests, composition version, and
-result digest are journalled before launch. Agent-modified instruction files
-remain candidate diff content and are always risk-flagged, never launch
-authority.
+vendor instructions resolved from the exact trusted base. The composition
+preserves their path scopes and precedence. Ward journals the bundle's source
+digests, composition version, and result digest before launch. Instruction
+files the agent modifies stay candidate diff content; they are always
+risk-flagged and never launch authority.
 
-An initial launch uses a daemon-generated UUID supplied with `--session-id`
-and journalled before process creation. Provider resume is a separate
-ward-owned launch generation in the same invocation: ward proves predecessor
-absence while retaining the credential lease and fence, supplies a fresh
-verified config root, fresh `session-env` scratch, and freshly materialized
-instruction bundle, remounts only that invocation's `projects/` continuity,
-and starts `--fork-session --resume <exact-predecessor-id> --session-id
-<journalled-successor-id>`. Ambient `--continue`, a non-forking resume, an
-unjournalled session ID, cross-invocation continuity, and a second process
-while the predecessor may exist are forbidden. Forking is load-bearing: the
-pinned CLI retained the predecessor's system prompt on an ordinary resume,
-whereas a fork accepted the fresh explicit bundle while preserving
-conversation continuity.
+An initial launch uses a daemon-generated UUID, supplied with `--session-id`
+and journalled before the process is created. Provider resume is a separate
+ward-owned launch generation in the same invocation. Ward proves the
+predecessor absent while keeping the credential lease and fence. It supplies a
+fresh verified config root, fresh `session-env` scratch, and a freshly
+materialized instruction bundle. It remounts only that invocation's `projects/`
+continuity. Then it starts `--fork-session --resume <exact-predecessor-id>
+--session-id <journalled-successor-id>`. Ambient `--continue`, a non-forking
+resume, an unjournalled session ID, cross-invocation continuity, and a second
+process while the predecessor may still exist are all forbidden. The fork is
+what makes this work. On an ordinary resume, the pinned CLI kept the
+predecessor's system prompt. A fork accepted the fresh explicit bundle and
+still preserved conversation continuity.
 
-Resume is bound to one agent (Section 5.4) as well as one invocation. A
+Resume is bound to one agent (Section 5.4) as well as to one invocation. A
 Section 4 alternate-agent retry defaults to a fresh invocation with no
-continuity remount; the Section 5.7 operating modes do not relax this.
-Whether a successor agent may remount a predecessor's continuity volume is
-the adapter's call over the two agents' process facts (adapter build,
-session format, launch, and the session-bound route and offer facts where
-the harness binds them): a different adapter is always a fresh invocation,
-and missing expected session state is a typed failure, never a silently
+continuity remount, and the Section 5.7 operating modes do not relax this. The
+adapter decides whether a successor agent may remount a predecessor's
+continuity volume. It decides over the two agents' process facts: adapter
+build, session format, launch, and, where the harness binds them, the
+session-bound route and offer facts. A different adapter is always a fresh
+invocation. Missing expected session state is a typed failure, never a silently
 created session. That comparison is its own tracked unit (#873), and #408
 merges after it.
 
-A replay of an already-journalled launch adopts or reaps that exact process;
-it never substitutes a resume or starts a duplicate. A resume generation
-whose predecessor-absence proof, bindings, or prepared volumes cannot be
-reconciled fails closed. After each launch is absent, ward deletes its clean
-root and scratch volumes. After terminal invocation capture, it also deletes
-the continuity volume before close; cleanup failure leaves the journal open
-for recovery. A CLI process the agent itself spawns inside the writer is
-untrusted agent activity, not a gate-mediated launch, and the export gates
-bound its effects.
+A replay of an already-journalled launch adopts or reaps that exact process; it
+never substitutes a resume or starts a duplicate. A resume generation fails
+closed when its predecessor-absence proof, bindings, or prepared volumes cannot
+be reconciled. Once each launch is absent, ward deletes its clean root and
+scratch volumes. After terminal invocation capture, it also deletes the
+continuity volume before close. If cleanup fails, the journal stays open for
+recovery. A CLI process the agent itself spawns inside the writer is untrusted
+agent activity, not a gate-mediated launch, and the export gates bound its
+effects.
 
-This topology is a pinned-CLI empirical contract. The exact image must pass
-the minimal-writable-state, workspace/config poison, exact-resume,
-fresh-invocation isolation, crash-matrix, and live-race probes before a CLI
-version change may enter the image.
+This topology is an empirical contract with the pinned CLI. Before a CLI
+version change may enter the image, the exact image must pass these probes:
+minimal-writable-state, workspace/config poison, exact-resume, fresh-invocation
+isolation, crash-matrix, and live-race.
 
 **Reviewer-instruction edits are advisory, never launch authority.** The
 gauntlet detects every reviewer-instruction path mechanically, including
-`AGENTS.md` at any depth, `AGENTS.override.md`, `.codex/**`, and peers; the
-detection is a mandatory minimum a profile can widen but never narrow. A
-detected edit lifts as an advisory finding (revision 42): it never blocks
-publication, never carries a waiver, and the publisher surfaces it in its own
-PR-body section that candidate prose cannot forge. Review independence does
-not rest on a block: the implementing agent and the Freeside-invoked reviewer
-compose their instructions from the exact trusted base, so the candidate's
+`AGENTS.md` at any depth, `AGENTS.override.md`, `.codex/**`, and their peers.
+That detection is a mandatory minimum: a profile can widen it but never narrow
+it. A detected edit lifts as an advisory finding (revision 42). It never blocks
+publication and never carries a waiver. The publisher surfaces it in a PR-body
+section of its own that candidate prose cannot forge. Review independence does
+not rest on a block. The implementing agent and the Freeside-invoked reviewer
+both compose their instructions from the exact trusted base, so the candidate's
 copy cannot govern its own review. A merged edit governs later runs, and the
-human merge gate, reading the surfaced advisory, is that judgment point.
-Every other control-plane category stays publish-blocking and non-waivable
-(Section 3.1).
+human merge gate, reading the surfaced advisory, is the judgment point for
+that. Every other control-plane category stays publish-blocking and
+non-waivable (Section 3.1).
 
 ### 5.9 Durability: Effectively Once
 
@@ -1609,26 +1611,26 @@ decisions survive restart. Deterministic identities, reconciliation, and
 bounded retry make external effects converge on one intended result. Anything
 that cannot be safely retried waits for me.
 
-One logical control plane has a stable `control_plane_id`, one or more enrolled
-hosts with distinct host identities, and exactly one active host: a single
-global execution seat. GitHub App private keys remain per-machine credentials;
-the logical identity does not turn them into shared secrets. A standby may
-verify replica and takeover readiness but serves no authoritative work. It does
-not process inbox or restored outbox work, run agents, mutate workflow state,
-or execute external effects.
+One logical control plane has a stable `control_plane_id`, and one or more
+enrolled hosts with distinct host identities. Exactly one host is active: a
+single global execution seat. GitHub App private keys stay per-machine
+credentials; the logical identity does not turn them into shared secrets. A
+standby may verify replica and takeover readiness but serves no authoritative
+work. It does not process inbox or restored outbox work, run agents, mutate
+workflow state, or execute external effects.
 
 **Enrolled host identity is cryptographically backed.** Reviewed at revision
-35: no host identity is persisted yet, so this is a forward requirement on
-the #265 domain contract, not a migration. An enrolled host record carries a
-stable identifier and a host public key whose private key stays in platform
-protected storage; the host proves possession when authenticating to
-infrastructure services (a future relay connector, portable-store
-provisioning, health attestation). Purpose-specific credentials derive from
-or sit beside that identity; no single omnipotent machine key exists, and
-the host key never becomes application authority: device pairing
-(Section 5.14) and GitHub App keys remain their own credentials. This is
-recorded now because a second notion of "machine" invented after
-installations exist is the expensive retrofit.
+35: no host identity is persisted yet, so this is a forward requirement on the
+#265 domain contract, not a migration. An enrolled host record carries a stable
+identifier and a host public key. The private key stays in platform protected
+storage. The host proves it holds that key when it authenticates to
+infrastructure services (a future relay connector, portable-store provisioning,
+health attestation). Purpose-specific credentials derive from that identity or
+sit beside it. No single omnipotent machine key exists, and the host key never
+becomes application authority: device pairing (Section 5.14) and GitHub App
+keys stay their own credentials. This is recorded now because inventing a
+second notion of "machine" after installations exist would be the expensive
+retrofit.
 
 Freeside has two operating modes:
 
@@ -1636,66 +1638,66 @@ Freeside has two operating modes:
   artifacts are the durable frontier, the active epoch is implicit, and the
   operator contract permits one machine only. Running copied standalone state
   as the same principal on two machines is out of contract, like copying a
-  GitHub App PEM. If that machine and its backup are lost, forge
-  reconstruction with human re-adjudication is the disaster floor.
+  GitHub App PEM. If that machine and its backup are both lost, the disaster
+  floor is forge reconstruction with human re-adjudication.
 - **`portable` is required before a second enrolled host may activate.** A
-  conforming remote store holds the durability frontier in one remote head
-  whose conditional writes also carry the active host identity and epoch.
+  conforming remote store holds the durability frontier in one remote head, and
+  that head's conditional writes also carry the active host identity and epoch.
   Portable-mode fencing applies only after the activation ceremony below
   completes. Standalone does not pretend to fence a second copy it cannot
   observe.
 
 Portable mode is enabled only by a completed ceremony:
 
-1. provision independently revocable store credentials for each enrolled
-   host;
-2. wrap the control-plane data key separately for every enrolled standby and
-   create the offline recovery wrap required by Section 5.10;
-3. create a complete seed checkpoint and begin the local append-only journal at
+1. provision independently revocable store credentials for each enrolled host;
+2. wrap the control-plane data key separately for every enrolled standby, and
+   create the offline recovery wrap that Section 5.10 requires;
+3. create a complete seed checkpoint and start the local append-only journal at
    the same transaction boundary, then upload and verify that checkpoint and
-   all referenced blobs while standalone work continues;
+   every blob it references while standalone work continues;
 4. quiesce authoritative local mutations, flush and verify the journal delta
    and its blob closure, then conditionally create the remote head in
-   `activating` state with the complete frontier, initial active host, and
-   initial active epoch; and
+   `activating` state with the complete frontier, the initial active host, and
+   the initial active epoch; and
 5. pass `freesided doctor` takeover-readiness checks from every enrolled
    standby, then conditionally change that same head to `portable` and resume
    authoritative work.
 
-Before the final cutover, the control plane remains fully functional in
+Until the final cutover, the control plane stays fully functional in
 `standalone`. The cutover pauses acknowledged mutations until step 5 succeeds
-or the candidate activation is conditionally marked abandoned. Failure resumes
-standalone from its intact local frontier; it never leaves a partly fenced
-portable state, and no standby may activate from an `activating` or abandoned
-head.
+or the candidate activation is conditionally marked abandoned. On failure,
+standalone resumes from its intact local frontier. Failure never leaves a
+partly fenced portable state, and no standby may activate from an `activating`
+or abandoned head.
 
 In portable mode, lease expiry is never authority. A host becomes active only
-by conditionally rewriting the observed remote head to advance its active
-epoch and name its own enrolled host identity. Every external effect requires
-that head's current host identity and epoch plus a remotely durable intent whose
-referenced artifacts have reached the head's durability frontier. If the store
-cannot acknowledge that frontier or validate the host and epoch, portable
-external effects stop. A stale host that returns becomes passive before it may
-inspect or process restored outbox work. Starting an agent invocation counts as
-an external effect: after takeover, the successor does not start a replacement
-while the prior invocation may still run. It first cancels or proves that
-invocation ended, then records its adoption disposition.
+by conditionally rewriting the observed remote head to advance its active epoch
+and name its own enrolled host identity. Every external effect requires that
+head's current host identity and epoch. It also requires a remotely durable
+intent whose referenced artifacts have reached the head's durability frontier.
+If the store cannot acknowledge that frontier or validate the host and epoch,
+portable external effects stop. A stale host that returns becomes passive
+before it may inspect or process restored outbox work. Starting an agent
+invocation counts as an external effect. So after takeover, the successor does
+not start a replacement while the prior invocation may still be running. It
+first cancels that invocation or proves it ended. Then it records its adoption
+disposition.
 
 Epoch fencing and credential fencing solve different problems. Ordinary
-failover uses the active epoch; it does not rotate GitHub credentials. Deleting
-a lost or compromised host's App key prevents new App authentication by that
-key. When immediate installation-wide fencing is required, Freeside suspends
-the installation. Exclusion becomes terminal only after every outstanding
+failover uses the active epoch and does not rotate GitHub credentials. Deleting
+a lost or compromised host's App key stops new App authentication with that
+key. When the whole installation must be fenced at once, Freeside suspends the
+installation. Exclusion becomes terminal only after every outstanding
 installation token expires or is explicitly revoked. Revocation cannot undo an
 effect already caused with copied credentials.
 
 The active host is the only writer, so registration bindings and pending
 installation intents need no principal-wide mutation lease or binding-set
-version. A pending envelope instead binds to `active_epoch` and a monotonically
-increasing `durable_intent_revision`. The active host serializes changes in its
-local transaction, publishes the resulting intent to the portable frontier
-before redirecting or producing any external effect, and rejects an envelope
-from another epoch or superseded revision.
+version. Instead, a pending envelope binds to `active_epoch` and a
+monotonically increasing `durable_intent_revision`. The active host serializes
+changes in its local transaction. It publishes the resulting intent to the
+portable frontier before it redirects or produces any external effect. It
+rejects an envelope from another epoch or a superseded revision.
 
 Kill-before and kill-after tests are permanent.
 
@@ -1723,10 +1725,11 @@ Portable replication adds four object classes around that checkpoint:
 - periodic complete encrypted checkpoints;
 - an encrypted append-only journal that records every committed transaction
   after the selected checkpoint;
-- encrypted content-addressed blobs for every referenced artifact and
-  workspace capture; and
-- one conditional-write remote head naming the checkpoint, journal frontier,
-  active host, active epoch, and complete content-addressed blob closure.
+- encrypted content-addressed blobs for every referenced artifact and workspace
+  capture; and
+- one conditional-write remote head that names the checkpoint, journal
+  frontier, active host, active epoch, and complete content-addressed blob
+  closure.
 
 `RemoteHead {control_plane_id, mode, active_host_id, active_epoch,
 checkpoint_id, journal_frontier, blob_closure_digest}`
@@ -1734,13 +1737,13 @@ checkpoint_id, journal_frontier, blob_closure_digest}`
 Only `mode: portable` grants portable authority. `activating` and abandoned
 heads are recovery evidence, not fencing or activation authority.
 
-The head advances atomically only after every referenced object is durably
-acknowledged. A conversation message, decision, workflow transition, or other
-result presented as committed or completed must therefore be recoverable by
-another enrolled host. An external effect in portable mode follows the same
-rule: its intent and every referenced artifact reach the head's durability
-frontier before execution. This extends, rather than bypasses, the Section 5.9
-outbox discipline.
+The head advances atomically, and only after every referenced object is durably
+acknowledged. So a conversation message, decision, workflow transition, or
+other result presented as committed or completed must be recoverable by another
+enrolled host. An external effect in portable mode follows the same rule: its
+intent and every referenced artifact reach the head's durability frontier
+before it executes. This extends the Section 5.9 outbox discipline rather than
+bypassing it.
 
 The replica store contract is capability-based:
 
@@ -1749,64 +1752,62 @@ The replica store contract is capability-based:
 - immutable content-addressed objects;
 - persisted-write acknowledgment;
 - independently revocable per-host credentials with bounded, observable
-  revocation; the conformance suite proves a revoked credential is rejected by
-  both control-object and data-object operations before recovery resumes;
-- declared, bounded object and metadata sizes that accommodate Freeside's
-  objects; and
+  revocation; the conformance suite proves that both control-object and
+  data-object operations reject a revoked credential before recovery resumes;
+- declared, bounded object and metadata sizes that fit Freeside's objects; and
 - no caching or sync layer in front of mutable control objects.
 
 Every portable backend passes the same multi-client conformance suite.
 Cloudflare R2 through its direct S3 API is the first reference backend because
 it offers the required consistency and conditional `PutObject`; neither R2 nor
-S3 compatibility is an architectural assumption. A filesystem target is
-always valid for standalone backup and testing. It is portable only after the
-full suite passes for the exact filesystem and mount configuration. Consumer
-sync folders such as iCloud Drive and Dropbox are categorically ineligible.
-The availability trade is deliberate: portable external effects stop while
-the replica store is unavailable rather than risk an unfenced effect. The
-integrity trust is equally explicit: the head arbitrates which host
-activates and names the frontier a takeover restores, so the replica
-backend sits inside the authority trust boundary for host activation and
-for frontier currency (the Section 5.1 scoped exception). A backend that
-equivocates over heads can misdirect activation or serve an older,
-internally consistent head that rolls back the restored frontier, losing
-or repeating already-committed work including effect intents; the
-conformance suite probes this trust but cannot eliminate it, checkpoint
-encryption keeps workflow content unreadable to the backend, and
-content-addressing binds what a named frontier contains, never which head
-is current.
+S3 compatibility is an architectural assumption. A filesystem target is always
+valid for standalone backup and testing. It is portable only after the full
+suite passes for the exact filesystem and mount configuration. Consumer sync
+folders such as iCloud Drive and Dropbox are categorically ineligible. The
+availability trade is deliberate: while the replica store is unavailable,
+portable external effects stop rather than risk an unfenced effect. The
+integrity trust is equally explicit. The head arbitrates which host activates,
+and it names the frontier a takeover restores. So the replica backend sits
+inside the authority trust boundary for host activation and for frontier
+currency (the Section 5.1 scoped exception). A backend that equivocates over
+heads can misdirect activation. It can also serve an older, internally
+consistent head, which rolls back the restored frontier and loses or repeats
+already-committed work, effect intents included. The conformance suite probes
+this trust but cannot eliminate it. Checkpoint encryption keeps workflow
+content unreadable to the backend, and content-addressing binds what a named
+frontier contains, never which head is current.
 
 Takeover restores a complete frontier; there is no partial mode:
 
-- **Graceful handoff:** the active host stops new work, cancels or waits for
-  every in-flight workspace writer and proves each one ended, flushes the
-  journal, performs one normalized workspace capture, and uploads and verifies
+- **Graceful handoff:** the active host stops new work. It cancels or waits for
+  every in-flight workspace writer and proves each one ended. It flushes the
+  journal, performs one normalized workspace capture, then uploads and verifies
   the resulting frontier. One conditional head write then both names that
   frontier and names the successor host while advancing the active epoch,
   transferring the seat atomically. The successor restores the resulting head
   and records explicit adoption events for in-flight attempts. An attempt whose
   writer committed a terminal result reconciles that result. In particular, a
-  canceled invocation remains terminal and is never restarted or resumed;
-  continuation requires a new attempt seeded from the recovered workspace as
+  canceled invocation stays terminal and is never restarted or resumed;
+  continuing it requires a new attempt seeded from the recovered workspace as
   untrusted input.
 - **Crash takeover:** the successor conditionally rewrites the remote head to
-  name itself and advance the active epoch while retaining the last complete
-  frontier, restores that frontier, records the same adoption events, proves or
-  waits for any prior agent invocation to end, and reconciles from there. The
-  workspace recovery point is the last successful daemon-side push. Because
-  workers hold no GitHub write credential and crash mode performs no ad hoc
-  capture, every unexported change from an in-flight invocation may be lost.
-  Periodic or per-turn workspace capture is not yet in contract. Loss of the
-  replica store itself falls back to forge reconstruction and human
-  re-adjudication, not a partial database or artifact restore.
+  name itself and advance the active epoch while keeping the last complete
+  frontier. It restores that frontier, records the same adoption events, proves
+  or waits for any prior agent invocation to end, and reconciles from there.
+  The workspace recovery point is the last successful daemon-side push. Workers
+  hold no GitHub write credential, and crash mode performs no ad hoc capture.
+  So every unexported change from an in-flight invocation may be lost. Periodic
+  or per-turn workspace capture is not yet in contract. Losing the replica
+  store itself falls back to forge reconstruction and human re-adjudication,
+  not to a partial database or artifact restore.
 
 Workspace capture uses one mechanism: a normalized, content-addressed export
 that reuses the gauntlet handoff machinery, excludes credentials and trusted
 `.git` state, and restores only as untrusted workspace input. Tier 1, one
 capture during graceful handoff, is contractual. Periodic and per-turn capture
-tiers remain an evolution of trigger policy over the same mechanism. Revisit
-them only after real handoffs measure capture cost and show that the loss
-window since the last successful daemon-side push is unacceptable.
+tiers are an evolution of trigger policy over the same mechanism. Revisit them
+only after real handoffs measure capture cost and show that the loss window
+since the last successful daemon-side push is unacceptable.
 
 **Confidentiality is policy:**
 
@@ -1815,39 +1816,38 @@ retention_by_artifact_class, last_completed_checkpoint, last_restore_test}`
 
 - Remote checkpoints are encrypted.
 - Journals, artifact blobs, and workspace captures are encrypted with the
-  control-plane data key before remote upload. Content addresses continue to
-  identify verified plaintext; the remote objects contain only ciphertext.
+  control-plane data key before remote upload. Content addresses still identify
+  verified plaintext; the remote objects hold only ciphertext.
 - Encryption keys live outside agent environments.
 - Backup credentials are never mounted into workspaces.
-- Each enrolled host receives its own host-specific wrap of the control-plane
-  data key. An operator-held recovery wrap remains offline and outside every
-  daemon host, so retiring the last healthy host does not destroy the only
-  recovery path.
+- Each enrolled host gets its own host-specific wrap of the control-plane data
+  key. An operator-held recovery wrap stays offline and outside every daemon
+  host, so retiring the last healthy host does not destroy the only recovery
+  path.
 - Retiring, losing, or compromising a host first revokes that host's replica
-  credential. Portable effects remain stopped until the store rejects that
-  credential on both control and data paths, a remaining host selects and
-  verifies the trusted frontier, and one head compare-and-swap establishes the
-  new epoch. The control-plane data key and remaining host wraps then rotate.
-  Revocation prevents future access; it cannot erase ciphertext or keys a
-  compromised host already copied.
+  credential. Portable effects stay stopped until three things happen: the
+  store rejects that credential on both control and data paths, a remaining
+  host selects and verifies the trusted frontier, and one head compare-and-swap
+  establishes the new epoch. Then the control-plane data key and the remaining
+  host wraps rotate. Revocation prevents future access; it cannot erase
+  ciphertext or keys a compromised host already copied.
 - GitHub App private keys are per-machine credentials under Section 10 and are
   excluded, as are provider credentials, unless a stronger recovery design
-  encrypts them separately. Recovery may therefore require reauthentication;
-  copying a key from another machine is not a recovery mechanism.
+  encrypts them separately. So recovery may require reauthentication; copying a
+  key from another machine is not a recovery mechanism.
 - Raw transcripts have shorter retention than decisions, approved
   specifications, and audit events.
 - `freesided doctor` checks checkpoint age, encryption state, artifact closure,
   and restore-test age.
 
-Before unattended mode uses a private repository with remote replication,
-encrypted backup is required. A local-only development checkpoint may come
-first.
+Encrypted backup is required before unattended mode uses a private repository
+with remote replication. A local-only development checkpoint may come first.
 
 ### 5.11 GitHub integration: reconciliation plus intake
 
 Freeside reconciles each active GitHub resource independently with conditional
-requests. Intake scanners discover new work using overlapping scans and
-idempotent identities. Webhooks are deferred to Phase 2 and added only if
+requests. Intake scanners discover new work with overlapping scans and
+idempotent identities. Webhooks wait until Phase 2 and are added only if
 latency becomes a problem.
 
 ### 5.12 Workflow Definition, Initiators, and Artifacts
@@ -1908,20 +1908,22 @@ Additional rules:
   reserves the deterministic implementation identity. The implementation run
   starts only after elaboration accepts a specification and, when configured,
   the operator approves that specification's digest. Its result names the
-  source digest and artifact, elaboration identity and policy, and reserved
-  implementation identity as separate lanes; the approval claim, then the
-  created run, carries the approved implementation specification digest.
+  source digest and artifact, the elaboration identity and policy, and the
+  reserved implementation identity as separate lanes. The approval claim, and
+  then the created run, carries the approved implementation specification
+  digest.
 - **Production acceptance identity is explicit.** The first manual submission
-  deterministically derives a campaign from its content-addressed attempt-1
-  implementation identity, so an exact submit remains idempotent. A deliberate
-  retry allocates the campaign's next monotonic attempt number and binds the
-  new implementation run to its exact terminal parent, operator reason,
-  original source digest, approving elaboration run, and unchanged approved
-  specification digest. Operational retry intent never requires changing
-  specification bytes. `freesided resume` instead targets one exact live run
-  and mints no identity; a terminal run can only continue as a deliberate new
+  derives a campaign deterministically from its content-addressed attempt-1
+  implementation identity, so an exact repeat of the same submit stays
+  idempotent. A deliberate retry allocates the campaign's next attempt number,
+  which only ever increases. It binds the new implementation run to its exact
+  terminal parent, the operator's reason, the original source digest, the
+  approving elaboration run, and the unchanged approved specification digest.
+  Retrying for operational reasons never requires changing the specification
+  bytes. `freesided resume` is different: it targets one exact live run and
+  mints no identity, and a terminal run can only continue as a deliberate new
   attempt. This command-level resume is distinct from provider-session resume
-  in Section 5.7 and AttentionItem actions in Section 4.
+  in Section 5.7 and from AttentionItem actions in Section 4.
 - `auto_start` is bounded by WIP caps. The conservative default is `propose`.
 - Raw findings are immutable. Classification is a versioned annotation.
 - Low-confidence materiality enters the Section 7 adjudication residue and
@@ -1930,9 +1932,9 @@ Additional rules:
   fixed.
 - Artifacts are typed, immutable, and digest-addressed. Approvals bind to their
   digests.
-- The stall heartbeat (1B.1) is ward- or daemon-observed and may only
-  accelerate a stall notice: it never resets or extends any hard budget and
-  cannot be influenced by agent output.
+- The stall heartbeat (1B.1) is observed by ward or the daemon and may only
+  accelerate a stall notice. It never resets or extends any hard budget, and
+  agent output cannot influence it.
 
 ### 5.13 Deterministic Components, Judgment Calls, and the Effect Registry
 
@@ -1951,93 +1953,93 @@ shadow reviewer, and, later, briefer.
 
 #### Daemon Judgment Calls
 
-The daemon may call a model for judgment where judgment genuinely helps, but
-an answer can never do anything by itself. Terminal authority modes are
+The daemon may call a model for judgment where judgment genuinely helps, but an
+answer can never do anything by itself. The terminal authority modes are
 exhaustive: **annotate**, **propose**, **explain**, and **choose**. Composed
-inference inherits its eventual sink; repetition, starvation, attention
-creation, and telemetry reuse count as sinks. Advisory output, meaning all
-explain sites and audit telemetry, lives in an advisory store structurally
-unreachable by policy evaluation, segregated from Section 8 policy-input
-telemetry.
+inference inherits its eventual sink. Repetition, starvation, attention
+creation, and telemetry reuse all count as sinks. Advisory output, meaning all
+explain sites and audit telemetry, lives in an advisory store that policy
+evaluation structurally cannot reach. That store stays separate from the
+Section 8 policy-input telemetry.
 
 Every call site carries exactly one per-site authority contract:
 
 1. **Ceiling-bounded annotation** (type case: the finding classifier; the
-   Section 7 finding adjudicator is the second site). It
-   declares its behavioral lattice and deterministic fallback; which outputs
-   reduce work; raw-severity ceilings; second-adjudication rules; cumulative
-   bounds on attention, compute, and starvation; and tests for extreme
-   outputs and repeated calls. Existing classifier ceilings are retained
-   verbatim. Monotone-conservative annotation is a stricter subtype.
+   Section 7 finding adjudicator is the second site). The site declares its
+   behavioral lattice and deterministic fallback; which outputs reduce work;
+   raw-severity ceilings; second-adjudication rules; cumulative bounds on
+   attention, compute, and starvation; and tests for extreme outputs and
+   repeated calls. Existing classifier ceilings stay verbatim.
+   Monotone-conservative annotation is a stricter subtype.
 2. **Advisory-only**: human and advisory-store consumers only.
 3. **Proposal** into the closed effect registry below.
 4. **Bounded choice** among daemon-authored options whose worst-case effects
-   were independently bounded before the call; cross-vendor driver selection
-   is not choosable (standing owner decision).
+   were independently bounded before the call; cross-vendor driver selection is
+   not choosable (standing owner decision).
 
-Cumulative bounds compose globally: per-site budgets aggregate across sites
-and runs under project-level and global windows, attributed to root lineage.
-Bound resets require gate-waiver-class authority, never the calling site.
+Cumulative bounds compose globally: per-site budgets aggregate across sites and
+runs under project-level and global windows, attributed to root lineage.
+Resetting a bound requires gate-waiver-class authority, never the calling site.
 
-Hard rules: outputs are schema-validated and producer-labeled; nothing flows
-into trust computation, transition legality, or `publish_eligible`; every
-site declares a fail-safe default; "operable with inference down" means the
-control plane stays available and fails safe. Inference-dependent steps pause
-or degrade under declared defaults and are never promised to complete. Every
-site is budgeted; untrusted-input sites carry sampled-audit telemetry; every
-site has a deterministic fake. A Section 4 item recommendation is not a
-fifth authority mode: an `agent_judgment` recommendation exists only as the
-schema-validated output of a declared site here and carries that site's
-immutable invocation and artifact binding; a `daemon_policy` recommendation
-binds its content-addressed deterministic rule and canonical input digest;
-and a `project_policy` recommendation binds the applied key and resolved-policy
+Hard rules: outputs are schema-validated and producer-labeled. Nothing flows
+into trust computation, transition legality, or `publish_eligible`. Every site
+declares a fail-safe default. "Operable with inference down" means the control
+plane stays available and fails safe. Inference-dependent steps pause or
+degrade under their declared defaults. They are never promised to complete.
+Every site is budgeted, untrusted-input sites carry sampled-audit telemetry,
+and every site has a deterministic fake. A Section 4 item recommendation is not
+a fifth authority mode. An `agent_judgment` recommendation exists only as the
+schema-validated output of a site declared here, and it carries that site's
+immutable invocation and artifact binding. A `daemon_policy` recommendation
+binds its content-addressed deterministic rule and canonical input digest. A
+`project_policy` recommendation binds the applied key and resolved-policy
 digest plus its daemon-authored application record. Each authoritative source
 record commits to the containing item's decision-surface identity under
-Section 4, the epoch-and-digest `DecisionSurface` record whose digest is
-eligibility-independent, telemetry-stable, surface-distinguishing, and
-non-cyclic. The item cannot select that record: creation and
-reconstruction derive the complete eligible-record set from current
-authoritative state and apply Section 4's unique-or-none rule. A separately
-supplied item digest grants no authority. Source labels without their matching
-Section 4 provenance variant are rejected at creation and reconstruction, as
-is a stale or foreign source-to-item binding or any action, reason, or
-confidence that differs from the canonical projection rederived from that
-authenticated pair. A `daemon_policy`
-recommendation is a deterministic card fact like any other. Proposal cards
-separate registers: "the
-proposal requests X" is a daemon fact from the artifact, while agent cost,
-safety, and scope assertions are labeled claims. Section 3.1's "designed
-judgment points" means human judgment points.
+Section 4. That identity is the epoch-and-digest `DecisionSurface` record. Its
+digest is eligibility-independent, telemetry-stable, surface-distinguishing,
+and non-cyclic. The item cannot select that record. Creation and reconstruction
+derive the complete eligible-record set from current authoritative state and
+apply Section 4's unique-or-none rule. A separately supplied item digest grants
+no authority. Creation and reconstruction reject a source label without its
+matching Section 4 provenance variant. They reject a stale or foreign
+source-to-item binding. And they reject any action, reason, or confidence that
+differs from the canonical projection rederived from that authenticated pair. A
+`daemon_policy` recommendation is a deterministic card fact like any other.
+Proposal cards keep two registers apart: "the proposal requests X" is a daemon
+fact from the artifact, while agent cost, safety, and scope assertions are
+labeled claims. Section 3.1's "designed judgment points" means human judgment
+points.
 
-Daemon-side inference is its own contract, not a reuse of `provider_only`:
-driver binding, credential handling, outbound field selection (an explicit
-allowlist per site), input sensitivity classification, redaction, provider
-identity, retention, size limits, and input digests recorded per call. No
-tools, no workspace, no ward container.
+Daemon-side inference is its own contract, not a reuse of `provider_only`. It
+covers driver binding, credential handling, outbound field selection (an
+explicit allowlist per site), input sensitivity classification, redaction,
+provider identity, retention, size limits, and the input digests recorded per
+call. No tools, no workspace, no ward container.
 
 #### The Closed Effect Registry
 
-Agent-requested real-world effects are anything a run, client proposal
+Agent-requested real-world effects are anything a run, a client proposal
 surface, or daemon-side inference asks the daemon to do. They exist only as
-typed, digest-addressed proposal artifacts targeting a closed registry of
-effect kinds. Each kind has a fixed Go type, trusted constructor, and gate.
+typed, digest-addressed proposal artifacts that target a closed registry of
+effect kinds. Each kind has a fixed Go type, a trusted constructor, and a gate.
 Effects the trusted workflow performs itself (publication, notifications,
-installation maintenance) remain engine-run under Section 5.9 and the
-deterministic-jobs list above; they are not proposal-gated. Proposals supply bounded parameters, never
-event bodies, target identities, or authority. Targets are daemon-selected
-context or a selection among daemon-enumerated opaque subject handles
-("watch PR 42" parses as picking from daemon-enumerated subjects).
+installation maintenance) stay engine-run under Section 5.9 and the
+deterministic-jobs list above; they are not proposal-gated. Proposals supply
+bounded parameters, never event bodies, target identities, or authority.
+Targets are daemon-selected context, or a selection among daemon-enumerated
+opaque subject handles ("watch PR 42" parses as picking from daemon-enumerated
+subjects).
 
 Admission allocates and persists a daemon-generated proposal-instance ID
-atomically under a stable admission idempotency key: the canonical upstream
-event ID, the client submission-command ID, or, for proposals emitted from
-within a run, the accepted invocation or export identity plus an emission
+atomically under a stable admission idempotency key. That key is the canonical
+upstream event ID, the client submission-command ID, or, for a proposal emitted
+from within a run, the accepted invocation or export identity plus an emission
 ordinal. A deliberate repeat gets a new command ID; retrying the same
-occurrence preserves it. Semantic content never defines occurrence identity.
-The instance ID is the effect identity for idempotence, ledgering, and crash
+occurrence keeps it. Semantic content never defines occurrence identity. The
+instance ID is the effect identity for idempotence, ledgering, and crash
 reconciliation; content digests bind approvals. Instances: `run_proposal`
-(existing), follow-up issue filings (Section 5.17, 1B.1), and proposed
-watches (a planned extension landing with its schedule kind and consumer,
+(existing), follow-up issue filings (Section 5.17, 1B.1), and proposed watches
+(a planned extension that lands with its schedule kind and consumer,
 Section 5.16). Gates read resolved policy; rein is not a security dial.
 
 ### 5.14 Client Synchronization and Conversations
@@ -2077,20 +2079,19 @@ databases are disposable read caches. The synchronization contract guarantees:
 #### Devices, Commands, and Caches
 
 Pairing uses a short-lived code shown or printed on the daemon host; no display
-is assumed. The daemon stores only a credential hash or device public key, never
-reusable plaintext. Devices can be revoked.
+is assumed. The daemon stores only a credential hash or a device public key,
+never reusable plaintext. Devices can be revoked.
 
-Device identity is independent of network identity. Tailscale identity is
-never Freeside device identity or authorization: every supported reachability
-mode (Section 5.2) presents the same Freeside device credential to Signet, so
-a device moving between reachability modes keeps its identity with no
+Device identity is independent of network identity. Tailscale identity is never
+Freeside device identity or authorization. Every supported reachability mode
+(Section 5.2) presents the same Freeside device credential to Signet. So a
+device that moves between reachability modes keeps its identity and needs no
 authorization migration. Pairing and revocation are daemon-owned under every
-mode. A managed service may transport pairing, discovery, or rendezvous
-traffic (end-to-end protected and unreadable by the transport; Section
-5.19), but can never independently enroll an authorized device: a hosted
-account identity may prove eligibility to reach a pairing endpoint, never
-confer application authority. The daemon alone turns a pairing ceremony into
-a device.
+mode. A managed service may transport pairing, discovery, or rendezvous traffic
+(end-to-end protected and unreadable by the transport; Section 5.19), but it
+can never enroll an authorized device on its own. A hosted account identity may
+prove that a caller is eligible to reach a pairing endpoint; it never confers
+application authority. The daemon alone turns a pairing ceremony into a device.
 
 Every judgment-bearing mutation is:
 
@@ -2103,14 +2104,15 @@ surface presented to that device before accepting the command:
 `DecisionActionSurface {device_id, item_decision_surface_digest,
 client_capability_digest, actions}`
 
-The record is content-addressed. `item_decision_surface_digest` is the
-`digest` of the item's current Section 4 `DecisionSurface` record. `actions` is the canonical intersection of
-the item's requested decisions and a daemon-registered client-capability
-contract already bound to the device; a caller-supplied action list or digest
-is never authority. The daemon revalidates the device, current item decision
-surface, capability contract, and selected-action membership before accepting
-a referenced surface. This record is telemetry evidence only: it cannot widen
-the item's actions or authorize a command.
+The record is content-addressed. `item_decision_surface_digest` is the `digest`
+of the item's current Section 4 `DecisionSurface` record. `actions` is the
+canonical intersection of the item's requested decisions and a
+daemon-registered client-capability contract already bound to the device. A
+caller-supplied action list or digest is never authority. Before accepting a
+referenced surface, the daemon revalidates the device, the item's current
+decision surface, the capability contract, and selected-action membership. This
+record is telemetry evidence only: it cannot widen the item's actions or
+authorize a command.
 
 A retry returns the original result.
 
@@ -2121,7 +2123,7 @@ outside `ClientCommand`:
   channel, attempt)`.
 - The device identity comes only from the credential.
 - The receipt records a fact and carries no judgment. It has no version
-  precondition because the delivery may advance from `submitted` to
+  precondition, because the delivery may advance from `submitted` to
   `channel_accepted` before the receipt arrives.
 - Attachments upload through a digest-addressed endpoint. Retrying converges on
   one artifact by digest (test 10).
@@ -2161,7 +2163,7 @@ twice.
 On agent completion, Freeside finalizes and fsyncs blobs, then commits the
 message, transition, and replacement item in one SQLite transaction. A failed
 transaction leaves only harmless orphan blobs. Live streaming and mid-turn
-steering are deferred to Phase 3.
+steering wait until Phase 3.
 
 #### Permanent Phase 1A Sync and Device Tests
 
@@ -2199,7 +2201,7 @@ Four machine-enforced rules govern evidence:
    Credential-free, network-free rooms capture “before” at the base SHA and
    “after” at the candidate. Agent workspaces do not load capture skills.
    Clean-room capture is the pixel-side secret mitigation. Text scanning cannot
-   inspect pixels; OCR is deferred to Phase 2.
+   inspect pixels; OCR waits until Phase 2.
 2. **Every artifact carries provenance:**
 
    `Provenance {producer_class: verifier | agent | daemon,
@@ -2212,121 +2214,121 @@ Four machine-enforced rules govern evidence:
    Trusted policy computes `publish_eligible`; the agent never supplies it. A
    remediation head invalidates evidence from an earlier head unless the
    artifact is explicitly head-independent. The publisher verifies head binding
-   before publication.
-3. **The daemon treats images as opaque blobs.** It validates magic bytes, type,
-   and size only. Server code never decodes an image; clients and GitHub render
-   it.
+   before it publishes.
+3. **The daemon treats images as opaque blobs.** It validates magic bytes,
+   type, and size only. Server code never decodes an image; clients and GitHub
+   render it.
 4. **EvidencePublisher owns publication.** It lives in git/publish and follows
    effectively-once discipline through digest-derived names,
-   check-before-create, and deterministic PR-section markers. It is deferred to
-   1B because the first repository is deliberately non-UI (Section 11). Phase
-   1A ships the artifact schema, provenance enforcement, and client rendering;
-   1B adds external publication with the first evidence-bearing workflow.
+   check-before-create, and deterministic PR-section markers. It waits for 1B
+   because the first repository is deliberately non-UI (Section 11). Phase 1A
+   ships the artifact schema, provenance enforcement, and client rendering; 1B
+   adds external publication with the first evidence-bearing workflow.
 
 ### 5.16 The Durable Scheduler
 
 One scheduler owns every durable deferred check: PR watches, deadlines, and
 subject-bound polls. It represents them as a closed union of schedule kinds
 with fixed Go types and trusted event constructors. 1B implements only the
-kinds with 1B consumers: the PR-checks deadline, the review-wait threshold, the
-base-advance staleness watch
-(consumer: the base-freshness fact on `ready_for_final_review` items, which
-stay live until merge or close), and the installation poll, plus permanent
-trusted-config jobs (doctor, janitor; not proposable, no expiry requirement).
-The doctor, the janitor, and the onboarding pending-install-or-expansion
-poll already run pre-1B on plain tickers under their Section 10 obligations;
-the scheduler adopting them is a 1B migration that preserves those
-obligations, never a precondition for them.
-The proposed-watch, scan-sweep, and grant-expiry kinds are planned
-extensions added with their consumers (proposed watches are deferred past
-the four 1B timer kinds; an approved watch proposal is representable only
-once its kind and consumer land); scan activation stays Phase 2. Stateless
-process heartbeats stay plain tickers. Active-resource reconciliation (Section
-5.11) also stays
-outside the kind union: the per-resource conditional-request polling that
-observes PR state, checks, merge and close, and native review activity is a
-continuous process cadence on a plain ticker, and `ready_for_final_review`
-items observe merge or close through it. Schedule kinds carry durable,
-subject-bound deadlines and watches, never the reconciler's cadence.
+kinds that have 1B consumers: the PR-checks deadline, the review-wait
+threshold, the base-advance staleness watch, and the installation poll, plus
+the permanent trusted-config jobs (doctor, janitor; not proposable, no expiry
+requirement). The staleness watch's consumer is the base-freshness fact on
+`ready_for_final_review` items, which stay live until merge or close. The
+doctor, the janitor, and the onboarding pending-install-or-expansion poll
+already run before 1B on plain tickers under their Section 10 obligations. The
+scheduler adopting them is a 1B migration that preserves those obligations,
+never a precondition for them. The proposed-watch, scan-sweep, and grant-expiry
+kinds are planned extensions that arrive with their consumers. Proposed watches
+wait past the four 1B timer kinds, and an approved watch proposal is
+representable only once its kind and consumer land. Scan activation stays
+Phase 2. Stateless process heartbeats stay plain tickers. Active-resource
+reconciliation (Section 5.11) also stays outside the kind union. Per-resource
+conditional-request polling observes PR state, checks, merge and close, and
+native review activity. That polling is a continuous process cadence on a plain
+ticker, and `ready_for_final_review` items observe merge or close through it.
+Schedule kinds carry durable, subject-bound deadlines and watches, never the
+reconciler's cadence.
 
-Proposed watches (Section 5.13's effect registry) require expiry and are
-bounded by minimum cadence; per-subject, per-project, and global active-watch
-caps; maximum occurrences or explicit renewal; and proposal, card, and
-notification coalescing.
+Proposed watches (Section 5.13's effect registry) require an expiry and are
+bounded by a minimum cadence; per-subject, per-project, and global active-watch
+caps; maximum occurrences or explicit renewal; and coalescing of proposals,
+cards, and notifications.
 
-Occurrence identity is (`schedule_id`, `generation`, `nominal_fire_at`);
-missed fires coalesce to the latest nominal occurrence with a recorded gap.
-Fire-time validation covers project binding, resolved policy, expiry,
-activation state (Section 5.9), operating-mode eligibility (Section 5.7;
-kind-specific:
-permanent trusted-config jobs run in every operating mode, so the doctor and
-janitor keep their Section 10 obligations in `attended_dev`, while workload
-kinds require the operating mode their consumer demands), and subject
-existence. It runs before event construction; the event carries the expected
-schedule generation and subject version, rechecked by the consuming handler.
-A stale event is never silently discarded: the handler recomputes and either
-re-arms (new generation, corrected binding) or records proof the condition no
-longer applies. Consumption and its outcome commit in one transaction;
-otherwise the occurrence stays durably pending and is redelivered. One-shot
-deadlines always terminate fired-and-handled or explicitly resolved. Firing
-never extends or preserves authority. Schedule state is durable, queryable,
-and synced.
+Occurrence identity is (`schedule_id`, `generation`, `nominal_fire_at`). Missed
+fires coalesce to the latest nominal occurrence with a recorded gap. Fire-time
+validation runs before event construction. It covers project binding, resolved
+policy, expiry, activation state (Section 5.9), operating-mode eligibility
+(Section 5.7), and subject existence. Operating-mode eligibility is
+kind-specific. Permanent trusted-config jobs run in every operating mode, so
+the doctor and janitor keep their Section 10 obligations in `attended_dev`.
+Workload kinds require the operating mode their consumer demands. The event
+carries the expected schedule generation and subject version, and the consuming
+handler rechecks both. A stale event is never silently discarded: the handler
+recomputes and either re-arms (new generation, corrected binding) or records
+proof that the condition no longer applies. Consumption and its outcome commit
+in one transaction; otherwise the occurrence stays durably pending and is
+redelivered. A one-shot deadline always ends fired-and-handled or explicitly
+resolved. Firing never extends or preserves authority. Schedule state is
+durable, queryable, and synced.
 
 ### 5.17 Follow-Up Issue Filing
 
-Filing a GitHub issue is a fan-out effect: it can start workflows, notify
+Filing a GitHub issue is a fan-out effect. It can start workflows, notify
 people, and wake integrations, and an issue those systems create in response
-could re-enter intake as new work. Filing is introduced human-gated (1B.1):
-every filing takes explicit per-proposal human approval regardless of profile
-state. The policy-approved path below is the later autonomous path; a valid
-authority profile is an additional precondition for it, never a replacement
-for the 1B.1 human gate.
+could re-enter intake as new work. Filing arrives human-gated (1B.1): every
+filing takes explicit per-proposal human approval, whatever the profile state.
+The policy-approved path below is the later autonomous path. A valid authority
+profile is an additional precondition for that path, never a replacement for
+the 1B.1 human gate.
 
-The policy-approved path requires a digest-bound, freshness-limited
-issue-event authority profile covering a complete enumerated authority
-surface (unknown or uninspectable surfaces render the repository ineligible),
-revalidated immediately before each creation, drift failing closed, as a
-filing precondition only. The eligibility predicate: every known transitive
-issue-creation or labeling path must be (a) ledgered before intake, (b)
-proven unable to become intake-eligible, or (c) structurally forced to
-propose. This requirement covers every path in the complete enumerated
-authority surface, not merely known paths. Otherwise filing stays human-gated.
+The policy-approved path requires a digest-bound, freshness-limited issue-event
+authority profile. The profile covers a complete enumerated authority surface.
+An unknown or uninspectable surface makes the repository ineligible. The
+profile is revalidated immediately before each creation, and it fails closed on
+drift. It is a filing precondition only. The eligibility predicate: every known
+transitive issue-creation or labeling path must be (a) ledgered before intake,
+(b) proven unable to become intake-eligible, or (c) structurally forced to
+propose. That requirement covers every path in the complete enumerated
+authority surface, not merely the known paths. Otherwise filing stays
+human-gated.
 
-Intake eligibility requires event-level authority proof: ledgered
-proposal-instance lineage (a daemon-authored ledger mapping to the canonical
-numeric issue ID under the canonical repository ID; markers in issue content
-carry zero authority) or explicit human admission, checked at the final
-intake transition. An event without proof is forced to propose even when
-current configuration validates: current-state revalidation cannot
-authenticate a historical event (drift-create-revert is assumed reachable).
+Intake eligibility requires event-level authority proof, checked at the final
+intake transition. The proof is either ledgered proposal-instance lineage or
+explicit human admission. That lineage is a daemon-authored ledger that maps to
+the canonical numeric issue ID under the canonical repository ID; markers in
+issue content carry zero authority. An event without proof is forced to propose
+even when current configuration validates, because current-state revalidation
+cannot authenticate a historical event (drift-create-revert is assumed
+reachable).
 
 Repository, filing identity, labels, and milestone derive from trusted policy
-and run lineage, never proposal text. Every agent-controlled textual field is
-screened under a versioned ruleset on the Section 5.5 commit-message-screening
-pattern. Effect identity is the proposal-instance ID (Section 5.13):
-idempotent check-before-create and crash-after-create reconciliation key off
-it; origin and canonical issue ID live in the immutable daemon ledger;
-discovered candidates are validated (repository, App authorship, expected
-ledger bindings; markers in issue text are rendering hints, never matching
-keys) before adoption. A durable creation intent fences recovery and precedes
-the API call. Unledgered creations serialize per repository, the candidate
-collision domain, because filing identities in one repository share App
-authorship and candidate-visible fields.
-Recovery therefore has at most one outstanding intent per repository to bind.
-It adopts the single validating App-authored candidate created in the intent
-window or proves absence before retrying. Residual ambiguity fails closed to a
-durable attention item, never a blind retry. Rate, depth, and cost caps come
-from resolved policy.
+and run lineage, never from proposal text. Every agent-controlled textual field
+is screened under a versioned ruleset on the Section 5.5
+commit-message-screening pattern. The effect identity is the proposal-instance
+ID (Section 5.13). Idempotent check-before-create and crash-after-create
+reconciliation key off it. Origin and canonical issue ID live in the immutable
+daemon ledger. Discovered candidates are validated (repository, App authorship,
+expected ledger bindings; markers in issue text are rendering hints, never
+matching keys) before adoption. A durable creation intent fences recovery and
+precedes the API call. Unledgered creations serialize per repository, because a
+repository is the candidate collision domain: filing identities in one
+repository share App authorship and candidate-visible fields. So recovery has
+at most one outstanding intent per repository to bind. It adopts the single
+validating App-authored candidate created in the intent window, or proves
+absence before retrying. Residual ambiguity fails closed to a durable attention
+item, never a blind retry. Rate, depth, and cost caps come from resolved
+policy.
 
-Freeside-origin issues enter intake as propose, never `auto_start`, enforced
-at every intake observation including after relabeling. In any repository
-where Freeside has ever filed and no current valid issue-event authority
-profile exists, all label intake demotes to propose: automation-created
-descendants cannot be attributed there, so no unattributed labeled issue in a
-Freeside-seeded repository is trusted for `auto_start`. A current valid
-profile restores `auto_start` eligibility only for non-Freeside-origin issues
-it admits that pass the intake proof check; Freeside-origin issues stay
-propose-only regardless of profile state.
+Freeside-origin issues enter intake as propose, never `auto_start`, and this is
+enforced at every intake observation, including after relabeling. All label
+intake demotes to propose in any repository where Freeside has ever filed and
+no current valid issue-event authority profile exists. Automation-created
+descendants cannot be attributed there. So no unattributed labeled issue in a
+Freeside-seeded repository is trusted for `auto_start`. A current valid profile
+restores `auto_start` eligibility only for the non-Freeside-origin issues it
+admits that pass the intake proof check. Freeside-origin issues stay
+propose-only whatever the profile state.
 
 ### 5.18 The World Model: Post-Merge Recompute and Frontier Projection
 
@@ -2337,133 +2339,131 @@ Projection computation and its UI land in 1B.2 (Section 11).
 
 A merge marks a unit done only through an exact daemon-recorded work-unit
 binding and completion criterion (for example, the bound issue closed by the
-merged PR); partial, stacked, or related merges do not complete units. The
-frontier projection uses only explicit declarations: dependency edges,
-declared path scopes, contract serialization, and merge state. It binds to
-a per-resource freshness vector (reconciliation is per-resource; there is no
-global cursor to wait on), and renders per-resource staleness and incomplete
+merged PR). Partial, stacked, or related merges do not complete units. The
+frontier projection uses only explicit declarations: dependency edges, declared
+path scopes, contract serialization, and merge state. It binds to a
+per-resource freshness vector (reconciliation is per-resource; there is no
+global cursor to wait on). It renders per-resource staleness and incomplete
 coverage explicitly. "No declared mechanical conflict detected" is the
-strongest daemon fact; inferred parallelism is a labeled planner claim;
-unknown scope serializes. The planner judgment call is deferred past 1B.
+strongest daemon fact; inferred parallelism is a labeled planner claim; unknown
+scope serializes. The planner judgment call waits past 1B.
 
 ### 5.19 Deferred Subsystems: Provisional Contracts
 
 The contracts below are design constraints for deferred subsystems, recorded
 now and re-reviewed at implementation. None is scheduled inside 1B.
 
-**Scoped consent grants (deferred past 1B).** A standing permission binds:
-canonical repository ID, effect kind, an effect-specific authority identity
-union (GitHub App identity, provider auth identity, or none), trust, policy,
-and profile digests, operating mode, cost, use, and concurrency limits, a
-validity interval, and the effect constructor/schema version (a constructor
-change invalidates the match). The daemon selects matching grants; agents and
-runs never nominate one. Issuing, renewing, widening, or extending requires
-version-bound human approval or a trusted-configuration change; inference and
-runs may only propose. Grants are immutable: renewal or changed bindings
-create a new grant. Direct operator revocation is always available. Before
-the first irreversible request, the executor atomically matches every binding
-against current state, reserves use, cost, and concurrency capacity, and
-marks the attempt started under the exact grant and constructor version. The
-durable EffectAuthorized intent is the linearization point: it binds grant
-ID, constructor version, payload digest, active epoch, and fencing token.
-Revocation committed before the intent prevents it. Revocation after the
-intent does not prevent reconciliation or adoption of an effect that may
-already have occurred, under least authority, with anything wider raising
-attention; but if reconciliation proves the irreversible request was never
-sent or the effect is absent, no new request may be made under the revoked
-grant. A new request requires a current grant, lease, epoch, and new intent.
-Reservations confer no authority and are invalidated by revocation; use and
-cost reservations (accounting) are distinct from fenced concurrency leases
+**Scoped consent grants (deferred past 1B).** A standing permission binds: the
+canonical repository ID; the effect kind; an effect-specific authority identity
+union (GitHub App identity, provider auth identity, or none); the trust,
+policy, and profile digests; the operating mode; cost, use, and concurrency
+limits; a validity interval; and the effect constructor/schema version. A
+constructor change invalidates the match. The daemon selects matching grants;
+agents and runs never nominate one. Issuing, renewing, widening, or extending a
+grant requires version-bound human approval or a trusted-configuration change;
+inference and runs may only propose. Grants are immutable: a renewal or a
+changed binding creates a new grant. The operator can always revoke a grant
+directly. Before the first irreversible request, the executor does three things
+atomically. It matches every binding against current state. It reserves use,
+cost, and concurrency capacity. And it marks the attempt started under the
+exact grant and constructor version. The durable EffectAuthorized intent is the
+linearization point: it binds the grant ID, constructor version, payload
+digest, active epoch, and fencing token. A revocation committed before the
+intent prevents it. A revocation after the intent does not prevent
+reconciliation or adoption of an effect that may already have occurred.
+Reconciliation and adoption run under least authority, and anything wider
+raises attention. But if reconciliation proves the irreversible request was
+never sent, or that the effect is absent, no new request may be made under the
+revoked grant. A new request requires a current grant, lease, epoch, and a new
+intent. Reservations confer no authority, and revocation invalidates them. Use
+and cost reservations (accounting) are distinct from fenced concurrency leases
 (correctness). In portable mode, grant changes and authorized intents
-acknowledge only after reaching the remote frontier; after takeover, a stale
-fencing token permits reconciliation only, and creating an absent effect
-requires a new current grant, lease, epoch, and intent. Fencing is enforced
-by the daemon-owned effect executor. Grants pre-answer a risk acknowledgement
-only; digest- and head-bound approvals and non-waivable gates are untouched.
-Until built, per-run authorization continues (accepted cost; revisit at the
-1B exit).
+acknowledge only after they reach the remote frontier. After takeover, a stale
+fencing token permits reconciliation only; creating an absent effect requires a
+new current grant, lease, epoch, and intent. The daemon-owned effect executor
+enforces fencing. Grants pre-answer a risk acknowledgement only; digest- and
+head-bound approvals and non-waivable gates are untouched. Until this is built,
+per-run authorization continues (an accepted cost; revisit at the 1B exit).
 
 **External findings ingestion (deferred).** Externally produced reviews are
-quarantined at entry: quota-bound advisory proposals (a future effect kind
-added to the Section 5.13 registry with this subsystem) with
+quarantined at entry. They enter as quota-bound advisory proposals (a future
+effect kind added to the Section 5.13 registry with this subsystem) with
 `external_untrusted` provenance, a raw-source digest, and a reconstructed
 project and head binding, never an asserted one. The authenticated ingestion
-actor is recorded separately from the claimed producer; the operator-selected
-ingestion target separately from the artifact's own source binding (exact /
-claimed / unknown; promotion to any blocking role requires exact).
+actor is recorded separately from the claimed producer. The operator-selected
+ingestion target is recorded separately from the artifact's own source binding
+(exact / claimed / unknown; promotion to any blocking role requires exact).
 Quarantined findings cannot block readiness, enter Section 7 adjudication,
 trigger remediation, or consume remediation budgets. Automatic blocking or
 remediation requires source-specific admission or explicit human promotion,
-deduplication, and a declared authority-site contract (Section 5.13).
-External findings never satisfy ReviewSource freshness, independence, or
+deduplication, and a declared authority-site contract (Section 5.13). External
+findings never satisfy ReviewSource freshness, independence, or
 review-completeness.
 
 **Pre-publication adversarial pass (deferred).** An optional adversarial
 self-review before a PR opens, so the external reviewer starts from a higher
 floor. It reviews the daemon-constructed publication candidate after hostile
 import, never the raw workspace. Each pass binds the exact candidate head and
-invocation inputs; stopping is bounded by resolved policy; the pass holds no
+invocation inputs; resolved policy bounds when it stops; the pass holds no
 direct remediation or publication authority. Each remediation repeats the
-gauntlet, verification, and the adversarial pass itself. Distinct from the
-Section 7 review requirement, which itself anchors pre-publication
+gauntlet, verification, and the adversarial pass itself. This is distinct from
+the Section 7 review requirement, which itself anchors pre-publication
 (revision 28): the Section 7 pass is required; this pass is optional and
 deferred.
 
-**Managed reachability relay (deferred, unscheduled).** A future managed
-relay may provide authenticated bidirectional byte transport between an
-enrolled host and its paired clients: `freesided` stays loopback-bound and
-holds an outbound connector authenticated by the Section 5.9 host identity;
-clients use ordinary HTTPS/WSS; the transported protocol is Signet,
-unchanged (Section 5.2). The Signet channel is end-to-end protected and
-daemon-anchored: a relay that terminates edge transport TLS carries only an
-opaque inner channel, and the client authenticates that channel against a
-Freeside-owned control-plane identity that is independent of
-relay-controlled hostnames or PKI and stable across enrolled-host takeover
-(Sections 5.9 and 5.10), so a paired client survives a graceful or crash
-takeover without re-pairing; the per-host Section 5.9 key authenticates the
-host to the relay, never the daemon to clients. Anchor succession is a
-control-plane ceremony: only the control plane's own existing anchor
-authority may admit a successor, never the relay or any hosted service, and
-stability across legitimate takeover never licenses one copied,
-unrevocable private key (the Section 5.9 no-omnipotent-key rule applies);
-compromise recovery may rotate the anchor and force re-pairing rather than
-leave a compromised anchor trusted. Connector admission and continued
-routing bind to the current Section 5.9 active host and epoch: an enrolled
-standby or returning stale host holds a valid host identity but never
+**Managed reachability relay (deferred, unscheduled).** A future managed relay
+may provide authenticated bidirectional byte transport between an enrolled host
+and its paired clients. `freesided` stays loopback-bound and holds an outbound
+connector authenticated by the Section 5.9 host identity; clients use ordinary
+HTTPS/WSS; the transported protocol is Signet, unchanged (Section 5.2). The
+Signet channel is end-to-end protected and daemon-anchored. A relay that
+terminates edge transport TLS carries only an opaque inner channel. The client
+authenticates that channel against a Freeside-owned control-plane identity.
+That identity is independent of relay-controlled hostnames or PKI, and it stays
+stable across enrolled-host takeover (Sections 5.9 and 5.10). So a paired
+client survives a graceful or crash takeover without re-pairing. The per-host
+Section 5.9 key authenticates the host to the relay, never the daemon to
+clients. Anchor succession is a control-plane ceremony: only the control
+plane's own existing anchor authority may admit a successor, never the relay or
+any hosted service. Stability across legitimate takeover never licenses one
+copied, unrevocable private key; the Section 5.9 no-omnipotent-key rule
+applies. Compromise recovery may rotate the anchor and force re-pairing rather
+than leave a compromised anchor trusted. Connector admission and continued
+routing bind to the current Section 5.9 active host and epoch. An enrolled
+standby or a returning stale host holds a valid host identity but never
 presents as the serving daemon, and a host that is not active refuses
-authoritative Signet service regardless of routing (the Sections 5.9 and
-5.10 fencing stays the authority backstop), so relay misrouting degrades
-to reachability loss, never stale state or premature command acceptance.
-Pairing bootstraps from the pairing
-secret itself, not from any certificate the relay could present, and must
-resist a relay-positioned attacker guessing or multiplying attempts
-against a short code. Signet authentication material (device credentials,
-pairing codes and grants) is therefore never readable or replayable by the
-relay, and a relay presenting a valid edge certificate cannot impersonate
-the daemon to collect it. The concrete mechanism (key-succession chains,
-device-pinned bindings, secret-authenticated bootstrap) is
-implementation-time design under this contract's re-review, which must
-refute the credential-replay, pairing-race, pairing-secret-guessing,
-daemon-impersonation (including unauthorized anchor succession), stale-
-or passive-host routing, takeover-stranding, and
-compromised-anchor-revocation paths before any relay is accepted. The
-relay must not: become workflow authority; interpret or independently
-execute AttentionItem or ClientCommand semantics; read, retain, or replay
-Signet authentication material; possess provider or GitHub credentials;
-persist authoritative workflow state; grant any action unavailable through
-Signet; or make Freeside-operated infrastructure necessary for standalone
-operation. Relay loss is reachability loss, never control-plane state loss.
-A hibernating per-host rendezvous (for example a Cloudflare Worker with a
-per-host Durable Object) is a plausible first implementation; neither
-Durable Objects nor any provider enters the application architecture or
-protocol contract, and the relay protocol must remain implementable by a
-self-hosted or third-party service. Artifact bytes stay daemon-served over the relay by default; a
-delivery cache for large artifacts is a separate deferred concern, taken up
-only if measured payloads demand it, and artifact authority stays local and
-digest-addressed regardless.
+authoritative Signet service regardless of routing (the Sections 5.9 and 5.10
+fencing stays the authority backstop). So relay misrouting degrades to
+reachability loss, never to stale state or premature command acceptance.
+Pairing bootstraps from the pairing secret itself, not from any certificate the
+relay could present. It must resist a relay-positioned attacker who guesses or
+multiplies attempts against a short code. So Signet authentication material
+(device credentials, pairing codes and grants) is never readable or replayable
+by the relay, and a relay presenting a valid edge certificate cannot
+impersonate the daemon to collect it. The concrete mechanism (key-succession
+chains, device-pinned bindings, secret-authenticated bootstrap) is
+implementation-time design under this contract's re-review. Before any relay is
+accepted, that re-review must refute these paths: credential-replay,
+pairing-race, pairing-secret-guessing, daemon-impersonation (including
+unauthorized anchor succession), stale- or passive-host routing,
+takeover-stranding, and compromised-anchor-revocation. The relay must not:
+become workflow authority; interpret or independently execute AttentionItem or
+ClientCommand semantics; read, retain, or replay Signet authentication
+material; possess provider or GitHub credentials; persist authoritative
+workflow state; grant any action unavailable through Signet; or make
+Freeside-operated infrastructure necessary for standalone operation. Relay loss
+is reachability loss, never control-plane state loss. A hibernating per-host
+rendezvous (for example a Cloudflare Worker with a per-host Durable Object) is
+a plausible first implementation. Neither Durable Objects nor any provider
+enters the application architecture or protocol contract, and the relay
+protocol must stay implementable by a self-hosted or third-party service.
+Artifact bytes stay daemon-served over the relay by default. A delivery cache
+for large artifacts is a separate deferred concern, taken up only if measured
+payloads demand it, and artifact authority stays local and digest-addressed
+regardless.
 
-**Readiness registry (deferred).** When built, a projection over current
-typed proofs recomputed on read, never a stored ready bit; the Section 10
+**Readiness registry (deferred).** When built, it is a projection over current
+typed proofs, recomputed on read, never a stored ready bit. The Section 10
 doctor consumes it.
 
 ## 6. Verification
