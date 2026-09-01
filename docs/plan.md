@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 44
+revision: 45
 status: active
 updated: 2026-09-01
 ---
@@ -3822,37 +3822,39 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 44 ("Retire the alternate-profile action"):
+Revision 45 ("Review drift audit"):
 
-1. **`publish_blocked` no longer offers `choose_alternate_profile`**
-   (Sections 4, 9, 11): the card keeps rerun trust evaluation, inspect the
-   trust failure, and stop. Revision 4 meant the action as a per-item pick
-   among pre-approved trust profiles whose `pr_execution` mode differs
-   (same-repository PR, fork PR, local only): the escape hatch when the
-   audited same-repository path is blocked. Which publication path a
-   repository uses is repository configuration settled at onboarding, and
-   fork versus same-repository follows from whether Freeside can push to
-   the repository, so nothing is chosen per run. A choice offered while a
-   run is blocked is exactly where the weaker path gets picked under
-   pressure, which the no-remembered-defaults and no-automatic-fallback
-   rules exist to prevent; the plan already keeps `convert_to_policy` off
-   the phone for the same reason. Of the four trust rules only
-   `trust_profile_drift` could be helped by a different path, and its fix
-   is re-approving the repository's configuration on the Mac, then
-   rerunning. At this revision the daemon holds one activated profile per
-   repository, never produces `fork_untrusted` or `local_only`, and offers
-   the action on no item, so retiring it removes a pending enum member and
-   nothing a card renders. Rejected: building the approved set
-   (multi-profile approval, fork publication, and local-only handoff:
-   three subsystems for one block cause); offering only the current
-   profile on drift (a one-item picker over `rerun_trust_evaluation`, a
-   decorative control revision 40 forbids); keeping the action pending
-   (fails the wave-7 exit). Fork publication for a non-pushable
-   repository is deferred as a plain publication feature (#1042). The
-   wider finding, that Section 5.5's CI audit is outside an agent control
-   plane's job and Section 5.8's protected paths are the control that
-   matters, is recorded for its own revision (#1041), not made here.
-   (User; devlog 2026-09-01-0841-retire-alternate-profile.md; #936.)
+1. **A drift audit joins the review loop** (Section 7, with Sections 1, 5,
+   9, 11, and 14): the loop now judges the change as a whole against the
+   approved specification, not only the stream of findings. As landed,
+   `EvaluateReviewConvergence` stops on a low-value streak, a fixed
+   finding's recurrence, or final-review findings, and nothing in the loop
+   sees the diff or its growth since round 1, so a run can pass every gate
+   one reasonable finding at a time and still end over-built. The daemon
+   records per-round diff metrics from round 1, a growth-without-blockers
+   rule stops the loop when the diff keeps growing with no credible
+   critical or high finding, and a ceiling-bounded audit site returns a
+   `DriftAudit` artifact with a `converged`, `over_hardened`, or `stuck`
+   verdict and a reversal list. Both knobs are off when unset.
+   (User; devlog 2026-09-01-1246-review-drift-audit.md; #1054; #1048.)
+2. **The audit reuses `review_diminishing_returns` with new causes**
+   (`growth_without_blockers`, `drift_audit`): the human's decision has the
+   same shape (finish now, apply and finish, or continue, which runs the
+   proposed simplification round when the card carries a validated reversal
+   list and an ordinary review round otherwise), and the card carries the
+   verdict and reversal list. Rejected: a new `AttentionType`, which grows
+   the vocabulary (#936) for no new decision.
+   (User; devlog 2026-09-01-1246-review-drift-audit.md; #1054.)
+3. **The deterministic floor ships before the model site** so the audit's
+   firing rate is measured before it costs anything. Rejected: the model
+   pass first.
+   (User; devlog 2026-09-01-1246-review-drift-audit.md; #1054.)
+4. **`over_hardened` auto-routes into one simplification round** under the
+   existing ceilings; a second verdict in the run parks, and
+   `drift_audit_route` flips auto-routing to park without a code change.
+   Rejected: park-by-default, which turns every verdict into an
+   interruption.
+   (User; devlog 2026-09-01-1246-review-drift-audit.md; #1054.)
 
 ## 14. Risks
 
@@ -3869,7 +3871,7 @@ Revision 44 ("Retire the alternate-profile action"):
 | Subscription-terms drift | Keep it as an explicit operating risk. |
 | Apple container immaturity | Prove actual runner capabilities and retain honest fallback classes. |
 | Vendor CLI churn | Pin tooling in golden images and verify its contracts. |
-| Review saturation | Bound work by review bandwidth and use yield policy. |
+| Review saturation | Bound work by review bandwidth and use yield policy; the Section 7 drift audit stops a loop that converges finding by finding into an over-built change. |
 | Interruption creep | Measure exceptional interruptions and treat a rising rate as a defect. |
 | Setup and upkeep burden | Make operational simplicity a Phase 1A exit criterion. |
 | Synchronization complexity creep | Keep the daemon authoritative and clients disposable; test the sixteen permanent cases. |

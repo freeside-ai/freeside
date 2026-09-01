@@ -1442,3 +1442,37 @@ Revision 43 ("Decision-surface identity"):
    commitment (two judgment outputs on one surface collapse to one
    digest).
    (User; devlog 2026-08-28-2036-decision-surface-identity.md; #942.)
+
+## Revision 44
+
+Revision 44 ("Retire the alternate-profile action"):
+
+1. **`publish_blocked` no longer offers `choose_alternate_profile`**
+   (Sections 4, 9, 11): the card keeps rerun trust evaluation, inspect the
+   trust failure, and stop. Revision 4 meant the action as a per-item pick
+   among pre-approved trust profiles whose `pr_execution` mode differs
+   (same-repository PR, fork PR, local only): the escape hatch when the
+   audited same-repository path is blocked. Which publication path a
+   repository uses is repository configuration settled at onboarding, and
+   fork versus same-repository follows from whether Freeside can push to
+   the repository, so nothing is chosen per run. A choice offered while a
+   run is blocked is exactly where the weaker path gets picked under
+   pressure, which the no-remembered-defaults and no-automatic-fallback
+   rules exist to prevent; the plan already keeps `convert_to_policy` off
+   the phone for the same reason. Of the four trust rules only
+   `trust_profile_drift` could be helped by a different path, and its fix
+   is re-approving the repository's configuration on the Mac, then
+   rerunning. At this revision the daemon holds one activated profile per
+   repository, never produces `fork_untrusted` or `local_only`, and offers
+   the action on no item, so retiring it removes a pending enum member and
+   nothing a card renders. Rejected: building the approved set
+   (multi-profile approval, fork publication, and local-only handoff:
+   three subsystems for one block cause); offering only the current
+   profile on drift (a one-item picker over `rerun_trust_evaluation`, a
+   decorative control revision 40 forbids); keeping the action pending
+   (fails the wave-7 exit). Fork publication for a non-pushable
+   repository is deferred as a plain publication feature (#1042). The
+   wider finding, that Section 5.5's CI audit is outside an agent control
+   plane's job and Section 5.8's protected paths are the control that
+   matters, is recorded for its own revision (#1041), not made here.
+   (User; devlog 2026-09-01-0841-retire-alternate-profile.md; #936.)
