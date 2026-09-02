@@ -1,0 +1,10 @@
+{
+  "invocation_id": "inv-3",
+  "status": "blocked",
+  "head_sha": "",
+  "artifacts": [
+    "sha256:blocked"
+  ],
+  "summary": "Which retention period applies to exported logs?",
+  "usage": null
+}

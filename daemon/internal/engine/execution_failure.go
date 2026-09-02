@@ -19,7 +19,7 @@ func executionOutcomeStatus(status exec.Status) (domain.ExecutionOutcomeStatus, 
 		return domain.ExecutionOutcomeCanceled, nil
 	case exec.StatusGone:
 		return domain.ExecutionOutcomeLost, nil
-	case exec.StatusPending, exec.StatusRunning, exec.StatusCompleted:
+	case exec.StatusPending, exec.StatusRunning, exec.StatusCompleted, exec.StatusBlocked:
 		return "", fmt.Errorf("execution status %q has no failure outcome", status)
 	}
 	return "", fmt.Errorf("unknown execution status %q", status)

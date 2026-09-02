@@ -1314,7 +1314,7 @@ func outcomeStatus(status exec.Status) (domain.ExecutionOutcomeStatus, error) {
 		return domain.ExecutionOutcomeFailed, nil
 	case exec.StatusCanceled:
 		return domain.ExecutionOutcomeCanceled, nil
-	case exec.StatusCompleted, exec.StatusPending, exec.StatusRunning, exec.StatusGone:
+	case exec.StatusCompleted, exec.StatusBlocked, exec.StatusPending, exec.StatusRunning, exec.StatusGone:
 		return "", fmt.Errorf("status %q is not a non-export terminal outcome", status)
 	}
 	return "", fmt.Errorf("status %q is not a non-export terminal outcome", status)

@@ -97,6 +97,8 @@ func observedStatus(s exec.Status) (domain.ObservedInvocationStatus, bool) {
 		return domain.ObservedStatusFailed, true
 	case exec.StatusCanceled:
 		return domain.ObservedStatusCanceled, true
+	case exec.StatusBlocked:
+		return domain.ObservedStatusBlocked, true
 	case exec.StatusGone:
 		return domain.ObservedStatusGone, true
 	}

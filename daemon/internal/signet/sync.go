@@ -1589,7 +1589,7 @@ func authenticateTerminal(
 	case domain.ObservedStatusGone:
 		want = domain.ExecutionOutcomeLost
 	case domain.ObservedStatusPending, domain.ObservedStatusRunning,
-		domain.ObservedStatusCompleted:
+		domain.ObservedStatusCompleted, domain.ObservedStatusBlocked:
 	}
 	if outcome.Status != want {
 		return fmt.Errorf("terminal %q disagrees with outcome %q: %w",
