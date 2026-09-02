@@ -10,3 +10,6 @@ fee0031f9ee4a23120db2869281da1a3bcf3bad8
 
 # Extract the provider-neutral stage driver core (#557)
 c115f4548366d03fe0cd7af5e56d9c3c8cd35f08
+
+# Rename the elaboration vocabulary to specification (#986)
+fb0f5607b2f836c5727a22d9a638144c91f90330
