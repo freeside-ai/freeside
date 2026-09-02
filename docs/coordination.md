@@ -510,8 +510,8 @@ answer it at a glance. Wave 5's tracker (#651) is the reference example.
 - **Wave-boundary pinning keeps exactly one wave-title match pinned, executed
   recovery-safely by the spine.** The §11 resolver counts only pinned issues
   whose titles match the canonical wave-tracker pattern; unrelated trackers (for
-  example the standing ad hoc audit and reliability trackers, currently #799 and
-  #578) stay pinned for their own purposes and never count toward wave state.
+  example the standing ad hoc audit tracker, currently #578; #799 has closed)
+  stay pinned for their own purposes and never count toward wave state.
   Among the wave-title matches the settled count is exactly one open in
   active-wave state, or exactly one closed, the inter-wave marker, between a
   wave's close and the next wave's planning; closing a wave leaves its closed
@@ -521,14 +521,15 @@ answer it at a glance. Wave 5's tracker (#651) is the reference example.
   per Work Units in AGENTS.md), a wave-planning action distinct from the
   per-issue `Plan #N` Planning stage, so it is authorized outside that stage's
   allowed-mutation surface. GitHub caps pins at three per repository and those
-  standing non-wave trackers occupy slots, so the wave tracker effectively holds
-  a single swappable pin slot: GitHub will not pin a fourth issue, so the
-  outgoing and incoming wave trackers cannot both be pinned at once, and with no
-  atomic pin swap the transition is necessarily non-atomic and multi-step. The
-  spine's wave-planning operation therefore performs it idempotently and
-  recovery-safely, in particular discovering and reusing any orphaned
-  open-unpinned wave-title tracker left by an interrupted prior transition rather
-  than creating a second. An invalid wave-title cardinality (zero or multiple
-  wave-title matches) is what the resolver escalates on, never guesses through.
-  The detailed interruption-safe procedure is owned and hardened by its executor,
-  the spine's wave-planning operation; see #828.
+  standing non-wave trackers occupy slots, so the capacity left for wave
+  trackers varies with how many standing trackers are pinned at the time. The
+  transition stays a swap whatever that capacity is, because the settled count
+  above is one wave-title match, and with no atomic pin swap it is necessarily
+  non-atomic and multi-step. The spine's wave-planning operation therefore
+  performs it idempotently and recovery-safely, in particular discovering and
+  reusing any orphaned open-unpinned wave-title tracker left by an interrupted
+  prior transition rather than creating a second. An invalid wave-title
+  cardinality (zero or multiple wave-title matches) is what the resolver
+  escalates on, never guesses through. The detailed interruption-safe procedure
+  is owned and hardened by its executor, the spine's wave-planning operation;
+  see #828.
