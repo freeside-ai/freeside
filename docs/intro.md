@@ -2,7 +2,9 @@
 
 This is the narrative companion to the project: the goals and core ideas presented
 in plain language, without the plan's implementation details. It is **not
-normative**, and describes the intended product, not necessarily what exists today.
+normative**, and describes the intended product. The workflow below now runs
+end to end on a real repository; for what has landed and what is still being
+built, follow the status pointer under "Where To Go Next".
 
 The source of truth is
 [`docs/plan.md`](plan.md). Where the two disagree, the plan wins, and nothing
@@ -64,9 +66,11 @@ The intended experience, end to end:
    a fresh checkout.
 6. Freeside runs approved checks against the result and captures evidence
    in a clean environment.
-7. The daemon publishes the verified candidate as a pull request under an
-   audited trust profile.
-8. Automated review and remediation iterate within explicit limits.
+7. An independent reviewer reads the candidate. Its findings are adjudicated,
+   and remediation and re-review continue while they still pay off; round
+   counts are emergency brakes, not the normal stopping rule.
+8. The daemon publishes the verified, reviewed candidate as a pull request
+   under an audited trust profile, carrying the review's disposition history.
 9. A ready-for-review card reaches your phone, carrying mechanical evidence
    alongside an agent's assessment, each labeled for what it is.
 10. You review and merge on GitHub.
@@ -86,7 +90,9 @@ Most automation treats interrupting you as an afterthought. Freeside treats
 interruptions as a first-class product. An interruption is a durable record with
 a lifecycle and a self-contained decision card carrying the context you need
 to decide. Approvals bind to the exact versions approved; changed inputs
-invalidate them. Every interruption is classified as a planned gate or an
+invalidate them. A card may lead with a recommended action, labeled with its
+source; how often you override it calibrates the recommender and is never a
+target. Every interruption is classified as a planned gate or an
 exception. A rising exception rate is a defect to fix, and a recurring kind
 of interruption is a candidate for a policy change that removes it.
 
@@ -175,9 +181,16 @@ secret-bearing CI.
 
 **Instructions are the second.** Prompts, policy, verification checks, and
 files like `AGENTS.md` load only from an approved commit, never from an agent's
-workspace, and a change that would edit the instructions governing its own
-review is blocked: a review is not independent when the thing under review picked
-its reviewer's instructions. Guarded is not frozen: what agents learn flows back
+workspace. The one exception is the operator host's own vendor instruction
+file, snapshotted at admission and pinned by digest. A review is not
+independent when the thing under review picked its reviewer's instructions, so
+the implementing agent and its reviewer both compose their instructions from
+the trusted base, and the candidate's copy never governs its own review. A
+candidate that edits a reviewer-instruction file such as `AGENTS.md` still
+publishes, with the edit surfaced as an advisory finding in a PR-body section
+the candidate's prose cannot forge; you judge it at merge, and the edit
+governs only later runs. Changes to CI and other automation-control paths
+stay publish-blocking. Guarded is not frozen: what agents learn flows back
 into prompts and policy through the same reviewed, gated path as any other
 change.
 
@@ -238,8 +251,12 @@ whether passing them is worth it.
   define the product and attention model, 5 the architecture and its
   binding contracts, 6–10 verification through operations, 11–12 the
   roadmap and exit criteria, and 13–15 decisions, risks, and naming.
+- [`docs/decisions/`](decisions/README.md) holds the architecture decision
+  records, including the AGPL-3.0-or-later license and the advisory
+  treatment of reviewer-instruction edits.
 - [`AGENTS.md`](../AGENTS.md) holds the development conventions for this
-  repository.
+  repository, and [`docs/coordination.md`](coordination.md) explains how
+  parallel agent sessions claim and coordinate work.
 - The [plan's implementation-coordination section](plan.md#implementation-coordination-building-freeside-with-agents)
   explains how to resolve the live phase, wave, and active implementation
   front.
