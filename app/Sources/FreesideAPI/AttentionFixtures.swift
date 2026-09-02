@@ -453,31 +453,18 @@ public enum AttentionFixtures {
                 provenance: claimProvenance,
                 text: .init(media_type: .text_sol_markdown, content: specification))
         }
-        // Section 9's agent_question card is self-contained: the question,
-        // what it blocks, and the enumerated options are one labeled claim,
-        // so answering never needs the transcript. The typed producer arrives
-        // with #990; the carrier is the claim contract that exists today.
+        // Section 9's agent_question card is self-contained: the typed
+        // decisions on the item say what is blocked and enumerate the
+        // options, and the item's Question claim carries the same decisions
+        // as the content-addressed artifact the asking invocation wrote
+        // (the daemon's agent_question producers, #990).
         if type == .agent_question {
-            let question =
-                "**Which order should the migration run in?** Implementation is "
-                + "blocked until this is answered; the implementer will not "
-                + "choose an order on its own.\n\n"
-                + "**Option A, store first, then API.** Existing rows migrate "
-                + "before any client can read them, and the API keeps the old "
-                + "shape for one release.\n\n"
-                + "**Option B, API first, then store.** Clients move "
-                + "immediately, and the daemon reads both shapes until the "
-                + "store migration lands."
-            // The question leads the claim register: it is the reason the
-            // card exists, and the screenshot claim is supporting context.
             agentClaims.insert(
-                agentClaim(
-                    label: "Question (unverified)",
-                    artifactID: "art-question-\(key)",
-                    digest: MockContractValidation.sha256Digest(of: question),
-                    provenance: claimProvenance,
-                    text: .init(media_type: .text_sol_markdown, content: question)
-                ),
+                jsonClaim(
+                    label: agentQuestionClaimLabel,
+                    artifactID: "decisions-inv-\(key)",
+                    body: agentQuestionDecisionsJSON,
+                    provenance: claimProvenance),
                 at: 0)
         }
         if type != .system_health, type != .blocked {
@@ -785,6 +772,14 @@ public enum AttentionFixtures {
                     code: "run_projection.unavailable", impairs: .run_visibility
                 ))
             : nil
+        let agentQuestion: Components.Schemas.AttentionItem.agent_questionPayload? =
+            type == .agent_question
+            ? .init(
+                value1: .init(
+                    stage: .implementation, invocation_id: "inv-\(key)",
+                    kind: .init(value1: .owner_decision),
+                    decisions: agentQuestionDecisions))
+            : nil
         let reviewDispute: Components.Schemas.AttentionItem.review_disputePayload? =
             type == .review_dispute
             ? .init(
@@ -839,6 +834,7 @@ public enum AttentionFixtures {
             health_diagnostic: healthDiagnostic,
             review_dispute: reviewDispute,
             spec_revision: nil,
+            agent_question: agentQuestion,
             item_version: 1,
             interruption_class: interruption,
             conversation_id: type == .spec_approval ? "conv-item-spec_approval" : nil,
@@ -908,6 +904,65 @@ public enum AttentionFixtures {
             created_at: createdInstant,
             source: .claim,
             availability: .available)
+    }
+
+    /// The label the daemon's agent_question producers give the decisions
+    /// claim. Keep in sync with domain.AgentQuestionClaimLabel.
+    public static let agentQuestionClaimLabel = "Question"
+
+    /// The decisions the fixture's agent_question card carries: one blocked
+    /// implementer question with two labeled options and a recommendation
+    /// that names one label exactly (domain.ValidateDecisions).
+    public static let agentQuestionDecisions: [Components.Schemas.Decision] = [
+        .init(
+            question: "Which order should the migration run in?",
+            why_blocking:
+                "Implementation is blocked until this is answered; the implementer will not choose an order on its own.",
+            options: [
+                .init(
+                    label: "Store first, then API",
+                    tradeoffs:
+                        "Existing rows migrate before any client can read them, and the API keeps the old shape for one release."
+                ),
+                .init(
+                    label: "API first, then store",
+                    tradeoffs:
+                        "Clients move immediately, and the daemon reads both shapes until the store migration lands."
+                ),
+            ],
+            recommendation: "Store first, then API")
+    ]
+
+    /// The canonical bytes of the decisions artifact the Question claim
+    /// names: sorted keys, no whitespace, the daemon's encoding of the same
+    /// array.
+    static var agentQuestionDecisionsJSON: Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        // The fixture decisions are static literals, so encoding cannot fail.
+        return (try? encoder.encode(agentQuestionDecisions)) ?? Data()
+    }
+
+    /// A labeled agent claim over a JSON artifact with valid claim-channel
+    /// metadata for its bytes.
+    static func jsonClaim(
+        label: String,
+        artifactID: String,
+        body: Data,
+        provenance: Components.Schemas.ClaimProvenance
+    ) -> Components.Schemas.AgentClaim {
+        .init(
+            label: label,
+            artifact_id: artifactID,
+            digest: MockContractValidation.sha256Digest(of: String(decoding: body, as: UTF8.self)),
+            provenance: provenance,
+            text: nil,
+            metadata: .init(
+                media_type: .application_sol_json,
+                size_bytes: Int64(body.count),
+                created_at: createdInstant,
+                source: .claim,
+                availability: .available))
     }
 
     /// A labeled agent claim carrying valid claim-channel metadata derived

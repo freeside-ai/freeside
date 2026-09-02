@@ -27,6 +27,9 @@ var (
 	ErrEvidenceMediaMismatch = errors.New("evidence blob does not match its declared media type")
 	ErrCommitPlanUnreadable  = errors.New("commit plan cannot be read")
 	ErrCommitPlanCollision   = errors.New("reserved commit-plan namespace collision")
+	// ErrUnexpectedChanges fails a handoff imported under ExpectNoChanges
+	// that carries repo-channel changes or a commit plan.
+	ErrUnexpectedChanges = errors.New("handoff carries changes where none are expected")
 
 	// Structural path-gate failures. An honest exporter cannot produce
 	// either shape (a real filesystem cannot hold them), so both are

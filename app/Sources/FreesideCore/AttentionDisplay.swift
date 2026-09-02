@@ -346,6 +346,7 @@ enum AttentionDisplay {
         case .failed: return "Failed"
         case .canceled: return "Canceled"
         case .lost: return "Lost"
+        case .blocked: return "Blocked"
         }
     }
 

@@ -336,7 +336,8 @@ func mapHeadBinding(b export.EvidenceHeadBinding) (domain.HeadBinding, error) {
 
 // mapEvidenceMediaType converts a validated evidence entry's declared media
 // type into the domain enum. The cases are exactly the importer allow-set (the
-// opaque image set plus application/jsonl and text/markdown) that
+// opaque image set plus application/jsonl, application/json, and
+// text/markdown) that
 // validateEvidenceType enforces; any other string fails closed with an
 // ErrEvidenceMediaMismatch, so a mapping gap can never silently admit a claim
 // with an unmapped type.
@@ -352,6 +353,8 @@ func mapEvidenceMediaType(mediaType string) (domain.EvidenceMediaType, error) {
 		return domain.EvidenceMediaImageWEBP, nil
 	case "application/jsonl":
 		return domain.EvidenceMediaApplicationJSONL, nil
+	case "application/json":
+		return domain.EvidenceMediaApplicationJSON, nil
 	case "text/markdown":
 		return domain.EvidenceMediaTextMarkdown, nil
 	}
@@ -414,6 +417,17 @@ func validateEvidenceType(entry export.EvidenceEntry, verifiedPath string) error
 		}
 		return nil
 	}
+	if entry.MediaType == "application/json" {
+		if err := validateJSONDocument(verifiedPath, entry.Size); err != nil {
+			if !errors.Is(err, ErrEvidenceMediaMismatch) {
+				return fmt.Errorf("validate evidence entry %q as %q: %w",
+					entry.Label, entry.MediaType, err)
+			}
+			return fmt.Errorf("evidence entry %q content does not match declared media_type %q: %w",
+				entry.Label, entry.MediaType, ErrEvidenceMediaMismatch)
+		}
+		return nil
+	}
 	if entry.MediaType == "text/markdown" {
 		if err := validateUTF8Markdown(verifiedPath, entry.Size); err != nil {
 			if !errors.Is(err, ErrEvidenceMediaMismatch) {
@@ -435,6 +449,22 @@ func validateEvidenceType(entry export.EvidenceEntry, verifiedPath string) error
 	}
 	if !matcher(header) {
 		return fmt.Errorf("evidence entry %q content does not match declared media_type %q: %w", entry.Label, entry.MediaType, ErrEvidenceMediaMismatch)
+	}
+	return nil
+}
+
+// validateJSONDocument checks exactly one valid UTF-8 JSON value. The blob
+// has already passed the evidence per-blob cap, which bounds the read.
+func validateJSONDocument(verifiedPath string, size int64) error {
+	if size <= 0 {
+		return ErrEvidenceMediaMismatch
+	}
+	body, err := os.ReadFile(verifiedPath) //nolint:gosec // G304: daemon-private verified-snapshot path
+	if err != nil {
+		return err
+	}
+	if int64(len(body)) != size || !utf8.Valid(body) || !json.Valid(body) {
+		return ErrEvidenceMediaMismatch
 	}
 	return nil
 }

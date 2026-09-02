@@ -800,6 +800,25 @@ func (a *stubArtifacts) RecordClaims(
 	return nil
 }
 
+func (a *stubArtifacts) LookupClaims(
+	_ context.Context, id domain.InvocationID,
+) ([]domain.AgentClaim, bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.err != nil {
+		return nil, false, a.err
+	}
+	body, ok := a.bodies[id]
+	if !ok {
+		return nil, false, nil
+	}
+	var claims []domain.AgentClaim
+	if err := json.Unmarshal(body, &claims); err != nil {
+		return nil, false, err
+	}
+	return claims, true, nil
+}
+
 func newTestDriver(t *testing.T, gate *stubGate, exports *stubExports) *Driver {
 	t.Helper()
 	root := t.TempDir()

@@ -1153,10 +1153,14 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		outcomeRecorded bool
 	)
 	err = e.store.Read(ctx, func(tx *store.ReadTx) error {
-		if _, outcomeErr := tx.GetExecutionOutcomeRecord(ctx, attempt.InvocationID); outcomeErr == nil {
+		// A driver-recorded blocked outcome is not a reason to skip: the
+		// engine still has to collect the blocked terminal and raise its
+		// agent_question item, then converge on the same outcome record.
+		if outcome, outcomeErr := tx.GetExecutionOutcomeRecord(ctx, attempt.InvocationID); outcomeErr == nil &&
+			outcome.Status != domain.ExecutionOutcomeBlocked {
 			outcomeRecorded = true
 			return nil
-		} else if !errors.Is(outcomeErr, store.ErrNotFound) {
+		} else if outcomeErr != nil && !errors.Is(outcomeErr, store.ErrNotFound) {
 			return outcomeErr
 		}
 		entry, err := tx.GetInbox(ctx, string(attempt.InvocationID))
@@ -1493,7 +1497,12 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 			}
 		}
 		inserted = insertedNow
-		if insertedNow && terminal.Status != exec.StatusCompleted {
+		if insertedNow && terminal.Status == exec.StatusBlocked {
+			if err := e.recordProductionQuestion(ctx, tx, run, terminal, time.Now().UTC()); err != nil {
+				return err
+			}
+		}
+		if insertedNow && terminal.Status != exec.StatusCompleted && terminal.Status != exec.StatusBlocked {
 			createdAt := time.Now().UTC()
 			facts, err := executionFailureFacts(
 				ctx, tx, terminal.InvocationID, terminal.Status, terminal.Summary,
@@ -1592,7 +1601,8 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 	if err != nil {
 		return false, fmt.Errorf("record terminal for %q: %w", terminal.InvocationID, err)
 	}
-	if inserted && terminal.Status != exec.StatusCompleted && e.inference != nil {
+	if inserted && terminal.Status != exec.StatusCompleted && terminal.Status != exec.StatusBlocked &&
+		e.inference != nil {
 		// A diagnostic claim is advisory-only. Failure to produce or retain one
 		// cannot roll back the durable failure fact or make the engine unavailable.
 		_ = e.inference.DiagnoseExecutionFailure(ctx, inference.DiagnosticInput{

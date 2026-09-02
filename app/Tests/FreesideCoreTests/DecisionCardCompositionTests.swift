@@ -8,36 +8,27 @@ import Testing
     /// Section 9: an agent question is answerable on its own, so the labeled
     /// question claim renders before the actions rather than in the lower
     /// supporting sections.
-    @Test func agentQuestionLeadsWithItsLabeledClaim() {
+    @Test func agentQuestionLeadsWithItsTypedDecisions() {
         let composition = DecisionCardComposition.forType(.agent_question)
 
         #expect(
             composition.modules == [
-                .recommendation, .claims, .facts, .factBlock, .summary, .claims, .evidence,
-                .details,
+                .recommendation, .agentQuestion, .facts, .factBlock, .summary, .claims,
+                .evidence, .details,
             ])
-        let claims = try? #require(composition.modules.firstIndex(of: .claims))
-        #expect(claims.map { $0 < composition.actionInsertionIndex } == true)
-        #expect(composition.claimsAreProminent(at: 1))
-        #expect(!composition.claimsAreProminent(at: 5))
-
-        // The question leads; its supporting attachment waits below the
+        let lead = try? #require(composition.modules.firstIndex(of: .agentQuestion))
+        #expect(lead.map { $0 < composition.actionInsertionIndex } == true)
+        // The decisions artifact and any supporting context wait below the
         // actions, so nothing unrelated stands between the ask and answering.
         let question = AttentionFixtures.fixture(type: .agent_question).item
-        let lead = composition.claims(
-            from: question.agent_claims, at: 1, prominentClaimIndex: nil)
-        #expect(lead.map(\.label) == ["Question (unverified)"])
-        #expect(lead.allSatisfy { $0.text != nil })
-        let supporting = composition.claims(
+        let claims = composition.claims(
             from: question.agent_claims, at: 5, prominentClaimIndex: nil)
-        #expect(supporting.map(\.label) == ["screenshot"])
+        #expect(claims.map(\.label).contains(AttentionFixtures.agentQuestionClaimLabel))
         #expect(
-            !(lead + supporting).contains { $0.label == AgentClaimLabels.summary })
+            composition.modules.firstIndex(of: .claims).map { $0 > composition.actionInsertionIndex }
+                == true)
     }
 
-    /// Section 9: a purely mechanical card carries daemon facts alone, so
-    /// neither type composes the summary layer and neither seeded item
-    /// carries agent prose for a card to render.
     @Test func mechanicalCardsCarryNoAgentProse() {
         for type in [Components.Schemas.AttentionType.system_health, .blocked] {
             let composition = DecisionCardComposition.forType(type)
@@ -56,9 +47,9 @@ import Testing
     @Test func moduleVocabularyIsClosedAndShared() {
         #expect(
             Set(DecisionCardComposition.sharedModuleSet) == [
-                .facts, .specRevision, .specification, .factBlock, .findingFacts, .recommendation,
-                .checklist, .stageRail, .comparison, .yieldChart, .summary, .claims, .evidence,
-                .details,
+                .facts, .agentQuestion, .specRevision, .specification, .factBlock, .findingFacts,
+                .recommendation, .checklist, .stageRail, .comparison, .yieldChart, .summary,
+                .claims, .evidence, .details,
             ])
     }
 
@@ -229,7 +220,7 @@ import Testing
             (.execution_failure, .stageRail),
             (.review_dispute, .comparison),
             (.review_diminishing_returns, .yieldChart),
-            (.agent_question, .claims),
+            (.agent_question, .agentQuestion),
             (.finding_adjudication, .findingFacts),
         ] {
             let composition = DecisionCardComposition.forType(type)

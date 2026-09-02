@@ -984,7 +984,7 @@ func (e *Engine) collectTerminal(ctx context.Context, runID domain.RunID, attemp
 	switch status {
 	case exec.StatusPending, exec.StatusRunning:
 		return exec.StageResult{}, false, nil
-	case exec.StatusCompleted, exec.StatusFailed, exec.StatusCanceled, exec.StatusGone:
+	case exec.StatusCompleted, exec.StatusFailed, exec.StatusCanceled, exec.StatusBlocked, exec.StatusGone:
 		// Collect below. A gone session may still carry a committed result.
 	default:
 		return exec.StageResult{}, false, fmt.Errorf("inspect returned status %q: %w", status, exec.ErrInvalidStatus)

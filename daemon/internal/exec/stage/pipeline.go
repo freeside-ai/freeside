@@ -7,12 +7,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -314,6 +315,15 @@ func (d *Driver) finish(
 	// commit SHA and converges on the recorded export instead of minting a
 	// second head for the same work.
 	opts.CommitDate = in.CommitDate
+	// A declared blocked outcome turns the export into a typed stop: the
+	// importer still audits both channels, but must find no change and no
+	// commit plan, and builds no commit. An undecodable outcome is the
+	// agent's defect, so it is a definitive rejection like malformed evidence.
+	blocked, blockedPresent, err := releasedBlockedOutcome(out)
+	if err != nil {
+		return exec.StageResult{}, fmt.Errorf("%w: %w", errDefinitiveExportRejection, err)
+	}
+	opts.ExpectNoChanges = blockedPresent
 	imported, err := importer.Import(ctx, out.dir, checkoutDir, opts)
 	if err != nil {
 		err = fmt.Errorf("gauntlet import: %w", err)
@@ -323,8 +333,11 @@ func (d *Driver) finish(
 		}
 		return exec.StageResult{}, err
 	}
-	if err := d.validateImportFindings(in, imported, opts.Policy.FindingProfile); err != nil {
+	if err := d.validateImportFindings(in, imported, opts.Policy.FindingProfile, !blockedPresent); err != nil {
 		return exec.StageResult{}, err
+	}
+	if blockedPresent {
+		return d.finishBlocked(ctx, in, out, imported, blocked, usage)
 	}
 	manifestDigest, err := fileDigest(filepath.Join(out.dir, export.ManifestFilename))
 	if err != nil {
@@ -383,6 +396,129 @@ func (d *Driver) finish(
 		Usage:     usage,
 		Summary: fmt.Sprintf("Imported candidate %s over base %s.",
 			record.HeadSHA, record.ObservedBaseSHA),
+	}, nil
+}
+
+// releasedBlockedOutcome finds and strictly decodes the launcher-declared
+// blocked outcome in a released export's evidence channel. The blob is read
+// from the released directory and re-verified against its digest.
+func releasedBlockedOutcome(out exportOutcome) (domain.BlockedOutcome, bool, error) {
+	if !out.evidencePresent {
+		return domain.BlockedOutcome{}, false, nil
+	}
+	for _, entry := range out.evidence.Entries {
+		if entry.Label != export.BlockedEvidenceLabel {
+			continue
+		}
+		// This runs before the importer applies the evidence blob caps, so
+		// bound the read here: the declared size is checked first and the
+		// file is never read past the decoder's own limit.
+		if entry.Size > int64(domain.MaxBlockedOutcomeBytes) {
+			return domain.BlockedOutcome{}, false, fmt.Errorf(
+				"blocked outcome: declared %d bytes exceeds %d", entry.Size, domain.MaxBlockedOutcomeBytes)
+		}
+		body, err := readBoundedEvidenceBlob(out.dir, domain.Digest(entry.Digest), int64(domain.MaxBlockedOutcomeBytes))
+		if err != nil {
+			return domain.BlockedOutcome{}, false, fmt.Errorf("blocked outcome: %w", err)
+		}
+		// The decisions are copied verbatim into item facts and synced to
+		// clients, the way the specifier's decisions are; a credential-shaped
+		// value fails the stage before any of that persists.
+		if importer.ContainsSecret(body) {
+			return domain.BlockedOutcome{}, false, errors.New("blocked outcome contains credential-shaped content")
+		}
+		blocked, err := domain.DecodeBlockedOutcome(body)
+		if err != nil {
+			return domain.BlockedOutcome{}, false, fmt.Errorf("blocked outcome: %w", err)
+		}
+		if blockedOutcomeContainsSecret(blocked) {
+			return domain.BlockedOutcome{}, false, errors.New("blocked outcome contains credential-shaped content")
+		}
+		canonical, err := domain.EncodeBlockedOutcome(blocked)
+		if err != nil {
+			return domain.BlockedOutcome{}, false, fmt.Errorf("blocked outcome: %w", err)
+		}
+		if importer.ContainsSecret(canonical) {
+			return domain.BlockedOutcome{}, false, errors.New("blocked outcome contains credential-shaped content")
+		}
+		return blocked, true, nil
+	}
+	return domain.BlockedOutcome{}, false, nil
+}
+
+// Scan decoded card text separately because JSON string escaping can hide
+// credential delimiters from both the raw and canonical document scans.
+func blockedOutcomeContainsSecret(blocked domain.BlockedOutcome) bool {
+	for _, decision := range blocked.Decisions {
+		if importer.ContainsSecret([]byte(decision.Question)) ||
+			importer.ContainsSecret([]byte(decision.WhyBlocking)) ||
+			importer.ContainsSecret([]byte(decision.Recommendation)) {
+			return true
+		}
+		for _, option := range decision.Options {
+			if importer.ContainsSecret([]byte(option.Label)) ||
+				importer.ContainsSecret([]byte(option.Tradeoffs)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// readBoundedEvidenceBlob reads one released evidence blob of at most limit
+// bytes and re-verifies its content address, refusing a file that runs past
+// the limit before hashing it.
+func readBoundedEvidenceBlob(dir string, digest domain.Digest, limit int64) ([]byte, error) {
+	hexDigits, ok := contentaddr.Parse(string(digest))
+	if !ok {
+		return nil, fmt.Errorf("evidence digest %q is not canonical", digest)
+	}
+	path := filepath.Join(dir, export.EvidenceBlobsDirname, "sha256", hexDigits)
+	f, err := os.Open(path) //nolint:gosec // G304: gate-released export path addressed by verified digest
+	if err != nil {
+		return nil, fmt.Errorf("read evidence blob %s: %w", digest, err)
+	}
+	defer func() { _ = f.Close() }()
+	body, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read evidence blob %s: %w", digest, err)
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("evidence blob %s exceeds %d bytes", digest, limit)
+	}
+	if got := sha256.Sum256(body); hex.EncodeToString(got[:]) != hexDigits {
+		return nil, fmt.Errorf("evidence blob %s does not match its digest", digest)
+	}
+	return body, nil
+}
+
+// finishBlocked persists a blocked export's evidence and claims and returns
+// the blocked terminal. The write-once blocked outcome is recorded by the
+// ordinary terminal commit, like every other non-export terminal, so the
+// committed result keeps the evidence digests and usage the outcome record
+// does not carry; the persisted evidence lands before either. No
+// ExecutionExport exists for the invocation, which is what keeps every
+// publication path closed.
+func (d *Driver) finishBlocked(
+	ctx context.Context, in intent, out exportOutcome, imported importer.Result,
+	blocked domain.BlockedOutcome, usage []exec.UsageMeasurement,
+) (exec.StageResult, error) {
+	body, err := domain.EncodeBlockedOutcome(blocked)
+	if err != nil {
+		return exec.StageResult{}, err
+	}
+	canonical := &evidenceNormalization{
+		label:  export.BlockedEvidenceLabel,
+		digest: domain.Digest(contentaddr.Sum(body)), body: body,
+	}
+	artifacts, err := d.persistEvidence(ctx, in, out, imported.Claims, canonical)
+	if err != nil {
+		return exec.StageResult{}, err
+	}
+	return exec.StageResult{
+		InvocationID: in.InvocationID, Status: exec.StatusBlocked,
+		Artifacts: artifacts, Usage: usage,
+		Summary: exec.TruncateSummary(blocked.Decisions[0].Question),
 	}, nil
 }
 
@@ -496,6 +632,7 @@ func isDefinitiveImportRejection(err error) bool {
 		errors.Is(err, importer.ErrEvidenceInvalid) ||
 		errors.Is(err, importer.ErrEvidenceMediaMismatch) ||
 		errors.Is(err, importer.ErrCommitPlanCollision) ||
+		errors.Is(err, importer.ErrUnexpectedChanges) ||
 		errors.Is(err, importer.ErrGitPathInjection) ||
 		errors.Is(err, importer.ErrPathConflict) ||
 		errors.Is(err, importer.ErrOrphanBlob) ||
@@ -511,9 +648,10 @@ func isDefinitiveImportRejection(err error) bool {
 // workspace content. A fatal finding returns a definitiveRejection carrying the
 // diagnostic sample; the ExportRejection itself is recorded later, after the
 // failed outcome commits (see definitiveRejection), so this function performs
-// no store write and cannot fail on one.
+// no store write and cannot fail on one. expectCommit is false only for a
+// blocked terminal, which by contract carries no candidate.
 func (d *Driver) validateImportFindings(
-	in intent, imported importer.Result, profile *importer.FindingProfile,
+	in intent, imported importer.Result, profile *importer.FindingProfile, expectCommit bool,
 ) error {
 	fatal, tolerated := partitionFindings(imported.Findings, profile)
 	if len(fatal) > 0 {
@@ -524,7 +662,7 @@ func (d *Driver) validateImportFindings(
 			"invocation", string(in.InvocationID), "profile", profileLabel(profile),
 			"tolerated", len(tolerated))
 	}
-	if imported.CommitSHA == "" {
+	if expectCommit && imported.CommitSHA == "" {
 		return fmt.Errorf("%w: gauntlet containment withheld a candidate commit",
 			errDefinitiveExportRejection)
 	}
@@ -669,7 +807,7 @@ func (d *Driver) persistReleasedMaterial(
 	// Evidence lands before the export record: the released blobs live only
 	// under this directory, and a durable row is an assertion that every
 	// object it implies can already be resolved.
-	artifacts, err := d.persistEvidence(ctx, in, out, claims)
+	artifacts, err := d.persistEvidence(ctx, in, out, claims, nil)
 	if err != nil {
 		return nil, executionReplay{}, err
 	}
@@ -949,12 +1087,20 @@ func readDigestedFile(path string, digest domain.Digest) ([]byte, error) {
 	return body, nil
 }
 
+type evidenceNormalization struct {
+	label  string
+	digest domain.Digest
+	body   []byte
+}
+
 // persistEvidence copies each released evidence blob into durable storage
 // and records the importer's agent claims, returning the digests the result
 // may safely name. A claim whose blob is missing from the export fails the
-// stage rather than being recorded unresolvable.
+// stage rather than being recorded unresolvable. normalized replaces one
+// already-validated source with its canonical durable representation.
 func (d *Driver) persistEvidence(
 	ctx context.Context, in intent, out exportOutcome, claims []domain.AgentClaim,
+	normalized *evidenceNormalization,
 ) ([]domain.Digest, error) {
 	if !out.evidencePresent {
 		if len(claims) > 0 {
@@ -962,12 +1108,42 @@ func (d *Driver) persistEvidence(
 		}
 		return nil, nil
 	}
+	if normalized != nil {
+		entries := 0
+		for _, entry := range out.evidence.Entries {
+			if entry.Label == normalized.label {
+				entries++
+			}
+		}
+		if entries != 1 {
+			return nil, fmt.Errorf("normalize evidence %q: found %d manifest entries",
+				normalized.label, entries)
+		}
+		claims = append([]domain.AgentClaim(nil), claims...)
+		normalizedClaims := 0
+		for index := range claims {
+			if claims[index].Label != normalized.label {
+				continue
+			}
+			claims[index].Digest = normalized.digest
+			claims[index].Metadata.SizeBytes = int64(len(normalized.body))
+			normalizedClaims++
+		}
+		if normalizedClaims != 1 {
+			return nil, fmt.Errorf("normalize evidence %q: found %d claims",
+				normalized.label, normalizedClaims)
+		}
+	}
 	digests := make([]domain.Digest, 0, len(out.evidence.Entries))
 	for _, entry := range out.evidence.Entries {
 		digest := domain.Digest(entry.Digest)
 		body, err := readEvidenceBlob(out.dir, digest)
 		if err != nil {
 			return nil, err
+		}
+		if normalized != nil && entry.Label == normalized.label {
+			digest = normalized.digest
+			body = normalized.body
 		}
 		if err := d.artifacts.PutBlob(ctx, digest, body); err != nil {
 			return nil, fmt.Errorf("persist evidence %s: %w", entry.Label, err)
@@ -1233,12 +1409,19 @@ func (d *Driver) commitResultLocked(
 		return false, nil
 	}
 	if result.Status != exec.StatusCompleted {
+		if len(result.Usage) > 0 {
+			in.PendingUsage = slices.Clone(result.Usage)
+			if err := d.saveIntent(in); err != nil {
+				return false, err
+			}
+		}
 		if err := d.recordOutcome(context.Background(), in, result); err != nil {
 			return false, err
 		}
 	}
 	in.Phase = phaseCommitted
 	in.Result = &result
+	in.PendingUsage = nil
 	if err := d.saveIntent(in); err != nil {
 		return false, err
 	}
@@ -1314,6 +1497,8 @@ func outcomeStatus(status exec.Status) (domain.ExecutionOutcomeStatus, error) {
 		return domain.ExecutionOutcomeFailed, nil
 	case exec.StatusCanceled:
 		return domain.ExecutionOutcomeCanceled, nil
+	case exec.StatusBlocked:
+		return domain.ExecutionOutcomeBlocked, nil
 	case exec.StatusCompleted, exec.StatusPending, exec.StatusRunning, exec.StatusGone:
 		return "", fmt.Errorf("status %q is not a non-export terminal outcome", status)
 	}
@@ -1695,24 +1880,13 @@ func fileDigest(path string) (domain.Digest, error) {
 	return domain.Digest(contentaddr.Format(sum[:])), nil
 }
 
-// maxSummaryBytes bounds the human-readable outcome the engine carries into
-// an attention item.
-const maxSummaryBytes = 512
+// maxSummaryBytes is exec.MaxSummaryBytes, the bound every terminal summary
+// this driver commits is held to.
+const maxSummaryBytes = exec.MaxSummaryBytes
 
+// truncateSummary bounds a terminal summary; see exec.TruncateSummary.
 func truncateSummary(s string) string {
-	// Error strings can carry data from filesystem or process boundaries.
-	// Normalize first so the durable JSON body and extracted summary column
-	// cannot disagree about replacement of malformed byte sequences.
-	s = strings.ToValidUTF8(s, "\uFFFD")
-	if len(s) <= maxSummaryBytes {
-		return s
-	}
-	const suffix = "…"
-	cut := maxSummaryBytes - len(suffix)
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut] + suffix
+	return exec.TruncateSummary(s)
 }
 
 // resume restarts a pipeline for an intent whose external effects had not
@@ -1844,10 +2018,14 @@ func (d *Driver) adoptRecordedOutcome(
 	switch outcome.Status {
 	case domain.ExecutionOutcomeLost:
 		return d.commitLost(ctx, in.InvocationID)
-	case domain.ExecutionOutcomeFailed, domain.ExecutionOutcomeCanceled:
+	case domain.ExecutionOutcomeFailed, domain.ExecutionOutcomeCanceled, domain.ExecutionOutcomeBlocked:
 		status := exec.StatusFailed
-		if outcome.Status == domain.ExecutionOutcomeCanceled {
+		switch outcome.Status {
+		case domain.ExecutionOutcomeCanceled:
 			status = exec.StatusCanceled
+		case domain.ExecutionOutcomeBlocked:
+			status = exec.StatusBlocked
+		case domain.ExecutionOutcomeFailed, domain.ExecutionOutcomeLost:
 		}
 		if err := d.commitResult(in.InvocationID, exec.StageResult{
 			InvocationID: in.InvocationID, Status: status, Summary: outcome.Summary,

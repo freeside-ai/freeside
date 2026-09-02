@@ -145,6 +145,9 @@ func WithProductionPublication(cfg ProductionPublicationConfig) Option {
 			return fmt.Errorf("configure production publication: %w", err)
 		}
 		e.productionPublication = workflow
+		if e.artifacts == nil {
+			e.artifacts = cfg.Artifacts
+		}
 		return nil
 	}
 }

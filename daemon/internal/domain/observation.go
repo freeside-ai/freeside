@@ -93,6 +93,7 @@ const (
 	ObservedStatusCompleted ObservedInvocationStatus = "completed"
 	ObservedStatusFailed    ObservedInvocationStatus = "failed"
 	ObservedStatusCanceled  ObservedInvocationStatus = "canceled"
+	ObservedStatusBlocked   ObservedInvocationStatus = "blocked"
 	ObservedStatusGone      ObservedInvocationStatus = "gone"
 )
 
@@ -104,13 +105,14 @@ var AllObservedInvocationStatuses = []ObservedInvocationStatus{
 	ObservedStatusCompleted,
 	ObservedStatusFailed,
 	ObservedStatusCanceled,
+	ObservedStatusBlocked,
 	ObservedStatusGone,
 }
 
 func (s ObservedInvocationStatus) valid() bool {
 	switch s {
 	case ObservedStatusPending, ObservedStatusRunning, ObservedStatusCompleted,
-		ObservedStatusFailed, ObservedStatusCanceled, ObservedStatusGone:
+		ObservedStatusFailed, ObservedStatusCanceled, ObservedStatusBlocked, ObservedStatusGone:
 		return true
 	default:
 		return false
@@ -118,13 +120,13 @@ func (s ObservedInvocationStatus) valid() bool {
 }
 
 // Concluded reports whether the observed status is a committed terminal
-// outcome (completed, failed, or canceled). Gone is not concluded: the
-// session is lost but the terminal class is still the workflow's to record.
-// Dispatch switch without default so the exhaustive linter forces a new
-// member to be classified.
+// outcome (completed, failed, canceled, or blocked). Gone is not concluded:
+// the session is lost but the terminal class is still the workflow's to
+// record. Dispatch switch without default so the exhaustive linter forces a
+// new member to be classified.
 func (s ObservedInvocationStatus) Concluded() bool {
 	switch s {
-	case ObservedStatusCompleted, ObservedStatusFailed, ObservedStatusCanceled:
+	case ObservedStatusCompleted, ObservedStatusFailed, ObservedStatusCanceled, ObservedStatusBlocked:
 		return true
 	case ObservedStatusPending, ObservedStatusRunning, ObservedStatusGone:
 		return false
@@ -807,7 +809,7 @@ func hasNonterminalInvocation(observations []InvocationObservation) bool {
 		case ObservedStatusPending, ObservedStatusRunning:
 			return true
 		case ObservedStatusCompleted, ObservedStatusFailed,
-			ObservedStatusCanceled, ObservedStatusGone:
+			ObservedStatusCanceled, ObservedStatusBlocked, ObservedStatusGone:
 		}
 	}
 	return false
@@ -815,7 +817,8 @@ func hasNonterminalInvocation(observations []InvocationObservation) bool {
 
 func concludeTerminalOutcome(terminal ObservedInvocationStatus) (RunOutcome, bool) {
 	switch terminal {
-	case ObservedStatusCompleted:
+	case ObservedStatusCompleted, ObservedStatusBlocked:
+		// A blocked stage waits on a human answer; the run is not final.
 		return RunOutcomePending, false
 	case ObservedStatusFailed, ObservedStatusCanceled:
 		return RunOutcomeFailed, true

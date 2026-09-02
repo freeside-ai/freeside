@@ -614,8 +614,8 @@ func TestAttentionItemFixedBindings(t *testing.T) {
 			return item
 		}},
 		{"type changed", func(item domain.AttentionItem) domain.AttentionItem {
-			item.Type = domain.AttentionAgentQuestion
-			item.RequestedDecision = []domain.Action{domain.ActionAnswerAndRetry, domain.ActionDismiss}
+			item.Type = domain.AttentionExecutionFailure
+			item.RequestedDecision = []domain.Action{domain.ActionRetry, domain.ActionStop}
 			item.PRReference = nil
 			item.DiffStats = nil
 			return item

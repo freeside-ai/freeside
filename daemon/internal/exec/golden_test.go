@@ -103,11 +103,18 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	blocked := exec.StageResult{
+		InvocationID: "inv-3",
+		Status:       exec.StatusBlocked,
+		Artifacts:    []domain.Digest{"sha256:blocked"},
+		Summary:      "Which retention period applies to exported logs?",
+	}
 	cases := []struct {
 		name  string
 		value any
 	}{
 		{"stage_result", stage},
+		{"stage_result_blocked", blocked},
 		{"review_result", review},
 		{"start_spec", exec.StartSpecFromAdmission(admission)},
 	}

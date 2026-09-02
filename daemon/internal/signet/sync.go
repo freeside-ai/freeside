@@ -1181,6 +1181,8 @@ func observedStatusForExecutionOutcome(status domain.ExecutionOutcomeStatus) dom
 		return domain.ObservedStatusCanceled
 	case domain.ExecutionOutcomeLost:
 		return domain.ObservedStatusGone
+	case domain.ExecutionOutcomeBlocked:
+		return domain.ObservedStatusBlocked
 	}
 	return ""
 }
@@ -1588,6 +1590,8 @@ func authenticateTerminal(
 		want = domain.ExecutionOutcomeCanceled
 	case domain.ObservedStatusGone:
 		want = domain.ExecutionOutcomeLost
+	case domain.ObservedStatusBlocked:
+		want = domain.ExecutionOutcomeBlocked
 	case domain.ObservedStatusPending, domain.ObservedStatusRunning,
 		domain.ObservedStatusCompleted:
 	}

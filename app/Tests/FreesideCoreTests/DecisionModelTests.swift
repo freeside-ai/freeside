@@ -591,13 +591,32 @@ import Testing
         let model = DecisionModel(store: store, itemID: "item-agent_question")
         await model.validate()
 
+        // The fixture question is implementation-stage, so the answer names
+        // its route the way the detail view does.
+        let route = AgentQuestionPresentation.answerRoute(for: model.snapshot?.item)
+        #expect(route == .retry_implementation)
         let claimed = await model.submitAnswer(
-            .answer_and_retry, message: "  Support the current and previous versions.  ")
+            .answer_and_retry, message: "  Support the current and previous versions.  ",
+            answerRoute: route)
 
         #expect(claimed)
         #expect(model.appliedRecord?.action == .answer_and_retry)
         #expect(model.appliedRecord?.message == "Support the current and previous versions.")
+        #expect(model.appliedRecord?.answer_route?.value1 == .retry_implementation)
         #expect(model.snapshot?.item.status == .superseded)
+    }
+
+    @Test func implementationAnswerWithoutARouteIsRefusedByTheDaemon() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-agent_question")
+        await model.validate()
+
+        let claimed = await model.submitAnswer(
+            .answer_and_retry, message: "Support the current and previous versions.")
+
+        #expect(!claimed || model.appliedRecord == nil)
+        #expect(model.snapshot?.item.status == .open)
     }
 
     @Test func capabilityRetrySubmitsTheSelectedManifestDigest() async throws {

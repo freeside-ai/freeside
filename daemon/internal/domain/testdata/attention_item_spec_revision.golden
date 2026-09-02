@@ -113,6 +113,7 @@
     ],
     "addressals_digest": "sha256:c886feb1d99e9c544b34a21766e9fe14e1a0f054fddf73188a7239374ea07a37"
   },
+  "agent_question": null,
   "item_version": 1,
   "interruption_class": "planned_gate",
   "conversation_id": null,

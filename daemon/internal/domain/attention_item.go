@@ -78,6 +78,10 @@ type AgentClaim struct {
 // (plan §9).
 const MaxClaimTextBytes = 1 << 16
 
+// AgentQuestionClaimLabel labels the claim that carries an agent_question
+// item's decisions artifact; its provenance names the asking invocation.
+const AgentQuestionClaimLabel = "Question"
+
 // ClaimText is the inline renderable body of a text claim (plan §9's summary
 // carrier): media-typed prose carried on the claim itself so the card's
 // summary layer renders without a fetch. The enclosing claim's digest binds
@@ -544,6 +548,7 @@ type AttentionItem struct {
 	HealthDiagnostic  *HealthDiagnostic      `json:"health_diagnostic"`
 	ReviewDispute     *ReviewDisputeBinding  `json:"review_dispute"`
 	SpecRevision      *SpecRevisionFacts     `json:"spec_revision"`
+	AgentQuestion     *AgentQuestionFacts    `json:"agent_question"`
 	ItemVersion       int                    `json:"item_version"`
 	InterruptionClass InterruptionClass      `json:"interruption_class"`
 	ConversationID    *ConversationID        `json:"conversation_id"`
@@ -613,6 +618,7 @@ type AttentionItemInput struct {
 	HealthDiagnostic                 *HealthDiagnostic
 	ReviewDispute                    *ReviewDisputeBinding
 	SpecRevision                     *SpecRevisionFacts
+	AgentQuestion                    *AgentQuestionFacts
 	ItemVersion                      int
 	InterruptionClass                InterruptionClass
 	ConversationID                   *ConversationID
@@ -669,6 +675,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		HealthDiagnostic:                 clonePtr(in.HealthDiagnostic),
 		ReviewDispute:                    cloneReviewDisputeBinding(in.ReviewDispute),
 		SpecRevision:                     cloneSpecRevisionFacts(in.SpecRevision),
+		AgentQuestion:                    cloneAgentQuestionFacts(in.AgentQuestion),
 		ItemVersion:                      in.ItemVersion,
 		InterruptionClass:                in.InterruptionClass,
 		ConversationID:                   clonePtr(in.ConversationID),
@@ -1042,6 +1049,41 @@ func (i AttentionItem) Validate() error {
 			return fmt.Errorf("item %s spec revision has %d matching Addressals claims: %w",
 				i.ID, matchingClaims, ErrCardFactInconsistent)
 		}
+	}
+	if i.AgentQuestion != nil {
+		if i.Type != AttentionAgentQuestion {
+			return fmt.Errorf("item %s type %q carries agent question facts: %w",
+				i.ID, i.Type, ErrCardFactOutsideItem)
+		}
+		if err := i.AgentQuestion.Validate(); err != nil {
+			return fmt.Errorf("item %s agent_question: %w", i.ID, err)
+		}
+		expectedDigest, err := i.AgentQuestion.ComputeDigest()
+		if err != nil {
+			return fmt.Errorf("item %s agent_question digest: %w", i.ID, err)
+		}
+		if i.Subject.Type != SubjectRun || i.Subject.RunID == nil ||
+			i.Subject.ID != SubjectID(*i.Subject.RunID) {
+			return fmt.Errorf("item %s agent question has no run subject: %w",
+				i.ID, ErrCardFactInconsistent)
+		}
+		// The answer transactions locate the asking invocation through the
+		// item's claims (operator feedback); exactly one Question claim from
+		// that invocation keeps the route unambiguous.
+		questionClaims := 0
+		for _, claim := range i.AgentClaims {
+			if claim.Label == AgentQuestionClaimLabel &&
+				claim.Provenance.ProducerInvocationID == i.AgentQuestion.InvocationID &&
+				claim.Digest == expectedDigest {
+				questionClaims++
+			}
+		}
+		if questionClaims != 1 {
+			return fmt.Errorf("item %s agent question has %d digest-bound Question claims from its invocation: %w",
+				i.ID, questionClaims, ErrCardFactInconsistent)
+		}
+	} else if i.Type == AttentionAgentQuestion {
+		return fmt.Errorf("item %s agent question has no facts: %w", i.ID, ErrCardFactInconsistent)
 	}
 	if i.CodexReenrollmentRecoveryBinding != nil {
 		if i.Type != AttentionSystemHealth {

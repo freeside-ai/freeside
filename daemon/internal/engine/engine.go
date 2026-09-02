@@ -56,6 +56,11 @@ type Engine struct {
 	productionDeliveryValidator func(context.Context, exec.StartSpec) error
 	specification               *specificationWorkflow
 	inference                   *inference.Client
+	// artifacts reads persisted agent evidence by digest (a blocked
+	// implementer's decisions). It is the blob store the configured
+	// workflows already share; the first workflow option that carries one
+	// sets it, so no separate composition step is needed.
+	artifacts ArtifactStore
 	// admission is the configured capability gate and durable-record writer
 	// (see WithAdmission); nil leaves dispatch exactly as it was before a
 	// runner backend existed to admit against.

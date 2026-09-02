@@ -11,6 +11,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -19,8 +20,30 @@ func TestGoldenRoundTripCardFacts(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{AdmissionFloors: attendedFloors()})
+	invocationID := domain.SpecificationInvocationID("run-1", 99)
+	invocation, err := domain.NewAgentInvocation(invocationID, []domain.ArtifactID{"input-1"}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputDigest, err := invocation.ComputeInputDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
 	execution := newAdmissionFixture(t, nil)
 	execution.run.Stages[0].Name = "implement"
+	questionExecution := newAdmissionFixture(t, func(input *domain.ExecutionAdmissionInput) {
+		input.InvocationID = invocationID
+		input.StageID = "stage-question"
+		input.AttemptID = "attempt-specification"
+		input.InputDigest = inputDigest
+	})
+	questionStage := questionExecution.run.Stages[0]
+	questionStage.ID = questionExecution.admission.StageID
+	questionStage.Name = "specification"
+	questionStage.Attempts[0].ID = questionExecution.admission.AttemptID
+	questionStage.Attempts[0].StageID = questionStage.ID
+	questionStage.Attempts[0].InvocationID = invocationID
+	execution.run.Stages = append(execution.run.Stages, questionStage)
 	outcome := cardFactExecutionOutcome(execution.admission)
 	approval := cardFactApprovalItem(t)
 	items := storeCardFactItems(t)
@@ -36,13 +59,45 @@ func TestGoldenRoundTripCardFacts(t *testing.T) {
 		if err := tx.PutRun(ctx, execution.run); err != nil {
 			return err
 		}
+		if err := tx.PutAgentInvocation(ctx, invocation); err != nil {
+			return err
+		}
 		if err := tx.RecordAuthIdentity(ctx, execution.identity, admissionEpoch); err != nil {
 			return err
 		}
 		if err := tx.RecordExecutionAdmission(ctx, execution.admission); err != nil {
 			return err
 		}
+		if err := tx.RecordExecutionAdmission(ctx, questionExecution.admission); err != nil {
+			return err
+		}
 		if err := tx.RecordExecutionOutcome(ctx, outcome); err != nil {
+			return err
+		}
+		question := items["agent_question"]
+		questionClaim := question.AgentClaims[0]
+		artifact, err := domain.NewArtifact(domain.ArtifactInput{
+			ID: questionClaim.Artifact, Type: domain.ArtifactKindEvidence,
+			Digest: questionClaim.Digest, Provenance: questionClaim.Provenance,
+			Metadata: runMeta(),
+		}, nil)
+		if err != nil {
+			return err
+		}
+		if err := tx.PutArtifact(ctx, artifact); err != nil {
+			return err
+		}
+		questionID := question.ID
+		artifactID := questionClaim.Artifact
+		terminal, err := json.Marshal(agentQuestionSpecificationTerminalFixture{
+			InvocationID: invocation.ID, Iteration: 99, Status: exec.StatusCompleted,
+			ResearchArtifactIDs: []domain.ArtifactID{}, DecisionArtifactID: &artifactID,
+			QuestionItemID: &questionID,
+		})
+		if err != nil {
+			return err
+		}
+		if _, _, err := tx.RecordInbox(ctx, string(invocation.ID), "specification_stage_terminal", terminal); err != nil {
 			return err
 		}
 		if err := tx.PutAttentionItem(ctx, approval); err != nil {
@@ -91,6 +146,45 @@ func TestGoldenRoundTripCardFacts(t *testing.T) {
 			}
 			golden.Assert(t, "attention_item_card_"+name, gotJSON)
 		})
+	}
+}
+
+func TestPutAttentionItemRejectsAgentQuestionWithoutProducerTerminal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	item := storeCardFactItems(t)["agent_question"]
+	invocationID := item.AgentQuestion.InvocationID
+	run := domain.Run{
+		ID: "run-1", ProjectID: item.ProjectID,
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+		Stages: []domain.Stage{{
+			ID: "stage-specification", RunID: "run-1", Name: "specification",
+			Attempts: []domain.Attempt{{
+				ID: "attempt-specification", StageID: "stage-specification",
+				Number: 1, InvocationID: invocationID,
+			}},
+		}},
+	}
+	claim := item.AgentClaims[0]
+	artifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: claim.Artifact, Type: domain.ArtifactKindEvidence,
+		Digest: claim.Digest, Provenance: claim.Provenance, Metadata: runMeta(),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		if err := tx.PutArtifact(ctx, artifact); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
+	})
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("put self-consistent question without producer terminal = %v, want ErrParentKeyMismatch", err)
 	}
 }
 
@@ -247,6 +341,19 @@ func TestPutAttentionItemRejectsChangedCardFact(t *testing.T) {
 	err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, changed) })
 	if !errors.Is(err, store.ErrImmutableConflict) {
 		t.Fatalf("changed fact put = %v, want ErrImmutableConflict", err)
+	}
+}
+
+func TestPutAttentionItemRejectsAgentQuestionDigestMismatch(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	item := storeCardFactItems(t)["agent_question"]
+	item.AgentQuestion.Decisions[0].Recommendation = "1 year"
+
+	err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, item) })
+	if !errors.Is(err, domain.ErrCardFactInconsistent) {
+		t.Fatalf("put question with altered decisions = %v, want ErrCardFactInconsistent", err)
 	}
 }
 
@@ -651,9 +758,19 @@ func TestPutAttentionItemRejectsOmittedSpecRevisionHistory(t *testing.T) {
 func cardFactExecutionOutcome(admission domain.ExecutionAdmission) domain.ExecutionOutcome {
 	return domain.ExecutionOutcome{
 		InvocationID: admission.InvocationID, AdmissionID: admission.ID,
-		Status: domain.ExecutionOutcomeFailed, Summary: "implementation failed",
+		Status:     domain.ExecutionOutcomeFailed,
+		Summary:    "implementation failed",
 		RecordedAt: admissionEpoch.Add(time.Minute),
 	}
+}
+
+type agentQuestionSpecificationTerminalFixture struct {
+	InvocationID        domain.InvocationID `json:"invocation_id"`
+	Iteration           int                 `json:"iteration"`
+	Status              exec.Status         `json:"status"`
+	ResearchArtifactIDs []domain.ArtifactID `json:"research_artifact_ids"`
+	DecisionArtifactID  *domain.ArtifactID  `json:"decision_artifact_id,omitempty"`
+	QuestionItemID      *domain.ItemID      `json:"question_item_id,omitempty"`
 }
 
 func cardFactApprovalItem(t *testing.T) domain.AttentionItem {
@@ -682,6 +799,7 @@ func storeCardFactItems(t *testing.T) map[string]domain.AttentionItem {
 	itemID := domain.ItemID("item-spec")
 	rule := domain.TrustRuleTrustProfileDrift
 	posture := domain.HealthPostureAdvisory
+	invocationID := domain.SpecificationInvocationID(runID, 99)
 	runNames := &domain.DisplayNames{
 		Project:  domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
 		WorkUnit: domain.DisplayName{Text: "#1003", Source: domain.DisplayNameSourceName},
@@ -692,6 +810,22 @@ func storeCardFactItems(t *testing.T) map[string]domain.AttentionItem {
 			Text: "daemon", Source: domain.DisplayNameSourceIdentifier,
 		},
 	}
+	agentQuestionFacts := &domain.AgentQuestionFacts{
+		Stage: domain.StageNameSpecification, InvocationID: invocationID,
+		Decisions: []domain.Decision{{
+			Question:    "Which retention period applies to exported logs?",
+			WhyBlocking: "The schema cannot be fixed without it.",
+			Options: []domain.DecisionOption{
+				{Label: "30 days", Tradeoffs: "Cheaper storage, shorter audit window."},
+				{Label: "1 year", Tradeoffs: "Longer audit window, higher storage cost."},
+			},
+			Recommendation: "30 days",
+		}},
+	}
+	agentQuestionDigest, err := agentQuestionFacts.ComputeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	inputs := map[string]domain.AttentionItemInput{
 		"cost": {
@@ -701,6 +835,27 @@ func storeCardFactItems(t *testing.T) map[string]domain.AttentionItem {
 			BillableCostSoFar: &domain.CostSoFar{Currency: "USD", Amount: "17.50", Invocations: 4},
 			DisplayNames:      runNames,
 			ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate, CreatedAt: &at, Status: domain.StatusOpen,
+		},
+		"agent_question": {
+			ID: domain.ItemID("question-" + invocationID), ProjectID: "proj-1", Subject: subject,
+			Type: domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
+			Reason:            "Which retention period applies to exported logs?",
+			RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry, domain.ActionStop},
+			AgentClaims: []domain.AgentClaim{{
+				Label: domain.AgentQuestionClaimLabel, Artifact: domain.ArtifactID("decisions-" + invocationID),
+				Digest: agentQuestionDigest,
+				Provenance: domain.Provenance{
+					ProducerClass: domain.ProducerAgent, ProducerInvocationID: invocationID,
+					HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+				},
+				Metadata: domain.EvidenceMetadata{
+					MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 256, CreatedAt: at,
+					Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+				},
+			}},
+			AgentQuestion: agentQuestionFacts,
+			DisplayNames:  runNames,
+			ItemVersion:   1, InterruptionClass: domain.InterruptionExceptional, CreatedAt: &at, Status: domain.StatusOpen,
 		},
 		"execution_failure": {
 			ID: "item-card-execution", ProjectID: "proj-1", Subject: subject,

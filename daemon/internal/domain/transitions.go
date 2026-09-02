@@ -241,6 +241,7 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		{"health_diagnostic", old.HealthDiagnostic != nil, old.HealthDiagnostic, updated.HealthDiagnostic},
 		{"review_dispute", old.ReviewDispute != nil, old.ReviewDispute, updated.ReviewDispute},
 		{"spec_revision", old.SpecRevision != nil, old.SpecRevision, updated.SpecRevision},
+		{"agent_question", old.AgentQuestion != nil, old.AgentQuestion, updated.AgentQuestion},
 	}
 	for _, fact := range cardFacts {
 		if !fact.oldPresent {

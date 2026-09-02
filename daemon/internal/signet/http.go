@@ -321,6 +321,7 @@ type decisionPayloadRequest struct {
 	SnoozeUntil              *time.Time                `json:"snooze_until"`
 	AlternativeChoices       []AlternativeChoice       `json:"alternative_choices"`
 	CapabilityManifestDigest *domain.Digest            `json:"capability_manifest_digest"`
+	AnswerRoute              *domain.AnswerRoute       `json:"answer_route"`
 }
 
 func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authenticatedDevice domain.DeviceID) {
@@ -367,6 +368,10 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 	if request.Payload.CapabilityManifestDigest != nil {
 		digest := *request.Payload.CapabilityManifestDigest
 		payload.CapabilityManifestDigest = &digest
+	}
+	if request.Payload.AnswerRoute != nil {
+		route := *request.Payload.AnswerRoute
+		payload.AnswerRoute = &route
 	}
 	if request.Payload.Message != nil {
 		payload.Message = *request.Payload.Message
@@ -538,7 +543,7 @@ func isCommandRequestError(err error) bool {
 		ErrInvalidProposalDecisionPayload, ErrInvalidFindingAdjudicationDecisionPayload,
 		ErrAlternativeNotOffered, ErrInvalidCapabilityRetryDecisionPayload,
 		ErrCapabilityManifestNotOffered,
-		ErrMessageRequired, ErrContentNotAllowed, ErrAttachmentNotStored,
+		ErrMessageRequired, ErrContentNotAllowed, ErrAnswerRouteRequired, ErrAttachmentNotStored,
 		// An over-limit request_changes message is deterministic invalid
 		// client input, rejected by validateCommandContent before the write,
 		// so it is a 400 like the empty-message and content-not-allowed cases
@@ -549,7 +554,7 @@ func isCommandRequestError(err error) bool {
 		// it, so it is a request error like the unstored-digest case.
 		ErrInvalidDigest,
 		store.ErrActionNotOffered, store.ErrImmutableConflict,
-		domain.ErrEmptyID, domain.ErrEmptyField, domain.ErrInvalidAction,
+		domain.ErrEmptyID, domain.ErrEmptyField, domain.ErrInvalidAction, domain.ErrInvalidAnswerRoute,
 		domain.ErrNonPositive, domain.ErrDigestsNotCanonical, domain.ErrDuplicate,
 	} {
 		if errors.Is(err, target) {

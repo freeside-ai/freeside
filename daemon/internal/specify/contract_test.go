@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
@@ -49,6 +50,11 @@ func TestDecodeOutputStrictAndExclusive(t *testing.T) {
 		{"both", `{"fetch_requests":[{"url":"https://example.com","purpose":"research"}],"specification":{"summary":"s","body":"b","addressals":[]}}`, specify.ErrInvalidOutput},
 		{"reply and spec", `{"fetch_requests":[],"specification":{"summary":"s","body":"b","addressals":[]},"reply":"answer"}`, specify.ErrInvalidOutput},
 		{"duplicate", `{"fetch_requests":[{"url":"https://example.com","purpose":"one"},{"url":"https://example.com","purpose":"two"}],"specification":null}`, specify.ErrInvalidOutput},
+		{"decisions", `{"fetch_requests":[],"specification":null,"reply":null,"decisions":` + decisionsJSON(1) + `}`, nil},
+		{"decisions and fetch", `{"fetch_requests":[{"url":"https://example.com","purpose":"research"}],"specification":null,"reply":null,"decisions":` + decisionsJSON(1) + `}`, specify.ErrInvalidOutput},
+		{"decisions and spec", `{"fetch_requests":[],"specification":{"summary":"s","body":"b","addressals":[]},"reply":null,"decisions":` + decisionsJSON(1) + `}`, specify.ErrInvalidOutput},
+		{"decisions and reply", `{"fetch_requests":[],"specification":null,"reply":"answer","decisions":` + decisionsJSON(1) + `}`, specify.ErrInvalidOutput},
+		{"empty decisions", `{"fetch_requests":[],"specification":null,"reply":null,"decisions":[]}`, specify.ErrInvalidOutput},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -160,6 +166,108 @@ func TestDecodeOutputToleratesSingleFence(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "output begins") {
 				t.Fatalf("error %q lacks the raw-output prefix", err)
+			}
+		})
+	}
+}
+
+func decisionFixture() domain.Decision {
+	return domain.Decision{
+		Question:    "Which retention period applies to exported logs?",
+		WhyBlocking: "The specification cannot fix the schema without it.",
+		Options: []domain.DecisionOption{
+			{Label: "30 days", Tradeoffs: "Cheaper storage, shorter audit window."},
+			{Label: "1 year", Tradeoffs: "Longer audit window, higher storage cost."},
+		},
+		Recommendation: "30 days",
+	}
+}
+
+func decisionsJSON(count int) string {
+	decisions := make([]domain.Decision, count)
+	for i := range decisions {
+		decisions[i] = decisionFixture()
+	}
+	body, err := json.Marshal(decisions)
+	if err != nil {
+		panic(err)
+	}
+	return string(body)
+}
+
+func TestOutputNeedsDecisionGolden(t *testing.T) {
+	body, err := specify.EncodeOutput(specify.Output{Decisions: []domain.Decision{decisionFixture()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value any
+	if err := json.Unmarshal(body, &value); err != nil {
+		t.Fatal(err)
+	}
+	indented, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden.Assert(t, "output_needs_decision", append(indented, '\n'))
+}
+
+// TestDecodeOutputNeedsDecisionLimits pins the decision limits at the
+// decoder: the counts and bounds the specifier prompt states.
+func TestDecodeOutputNeedsDecisionLimits(t *testing.T) {
+	withOptions := func(n int) domain.Decision {
+		d := decisionFixture()
+		d.Options = nil
+		for i := 0; i < n; i++ {
+			d.Options = append(d.Options, domain.DecisionOption{
+				Label: strings.Repeat("x", i+1), Tradeoffs: "tradeoffs",
+			})
+		}
+		d.Recommendation = "x"
+		return d
+	}
+	noMatch := decisionFixture()
+	noMatch.Recommendation = "never"
+	over := decisionFixture()
+	over.Question = strings.Repeat("q", domain.MaxDecisionTextBytes+1)
+
+	cases := []struct {
+		name      string
+		decisions []domain.Decision
+		accepted  bool
+	}{
+		{"one decision", []domain.Decision{decisionFixture()}, true},
+		{"eight decisions", make([]domain.Decision, domain.MaxDecisionsPerResult), true},
+		{"nine decisions", make([]domain.Decision, domain.MaxDecisionsPerResult+1), false},
+		{"zero options", []domain.Decision{withOptions(0)}, false},
+		{"one option", []domain.Decision{withOptions(1)}, false},
+		{"six options", []domain.Decision{withOptions(domain.MaxDecisionOptions)}, true},
+		{"seven options", []domain.Decision{withOptions(domain.MaxDecisionOptions + 1)}, false},
+		{"recommendation matches no option", []domain.Decision{noMatch}, false},
+		{"text over 4 KiB", []domain.Decision{over}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for i := range tc.decisions {
+				if tc.decisions[i].Question == "" {
+					tc.decisions[i] = decisionFixture()
+				}
+			}
+			body, err := json.Marshal(specify.Output{Decisions: tc.decisions})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := specify.DecodeOutput(body)
+			if tc.accepted {
+				if err != nil {
+					t.Fatalf("DecodeOutput() = %v, want accepted", err)
+				}
+				if len(out.Decisions) != len(tc.decisions) {
+					t.Fatalf("decoded %d decisions, want %d", len(out.Decisions), len(tc.decisions))
+				}
+				return
+			}
+			if !errors.Is(err, specify.ErrInvalidOutput) || !errors.Is(err, domain.ErrDecisionInvalid) {
+				t.Fatalf("DecodeOutput() = %v, want ErrInvalidOutput wrapping ErrDecisionInvalid", err)
 			}
 		})
 	}

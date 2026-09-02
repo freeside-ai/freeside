@@ -1,0 +1,22 @@
+{
+  "decisions": [
+    {
+      "options": [
+        {
+          "label": "30 days",
+          "tradeoffs": "Cheaper storage, shorter audit window."
+        },
+        {
+          "label": "1 year",
+          "tradeoffs": "Longer audit window, higher storage cost."
+        }
+      ],
+      "question": "Which retention period applies to exported logs?",
+      "recommendation": "30 days",
+      "why_blocking": "The specification cannot fix the schema without it."
+    }
+  ],
+  "fetch_requests": null,
+  "reply": null,
+  "specification": null
+}

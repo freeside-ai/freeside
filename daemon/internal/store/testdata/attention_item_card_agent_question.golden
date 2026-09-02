@@ -1,0 +1,115 @@
+{
+  "id": "question-inv-specify-run-1-99",
+  "project_id": "proj-1",
+  "subject": {
+    "subject_type": "run",
+    "subject_id": "run-1",
+    "run_id": "run-1"
+  },
+  "type": "agent_question",
+  "priority": "normal",
+  "reason": "Which retention period applies to exported logs?",
+  "requested_decision": [
+    "answer_and_retry",
+    "stop"
+  ],
+  "recommendation": null,
+  "decision_surface": {
+    "epoch": 1,
+    "digest": "sha256:42eb0ab41599a20eb94ac43a57f4a6f0c9a42ded84a91bf5a269ce7c919488a6"
+  },
+  "evidence_snapshot": null,
+  "agent_claims": [
+    {
+      "label": "Question",
+      "artifact_id": "decisions-inv-specify-run-1-99",
+      "digest": "sha256:e1685dd22039c121729c68f4ec11e5a110a5b57a40cd221eb087abbe89b0faa4",
+      "provenance": {
+        "producer_class": "agent",
+        "producer_invocation_id": "inv-specify-run-1-99",
+        "head_binding": "head_independent",
+        "verification_recipe_digest": null,
+        "sensitivity_class": "normal"
+      },
+      "text": null,
+      "metadata": {
+        "media_type": "application/json",
+        "size_bytes": 256,
+        "created_at": "2026-08-29T20:00:00Z",
+        "source": "claim",
+        "availability": "available"
+      }
+    }
+  ],
+  "artifact_digests": [
+    "sha256:e1685dd22039c121729c68f4ec11e5a110a5b57a40cd221eb087abbe89b0faa4"
+  ],
+  "pr_head_sha": "",
+  "pr_reference": null,
+  "readiness": null,
+  "readiness_detail": null,
+  "yield_history": null,
+  "commit_plan_notice": null,
+  "base_freshness": null,
+  "readiness_invalidation": null,
+  "review_recovery_binding": null,
+  "codex_reenrollment_recovery_binding": null,
+  "review_configuration_recovery": null,
+  "finding_adjudication": null,
+  "display_names": {
+    "project": {
+      "text": "owner/repo",
+      "source": "name"
+    },
+    "work_unit": {
+      "text": "#1003",
+      "source": "name"
+    }
+  },
+  "billable_cost_so_far": null,
+  "execution_failure": null,
+  "publish_block": null,
+  "diff_stats": null,
+  "blocked_on": null,
+  "health_diagnostic": null,
+  "review_dispute": null,
+  "spec_revision": null,
+  "agent_question": {
+    "stage": "specification",
+    "invocation_id": "inv-specify-run-1-99",
+    "kind": null,
+    "decisions": [
+      {
+        "question": "Which retention period applies to exported logs?",
+        "why_blocking": "The schema cannot be fixed without it.",
+        "options": [
+          {
+            "label": "30 days",
+            "tradeoffs": "Cheaper storage, shorter audit window."
+          },
+          {
+            "label": "1 year",
+            "tradeoffs": "Longer audit window, higher storage cost."
+          }
+        ],
+        "recommendation": "30 days"
+      }
+    ]
+  },
+  "item_version": 1,
+  "interruption_class": "exceptional",
+  "conversation_id": null,
+  "timing": {
+    "delivery_count": 0,
+    "first_submitted_at": null,
+    "first_accepted_at": null,
+    "first_opened_at": null,
+    "submit_to_first_open": null
+  },
+  "created_at": "2026-08-29T20:00:00Z",
+  "expires_when": null,
+  "decided_at": null,
+  "posture": null,
+  "blocking_supersession": null,
+  "status": "open"
+}

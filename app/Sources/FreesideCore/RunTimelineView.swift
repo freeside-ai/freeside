@@ -254,7 +254,7 @@ struct InvocationPresentation {
     init(_ invocation: Components.Schemas.InvocationObservation, asOf: Date) {
         let isTerminal: Bool
         switch invocation.status {
-        case .completed, .failed, .canceled:
+        case .completed, .failed, .canceled, .blocked:
             isTerminal = true
         case .pending, .running, .gone:
             isTerminal = false
@@ -278,6 +278,11 @@ struct InvocationPresentation {
             case .failed, .canceled:
                 color = .waxText
                 glyph = nil
+            case .blocked:
+                // A typed stop: the stage ended on a question for the human,
+                // not on a failure.
+                color = .accentText
+                glyph = "?"
             case .pending, .gone:
                 color = .inkDim
                 glyph = invocation.live ? "●" : "○"

@@ -43,6 +43,11 @@ type Command struct {
 	// a domain invariant.
 	Message     string   `json:"message"`
 	Attachments []Digest `json:"attachments"`
+	// AnswerRoute is set only by answer_and_retry on an implementation-stage
+	// agent_question, where the human says whether the answer re-invokes the
+	// implementer or revises the specification. Which items require or forbid
+	// it is the acceptance boundary's policy, not a domain invariant.
+	AnswerRoute *AnswerRoute `json:"answer_route"`
 }
 
 // CommandInput carries the caller-supplied fields of a Command. The bound
@@ -57,6 +62,7 @@ type CommandInput struct {
 	Action          Action
 	Message         string
 	Attachments     []Digest
+	AnswerRoute     *AnswerRoute
 }
 
 // NewCommand builds a validated Command whose bound digest set is in canonical
@@ -87,6 +93,7 @@ func NewCommand(in CommandInput) (Command, error) {
 		// concern does not arise. The non-nil base keeps the field
 		// array-shaped ("[]") in the write-once record.
 		Attachments: append([]Digest{}, in.Attachments...),
+		AnswerRoute: clonePtr(in.AnswerRoute),
 	}
 	if err := c.Validate(); err != nil {
 		return Command{}, err
@@ -116,6 +123,9 @@ func (c Command) Validate() error {
 	}
 	if !c.Action.valid() {
 		return fmt.Errorf("command %s action %q: %w", c.CommandID, c.Action, ErrInvalidAction)
+	}
+	if c.AnswerRoute != nil && !c.AnswerRoute.valid() {
+		return fmt.Errorf("command %s answer_route %q: %w", c.CommandID, *c.AnswerRoute, ErrInvalidAnswerRoute)
 	}
 	// The bound digest set is canonical (sorted, deduplicated): the write-once
 	// record then has one byte-form per accepted binding, so a reordered retry

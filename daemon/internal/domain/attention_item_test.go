@@ -79,6 +79,17 @@ func validItemInput(typ domain.AttentionType) domain.AttentionItemInput {
 			}},
 		}
 	}
+	if typ == domain.AttentionAgentQuestion {
+		runID := domain.RunID("run-1")
+		in.Subject.RunID = &runID
+		in.RequestedDecision = []domain.Action{domain.ActionAnswerAndRetry, domain.ActionStop}
+		in.InterruptionClass = domain.InterruptionExceptional
+		in.AgentQuestion = &domain.AgentQuestionFacts{
+			Stage: domain.StageNameSpecification, InvocationID: "inv-specify-1",
+			Decisions: validDecisions(),
+		}
+		in.AgentClaims = []domain.AgentClaim{agentQuestionClaim(in.AgentQuestion)}
+	}
 	if typ == domain.AttentionReadyForFinalReview {
 		in.PRReference = &domain.PRReference{Repo: "owner/repo", Number: 123}
 	}
@@ -1164,4 +1175,35 @@ func TestAttentionItemHealthPostureRules(t *testing.T) {
 			t.Fatalf("constructed posture = %q, want blocking", *item.Posture)
 		}
 	})
+}
+
+// validDecisions is one well-formed decision list shared by the fixtures.
+func validDecisions() []domain.Decision {
+	return []domain.Decision{{
+		Question:    "Which retention period applies to exported logs?",
+		WhyBlocking: "The specification cannot fix the schema without it.",
+		Options: []domain.DecisionOption{
+			{Label: "30 days", Tradeoffs: "Cheaper storage, shorter audit window."},
+			{Label: "1 year", Tradeoffs: "Longer audit window, higher storage cost."},
+		},
+		Recommendation: "30 days",
+	}}
+}
+
+// agentQuestionClaim is the Question claim an agent_question item carries,
+// with provenance naming the asking invocation.
+func agentQuestionClaim(facts *domain.AgentQuestionFacts) domain.AgentClaim {
+	digest, err := facts.ComputeDigest()
+	if err != nil {
+		panic(err)
+	}
+	prov := provenance(domain.ProducerAgent, nil)
+	prov.ProducerInvocationID = facts.InvocationID
+	prov.HeadBinding = domain.HeadIndependent
+	prov.SourceHeadSHA = ""
+	return domain.AgentClaim{
+		Label: domain.AgentQuestionClaimLabel, Artifact: "decisions-" + domain.ArtifactID(facts.InvocationID),
+		Digest: digest, Provenance: prov,
+		Metadata: claimMeta(domain.EvidenceMediaApplicationJSON),
+	}
 }

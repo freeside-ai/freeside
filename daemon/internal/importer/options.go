@@ -79,6 +79,11 @@ type Options struct {
 	Now time.Time
 	// GitPath is the git binary to run; empty means "git" from PATH.
 	GitPath string
+	// ExpectNoChanges declares that the handoff is a blocked terminal: the
+	// evidence channel is imported as usual, but any repo-channel change or a
+	// commit plan is a definitive rejection (ErrUnexpectedChanges) and no
+	// commit is built, so a stop can never surface as an empty candidate.
+	ExpectNoChanges bool
 	// Policy is the import's policy surface.
 	Policy Policy
 	// Test-only fault hooks exercise the construct-all/swap-once boundary.

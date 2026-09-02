@@ -1108,6 +1108,26 @@ public actor MockServer {
                     reason: "capability manifest was not offered")
             }
         }
+        // The daemon's answer_route policy (signet validateAnswerRoute): an
+        // implementation-stage question must name where the answer goes;
+        // revise_specification is refused as not yet available; no other
+        // command may carry a route.
+        let routedAnswer =
+            payload.action == .answer_and_retry && current.item._type == .agent_question
+            && current.item.agent_question?.value1.stage == .implementation
+        if routedAnswer {
+            guard let route = payload.answer_route?.value1 else {
+                throw MalformedCommandError(
+                    commandID: command.command_id,
+                    reason: "answer_and_retry on an implementation-stage question requires answer_route")
+            }
+            if route == .revise_specification {
+                throw UnsupportedActionError(commandID: command.command_id, action: payload.action)
+            }
+        } else if payload.answer_route != nil {
+            throw MalformedCommandError(
+                commandID: command.command_id, reason: "answer_route is not allowed for this command")
+        }
         switch ActionOutcome.of(payload.action) {
         case .discusses:
             if let conversationID = current.item.conversation_id,
@@ -1360,7 +1380,8 @@ public actor MockServer {
                 // (one byte-form per write-once record, domain.NewCommand);
                 // attachment order is authored, never canonicalized.
                 message: recordedMessage,
-                attachments: payload.attachments ?? []
+                attachments: payload.attachments ?? [],
+                answer_route: payload.answer_route.map { .init(value1: $0.value1) }
             ),
             revision: revision
         )

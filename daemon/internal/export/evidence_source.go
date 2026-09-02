@@ -35,6 +35,16 @@ const (
 	SummaryEvidencePath  = EvidenceWorkspaceDir + "/summary.md"
 )
 
+// BlockedEvidenceLabel and BlockedEvidencePath reserve the second
+// launcher-declared source: the implementer's typed blocked outcome
+// (domain.BlockedOutcome). Its presence turns the export into a blocked
+// terminal with no candidate; the importer then requires an empty change
+// set and no commit plan.
+const (
+	BlockedEvidenceLabel = "freeside.blocked"
+	BlockedEvidencePath  = EvidenceWorkspaceDir + "/blocked.json"
+)
+
 // EvidenceSourceVersion identifies the evidence *source descriptor* wire format
 // (the agent-facing input the helper reads), independent of and distinct from
 // the evidence *manifest* the helper emits (EvidenceManifestVersion). Any

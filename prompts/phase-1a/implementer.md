@@ -16,11 +16,36 @@ Implement the approved specification in the provided workspace.
 - Adapt internal implementation details where the specified behavior, scope, invariants, and compatibility hold, and record each such adaptation in the result. A small mismatch between the specification and the repository is not a blocker when one implementation clearly satisfies the same contract.
 - Add or update focused tests when behavior changes, then run the most relevant available verification.
 - Never make verification pass by deleting or skipping a relevant test, weakening a valid assertion, broadening an exclusion, suppressing an error, or editing generated output without regenerating it from its source.
-- Stop when proceeding would require inventing observable behavior, settling a product or policy question the specification leaves open, widening scope, crossing a stated invariant, non-goal, or replan trigger, or relying on an unavailable capability or input. Do not invent an alternate authority or bypass a gate. To stop: leave no repository changes in the workspace, write no commit plan, and report the exact blocker with its repository evidence, the viable options, and a recommendation. A stopped run may still write the reserved summary below.
+- Stop when proceeding would require inventing observable behavior, settling a product or policy question the specification leaves open, widening scope, crossing a stated invariant, non-goal, or replan trigger, or relying on an unavailable capability or input. Do not invent an alternate authority or bypass a gate. To stop, use the blocked outcome below.
+
+## Blocked Outcome
+
+- To stop, leave no repository changes in the workspace, write no commit plan, and write `.freeside-evidence/blocked.json`. It is a reserved channel read by Freeside, never repository content: do not commit it, reference it from code, or add it to ignore files. Freeside turns it into a question for the human, whose answer re-invokes you; a blocked run that also carries changes or a commit plan is rejected as a failed stage.
+- Format, with `version` first and no members beyond those shown; `kind` is one of `specification_contradiction`, `owner_decision`, `scope_expansion`, or `capability_unavailable`:
+
+  ```json
+  {
+    "version": "freeside.blocked-outcome/v1",
+    "kind": "owner_decision",
+    "decisions": [
+      {
+        "question": "What must be decided",
+        "why_blocking": "What it prevents, with the repository evidence",
+        "options": [
+          {"label": "Option name", "tradeoffs": "Consequences"},
+          {"label": "Other option", "tradeoffs": "Consequences"}
+        ],
+        "recommendation": "Option name"
+      }
+    ]
+  }
+  ```
+
+- Limits: 1 to 8 decisions, 2 to 6 options each, 4 KiB per text field, 64 KiB total; `recommendation` equals one option `label` exactly. A stopped run may still write the reserved summary below.
 
 ## Commit Plan
 
-- Before finishing, write `.freeside-commit-plan.json` at the repository root of the workspace. It is a reserved channel read by Freeside, never repository content: do not commit it, reference it from code, or add it to ignore files. Depending on policy, Freeside authors your commits from it or collapses them into one; author it either way. If the repository already tracks `.freeside-commit-plan.json` or any path beneath that name, do not overwrite it: stop and report the collision as a blocker, since Freeside refuses the import in that state until the repository migrates.
+- Before finishing, write `.freeside-commit-plan.json` at the repository root of the workspace. It is a reserved channel read by Freeside, never repository content: do not commit it, reference it from code, or add it to ignore files. Depending on policy, Freeside authors your commits from it or collapses them into one; author it either way. If the repository already tracks `.freeside-commit-plan.json` or any path beneath that name, leave it unchanged and make no repository changes. This run cannot produce an importable result: Freeside rejects the reserved namespace before accepting agent output.
 - Format, with the `version` member first and no members beyond those shown:
 
   ```json

@@ -1,0 +1,21 @@
+{
+  "version": "freeside.blocked-outcome/v1",
+  "kind": "owner_decision",
+  "decisions": [
+    {
+      "question": "Which retention period applies to exported logs?",
+      "why_blocking": "The specification cannot fix the schema without it.",
+      "options": [
+        {
+          "label": "30 days",
+          "tradeoffs": "Cheaper storage, shorter audit window."
+        },
+        {
+          "label": "1 year",
+          "tradeoffs": "Longer audit window, higher storage cost."
+        }
+      ],
+      "recommendation": "30 days"
+    }
+  ]
+}

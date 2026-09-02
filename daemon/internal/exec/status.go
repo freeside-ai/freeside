@@ -24,6 +24,11 @@ const (
 	// StatusCanceled means the invocation was canceled and committed a
 	// canceled result.
 	StatusCanceled Status = "canceled"
+	// StatusBlocked means the invocation finished without a result because
+	// the agent needs a human decision it reported through the typed blocked
+	// outcome (domain.BlockedOutcome). It is terminal: the stage is over, a
+	// retry is a new stage carrying the answer, and no candidate exists.
+	StatusBlocked Status = "blocked"
 	// StatusGone means the provider-side session is lost (crash, eviction):
 	// Inspect can observe nothing more, but a result committed before the
 	// loss remains collectable by invocation id (plan §5.3 reconciliation).
@@ -40,13 +45,14 @@ var AllStatuses = []Status{
 	StatusCompleted,
 	StatusFailed,
 	StatusCanceled,
+	StatusBlocked,
 	StatusGone,
 }
 
 func (s Status) valid() bool {
 	switch s {
 	case StatusPending, StatusRunning, StatusCompleted, StatusFailed,
-		StatusCanceled, StatusGone:
+		StatusCanceled, StatusBlocked, StatusGone:
 		return true
 	default:
 		return false
@@ -54,11 +60,11 @@ func (s Status) valid() bool {
 }
 
 // Terminal reports whether s is a final outcome a result can carry
-// (completed, failed, or canceled). Dispatch switch without default so the
-// exhaustive linter forces a new member to be classified.
+// (completed, failed, canceled, or blocked). Dispatch switch without default
+// so the exhaustive linter forces a new member to be classified.
 func (s Status) Terminal() bool {
 	switch s {
-	case StatusCompleted, StatusFailed, StatusCanceled:
+	case StatusCompleted, StatusFailed, StatusCanceled, StatusBlocked:
 		return true
 	case StatusPending, StatusRunning, StatusGone:
 		return false

@@ -5,6 +5,8 @@ import "errors"
 var (
 	ErrCardFactInconsistent                 = errors.New("card fact is inconsistent")
 	ErrCardFactOutsideItem                  = errors.New("card fact is not valid for this attention type")
+	ErrDecisionInvalid                      = errors.New("decision is invalid")
+	ErrBlockedOutcomeInvalid                = errors.New("blocked outcome is invalid")
 	ErrRecommendationProvenanceInconsistent = errors.New("recommendation provenance does not match its source")
 	ErrRecommendationSourceDigestMismatch   = errors.New("recommendation source digest does not match its canonical content")
 )
@@ -15,6 +17,8 @@ var (
 var (
 	// Enum-membership failures.
 	ErrUnknownAttentionType             = errors.New("unknown attention type")
+	ErrInvalidBlockedKind               = errors.New("invalid blocked kind")
+	ErrInvalidAnswerRoute               = errors.New("invalid answer route")
 	ErrInvalidSubjectType               = errors.New("invalid subject type")
 	ErrInvalidProducerClass             = errors.New("invalid producer class")
 	ErrInvalidArtifactKind              = errors.New("invalid artifact kind")
