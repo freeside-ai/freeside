@@ -1,8 +1,9 @@
 # Coordination Protocol
 
 The mechanics behind AGENTS.md's coordination gates: the lane glossary, the
-claim-lease protocol, the session-start queries, session end, deferral
-escalation, and the tracking-issue format. Read this file before claiming a
+work-unit issue shape and wave-state terms, the claim-lease protocol, the
+session-start queries, session end, deferral escalation, and the
+tracking-issue format. Read this file before claiming a
 unit, filing a deferral, starting an issue-backed session, or creating or
 updating a tracking issue.
 
@@ -29,6 +30,46 @@ code identifiers, package names, or API vocabulary, which stay functional
 | ward | Runner backends, workspace-handoff gate, conformance, operating modes | daemon/internal/ward | §5.7 |
 | saddle | SwiftUI clients (pipeline-exempt) | app/ | §5.14, §11 |
 | spine | A ROLE, not a territory: serialized shared-contract changes (domain, migrations, interfaces, api/) and Wave 2 integration (workflow engine) | daemon/internal/domain, daemon/internal/store, daemon/internal/exec, daemon/internal/engine, daemon/migrations/, api/ | §11 |
+
+## Work-Unit Issues
+
+AGENTS.md (Work Units) says which work needs an issue; this section holds
+the issue's shape and the wave-state terms the gates use.
+
+One issue per issue-backed work unit, created from the work-unit template:
+
+- Source devlog entry (optional; cite the originating decision note's filename
+  only when the issue genuinely started there).
+- Objective.
+- Non-goals (`none` allowed).
+- Affected interfaces/contracts: the interface surfaces the unit touches, not
+  the whole work contract; the issue as a whole is the contract.
+- Acceptance: the fixture/test list is the spec.
+- Scope / declared paths.
+- Dependencies: `starts-after`, `merges-after`, `stacked-on`, and
+  `exclusive-with` (see Relationship Types), never untyped issue refs. Record
+  an unknown or materially ambiguous relationship as `starts-after` until the
+  spine resolves it.
+
+Labels: `lane:*` for ownership area, `kind:*` for type. Milestones carry the
+phase (1A, 1B). Each wave has a pinned tracking issue listing its units,
+maintained by the spine role. Any issue that tracks other issues (a wave
+tracker or an ad hoc tracker over a set of units) records their
+implementation order per Tracking Issues below.
+
+Wave state resolves per the §11 three-state resolver over every pinned issue
+whose title matches the canonical wave-tracker pattern: exactly one open match
+is active-wave state, exactly one closed match is inter-wave state, and zero
+or multiple matches are an invalid authority state for spine repair. The
+scheduling door exists only in active-wave state, because it needs an open
+current tracker to list the unit. Fiat (`Plan #N`, `Handle #N`) is
+independent of wave state and may proceed in either state after all ordinary
+gates pass.
+
+**Scheduled** means both a milestone and a listing on the current tracking
+issue. The spine changes those fields as one planning operation; either field
+alone is a spine-repair error and does not open the scheduling door (fiat
+remains independent).
 
 ## Claiming
 
