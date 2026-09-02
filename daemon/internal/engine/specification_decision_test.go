@@ -315,3 +315,48 @@ func TestSpecificationNeedsDecisionStopResolvesWithoutEnqueueing(t *testing.T) {
 		t.Fatalf("implementation run after stop = %v, want ErrNotFound", err)
 	}
 }
+
+// TestSpecifierFixtureDistinguishesAssumptionFromOwnerDecision is the
+// prompt-contract fixture: a repository-practice detail is a bounded
+// assumption inside a returned specification, while a product question
+// comes back as needs_decision and stops the run on a question item.
+func TestSpecifierFixtureDistinguishesAssumptionFromOwnerDecision(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		output   specify.Output
+		question bool
+	}{
+		{
+			"bounded assumption", specify.Output{Specification: &specify.Specification{
+				Summary:    "Assumes the existing table naming convention; no owner decision is open.",
+				Body:       "# Specification\n\nAssumption: new tables follow the repository's snake_case convention.",
+				Addressals: []specify.Addressal{},
+			}}, false,
+		},
+		{"owner decision", specify.Output{Decisions: decisionsFixture()}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSpecificationFixture(t, false, 4)
+			driver := f.newDriver(t)
+			firstID := specificationInvocationID("specification-run", 1)
+			if err := specifyfake.Script(driver, firstID, 0, 0, tc.output); err != nil {
+				t.Fatal(err)
+			}
+			f.submit(t)
+			if result, err := f.newEngine(t, driver).Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+				t.Fatalf("reconcile = %+v, %v", result, err)
+			}
+			questions := f.questionItemsForRun(t, "specification-run")
+			_, implementationErr := f.run("implementation-run")
+			if tc.question {
+				if len(questions) != 1 || !errors.Is(implementationErr, store.ErrNotFound) {
+					t.Fatalf("owner decision: questions = %d, implementation = %v", len(questions), implementationErr)
+				}
+				return
+			}
+			if len(questions) != 0 || implementationErr != nil {
+				t.Fatalf("bounded assumption: questions = %d, implementation = %v", len(questions), implementationErr)
+			}
+		})
+	}
+}

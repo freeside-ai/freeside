@@ -190,18 +190,46 @@ func TestPhase1ASummaryPromptContracts(t *testing.T) {
 		export.SummaryEvidencePath,
 		"State what changed and why, what you left undone or out of scope, and what remains uncertain.",
 		"Assert a verifiable outcome only by naming the command, check, diff, or artifact it comes from",
+		// The typed stop (#990): the blocked file, its version, every kind, and
+		// the no-changes rule the importer enforces.
+		export.BlockedEvidencePath,
+		domain.BlockedOutcomeEncodingVersion,
+		"leave no repository changes in the workspace, write no commit plan",
+		"1 to 8 decisions, 2 to 6 options each, 4 KiB per text field",
 	} {
 		if !bytes.Contains(implementer, []byte(required)) {
 			t.Errorf("implementer prompt omits %q", required)
 		}
 	}
+	for _, kind := range domain.AllBlockedKinds {
+		if kind == domain.BlockedKindCommitPlanCollision {
+			if bytes.Contains(implementer, []byte("`"+string(kind)+"`")) {
+				t.Errorf("implementer prompt advertises unusable blocked kind %q", kind)
+			}
+			continue
+		}
+		if !bytes.Contains(implementer, []byte("`"+string(kind)+"`")) {
+			t.Errorf("implementer prompt omits blocked kind %q", kind)
+		}
+	}
+	if bytes.Contains(implementer, []byte("report the exact blocker")) {
+		t.Error("implementer prompt still carries the interim untyped stop protocol")
+	}
 	for _, required := range []string{
 		"intent, key questions, open decisions, uncertainty, and dissent",
 		"Never claim verification",
+		// The needs_decision form (#990) and the limits the decoder pins.
+		`{"decisions":[{"question"`,
+		"8 decisions, 2 to 6 options each, 4 KiB per text field",
+		"`recommendation` equals one option `label` exactly",
+		"return `decisions` instead of a specification",
 	} {
 		if !bytes.Contains(specifier, []byte(required)) {
 			t.Errorf("specifier prompt omits %q", required)
 		}
+	}
+	if bytes.Contains(specifier, []byte("open owner decision")) {
+		t.Error("specifier prompt still lists owner decisions in the summary instead of returning them")
 	}
 	if summaryFixtureConforms("All tests pass.") {
 		t.Fatal("bare verdict fixture passed the summary composition assertion")
