@@ -201,7 +201,7 @@ func TestSubmitIssueSubjectSpecificationRunAdoptsReservedRun(t *testing.T) {
 		if len(request.InputArtifactIDs) != 1 || request.InputArtifactIDs[0] != r.workItemArtifact {
 			t.Errorf("marker inputs = %v, want [%q]", request.InputArtifactIDs, r.workItemArtifact)
 		}
-		claim, err := tx.GetOutbox(t.Context(), specificationImplementationClaimKey(r.spec.ImplementationRunID))
+		claim, err := tx.GetOutbox(t.Context(), specificationImplementationClaimKey(r.spec.SpecificationRunID, r.spec.ImplementationRunID))
 		if err != nil {
 			return err
 		}

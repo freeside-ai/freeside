@@ -51,11 +51,6 @@ func derivedInitialCampaignID(implementationRunID domain.RunID) domain.CampaignI
 	return domain.CampaignID("campaign-" + hex.EncodeToString(sum[:]))
 }
 
-func derivedSpecificationRunID(implementationRunID domain.RunID) domain.RunID {
-	sum := sha256.Sum256([]byte("freeside.specification-run/v1\x00" + string(implementationRunID)))
-	return domain.RunID("run-specification-" + hex.EncodeToString(sum[:]))
-}
-
 func (tx *ReadTx) authenticateRunProductionLineage(ctx context.Context, run domain.Run) error {
 	if run.CampaignID == "" {
 		return nil
@@ -92,7 +87,7 @@ func (tx *ReadTx) authenticateInitialAttemptAuthority(ctx context.Context, attem
 	if attempt.AttemptNumber != 1 {
 		return nil
 	}
-	entry, err := tx.GetOutbox(ctx, "inv-specify-"+string(attempt.SpecificationRunID)+"-1")
+	entry, err := tx.GetOutbox(ctx, string(domain.SpecificationInvocationID(attempt.SpecificationRunID, 1)))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			// Admission reserves the attempt before a human or auto-start writes
@@ -173,9 +168,9 @@ func (tx *ReadTx) authenticateInitialApprovedSpec(
 	}
 	rows, err := tx.tx.QueryContext(ctx, `
 SELECT idempotency_key FROM outbox
-WHERE kind = ? AND idempotency_key LIKE ?`,
-		string(domain.SpecificationInvocationRequestedKind),
-		"inv-specify-"+string(attempt.SpecificationRunID)+"-%")
+WHERE kind IN (?, ?) AND idempotency_key LIKE ?`,
+		string(domain.SpecificationInvocationRequestedKind), queueKindAlias(string(domain.SpecificationInvocationRequestedKind)),
+		domain.SpecificationInvocationIDPrefix(attempt.SpecificationRunID)+"%")
 	if err != nil {
 		return err
 	}
@@ -211,7 +206,7 @@ WHERE kind = ? AND idempotency_key LIKE ?`,
 			AttemptNumber       int                 `json:"attempt_number"`
 		}
 		if err := json.Unmarshal(requestEntry.Payload, &request); err != nil || request.Iteration < 1 ||
-			key != fmt.Sprintf("inv-specify-%s-%d", attempt.SpecificationRunID, request.Iteration) ||
+			key != string(domain.SpecificationInvocationID(attempt.SpecificationRunID, request.Iteration)) ||
 			request.SpecificationRunID != attempt.SpecificationRunID ||
 			request.ImplementationRunID != attempt.ImplementationRunID ||
 			request.InvocationID != domain.InvocationID(key) || request.CampaignID != attempt.CampaignID ||
@@ -391,7 +386,7 @@ func (tx *WriteTx) PutProductionAttempt(ctx context.Context, attempt domain.Prod
 			attempt.CampaignID, attempt.AttemptNumber, domain.ErrImmutableTransition)
 	}
 	if attempt.AttemptNumber == 1 && (attempt.CampaignID != derivedInitialCampaignID(attempt.ImplementationRunID) ||
-		attempt.SpecificationRunID != derivedSpecificationRunID(attempt.ImplementationRunID)) {
+		!domain.SpecificationRunIDMatchesImplementation(attempt.SpecificationRunID, attempt.ImplementationRunID)) {
 		return fmt.Errorf("put production attempt %s/%d initial identity: %w",
 			attempt.CampaignID, attempt.AttemptNumber, domain.ErrParentKeyMismatch)
 	}
@@ -425,7 +420,7 @@ func (tx *WriteTx) PutProductionAttempt(ctx context.Context, attempt domain.Prod
 	_, err = tx.tx.ExecContext(ctx, `
 INSERT INTO production_attempts (
     campaign_id, attempt_number, kind, parent_run_id, source_digest, publication_digest,
-    approved_spec_digest, elaboration_run_id, implementation_run_id,
+    approved_spec_digest, specification_run_id, implementation_run_id,
     reason, as_of_revision, body
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		attempt.CampaignID, attempt.AttemptNumber, attempt.Kind,
@@ -519,14 +514,14 @@ func (tx *ReadTx) scanProductionAttempt(sc scanner) (domain.ProductionAttempt, e
 		return domain.ProductionAttempt{}, errRowInconsistent
 	}
 	if attempt.AttemptNumber == 1 && (attempt.CampaignID != derivedInitialCampaignID(attempt.ImplementationRunID) ||
-		attempt.SpecificationRunID != derivedSpecificationRunID(attempt.ImplementationRunID)) {
+		!domain.SpecificationRunIDMatchesImplementation(attempt.SpecificationRunID, attempt.ImplementationRunID)) {
 		return domain.ProductionAttempt{}, errRowInconsistent
 	}
 	return attempt, nil
 }
 
 const productionAttemptColumns = `campaign_id, attempt_number, kind, parent_run_id,
-source_digest, publication_digest, approved_spec_digest, elaboration_run_id, implementation_run_id,
+source_digest, publication_digest, approved_spec_digest, specification_run_id, implementation_run_id,
 reason, as_of_revision, body`
 
 func (tx *ReadTx) GetProductionAttempt(

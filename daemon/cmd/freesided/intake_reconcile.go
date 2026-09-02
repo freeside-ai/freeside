@@ -247,7 +247,7 @@ func (r *intakeReconciler) admit(
 	ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence,
 ) (domain.IntakeOccurrence, error) {
 	implementationRunID := intakeImplementationRunID(occurrence)
-	specificationRunID, err := engine.SpecificationRunIDForImplementation(implementationRunID)
+	specificationRunID, err := engine.ResolveSpecificationRunID(ctx, r.store, implementationRunID)
 	if err != nil {
 		return domain.IntakeOccurrence{}, err
 	}

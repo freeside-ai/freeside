@@ -354,6 +354,17 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, fmt.Errorf("submit: open store: %w", err)
 	}
 	defer func() { _ = st.Close() }()
+	// A database written before the rename holds this work item's intake
+	// state under the legacy specification identity; converge on it instead
+	// of minting a second specification run for the same implementation.
+	if resolved, err := engine.ResolveSpecificationRunID(ctx, st, implementationRunID); err != nil {
+		return submitResult{}, fmt.Errorf("submit: %w", err)
+	} else if resolved != specificationRunID {
+		specificationRunID = resolved
+		if resolvedPolicy, err = domain.NewResolvedPolicy(specificationRunID, keys); err != nil {
+			return submitResult{}, fmt.Errorf("submit: validate resolved policy: %w", err)
+		}
+	}
 	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: open blob store: %w", err)

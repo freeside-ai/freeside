@@ -74,10 +74,10 @@ SELECT id, idempotency_key, kind, payload, payload_version, payload_digest, stat
 FROM outbox WHERE idempotency_key = ?`
 	listOutboxByStatusSQL = `
 SELECT id, idempotency_key, kind, payload, payload_version, payload_digest, status, created_at
-FROM outbox WHERE kind = ? AND status = ? ORDER BY id`
+FROM outbox WHERE kind IN (?, ?) AND status = ? ORDER BY id`
 	listPendingOutboxSQL = `
 SELECT id, idempotency_key, kind, payload, payload_version, payload_digest, status, created_at
-FROM outbox WHERE kind = ? AND status IN (?, ?) ORDER BY id`
+FROM outbox WHERE kind IN (?, ?) AND status IN (?, ?) ORDER BY id`
 	markOutboxDispatchedSQL = `
 	UPDATE outbox SET status = ?
 WHERE idempotency_key = ? AND status IN (?, ?)`
@@ -165,7 +165,7 @@ func (tx *ReadTx) listPendingOutbox(ctx context.Context, kind string) ([]QueueEn
 		return nil, errors.New("list outbox: empty kind")
 	}
 	return tx.listOutboxQuery(ctx, listPendingOutboxSQL, kind, "pending or dispatching",
-		kind, outboxStatusPending, outboxStatusDispatching)
+		kind, queueKindAlias(kind), outboxStatusPending, outboxStatusDispatching)
 }
 
 // ListDispatchedOutbox returns completed intents of one kind in insertion
@@ -192,7 +192,7 @@ func (tx *ReadTx) listOutboxByStatus(
 	if kind == "" {
 		return nil, errors.New("list outbox: empty kind")
 	}
-	return tx.listOutboxQuery(ctx, listOutboxByStatusSQL, kind, status, kind, status)
+	return tx.listOutboxQuery(ctx, listOutboxByStatusSQL, kind, status, kind, queueKindAlias(kind), status)
 }
 
 func (tx *ReadTx) listOutboxQuery(ctx context.Context, query, kind, status string, args ...any) ([]QueueEntry, error) {
@@ -220,6 +220,7 @@ func (tx *ReadTx) listOutboxQuery(ctx context.Context, query, kind, status strin
 		if err := validateOutboxPayload(entry); err != nil {
 			return nil, fmt.Errorf("list outbox %q status %q: %w", kind, status, err)
 		}
+		canonicalizeLegacyQueueEntry(&entry)
 		entries = append(entries, entry)
 	}
 	if err := rows.Err(); err != nil {
@@ -258,6 +259,7 @@ func (tx *ReadTx) GetOutbox(ctx context.Context, key string) (QueueEntry, error)
 	if err := validateOutboxPayload(entry); err != nil {
 		return QueueEntry{}, fmt.Errorf("get outbox %q: %w", key, err)
 	}
+	canonicalizeLegacyQueueEntry(&entry)
 	return entry, nil
 }
 
@@ -284,6 +286,7 @@ func (tx *ReadTx) GetInbox(ctx context.Context, key string) (QueueEntry, error) 
 	if err != nil {
 		return QueueEntry{}, fmt.Errorf("get inbox %q: stored created_at invalid: %w", key, err)
 	}
+	canonicalizeLegacyQueueEntry(&entry)
 	return entry, nil
 }
 
@@ -513,5 +516,6 @@ func (tx *InternalTx) record(ctx context.Context, insertSQL, selectSQL, key, kin
 	if !entry.validStatus() {
 		return QueueEntry{}, false, fmt.Errorf("stored status %q is invalid", entry.Status)
 	}
+	canonicalizeLegacyQueueEntry(&entry)
 	return entry, affected > 0, nil
 }

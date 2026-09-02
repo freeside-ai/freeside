@@ -17,7 +17,7 @@ func testInitialProductionAttempt() domain.ProductionAttempt {
 	return domain.ProductionAttempt{
 		CampaignID: derivedInitialCampaignID(implementationRunID), AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
 		SourceDigest: "sha256:source", PublicationDigest: "sha256:publication",
-		SpecificationRunID:  derivedSpecificationRunID(implementationRunID),
+		SpecificationRunID:  domain.SpecificationRunIDForImplementation(implementationRunID),
 		ImplementationRunID: implementationRunID,
 	}
 }
@@ -60,8 +60,8 @@ func TestProductionAttemptMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 63 {
-		t.Fatalf("schema version = %d, want 63", got)
+	if got := rawVersion(t, db); got != 64 {
+		t.Fatalf("schema version = %d, want 64", got)
 	}
 	assertTableExists(t, db, "production_attempts", true)
 	st := &Store{db: db}

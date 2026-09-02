@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"slices"
 	"strconv"
 	"strings"
@@ -104,7 +103,7 @@ func WithSpecification(cfg SpecificationConfig) Option {
 }
 
 func specificationStageID(runID domain.RunID) domain.StageID {
-	return domain.StageID("specify-" + string(runID))
+	return domain.SpecificationStageID(runID)
 }
 
 // NewReservedSpecificationRun builds the bare reserved specification run the
@@ -129,12 +128,10 @@ func NewReservedSpecificationRun(
 }
 
 func specificationInvocationID(runID domain.RunID, iteration int) domain.InvocationID {
-	return domain.InvocationID(fmt.Sprintf("inv-specify-%s-%d", runID, iteration))
+	return domain.SpecificationInvocationID(runID, iteration)
 }
 
-func specificationImplementationClaimKey(runID domain.RunID) string {
-	return "claim-specification-implementation-" + string(runID)
-}
+const specificationImplementationClaimKeyPrefix = "claim-specification-implementation-"
 
 // SpecificationRunSpec keeps the pre-approval run separate from the immutable
 // implementation run. The latter does not exist until its current spec wins
@@ -318,8 +315,7 @@ func SpecificationRunIDForImplementation(implementationRunID domain.RunID) (doma
 	if implementationRunID == "" {
 		return "", fmt.Errorf("derive specification run id: %w", domain.ErrEmptyID)
 	}
-	sum := sha256.Sum256([]byte("freeside.specification-run/v1\x00" + string(implementationRunID)))
-	return domain.RunID("run-specification-" + hex.EncodeToString(sum[:])), nil
+	return domain.SpecificationRunIDForImplementation(implementationRunID), nil
 }
 
 // ProductionCampaignIDForImplementation derives the stable campaign identity
@@ -356,31 +352,78 @@ func HasSpecificationIntakeState(
 		return false, errors.New("inspect specification intake: store and distinct run IDs are required")
 	}
 	present := false
+	// A database written before the rename holds the same intake state under
+	// the legacy identifier family, which derives differently from the same
+	// implementation run; both families count as current.
+	candidates := []domain.RunID{specificationRunID}
+	if legacy := domain.LegacySpecificationRunIDForImplementation(implementationRunID); legacy != specificationRunID {
+		candidates = append(candidates, legacy)
+	}
 	err := st.Read(ctx, func(tx *store.ReadTx) error {
-		if _, err := tx.GetRun(ctx, specificationRunID); err == nil {
-			present = true
-			return nil
-		} else if !errors.Is(err, store.ErrNotFound) {
-			return err
-		}
-		if _, err := tx.GetOutbox(ctx, string(specificationInvocationID(specificationRunID, 1))); err == nil {
-			present = true
-			return nil
-		} else if !errors.Is(err, store.ErrNotFound) {
-			return err
-		}
-		if _, err := tx.GetOutbox(ctx, specificationImplementationClaimKey(implementationRunID)); err == nil {
-			present = true
-			return nil
-		} else if !errors.Is(err, store.ErrNotFound) {
-			return err
-		}
-		return nil
+		var err error
+		present, err = specificationIntakeStatePresent(ctx, tx, candidates, implementationRunID)
+		return err
+	})
+	return present, err
+}
+
+// specificationRunIDCandidates lists the specification run identities an
+// implementation run may have been derived under, current family first.
+func specificationRunIDCandidates(implementationRunID domain.RunID) []domain.RunID {
+	return []domain.RunID{
+		domain.SpecificationRunIDForImplementation(implementationRunID),
+		domain.LegacySpecificationRunIDForImplementation(implementationRunID),
+	}
+}
+
+// ResolveSpecificationRunID names the specification run for an implementation
+// run against the store: the legacy identity when a database written before
+// the rename already holds intake state under it, so a replayed submission
+// converges on the stored run, and the current derivation otherwise.
+func ResolveSpecificationRunID(
+	ctx context.Context, st *store.Store, implementationRunID domain.RunID,
+) (domain.RunID, error) {
+	if st == nil || implementationRunID == "" {
+		return "", errors.New("resolve specification run id: store and implementation run ID are required")
+	}
+	legacy := domain.LegacySpecificationRunIDForImplementation(implementationRunID)
+	present := false
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		present, err = specificationIntakeStatePresent(ctx, tx, []domain.RunID{legacy}, implementationRunID)
+		return err
 	})
 	if err != nil {
-		return false, fmt.Errorf("inspect specification intake: %w", err)
+		return "", err
 	}
-	return present, nil
+	if present {
+		return legacy, nil
+	}
+	return domain.SpecificationRunIDForImplementation(implementationRunID), nil
+}
+
+func specificationIntakeStatePresent(
+	ctx context.Context, tx *store.ReadTx, candidates []domain.RunID, implementationRunID domain.RunID,
+) (bool, error) {
+	for _, candidate := range candidates {
+		keys := []string{
+			string(specificationInvocationID(candidate, 1)),
+			specificationImplementationClaimKey(candidate, implementationRunID),
+		}
+		if _, err := tx.GetRun(ctx, candidate); err == nil {
+			return true, nil
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return false, fmt.Errorf("inspect specification intake: %w", err)
+		}
+		for _, key := range keys {
+			if _, err := tx.GetOutbox(ctx, key); err == nil {
+				return true, nil
+			} else if !errors.Is(err, store.ErrNotFound) {
+				return false, fmt.Errorf("inspect specification intake: %w", err)
+			}
+		}
+	}
+	return false, nil
 }
 
 // SpecificationDispatchMarkerKey is the outbox key of a reserved specification run's
@@ -455,12 +498,8 @@ func SubmitSpecificationRun(ctx context.Context, st *store.Store, spec Specifica
 		if err != nil {
 			return SpecificationRun{}, err
 		}
-		wantSpecification, err := SpecificationRunIDForImplementation(spec.ImplementationRunID)
-		if err != nil {
-			return SpecificationRun{}, err
-		}
 		if spec.AttemptNumber != 1 || spec.CampaignID != wantCampaign ||
-			spec.SpecificationRunID != wantSpecification {
+			!domain.SpecificationRunIDMatchesImplementation(spec.SpecificationRunID, spec.ImplementationRunID) {
 			return SpecificationRun{}, fmt.Errorf(
 				"submit specification run: initial campaign identity disagrees: %w",
 				domain.ErrParentKeyMismatch)
@@ -543,7 +582,7 @@ func SubmitSpecificationRun(ctx context.Context, st *store.Store, spec Specifica
 			}
 			stored, markerErr := tx.GetOutbox(ctx, string(invocationID))
 			claim, claimErr := tx.GetOutbox(ctx,
-				specificationImplementationClaimKey(spec.ImplementationRunID))
+				specificationImplementationClaimKey(spec.SpecificationRunID, spec.ImplementationRunID))
 			storedPolicy, policyErr := tx.GetResolvedPolicy(ctx, want.ID)
 			storedInvocation, invocationErr := tx.GetAgentInvocation(ctx, invocationID)
 			lineageDisagrees := !legacyCampaignReplay &&
@@ -619,7 +658,7 @@ func SubmitSpecificationRun(ctx context.Context, st *store.Store, spec Specifica
 			return fmt.Errorf("create specification marker: %w", domain.ErrImmutableTransition)
 		}
 		claim, claimed, err := tx.EnqueueOutbox(ctx,
-			specificationImplementationClaimKey(spec.ImplementationRunID),
+			specificationImplementationClaimKey(spec.SpecificationRunID, spec.ImplementationRunID),
 			KindSpecificationImplementationClaim, payload)
 		if err != nil {
 			return err
@@ -760,7 +799,7 @@ func submitIssueSubjectSpecificationRun(
 		// instead of conflicting.
 		marker, markerErr := tx.GetOutbox(ctx, string(invocationID))
 		if markerErr == nil {
-			claim, claimErr := tx.GetOutbox(ctx, specificationImplementationClaimKey(spec.ImplementationRunID))
+			claim, claimErr := tx.GetOutbox(ctx, specificationImplementationClaimKey(spec.SpecificationRunID, spec.ImplementationRunID))
 			storedInvocation, invocationErr := tx.GetAgentInvocation(ctx, invocationID)
 			if marker.Kind != KindSpecificationInvocationRequested || !bytes.Equal(marker.Payload, payload) ||
 				claimErr != nil || claim.Kind != KindSpecificationImplementationClaim || !claim.Dispatched() ||
@@ -809,7 +848,7 @@ func submitIssueSubjectSpecificationRun(
 			return fmt.Errorf("create specification marker: %w", domain.ErrImmutableTransition)
 		}
 		claim, claimed, err := tx.EnqueueOutbox(ctx,
-			specificationImplementationClaimKey(spec.ImplementationRunID),
+			specificationImplementationClaimKey(spec.SpecificationRunID, spec.ImplementationRunID),
 			KindSpecificationImplementationClaim, payload)
 		if err != nil {
 			return err
@@ -907,11 +946,8 @@ func (r specificationRequest) validate() error {
 		if err != nil {
 			return err
 		}
-		specificationRunID, err := SpecificationRunIDForImplementation(r.ImplementationRunID)
-		if err != nil {
-			return err
-		}
-		if r.AttemptNumber != 1 || r.CampaignID != campaignID || r.SpecificationRunID != specificationRunID {
+		if r.AttemptNumber != 1 || r.CampaignID != campaignID ||
+			!domain.SpecificationRunIDMatchesImplementation(r.SpecificationRunID, r.ImplementationRunID) {
 			return fmt.Errorf("specification request carries inconsistent campaign identity: %w", domain.ErrParentKeyMismatch)
 		}
 	}
@@ -1092,7 +1128,7 @@ func SpecificationImplementationClaimBackupPayloadDigests(entry store.QueueEntry
 	if err != nil {
 		return nil, err
 	}
-	if entry.IdempotencyKey != specificationImplementationClaimKey(request.ImplementationRunID) {
+	if entry.IdempotencyKey != specificationImplementationClaimKey(request.SpecificationRunID, request.ImplementationRunID) {
 		return nil, domain.ErrParentKeyMismatch
 	}
 	return nil, nil
@@ -1109,7 +1145,7 @@ func authenticateSpecificationRoot(
 	if err != nil {
 		return err
 	}
-	claim, err := tx.GetOutbox(ctx, specificationImplementationClaimKey(request.ImplementationRunID))
+	claim, err := tx.GetOutbox(ctx, specificationImplementationClaimKey(request.SpecificationRunID, request.ImplementationRunID))
 	if err != nil {
 		return err
 	}
@@ -1832,23 +1868,7 @@ func authenticateSpecificationMarker(entry store.QueueEntry) (specificationReque
 }
 
 func specificationRunIDFromInvocationID(id domain.InvocationID) (domain.RunID, bool) {
-	const prefix = "inv-specify-"
-	raw := string(id)
-	if !strings.HasPrefix(raw, prefix) {
-		return "", false
-	}
-	lastDash := strings.LastIndexByte(raw, '-')
-	if lastDash <= len(prefix) || lastDash == len(raw)-1 {
-		return "", false
-	}
-	suffix := raw[lastDash+1:]
-	iteration, ok := new(big.Int).SetString(suffix, 10)
-	if !ok || iteration.Sign() < 1 || iteration.String() != suffix {
-		return "", false
-	}
-	runID := domain.RunID(raw[len(prefix):lastDash])
-	want := domain.InvocationID("inv-specify-" + string(runID) + "-" + iteration.String())
-	return runID, want == id
+	return domain.SpecificationRunIDFromInvocationID(id)
 }
 
 // IsSpecificationInvocationIdentity reports whether the invocation, admitted
@@ -1888,7 +1908,7 @@ func (e *Engine) quarantinePendingSpecificationMarker(
 		return false, err
 	}
 	return true, recordProductionQuarantine(
-		ctx, e.store, e.signet, specificationMarkerQuarantinePrefix,
+		ctx, e.store, e.signet, specificationMarkerQuarantinePrefixFor(run.ID),
 		run.ID, run.ProjectID, specificationQuarantineUnreadable)
 }
 

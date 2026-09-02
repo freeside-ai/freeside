@@ -88,7 +88,7 @@ func (r SpecificationDiscussionInvocationIntent) Validate() error {
 	discussionArtifactID := ArtifactID("spec-discussion-" + commandID)
 	if r.Version != SpecificationDiscussionInvocationIntentVersion || r.SpecificationRunID == "" ||
 		r.ImplementationRunID == "" || r.ProjectID == "" || r.Iteration < 1 || commandID == "" ||
-		r.InvocationID != InvocationID("specification-discussion-"+commandID) || r.ConversationID == "" ||
+		!specificationDiscussionInvocationIDMatches(r.InvocationID, commandID) || r.ConversationID == "" ||
 		r.ThroughSequence < 1 || r.ItemID == "" || r.ItemVersion < 2 || r.SpecArtifactID == "" ||
 		r.PolicyArtifactID == "" || !contentaddr.Valid(string(r.PrefixDigest)) || len(r.InputArtifactIDs) == 0 {
 		return fmt.Errorf("invalid specification discussion request identity: %w", ErrParentKeyMismatch)
@@ -177,7 +177,7 @@ func AuthenticateInvocationDispatchIntent(
 			return fmt.Errorf("decode specification invocation intent: %w", err)
 		}
 		if request.InvocationID != invocation || request.SpecificationRunID != runID ||
-			stageID != StageID("specify-"+string(runID)) {
+			stageID != SpecificationStageID(runID) {
 			return fmt.Errorf("specification invocation intent does not bind run %q stage %q: %w", runID, stageID, ErrParentKeyMismatch)
 		}
 		return nil
@@ -187,7 +187,7 @@ func AuthenticateInvocationDispatchIntent(
 			return err
 		}
 		if request.InvocationID != invocation || request.SpecificationRunID != runID ||
-			stageID != StageID("specify-"+string(runID)) {
+			stageID != SpecificationStageID(runID) {
 			return fmt.Errorf("specification discussion intent does not bind run %q stage %q: %w", runID, stageID, ErrParentKeyMismatch)
 		}
 		return nil

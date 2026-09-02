@@ -1349,9 +1349,7 @@ func authenticateSpecificationDiscussionInvocationIntent(
 	if err != nil {
 		return err
 	}
-	baseInvocationID := domain.InvocationID(fmt.Sprintf(
-		"inv-specify-%s-%d", request.SpecificationRunID, request.Iteration,
-	))
+	baseInvocationID := domain.SpecificationInvocationID(request.SpecificationRunID, request.Iteration)
 	baseEntry, err := tx.GetOutbox(ctx, string(baseInvocationID))
 	if err != nil {
 		return err

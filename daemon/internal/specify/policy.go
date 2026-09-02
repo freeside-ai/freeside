@@ -9,9 +9,12 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
+// policyKeyPrefix names the specification section of the resolved policy.
+const policyKeyPrefix = "specification."
+
 const (
 	PolicySpecApproval          = "gates.spec_approval"
-	PolicyMaxIterations         = "specification.max_iterations"
+	PolicyMaxIterations         = policyKeyPrefix + "max_iterations"
 	PolicyStageActiveTime       = "budgets.stage_active_time"
 	PolicyApprovalWait          = "waiting.spec_approval_attention_after"
 	PolicyResearchAllowlist     = "research.allowlist"
@@ -38,7 +41,7 @@ func ParsePolicy(resolved domain.ResolvedPolicy) (Policy, error) {
 	}
 	values := make(map[string]string, len(resolved.Keys))
 	for _, key := range resolved.Keys {
-		values[key.Key] = key.Value
+		values[canonicalPolicyKey(key.Key)] = key.Value
 	}
 	require := func(key string) (string, error) {
 		value, ok := values[key]

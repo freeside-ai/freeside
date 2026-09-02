@@ -573,7 +573,7 @@ func authorizeProductionSubmission(
 	spec ProductionRunSpec,
 	grant *specificationRequest,
 ) error {
-	claim, err := tx.GetOutbox(ctx, specificationImplementationClaimKey(spec.RunID))
+	claim, err := getSpecificationImplementationClaim(ctx, tx, spec.RunID)
 	if errors.Is(err, store.ErrNotFound) {
 		if grant != nil {
 			return fmt.Errorf("specification grant for unreserved implementation run %q: %w",
@@ -685,19 +685,17 @@ func authenticateProductionAttempt(
 func hasSpecificationReservationEvidence(
 	ctx context.Context, tx *store.ReadTx, implementationRunID domain.RunID,
 ) (bool, error) {
-	specificationRunID, err := SpecificationRunIDForImplementation(implementationRunID)
-	if err != nil {
-		return false, err
-	}
-	if _, err := tx.GetRun(ctx, specificationRunID); err == nil {
-		return true, nil
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return false, err
-	}
-	if _, err := tx.GetOutbox(ctx, string(specificationInvocationID(specificationRunID, 1))); err == nil {
-		return true, nil
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return false, err
+	for _, specificationRunID := range specificationRunIDCandidates(implementationRunID) {
+		if _, err := tx.GetRun(ctx, specificationRunID); err == nil {
+			return true, nil
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return false, err
+		}
+		if _, err := tx.GetOutbox(ctx, string(specificationInvocationID(specificationRunID, 1))); err == nil {
+			return true, nil
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return false, err
+		}
 	}
 	// This fallback is a conservative existence probe used only to refuse an
 	// ungranted production submission when the deterministic reservation claim
@@ -2054,6 +2052,9 @@ func productionQuarantineNoticeFor(prefix, reason string) bool {
 	}
 	if prefix == specificationMarkerQuarantinePrefix {
 		return reason == specificationQuarantineUnreadable
+	}
+	if legacySpecificationQuarantineNoticeFor(prefix, reason) {
+		return true
 	}
 	if prefix == remediationMarkerQuarantinePrefix {
 		return reason == remediationQuarantineUnreadable

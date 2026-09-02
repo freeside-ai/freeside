@@ -74,9 +74,9 @@ retry-only states an explicit reconcile-pass bound. It runs under ordinary
 `go test` with injected clocks and local fakes only.
 
 - `internal/engine/durable_transition.go` is the engine registry.
-  `internal/engine/elaboration_test.go` owns elaboration outcome and
+  `internal/engine/specification_test.go` owns specification outcome and
   specification-approval rows; `internal/engine/operator_feedback_test.go`
-  owns elaboration-answer and operator-feedback rows;
+  owns specification-answer and operator-feedback rows;
   `internal/integration/production_publication_test.go` owns verification,
   review request/result, publication, ready-item, and terminal rows plus the
   registry-completeness check.

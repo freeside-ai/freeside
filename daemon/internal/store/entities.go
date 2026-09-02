@@ -741,9 +741,7 @@ func (tx *ReadTx) gateSpecRevisionItem(ctx context.Context, item domain.Attentio
 	if err != nil {
 		return err
 	}
-	if currentClaim.Provenance.ProducerInvocationID != domain.InvocationID(fmt.Sprintf(
-		"inv-specify-%s-%d", *item.Subject.RunID, facts.Iteration,
-	)) {
+	if currentClaim.Provenance.ProducerInvocationID != domain.SpecificationInvocationID(*item.Subject.RunID, facts.Iteration) {
 		return domain.ErrParentKeyMismatch
 	}
 	currentArtifact, err := tx.GetArtifact(ctx, currentClaim.Artifact)
@@ -816,9 +814,7 @@ func (tx *ReadTx) gateSpecRevisionItem(ctx context.Context, item domain.Attentio
 	if err != nil {
 		return err
 	}
-	if priorClaim.Provenance.ProducerInvocationID != domain.InvocationID(fmt.Sprintf(
-		"inv-specify-%s-%d", *item.Subject.RunID, priorIteration,
-	)) {
+	if priorClaim.Provenance.ProducerInvocationID != domain.SpecificationInvocationID(*item.Subject.RunID, priorIteration) {
 		return domain.ErrParentKeyMismatch
 	}
 	if facts.Diff != domain.DeriveSpecDiff(priorClaim.Text.Content, currentClaim.Text.Content) {
@@ -1070,9 +1066,7 @@ func blockedWaitTerminalIdentityMatches(
 	specification domain.Artifact,
 ) bool {
 	if approval.Subject.RunID == nil ||
-		terminal.InvocationID != domain.InvocationID(fmt.Sprintf(
-			"inv-specify-%s-%d", *approval.Subject.RunID, terminal.Iteration,
-		)) {
+		terminal.InvocationID != domain.SpecificationInvocationID(*approval.Subject.RunID, terminal.Iteration) {
 		return false
 	}
 	implementationIteration, ok := strings.CutPrefix(string(specification.ID), "spec-")

@@ -38,10 +38,7 @@ type specificationDiscussionBinding struct {
 }
 
 func specDiscussionInvocationID(commandID string) domain.InvocationID {
-	// Client-generated discuss invocation IDs always occupy the inv- namespace.
-	// Keep this daemon-owned invocation disjoint even when a client chooses a
-	// command ID that resembles a specification discussion identity.
-	return domain.InvocationID("specification-discussion-" + commandID)
+	return domain.SpecificationDiscussionInvocationID(commandID)
 }
 
 func specDiscussionArtifactID(commandID string) domain.ArtifactID {
@@ -258,7 +255,7 @@ func (e *Engine) quarantinePendingSpecificationDiscussionMarker(
 	}
 	var run domain.Run
 	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
-		commandID, ok := strings.CutPrefix(entry.IdempotencyKey, "specification-discussion-")
+		commandID, ok := domain.SpecificationDiscussionCommandID(entry.IdempotencyKey)
 		if entry.Kind != KindSpecificationDiscussionRequested || !ok || commandID == "" {
 			return domain.ErrParentKeyMismatch
 		}
@@ -305,7 +302,7 @@ func (e *Engine) quarantinePendingSpecificationDiscussionMarker(
 		return false, err
 	}
 	return true, recordProductionQuarantine(
-		ctx, e.store, e.signet, specificationDiscussionMarkerQuarantinePrefix,
+		ctx, e.store, e.signet, specificationDiscussionMarkerQuarantinePrefixFor(run.ID),
 		run.ID, run.ProjectID, specificationDiscussionQuarantineUnreadable,
 	)
 }
