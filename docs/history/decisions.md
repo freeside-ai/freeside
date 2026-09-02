@@ -1476,3 +1476,39 @@ Revision 44 ("Retire the alternate-profile action"):
    plane's job and Section 5.8's protected paths are the control that
    matters, is recorded for its own revision (#1041), not made here.
    (User; devlog 2026-09-01-0841-retire-alternate-profile.md; #936.)
+
+## Revision 45
+
+Revision 45 ("Review drift audit"):
+
+1. **A drift audit joins the review loop** (Section 7, with Sections 1, 5,
+   9, 11, and 14): the loop now judges the change as a whole against the
+   approved specification, not only the stream of findings. As landed,
+   `EvaluateReviewConvergence` stops on a low-value streak, a fixed
+   finding's recurrence, or final-review findings, and nothing in the loop
+   sees the diff or its growth since round 1, so a run can pass every gate
+   one reasonable finding at a time and still end over-built. The daemon
+   records per-round diff metrics from round 1, a growth-without-blockers
+   rule stops the loop when the diff keeps growing with no credible
+   critical or high finding, and a ceiling-bounded audit site returns a
+   `DriftAudit` artifact with a `converged`, `over_hardened`, or `stuck`
+   verdict and a reversal list. Both knobs are off when unset.
+   (User; devlog 2026-09-01-1246-review-drift-audit.md; #1054; #1048.)
+2. **The audit reuses `review_diminishing_returns` with new causes**
+   (`growth_without_blockers`, `drift_audit`): the human's decision has the
+   same shape (finish now, apply and finish, or continue, which runs the
+   proposed simplification round when the card carries a validated reversal
+   list and an ordinary review round otherwise), and the card carries the
+   verdict and reversal list. Rejected: a new `AttentionType`, which grows
+   the vocabulary (#936) for no new decision.
+   (User; devlog 2026-09-01-1246-review-drift-audit.md; #1054.)
+3. **The deterministic floor ships before the model site** so the audit's
+   firing rate is measured before it costs anything. Rejected: the model
+   pass first.
+   (User; devlog 2026-09-01-1246-review-drift-audit.md; #1054.)
+4. **`over_hardened` auto-routes into one simplification round** under the
+   existing ceilings; a second verdict in the run parks, and
+   `drift_audit_route` flips auto-routing to park without a code change.
+   Rejected: park-by-default, which turns every verdict into an
+   interruption.
+   (User; devlog 2026-09-01-1246-review-drift-audit.md; #1054.)

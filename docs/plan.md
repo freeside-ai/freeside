@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 45
+revision: 46
 status: active
 updated: 2026-09-01
 ---
@@ -1815,6 +1815,9 @@ Freeside has two operating modes:
   Portable-mode fencing applies only after the activation ceremony below
   completes. Standalone does not pretend to fence a second copy it cannot
   observe.
+
+Portable mode, host enrollment, and the ceremony below are Phase 2 work
+(Section [11](#11-roadmap-build-order-and-coordination), revision 46); Phase 1 runs standalone.
 
 Portable mode is enabled only by a completed ceremony:
 
@@ -3746,9 +3749,10 @@ Defaults are hosted ntfy, embedded SQLite, one configuration directory, and
 
 The Phase 1 reference deployment is fully unmanaged (Section [5.1](#51-overview)). It uses
 Tailscale for remote reachability, ntfy for notification delivery, `freesided`
-as workflow authority with local state and artifacts, an operator-selected
-conforming replica backend when portable mode is enabled, and an
-operator-controlled external probe for away-from-host monitoring. Future
+as workflow authority with local state and artifacts, and an
+operator-controlled external probe for away-from-host monitoring. It runs
+standalone: the operator-selected conforming replica backend arrives with
+portable mode in Phase 2 (Section [11](#11-roadmap-build-order-and-coordination), revision 46). Future
 managed implementations (relay, push, storage, monitoring) may substitute
 convenience infrastructure without changing the authority model. The one scoped
 exception is a managed replica backend. It carries Section [5.10](#510-coherent-backup-encrypted-checkpoints)'s head trust
@@ -4014,7 +4018,13 @@ proposal (`convert_to_policy`). That action waits for its deferred control-plane
 proposal surface (Section [4](#4-the-attention-model)). Until that surface lands, the client omits it from
 its action surface and never renders it disabled (revision 40). A routed
 `review_dispute` likewise renders no adjudication action until its transaction
-lands (#1016; Section [4](#4-the-attention-model)).
+lands (#1016; Section [4](#4-the-attention-model)). That unit binds to a trigger, not a wave row: the
+first routed `review_dispute` that parks a run on the real backlog. That trigger
+signals that the transaction is now worth its chain link; it authorizes nothing
+by itself. On it the spine gives #1016 a position in the serialized contract
+chain and schedules it into the open wave, or into the next wave at planning
+when none is open (revision 46). If none fires in 1B, the exit records this
+carve-out and #1016 drains with Phase 2.
 
 ### Implementation Coordination (Building Freeside with Agents)
 
@@ -4117,6 +4127,8 @@ Expand beyond the first constrained path:
 - scan initiators and chaining;
 - `api_key_isolated`;
 - full failure-injection and restore drills;
+- portable mode and host enrollment, the movable control plane (Sections [5.9](#59-durability-effectively-once)
+  and [5.10](#510-coherent-backup-encrypted-checkpoints); #266, with its domain contract #265; revision 46);
 - generalized but bounded CI-audit tooling;
 - richer classification and risk-classified cards;
 - webhooks if latency hurts;
@@ -4181,39 +4193,39 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 45 ("Review drift audit"):
+Revision 46 ("Portable mode and routed-dispute placement"):
 
-1. **A drift audit joins the review loop** (Section [7](#7-review-policy), with Sections [1](#1-what-freeside-is), [5](#5-architecture),
-   [9](#9-comprehension), [11](#11-roadmap-build-order-and-coordination), and [14](#14-risks)): the loop now judges the change as a whole against the
-   approved specification, not only the stream of findings. As landed,
-   `EvaluateReviewConvergence` stops on a low-value streak, a fixed
-   finding's recurrence, or final-review findings, and nothing in the loop
-   sees the diff or its growth since round 1, so a run can pass every gate
-   one reasonable finding at a time and still end over-built. The daemon
-   records per-round diff metrics from round 1, a growth-without-blockers
-   rule stops the loop when the diff keeps growing with no credible
-   critical or high finding, and a ceiling-bounded audit site returns a
-   `DriftAudit` artifact with a `converged`, `over_hardened`, or `stuck`
-   verdict and a reversal list. Both knobs are off when unset.
-   (User; devlog 2026-09-01-1246-review-drift-audit.md; #1054; #1048.)
-2. **The audit reuses `review_diminishing_returns` with new causes**
-   (`growth_without_blockers`, `drift_audit`): the human's decision has the
-   same shape (finish now, apply and finish, or continue, which runs the
-   proposed simplification round when the card carries a validated reversal
-   list and an ordinary review round otherwise), and the card carries the
-   verdict and reversal list. Rejected: a new `AttentionType`, which grows
-   the vocabulary (#936) for no new decision.
-   (User; devlog 2026-09-01-1246-review-drift-audit.md; #1054.)
-3. **The deterministic floor ships before the model site** so the audit's
-   firing rate is measured before it costs anything. Rejected: the model
-   pass first.
-   (User; devlog 2026-09-01-1246-review-drift-audit.md; #1054.)
-4. **`over_hardened` auto-routes into one simplification round** under the
-   existing ceilings; a second verdict in the run parks, and
-   `drift_audit_route` flips auto-routing to park without a code change.
-   Rejected: park-by-default, which turns every verdict into an
-   interruption.
-   (User; devlog 2026-09-01-1246-review-drift-audit.md; #1054.)
+1. **Portable mode and host enrollment are Phase 2 work** (Sections [5.9](#59-durability-effectively-once),
+   [5.10](#510-coherent-backup-encrypted-checkpoints), [10](#10-operations-and-onboarding), and [11](#11-roadmap-build-order-and-coordination)): Sections [5.9](#59-durability-effectively-once) and [5.10](#510-coherent-backup-encrypted-checkpoints) stated the replica, epoch, and
+   host-identity model as current architecture while Section [11](#11-roadmap-build-order-and-coordination) placed the
+   movable control plane (#266; its domain contract #265) in no wave or
+   phase. Nothing in the 1B exit criteria needs a second host: the claims
+   concern attention, unattended operation, and phone-decidable approvals on
+   one reference machine, and daemon death is covered by the wave-8 external
+   probe, never by takeover. The retrofit Section [5.9](#59-durability-effectively-once) guards against is
+   contained, because host identity is recorded there as a forward
+   requirement and one host exists. Section [10](#10-operations-and-onboarding)'s Phase 1 reference
+   deployment therefore runs standalone, with the conforming replica
+   backend arriving beside portable mode. Phase 2's failure-injection and
+   restore drills are its natural neighbours. Rejected: #265 in wave 9's
+   contract chain, warranted only if a second host must run during 1B.
+   (User; devlog 2026-09-01-2231-portable-mode-and-dispute-placement.md;
+   #266; #265.)
+2. **Routed `review_dispute` execution binds to a trigger, not a wave row**
+   (Sections [4](#4-the-attention-model), [7](#7-review-policy), and [11](#11-roadmap-build-order-and-coordination)): #1016's route fires only when the adjudicator
+   marks a critical or high finding as contradicting the approved
+   specification. None has fired, so building the transaction now spends
+   contract-chain bandwidth, the binding constraint on every wave, on a route
+   with a zero measured rate, against the revision-45 rule of measuring a
+   firing rate before paying for a mechanism. The trigger is the first routed
+   `review_dispute` that parks a run on the real backlog; it authorizes
+   nothing by itself, and on it the spine gives #1016 a contract-chain
+   position and schedules it into the open wave, or into the next wave at
+   planning. Until then the item offers discuss or stop, and the 1B exit
+   records the carve-out.
+   Rejected: wave 8's chain directly after #1048, which buys a clean exit
+   claim at the cost of the binding constraint.
+   (User; devlog 2026-09-01-2231-portable-mode-and-dispute-placement.md; #1016.)
 
 ## 14. Risks
 
