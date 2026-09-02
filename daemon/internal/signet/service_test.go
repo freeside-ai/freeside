@@ -714,9 +714,7 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 				item.Type = test.itemType
 				item.RequestedDecision = []domain.Action{test.action}
 				if test.itemType == domain.AttentionAgentQuestion {
-					item.PRHeadSHA = ""
-					item.PRReference = nil
-					item.InterruptionClass = domain.InterruptionExceptional
+					item = mustAgentQuestionItem(t, item.ID, test.action)
 				}
 				if err := f.service.PutItem(ctx, item); err != nil {
 					t.Fatal(err)
@@ -893,4 +891,70 @@ func TestSubmitDismissingAction(t *testing.T) {
 	if item.DecidedAt == nil || !item.DecidedAt.Equal(*f.now) {
 		t.Errorf("item decided_at = %v, want the accepting instant %v", item.DecidedAt, *f.now)
 	}
+}
+
+// decisionsFixture is one well-formed decision list shared by the
+// agent_question fixtures.
+func decisionsFixture() []domain.Decision {
+	return []domain.Decision{{
+		Question:    "Which compatibility target applies?",
+		WhyBlocking: "The specification cannot fix the API surface without it.",
+		Options: []domain.DecisionOption{
+			{Label: "Current and previous", Tradeoffs: "Wider support, more adapters."},
+			{Label: "Current only", Tradeoffs: "Less code, drops older clients."},
+		},
+		Recommendation: "Current and previous",
+	}}
+}
+
+// questionClaimFixture is the Question claim an agent_question item carries;
+// its provenance names the asking invocation.
+func questionClaimFixture(facts *domain.AgentQuestionFacts) domain.AgentClaim {
+	digest, err := facts.ComputeDigest()
+	if err != nil {
+		panic(err)
+	}
+	return domain.AgentClaim{
+		Label: domain.AgentQuestionClaimLabel, Artifact: domain.ArtifactID("decisions-" + facts.InvocationID),
+		Digest: digest,
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerAgent, ProducerInvocationID: facts.InvocationID,
+			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 1,
+			CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+			Source:    domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+		},
+	}
+}
+
+func specificationQuestionFacts(invocationID domain.InvocationID) *domain.AgentQuestionFacts {
+	return &domain.AgentQuestionFacts{
+		Stage: domain.StageNameSpecification, InvocationID: invocationID,
+		Decisions: decisionsFixture(),
+	}
+}
+
+// mustAgentQuestionItem builds a valid open agent_question item on run-1
+// offering exactly the given action.
+func mustAgentQuestionItem(t *testing.T, id domain.ItemID, action domain.Action) domain.AttentionItem {
+	t.Helper()
+	runID := domain.RunID("run-1")
+	facts := specificationQuestionFacts("inv-specify-1")
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: id, ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
+		Type:    domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
+		Reason:            "the specifier needs an owner decision",
+		RequestedDecision: []domain.Action{action},
+		AgentClaims:       []domain.AgentClaim{questionClaimFixture(facts)},
+		AgentQuestion:     facts,
+		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
+		Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem(agent question): %v", err)
+	}
+	return item
 }

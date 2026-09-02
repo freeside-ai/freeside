@@ -290,6 +290,52 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	questionProvenance := domain.Provenance{
+		ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-specify-1",
+		HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+	}
+	agentQuestionFacts := &domain.AgentQuestionFacts{
+		Stage: domain.StageNameSpecification, InvocationID: "inv-specify-1",
+		Decisions: []domain.Decision{{
+			Question:    "Which retention period applies to exported logs?",
+			WhyBlocking: "The specification cannot fix the schema without it.",
+			Options: []domain.DecisionOption{
+				{Label: "30 days", Tradeoffs: "Cheaper storage, shorter audit window."},
+				{Label: "1 year", Tradeoffs: "Longer audit window, higher storage cost."},
+			},
+			Recommendation: "30 days",
+		}},
+	}
+	questionDigest, err := agentQuestionFacts.ComputeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentQuestionItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-agent-question", ProjectID: "proj-1", Subject: subject,
+		Type: domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
+		Reason:            "the specifier needs an owner decision",
+		RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry, domain.ActionStop},
+		AgentClaims: []domain.AgentClaim{{
+			Label: domain.AgentQuestionClaimLabel, Artifact: "decisions-inv-specify-1",
+			Digest: questionDigest, Provenance: questionProvenance,
+			Metadata: domain.EvidenceMetadata{
+				MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 256, CreatedAt: ts,
+				Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+			},
+		}},
+		AgentQuestion: agentQuestionFacts,
+		ItemVersion:   1, InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt: &ts, Status: domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedKind := domain.BlockedKindOwnerDecision
+	blockedOutcome := domain.BlockedOutcome{
+		Version: domain.BlockedOutcomeEncodingVersion, Kind: blockedKind,
+		Decisions: agentQuestionItem.AgentQuestion.Decisions,
+	}
+
 	trustRule := domain.TrustRuleTrustProfileDrift
 	publishBlockedItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-publish-blocked", ProjectID: "proj-1", Subject: subject,
@@ -1358,6 +1404,8 @@ func TestGolden(t *testing.T) {
 		{"attention_item_publish_blocked", publishBlockedItem},
 		{"attention_item_review_dispute", reviewDisputeItem},
 		{"attention_item_spec_revision", specRevisionItem},
+		{"attention_item_agent_question", agentQuestionItem},
+		{"blocked_outcome", blockedOutcome},
 		{"attention_item_decided", decidedItem},
 		{"attention_item_superseded", supersededItem},
 		{"attention_item_advisory", advisoryItem},

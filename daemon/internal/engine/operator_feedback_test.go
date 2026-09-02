@@ -72,6 +72,30 @@ func TestOperatorFeedbackRequestRejectsUntrustedIdentityChanges(t *testing.T) {
 	}
 }
 
+func TestFeedbackSourceInvocationUsesAuthenticatedQuestionFacts(t *testing.T) {
+	facts := specificationQuestionFacts("inv-question")
+	extra := questionClaimFixture("inv-other")
+	extra.Label = "context"
+	runID := domain.RunID("run-1")
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "question-1", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
+		Type:    domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
+		Reason:            "the specifier needs an owner decision",
+		RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry},
+		AgentClaims:       []domain.AgentClaim{questionClaimFixture(facts.InvocationID), extra},
+		AgentQuestion:     facts, ItemVersion: 1,
+		InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := feedbackSourceInvocation(item, func(domain.InvocationID) bool { return true })
+	if err != nil || got != facts.InvocationID {
+		t.Fatalf("feedbackSourceInvocation() = %q, %v, want %q", got, err, facts.InvocationID)
+	}
+}
+
 func TestOperatorFeedbackInputAuthenticatesAcceptedCommand(t *testing.T) {
 	returned := domain.Command{
 		CommandID: "return-work", Action: domain.ActionReturnToAgent,
@@ -197,7 +221,8 @@ func TestAnswerAndRetryRecordsSpecificationInputAndEnqueuesNextIteration(t *test
 		Type:    domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
 		Reason:            "the specifier needs an operator answer",
 		RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry},
-		AgentClaims:       []domain.AgentClaim{summaryClaimFixture(sourceID, "Which compatibility target applies?")},
+		AgentClaims:       []domain.AgentClaim{questionClaimFixture(sourceID)},
+		AgentQuestion:     specificationQuestionFacts(sourceID),
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
 		Status: domain.StatusOpen,
 	}, nil)
@@ -514,7 +539,8 @@ func TestAnswerAtSpecificationIterationLimitRecordsFailure(t *testing.T) {
 		Type:    domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
 		Reason:            "the specifier needs an operator answer",
 		RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry},
-		AgentClaims:       []domain.AgentClaim{summaryClaimFixture(sourceID, "Which target applies?")},
+		AgentClaims:       []domain.AgentClaim{questionClaimFixture(sourceID)},
+		AgentQuestion:     specificationQuestionFacts(sourceID),
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
 	}, nil)
 	if err != nil {
@@ -829,7 +855,8 @@ func assertSpecificationAnswerRestart(
 		Type:    domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
 		Reason:            "the specifier needs an operator answer",
 		RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry},
-		AgentClaims:       []domain.AgentClaim{summaryClaimFixture(sourceID, "Which compatibility target applies?")},
+		AgentClaims:       []domain.AgentClaim{questionClaimFixture(sourceID)},
+		AgentQuestion:     specificationQuestionFacts(sourceID),
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
 	}, nil)
 	if err != nil {
@@ -1013,5 +1040,45 @@ func assertImplementationFeedbackRestart(
 		return nil
 	}); err != nil {
 		t.Fatalf("recovered implementation feedback identities: %v", err)
+	}
+}
+
+// decisionsFixture is one well-formed decision list shared by the
+// agent_question fixtures.
+func decisionsFixture() []domain.Decision {
+	return []domain.Decision{{
+		Question:    "Which compatibility target applies?",
+		WhyBlocking: "The specification cannot fix the API surface without it.",
+		Options: []domain.DecisionOption{
+			{Label: "Current and previous", Tradeoffs: "Wider support, more adapters."},
+			{Label: "Current only", Tradeoffs: "Less code, drops older clients."},
+		},
+		Recommendation: "Current and previous",
+	}}
+}
+
+// questionClaimFixture is the Question claim an agent_question item carries;
+// its provenance names the asking invocation, which is how the answer path
+// finds the source stage.
+func questionClaimFixture(invocationID domain.InvocationID) domain.AgentClaim {
+	digest, err := specificationQuestionFacts(invocationID).ComputeDigest()
+	if err != nil {
+		panic(err)
+	}
+	return domain.AgentClaim{
+		Label: domain.AgentQuestionClaimLabel, Artifact: domain.ArtifactID("decisions-" + invocationID),
+		Digest: digest,
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerAgent, ProducerInvocationID: invocationID,
+			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+		},
+		Metadata: claimMeta(domain.EvidenceMediaApplicationJSON),
+	}
+}
+
+func specificationQuestionFacts(invocationID domain.InvocationID) *domain.AgentQuestionFacts {
+	return &domain.AgentQuestionFacts{
+		Stage: domain.StageNameSpecification, InvocationID: invocationID,
+		Decisions: decisionsFixture(),
 	}
 }

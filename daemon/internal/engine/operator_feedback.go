@@ -191,6 +191,12 @@ func feedbackSourceInvocation(
 	item domain.AttentionItem,
 	accept func(domain.InvocationID) bool,
 ) (domain.InvocationID, error) {
+	if item.Type == domain.AttentionAgentQuestion {
+		if item.AgentQuestion == nil || !accept(item.AgentQuestion.InvocationID) {
+			return "", domain.ErrParentKeyMismatch
+		}
+		return item.AgentQuestion.InvocationID, nil
+	}
 	seen := map[domain.InvocationID]struct{}{}
 	for _, claim := range item.AgentClaims {
 		id := claim.Provenance.ProducerInvocationID

@@ -12,6 +12,7 @@
 //   - attention_item.go, attention_delivery.go   the attention model (§4)
 //   - artifact.go     artifacts, provenance, and the evidence gate (§5.15)
 //   - finding.go      raw findings and versioned classification (§5.12)
+//   - agent_decision.go the decisions an agent hands back and the blocked outcome (§4)
 //   - conversation.go conversations, messages, invocations (§5.14)
 //   - policy.go       resolved policy with per-key provenance (§5.12)
 //   - run.go          run/stage/attempt and invocation identities (§5.3)

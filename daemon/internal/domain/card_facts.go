@@ -106,6 +106,50 @@ func (f ExecutionFailureFacts) Validate() error {
 	return nil
 }
 
+// AgentQuestionFacts identifies the stage and invocation that stopped to ask,
+// the blocker kind on the implementation side, and the decisions the human
+// is asked to make. Kind is set exactly when Stage is implementation: the
+// specifier's needs_decision output has no blocker taxonomy.
+type AgentQuestionFacts struct {
+	Stage        StageName    `json:"stage"`
+	InvocationID InvocationID `json:"invocation_id"`
+	Kind         *BlockedKind `json:"kind"`
+	Decisions    []Decision   `json:"decisions"`
+}
+
+func (f AgentQuestionFacts) Validate() error {
+	if f.InvocationID == "" {
+		return fmt.Errorf("agent question invocation: %w", ErrCardFactInconsistent)
+	}
+	switch f.Stage {
+	case StageNameSpecification:
+		if f.Kind != nil {
+			return fmt.Errorf("agent question specification stage carries a blocked kind: %w",
+				ErrCardFactInconsistent)
+		}
+	case StageNameImplementation:
+		if f.Kind == nil || !f.Kind.valid() {
+			return fmt.Errorf("agent question implementation stage kind: %w", ErrCardFactInconsistent)
+		}
+	default:
+		return fmt.Errorf("agent question stage %q: %w", f.Stage, ErrCardFactInconsistent)
+	}
+	if err := ValidateDecisions(f.Decisions); err != nil {
+		return fmt.Errorf("agent question: %w", err)
+	}
+	return nil
+}
+
+func cloneAgentQuestionFacts(in *AgentQuestionFacts) *AgentQuestionFacts {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Kind = clonePtr(in.Kind)
+	out.Decisions = cloneDecisions(in.Decisions)
+	return &out
+}
+
 // PublishBlockFacts carries exactly one of the normal hold vocabulary or the
 // definitive trust-rule vocabulary used by publication failures.
 type PublishBlockFacts struct {

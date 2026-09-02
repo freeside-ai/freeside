@@ -196,6 +196,38 @@ func (k BlockedWaitKind) valid() bool {
 	}
 }
 
+// BlockedKind classifies why the implementer stopped instead of producing a
+// candidate. Each kind names what the answer has to change; the decisions
+// carried beside it enumerate the choices.
+type BlockedKind string
+
+const (
+	BlockedKindSpecificationContradiction BlockedKind = "specification_contradiction"
+	BlockedKindOwnerDecision              BlockedKind = "owner_decision"
+	BlockedKindScopeExpansion             BlockedKind = "scope_expansion"
+	BlockedKindCapabilityUnavailable      BlockedKind = "capability_unavailable"
+	BlockedKindCommitPlanCollision        BlockedKind = "commit_plan_collision"
+)
+
+// AllBlockedKinds lists every valid BlockedKind.
+var AllBlockedKinds = []BlockedKind{
+	BlockedKindSpecificationContradiction,
+	BlockedKindOwnerDecision,
+	BlockedKindScopeExpansion,
+	BlockedKindCapabilityUnavailable,
+	BlockedKindCommitPlanCollision,
+}
+
+func (k BlockedKind) valid() bool {
+	switch k {
+	case BlockedKindSpecificationContradiction, BlockedKindOwnerDecision, BlockedKindScopeExpansion,
+		BlockedKindCapabilityUnavailable, BlockedKindCommitPlanCollision:
+		return true
+	default:
+		return false
+	}
+}
+
 // ImpairedCapability identifies the operator capability a health diagnostic
 // degrades. None represents a diagnostic with no current capability impact.
 type ImpairedCapability string
