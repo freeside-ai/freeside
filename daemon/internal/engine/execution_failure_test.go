@@ -84,7 +84,7 @@ func TestExecutionFailureFactsLeaveCompletedExportUnclassified(t *testing.T) {
 		var err error
 		facts, err = executionFailureFacts(
 			ctx, tx, attempt.InvocationID, exec.StatusFailed, "invalid completed output",
-			exportedAt.Add(time.Minute), domain.StageNameElaboration,
+			exportedAt.Add(time.Minute), domain.StageNameSpecification,
 		)
 		return err
 	}); err != nil {

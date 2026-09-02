@@ -10,7 +10,7 @@ func validProductionAttempt() ProductionAttempt {
 		CampaignID: "campaign-1", AttemptNumber: 2, Kind: ProductionAttemptRetry,
 		Reason: "retry after repair", ParentRunID: "run-1",
 		SourceDigest: "sha256:source", ApprovedSpecDigest: "sha256:approved",
-		ElaborationRunID: "run-elaboration-1", ImplementationRunID: "run-2",
+		SpecificationRunID: "run-specification-1", ImplementationRunID: "run-2",
 	}
 }
 

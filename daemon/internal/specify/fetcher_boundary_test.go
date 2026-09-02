@@ -1,4 +1,4 @@
-package elaborate
+package specify
 
 import (
 	"bytes"

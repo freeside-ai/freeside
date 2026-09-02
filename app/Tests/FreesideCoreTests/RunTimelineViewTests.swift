@@ -44,11 +44,11 @@ import Testing
         #expect(presentation.symbol == "wave.3.right.circle.fill")
     }
 
-    @Test func elaborationCampaignLabelsItsSourceSpecification() {
-        var elaboration = RunFixtures.defaultRuns()[0].run
-        elaboration.stages[0].name = "elaboration"
+    @Test func specificationCampaignLabelsItsSourceSpecification() {
+        var specification = RunFixtures.defaultRuns()[0].run
+        specification.stages[0].name = "specification"
 
-        #expect(RunDisplay.specificationLabel(elaboration) == "Source specification")
+        #expect(RunDisplay.specificationLabel(specification) == "Source specification")
     }
 
     @Test func productionLaneKeepsApprovedSpecificationAfterLaterStages() {

@@ -11,14 +11,14 @@ import (
 // TestIntakeSubjectBindingRenameEquivalence is the refute-first equivalence
 // harness the high-assurance profile requires for a behaviour-preserving change
 // on a returned-object trust boundary (AGENTS.md): a diff-read only asserts the
-// ImplementationRunID -> ElaborationRunID rename preserves the decoded-binding
+// ImplementationRunID -> SpecificationRunID rename preserves the decoded-binding
 // re-gate, so this reconstructs the pre-rename Validate and measures that old and
 // new reach the same accept/reject decision, sentinel-for-sentinel, over a
 // combinatorial corpus. The rename is behaviour-preserving iff every corpus point
 // agrees; a silently swapped operand or comparison would diverge here.
 //
 // The corpus feeds each version its own field layout carrying the same logical
-// values (old.ImplementationRunID == new.ElaborationRunID), which is the whole
+// values (old.ImplementationRunID == new.SpecificationRunID), which is the whole
 // point: the wire key changed, so comparing identical bytes would diverge by
 // construction; comparing the same logical binding measures that the
 // authentication logic is unchanged.
@@ -29,18 +29,18 @@ func TestIntakeSubjectBindingRenameEquivalence(t *testing.T) {
 	otherDigest := domain.Digest(contentaddr.Sum([]byte("other-policy")))
 
 	projectIDs := []domain.ProjectID{"", "proj-1"}
-	runIDs := []domain.RunID{"", "run-elab-1"}
+	runIDs := []domain.RunID{"", "run-spec-1"}
 	// workUnit selector: 0 => derived from runID (valid), 1 => a foreign id, 2 => empty.
 	workUnitSel := []int{0, 1, 2}
 	policyArtifactIDs := []domain.ArtifactID{"", "policy-art-1"}
 	policyArtifactDigests := []domain.Digest{validDigest, otherDigest, "not-a-digest", ""}
 	resolvedPolicyDigests := []domain.Digest{validDigest, "not-a-digest", ""}
-	sources := []domain.ElaborationSource{
+	sources := []domain.SpecificationSource{
 		{
-			Kind:         domain.ElaborationSourceIssueSubject,
+			Kind:         domain.SpecificationSourceIssueSubject,
 			IssueSubject: &domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 42, IssueNumber: 7},
 		},
-		{Kind: domain.ElaborationSourceSpecArtifact, SpecArtifactID: "spec-1"},
+		{Kind: domain.SpecificationSourceWorkItemArtifact, WorkItemArtifactID: "spec-1"},
 		{Kind: "bogus"}, // invalid source
 	}
 
@@ -75,7 +75,7 @@ func TestIntakeSubjectBindingRenameEquivalence(t *testing.T) {
 								})
 								newErr := domain.IntakeSubjectBinding{
 									ProjectID: projectID, WorkUnitID: workUnitID,
-									ElaborationRunID:     runID,
+									SpecificationRunID:   runID,
 									PolicyArtifactID:     policyArtifactID,
 									PolicyArtifactDigest: paDigest,
 									ResolvedPolicyDigest: rpDigest,
@@ -111,8 +111,8 @@ func sameBindingVerdict(oldErr, newErr error) bool {
 	for _, sentinel := range []error{
 		domain.ErrEmptyID,
 		domain.ErrIntakeOccurrenceInconsistent,
-		domain.ErrInvalidElaborationSourceKind,
-		domain.ErrElaborationSourceInconsistent,
+		domain.ErrInvalidSpecificationSourceKind,
+		domain.ErrSpecificationSourceInconsistent,
 		domain.ErrEmptyField,
 		domain.ErrNonPositive,
 	} {
@@ -134,7 +134,7 @@ type oldIntakeSubjectBinding struct {
 	PolicyArtifactID     domain.ArtifactID
 	PolicyArtifactDigest domain.Digest
 	ResolvedPolicyDigest domain.Digest
-	Source               domain.ElaborationSource
+	Source               domain.SpecificationSource
 }
 
 func oldIntakeBindingValidate(b oldIntakeSubjectBinding) error {

@@ -1,4 +1,4 @@
-package elaborate_test
+package specify_test
 
 import (
 	"encoding/json"
@@ -6,20 +6,20 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 func TestOutputGolden(t *testing.T) {
-	out := elaborate.Output{Specification: &elaborate.Specification{
+	out := specify.Output{Specification: &specify.Specification{
 		Summary: "Add the missing lifecycle gate.",
 		Body:    "# Objective\n\nRequire approval before implementation.",
-		Addressals: []elaborate.Addressal{{
+		Addressals: []specify.Addressal{{
 			CommentID: "request-refusal-tests", Response: "Added refusal tests.",
 		}},
 	}}
-	body, err := elaborate.EncodeOutput(out)
+	body, err := specify.EncodeOutput(out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,16 +43,16 @@ func TestDecodeOutputStrictAndExclusive(t *testing.T) {
 	}{
 		{"fetch", `{"fetch_requests":[{"url":"https://example.com/a","purpose":"confirm behavior"}],"specification":null}`, nil},
 		{"reply", `{"fetch_requests":[],"specification":null,"reply":"The approval remains open."}`, nil},
-		{"unknown", `{"fetch_requests":[],"specification":null,"extra":true}`, elaborate.ErrInvalidOutput},
+		{"unknown", `{"fetch_requests":[],"specification":null,"extra":true}`, specify.ErrInvalidOutput},
 		{"trailing", `{"fetch_requests":[],"specification":null}{}`, strictjson.ErrTrailingData},
-		{"neither", `{"fetch_requests":[],"specification":null}`, elaborate.ErrInvalidOutput},
-		{"both", `{"fetch_requests":[{"url":"https://example.com","purpose":"research"}],"specification":{"summary":"s","body":"b","addressals":[]}}`, elaborate.ErrInvalidOutput},
-		{"reply and spec", `{"fetch_requests":[],"specification":{"summary":"s","body":"b","addressals":[]},"reply":"answer"}`, elaborate.ErrInvalidOutput},
-		{"duplicate", `{"fetch_requests":[{"url":"https://example.com","purpose":"one"},{"url":"https://example.com","purpose":"two"}],"specification":null}`, elaborate.ErrInvalidOutput},
+		{"neither", `{"fetch_requests":[],"specification":null}`, specify.ErrInvalidOutput},
+		{"both", `{"fetch_requests":[{"url":"https://example.com","purpose":"research"}],"specification":{"summary":"s","body":"b","addressals":[]}}`, specify.ErrInvalidOutput},
+		{"reply and spec", `{"fetch_requests":[],"specification":{"summary":"s","body":"b","addressals":[]},"reply":"answer"}`, specify.ErrInvalidOutput},
+		{"duplicate", `{"fetch_requests":[{"url":"https://example.com","purpose":"one"},{"url":"https://example.com","purpose":"two"}],"specification":null}`, specify.ErrInvalidOutput},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := elaborate.DecodeOutput([]byte(tc.body))
+			_, err := specify.DecodeOutput([]byte(tc.body))
 			if tc.want == nil && err != nil {
 				t.Fatal(err)
 			}
@@ -66,7 +66,7 @@ func TestDecodeOutputStrictAndExclusive(t *testing.T) {
 
 func TestDecodeLegacyAddressalOutputBindsAuthenticatedFeedback(t *testing.T) {
 	body := []byte(`{"fetch_requests":[],"specification":{"summary":"Revised.","body":"# Specification","addressals":[{"comment":"Bound the request.","response":"Added a 1 MiB limit."}]},"reply":null}`)
-	out, err := elaborate.DecodeLegacyAddressalOutput(body, map[string]string{
+	out, err := specify.DecodeLegacyAddressalOutput(body, map[string]string{
 		"Bound the request.": "revise-spec",
 	})
 	if err != nil {
@@ -76,43 +76,43 @@ func TestDecodeLegacyAddressalOutputBindsAuthenticatedFeedback(t *testing.T) {
 		out.Specification.Addressals[0].CommentID != "revise-spec" {
 		t.Fatalf("legacy output = %+v, want authenticated comment id", out)
 	}
-	if _, err := elaborate.DecodeLegacyAddressalOutput(body, nil); !errors.Is(err, elaborate.ErrInvalidOutput) {
+	if _, err := specify.DecodeLegacyAddressalOutput(body, nil); !errors.Is(err, specify.ErrInvalidOutput) {
 		t.Fatalf("unbound legacy output error = %v, want ErrInvalidOutput", err)
 	}
-	if _, err := elaborate.DecodeOutput(body); err == nil || !strings.Contains(err.Error(), "unknown field") {
+	if _, err := specify.DecodeOutput(body); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("current decoder accepted legacy output: %v", err)
 	}
 }
 
 func TestOutputRejectsCardinalityAndPresentationOverflow(t *testing.T) {
-	requests := make([]elaborate.FetchRequest, elaborate.MaxFetchRequests+1)
+	requests := make([]specify.FetchRequest, specify.MaxFetchRequests+1)
 	for i := range requests {
-		requests[i] = elaborate.FetchRequest{URL: "https://example.com/" + strings.Repeat("x", i+1), Purpose: "test"}
+		requests[i] = specify.FetchRequest{URL: "https://example.com/" + strings.Repeat("x", i+1), Purpose: "test"}
 	}
-	if err := (elaborate.Output{FetchRequests: requests}).Validate(); !errors.Is(err, elaborate.ErrInvalidOutput) {
+	if err := (specify.Output{FetchRequests: requests}).Validate(); !errors.Is(err, specify.ErrInvalidOutput) {
 		t.Fatalf("fetch cardinality error = %v", err)
 	}
-	if err := (elaborate.Output{Specification: &elaborate.Specification{
-		Summary: strings.Repeat("s", elaborate.MaxSummaryBytes+1), Body: "body",
-		Addressals: []elaborate.Addressal{},
-	}}).Validate(); !errors.Is(err, elaborate.ErrInvalidOutput) {
+	if err := (specify.Output{Specification: &specify.Specification{
+		Summary: strings.Repeat("s", specify.MaxSummaryBytes+1), Body: "body",
+		Addressals: []specify.Addressal{},
+	}}).Validate(); !errors.Is(err, specify.ErrInvalidOutput) {
 		t.Fatalf("summary bound error = %v", err)
 	}
-	reply := strings.Repeat("r", elaborate.MaxReplyBytes+1)
-	if err := (elaborate.Output{Reply: &reply}).Validate(); !errors.Is(err, elaborate.ErrInvalidOutput) {
+	reply := strings.Repeat("r", specify.MaxReplyBytes+1)
+	if err := (specify.Output{Reply: &reply}).Validate(); !errors.Is(err, specify.ErrInvalidOutput) {
 		t.Fatalf("reply bound error = %v", err)
 	}
-	addressals := make([]elaborate.Addressal, elaborate.MaxAddressals)
+	addressals := make([]specify.Addressal, specify.MaxAddressals)
 	for i := range addressals {
-		addressals[i] = elaborate.Addressal{
-			CommentID: strings.Repeat("c", elaborate.MaxAddressalTextBytes),
-			Response:  strings.Repeat("r", elaborate.MaxAddressalTextBytes),
+		addressals[i] = specify.Addressal{
+			CommentID: strings.Repeat("c", specify.MaxAddressalTextBytes),
+			Response:  strings.Repeat("r", specify.MaxAddressalTextBytes),
 		}
 	}
-	if _, err := elaborate.EncodeOutput(elaborate.Output{Specification: &elaborate.Specification{
-		Summary: strings.Repeat("s", elaborate.MaxSummaryBytes),
+	if _, err := specify.EncodeOutput(specify.Output{Specification: &specify.Specification{
+		Summary: strings.Repeat("s", specify.MaxSummaryBytes),
 		Body:    strings.Repeat("b", 64<<10), Addressals: addressals,
-	}}); !errors.Is(err, elaborate.ErrInvalidOutput) {
+	}}); !errors.Is(err, specify.ErrInvalidOutput) {
 		t.Fatalf("aggregate output bound error = %v, want ErrInvalidOutput", err)
 	}
 }
@@ -133,7 +133,7 @@ func TestDecodeOutputToleratesSingleFence(t *testing.T) {
 	}
 	for _, tc := range accepted {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := elaborate.DecodeOutput([]byte(tc.body))
+			out, err := specify.DecodeOutput([]byte(tc.body))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -154,7 +154,7 @@ func TestDecodeOutputToleratesSingleFence(t *testing.T) {
 	}
 	for _, tc := range rejected {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := elaborate.DecodeOutput([]byte(tc.body))
+			_, err := specify.DecodeOutput([]byte(tc.body))
 			if err == nil {
 				t.Fatal("decode accepted a payload outside the single-fence tolerance")
 			}

@@ -571,7 +571,7 @@ func deriveSupervisionState(snapshot observedb.Snapshot, conclusion Conclusion) 
 		}
 	}
 	if snapshot.Attempt != nil && snapshot.Attempt.ApprovedSpecDigest != "" &&
-		snapshot.Observation.RunID == snapshot.Attempt.ElaborationRunID {
+		snapshot.Observation.RunID == snapshot.Attempt.SpecificationRunID {
 		return SupervisionImplementationBound
 	}
 	return SupervisionState(conclusion.Outcome)

@@ -51,9 +51,9 @@ func derivedInitialCampaignID(implementationRunID domain.RunID) domain.CampaignI
 	return domain.CampaignID("campaign-" + hex.EncodeToString(sum[:]))
 }
 
-func derivedElaborationRunID(implementationRunID domain.RunID) domain.RunID {
-	sum := sha256.Sum256([]byte("freeside.elaboration-run/v1\x00" + string(implementationRunID)))
-	return domain.RunID("run-elaboration-" + hex.EncodeToString(sum[:]))
+func derivedSpecificationRunID(implementationRunID domain.RunID) domain.RunID {
+	sum := sha256.Sum256([]byte("freeside.specification-run/v1\x00" + string(implementationRunID)))
+	return domain.RunID("run-specification-" + hex.EncodeToString(sum[:]))
 }
 
 func (tx *ReadTx) authenticateRunProductionLineage(ctx context.Context, run domain.Run) error {
@@ -64,10 +64,10 @@ func (tx *ReadTx) authenticateRunProductionLineage(ctx context.Context, run doma
 	if err != nil {
 		return fmt.Errorf("run %q production attempt: %w", run.ID, err)
 	}
-	if run.ID == attempt.ElaborationRunID {
+	if run.ID == attempt.SpecificationRunID {
 		if attempt.Kind != domain.ProductionAttemptInitial || attempt.AttemptNumber != 1 ||
 			run.SpecDigest != attempt.SourceDigest || run.AttemptReason != "" || run.ParentRunID != "" {
-			return fmt.Errorf("run %q elaboration lineage: %w", run.ID, domain.ErrParentKeyMismatch)
+			return fmt.Errorf("run %q specification lineage: %w", run.ID, domain.ErrParentKeyMismatch)
 		}
 		return nil
 	}
@@ -85,18 +85,18 @@ func (tx *ReadTx) authenticateRunProductionLineage(ctx context.Context, run doma
 }
 
 // authenticateInitialAttemptAuthority binds the mutable run/attempt rows to
-// the immutable elaboration dispatch intent written at admission. Store owns
+// the immutable specification dispatch intent written at admission. Store owns
 // this narrow wire projection to avoid an engine import cycle at the
 // reconstruction trust boundary.
 func (tx *ReadTx) authenticateInitialAttemptAuthority(ctx context.Context, attempt domain.ProductionAttempt) error {
 	if attempt.AttemptNumber != 1 {
 		return nil
 	}
-	entry, err := tx.GetOutbox(ctx, "inv-elaborate-"+string(attempt.ElaborationRunID)+"-1")
+	entry, err := tx.GetOutbox(ctx, "inv-specify-"+string(attempt.SpecificationRunID)+"-1")
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			// Admission reserves the attempt before a human or auto-start writes
-			// the elaboration marker. A marker-absent row therefore has no
+			// the specification marker. A marker-absent row therefore has no
 			// implementation run to expose yet; authenticate it once start makes
 			// the immutable authority available.
 			var exists int
@@ -111,11 +111,11 @@ func (tx *ReadTx) authenticateInitialAttemptAuthority(ctx context.Context, attem
 		}
 		return err
 	}
-	if entry.Kind != string(domain.ElaborationInvocationRequestedKind) {
+	if entry.Kind != string(domain.SpecificationInvocationRequestedKind) {
 		return domain.ErrParentKeyMismatch
 	}
 	var root struct {
-		ElaborationRunID    domain.RunID        `json:"elaboration_run_id"`
+		SpecificationRunID  domain.RunID        `json:"specification_run_id"`
 		ImplementationRunID domain.RunID        `json:"implementation_run_id"`
 		CampaignID          domain.CampaignID   `json:"campaign_id"`
 		AttemptNumber       int                 `json:"attempt_number"`
@@ -123,7 +123,7 @@ func (tx *ReadTx) authenticateInitialAttemptAuthority(ctx context.Context, attem
 		InputArtifactIDs    []domain.ArtifactID `json:"input_artifact_ids"`
 	}
 	if err := json.Unmarshal(entry.Payload, &root); err != nil ||
-		root.ElaborationRunID != attempt.ElaborationRunID || root.ImplementationRunID != attempt.ImplementationRunID ||
+		root.SpecificationRunID != attempt.SpecificationRunID || root.ImplementationRunID != attempt.ImplementationRunID ||
 		root.CampaignID != attempt.CampaignID || root.AttemptNumber != 1 ||
 		root.PublicationDigest != attempt.PublicationDigest || len(root.InputArtifactIDs) != 1 {
 		return domain.ErrParentKeyMismatch
@@ -138,7 +138,7 @@ func (tx *ReadTx) authenticateInitialAttemptAuthority(ctx context.Context, attem
 	return nil
 }
 
-// authenticateInitialApprovedSpec reconstructs the elaboration terminal that
+// authenticateInitialApprovedSpec reconstructs the specification terminal that
 // authorized the initial implementation. The attempt and implementation run
 // are mutually editable rows, so agreement between them is not approval
 // evidence: the output artifact and, when approval is enabled, the resolved
@@ -146,7 +146,7 @@ func (tx *ReadTx) authenticateInitialAttemptAuthority(ctx context.Context, attem
 func (tx *ReadTx) authenticateInitialApprovedSpec(
 	ctx context.Context, attempt domain.ProductionAttempt,
 ) error {
-	policy, err := tx.GetResolvedPolicy(ctx, attempt.ElaborationRunID)
+	policy, err := tx.GetResolvedPolicy(ctx, attempt.SpecificationRunID)
 	if err != nil {
 		return err
 	}
@@ -174,8 +174,8 @@ func (tx *ReadTx) authenticateInitialApprovedSpec(
 	rows, err := tx.tx.QueryContext(ctx, `
 SELECT idempotency_key FROM outbox
 WHERE kind = ? AND idempotency_key LIKE ?`,
-		string(domain.ElaborationInvocationRequestedKind),
-		"inv-elaborate-"+string(attempt.ElaborationRunID)+"-%")
+		string(domain.SpecificationInvocationRequestedKind),
+		"inv-specify-"+string(attempt.SpecificationRunID)+"-%")
 	if err != nil {
 		return err
 	}
@@ -198,12 +198,12 @@ WHERE kind = ? AND idempotency_key LIKE ?`,
 
 	for _, key := range keys {
 		requestEntry, err := tx.GetOutbox(ctx, key)
-		if err != nil || requestEntry.Kind != string(domain.ElaborationInvocationRequestedKind) ||
+		if err != nil || requestEntry.Kind != string(domain.SpecificationInvocationRequestedKind) ||
 			!requestEntry.Dispatched() {
 			continue
 		}
 		var request struct {
-			ElaborationRunID    domain.RunID        `json:"elaboration_run_id"`
+			SpecificationRunID  domain.RunID        `json:"specification_run_id"`
 			ImplementationRunID domain.RunID        `json:"implementation_run_id"`
 			InvocationID        domain.InvocationID `json:"invocation_id"`
 			Iteration           int                 `json:"iteration"`
@@ -211,8 +211,8 @@ WHERE kind = ? AND idempotency_key LIKE ?`,
 			AttemptNumber       int                 `json:"attempt_number"`
 		}
 		if err := json.Unmarshal(requestEntry.Payload, &request); err != nil || request.Iteration < 1 ||
-			key != fmt.Sprintf("inv-elaborate-%s-%d", attempt.ElaborationRunID, request.Iteration) ||
-			request.ElaborationRunID != attempt.ElaborationRunID ||
+			key != fmt.Sprintf("inv-specify-%s-%d", attempt.SpecificationRunID, request.Iteration) ||
+			request.SpecificationRunID != attempt.SpecificationRunID ||
 			request.ImplementationRunID != attempt.ImplementationRunID ||
 			request.InvocationID != domain.InvocationID(key) || request.CampaignID != attempt.CampaignID ||
 			request.AttemptNumber != 1 {
@@ -220,7 +220,7 @@ WHERE kind = ? AND idempotency_key LIKE ?`,
 		}
 
 		terminalEntry, err := tx.GetInbox(ctx, key)
-		if err != nil || terminalEntry.Kind != "elaboration_stage_terminal" {
+		if err != nil || terminalEntry.Kind != "specification_stage_terminal" {
 			continue
 		}
 		var terminal struct {
@@ -259,9 +259,9 @@ WHERE kind = ? AND idempotency_key LIKE ?`,
 		}
 		item, err := tx.GetAttentionItem(ctx, expectedItemID)
 		if err != nil || item.Type != domain.AttentionSpecApproval || item.Status != domain.StatusResolved ||
-			item.Subject.Type != domain.SubjectRun || item.Subject.ID != domain.SubjectID(attempt.ElaborationRunID) ||
-			item.Subject.RunID == nil || *item.Subject.RunID != attempt.ElaborationRunID ||
-			!authenticElaborationApprovalDecisionSet(item.RequestedDecision) ||
+			item.Subject.Type != domain.SubjectRun || item.Subject.ID != domain.SubjectID(attempt.SpecificationRunID) ||
+			item.Subject.RunID == nil || *item.Subject.RunID != attempt.SpecificationRunID ||
+			!authenticSpecificationApprovalDecisionSet(item.RequestedDecision) ||
 			len(item.EvidenceSnapshot) != 0 ||
 			item.PRHeadSHA != "" {
 			continue
@@ -298,7 +298,7 @@ WHERE kind = ? AND idempotency_key LIKE ?`,
 	return domain.ErrParentKeyMismatch
 }
 
-func authenticElaborationApprovalDecisionSet(actions []domain.Action) bool {
+func authenticSpecificationApprovalDecisionSet(actions []domain.Action) bool {
 	return slices.Equal(actions,
 		[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}) ||
 		slices.Equal(actions,
@@ -391,7 +391,7 @@ func (tx *WriteTx) PutProductionAttempt(ctx context.Context, attempt domain.Prod
 			attempt.CampaignID, attempt.AttemptNumber, domain.ErrImmutableTransition)
 	}
 	if attempt.AttemptNumber == 1 && (attempt.CampaignID != derivedInitialCampaignID(attempt.ImplementationRunID) ||
-		attempt.ElaborationRunID != derivedElaborationRunID(attempt.ImplementationRunID)) {
+		attempt.SpecificationRunID != derivedSpecificationRunID(attempt.ImplementationRunID)) {
 		return fmt.Errorf("put production attempt %s/%d initial identity: %w",
 			attempt.CampaignID, attempt.AttemptNumber, domain.ErrParentKeyMismatch)
 	}
@@ -406,7 +406,7 @@ func (tx *WriteTx) PutProductionAttempt(ctx context.Context, attempt domain.Prod
 				attempt.CampaignID, attempt.AttemptNumber, err)
 		}
 		if parent.AttemptNumber >= attempt.AttemptNumber || parent.CampaignID != attempt.CampaignID || parent.ImplementationRunID != attempt.ParentRunID ||
-			parent.ElaborationRunID != attempt.ElaborationRunID ||
+			parent.SpecificationRunID != attempt.SpecificationRunID ||
 			parent.ApprovedSpecDigest == "" || parent.SourceDigest != attempt.SourceDigest ||
 			parent.PublicationDigest != attempt.PublicationDigest ||
 			parent.ApprovedSpecDigest != attempt.ApprovedSpecDigest {
@@ -430,7 +430,7 @@ INSERT INTO production_attempts (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		attempt.CampaignID, attempt.AttemptNumber, attempt.Kind,
 		nullableString(string(attempt.ParentRunID)), attempt.SourceDigest, nullableString(string(attempt.PublicationDigest)),
-		nullableString(string(attempt.ApprovedSpecDigest)), attempt.ElaborationRunID,
+		nullableString(string(attempt.ApprovedSpecDigest)), attempt.SpecificationRunID,
 		attempt.ImplementationRunID, attempt.Reason, tx.asOfRevision, body)
 	if err != nil {
 		return fmt.Errorf("put production attempt %s/%d: %w", attempt.CampaignID, attempt.AttemptNumber, err)
@@ -485,14 +485,14 @@ WHERE campaign_id = ? AND attempt_number = ? AND approved_spec_digest IS NULL`,
 
 func (tx *ReadTx) scanProductionAttempt(sc scanner) (domain.ProductionAttempt, error) {
 	var (
-		campaignID, kind, sourceDigest, elaborationRunID, implementationRunID, reason string
-		number                                                                        int
-		parentRunID, publicationDigest, approvedSpecDigest                            sql.NullString
-		asOfRevision                                                                  int64
-		body                                                                          []byte
+		campaignID, kind, sourceDigest, specificationRunID, implementationRunID, reason string
+		number                                                                          int
+		parentRunID, publicationDigest, approvedSpecDigest                              sql.NullString
+		asOfRevision                                                                    int64
+		body                                                                            []byte
 	)
 	if err := sc.Scan(&campaignID, &number, &kind, &parentRunID, &sourceDigest, &publicationDigest,
-		&approvedSpecDigest, &elaborationRunID, &implementationRunID, &reason,
+		&approvedSpecDigest, &specificationRunID, &implementationRunID, &reason,
 		&asOfRevision, &body); err != nil {
 		return domain.ProductionAttempt{}, err
 	}
@@ -506,7 +506,7 @@ func (tx *ReadTx) scanProductionAttempt(sc scanner) (domain.ProductionAttempt, e
 		attempt.SourceDigest != domain.Digest(sourceDigest) ||
 		!optionalStringEqual(publicationDigest, string(attempt.PublicationDigest)) ||
 		!optionalStringEqual(approvedSpecDigest, string(attempt.ApprovedSpecDigest)) ||
-		attempt.ElaborationRunID != domain.RunID(elaborationRunID) ||
+		attempt.SpecificationRunID != domain.RunID(specificationRunID) ||
 		attempt.ImplementationRunID != domain.RunID(implementationRunID) ||
 		attempt.Reason != reason || asOfRevision < 1 {
 		return domain.ProductionAttempt{}, errRowInconsistent
@@ -519,7 +519,7 @@ func (tx *ReadTx) scanProductionAttempt(sc scanner) (domain.ProductionAttempt, e
 		return domain.ProductionAttempt{}, errRowInconsistent
 	}
 	if attempt.AttemptNumber == 1 && (attempt.CampaignID != derivedInitialCampaignID(attempt.ImplementationRunID) ||
-		attempt.ElaborationRunID != derivedElaborationRunID(attempt.ImplementationRunID)) {
+		attempt.SpecificationRunID != derivedSpecificationRunID(attempt.ImplementationRunID)) {
 		return domain.ProductionAttempt{}, errRowInconsistent
 	}
 	return attempt, nil
@@ -560,7 +560,7 @@ func (tx *ReadTx) authenticateReconstructedProductionAttempt(ctx context.Context
 		return err
 	}
 	if parent.AttemptNumber >= attempt.AttemptNumber || parent.CampaignID != attempt.CampaignID || parent.ImplementationRunID != attempt.ParentRunID ||
-		parent.ElaborationRunID != attempt.ElaborationRunID || parent.ApprovedSpecDigest == "" ||
+		parent.SpecificationRunID != attempt.SpecificationRunID || parent.ApprovedSpecDigest == "" ||
 		parent.SourceDigest != attempt.SourceDigest || parent.PublicationDigest != attempt.PublicationDigest ||
 		parent.ApprovedSpecDigest != attempt.ApprovedSpecDigest {
 		return domain.ErrParentKeyMismatch

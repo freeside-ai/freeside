@@ -354,7 +354,7 @@ func (d *Driver) finish(
 	// Every byte needed to reconstruct a publishable candidate lands before the
 	// immutable export row. A crash can leave unreferenced content-addressed
 	// bytes, but never an ExecutionExport whose publication source material
-	// disappeared with the released directory. The elaboration profile is the
+	// disappeared with the released directory. The specification profile is the
 	// one exception: its commit is never published, so its repo-channel blobs
 	// are deliberately not persisted (persistsRepositoryChannel).
 	artifacts, replay, err := d.persistReleasedMaterial(
@@ -506,7 +506,7 @@ func isDefinitiveImportRejection(err error) bool {
 
 // validateImportFindings decides the released import's fate under the stage's
 // finding profile. Under the default publish-strict profile every finding is
-// fatal, exactly as before; the elaboration profile tolerates the
+// fatal, exactly as before; the specification profile tolerates the
 // workspace-debris classes because it publishes a typed specification, never
 // workspace content. A fatal finding returns a definitiveRejection carrying the
 // diagnostic sample; the ExportRejection itself is recorded later, after the
@@ -635,14 +635,14 @@ func domainRejectionFindings(findings []importer.Finding) []domain.ExportRejecti
 const maxSummaryFindings = 5
 
 // persistsRepositoryChannel reports whether this import's repo-channel blobs
-// must enter durable storage. The specification (elaboration) profile publishes
+// must enter durable storage. The specification profile publishes
 // a typed result and never publishes the repo commit, so those blobs are
 // vestigial: skipping them keeps unscanned tolerated content (a
 // secret_scan_skipped blob most sharply) out of the daemon CAS, which
 // publish-strict never admits because it rejects that finding outright. Every
 // other profile may publish, so its repo blobs must be resolvable for the
 // production replay that reconstructs the commit. This is safe only while no
-// path builds a publication replay from an elaboration export: the elaboration
+// path builds a publication replay from a specification export: the specification
 // arm of engine.RecordExecutionExport records the export export-only and mints
 // no publication task, and backup artifact closure pulls repo entry blobs only
 // through such a task (issue #768).

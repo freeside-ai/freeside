@@ -18,14 +18,14 @@ func initialProductionAttempt() domain.ProductionAttempt {
 	if err != nil {
 		panic(err)
 	}
-	elaborationRunID, err := engine.ElaborationRunIDForImplementation(implementationRunID)
+	specificationRunID, err := engine.SpecificationRunIDForImplementation(implementationRunID)
 	if err != nil {
 		panic(err)
 	}
 	return domain.ProductionAttempt{
 		CampaignID: campaignID, AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
 		SourceDigest: "sha256:source", PublicationDigest: "sha256:publication",
-		ElaborationRunID:    elaborationRunID,
+		SpecificationRunID:  specificationRunID,
 		ImplementationRunID: implementationRunID,
 	}
 }
@@ -89,7 +89,7 @@ func TestProductionAttemptAllocationApprovalAndRestart(t *testing.T) {
 		Reason: "retry after repair", ParentRunID: initial.ImplementationRunID,
 		SourceDigest: initial.SourceDigest, PublicationDigest: initial.PublicationDigest,
 		ApprovedSpecDigest: approved.ApprovedSpecDigest,
-		ElaborationRunID:   initial.ElaborationRunID,
+		SpecificationRunID: initial.SpecificationRunID,
 		ImplementationRunID: func() domain.RunID {
 			id, err := engine.ProductionAttemptRunID(initial.CampaignID, 2)
 			if err != nil {
@@ -130,11 +130,11 @@ func TestProductionAttemptAllocationApprovalAndRestart(t *testing.T) {
 	foreignRoot.AttemptNumber = 3
 	foreignRoot.ParentRunID = retry.ImplementationRunID
 	foreignRoot.ImplementationRunID = "run-3"
-	foreignRoot.ElaborationRunID = "run-elaboration-foreign"
+	foreignRoot.SpecificationRunID = "run-specification-foreign"
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutProductionAttempt(ctx, foreignRoot)
 	}); !errors.Is(err, domain.ErrParentKeyMismatch) {
-		t.Fatalf("foreign elaboration root = %v, want ErrParentKeyMismatch", err)
+		t.Fatalf("foreign specification root = %v, want ErrParentKeyMismatch", err)
 	}
 	skipped := retry
 	skipped.AttemptNumber = 4

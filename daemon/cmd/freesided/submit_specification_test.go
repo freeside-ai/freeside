@@ -12,25 +12,25 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
-	elaboratefake "github.com/freeside-ai/freeside/daemon/internal/elaborate/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
+	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-type submitElaborationBackend struct{}
+type submitSpecificationBackend struct{}
 
-func (submitElaborationBackend) Name() string { return "submit-elaboration-test" }
+func (submitSpecificationBackend) Name() string { return "submit-specification-test" }
 
-func (submitElaborationBackend) Capabilities() exec.CapabilitySet {
+func (submitSpecificationBackend) Capabilities() exec.CapabilitySet {
 	return exec.NewCapabilitySet(exec.CapPostExitExport)
 }
 
-func TestSubmitCommandElaboratesBeforeCreatingProductionRun(t *testing.T) {
+func TestSubmitCommandSpecifiesBeforeCreatingProductionRun(t *testing.T) {
 	tests := []struct {
 		name                  string
 		acceptedBody          string
@@ -59,7 +59,7 @@ func TestSubmitCommandElaboratesBeforeCreatingProductionRun(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			testSubmitCommandElaborationDigest(
+			testSubmitCommandSpecificationDigest(
 				t, tc.acceptedBody, tc.wantSameDigest,
 				tc.preallocateRetry, tc.preallocateForeignRun,
 			)
@@ -67,13 +67,13 @@ func TestSubmitCommandElaboratesBeforeCreatingProductionRun(t *testing.T) {
 	}
 }
 
-func testSubmitCommandElaborationDigest(
+func testSubmitCommandSpecificationDigest(
 	t *testing.T, acceptedBody string, wantSameDigest,
 	preallocateRetry, preallocateForeignRun bool,
 ) {
 	t.Helper()
 	root := t.TempDir()
-	specPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	workItemPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	manifest, err := domain.NewCapabilityManifest("Provider web read", domain.EgressProviderWebRead)
 	if err != nil {
 		t.Fatal(err)
@@ -102,13 +102,13 @@ func testSubmitCommandElaborationDigest(
 		t.Fatal(err)
 	}
 	sourceBody := "# Work item\n\nImplement the thing."
-	if err := os.WriteFile(specPath, []byte(sourceBody), 0o600); err != nil {
+	if err := os.WriteFile(workItemPath, []byte(sourceBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := submitCommandConfig{
-		DBPath: filepath.Join(root, "state.db"), SpecPath: specPath,
+		DBPath: filepath.Join(root, "state.db"), WorkItemPath: workItemPath,
 		PolicyPath: policyPath, PublicationPath: publicationPath,
-		ProjectID: "project-submit-elaboration", RunID: "implementation-from-submit",
+		ProjectID: "project-submit-specification", RunID: "implementation-from-submit",
 	}
 	submitted, err := runSubmitCommand(t.Context(), cfg)
 	if err != nil {
@@ -142,7 +142,7 @@ func testSubmitCommandElaborationDigest(
 	}); err != nil {
 		t.Fatal(err)
 	}
-	promptBody := []byte("Elaborate the submitted work item.\n")
+	promptBody := []byte("Specify the submitted work item.\n")
 	promptDigest := domain.Digest(contentaddr.Sum(promptBody))
 	if _, err := blobs.Put(promptDigest, bytes.NewReader(promptBody)); err != nil {
 		t.Fatal(err)
@@ -155,22 +155,22 @@ func testSubmitCommandElaborationDigest(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := elaboratefake.Script(driver, submitted.ElaborationInvocationID, 0, 0, elaborate.Output{
-		Specification: &elaborate.Specification{
+	if err := specifyfake.Script(driver, submitted.SpecificationInvocationID, 0, 0, specify.Output{
+		Specification: &specify.Specification{
 			Summary:    "Ready for implementation.",
 			Body:       acceptedBody,
-			Addressals: []elaborate.Addressal{},
+			Addressals: []specify.Addressal{},
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	fetcher, err := elaborate.NewFetcher(st, blobs, nil)
+	fetcher, err := specify.NewFetcher(st, blobs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	identity := domain.AuthIdentityID("auth-submit")
 	workflow, err := engine.New(st, attention, driver,
-		engine.WithAdmission(submitElaborationBackend{}, []exec.Capability{exec.CapPostExitExport}, engine.AdmissionEnvironment{
+		engine.WithAdmission(submitSpecificationBackend{}, []exec.Capability{exec.CapPostExitExport}, engine.AdmissionEnvironment{
 			OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
 			EgressProfile:       domain.EgressProviderOnly,
 			ImageRef:            domain.ImageRef("agent@sha256:" + strings.Repeat("a", 64)),
@@ -185,7 +185,7 @@ func testSubmitCommandElaborationDigest(
 			},
 			Workspace: "workspace-submit", AuthIdentityID: &identity,
 		}, func() time.Time { return now }),
-		engine.WithElaboration(engine.ElaborationConfig{
+		engine.WithSpecification(engine.SpecificationConfig{
 			Fetcher: fetcher, Blobs: blobs, Now: func() time.Time { return now },
 			PromptPackageDigest: promptDigest,
 		}),
@@ -275,7 +275,7 @@ func testSubmitCommandElaborationDigest(
 		t.Fatalf("re-submit after byte-identical specification approval: %v", err)
 	}
 	if resubmitted != submitted {
-		t.Fatalf("re-submit result = %#v, want full elaboration result %#v", resubmitted, submitted)
+		t.Fatalf("re-submit result = %#v, want full specification result %#v", resubmitted, submitted)
 	}
 	if _, err := engine.ReattemptProductionRun(t.Context(), st, engine.ProductionReattemptSpec{
 		ParentRunID: implementationRun.ID, Reason: "retry while live",
@@ -305,7 +305,7 @@ func testSubmitCommandElaborationDigest(
 	}
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID: submitted.ImplementationInvocationID, RunID: implementationRun.ID,
-		StageID: stage.ID, AttemptID: attempt.ID, Backend: submitElaborationBackend{}.Name(),
+		StageID: stage.ID, AttemptID: attempt.ID, Backend: submitSpecificationBackend{}.Name(),
 		Capabilities:  domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
 		EgressProfile: domain.EgressProviderOnly,
@@ -434,7 +434,7 @@ func testSubmitCommandElaborationDigest(
 				ParentRunID: implementationRun.ID, SourceDigest: submitted.SourceDigest,
 				PublicationDigest:   submitted.PublicationDigest,
 				ApprovedSpecDigest:  implementationRun.SpecDigest,
-				ElaborationRunID:    initialAttempt.ElaborationRunID,
+				SpecificationRunID:  initialAttempt.SpecificationRunID,
 				ImplementationRunID: retryRunID,
 				OperatorCommandID:   &commandID, RetryOfInvocationID: &retryOf,
 				CapabilityManifestDigest: &manifestDigest,
@@ -447,7 +447,7 @@ func testSubmitCommandElaborationDigest(
 		}
 	}
 	retryWorkflow, err := engine.New(st, attention, driver,
-		engine.WithAdmission(submitElaborationBackend{}, []exec.Capability{exec.CapPostExitExport},
+		engine.WithAdmission(submitSpecificationBackend{}, []exec.Capability{exec.CapPostExitExport},
 			workflowAdmission, func() time.Time { return now }),
 	)
 	if err != nil {
@@ -503,7 +503,7 @@ func testSubmitCommandElaborationDigest(
 	restrictedAdmission := workflowAdmission
 	restrictedAdmission.EnforceableEgressProfiles = []domain.EgressProfile{domain.EgressProviderOnly}
 	withoutSelectedProfile, err := engine.New(st, attention, driver,
-		engine.WithAdmission(submitElaborationBackend{}, []exec.Capability{exec.CapPostExitExport},
+		engine.WithAdmission(submitSpecificationBackend{}, []exec.Capability{exec.CapPostExitExport},
 			restrictedAdmission, func() time.Time { return now }),
 	)
 	if err != nil {

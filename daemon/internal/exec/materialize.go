@@ -29,7 +29,7 @@ type MaterializerOptions struct {
 const (
 	// ProductionMaxInputBytes and ProductionMaxTotalInputBytes are the one
 	// process-wide materialization ceiling used by the production driver and
-	// by elaboration's pre-commit delivery check.
+	// by specification's pre-commit delivery check.
 	ProductionMaxInputBytes      = int64(4 << 20)
 	ProductionMaxTotalInputBytes = int64(32 << 20)
 )

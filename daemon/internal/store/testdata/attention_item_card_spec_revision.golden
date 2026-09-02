@@ -28,7 +28,7 @@
       "digest": "sha256:be5a69b9b1d2f718ff8b8012f3d216db6a8cc567f42188e2def69205d27dc366",
       "provenance": {
         "producer_class": "agent",
-        "producer_invocation_id": "inv-elaborate-run-1-2",
+        "producer_invocation_id": "inv-specify-run-1-2",
         "head_binding": "head_independent",
         "verification_recipe_digest": null,
         "sensitivity_class": "normal"
@@ -51,7 +51,7 @@
       "digest": "sha256:3952e583ff02ab1fd72543cf7317dfa49b5be283e0e59bb95c93db6be78d11af",
       "provenance": {
         "producer_class": "agent",
-        "producer_invocation_id": "inv-elaborate-run-1-2",
+        "producer_invocation_id": "inv-specify-run-1-2",
         "head_binding": "head_independent",
         "verification_recipe_digest": null,
         "sensitivity_class": "normal"
@@ -74,7 +74,7 @@
       "digest": "sha256:c886feb1d99e9c544b34a21766e9fe14e1a0f054fddf73188a7239374ea07a37",
       "provenance": {
         "producer_class": "agent",
-        "producer_invocation_id": "inv-elaborate-run-1-2",
+        "producer_invocation_id": "inv-specify-run-1-2",
         "head_binding": "head_independent",
         "verification_recipe_digest": null,
         "sensitivity_class": "normal"

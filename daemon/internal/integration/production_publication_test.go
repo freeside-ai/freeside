@@ -4003,8 +4003,8 @@ var productionPublicationTransitionMatrix = []struct {
 
 func TestProductionTransitionMatrixRegistersEveryEngineBoundary(t *testing.T) {
 	covered := map[engine.DurableTransition]bool{
-		engine.DurableTransitionElaborationOutcome:    true,
-		engine.DurableTransitionElaborationAnswer:     true,
+		engine.DurableTransitionSpecificationOutcome:  true,
+		engine.DurableTransitionSpecificationAnswer:   true,
 		engine.DurableTransitionSpecificationApproval: true,
 		engine.DurableTransitionOperatorFeedback:      true,
 		engine.DurableTransitionFindingAdjudication:   true,

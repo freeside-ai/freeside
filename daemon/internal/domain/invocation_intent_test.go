@@ -7,12 +7,12 @@ import (
 	"testing"
 )
 
-func validElaborationDiscussionIntent(t *testing.T) []byte {
+func validSpecificationDiscussionIntent(t *testing.T) []byte {
 	t.Helper()
-	payload, err := json.Marshal(ElaborationDiscussionInvocationIntent{
-		Version:          ElaborationDiscussionInvocationIntentVersion,
-		ElaborationRunID: "run-1", ImplementationRunID: "implementation-1", ProjectID: "project-1",
-		Iteration: 1, InvocationID: "elaboration-discussion-1", DiscussInvocationID: "inv-1",
+	payload, err := json.Marshal(SpecificationDiscussionInvocationIntent{
+		Version:            SpecificationDiscussionInvocationIntentVersion,
+		SpecificationRunID: "run-1", ImplementationRunID: "implementation-1", ProjectID: "project-1",
+		Iteration: 1, InvocationID: "specification-discussion-1", DiscussInvocationID: "inv-1",
 		ConversationID: "conversation-1", ThroughSequence: 1,
 		PrefixDigest: Digest("sha256:" + strings.Repeat("a", 64)), ItemID: "item-1", ItemVersion: 2,
 		InputArtifactIDs: []ArtifactID{"spec-1", "spec-discussion-1"},
@@ -51,29 +51,29 @@ func TestAuthenticateInvocationDispatchIntentBindsEveryExecutionLane(t *testing.
 			stageID: "stage-1",
 		},
 		{
-			name: "elaboration",
+			name: "specification",
 			entry: InvocationDispatchIntent{
-				Kind:           string(ElaborationInvocationRequestedKind),
+				Kind:           string(SpecificationInvocationRequestedKind),
 				IdempotencyKey: string(invocation),
-				Payload:        []byte(`{"invocation_id":"inv-1","elaboration_run_id":"run-1"}`),
+				Payload:        []byte(`{"invocation_id":"inv-1","specification_run_id":"run-1"}`),
 			},
-			stageID: "elaborate-run-1",
+			stageID: "specify-run-1",
 		},
 		{
-			name: "elaboration discussion",
+			name: "specification discussion",
 			entry: InvocationDispatchIntent{
-				Kind:           string(ElaborationDiscussionRequestedKind),
-				IdempotencyKey: "elaboration-discussion-1",
-				Payload:        validElaborationDiscussionIntent(t),
+				Kind:           string(SpecificationDiscussionRequestedKind),
+				IdempotencyKey: "specification-discussion-1",
+				Payload:        validSpecificationDiscussionIntent(t),
 			},
-			stageID: "elaborate-run-1",
+			stageID: "specify-run-1",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			invocationID := invocation
-			if tc.name == "elaboration discussion" {
-				invocationID = "elaboration-discussion-1"
+			if tc.name == "specification discussion" {
+				invocationID = "specification-discussion-1"
 			}
 			if err := AuthenticateInvocationDispatchIntent(tc.entry, invocationID, runID, tc.stageID); err != nil {
 				t.Fatalf("AuthenticateInvocationDispatchIntent() = %v", err)
@@ -82,8 +82,8 @@ func TestAuthenticateInvocationDispatchIntentBindsEveryExecutionLane(t *testing.
 	}
 }
 
-func TestElaborationDiscussionInvocationIntentRequiresCompleteStrictBinding(t *testing.T) {
-	valid := validElaborationDiscussionIntent(t)
+func TestSpecificationDiscussionInvocationIntentRequiresCompleteStrictBinding(t *testing.T) {
+	valid := validSpecificationDiscussionIntent(t)
 	var request map[string]any
 	if err := json.Unmarshal(valid, &request); err != nil {
 		t.Fatal(err)
@@ -102,14 +102,14 @@ func TestElaborationDiscussionInvocationIntentRequiresCompleteStrictBinding(t *t
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := DecodeElaborationDiscussionInvocationIntent(payload); err == nil {
-				t.Fatalf("DecodeElaborationDiscussionInvocationIntent accepted missing %s", field)
+			if _, err := DecodeSpecificationDiscussionInvocationIntent(payload); err == nil {
+				t.Fatalf("DecodeSpecificationDiscussionInvocationIntent accepted missing %s", field)
 			}
 		})
 	}
 	withUnknown := append(valid[:len(valid)-1], []byte(`,"unexpected":true}`)...)
-	if _, err := DecodeElaborationDiscussionInvocationIntent(withUnknown); err == nil {
-		t.Fatal("DecodeElaborationDiscussionInvocationIntent accepted an unknown field")
+	if _, err := DecodeSpecificationDiscussionInvocationIntent(withUnknown); err == nil {
+		t.Fatal("DecodeSpecificationDiscussionInvocationIntent accepted an unknown field")
 	}
 }
 

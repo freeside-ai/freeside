@@ -163,7 +163,7 @@ const (
 	// explicitly; naming it lets a caller state the strict choice.
 	FindingProfilePublishStrict FindingProfile = "publish_strict"
 	// FindingProfileSpecification tolerates the workspace-debris finding classes
-	// because the elaboration stage publishes a typed JSON specification, never
+	// because the specification stage publishes a typed JSON specification, never
 	// workspace content, so an agent's incidental build/test output must not
 	// definitively fail the invocation. Integrity, secret, and control-plane
 	// findings stay fatal (see fatalForSpecification).
@@ -239,17 +239,17 @@ func (k FindingKind) fatalForProfile(profile *FindingProfile) bool {
 }
 
 // fatalForSpecification reports whether a finding of this kind stays fatal
-// under the elaboration (specification) profile. The switch omits default so a
+// under the specification profile. The switch omits default so a
 // new FindingKind must decide its class; the trailing return covers the
 // invalid zero value, failing closed.
 //
 // The fatality table (design call recorded in issue #768):
 //   - Inherently fatal: the four kinds that already withhold the commit itself
 //     (blocksCommit) — the tree cannot represent the candidate at all.
-//   - Stay fatal for elaboration: a tolerated secret would be durably copied
+//   - Stay fatal for specification: a tolerated secret would be durably copied
 //     into the daemon CAS by persistRepositoryBlobs, and none of the
 //     control-plane path classes (§5.5/§5.8) or git metadata is plausible
-//     investigation debris — an elaborator editing CI, policy, reviewer
+//     investigation debris — a specifier editing CI, policy, reviewer
 //     instructions, or git metadata is off-contract even unpublished.
 //   - Tolerated debris: gitignored build/test output is out-of-allowlist and
 //     routinely over the size and scan caps. Tolerating secret_scan_skipped

@@ -300,13 +300,13 @@ func (c ProducerClass) valid() bool {
 }
 
 // StageName is the closed vocabulary of workflow-definition stages consumed
-// by the elaborator and later workflow dispatch (plan §5.4, §5.12). Persisted
+// by the specifier and later workflow dispatch (plan §5.4, §5.12). Persisted
 // Stage.Name remains string-typed for compatibility with the Phase 1A engine's
 // narrower and internal stage names.
 type StageName string
 
 const (
-	StageNameElaboration    StageName = "elaboration"
+	StageNameSpecification  StageName = "specification"
 	StageNameImplementation StageName = "implementation"
 	StageNameReview         StageName = "review"
 	StageNameVerification   StageName = "verification"
@@ -314,12 +314,12 @@ const (
 
 // AllStageNames lists every valid StageName.
 var AllStageNames = []StageName{
-	StageNameElaboration, StageNameImplementation, StageNameReview, StageNameVerification,
+	StageNameSpecification, StageNameImplementation, StageNameReview, StageNameVerification,
 }
 
 func (n StageName) valid() bool {
 	switch n {
-	case StageNameElaboration, StageNameImplementation, StageNameReview, StageNameVerification:
+	case StageNameSpecification, StageNameImplementation, StageNameReview, StageNameVerification:
 		return true
 	default:
 		return false
@@ -328,7 +328,7 @@ func (n StageName) valid() bool {
 
 // ArtifactKind is the closed vocabulary of persisted artifact roles. It
 // includes the Phase 1A production roles, existing persisted evidence roles,
-// and the research/specification outputs needed by the 1B elaborator.
+// and the research/specification outputs needed by the 1B specifier.
 type ArtifactKind string
 
 const (
@@ -1594,7 +1594,7 @@ const (
 	// IntakeRefusalModeNotAuthorized: auto_start was requested without the
 	// explicit override provenance the mode key requires.
 	IntakeRefusalModeNotAuthorized IntakeStartRefusalReason = "mode_not_authorized"
-	// IntakeRefusalSubjectInputMissing: a bound elaboration/start input is
+	// IntakeRefusalSubjectInputMissing: a bound specification/start input is
 	// absent (project, declaration, or policy artifact gone).
 	IntakeRefusalSubjectInputMissing IntakeStartRefusalReason = "subject_input_missing"
 	// IntakeRefusalSubjectInputStale: a bound input exists but no longer
@@ -1642,25 +1642,25 @@ func (r IntakeSupersessionReason) valid() bool {
 	}
 }
 
-// ElaborationSourceKind is the arm of an ElaborationSource union in use: a
+// SpecificationSourceKind is the arm of a SpecificationSource union in use: a
 // pre-registered spec-source artifact (the freesided submit path), or an
 // occurrence-bound issue subject authenticated from a durable IntakeOccurrence
 // record (the label-intake path). The zero value "" is invalid by design.
-type ElaborationSourceKind string
+type SpecificationSourceKind string
 
 const (
-	ElaborationSourceSpecArtifact ElaborationSourceKind = "spec_artifact"
-	ElaborationSourceIssueSubject ElaborationSourceKind = "issue_subject"
+	SpecificationSourceWorkItemArtifact SpecificationSourceKind = "work_item_artifact"
+	SpecificationSourceIssueSubject     SpecificationSourceKind = "issue_subject"
 )
 
-// AllElaborationSourceKinds is the single registration point for the kinds.
-var AllElaborationSourceKinds = []ElaborationSourceKind{
-	ElaborationSourceSpecArtifact, ElaborationSourceIssueSubject,
+// AllSpecificationSourceKinds is the single registration point for the kinds.
+var AllSpecificationSourceKinds = []SpecificationSourceKind{
+	SpecificationSourceWorkItemArtifact, SpecificationSourceIssueSubject,
 }
 
-func (k ElaborationSourceKind) valid() bool {
+func (k SpecificationSourceKind) valid() bool {
 	switch k {
-	case ElaborationSourceSpecArtifact, ElaborationSourceIssueSubject:
+	case SpecificationSourceWorkItemArtifact, SpecificationSourceIssueSubject:
 		return true
 	default:
 		return false

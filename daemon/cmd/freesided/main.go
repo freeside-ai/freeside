@@ -30,7 +30,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
@@ -40,6 +39,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -165,7 +165,7 @@ func main() {
 	rigTokenFile := flags.String("rig-token-file", "", "production rig acquisition file (optional)")
 	providerEndpoints := flags.String("provider-endpoints", "api.anthropic.com:443", "comma-separated provider host:port allowlist")
 	promptPackage := flags.String("prompt-package", "", "trusted prompt-package file (ingested into the artifact store at startup)")
-	elaborationPromptPackage := flags.String("elaboration-prompt-package", "", "trusted elaborator prompt-package file (ingested into the artifact store at startup)")
+	specificationPromptPackage := flags.String("specification-prompt-package", "", "trusted specifier prompt-package file (ingested into the artifact store at startup)")
 	remediationPromptPackage := flags.String("remediation-prompt-package", "", "trusted remediator prompt-package file (ingested into the artifact store at startup)")
 	vendorInstructions := flags.String("vendor-instructions", "", "host vendor-instruction file (CLAUDE.md)")
 	repo := flags.String("repo", "", "managed owner/name repository")
@@ -280,12 +280,12 @@ func main() {
 			AgentImage: domain.ImageRef(*agentImage), ExporterImage: *exporterImage,
 			ContainerBin: *containerBin, SeedRoot: *seedRoot,
 			StateDir: *stateDir, RigTokenFile: *rigTokenFile,
-			ProviderEndpoints:            strings.Split(*providerEndpoints, ","),
-			PromptPackageFile:            *promptPackage,
-			ElaborationPromptPackageFile: *elaborationPromptPackage,
-			RemediationPromptPackageFile: *remediationPromptPackage,
-			VendorInstructions:           *vendorInstructions,
-			Repo:                         *repo, RepositoryID: id,
+			ProviderEndpoints:              strings.Split(*providerEndpoints, ","),
+			PromptPackageFile:              *promptPackage,
+			SpecificationPromptPackageFile: *specificationPromptPackage,
+			RemediationPromptPackageFile:   *remediationPromptPackage,
+			VendorInstructions:             *vendorInstructions,
+			Repo:                           *repo, RepositoryID: id,
 			BaseRef: *baseRef, BaseSHA: *baseSHA,
 			AuthIdentityID: domain.AuthIdentityID(*authIdentity),
 			AllowedPaths:   splitNonEmpty(*allowedPaths),
@@ -744,21 +744,21 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return nil, fmt.Errorf("compose inference boundary: %w", err)
 		}
 		engineOptions = append(engineOptions, engine.WithInference(judgments))
-		researchFetcher, err := elaborate.NewFetcher(st, blobs, nil)
+		researchFetcher, err := specify.NewFetcher(st, blobs, nil)
 		if err != nil {
 			return nil, fmt.Errorf("compose research fetcher: %w", err)
 		}
 		deliveryMaterializer, err := productionMaterializer(blobs)
 		if err != nil {
-			return nil, fmt.Errorf("compose elaboration delivery validator: %w", err)
+			return nil, fmt.Errorf("compose specification delivery validator: %w", err)
 		}
 		engineOptions = append(engineOptions, engine.WithProductionDeliveryValidation(
 			productionImplementationDeliveryValidator(deliveryMaterializer),
 		))
-		engineOptions = append(engineOptions, engine.WithElaboration(engine.ElaborationConfig{
+		engineOptions = append(engineOptions, engine.WithSpecification(engine.SpecificationConfig{
 			Fetcher: researchFetcher, Blobs: blobs, Now: func() time.Time { return time.Now().UTC() },
-			PromptPackageDigest: claudeWiring.elaborationPromptPackage,
-			ValidateDelivery:    productionElaborationDeliveryValidator(deliveryMaterializer),
+			PromptPackageDigest: claudeWiring.specificationPromptPackage,
+			ValidateDelivery:    productionSpecificationDeliveryValidator(deliveryMaterializer),
 		}))
 		var shadowReviewFailure func(domain.RunID, int, domain.ReviewFailureClass, error)
 		if claudeWiring.shadowReviewSource != nil {

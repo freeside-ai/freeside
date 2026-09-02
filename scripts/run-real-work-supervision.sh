@@ -21,19 +21,19 @@ real_work_report_failure() {
 	printf '\n' >&2
 }
 
-# real_work_supervise follows the elaboration identity until it binds the exact
+# real_work_supervise follows the specification identity until it binds the exact
 # implementation run, then follows that run to publication or actionable
 # attention. It keeps reconciliation live through actionable attention, and
 # returns 0 once publication is durably accepted, 124 for the global timeout,
 # and 1 for terminal or observation failure.
 real_work_supervise() {
-	local freesided=$1 db_path=$2 elaboration_run_id=$3 implementation_run_id=$4
+	local freesided=$1 db_path=$2 specification_run_id=$3 implementation_run_id=$4
 	local daemon_pid=$5 timeout_seconds=$6 snapshot_path=$7 interval_seconds=${8:-1}
 	local lane run_id state previous_state="" state_changed deadline
 	deadline=$((SECONDS + timeout_seconds))
-	if [[ -n "$elaboration_run_id" ]]; then
-		lane=elaboration
-		run_id=$elaboration_run_id
+	if [[ -n "$specification_run_id" ]]; then
+		lane=specification
+		run_id=$specification_run_id
 	else
 		lane=implementation
 		run_id=$implementation_run_id
@@ -67,13 +67,13 @@ real_work_supervise() {
 			previous_state=$state
 		fi
 		case "$lane:$state" in
-		elaboration:implementation_bound)
+		specification:implementation_bound)
 			lane=implementation
 			run_id=$implementation_run_id
 			previous_state=""
 			continue
 			;;
-		elaboration:waiting_for_specification_approval|elaboration:pending|elaboration:unobserved|implementation:pending|implementation:unobserved|implementation:publication_ready)
+		specification:waiting_for_specification_approval|specification:pending|specification:unobserved|implementation:pending|implementation:unobserved|implementation:publication_ready)
 			;;
 		implementation:published)
 			return 0
@@ -84,7 +84,7 @@ real_work_supervise() {
 				printf 'observe exact run: freesided resume -db %q -run %q\n' "$db_path" "$run_id" >&2
 			fi
 			;;
-		elaboration:attention_required|elaboration:failed|elaboration:lost|elaboration:blocked|implementation:failed|implementation:lost|implementation:blocked)
+		specification:attention_required|specification:failed|specification:lost|specification:blocked|implementation:failed|implementation:lost|implementation:blocked)
 			real_work_report_failure "$lane" "$run_id" "$snapshot_path"
 			return 1
 			;;

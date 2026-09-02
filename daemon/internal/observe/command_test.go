@@ -242,9 +242,9 @@ func TestFollowCommandPrintsBoundedSupervisionSnapshot(t *testing.T) {
 		ID: followRun, ProjectID: "project-follow", SpecDigest: "sha256:spec",
 		PolicyDigest: "sha256:policy",
 		Stages: []domain.Stage{{
-			ID: "stage-elaboration", RunID: followRun, Name: string(domain.StageNameElaboration),
+			ID: "stage-specification", RunID: followRun, Name: string(domain.StageNameSpecification),
 			Attempts: []domain.Attempt{{
-				ID: "attempt-elaboration", StageID: "stage-elaboration", Number: 1,
+				ID: "attempt-specification", StageID: "stage-specification", Number: 1,
 				InvocationID: followInvocation,
 			}},
 		}},
@@ -282,7 +282,7 @@ func TestFollowCommandPrintsBoundedSupervisionSnapshot(t *testing.T) {
 		t.Fatalf("decode snapshot %q: %v", output, err)
 	}
 	if got.RunID != followRun || got.State != "waiting_for_specification_approval" ||
-		got.Outcome != domain.RunOutcomePending || got.LastStage != string(domain.StageNameElaboration) {
+		got.Outcome != domain.RunOutcomePending || got.LastStage != string(domain.StageNameSpecification) {
 		t.Fatalf("snapshot identity/state = %+v", got)
 	}
 	if len(got.AttentionItems) != 1 || got.AttentionItems[0].ID != item.ID ||
@@ -402,33 +402,33 @@ func TestFollowCommandSnapshotProjectsAdjudications(t *testing.T) {
 	}
 }
 
-func TestFollowCommandReportsPersistedElaborationAsImplementationBound(t *testing.T) {
+func TestFollowCommandReportsPersistedSpecificationAsImplementationBound(t *testing.T) {
 	st, path := openFollowStore(t)
 	rootImplementationRunID := domain.RunID("run-follow-implementation")
 	campaignID, err := engine.ProductionCampaignIDForImplementation(rootImplementationRunID)
 	if err != nil {
 		t.Fatalf("ProductionCampaignIDForImplementation: %v", err)
 	}
-	elaborationRunID, err := engine.ElaborationRunIDForImplementation(rootImplementationRunID)
+	specificationRunID, err := engine.SpecificationRunIDForImplementation(rootImplementationRunID)
 	if err != nil {
-		t.Fatalf("ElaborationRunIDForImplementation: %v", err)
+		t.Fatalf("SpecificationRunIDForImplementation: %v", err)
 	}
 	approvedSpec := domain.Digest("sha256:approved-spec")
 	attempt := domain.ProductionAttempt{
 		CampaignID: campaignID, AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
 		SourceDigest: "sha256:source", PublicationDigest: "sha256:publication",
-		ElaborationRunID:    elaborationRunID,
+		SpecificationRunID:  specificationRunID,
 		ImplementationRunID: rootImplementationRunID,
 	}
 	run := domain.Run{
-		ID: elaborationRunID, ProjectID: "project-follow", SpecDigest: attempt.SourceDigest,
+		ID: specificationRunID, ProjectID: "project-follow", SpecDigest: attempt.SourceDigest,
 		PolicyDigest: "sha256:policy", CampaignID: campaignID, AttemptNumber: 1,
 		Stages: []domain.Stage{{
-			ID: "stage-elaboration", RunID: elaborationRunID, Name: string(domain.StageNameElaboration),
+			ID: "stage-specification", RunID: specificationRunID, Name: string(domain.StageNameSpecification),
 		}},
 	}
 	ctx := context.Background()
-	invocationID := domain.InvocationID("inv-follow-elaboration")
+	invocationID := domain.InvocationID("inv-follow-specification")
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutProductionAttempt(ctx, attempt); err != nil {
 			return err
@@ -440,14 +440,14 @@ func TestFollowCommandReportsPersistedElaborationAsImplementationBound(t *testin
 			return err
 		}
 		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
-			RunID: elaborationRunID, Kind: domain.MilestoneRunSubmitted,
+			RunID: specificationRunID, Kind: domain.MilestoneRunSubmitted,
 			InvocationID: &invocationID, RecordedAt: followAt(0),
 		})
 	}); err != nil {
-		t.Fatalf("seed persisted elaboration: %v", err)
+		t.Fatalf("seed persisted specification: %v", err)
 	}
 
-	output, err := runFollowCLI(t, "-db", path, "-run", string(elaborationRunID), "-snapshot")
+	output, err := runFollowCLI(t, "-db", path, "-run", string(specificationRunID), "-snapshot")
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
@@ -456,10 +456,10 @@ func TestFollowCommandReportsPersistedElaborationAsImplementationBound(t *testin
 		t.Fatalf("decode snapshot %q: %v", output, err)
 	}
 	if got.State != "implementation_bound" || got.Lineage == nil ||
-		got.Lineage.ElaborationRunID != elaborationRunID ||
+		got.Lineage.SpecificationRunID != specificationRunID ||
 		got.Lineage.ImplementationRunID != rootImplementationRunID ||
 		got.Lineage.ApprovedSpecDigest != approvedSpec {
-		t.Fatalf("persisted elaboration snapshot = %+v", got)
+		t.Fatalf("persisted specification snapshot = %+v", got)
 	}
 }
 

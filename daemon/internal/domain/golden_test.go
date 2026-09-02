@@ -727,7 +727,7 @@ func TestGolden(t *testing.T) {
 		CampaignID: "campaign-1", AttemptNumber: 2, Kind: domain.ProductionAttemptRetry,
 		Reason: "Retry after repairing the acceptance rig", ParentRunID: "run-0",
 		SourceDigest: "sha256:source", ApprovedSpecDigest: "sha256:spec",
-		ElaborationRunID: "run-elaboration-1", ImplementationRunID: "run-1",
+		SpecificationRunID: "run-specification-1", ImplementationRunID: "run-1",
 	}
 
 	// The provider identity the stage below runs under, and a live lease on
@@ -1282,12 +1282,12 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	intakeIssueSource := domain.ElaborationSource{
-		Kind:         domain.ElaborationSourceIssueSubject,
+	intakeIssueSource := domain.SpecificationSource{
+		Kind:         domain.SpecificationSourceIssueSubject,
 		IssueSubject: &domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 42, IssueNumber: 7},
 	}
-	intakeSpecSource := domain.ElaborationSource{
-		Kind: domain.ElaborationSourceSpecArtifact, SpecArtifactID: "spec-art-1",
+	intakeSpecSource := domain.SpecificationSource{
+		Kind: domain.SpecificationSourceWorkItemArtifact, WorkItemArtifactID: "spec-art-1",
 	}
 	intakeAdmittedOccurrence := domain.IntakeOccurrence{
 		Repo: "owner/repo", RepositoryID: 42, IssueNumber: 7, Label: "freeside",
@@ -1296,8 +1296,8 @@ func TestGolden(t *testing.T) {
 			ProposalInstanceID: "proposal-1",
 			ProposalDigest:     domain.Digest(contentaddr.Sum([]byte("intake-proposal"))),
 			Subject: domain.IntakeSubjectBinding{
-				ProjectID: "proj-1", ElaborationRunID: "run-elab-1",
-				WorkUnitID:           domain.WorkUnitIDForRun("run-elab-1"),
+				ProjectID: "proj-1", SpecificationRunID: "run-spec-1",
+				WorkUnitID:           domain.WorkUnitIDForRun("run-spec-1"),
 				PolicyArtifactID:     "policy-art-1",
 				PolicyArtifactDigest: domain.Digest(contentaddr.Sum([]byte("intake-resolved-policy"))),
 				ResolvedPolicyDigest: domain.Digest(contentaddr.Sum([]byte("intake-resolved-policy"))),
@@ -1335,8 +1335,8 @@ func TestGolden(t *testing.T) {
 	}{
 		{"intake_occurrence", intakeFreshOccurrence},
 		{"intake_occurrence_admitted", intakeAdmittedOccurrence},
-		{"elaboration_source_spec", intakeSpecSource},
-		{"elaboration_source_issue", intakeIssueSource},
+		{"specification_source_work_item", intakeSpecSource},
+		{"specification_source_issue", intakeIssueSource},
 		{"attention_item_base_freshness", freshItem},
 		{"attention_item_readiness_invalidation", invalidatedItem},
 		{"attention_item_identity_changed", identityInvalidatedItem},

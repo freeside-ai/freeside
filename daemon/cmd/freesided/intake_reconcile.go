@@ -15,10 +15,10 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/intake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -40,7 +40,7 @@ const (
 	defaultIntakeInterval = 15 * time.Minute
 
 	// intakeForgeResearchHost is the forge API host the loop guarantees in the
-	// resolved policy's research allowlist, so the elaborator's issue fetch (the
+	// resolved policy's research allowlist, so the specifier's issue fetch (the
 	// only place issue content legitimately enters, as research) is admitted
 	// regardless of operator allowlist configuration.
 	intakeForgeResearchHost = "https://api.github.com"
@@ -53,7 +53,7 @@ var errIntakeRepositoryRebound = errors.New(
 	"initiator repository name resolves to a different repository id")
 
 // errIntakeForgeHostNotAllowed marks an initiator whose research allowlist does
-// not admit the forge host, so the elaborator's issue fetch could not succeed.
+// not admit the forge host, so the specifier's issue fetch could not succeed.
 // Admission fails closed rather than silently widening the operator's policy.
 var errIntakeForgeHostNotAllowed = errors.New(
 	"initiator research allowlist does not admit the forge host")
@@ -240,14 +240,14 @@ func (r *intakeReconciler) reconcilePresent(ctx context.Context, init intakeInit
 // admit performs the per-occurrence admission orchestration, each step
 // idempotent and replay-convergent: derive the run identities, build the
 // resolved policy, synthesize and store the coordinates-only work-item document,
-// persist the reserved elaboration run, register the project authority, mint the
+// persist the reserved specification run, register the project authority, mint the
 // declaration, admit the run proposal under the occurrence's derived key, and
 // bind the admission. See the decision note for the reserved-run adoption model.
 func (r *intakeReconciler) admit(
 	ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence,
 ) (domain.IntakeOccurrence, error) {
 	implementationRunID := intakeImplementationRunID(occurrence)
-	elaborationRunID, err := engine.ElaborationRunIDForImplementation(implementationRunID)
+	specificationRunID, err := engine.SpecificationRunIDForImplementation(implementationRunID)
 	if err != nil {
 		return domain.IntakeOccurrence{}, err
 	}
@@ -262,7 +262,7 @@ func (r *intakeReconciler) admit(
 	if err := requireForgeResearchHost(init.PolicyKeys); err != nil {
 		return domain.IntakeOccurrence{}, err
 	}
-	resolvedPolicy, err := domain.NewResolvedPolicy(elaborationRunID, init.PolicyKeys)
+	resolvedPolicy, err := domain.NewResolvedPolicy(specificationRunID, init.PolicyKeys)
 	if err != nil {
 		return domain.IntakeOccurrence{}, fmt.Errorf("resolve policy: %w", err)
 	}
@@ -299,8 +299,8 @@ func (r *intakeReconciler) admit(
 	if _, err := r.blobs.Put(policyArtifact.Digest, bytes.NewReader(policyBody)); err != nil {
 		return domain.IntakeOccurrence{}, fmt.Errorf("store policy bytes: %w", err)
 	}
-	reservedRun := engine.NewReservedElaborationRun(
-		elaborationRunID, init.ProjectID, workItem.Digest, resolvedPolicy.Digest)
+	reservedRun := engine.NewReservedSpecificationRun(
+		specificationRunID, init.ProjectID, workItem.Digest, resolvedPolicy.Digest)
 	reservedRun.CampaignID = campaignID
 	reservedRun.AttemptNumber = 1
 	if err := r.store.Write(ctx, func(tx *store.WriteTx) error {
@@ -312,7 +312,7 @@ func (r *intakeReconciler) admit(
 		}
 		if err := tx.PutProductionAttempt(ctx, domain.ProductionAttempt{
 			CampaignID: campaignID, AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
-			SourceDigest: workItem.Digest, PublicationDigest: publicationDigest, Publication: publicationBody, ElaborationRunID: elaborationRunID,
+			SourceDigest: workItem.Digest, PublicationDigest: publicationDigest, Publication: publicationBody, SpecificationRunID: specificationRunID,
 			ImplementationRunID: implementationRunID,
 		}); err != nil {
 			return err
@@ -327,7 +327,7 @@ func (r *intakeReconciler) admit(
 			return err
 		}
 		_, err := tx.MintIntakeDeclaration(ctx,
-			occurrence.RepositoryID, occurrence.IssueNumber, occurrence.Label, occurrence.Ordinal, elaborationRunID)
+			occurrence.RepositoryID, occurrence.IssueNumber, occurrence.Label, occurrence.Ordinal, specificationRunID)
 		return err
 	}); err != nil {
 		return domain.IntakeOccurrence{}, fmt.Errorf("reserve run and mint declaration: %w", err)
@@ -339,7 +339,7 @@ func (r *intakeReconciler) admit(
 		AdmissionKey:    occurrence.ProposalAdmissionKey(),
 		Kind:            domain.EffectRunProposal,
 		Parameters: domain.RunProposalParameters{
-			SubjectHandle:     domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(elaborationRunID)),
+			SubjectHandle:     domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(specificationRunID)),
 			Intent:            domain.RunProposalIntentImplement,
 			ExpectedCostUnits: init.ExpectedCostUnits,
 			Scope: domain.RunProposalScope{
@@ -379,8 +379,8 @@ func (r *intakeReconciler) decide(ctx context.Context, init intakeInitiator, occ
 	if occurrence.Admission == nil {
 		return nil
 	}
-	elaborationRunID := occurrence.Admission.Subject.ElaborationRunID
-	started, err := r.elaborationStarted(ctx, elaborationRunID)
+	specificationRunID := occurrence.Admission.Subject.SpecificationRunID
+	started, err := r.specificationStarted(ctx, specificationRunID)
 	if err != nil {
 		return err
 	}
@@ -394,7 +394,7 @@ func (r *intakeReconciler) decide(ctx context.Context, init intakeInitiator, occ
 	if decidedStart {
 		// An operator decided start on a propose card, or a prior pass recorded
 		// the auto_start decision but crashed before launching: launch now
-		// (SubmitElaborationRun converges).
+		// (SubmitSpecificationRun converges).
 		return r.launch(ctx, init, occurrence)
 	}
 	// The card is open and undecided. A prior durable refusal leaves it an
@@ -405,7 +405,7 @@ func (r *intakeReconciler) decide(ctx context.Context, init intakeInitiator, occ
 	var resolved domain.ResolvedPolicy
 	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		resolved, err = tx.GetResolvedPolicy(ctx, elaborationRunID)
+		resolved, err = tx.GetResolvedPolicy(ctx, specificationRunID)
 		return err
 	}); err != nil {
 		return err
@@ -515,39 +515,39 @@ func (r *intakeReconciler) launch(ctx context.Context, init intakeInitiator, occ
 	if err != nil {
 		return err
 	}
-	if _, err := engine.SubmitElaborationRun(ctx, r.store, spec); err != nil {
-		return fmt.Errorf("submit elaboration run: %w", err)
+	if _, err := engine.SubmitSpecificationRun(ctx, r.store, spec); err != nil {
+		return fmt.Errorf("submit specification run: %w", err)
 	}
 	return nil
 }
 
-// startSpec reconstructs the issue-subject ElaborationRunSpec from the admitted
+// startSpec reconstructs the issue-subject SpecificationRunSpec from the admitted
 // occurrence, deterministically, so a launch and its replays submit identical
 // bytes. The work-item artifact id and the publication are pure functions of the
 // occurrence coordinates and the initiator identity; the resolved policy is the
 // one persisted at admission.
 func (r *intakeReconciler) startSpec(
 	ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence,
-) (engine.ElaborationRunSpec, error) {
-	elaborationRunID := occurrence.Admission.Subject.ElaborationRunID
+) (engine.SpecificationRunSpec, error) {
+	specificationRunID := occurrence.Admission.Subject.SpecificationRunID
 	implementationRunID := intakeImplementationRunID(occurrence)
 	campaignID, err := engine.ProductionCampaignIDForImplementation(implementationRunID)
 	if err != nil {
-		return engine.ElaborationRunSpec{}, err
+		return engine.SpecificationRunSpec{}, err
 	}
 	var resolved domain.ResolvedPolicy
 	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		resolved, err = tx.GetResolvedPolicy(ctx, elaborationRunID)
+		resolved, err = tx.GetResolvedPolicy(ctx, specificationRunID)
 		return err
 	}); err != nil {
-		return engine.ElaborationRunSpec{}, err
+		return engine.SpecificationRunSpec{}, err
 	}
 	workItemDoc := intakeWorkItemDocument(occurrence)
 	workItem, err := submissionArtifact(domain.ArtifactKindSpecification,
 		domain.Digest(contentaddr.Sum(workItemDoc)), domain.EvidenceMediaTextMarkdown, int64(len(workItemDoc)))
 	if err != nil {
-		return engine.ElaborationRunSpec{}, err
+		return engine.SpecificationRunSpec{}, err
 	}
 	issue := occurrence.IssueNumber
 	var attempt domain.ProductionAttempt
@@ -561,34 +561,34 @@ func (r *intakeReconciler) startSpec(
 	publicationBytes := json.RawMessage(nil)
 	if attemptErr == nil {
 		if err := json.Unmarshal(attempt.Publication, &publication); err != nil {
-			return engine.ElaborationRunSpec{}, fmt.Errorf("decode admitted publication: %w", err)
+			return engine.SpecificationRunSpec{}, fmt.Errorf("decode admitted publication: %w", err)
 		}
 		if attempt.PublicationDigest == "" || submissionBytes(attempt.Publication).digest != attempt.PublicationDigest {
-			return engine.ElaborationRunSpec{}, fmt.Errorf("admitted publication disagrees with attempt: %w", domain.ErrParentKeyMismatch)
+			return engine.SpecificationRunSpec{}, fmt.Errorf("admitted publication disagrees with attempt: %w", domain.ErrParentKeyMismatch)
 		}
 		publicationDigest, publicationBytes = attempt.PublicationDigest, attempt.Publication
 	} else if !errors.Is(attemptErr, store.ErrNotFound) {
-		return engine.ElaborationRunSpec{}, attemptErr
+		return engine.SpecificationRunSpec{}, attemptErr
 	} else {
 		var reserved domain.Run
 		if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
 			var err error
-			reserved, err = tx.GetRun(ctx, elaborationRunID)
+			reserved, err = tx.GetRun(ctx, specificationRunID)
 			return err
 		}); err != nil || reserved.CampaignID != "" || reserved.AttemptNumber != 0 {
-			return engine.ElaborationRunSpec{}, fmt.Errorf("legacy reservation lookup: %w", attemptErr)
+			return engine.SpecificationRunSpec{}, fmt.Errorf("legacy reservation lookup: %w", attemptErr)
 		}
 		body, err := json.Marshal(publication)
 		if err != nil {
-			return engine.ElaborationRunSpec{}, fmt.Errorf("encode legacy publication: %w", err)
+			return engine.SpecificationRunSpec{}, fmt.Errorf("encode legacy publication: %w", err)
 		}
 		publicationDigest = submissionBytes(body).digest
 	}
 	if err := publication.Validate(); err != nil {
-		return engine.ElaborationRunSpec{}, fmt.Errorf("validate publication: %w", err)
+		return engine.SpecificationRunSpec{}, fmt.Errorf("validate publication: %w", err)
 	}
-	return engine.ElaborationRunSpec{
-		ElaborationRunID:    elaborationRunID,
+	return engine.SpecificationRunSpec{
+		SpecificationRunID:  specificationRunID,
 		ImplementationRunID: implementationRunID,
 		CampaignID:          campaignID,
 		AttemptNumber:       1,
@@ -604,8 +604,8 @@ func (r *intakeReconciler) startSpec(
 			BoundIssue:          &issue,
 			DeclaredPaths:       domain.CanonicalDeclaredPaths(resolved),
 		},
-		Source: domain.ElaborationSource{
-			Kind: domain.ElaborationSourceIssueSubject,
+		Source: domain.SpecificationSource{
+			Kind: domain.SpecificationSourceIssueSubject,
 			IssueSubject: &domain.IssueSubjectRef{
 				Repo: occurrence.Repo, RepositoryID: occurrence.RepositoryID, IssueNumber: occurrence.IssueNumber,
 			},
@@ -626,12 +626,12 @@ func (r *intakeReconciler) refuse(
 	})
 }
 
-// elaborationStarted reports whether the reserved elaboration run's iteration-1
+// specificationStarted reports whether the reserved specification run's iteration-1
 // dispatch marker exists, i.e. a start has already launched it.
-func (r *intakeReconciler) elaborationStarted(ctx context.Context, elaborationRunID domain.RunID) (bool, error) {
-	present, err := engine.HasElaborationDispatchMarker(ctx, r.store, elaborationRunID)
+func (r *intakeReconciler) specificationStarted(ctx context.Context, specificationRunID domain.RunID) (bool, error) {
+	present, err := engine.HasSpecificationDispatchMarker(ctx, r.store, specificationRunID)
 	if err != nil {
-		return false, fmt.Errorf("inspect elaboration start: %w", err)
+		return false, fmt.Errorf("inspect specification start: %w", err)
 	}
 	return present, nil
 }
@@ -657,7 +657,7 @@ func (r *intakeReconciler) proposalDecidedStart(
 	return decided, nil
 }
 
-// subjectInputStatus re-checks the one elaboration input the admission binding
+// subjectInputStatus re-checks the one specification input the admission binding
 // names (the policy artifact) plus the reserved run's work-item source at start
 // time. The read re-gate deliberately tolerates later unavailability (#720), so
 // the start records subject_input_missing / subject_input_stale here rather than
@@ -665,7 +665,7 @@ func (r *intakeReconciler) proposalDecidedStart(
 func (r *intakeReconciler) subjectInputStatus(
 	ctx context.Context, occurrence domain.IntakeOccurrence,
 ) (missing, stale bool, err error) {
-	elaborationRunID := occurrence.Admission.Subject.ElaborationRunID
+	specificationRunID := occurrence.Admission.Subject.SpecificationRunID
 	workItemDoc := intakeWorkItemDocument(occurrence)
 	workItem, err := submissionArtifact(domain.ArtifactKindSpecification,
 		domain.Digest(contentaddr.Sum(workItemDoc)), domain.EvidenceMediaTextMarkdown, int64(len(workItemDoc)))
@@ -673,7 +673,7 @@ func (r *intakeReconciler) subjectInputStatus(
 		return false, false, err
 	}
 	readErr := r.store.Read(ctx, func(tx *store.ReadTx) error {
-		run, err := tx.GetRun(ctx, elaborationRunID)
+		run, err := tx.GetRun(ctx, specificationRunID)
 		if err != nil {
 			return err
 		}
@@ -807,7 +807,7 @@ func (r *intakeReconciler) advanceDeparture(ctx context.Context, occurrence doma
 		}
 		if decided {
 			if _, err := tx.GetOutbox(ctx,
-				engine.ElaborationDispatchMarkerKey(occurrence.Admission.Subject.ElaborationRunID)); errors.Is(err, store.ErrNotFound) {
+				engine.SpecificationDispatchMarkerKey(occurrence.Admission.Subject.SpecificationRunID)); errors.Is(err, store.ErrNotFound) {
 				return errIntakeDeferDepartureRetire
 			} else if err != nil {
 				return err
@@ -824,7 +824,7 @@ func (r *intakeReconciler) advanceDeparture(ctx context.Context, occurrence doma
 // decided start but not yet started, before the occurrence is retired. It
 // reports whether it launched. A proposal still open (no decision) or already
 // started needs nothing; only a decided-but-unstarted start would otherwise be
-// stranded by the departure. SubmitElaborationRun converges, so a replay is a
+// stranded by the departure. SubmitSpecificationRun converges, so a replay is a
 // no-op.
 func (r *intakeReconciler) launchDecidedDeparture(
 	ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence,
@@ -832,7 +832,7 @@ func (r *intakeReconciler) launchDecidedDeparture(
 	if occurrence.Admission == nil {
 		return false, nil
 	}
-	started, err := r.elaborationStarted(ctx, occurrence.Admission.Subject.ElaborationRunID)
+	started, err := r.specificationStarted(ctx, occurrence.Admission.Subject.SpecificationRunID)
 	if err != nil || started {
 		return false, err
 	}
@@ -848,8 +848,8 @@ func (r *intakeReconciler) launchDecidedDeparture(
 
 // intakeImplementationRunID derives the implementation run identity from the
 // occurrence's own upstream-event coordinates, so a re-observed occurrence
-// always resolves to the same run and the admission converges. The elaboration
-// run id derives from this (ElaborationRunIDForImplementation).
+// always resolves to the same run and the admission converges. The specification
+// run id derives from this (SpecificationRunIDForImplementation).
 func intakeImplementationRunID(occurrence domain.IntakeOccurrence) domain.RunID {
 	sum := sha256.Sum256([]byte("freeside.label-intake.implementation/v1\x00" + occurrence.UpstreamEventID()))
 	return domain.RunID("run-" + hex.EncodeToString(sum[:]))
@@ -871,18 +871,18 @@ func intakeStartCommandID(occurrence domain.IntakeOccurrence) string {
 }
 
 // intakeWorkItemDocument is the daemon-authored, coordinates-only work item
-// delivered to the elaborator in the specification role. It is a pure function
+// delivered to the specifier in the specification role. It is a pure function
 // of the occurrence coordinates and carries NO observed issue content (GQ1,
-// §5.13): the issue's title, body, and comments reach elaboration only as
-// elaborator-fetched research, never as authority. Its digest is the reserved
+// §5.13): the issue's title, body, and comments reach specification only as
+// specifier-fetched research, never as authority. Its digest is the reserved
 // run's SpecDigest, so the bytes must be deterministic across replays.
 func intakeWorkItemDocument(occurrence domain.IntakeOccurrence) []byte {
 	return []byte(fmt.Sprintf(
 		"# Freeside label-initiator work item\n\n"+
-			"This elaboration run was initiated by the presence of an initiator label on a\n"+
+			"This specification run was initiated by the presence of an initiator label on a\n"+
 			"repository issue. It carries only the issue coordinates below. The issue's own\n"+
-			"title, body, and comments are not included here and enter elaboration only as\n"+
-			"elaborator-fetched research, never as authority.\n\n"+
+			"title, body, and comments are not included here and enter specification only as\n"+
+			"specifier-fetched research, never as authority.\n\n"+
 			"- repository: %s\n"+
 			"- repository_id: %d\n"+
 			"- issue: %d\n"+
@@ -898,7 +898,7 @@ func intakePublication(init intakeInitiator, occurrence domain.IntakeOccurrence)
 		Title: fmt.Sprintf("Resolve %s#%d", occurrence.Repo, occurrence.IssueNumber),
 		Body: fmt.Sprintf(
 			"Automated resolution of issue #%d in %s, initiated by the %q label. "+
-				"The implementation is derived from the elaborated specification, not the issue text.",
+				"The implementation is derived from the specified specification, not the issue text.",
 			occurrence.IssueNumber, occurrence.Repo, occurrence.Label),
 		CommitAuthor: init.CommitAuthor,
 	}
@@ -913,7 +913,7 @@ func intakePublication(init intakeInitiator, occurrence domain.IntakeOccurrence)
 // falsely attest an egress the source never authorized).
 func requireForgeResearchHost(keys []domain.PolicyKey) error {
 	for _, key := range keys {
-		if key.Key != elaborate.PolicyResearchAllowlist {
+		if key.Key != specify.PolicyResearchAllowlist {
 			continue
 		}
 		for _, host := range strings.Split(key.Value, ",") {
@@ -925,5 +925,5 @@ func requireForgeResearchHost(keys []domain.PolicyKey) error {
 			intakeForgeResearchHost, errIntakeForgeHostNotAllowed)
 	}
 	return fmt.Errorf("initiator policy has no %s key: %w",
-		elaborate.PolicyResearchAllowlist, errIntakeForgeHostNotAllowed)
+		specify.PolicyResearchAllowlist, errIntakeForgeHostNotAllowed)
 }

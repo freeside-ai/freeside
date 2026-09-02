@@ -8,7 +8,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
-// The stage owns the launch (plan §5.4): elaboration, implementation, and
+// The stage owns the launch (plan §5.4): specification, implementation, and
 // review each define what they hand the harness — writer or read-only, the
 // output contract, severance, session mode, and an auxiliary-inference
 // policy. The adapter maps the launch to harness-native controls or declares

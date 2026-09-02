@@ -16,12 +16,12 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
-	elaboratefake "github.com/freeside-ai/freeside/daemon/internal/elaborate/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
+	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -126,7 +126,7 @@ func TestRunObservationTimelineForAPublishedRun(t *testing.T) {
 }
 
 // TestApprovedImplementationRemainsServedWhenObservationLagsExport is issue
-// #785's gated-approval regression. The real elaboration workflow creates the
+// #785's gated-approval regression. The real specification workflow creates the
 // digest-bound approval and implementation; the fixture records its ordinary
 // admission, start, and running observation before durable export advances
 // authority. Listing reads keep serving the run, the timeline derives
@@ -163,19 +163,19 @@ func TestApprovedImplementationRemainsServedWhenObservationLagsExport(t *testing
 		t.Fatal(err)
 	}
 
-	elaborationRunID := domain.RunID("run-elaboration-785")
+	specificationRunID := domain.RunID("run-specification-785")
 	implementationRunID := domain.RunID("run-implementation-785")
 	provenance := domain.KeyProvenance{
-		Source: domain.ProvenancePreset, Digest: submissionDigest(string(elaborationRunID), "policy-source"),
+		Source: domain.ProvenancePreset, Digest: submissionDigest(string(specificationRunID), "policy-source"),
 	}
 	source, policyArtifact, resolved := registerSubmissionArtifactsWithPolicyKeys(
-		t, st, string(elaborationRunID), []domain.PolicyKey{
-			{Key: elaborate.PolicySpecApproval, Value: "true", Provenance: provenance},
-			{Key: elaborate.PolicyMaxIterations, Value: "1", Provenance: provenance},
-			{Key: elaborate.PolicyStageActiveTime, Value: "1m", Provenance: provenance},
-			{Key: elaborate.PolicyApprovalWait, Value: "1m", Provenance: provenance},
-			{Key: elaborate.PolicyResearchAllowlist, Value: "https://docs.example", Provenance: provenance},
-			{Key: elaborate.PolicyResearchMaxBytes, Value: "1024", Provenance: provenance},
+		t, st, string(specificationRunID), []domain.PolicyKey{
+			{Key: specify.PolicySpecApproval, Value: "true", Provenance: provenance},
+			{Key: specify.PolicyMaxIterations, Value: "1", Provenance: provenance},
+			{Key: specify.PolicyStageActiveTime, Value: "1m", Provenance: provenance},
+			{Key: specify.PolicyApprovalWait, Value: "1m", Provenance: provenance},
+			{Key: specify.PolicyResearchAllowlist, Value: "https://docs.example", Provenance: provenance},
+			{Key: specify.PolicyResearchMaxBytes, Value: "1024", Provenance: provenance},
 		},
 	)
 	policyBody, err := json.Marshal(resolved.Keys)
@@ -186,7 +186,7 @@ func TestApprovedImplementationRemainsServedWhenObservationLagsExport(t *testing
 		digest domain.Digest
 		body   []byte
 	}{
-		{source.Digest, submissionSpecification(string(elaborationRunID))},
+		{source.Digest, submissionSpecification(string(specificationRunID))},
 		{policyArtifact.Digest, policyBody},
 	} {
 		if _, err := blobs.Put(input.digest, bytes.NewReader(input.body)); err != nil {
@@ -195,12 +195,12 @@ func TestApprovedImplementationRemainsServedWhenObservationLagsExport(t *testing
 	}
 	implementationPromptBody := []byte("Implement the approved specification.\n")
 	implementationPrompt := domain.Digest(contentaddr.Sum(implementationPromptBody))
-	elaborationPromptBody := []byte("Elaborate the work item into a bounded specification.\n")
-	elaborationPrompt := domain.Digest(contentaddr.Sum(elaborationPromptBody))
+	specificationPromptBody := []byte("Specify the work item into a bounded specification.\n")
+	specificationPrompt := domain.Digest(contentaddr.Sum(specificationPromptBody))
 	if _, err := blobs.Put(implementationPrompt, bytes.NewReader(implementationPromptBody)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := blobs.Put(elaborationPrompt, bytes.NewReader(elaborationPromptBody)); err != nil {
+	if _, err := blobs.Put(specificationPrompt, bytes.NewReader(specificationPromptBody)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -208,7 +208,7 @@ func TestApprovedImplementationRemainsServedWhenObservationLagsExport(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	fetcher, err := elaborate.NewFetcher(st, blobs, nil)
+	fetcher, err := specify.NewFetcher(st, blobs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,26 +231,26 @@ func TestApprovedImplementationRemainsServedWhenObservationLagsExport(t *testing
 			},
 			Workspace: "workspace-785", AuthIdentityID: &identity,
 		}, func() time.Time { return now }),
-		engine.WithElaboration(engine.ElaborationConfig{
+		engine.WithSpecification(engine.SpecificationConfig{
 			Fetcher: fetcher, Blobs: blobs, Now: func() time.Time { return now },
-			PromptPackageDigest: elaborationPrompt,
+			PromptPackageDigest: specificationPrompt,
 		}),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	elaborationInvocation := domain.InvocationID(engine.ElaborationDispatchMarkerKey(elaborationRunID))
-	if err := elaboratefake.Script(driver, elaborationInvocation, 0, 0, elaborate.Output{
-		Specification: &elaborate.Specification{
+	specificationInvocation := domain.InvocationID(engine.SpecificationDispatchMarkerKey(specificationRunID))
+	if err := specifyfake.Script(driver, specificationInvocation, 0, 0, specify.Output{
+		Specification: &specify.Specification{
 			Summary:    "The implementation plan is ready.",
 			Body:       "# Approved Specification\n\nImplement issue 785.",
-			Addressals: []elaborate.Addressal{},
+			Addressals: []specify.Addressal{},
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.SubmitElaborationRun(ctx, st, engine.ElaborationRunSpec{
-		ElaborationRunID: elaborationRunID, ImplementationRunID: implementationRunID,
+	if _, err := engine.SubmitSpecificationRun(ctx, st, engine.SpecificationRunSpec{
+		SpecificationRunID: specificationRunID, ImplementationRunID: implementationRunID,
 		ProjectID: "project-785", SourceArtifactID: source.ID, PolicyArtifactID: policyArtifact.ID,
 		ResolvedPolicy: resolved, Publication: engine.ProductionPublication{
 			Title: "Implement issue 785", Body: "Implements the approved specification.",

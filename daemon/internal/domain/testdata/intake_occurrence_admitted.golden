@@ -14,8 +14,8 @@
     "proposal_digest": "sha256:287db3ea97dadc785853bd270b6fff0febf259bb809856dca869751a49f847d5",
     "subject": {
       "project_id": "proj-1",
-      "work_unit_id": "workunit-run-elab-1",
-      "elaboration_run_id": "run-elab-1",
+      "work_unit_id": "workunit-run-spec-1",
+      "specification_run_id": "run-spec-1",
       "policy_artifact_id": "policy-art-1",
       "policy_artifact_digest": "sha256:214169d7fc1bae4fdabce21fe2bb7086cbb2785324d7774d1a51ae41b134e029",
       "resolved_policy_digest": "sha256:214169d7fc1bae4fdabce21fe2bb7086cbb2785324d7774d1a51ae41b134e029",

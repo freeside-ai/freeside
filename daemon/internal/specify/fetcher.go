@@ -1,4 +1,4 @@
-package elaborate
+package specify
 
 import (
 	"bytes"
@@ -85,7 +85,7 @@ type ResearchSource struct {
 // ResearchEvidence is the prompt-readable reconstruction of one stored
 // research envelope. Body is decoded from storage's base64 transport form;
 // the source fields keep the evidence attributable without exposing the
-// transport wrapper to the elaborator.
+// transport wrapper to the specifier.
 type ResearchEvidence struct {
 	Source ResearchSource
 	Body   string

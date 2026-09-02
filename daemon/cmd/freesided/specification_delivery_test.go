@@ -15,7 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-func TestProductionElaborationDeliveryValidatorRejectsPromptOverflow(t *testing.T) {
+func TestProductionSpecificationDeliveryValidatorRejectsPromptOverflow(t *testing.T) {
 	st, blobs, run, promptDigest := deliveryValidatorFixture(t, true)
 	priorBody := []byte(strings.Repeat("r", 32<<10))
 	putDeliveryArtifact(t, st, blobs, "research-prompt-overflow", priorBody)
@@ -23,17 +23,17 @@ func TestProductionElaborationDeliveryValidatorRejectsPromptOverflow(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = productionElaborationDeliveryValidator(materializer)(t.Context(),
+	err = productionSpecificationDeliveryValidator(materializer)(t.Context(),
 		deliveryStartSpec(t, run, promptDigest, []domain.Digest{
 			domain.Digest(contentaddr.Sum(priorBody)),
 		}))
-	if !errors.Is(err, engine.ErrElaborationInputUndeliverable) ||
+	if !errors.Is(err, engine.ErrSpecificationInputUndeliverable) ||
 		!errors.Is(err, claude.ErrUnsupportedStart) {
 		t.Fatalf("prompt overflow = %v, want durable undeliverable Claude input", err)
 	}
 }
 
-func TestProductionElaborationDeliveryValidatorRejectsAggregateOverflow(t *testing.T) {
+func TestProductionSpecificationDeliveryValidatorRejectsAggregateOverflow(t *testing.T) {
 	st, blobs, run, promptDigest := deliveryValidatorFixture(t, true)
 	body := bytes.Repeat([]byte("r"), int(exec.ProductionMaxInputBytes))
 	prior := make([]domain.Digest, 9)
@@ -46,9 +46,9 @@ func TestProductionElaborationDeliveryValidatorRejectsAggregateOverflow(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = productionElaborationDeliveryValidator(materializer)(t.Context(),
+	err = productionSpecificationDeliveryValidator(materializer)(t.Context(),
 		deliveryStartSpec(t, run, promptDigest, prior))
-	if !errors.Is(err, engine.ErrElaborationInputUndeliverable) ||
+	if !errors.Is(err, engine.ErrSpecificationInputUndeliverable) ||
 		!errors.Is(err, exec.ErrInputTooLarge) {
 		t.Fatalf("aggregate overflow = %v, want durable undeliverable materialized input", err)
 	}
@@ -112,17 +112,17 @@ func TestProductionRemediationDeliveryValidatorRejectsAggregateOverflow(t *testi
 	}
 }
 
-func TestStoreAdmissionAuthorityRejectsMissingElaborationMarker(t *testing.T) {
+func TestStoreAdmissionAuthorityRejectsMissingSpecificationMarker(t *testing.T) {
 	st, _, _, _ := deliveryValidatorFixture(t, true)
 	authority := storeAdmissionAuthority{store: st}
-	elaboration, err := authority.authenticateElaborationInvocation(
-		t.Context(), "inv-elaborate-run-missing-2", domain.ExecutionAdmission{
-			RunID: "run-missing", StageID: "elaborate-run-missing",
+	specification, err := authority.authenticateSpecificationInvocation(
+		t.Context(), "inv-specify-run-missing-2", domain.ExecutionAdmission{
+			RunID: "run-missing", StageID: "specify-run-missing",
 		},
 	)
-	if !elaboration || !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("missing elaboration marker = elaboration %t, error %v; want fail-closed ErrNotFound",
-			elaboration, err)
+	if !specification || !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing specification marker = specification %t, error %v; want fail-closed ErrNotFound",
+			specification, err)
 	}
 }
 
@@ -175,7 +175,7 @@ func deliveryValidatorFixture(
 	}
 	promptDigest := put(prompt)
 	return st, blobs, domain.Run{
-		ID: "elaboration-run", ProjectID: "project-1",
+		ID: "specification-run", ProjectID: "project-1",
 		SpecDigest: specDigest, PolicyDigest: policyDigest,
 	}, promptDigest
 }
@@ -195,7 +195,7 @@ func putDeliveryArtifact(
 	artifact, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: id, Type: domain.ArtifactKindResearch, Digest: digest,
 		Provenance: domain.Provenance{
-			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-elaborate-test-1",
+			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-specify-test-1",
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
 		Metadata: testRunEvidenceMetadata(int64(len(body))),

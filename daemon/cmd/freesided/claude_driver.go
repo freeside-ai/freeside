@@ -55,18 +55,18 @@ type claudeDriverConfig struct {
 	StateDir          string
 	RigTokenFile      string
 	ProviderEndpoints []string
-	// The prompt-package files are trusted implementation, elaboration, and
+	// The prompt-package files are trusted implementation, specification, and
 	// remediation inputs. The daemon derives every digest from ingested bytes.
-	PromptPackageFile            string
-	ElaborationPromptPackageFile string
-	RemediationPromptPackageFile string
-	VendorInstructions           string
-	Repo                         string
-	RepositoryID                 int64
-	BaseRef                      string
-	BaseSHA                      string
-	AuthIdentityID               domain.AuthIdentityID
-	AllowedPaths                 []string
+	PromptPackageFile              string
+	SpecificationPromptPackageFile string
+	RemediationPromptPackageFile   string
+	VendorInstructions             string
+	Repo                           string
+	RepositoryID                   int64
+	BaseRef                        string
+	BaseSHA                        string
+	AuthIdentityID                 domain.AuthIdentityID
+	AllowedPaths                   []string
 	// RunConformance executes the store-backed full ward suite against this
 	// exact runtime/image/configuration before the engine can admit work.
 	RunConformance bool
@@ -108,8 +108,8 @@ func (c claudeDriverConfig) validate() error {
 		return fmt.Errorf("-provider-endpoints is required in claude driver mode")
 	case c.PromptPackageFile == "":
 		return fmt.Errorf("-prompt-package is required in claude driver mode")
-	case c.ElaborationPromptPackageFile == "":
-		return fmt.Errorf("-elaboration-prompt-package is required in claude driver mode")
+	case c.SpecificationPromptPackageFile == "":
+		return fmt.Errorf("-specification-prompt-package is required in claude driver mode")
 	case c.RemediationPromptPackageFile == "":
 		return fmt.Errorf("-remediation-prompt-package is required in claude driver mode")
 	case c.VendorInstructions == "":
@@ -513,8 +513,8 @@ func (a storeAdmissionAuthority) AuthenticateStart(
 func (a storeAdmissionAuthority) authenticateInvocationStart(
 	ctx context.Context, id domain.InvocationID, admission domain.ExecutionAdmission, repo string,
 ) error {
-	elaboration, err := a.authenticateElaborationInvocation(ctx, id, admission)
-	if err != nil || elaboration {
+	specification, err := a.authenticateSpecificationInvocation(ctx, id, admission)
+	if err != nil || specification {
 		return err
 	}
 	_, _, err = a.authenticateInvocationCommitAuthorForStart(
@@ -523,41 +523,41 @@ func (a storeAdmissionAuthority) authenticateInvocationStart(
 	return err
 }
 
-func (a storeAdmissionAuthority) authenticateElaborationInvocation(
+func (a storeAdmissionAuthority) authenticateSpecificationInvocation(
 	ctx context.Context, id domain.InvocationID, admission domain.ExecutionAdmission,
 ) (bool, error) {
-	elaboration := false
+	specification := false
 	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
 		entry, err := tx.GetOutbox(ctx, string(id))
 		if err != nil {
 			return err
 		}
-		if entry.Kind != engine.KindElaborationInvocationRequested &&
-			entry.Kind != engine.KindElaborationDiscussionRequested {
+		if entry.Kind != engine.KindSpecificationInvocationRequested &&
+			entry.Kind != engine.KindSpecificationDiscussionRequested {
 			return nil
 		}
-		elaboration = true
-		if entry.Kind == engine.KindElaborationDiscussionRequested {
-			return engine.AuthenticateElaborationDiscussionTransition(
+		specification = true
+		if entry.Kind == engine.KindSpecificationDiscussionRequested {
+			return engine.AuthenticateSpecificationDiscussionTransition(
 				ctx, tx, entry, admission.RunID, admission.StageID,
 			)
 		}
-		return engine.AuthenticateElaborationInvocationTransition(
+		return engine.AuthenticateSpecificationInvocationTransition(
 			ctx, tx, entry, admission.RunID, admission.StageID,
 		)
 	})
 	if errors.Is(err, store.ErrNotFound) {
-		if elaboration || engine.IsElaborationInvocationIdentity(
+		if specification || engine.IsSpecificationInvocationIdentity(
 			id, admission.RunID, admission.StageID,
 		) {
-			return true, fmt.Errorf("authenticate elaboration invocation marker: %w", err)
+			return true, fmt.Errorf("authenticate specification invocation marker: %w", err)
 		}
 		return false, nil
 	}
 	if err != nil {
-		return elaboration, fmt.Errorf("authenticate elaboration invocation marker: %w", err)
+		return specification, fmt.Errorf("authenticate specification invocation marker: %w", err)
 	}
-	return elaboration, nil
+	return specification, nil
 }
 
 func (a storeAdmissionAuthority) ImportOptions(
@@ -585,10 +585,10 @@ func (a storeAdmissionAuthority) ImportOptions(
 	if err != nil {
 		return importer.Options{}, err
 	}
-	// An elaboration run imports under the specification finding profile: it
+	// A specification run imports under the specification finding profile: it
 	// publishes a typed JSON result, never workspace content, so incidental
 	// investigation debris must not definitively fail the invocation (#768).
-	if err := a.applyElaborationFindingProfile(ctx, id, admission, &opts); err != nil {
+	if err := a.applySpecificationFindingProfile(ctx, id, admission, &opts); err != nil {
 		return importer.Options{}, err
 	}
 	author, production, err := a.invocationImportAuthor(ctx, id, admission, spec.Base.Repo)
@@ -602,18 +602,18 @@ func (a storeAdmissionAuthority) ImportOptions(
 	return opts, nil
 }
 
-// applyElaborationFindingProfile sets the specification finding profile when
-// the invocation is an authenticated elaboration one, so both the live import
+// applySpecificationFindingProfile sets the specification finding profile when
+// the invocation is an authenticated specification one, so both the live import
 // and its terminal replay reconstruct the same profile from the same durable
-// marker (the omitempty field keeps a non-elaboration policy byte-identical).
-func (a storeAdmissionAuthority) applyElaborationFindingProfile(
+// marker (the omitempty field keeps a non-specification policy byte-identical).
+func (a storeAdmissionAuthority) applySpecificationFindingProfile(
 	ctx context.Context, id domain.InvocationID, admission domain.ExecutionAdmission, opts *importer.Options,
 ) error {
-	elaboration, err := a.authenticateElaborationInvocation(ctx, id, admission)
+	specification, err := a.authenticateSpecificationInvocation(ctx, id, admission)
 	if err != nil {
 		return err
 	}
-	if elaboration {
+	if specification {
 		profile := importer.FindingProfileSpecification
 		opts.Policy.FindingProfile = &profile
 	}
@@ -646,8 +646,8 @@ func (a storeAdmissionAuthority) ImportOptionsRecord(
 		return importer.Options{}, err
 	}
 	// Reconstruct the same specification profile the live import used, from the
-	// same durable elaboration marker, so the replayed ImportOptions match.
-	if err := a.applyElaborationFindingProfile(ctx, id, admission, &opts); err != nil {
+	// same durable specification marker, so the replayed ImportOptions match.
+	if err := a.applySpecificationFindingProfile(ctx, id, admission, &opts); err != nil {
 		return importer.Options{}, err
 	}
 	// This reconstructs an already-completed import from immutable records.
@@ -666,8 +666,8 @@ func (a storeAdmissionAuthority) ImportOptionsRecord(
 func (a storeAdmissionAuthority) invocationImportAuthor(
 	ctx context.Context, id domain.InvocationID, admission domain.ExecutionAdmission, repo string,
 ) (engine.ProductionCommitAuthor, bool, error) {
-	elaboration, err := a.authenticateElaborationInvocation(ctx, id, admission)
-	if err != nil || elaboration {
+	specification, err := a.authenticateSpecificationInvocation(ctx, id, admission)
+	if err != nil || specification {
 		return engine.ProductionCommitAuthor{}, false, err
 	}
 	return a.authenticateInvocationCommitAuthorRevalidated(
@@ -678,8 +678,8 @@ func (a storeAdmissionAuthority) invocationImportAuthor(
 func (a storeAdmissionAuthority) invocationImportRecordAuthor(
 	ctx context.Context, id domain.InvocationID, admission domain.ExecutionAdmission,
 ) (engine.ProductionCommitAuthor, bool, error) {
-	elaboration, err := a.authenticateElaborationInvocation(ctx, id, admission)
-	if err != nil || elaboration {
+	specification, err := a.authenticateSpecificationInvocation(ctx, id, admission)
+	if err != nil || specification {
 		return engine.ProductionCommitAuthor{}, false, err
 	}
 	return a.invocationCommitAuthor(ctx, id, admission)
@@ -1277,7 +1277,7 @@ type claudeComposition struct {
 	reviewHostInstructions          engine.ReviewHostInstructions
 	containerBin                    string
 	env                             engine.AdmissionEnvironment
-	elaborationPromptPackage        domain.Digest
+	specificationPromptPackage      domain.Digest
 	remediationPromptPackage        domain.Digest
 	derive                          engine.AdmissionDerivation
 	runConformance                  func(context.Context) error
@@ -1385,13 +1385,13 @@ func composeClaudeDriver(
 	if err != nil {
 		return nil, err
 	}
-	elaborationPromptPackage, elaborationPromptPackageBody, err := ingestPromptPackage(
-		blobs, cfg.ElaborationPromptPackageFile)
+	specificationPromptPackage, specificationPromptPackageBody, err := ingestPromptPackage(
+		blobs, cfg.SpecificationPromptPackageFile)
 	if err != nil {
 		return nil, err
 	}
 	if err := claude.ValidatePromptPackageRoles(
-		promptPackageBody, elaborationPromptPackageBody); err != nil {
+		promptPackageBody, specificationPromptPackageBody); err != nil {
 		return nil, fmt.Errorf("prompt package roles: %w", err)
 	}
 	remediationPromptPackage, remediationPromptPackageBody, err := ingestPromptPackage(
@@ -1681,11 +1681,11 @@ func composeClaudeDriver(
 		reviewConfigurationDigest: reviewConfigurationDigest, containerBin: cfg.ContainerBin,
 		shadowReviewConfigurationDigest: shadowReviewDigests.runtime,
 		shadowReviewCostOwner:           cfg.ShadowReviewCostOwner, shadowReviewRate: cfg.ShadowReviewRate,
-		reviewHostInstructions:   reviewHostInstructions,
-		env:                      env,
-		elaborationPromptPackage: elaborationPromptPackage,
-		remediationPromptPackage: remediationPromptPackage,
-		derive:                   claudeAdmissionDerivation(cfg),
+		reviewHostInstructions:     reviewHostInstructions,
+		env:                        env,
+		specificationPromptPackage: specificationPromptPackage,
+		remediationPromptPackage:   remediationPromptPackage,
+		derive:                     claudeAdmissionDerivation(cfg),
 		runConformance: func(runCtx context.Context) error {
 			return runClaudeConformance(
 				runCtx, st, transport, backend, cfg, janitor.WithStableCoverage,
@@ -2226,10 +2226,10 @@ func productionMaterializer(blobs *signet.BlobStore) (*exec.Materializer, error)
 	})
 }
 
-func productionElaborationDeliveryValidator(
+func productionSpecificationDeliveryValidator(
 	materializer *exec.Materializer,
 ) func(context.Context, exec.StartSpec) error {
-	return productionPromptDeliveryValidator(materializer, engine.ErrElaborationInputUndeliverable)
+	return productionPromptDeliveryValidator(materializer, engine.ErrSpecificationInputUndeliverable)
 }
 
 func productionImplementationDeliveryValidator(

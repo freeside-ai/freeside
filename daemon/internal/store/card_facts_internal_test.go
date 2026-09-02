@@ -109,11 +109,11 @@ func internalSpecRevisionFixture(
 ) (domain.AttentionItem, domain.AttentionItem, domain.Command, []domain.Artifact) {
 	t.Helper()
 	priorProvenance := domain.Provenance{
-		ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-elaborate-run-1-1",
+		ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-specify-run-1-1",
 		HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 	}
 	currentProvenance := priorProvenance
-	currentProvenance.ProducerInvocationID = "inv-elaborate-run-1-2"
+	currentProvenance.ProducerInvocationID = "inv-specify-run-1-2"
 	priorBody := "# Specification\n\nKeep the request valid."
 	currentBody := "# Specification\n\nKeep the request valid and bound it to 1 MiB."
 	summaryText := domain.ClaimText{
@@ -134,7 +134,7 @@ func internalSpecRevisionFixture(
 	current := artifact("spec-implementation-run-2", domain.ArtifactKindSpecification, currentBody, currentProvenance)
 	commentBody := "Bound the request body."
 	feedbackProvenance := domain.Provenance{
-		ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-elaborate-run-1-1",
+		ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-specify-run-1-1",
 		HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 	}
 	feedback := artifact("spec-feedback-revise-spec", domain.ArtifactKindResearch, commentBody, feedbackProvenance)
@@ -248,7 +248,7 @@ func recordInternalSpecApprovalTerminal(
 	if specification == nil {
 		return domain.ErrParentKeyMismatch
 	}
-	terminal := blockedWaitElaborationTerminal{
+	terminal := blockedWaitSpecificationTerminal{
 		InvocationID: specification.Provenance.ProducerInvocationID,
 		Iteration:    iteration, Status: "completed",
 		ResearchArtifactIDs: []domain.ArtifactID{}, SpecArtifactID: &specification.Artifact,
@@ -260,7 +260,7 @@ func recordInternalSpecApprovalTerminal(
 	}
 	return st.WriteInternal(ctx, func(tx *InternalTx) error {
 		_, _, err := tx.RecordInbox(
-			ctx, string(terminal.InvocationID), blockedWaitElaborationTerminalKind, body,
+			ctx, string(terminal.InvocationID), blockedWaitSpecificationTerminalKind, body,
 		)
 		return err
 	})
@@ -379,7 +379,7 @@ func TestAttentionItemReadAuthenticatesBlockedWait(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	at := time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC)
-	invocationID := domain.InvocationID("inv-elaborate-run-blocked-card-fact-1")
+	invocationID := domain.InvocationID("inv-specify-run-blocked-card-fact-1")
 	run := domain.Run{
 		ID: "run-blocked-card-fact", ProjectID: "project-1",
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
@@ -428,10 +428,10 @@ func TestAttentionItemReadAuthenticatesBlockedWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	terminalBody := []byte(`{"invocation_id":"inv-elaborate-run-blocked-card-fact-1","iteration":1,"status":"completed","research_artifact_ids":[],"spec_artifact_id":"spec-implementation-run-1","approval_item_id":"spec-approval-implementation-run-1"}`)
+	terminalBody := []byte(`{"invocation_id":"inv-specify-run-blocked-card-fact-1","iteration":1,"status":"completed","research_artifact_ids":[],"spec_artifact_id":"spec-implementation-run-1","approval_item_id":"spec-approval-implementation-run-1"}`)
 	if err := st.WriteInternal(ctx, func(tx *InternalTx) error {
 		_, _, err := tx.RecordInbox(
-			ctx, string(invocationID), blockedWaitElaborationTerminalKind, terminalBody,
+			ctx, string(invocationID), blockedWaitSpecificationTerminalKind, terminalBody,
 		)
 		return err
 	}); err != nil {
@@ -532,7 +532,7 @@ func TestAttentionItemReadAuthenticatesBlockedWait(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := st.db.ExecContext(ctx,
 				`UPDATE inbox SET kind = ?, payload = ? WHERE idempotency_key = ?`,
-				blockedWaitElaborationTerminalKind, terminalBody, invocationID,
+				blockedWaitSpecificationTerminalKind, terminalBody, invocationID,
 			); err != nil {
 				t.Fatal(err)
 			}
@@ -556,7 +556,7 @@ func TestAttentionItemReadAuthenticatesBlockedWait(t *testing.T) {
 	}
 	if _, err := st.db.ExecContext(ctx,
 		`UPDATE inbox SET kind = ?, payload = ? WHERE idempotency_key = ?`,
-		blockedWaitElaborationTerminalKind, terminalBody, invocationID,
+		blockedWaitSpecificationTerminalKind, terminalBody, invocationID,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -579,7 +579,7 @@ func TestAttentionItemReadAuthenticatesBlockedWait(t *testing.T) {
 }
 
 func TestBlockedWaitTerminalSummaryMatchesApproval(t *testing.T) {
-	invocationID := domain.InvocationID("inv-elaborate-elaboration-run-1")
+	invocationID := domain.InvocationID("inv-specify-specification-run-1")
 	provenance := domain.Provenance{
 		ProducerClass: domain.ProducerAgent, ProducerInvocationID: invocationID,
 		HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
@@ -608,7 +608,7 @@ func TestBlockedWaitTerminalSummaryMatchesApproval(t *testing.T) {
 			Metadata: claimTextMeta(summaryText),
 		},
 	}}
-	terminal := blockedWaitElaborationTerminal{SummaryDigest: &summaryDigest}
+	terminal := blockedWaitSpecificationTerminal{SummaryDigest: &summaryDigest}
 	if !blockedWaitTerminalSummaryMatches(terminal, approval, specification) {
 		t.Fatal("canonical summary binding rejected")
 	}
@@ -619,16 +619,16 @@ func TestBlockedWaitTerminalSummaryMatchesApproval(t *testing.T) {
 }
 
 func TestBlockedWaitTerminalIdentityMatchesApproval(t *testing.T) {
-	elaborationRun := domain.RunID("elaboration-run")
+	specificationRun := domain.RunID("specification-run")
 	approval := domain.AttentionItem{
 		ID: "spec-approval-implementation-run-1",
 		Subject: domain.Subject{
-			Type: domain.SubjectRun, ID: domain.SubjectID(elaborationRun),
-			RunID: &elaborationRun,
+			Type: domain.SubjectRun, ID: domain.SubjectID(specificationRun),
+			RunID: &specificationRun,
 		},
 	}
-	terminal := blockedWaitElaborationTerminal{
-		InvocationID: "inv-elaborate-elaboration-run-1", Iteration: 1,
+	terminal := blockedWaitSpecificationTerminal{
+		InvocationID: "inv-specify-specification-run-1", Iteration: 1,
 	}
 	specification := domain.Artifact{ID: "spec-implementation-run-1"}
 	if !blockedWaitTerminalIdentityMatches(terminal, approval, specification) {
@@ -645,9 +645,9 @@ func TestBlockedWaitTerminalIdentityMatchesApproval(t *testing.T) {
 			specification: "spec--1", approval: "spec-approval--1",
 		},
 		{
-			name:          "same elaboration and implementation run",
-			specification: "spec-elaboration-run-1",
-			approval:      "spec-approval-elaboration-run-1",
+			name:          "same specification and implementation run",
+			specification: "spec-specification-run-1",
+			approval:      "spec-approval-specification-run-1",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

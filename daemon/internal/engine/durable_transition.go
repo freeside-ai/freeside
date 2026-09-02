@@ -11,8 +11,8 @@ import (
 type DurableTransition string
 
 const (
-	DurableTransitionElaborationOutcome    DurableTransition = "elaboration_outcome"
-	DurableTransitionElaborationAnswer     DurableTransition = "elaboration_answer"
+	DurableTransitionSpecificationOutcome  DurableTransition = "specification_outcome"
+	DurableTransitionSpecificationAnswer   DurableTransition = "specification_answer"
 	DurableTransitionSpecificationApproval DurableTransition = "specification_approval"
 	DurableTransitionOperatorFeedback      DurableTransition = "operator_feedback"
 	DurableTransitionVerificationEvidence  DurableTransition = "verification_evidence"
@@ -28,8 +28,8 @@ const (
 // Stage-driver seed/export boundaries and atomic AttentionItem resolution have
 // sibling registries in their owning test suites.
 var AllDurableTransitions = []DurableTransition{
-	DurableTransitionElaborationOutcome,
-	DurableTransitionElaborationAnswer,
+	DurableTransitionSpecificationOutcome,
+	DurableTransitionSpecificationAnswer,
 	DurableTransitionSpecificationApproval,
 	DurableTransitionOperatorFeedback,
 	DurableTransitionVerificationEvidence,
@@ -43,8 +43,8 @@ var AllDurableTransitions = []DurableTransition{
 
 func (transition DurableTransition) valid() bool {
 	switch transition {
-	case DurableTransitionElaborationOutcome,
-		DurableTransitionElaborationAnswer,
+	case DurableTransitionSpecificationOutcome,
+		DurableTransitionSpecificationAnswer,
 		DurableTransitionSpecificationApproval,
 		DurableTransitionOperatorFeedback,
 		DurableTransitionVerificationEvidence,

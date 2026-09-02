@@ -217,7 +217,7 @@ func (d SpecDiff) Validate() error {
 }
 
 // DeriveSpecDiff returns the bounded, deterministic line diff used by both
-// the elaboration producer and the store trust boundary. Keeping one pure
+// the specification producer and the store trust boundary. Keeping one pure
 // derivation prevents a caller-supplied rendering or count from being
 // presented as daemon-authenticated revision history.
 func DeriveSpecDiff(before, after string) SpecDiff {

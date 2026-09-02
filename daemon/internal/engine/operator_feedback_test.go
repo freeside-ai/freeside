@@ -157,24 +157,24 @@ func TestOperatorFeedbackInputAuthenticatesAcceptedCommand(t *testing.T) {
 	})
 }
 
-func TestAnswerAndRetryRecordsElaborationInputAndEnqueuesNextIteration(t *testing.T) {
-	f := newElaborationFixture(t, false, 4)
+func TestAnswerAndRetryRecordsSpecificationInputAndEnqueuesNextIteration(t *testing.T) {
+	f := newSpecificationFixture(t, false, 4)
 	f.submit(t)
 	driver := f.newDriver(t)
 	engine := f.newEngine(t, driver)
-	sourceID := elaborationInvocationID("elaboration-run", 1)
+	sourceID := specificationInvocationID("specification-run", 1)
 
 	var run domain.Run
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		var err error
-		run, err = tx.GetRun(t.Context(), "elaboration-run")
+		run, err = tx.GetRun(t.Context(), "specification-run")
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	stage, ok := findElaborationStage(run)
+	stage, ok := findSpecificationStage(run)
 	if !ok {
-		t.Fatal("submitted elaboration run has no elaboration stage")
+		t.Fatal("submitted specification run has no specification stage")
 	}
 	stage.Attempts = append(stage.Attempts, domain.Attempt{
 		ID: attemptIDFor(sourceID), StageID: stage.ID, Number: 1, InvocationID: sourceID,
@@ -192,10 +192,10 @@ func TestAnswerAndRetryRecordsElaborationInputAndEnqueuesNextIteration(t *testin
 
 	runID := run.ID
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: "question-elaboration", ProjectID: run.ProjectID,
+		ID: "question-specification", ProjectID: run.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
 		Type:    domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
-		Reason:            "the elaborator needs an operator answer",
+		Reason:            "the specifier needs an operator answer",
 		RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry},
 		AgentClaims:       []domain.AgentClaim{summaryClaimFixture(sourceID, "Which compatibility target applies?")},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
@@ -213,7 +213,7 @@ func TestAnswerAndRetryRecordsElaborationInputAndEnqueuesNextIteration(t *testin
 	}
 	const answer = "Target the current and immediately previous API versions."
 	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
-		CommandID: "answer-elaboration", DeviceID: "device-1",
+		CommandID: "answer-specification", DeviceID: "device-1",
 		ExpectedEntityVersion: snapshot.EntityVersion,
 		Payload: signet.DecisionPayload{
 			ItemID: item.ID, Action: domain.ActionAnswerAndRetry,
@@ -228,7 +228,7 @@ func TestAnswerAndRetryRecordsElaborationInputAndEnqueuesNextIteration(t *testin
 	if err != nil || created != 1 {
 		t.Fatalf("reconcileOperatorFeedback = %d, %v", created, err)
 	}
-	nextID := elaborationInvocationID(run.ID, 2)
+	nextID := specificationInvocationID(run.ID, 2)
 	var (
 		entry    store.QueueEntry
 		artifact domain.Artifact
@@ -239,12 +239,12 @@ func TestAnswerAndRetryRecordsElaborationInputAndEnqueuesNextIteration(t *testin
 		if err != nil {
 			return err
 		}
-		artifact, err = tx.GetArtifact(t.Context(), "answer-answer-elaboration")
+		artifact, err = tx.GetArtifact(t.Context(), "answer-answer-specification")
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	request, _, err := engine.loadElaborationBinding(t.Context(), entry)
+	request, _, err := engine.loadSpecificationBinding(t.Context(), entry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,16 +274,16 @@ func TestAnswerAndRetryRecordsElaborationInputAndEnqueuesNextIteration(t *testin
 	}
 }
 
-func TestAnswerThenRevisionKeepsCanonicalElaborationInputOrder(t *testing.T) {
+func TestAnswerThenRevisionKeepsCanonicalSpecificationInputOrder(t *testing.T) {
 	prior := domain.ArtifactID("prior-spec-1")
-	request := elaborationRequest{
-		ElaborationRunID: "run-answer-revision", Iteration: 2,
+	request := specificationRequest{
+		SpecificationRunID: "run-answer-revision", Iteration: 2,
 		InputArtifactIDs:    []domain.ArtifactID{"source", "research", prior, "feedback-1"},
 		PriorSpecArtifactID: &prior,
 		FeedbackArtifactIDs: []domain.ArtifactID{"feedback-1"},
 	}
-	answered := nextElaborationAnswerRequest(request, "answer-1")
-	revised := nextElaborationRevisionRequest(answered, "prior-spec-2", "feedback-2")
+	answered := nextSpecificationAnswerRequest(request, "answer-1")
+	revised := nextSpecificationRevisionRequest(answered, "prior-spec-2", "feedback-2")
 	want := []domain.ArtifactID{
 		"source", "research", "prior-spec-2", "feedback-1", "feedback-2", "answer-1",
 	}
@@ -293,7 +293,7 @@ func TestAnswerThenRevisionKeepsCanonicalElaborationInputOrder(t *testing.T) {
 }
 
 func TestReturnToAgentRecordsFeedbackAndCandidatePatchForResumedWork(t *testing.T) {
-	f := newElaborationFixture(t, false, 4)
+	f := newSpecificationFixture(t, false, 4)
 	runID := domain.RunID("run-return-to-agent")
 	sourceID := productionInvocationID(runID)
 	head := strings.Repeat("2", 40)
@@ -467,17 +467,17 @@ func TestReturnToAgentRecordsFeedbackAndCandidatePatchForResumedWork(t *testing.
 	}
 }
 
-func TestAnswerAtElaborationIterationLimitRecordsFailure(t *testing.T) {
-	f := newElaborationFixture(t, false, 1)
+func TestAnswerAtSpecificationIterationLimitRecordsFailure(t *testing.T) {
+	f := newSpecificationFixture(t, false, 1)
 	f.submit(t)
-	sourceID := elaborationInvocationID("elaboration-run", 1)
+	sourceID := specificationInvocationID("specification-run", 1)
 	var (
 		run   domain.Run
 		entry store.QueueEntry
 	)
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		var err error
-		run, err = tx.GetRun(t.Context(), "elaboration-run")
+		run, err = tx.GetRun(t.Context(), "specification-run")
 		if err != nil {
 			return err
 		}
@@ -486,13 +486,13 @@ func TestAnswerAtElaborationIterationLimitRecordsFailure(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	request, err := decodeElaborationRequest(entry)
+	request, err := decodeSpecificationRequest(entry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stage, ok := findElaborationStage(run)
+	stage, ok := findSpecificationStage(run)
 	if !ok {
-		t.Fatal("submitted elaboration run has no elaboration stage")
+		t.Fatal("submitted specification run has no specification stage")
 	}
 	stage.Attempts = append(stage.Attempts, domain.Attempt{
 		ID: attemptIDFor(sourceID), StageID: stage.ID, Number: 1, InvocationID: sourceID,
@@ -509,10 +509,10 @@ func TestAnswerAtElaborationIterationLimitRecordsFailure(t *testing.T) {
 	}
 	runID := run.ID
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: "question-elaboration-limit", ProjectID: run.ProjectID,
+		ID: "question-specification-limit", ProjectID: run.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
 		Type:    domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
-		Reason:            "the elaborator needs an operator answer",
+		Reason:            "the specifier needs an operator answer",
 		RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry},
 		AgentClaims:       []domain.AgentClaim{summaryClaimFixture(sourceID, "Which target applies?")},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
@@ -542,10 +542,10 @@ func TestAnswerAtElaborationIterationLimitRecordsFailure(t *testing.T) {
 		t.Fatalf("limited answer reconciliation = %d, %v", transitions, err)
 	}
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
-		if _, err := tx.GetOutbox(t.Context(), string(elaborationInvocationID(run.ID, 2))); !errors.Is(err, store.ErrNotFound) {
+		if _, err := tx.GetOutbox(t.Context(), string(specificationInvocationID(run.ID, 2))); !errors.Is(err, store.ErrNotFound) {
 			return fmt.Errorf("next iteration marker = %w, want ErrNotFound", err)
 		}
-		failure, err := tx.GetAttentionItem(t.Context(), elaborationRevisionFailureItemID(request))
+		failure, err := tx.GetAttentionItem(t.Context(), specificationRevisionFailureItemID(request))
 		if err != nil {
 			return err
 		}
@@ -559,7 +559,7 @@ func TestAnswerAtElaborationIterationLimitRecordsFailure(t *testing.T) {
 }
 
 func TestOversizedOperatorFeedbackInputParksOnlyItsRun(t *testing.T) {
-	f := newElaborationFixture(t, false, 4)
+	f := newSpecificationFixture(t, false, 4)
 	runID := domain.RunID("run-oversized-operator-feedback")
 	sourceID := productionInvocationID(runID)
 	head := strings.Repeat("2", 40)
@@ -685,7 +685,7 @@ func TestOversizedOperatorFeedbackInputParksOnlyItsRun(t *testing.T) {
 }
 
 func TestProductionPublicationContinuesAfterReturnedFeedbackFailure(t *testing.T) {
-	f := newElaborationFixture(t, false, 4)
+	f := newSpecificationFixture(t, false, 4)
 	runID := domain.RunID("run-return-isolation")
 	sourceID := productionInvocationID(runID)
 	head := strings.Repeat("2", 40)
@@ -763,7 +763,7 @@ func TestProductionPublicationContinuesAfterReturnedFeedbackFailure(t *testing.T
 
 func TestOperatorFeedbackRestartsAcrossDurableBoundaries(t *testing.T) {
 	for _, transition := range []DurableTransition{
-		DurableTransitionElaborationAnswer,
+		DurableTransitionSpecificationAnswer,
 		DurableTransitionOperatorFeedback,
 	} {
 		for _, side := range AllDurableTransitionSides {
@@ -777,8 +777,8 @@ func TestOperatorFeedbackRestartsAcrossDurableBoundaries(t *testing.T) {
 					return nil
 				}
 				switch transition {
-				case DurableTransitionElaborationAnswer:
-					assertElaborationAnswerRestart(t, hook, side, &injected)
+				case DurableTransitionSpecificationAnswer:
+					assertSpecificationAnswerRestart(t, hook, side, &injected)
 				case DurableTransitionOperatorFeedback:
 					assertImplementationFeedbackRestart(t, hook, side, &injected)
 				default:
@@ -789,27 +789,27 @@ func TestOperatorFeedbackRestartsAcrossDurableBoundaries(t *testing.T) {
 	}
 }
 
-func assertElaborationAnswerRestart(
+func assertSpecificationAnswerRestart(
 	t *testing.T,
 	hook DurableTransitionHook,
 	side DurableTransitionSide,
 	injected *bool,
 ) {
 	t.Helper()
-	f := newElaborationFixture(t, false, 4)
+	f := newSpecificationFixture(t, false, 4)
 	f.submit(t)
-	sourceID := elaborationInvocationID("elaboration-run", 1)
+	sourceID := specificationInvocationID("specification-run", 1)
 	var run domain.Run
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		var err error
-		run, err = tx.GetRun(t.Context(), "elaboration-run")
+		run, err = tx.GetRun(t.Context(), "specification-run")
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	stage, ok := findElaborationStage(run)
+	stage, ok := findSpecificationStage(run)
 	if !ok {
-		t.Fatal("submitted elaboration run has no elaboration stage")
+		t.Fatal("submitted specification run has no specification stage")
 	}
 	stage.Attempts = append(stage.Attempts, domain.Attempt{
 		ID: attemptIDFor(sourceID), StageID: stage.ID, Number: 1, InvocationID: sourceID,
@@ -827,7 +827,7 @@ func assertElaborationAnswerRestart(
 		ID: "question-answer-restart", ProjectID: run.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
 		Type:    domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
-		Reason:            "the elaborator needs an operator answer",
+		Reason:            "the specifier needs an operator answer",
 		RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry},
 		AgentClaims:       []domain.AgentClaim{summaryClaimFixture(sourceID, "Which compatibility target applies?")},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
@@ -861,19 +861,19 @@ func assertElaborationAnswerRestart(
 		t.Fatal(err)
 	}
 	engine := f.newEngineWithTransitionHook(t, f.newDriver(t), hook)
-	if _, err := engine.enqueueElaborationAnswer(t.Context(), run, item, result.Record); err == nil || !*injected {
+	if _, err := engine.enqueueSpecificationAnswer(t.Context(), run, item, result.Record); err == nil || !*injected {
 		t.Fatalf("injected %s crash = %v, reached %t", side, err, *injected)
 	}
 	f = f.reopen(t)
 	engine = f.newEngine(t, f.newDriver(t))
-	created, err := engine.enqueueElaborationAnswer(t.Context(), run, item, result.Record)
+	created, err := engine.enqueueSpecificationAnswer(t.Context(), run, item, result.Record)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := side == DurableTransitionBefore; created != want {
-		t.Fatalf("recovered elaboration answer created = %t, want %t", created, want)
+		t.Fatalf("recovered specification answer created = %t, want %t", created, want)
 	}
-	nextID := elaborationInvocationID(run.ID, 2)
+	nextID := specificationInvocationID(run.ID, 2)
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		if _, err := tx.GetOutbox(t.Context(), string(nextID)); err != nil {
 			return err
@@ -884,7 +884,7 @@ func assertElaborationAnswerRestart(
 		_, err := tx.GetArtifact(t.Context(), "answer-answer-restart")
 		return err
 	}); err != nil {
-		t.Fatalf("recovered elaboration answer identities: %v", err)
+		t.Fatalf("recovered specification answer identities: %v", err)
 	}
 }
 
@@ -895,7 +895,7 @@ func assertImplementationFeedbackRestart(
 	injected *bool,
 ) {
 	t.Helper()
-	f := newElaborationFixture(t, false, 4)
+	f := newSpecificationFixture(t, false, 4)
 	runID := domain.RunID("run-feedback-restart")
 	sourceID := productionInvocationID(runID)
 	base := strings.Repeat("1", 40)

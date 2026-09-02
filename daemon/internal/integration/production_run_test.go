@@ -71,36 +71,36 @@ func TestRealRunAttentionStateDetectsOpenPublicationBlock(t *testing.T) {
 	}
 }
 
-func TestRealRunElaborationFailure(t *testing.T) {
+func TestRealRunSpecificationFailure(t *testing.T) {
 	t.Parallel()
-	elaborationRunID := domain.RunID("elaboration-run")
+	specificationRunID := domain.RunID("specification-run")
 	implementationRunID := domain.RunID("implementation-run")
 	matching := store.Snapshotted[domain.AttentionItem]{Value: domain.AttentionItem{
-		ID:   "execution-failure-inv-elaborate-elaboration-run-1",
+		ID:   "execution-failure-inv-specify-specification-run-1",
 		Type: domain.AttentionExecutionFailure, Status: domain.StatusOpen,
-		Subject: domain.Subject{RunID: &elaborationRunID}, Reason: "invalid elaborator output",
+		Subject: domain.Subject{RunID: &specificationRunID}, Reason: "invalid specifier output",
 	}}
 
-	if got := realRunElaborationFailure(
-		[]store.Snapshotted[domain.AttentionItem]{matching}, elaborationRunID,
+	if got := realRunSpecificationFailure(
+		[]store.Snapshotted[domain.AttentionItem]{matching}, specificationRunID,
 	); got.ID != matching.Value.ID || got.Reason != matching.Value.Reason {
-		t.Fatalf("elaboration failure = %+v, want %+v", got, matching.Value)
+		t.Fatalf("specification failure = %+v, want %+v", got, matching.Value)
 	}
 
 	revisionFailure := matching
 	revisionFailure.Value.ID = "execution-failure-spec-revision-implementation-run-2"
-	if got := realRunElaborationFailure(
-		[]store.Snapshotted[domain.AttentionItem]{revisionFailure}, elaborationRunID,
+	if got := realRunSpecificationFailure(
+		[]store.Snapshotted[domain.AttentionItem]{revisionFailure}, specificationRunID,
 	); got.ID != revisionFailure.Value.ID {
-		t.Fatalf("elaboration revision failure = %+v, want %+v", got, revisionFailure.Value)
+		t.Fatalf("specification revision failure = %+v, want %+v", got, revisionFailure.Value)
 	}
 
 	resolvedTerminal := matching
 	resolvedTerminal.Value.Status = domain.StatusResolved
-	if got := realRunElaborationFailure(
-		[]store.Snapshotted[domain.AttentionItem]{resolvedTerminal}, elaborationRunID,
+	if got := realRunSpecificationFailure(
+		[]store.Snapshotted[domain.AttentionItem]{resolvedTerminal}, specificationRunID,
 	); got.ID != resolvedTerminal.Value.ID {
-		t.Fatalf("resolved elaboration failure = %+v, want %+v", got, resolvedTerminal.Value)
+		t.Fatalf("resolved specification failure = %+v, want %+v", got, resolvedTerminal.Value)
 	}
 
 	tests := []struct {
@@ -110,17 +110,17 @@ func TestRealRunElaborationFailure(t *testing.T) {
 		{
 			name: "marker quarantine",
 			item: domain.AttentionItem{
-				ID:   "elaboration-marker-quarantined-1-elaboration-run",
+				ID:   "specification-marker-quarantined-1-specification-run",
 				Type: domain.AttentionExecutionFailure, Status: domain.StatusOpen,
-				Subject: domain.Subject{RunID: &elaborationRunID},
+				Subject: domain.Subject{RunID: &specificationRunID},
 			},
 		},
 		{
 			name: "malformed terminal identity",
 			item: domain.AttentionItem{
-				ID:   "execution-failure-inv-elaborate-elaboration-run-01",
+				ID:   "execution-failure-inv-specify-specification-run-01",
 				Type: domain.AttentionExecutionFailure, Status: domain.StatusOpen,
-				Subject: domain.Subject{RunID: &elaborationRunID},
+				Subject: domain.Subject{RunID: &specificationRunID},
 			},
 		},
 		{
@@ -134,24 +134,24 @@ func TestRealRunElaborationFailure(t *testing.T) {
 			name: "other item type",
 			item: domain.AttentionItem{
 				ID: "publish-blocked", Type: domain.AttentionPublishBlocked,
-				Status: domain.StatusOpen, Subject: domain.Subject{RunID: &elaborationRunID},
+				Status: domain.StatusOpen, Subject: domain.Subject{RunID: &specificationRunID},
 			},
 		},
 		{
 			name: "resolved failure",
 			item: domain.AttentionItem{
 				ID: "execution-failure-resolved", Type: domain.AttentionExecutionFailure,
-				Status: domain.StatusResolved, Subject: domain.Subject{RunID: &elaborationRunID},
+				Status: domain.StatusResolved, Subject: domain.Subject{RunID: &specificationRunID},
 			},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if got := realRunElaborationFailure(
-				[]store.Snapshotted[domain.AttentionItem]{{Value: test.item}}, elaborationRunID,
+			if got := realRunSpecificationFailure(
+				[]store.Snapshotted[domain.AttentionItem]{{Value: test.item}}, specificationRunID,
 			); got.ID != "" {
-				t.Fatalf("ignored item produced elaboration failure %+v", got)
+				t.Fatalf("ignored item produced specification failure %+v", got)
 			}
 		})
 	}
@@ -160,7 +160,7 @@ func TestRealRunElaborationFailure(t *testing.T) {
 func TestValidateRealRunImplementationBinding(t *testing.T) {
 	t.Parallel()
 	implementationRunID := domain.RunID("implementation-run")
-	elaborationRunID := domain.RunID("elaboration-run")
+	specificationRunID := domain.RunID("specification-run")
 	valid := realRunImplementationIdentityInput{
 		implementationRunID: "implementation-run", implementationRunIDSet: true,
 		implementationInvocationID:    "implementation-invocation",
@@ -208,8 +208,8 @@ func TestValidateRealRunImplementationBinding(t *testing.T) {
 			name: "valid pair", input: valid, admittedRunID: &implementationRunID, wantSet: true,
 		},
 		{
-			name: "cross-lane pair", input: valid, admittedRunID: &elaborationRunID,
-			wantError: "do not substitute an elaboration run",
+			name: "cross-lane pair", input: valid, admittedRunID: &specificationRunID,
+			wantError: "do not substitute a specification run",
 		},
 	}
 	for _, tt := range tests {

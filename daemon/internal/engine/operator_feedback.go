@@ -14,10 +14,10 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
@@ -25,7 +25,7 @@ import (
 // putArtifactIdempotent write-once registers a content-addressed research
 // artifact without conflicting on a replay whose only difference is the
 // recorded created_at. The reconcile transitions that build these artifacts
-// (enqueueElaborationAnswer, enqueueSpecRevision, enqueueSpecDiscussion) re-run
+// (enqueueSpecificationAnswer, enqueueSpecRevision, enqueueSpecDiscussion) re-run
 // on every engine tick while their answered item and command persist, and they
 // write the artifact before their outbox idempotence guard; a plain PutArtifact
 // of the byte-different (fresh created_at) artifact would raise
@@ -207,8 +207,8 @@ func feedbackSourceInvocation(
 	return "", domain.ErrParentKeyMismatch
 }
 
-func elaborationSourceInvocation(item domain.AttentionItem, run domain.Run) (domain.InvocationID, error) {
-	stage, ok := findElaborationStage(run)
+func specificationSourceInvocation(item domain.AttentionItem, run domain.Run) (domain.InvocationID, error) {
+	stage, ok := findSpecificationStage(run)
 	if !ok {
 		return "", domain.ErrParentKeyMismatch
 	}
@@ -295,12 +295,12 @@ func (e *Engine) reconcileOperatorFeedbackActions(
 					"operator feedback command %q: %w", command.CommandID, err))
 				continue
 			}
-			if owned, err := e.ownsElaborationRun(ctx, run); err != nil {
+			if owned, err := e.ownsSpecificationRun(ctx, run); err != nil {
 				joined = errors.Join(joined, fmt.Errorf(
 					"operator feedback command %q: %w", command.CommandID, err))
 				continue
 			} else if owned {
-				made, err := e.enqueueElaborationAnswer(ctx, run, item, command)
+				made, err := e.enqueueSpecificationAnswer(ctx, run, item, command)
 				created += boolCount(made)
 				if err != nil {
 					joined = errors.Join(joined, fmt.Errorf(
@@ -337,14 +337,14 @@ func (e *Engine) commandsForOperatorFeedback(
 	return commands, err
 }
 
-func (e *Engine) enqueueElaborationAnswer(
+func (e *Engine) enqueueSpecificationAnswer(
 	ctx context.Context, run domain.Run, item domain.AttentionItem, command domain.Command,
 ) (bool, error) {
-	if e.elaboration == nil || !operatorFeedbackCommandMatchesItem(command, item) ||
+	if e.specification == nil || !operatorFeedbackCommandMatchesItem(command, item) ||
 		command.Action != domain.ActionAnswerAndRetry || strings.TrimSpace(command.Message) == "" {
 		return false, domain.ErrParentKeyMismatch
 	}
-	source, err := elaborationSourceInvocation(item, run)
+	source, err := specificationSourceInvocation(item, run)
 	if err != nil {
 		return false, err
 	}
@@ -356,7 +356,7 @@ func (e *Engine) enqueueElaborationAnswer(
 	}); err != nil {
 		return false, err
 	}
-	request, binding, err := e.loadElaborationBinding(ctx, entry)
+	request, binding, err := e.loadSpecificationBinding(ctx, entry)
 	if err != nil || binding.run.ID != run.ID {
 		return false, errors.Join(err, domain.ErrParentKeyMismatch)
 	}
@@ -368,17 +368,17 @@ func (e *Engine) enqueueElaborationAnswer(
 	}); err != nil {
 		return false, err
 	}
-	settings, err := elaborate.ParsePolicy(resolved)
+	settings, err := specify.ParsePolicy(resolved)
 	if err != nil {
 		return false, err
 	}
 	if request.Iteration >= settings.MaxIterations {
-		return false, e.recordElaborationRevisionFailure(
-			ctx, run, request, exec.StatusFailed, ErrElaborationIterationsExhausted.Error())
+		return false, e.recordSpecificationRevisionFailure(
+			ctx, run, request, exec.StatusFailed, ErrSpecificationIterationsExhausted.Error())
 	}
 	feedbackBody := strings.TrimSpace(command.Message)
 	digest := domain.Digest(contentaddr.Sum([]byte(feedbackBody)))
-	if _, err := e.elaboration.blobs.Put(digest, strings.NewReader(feedbackBody)); err != nil {
+	if _, err := e.specification.blobs.Put(digest, strings.NewReader(feedbackBody)); err != nil {
 		return false, err
 	}
 	feedbackID := domain.ArtifactID("answer-" + command.CommandID)
@@ -390,15 +390,15 @@ func (e *Engine) enqueueElaborationAnswer(
 		},
 		Metadata: domain.EvidenceMetadata{
 			MediaType: domain.EvidenceMediaTextPlain, SizeBytes: int64(len(feedbackBody)),
-			CreatedAt: e.elaboration.now().UTC(), Source: domain.EvidenceSourceRun,
+			CreatedAt: e.specification.now().UTC(), Source: domain.EvidenceSourceRun,
 			Availability: domain.EvidenceAvailable,
 		},
 	}, nil)
 	if err != nil {
 		return false, err
 	}
-	next := nextElaborationAnswerRequest(request, feedbackID)
-	payload, err := encodeElaborationRequest(next)
+	next := nextSpecificationAnswerRequest(request, feedbackID)
+	payload, err := encodeSpecificationRequest(next)
 	if err != nil {
 		return false, err
 	}
@@ -407,11 +407,11 @@ func (e *Engine) enqueueElaborationAnswer(
 		return false, err
 	}
 	if err := e.validateProspectiveDelivery(ctx, run, invocation,
-		e.elaboration.promptPackage, true, map[domain.ArtifactID]domain.Artifact{feedback.ID: feedback}); err != nil {
+		e.specification.promptPackage, true, map[domain.ArtifactID]domain.Artifact{feedback.ID: feedback}); err != nil {
 		return false, err
 	}
-	if err := runDurableTransitionHook(e.elaboration.transitionHook,
-		DurableTransitionElaborationAnswer, DurableTransitionBefore); err != nil {
+	if err := runDurableTransitionHook(e.specification.transitionHook,
+		DurableTransitionSpecificationAnswer, DurableTransitionBefore); err != nil {
 		return false, err
 	}
 	inserted := false
@@ -432,11 +432,11 @@ func (e *Engine) enqueueElaborationAnswer(
 			return err
 		}
 		queued, made, err := tx.EnqueueOutbox(
-			ctx, string(next.InvocationID), KindElaborationInvocationRequested, payload)
+			ctx, string(next.InvocationID), KindSpecificationInvocationRequested, payload)
 		if err != nil {
 			return err
 		}
-		if !made && (queued.Kind != KindElaborationInvocationRequested || !bytes.Equal(queued.Payload, payload)) {
+		if !made && (queued.Kind != KindSpecificationInvocationRequested || !bytes.Equal(queued.Payload, payload)) {
 			return domain.ErrImmutableTransition
 		}
 		inserted = made
@@ -451,8 +451,8 @@ func (e *Engine) enqueueElaborationAnswer(
 	if err != nil {
 		return false, err
 	}
-	if err := runDurableTransitionHook(e.elaboration.transitionHook,
-		DurableTransitionElaborationAnswer, DurableTransitionAfter); err != nil {
+	if err := runDurableTransitionHook(e.specification.transitionHook,
+		DurableTransitionSpecificationAnswer, DurableTransitionAfter); err != nil {
 		return false, err
 	}
 	return inserted, nil

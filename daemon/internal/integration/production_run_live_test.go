@@ -37,7 +37,7 @@ const realRunLiveEnv = "FREESIDE_REAL_RUN_LIVE_TEST"
 const (
 	realRunImplementationRunIDEnv      = "FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID"
 	realRunImplementationInvocationEnv = "FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION"
-	realRunElaborationRunIDEnv         = "FREESIDE_REAL_RUN_ELABORATION_RUN_ID"
+	realRunSpecificationRunIDEnv       = "FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID"
 	realRunLegacyRunIDEnv              = "FREESIDE_REAL_RUN_RUN_ID"
 	realRunLegacyInvocationEnv         = "FREESIDE_REAL_RUN_INVOCATION"
 )
@@ -95,7 +95,7 @@ func validateRealRunImplementationBinding(
 	}
 	if admittedRunID != nil && *admittedRunID != binding.runID {
 		return realRunImplementationBinding{}, false, fmt.Errorf(
-			"cross-lane real-run identity: implementation invocation %q belongs to admitted run %q, not bound implementation run %q; do not substitute an elaboration run for %s",
+			"cross-lane real-run identity: implementation invocation %q belongs to admitted run %q, not bound implementation run %q; do not substitute a specification run for %s",
 			binding.invocationID, *admittedRunID, binding.runID, realRunImplementationRunIDEnv,
 		)
 	}
@@ -314,32 +314,32 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 			realRunImplementationInvocationEnv + " to the submitted implementation run " +
 			"to verify a completed run; scripts/run-real-work.sh sets them")
 	}
-	elaborationRunID := domain.RunID(os.Getenv(realRunElaborationRunIDEnv))
+	specificationRunID := domain.RunID(os.Getenv(realRunSpecificationRunIDEnv))
 	invocationID := binding.invocationID
 	runID := binding.runID
 
 	var (
-		admission          domain.ExecutionAdmission
-		export             domain.ExecutionExport
-		terminal           *domain.ExecutionOutcome
-		ready              domain.AttentionItem
-		blocked            domain.AttentionItem
-		elaborationFailure domain.AttentionItem
-		outcome            publish.Outcome
+		admission            domain.ExecutionAdmission
+		export               domain.ExecutionExport
+		terminal             *domain.ExecutionOutcome
+		ready                domain.AttentionItem
+		blocked              domain.AttentionItem
+		specificationFailure domain.AttentionItem
+		outcome              publish.Outcome
 	)
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		admission, err = tx.GetExecutionAdmission(ctx, invocationID)
 		if err != nil {
-			if !errors.Is(err, store.ErrNotFound) || elaborationRunID == "" {
+			if !errors.Is(err, store.ErrNotFound) || specificationRunID == "" {
 				return err
 			}
 			items, listErr := tx.ListAttentionItems(ctx)
 			if listErr != nil {
 				return listErr
 			}
-			elaborationFailure = realRunElaborationFailure(items, elaborationRunID)
-			if elaborationFailure.ID != "" {
+			specificationFailure = realRunSpecificationFailure(items, specificationRunID)
+			if specificationFailure.ID != "" {
 				return nil
 			}
 			return err
@@ -399,12 +399,12 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("read durable execution record: %v", err)
 	}
-	if elaborationFailure.ID != "" {
+	if specificationFailure.ID != "" {
 		t.Fatalf(
-			"real run elaboration failed: run=%s item=%s reason=%q",
-			elaborationRunID,
-			elaborationFailure.ID,
-			elaborationFailure.Reason,
+			"real run specification failed: run=%s item=%s reason=%q",
+			specificationRunID,
+			specificationFailure.ID,
+			specificationFailure.Reason,
 		)
 	}
 	if blocked.ID != "" {
@@ -510,19 +510,19 @@ func realRunBackupPayloadExtractors() map[string]store.BackupPayloadDigestExtrac
 		signet.PublicationReevaluationCompletedKind: signet.PublicationReevaluationCompletionBackupPayloadDigests,
 		engine.KindProductionInvocationRequested:    engine.ProductionInvocationBackupPayloadDigests,
 		engine.KindProductionPublicationRequested:   engine.ProductionPublicationBackupPayloadDigests,
-		engine.KindElaborationInvocationRequested:   engine.ElaborationInvocationBackupPayloadDigests,
-		engine.KindElaborationImplementationClaim:   engine.ElaborationImplementationClaimBackupPayloadDigests,
+		engine.KindSpecificationInvocationRequested: engine.SpecificationInvocationBackupPayloadDigests,
+		engine.KindSpecificationImplementationClaim: engine.SpecificationImplementationClaimBackupPayloadDigests,
 		publish.IntentKindReservation:               publish.ReservationBackupPayloadDigests,
 		publish.IntentKindPublication:               publish.PublicationBackupPayloadDigests,
 	}
 }
 
-func TestRealRunBackupPayloadExtractorsIncludeElaborationMarkers(t *testing.T) {
+func TestRealRunBackupPayloadExtractorsIncludeSpecificationMarkers(t *testing.T) {
 	t.Parallel()
 	extractors := realRunBackupPayloadExtractors()
 	for _, kind := range []string{
-		engine.KindElaborationInvocationRequested,
-		engine.KindElaborationImplementationClaim,
+		engine.KindSpecificationInvocationRequested,
+		engine.KindSpecificationImplementationClaim,
 		signet.PublicationReevaluationRequestedKind,
 	} {
 		if extractors[kind] == nil {
@@ -531,21 +531,21 @@ func TestRealRunBackupPayloadExtractorsIncludeElaborationMarkers(t *testing.T) {
 	}
 }
 
-func realRunElaborationFailure(
+func realRunSpecificationFailure(
 	items []store.Snapshotted[domain.AttentionItem], runID domain.RunID,
 ) domain.AttentionItem {
 	for _, item := range items {
 		if item.Value.Type == domain.AttentionExecutionFailure &&
 			item.Value.Subject.RunID != nil && *item.Value.Subject.RunID == runID &&
-			realRunElaborationFailureID(item.Value.ID, runID) {
+			realRunSpecificationFailureID(item.Value.ID, runID) {
 			return item.Value
 		}
 	}
 	return domain.AttentionItem{}
 }
 
-func realRunElaborationFailureID(id domain.ItemID, runID domain.RunID) bool {
-	terminalPrefix := "execution-failure-inv-elaborate-" + string(runID) + "-"
+func realRunSpecificationFailureID(id domain.ItemID, runID domain.RunID) bool {
+	terminalPrefix := "execution-failure-inv-specify-" + string(runID) + "-"
 	if suffix, ok := strings.CutPrefix(string(id), terminalPrefix); ok {
 		iteration, err := strconv.ParseUint(suffix, 10, 64)
 		return err == nil && iteration > 0 && strconv.FormatUint(iteration, 10) == suffix

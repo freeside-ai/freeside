@@ -1479,8 +1479,8 @@ func TestJanitorSessionReportsEveryMissingCoverageCause(t *testing.T) {
 func TestBackupPayloadExtractorsIncludeAgentWorkflowMarkers(t *testing.T) {
 	extractors := backupPayloadExtractors()
 	for _, kind := range []string{
-		engine.KindElaborationInvocationRequested,
-		engine.KindElaborationImplementationClaim,
+		engine.KindSpecificationInvocationRequested,
+		engine.KindSpecificationImplementationClaim,
 		engine.KindRemediationInvocationRequested,
 		engine.KindOperatorFeedbackInvocationRequested,
 		signet.PublicationReevaluationRequestedKind,

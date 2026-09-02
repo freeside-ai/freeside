@@ -84,23 +84,23 @@ func runReattemptCommand(ctx context.Context, cfg reattemptCommandConfig) (submi
 	result := submitResult{
 		RunID: created.Run.Run.ID, ProjectID: created.Run.Run.ProjectID,
 		InvocationID: created.Run.InvocationID, StageID: created.Run.StageID,
-		ImplementationRunID:         created.Run.Run.ID,
-		ImplementationInvocationID:  created.Run.InvocationID,
-		ImplementationStageID:       created.Run.StageID,
-		ElaborationRunID:            created.Attempt.ElaborationRunID,
-		SourceDigest:                created.Attempt.SourceDigest,
-		ApprovedSpecDigest:          created.Attempt.ApprovedSpecDigest,
-		SourceArtifactID:            created.RootSourceArtifactID,
-		ElaborationPolicyDigest:     created.PolicyDigest,
-		ElaborationPolicyArtifactID: created.PolicyArtifactID,
-		PublicationDigest:           created.Attempt.PublicationDigest,
-		CampaignID:                  created.Attempt.CampaignID,
-		AttemptNumber:               created.Attempt.AttemptNumber,
-		AttemptReason:               created.Attempt.Reason,
-		ParentRunID:                 created.Attempt.ParentRunID,
+		ImplementationRunID:           created.Run.Run.ID,
+		ImplementationInvocationID:    created.Run.InvocationID,
+		ImplementationStageID:         created.Run.StageID,
+		SpecificationRunID:            created.Attempt.SpecificationRunID,
+		SourceDigest:                  created.Attempt.SourceDigest,
+		ApprovedSpecDigest:            created.Attempt.ApprovedSpecDigest,
+		SourceArtifactID:              created.RootSourceArtifactID,
+		SpecificationPolicyDigest:     created.PolicyDigest,
+		SpecificationPolicyArtifactID: created.PolicyArtifactID,
+		PublicationDigest:             created.Attempt.PublicationDigest,
+		CampaignID:                    created.Attempt.CampaignID,
+		AttemptNumber:                 created.Attempt.AttemptNumber,
+		AttemptReason:                 created.Attempt.Reason,
+		ParentRunID:                   created.Attempt.ParentRunID,
 	}
-	result.ElaborationInvocationID = created.ElaborationInvocationID
-	result.ElaborationStageID = created.ElaborationStageID
+	result.SpecificationInvocationID = created.SpecificationInvocationID
+	result.SpecificationStageID = created.SpecificationStageID
 	if created.HasWorkUnit {
 		result.WorkUnitID = domain.WorkUnitIDForRun(created.Run.Run.ID)
 	}

@@ -287,15 +287,15 @@ func (e *Engine) admitAttempt(
 		env.Workspace, env.Base = workspace, base
 	}
 	promptPackageDigest := e.admission.environment.PromptPackageDigest
-	isElaboration := stage.ID == elaborationStageID(binding.run.ID) && stage.Name == elaborationStageName
+	isSpecification := stage.ID == specificationStageID(binding.run.ID) && stage.Name == specificationStageName
 	isProduction := invocationID == productionInvocationID(binding.run.ID) &&
 		stage.ID == productionStageID(binding.run.ID) && stage.Name == productionStageName
-	if isElaboration {
-		if e.elaboration == nil {
+	if isSpecification {
+		if e.specification == nil {
 			return domain.ExecutionAdmission{}, false, fmt.Errorf(
-				"admit invocation %q: elaboration stage has no elaboration workflow", invocationID)
+				"admit invocation %q: specification stage has no specification workflow", invocationID)
 		}
-		promptPackageDigest = e.elaboration.promptPackage
+		promptPackageDigest = e.specification.promptPackage
 	}
 	if round, ok := remediationRoundForInvocation(binding.run.ID, invocationID); ok {
 		if stage.ID != remediationStageID(binding.run.ID, round) || stage.Name != productionStageName ||
@@ -339,7 +339,7 @@ func (e *Engine) admitAttempt(
 		}
 	}
 	stageInputs, err := e.stageInputSnapshot(
-		ctx, binding, inputDigest, promptPackageDigest, isElaboration,
+		ctx, binding, inputDigest, promptPackageDigest, isSpecification,
 	)
 	if err != nil {
 		return domain.ExecutionAdmission{}, false, fmt.Errorf(
@@ -486,14 +486,14 @@ const imageInputArtifactType = domain.ArtifactKindImage
 
 func (e *Engine) stageInputSnapshot(
 	ctx context.Context, binding invocationBinding, inputDigest, promptPackageDigest domain.Digest,
-	isElaboration bool,
+	isSpecification bool,
 ) (domain.StageInputSnapshot, error) {
-	return e.stageInputSnapshotWithArtifacts(ctx, binding, inputDigest, promptPackageDigest, isElaboration, nil)
+	return e.stageInputSnapshotWithArtifacts(ctx, binding, inputDigest, promptPackageDigest, isSpecification, nil)
 }
 
 func (e *Engine) stageInputSnapshotWithArtifacts(
 	ctx context.Context, binding invocationBinding, inputDigest, promptPackageDigest domain.Digest,
-	isElaboration bool, prospective map[domain.ArtifactID]domain.Artifact,
+	isSpecification bool, prospective map[domain.ArtifactID]domain.Artifact,
 ) (domain.StageInputSnapshot, error) {
 	vendorInstructions, vendorBody, err := snapshotVendorInstructions(
 		ctx, e.admission.environment.VendorInstructions,
@@ -501,16 +501,16 @@ func (e *Engine) stageInputSnapshotWithArtifacts(
 	if err != nil {
 		return domain.StageInputSnapshot{}, err
 	}
-	if isElaboration {
+	if isSpecification {
 		separator := ""
 		if len(vendorBody) > 0 && vendorBody[len(vendorBody)-1] != '\n' {
 			separator = "\n"
 		}
-		vendorBody = append(vendorBody, separator+"\n"+elaborationSystemContract...)
+		vendorBody = append(vendorBody, separator+"\n"+specificationSystemContract...)
 		if int64(len(vendorBody)) > domain.MaxVendorInstructionBytes {
 			return domain.StageInputSnapshot{}, fmt.Errorf(
-				"%w: elaboration vendor instructions exceed %d bytes",
-				ErrElaborationInputUndeliverable, domain.MaxVendorInstructionBytes)
+				"%w: specification vendor instructions exceed %d bytes",
+				ErrSpecificationInputUndeliverable, domain.MaxVendorInstructionBytes)
 		}
 		digest := domain.Digest(contentaddr.Sum(vendorBody))
 		vendorInstructions.Digest = &digest
@@ -546,17 +546,17 @@ func (e *Engine) stageInputSnapshotWithArtifacts(
 	}); err != nil {
 		return domain.StageInputSnapshot{}, err
 	}
-	if isElaboration && len(priorArtifactRecords) > 0 {
+	if isSpecification && len(priorArtifactRecords) > 0 {
 		priorArtifacts = make([]domain.Digest, 0, len(priorArtifactRecords))
 		for _, artifact := range priorArtifactRecords {
-			envelope, err := e.encodeElaborationPriorArtifact(ctx, artifact)
+			envelope, err := e.encodeSpecificationPriorArtifact(ctx, artifact)
 			if err != nil {
 				return domain.StageInputSnapshot{}, err
 			}
 			digest := domain.Digest(contentaddr.Sum(envelope))
 			if err := e.signet.PutStageInput(ctx, digest, envelope); err != nil {
 				return domain.StageInputSnapshot{}, fmt.Errorf(
-					"store elaboration prior artifact envelope %s: %w", digest, err)
+					"store specification prior artifact envelope %s: %w", digest, err)
 			}
 			priorArtifacts = append(priorArtifacts, digest)
 		}
@@ -576,10 +576,10 @@ func (e *Engine) stageInputSnapshotWithArtifacts(
 			return domain.StageInputSnapshot{}, err
 		}
 		conversationDigest, conversationBody = &digest, body
-		if !isElaboration {
+		if !isSpecification {
 			for _, message := range binding.conversation.Messages[:binding.invocation.ThroughSequence] {
 				// The provider does not yet have an authenticated image-delivery path.
-				// Preserve the existing opaque role outside elaboration; elaboration
+				// Preserve the existing opaque role outside specification; specification
 				// admits only envelopes constructed from typed durable artifacts above.
 				priorArtifacts = append(priorArtifacts, message.Attachments...)
 			}

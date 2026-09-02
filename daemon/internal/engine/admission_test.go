@@ -309,31 +309,31 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 	if got := admission.StageInputs.ImageInputDigests; len(got) != 1 || got[0] != image.Digest {
 		t.Fatalf("image input digests = %v, want [%s]", got, image.Digest)
 	}
-	e.elaboration = &elaborationWorkflow{promptPackage: digest("7"), blobs: blobs}
-	elaborationInvocation, err := domain.NewAgentInvocation(
-		"inv-elaboration", nil, &conversationID, 1,
+	e.specification = &specificationWorkflow{promptPackage: digest("7"), blobs: blobs}
+	specificationInvocation, err := domain.NewAgentInvocation(
+		"inv-specification", nil, &conversationID, 1,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	elaborationBinding := binding
-	elaborationBinding.run.ID = "elaboration-run"
-	elaborationBinding.invocation = elaborationInvocation
-	elaborationAdmission, admitted, err := e.admitAttempt(ctx, elaborationBinding, domain.Stage{
-		ID: elaborationStageID(elaborationBinding.run.ID), Name: elaborationStageName,
-	}, elaborationInvocation.ID)
+	specificationBinding := binding
+	specificationBinding.run.ID = "specification-run"
+	specificationBinding.invocation = specificationInvocation
+	specificationAdmission, admitted, err := e.admitAttempt(ctx, specificationBinding, domain.Stage{
+		ID: specificationStageID(specificationBinding.run.ID), Name: specificationStageName,
+	}, specificationInvocation.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !admitted || elaborationAdmission.StageInputs == nil {
-		t.Fatalf("elaboration admitted = %t, stage inputs = %v",
-			admitted, elaborationAdmission.StageInputs)
+	if !admitted || specificationAdmission.StageInputs == nil {
+		t.Fatalf("specification admitted = %t, stage inputs = %v",
+			admitted, specificationAdmission.StageInputs)
 	}
-	if got := elaborationAdmission.StageInputs.PriorArtifactDigests; len(got) != 0 {
-		t.Fatalf("elaboration prior artifacts include opaque conversation attachment: %v", got)
+	if got := specificationAdmission.StageInputs.PriorArtifactDigests; len(got) != 0 {
+		t.Fatalf("specification prior artifacts include opaque conversation attachment: %v", got)
 	}
-	if got := elaborationAdmission.StageInputs.ImageInputDigests; len(got) != 0 {
-		t.Fatalf("elaboration image inputs claim unsupported attachment delivery: %v", got)
+	if got := specificationAdmission.StageInputs.ImageInputDigests; len(got) != 0 {
+		t.Fatalf("specification image inputs claim unsupported attachment delivery: %v", got)
 	}
 	remediationID := domain.InvocationID("inv-remediate-1-run-1")
 	remediationInvocation, err := domain.NewAgentInvocation(

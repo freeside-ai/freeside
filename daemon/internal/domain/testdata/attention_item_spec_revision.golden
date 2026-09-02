@@ -25,7 +25,7 @@
       "digest": "sha256:spec-2",
       "provenance": {
         "producer_class": "agent",
-        "producer_invocation_id": "inv-elaborate-2",
+        "producer_invocation_id": "inv-specify-2",
         "head_binding": "head_independent",
         "verification_recipe_digest": null,
         "sensitivity_class": "normal"
@@ -45,7 +45,7 @@
       "digest": "sha256:c886feb1d99e9c544b34a21766e9fe14e1a0f054fddf73188a7239374ea07a37",
       "provenance": {
         "producer_class": "agent",
-        "producer_invocation_id": "inv-elaborate-2",
+        "producer_invocation_id": "inv-specify-2",
         "head_binding": "head_independent",
         "verification_recipe_digest": null,
         "sensitivity_class": "normal"

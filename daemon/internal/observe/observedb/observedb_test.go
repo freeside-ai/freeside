@@ -64,7 +64,7 @@ var wantSurface = map[string]bool{
 	"Lineage.ApprovedSpecDigest":                  true,
 	"Lineage.AttemptNumber":                       true,
 	"Lineage.CampaignID":                          true,
-	"Lineage.ElaborationRunID":                    true,
+	"Lineage.SpecificationRunID":                  true,
 	"Lineage.ImplementationRunID":                 true,
 	"Lineage.Kind":                                true,
 	"Lineage.ParentRunID":                         true,
@@ -254,21 +254,21 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 	if err != nil {
 		t.Fatalf("ProductionAttemptRunID: %v", err)
 	}
-	elaborationRunID, err := engine.ElaborationRunIDForImplementation(rootImplementationRunID)
+	specificationRunID, err := engine.SpecificationRunIDForImplementation(rootImplementationRunID)
 	if err != nil {
-		t.Fatalf("ElaborationRunIDForImplementation: %v", err)
+		t.Fatalf("SpecificationRunIDForImplementation: %v", err)
 	}
 	initialAttempt := domain.ProductionAttempt{
 		CampaignID: campaignID, AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
 		SourceDigest: "sha256:source", PublicationDigest: "sha256:publication",
-		ElaborationRunID: elaborationRunID, ImplementationRunID: rootImplementationRunID,
+		SpecificationRunID: specificationRunID, ImplementationRunID: rootImplementationRunID,
 	}
 	productionAttempt := domain.ProductionAttempt{
 		CampaignID: campaignID, AttemptNumber: 2, Kind: domain.ProductionAttemptRetry,
 		Reason: "retry after rig repair", ParentRunID: rootImplementationRunID,
 		SourceDigest: initialAttempt.SourceDigest, PublicationDigest: initialAttempt.PublicationDigest,
 		ApprovedSpecDigest: "sha256:approved-spec",
-		ElaborationRunID:   elaborationRunID, ImplementationRunID: implementationRunID,
+		SpecificationRunID: specificationRunID, ImplementationRunID: implementationRunID,
 	}
 	invocationID := domain.InvocationID("inv-snapshot")
 	run := domain.Run{
@@ -281,12 +281,12 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 			}},
 		}},
 	}
-	elaborationRun := domain.Run{
-		ID: elaborationRunID, ProjectID: run.ProjectID,
+	specificationRun := domain.Run{
+		ID: specificationRunID, ProjectID: run.ProjectID,
 		SpecDigest: initialAttempt.SourceDigest, PolicyDigest: run.PolicyDigest,
 		CampaignID: campaignID, AttemptNumber: 1,
 		Stages: []domain.Stage{{
-			ID: "stage-elaboration", RunID: elaborationRunID, Name: string(domain.StageNameElaboration),
+			ID: "stage-specification", RunID: specificationRunID, Name: string(domain.StageNameSpecification),
 		}},
 	}
 	foreignRun := domain.Run{
@@ -499,7 +499,7 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 		if err := tx.PutProductionAttempt(ctx, productionAttempt); err != nil {
 			return err
 		}
-		if err := tx.PutRun(ctx, elaborationRun); err != nil {
+		if err := tx.PutRun(ctx, specificationRun); err != nil {
 			return err
 		}
 		if err := tx.PutRun(ctx, run); err != nil {
@@ -621,15 +621,15 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 		snapshot.ReviewYield[0].DecisionAction != nil {
 		t.Fatalf("review yield = %+v", snapshot.ReviewYield)
 	}
-	elaborationSnapshot, err := observed.ObserveSnapshot(ctx, elaborationRun.ID)
+	specificationSnapshot, err := observed.ObserveSnapshot(ctx, specificationRun.ID)
 	if err != nil {
-		t.Fatalf("ObserveSnapshot(elaboration): %v", err)
+		t.Fatalf("ObserveSnapshot(specification): %v", err)
 	}
-	if elaborationSnapshot.Attempt == nil ||
-		elaborationSnapshot.Attempt.ElaborationRunID != elaborationRun.ID ||
-		elaborationSnapshot.Attempt.ImplementationRunID != rootImplementationRunID ||
-		elaborationSnapshot.Attempt.ApprovedSpecDigest != run.SpecDigest {
-		t.Fatalf("elaboration lineage = %+v", elaborationSnapshot.Attempt)
+	if specificationSnapshot.Attempt == nil ||
+		specificationSnapshot.Attempt.SpecificationRunID != specificationRun.ID ||
+		specificationSnapshot.Attempt.ImplementationRunID != rootImplementationRunID ||
+		specificationSnapshot.Attempt.ApprovedSpecDigest != run.SpecDigest {
+		t.Fatalf("specification lineage = %+v", specificationSnapshot.Attempt)
 	}
 	if _, err := observed.ObserveSnapshot(ctx, foreignRun.ID); !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("ObserveSnapshot(foreign admission) error = %v, want ErrParentKeyMismatch", err)

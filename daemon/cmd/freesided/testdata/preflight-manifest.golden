@@ -41,10 +41,10 @@
   "codex_auth_identity": "codex-1",
   "identity": {
     "source_digest": "sha256:98f7ecbbe8aa0b856e2af4856e0d6ed099ac777be5cada07dc9026a9f37bdb62",
-    "policy_digest": "sha256:a59b2bb91a87bf2067aef7c598aac2660a07b136c4c9d02a83a96346c307b37d",
+    "policy_digest": "sha256:34e4283fd67b0809b8807b6e2e1af628e0f204ff0d7485f3b71c8a8d8578f745",
     "publication_digest": "sha256:f3c794222955e37bcacd199d0da87ea4f0cb721edd5a2d57b67ce9d86402219a",
-    "implementation_run_id": "run-712d5690150ec0a0162b3d17fff0be6276d50a77d051205997b0121ca8e2da91",
-    "implementation_invocation_id": "inv-implement-run-712d5690150ec0a0162b3d17fff0be6276d50a77d051205997b0121ca8e2da91"
+    "implementation_run_id": "run-0db57024c4bc1a8ea01f738034c5f3cc7bcb0b7f885b00b316b4e918f1f23c55",
+    "implementation_invocation_id": "inv-implement-run-0db57024c4bc1a8ea01f738034c5f3cc7bcb0b7f885b00b316b4e918f1f23c55"
   },
   "images": [
     {
@@ -117,7 +117,7 @@
     {
       "name": "source_implementation_identity",
       "status": "passed",
-      "evidence": "source sha256:98f7ecbbe8aa0b856e2af4856e0d6ed099ac777be5cada07dc9026a9f37bdb62 deterministically reserves run run-712d5690150ec0a0162b3d17fff0be6276d50a77d051205997b0121ca8e2da91 and invocation inv-implement-run-712d5690150ec0a0162b3d17fff0be6276d50a77d051205997b0121ca8e2da91"
+      "evidence": "source sha256:98f7ecbbe8aa0b856e2af4856e0d6ed099ac777be5cada07dc9026a9f37bdb62 deterministically reserves run run-0db57024c4bc1a8ea01f738034c5f3cc7bcb0b7f885b00b316b4e918f1f23c55 and invocation inv-implement-run-0db57024c4bc1a8ea01f738034c5f3cc7bcb0b7f885b00b316b4e918f1f23c55"
     },
     {
       "name": "review_instructions",

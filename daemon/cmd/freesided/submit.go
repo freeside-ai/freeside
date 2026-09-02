@@ -28,7 +28,7 @@ import (
 
 // freesided submit (plan §5.12, §10): registers the source work item and
 // resolved policy as digest-addressed artifacts, creates its pre-approval
-// elaboration run, and reserves the future implementation identity.
+// specification run, and reserves the future implementation identity.
 // Registration only: execution preconditions stay with the dispatch gates,
 // so a submission is durable intent even while the daemon is stopped or held.
 
@@ -40,8 +40,8 @@ const maxSubmissionFileBytes = 4 << 20
 const submitResultHelp = `
 Result JSON fields by lane:
   source submission: source_digest, source_artifact_id, publication_digest
-  elaboration: elaboration_run_id, elaboration_invocation_id, elaboration_stage_id,
-    elaboration_policy_digest, elaboration_policy_artifact_id
+  specification: specification_run_id, specification_invocation_id, specification_stage_id,
+    specification_policy_digest, specification_policy_artifact_id
   reserved implementation: implementation_run_id, implementation_invocation_id,
     implementation_stage_id, campaign_id, attempt_number
   shared: project_id, composition_digest
@@ -50,9 +50,9 @@ The legacy fields run_id, invocation_id, stage_id, and work_unit_id are
 compatibility aliases bound to the reserved implementation run. The former
 spec_digest and spec_artifact_id fields are source_digest and
 source_artifact_id; policy_digest and policy_artifact_id are
-elaboration_policy_digest and elaboration_policy_artifact_id. No deprecated
+specification_policy_digest and specification_policy_artifact_id. No deprecated
 digest or artifact aliases are emitted. A legacy production-only replay leaves
-the elaboration fields empty because its source is already the implementation
+the specification fields empty because its source is already the implementation
 specification.
 
 The approved implementation specification digest is available before start on
@@ -76,7 +76,7 @@ func runSubmitMain(args []string) {
 	flags.SetOutput(os.Stderr)
 	configureSubmitUsage(flags)
 	dbPath := flags.String("db", "", "SQLite database path (required)")
-	specPath := flags.String("spec", "", "source work-item specification file (required)")
+	workItemPath := flags.String("work-item", "", "source work-item file (required)")
 	policyPath := flags.String("policy", "", "resolved per-run policy-key JSON array (required)")
 	publicationPath := flags.String("publication", "", "reviewer-facing pull-request metadata JSON file (required)")
 	compositionPath := flags.String("composition-manifest", "", "passing production-composition manifest bound to the submitted inputs")
@@ -90,7 +90,7 @@ func runSubmitMain(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	result, err := runSubmitCommand(ctx, submitCommandConfig{
-		DBPath: *dbPath, SpecPath: *specPath, PolicyPath: *policyPath,
+		DBPath: *dbPath, WorkItemPath: *workItemPath, PolicyPath: *policyPath,
 		PublicationPath: *publicationPath, WorkUnitPath: *workUnitPath,
 		CompositionPath:    *compositionPath,
 		RequireComposition: *requireComposition,
@@ -108,7 +108,7 @@ func runSubmitMain(args []string) {
 
 type submitCommandConfig struct {
 	DBPath             string
-	SpecPath           string
+	WorkItemPath       string
 	PolicyPath         string
 	PublicationPath    string
 	WorkUnitPath       string
@@ -130,28 +130,28 @@ type submittedWorkUnit struct {
 }
 
 type submitResult struct {
-	RunID                       domain.RunID        `json:"run_id"`
-	ElaborationRunID            domain.RunID        `json:"elaboration_run_id"`
-	ProjectID                   domain.ProjectID    `json:"project_id"`
-	InvocationID                domain.InvocationID `json:"invocation_id"`
-	StageID                     domain.StageID      `json:"stage_id"`
-	ImplementationRunID         domain.RunID        `json:"implementation_run_id"`
-	ImplementationInvocationID  domain.InvocationID `json:"implementation_invocation_id"`
-	ImplementationStageID       domain.StageID      `json:"implementation_stage_id"`
-	ElaborationInvocationID     domain.InvocationID `json:"elaboration_invocation_id"`
-	ElaborationStageID          domain.StageID      `json:"elaboration_stage_id"`
-	SourceDigest                domain.Digest       `json:"source_digest"`
-	ElaborationPolicyDigest     domain.Digest       `json:"elaboration_policy_digest"`
-	SourceArtifactID            domain.ArtifactID   `json:"source_artifact_id"`
-	ElaborationPolicyArtifactID domain.ArtifactID   `json:"elaboration_policy_artifact_id"`
-	PublicationDigest           domain.Digest       `json:"publication_digest"`
-	CompositionDigest           domain.Digest       `json:"composition_digest,omitempty"`
-	WorkUnitID                  domain.WorkUnitID   `json:"work_unit_id,omitempty"`
-	CampaignID                  domain.CampaignID   `json:"campaign_id,omitempty"`
-	AttemptNumber               int                 `json:"attempt_number,omitempty"`
-	AttemptReason               string              `json:"attempt_reason,omitempty"`
-	ParentRunID                 domain.RunID        `json:"parent_run_id,omitempty"`
-	ApprovedSpecDigest          domain.Digest       `json:"approved_spec_digest,omitempty"`
+	RunID                         domain.RunID        `json:"run_id"`
+	SpecificationRunID            domain.RunID        `json:"specification_run_id"`
+	ProjectID                     domain.ProjectID    `json:"project_id"`
+	InvocationID                  domain.InvocationID `json:"invocation_id"`
+	StageID                       domain.StageID      `json:"stage_id"`
+	ImplementationRunID           domain.RunID        `json:"implementation_run_id"`
+	ImplementationInvocationID    domain.InvocationID `json:"implementation_invocation_id"`
+	ImplementationStageID         domain.StageID      `json:"implementation_stage_id"`
+	SpecificationInvocationID     domain.InvocationID `json:"specification_invocation_id"`
+	SpecificationStageID          domain.StageID      `json:"specification_stage_id"`
+	SourceDigest                  domain.Digest       `json:"source_digest"`
+	SpecificationPolicyDigest     domain.Digest       `json:"specification_policy_digest"`
+	SourceArtifactID              domain.ArtifactID   `json:"source_artifact_id"`
+	SpecificationPolicyArtifactID domain.ArtifactID   `json:"specification_policy_artifact_id"`
+	PublicationDigest             domain.Digest       `json:"publication_digest"`
+	CompositionDigest             domain.Digest       `json:"composition_digest,omitempty"`
+	WorkUnitID                    domain.WorkUnitID   `json:"work_unit_id,omitempty"`
+	CampaignID                    domain.CampaignID   `json:"campaign_id,omitempty"`
+	AttemptNumber                 int                 `json:"attempt_number,omitempty"`
+	AttemptReason                 string              `json:"attempt_reason,omitempty"`
+	ParentRunID                   domain.RunID        `json:"parent_run_id,omitempty"`
+	ApprovedSpecDigest            domain.Digest       `json:"approved_spec_digest,omitempty"`
 }
 
 type submissionFile struct {
@@ -195,8 +195,8 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, errors.New("submit: --run-id cannot override production composition identity")
 	case cfg.DBPath == "":
 		return submitResult{}, errors.New("submit: -db is required")
-	case cfg.SpecPath == "":
-		return submitResult{}, errors.New("submit: --spec is required")
+	case cfg.WorkItemPath == "":
+		return submitResult{}, errors.New("submit: --work-item is required")
 	case cfg.PolicyPath == "":
 		return submitResult{}, errors.New("submit: --policy is required")
 	case cfg.PublicationPath == "":
@@ -207,7 +207,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, errors.New("submit: --project is required")
 	}
 
-	spec, err := readSubmissionFile(cfg.SpecPath)
+	spec, err := readSubmissionFile(cfg.WorkItemPath)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: read specification: %w", err)
 	}
@@ -323,7 +323,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 			return submitResult{}, fmt.Errorf("submit: composition manifest: %w", err)
 		}
 	}
-	elaborationRunID, err := engine.ElaborationRunIDForImplementation(implementationRunID)
+	specificationRunID, err := engine.SpecificationRunIDForImplementation(implementationRunID)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
@@ -331,7 +331,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
-	resolvedPolicy, err := domain.NewResolvedPolicy(elaborationRunID, keys)
+	resolvedPolicy, err := domain.NewResolvedPolicy(specificationRunID, keys)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: validate resolved policy: %w", err)
 	}
@@ -387,13 +387,13 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	}); err != nil {
 		return submitResult{}, fmt.Errorf("submit: register artifacts: %w", err)
 	}
-	elaborationStatePresent, err := engine.HasElaborationIntakeState(
-		ctx, st, elaborationRunID, implementationRunID,
+	specificationStatePresent, err := engine.HasSpecificationIntakeState(
+		ctx, st, specificationRunID, implementationRunID,
 	)
 	if err != nil {
-		return submitResult{}, fmt.Errorf("submit: inspect elaboration intake: %w", err)
+		return submitResult{}, fmt.Errorf("submit: inspect specification intake: %w", err)
 	}
-	if !elaborationStatePresent {
+	if !specificationStatePresent {
 		legacy, found, err := legacyProductionReplay(ctx, st, implementationRunID, cfg.ProjectID,
 			specArtifact, policyArtifact, keys, publication, workUnit, publicationDigest)
 		if err != nil {
@@ -404,8 +404,8 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		}
 	}
 
-	submitted, err := engine.SubmitElaborationRun(ctx, st, engine.ElaborationRunSpec{
-		ElaborationRunID: elaborationRunID, ImplementationRunID: implementationRunID,
+	submitted, err := engine.SubmitSpecificationRun(ctx, st, engine.SpecificationRunSpec{
+		SpecificationRunID: specificationRunID, ImplementationRunID: implementationRunID,
 		ProjectID: cfg.ProjectID, SourceArtifactID: specArtifact.ID,
 		PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: resolvedPolicy, Publication: publication,
 		PublicationDigest: publicationDigest,
@@ -415,25 +415,25 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
 	result := submitResult{
-		RunID: submitted.ImplementationRunID, ElaborationRunID: submitted.Run.ID,
+		RunID: submitted.ImplementationRunID, SpecificationRunID: submitted.Run.ID,
 		ProjectID: submitted.Run.ProjectID,
 		// Keep the original fields as implementation aliases for compatibility
 		// while exposing both lanes without ambiguity.
-		InvocationID:                submitted.ImplementationInvocationID,
-		StageID:                     submitted.ImplementationStageID,
-		ImplementationRunID:         submitted.ImplementationRunID,
-		ImplementationInvocationID:  submitted.ImplementationInvocationID,
-		ImplementationStageID:       submitted.ImplementationStageID,
-		ElaborationInvocationID:     submitted.ElaborationInvocationID,
-		ElaborationStageID:          submitted.ElaborationStageID,
-		SourceDigest:                spec.digest,
-		ElaborationPolicyDigest:     submitted.Run.PolicyDigest,
-		SourceArtifactID:            specArtifact.ID,
-		ElaborationPolicyArtifactID: policyArtifact.ID,
-		PublicationDigest:           publicationDigest,
-		CompositionDigest:           composition.digest,
-		CampaignID:                  submitted.Run.CampaignID,
-		AttemptNumber:               submitted.Run.AttemptNumber,
+		InvocationID:                  submitted.ImplementationInvocationID,
+		StageID:                       submitted.ImplementationStageID,
+		ImplementationRunID:           submitted.ImplementationRunID,
+		ImplementationInvocationID:    submitted.ImplementationInvocationID,
+		ImplementationStageID:         submitted.ImplementationStageID,
+		SpecificationInvocationID:     submitted.SpecificationInvocationID,
+		SpecificationStageID:          submitted.SpecificationStageID,
+		SourceDigest:                  spec.digest,
+		SpecificationPolicyDigest:     submitted.Run.PolicyDigest,
+		SourceArtifactID:              specArtifact.ID,
+		SpecificationPolicyArtifactID: policyArtifact.ID,
+		PublicationDigest:             publicationDigest,
+		CompositionDigest:             composition.digest,
+		CampaignID:                    submitted.Run.CampaignID,
+		AttemptNumber:                 submitted.Run.AttemptNumber,
 	}
 	if workUnit != nil {
 		result.WorkUnitID = domain.WorkUnitIDForRun(submitted.ImplementationRunID)
@@ -471,8 +471,8 @@ func validateSubmissionComposition(
 }
 
 // legacyProductionReplay preserves exact retries from the production-only
-// submit protocol that preceded elaboration. A matching legacy run remains
-// authoritative instead of being retrofitted with an elaboration reservation:
+// submit protocol that preceded specification. A matching legacy run remains
+// authoritative instead of being retrofitted with a specification reservation:
 // that reservation is an intake-time fact, and creating it after execution
 // could retarget a live or terminal production workflow.
 func legacyProductionReplay(

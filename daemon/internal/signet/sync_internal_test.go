@@ -66,10 +66,10 @@ func TestNormalizeAttentionItemCarriesReadinessDetailAndLegacyNull(t *testing.T)
 	}
 }
 
-func TestAuthenticateElaborationDiscussionArtifact(t *testing.T) {
+func TestAuthenticateSpecificationDiscussionArtifact(t *testing.T) {
 	id := domain.ArtifactID("spec-discussion-command-1")
 	digest := domain.Digest("sha256:" + strings.Repeat("a", 64))
-	producer := domain.InvocationID("inv-elaborate-run-1")
+	producer := domain.InvocationID("inv-specify-run-1")
 	valid := domain.Artifact{
 		ID: id, Type: domain.ArtifactKindResearch, Digest: digest,
 		Provenance: domain.Provenance{
@@ -82,7 +82,7 @@ func TestAuthenticateElaborationDiscussionArtifact(t *testing.T) {
 			Source:    domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
 		},
 	}
-	if !authenticatesElaborationDiscussionArtifact(valid, id, digest, producer) {
+	if !authenticatesSpecificationDiscussionArtifact(valid, id, digest, producer) {
 		t.Fatal("valid discussion artifact was rejected")
 	}
 	for name, mutate := range map[string]func(*domain.Artifact){
@@ -90,7 +90,7 @@ func TestAuthenticateElaborationDiscussionArtifact(t *testing.T) {
 		"wrong digest":  func(artifact *domain.Artifact) { artifact.Digest = "sha256:" + domain.Digest(strings.Repeat("b", 64)) },
 		"wrong kind":    func(artifact *domain.Artifact) { artifact.Type = domain.ArtifactKindSpecification },
 		"wrong producer": func(artifact *domain.Artifact) {
-			artifact.Provenance.ProducerInvocationID = "inv-elaborate-other"
+			artifact.Provenance.ProducerInvocationID = "inv-specify-other"
 		},
 		"agent producer": func(artifact *domain.Artifact) {
 			artifact.Provenance.ProducerClass = domain.ProducerAgent
@@ -106,7 +106,7 @@ func TestAuthenticateElaborationDiscussionArtifact(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			artifact := valid
 			mutate(&artifact)
-			if authenticatesElaborationDiscussionArtifact(artifact, id, digest, producer) {
+			if authenticatesSpecificationDiscussionArtifact(artifact, id, digest, producer) {
 				t.Fatalf("corrupt discussion artifact authenticated: %+v", artifact)
 			}
 		})
