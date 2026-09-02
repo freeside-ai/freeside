@@ -3,6 +3,7 @@ import SwiftUI
 
 enum DecisionCardModule: String, CaseIterable {
     case facts
+    case agentQuestion
     case specRevision
     case specification
     case factBlock
@@ -133,15 +134,15 @@ struct DecisionCardComposition: Equatable {
                 actionInsertionIndex: 3,
                 reviewingActionInsertionIndex: nil)
         case .agent_question:
-            // Section 9: the question leads as a labeled agent claim, and it
-            // is answerable without the transcript, so the claim module runs
-            // ahead of the action region instead of sitting in the lower
-            // sections with the supporting context. The second claim module
-            // carries that supporting context, which stays below the actions.
+            // Section 9: the typed decisions lead (what is blocked and the
+            // enumerated options, with the recommendation labeled as an agent
+            // claim), so the card is answerable without the transcript. The
+            // claims module below the actions carries the decisions artifact
+            // and any supporting context.
             return .init(
                 modules: [
-                    .recommendation, .claims, .facts, .factBlock, .summary, .claims, .evidence,
-                    .details,
+                    .recommendation, .agentQuestion, .facts, .factBlock, .summary, .claims,
+                    .evidence, .details,
                 ],
                 actionInsertionIndex: 3,
                 reviewingActionInsertionIndex: nil)

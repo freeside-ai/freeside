@@ -199,7 +199,9 @@ struct DecisionDetailView: View {
                         prompt: "Answer the agent's question and retry the blocked work.",
                         submitLabel: "Answer and retry", byteLimit: 8192
                     ) { message in
-                        await model.submitAnswer(.answer_and_retry, message: message)
+                        await model.submitAnswer(
+                            .answer_and_retry, message: message,
+                            answerRoute: AgentQuestionPresentation.answerRoute(for: model.snapshot?.item))
                     }
                 case .answerWithoutRetry:
                     MessageComposerSheet(
@@ -620,6 +622,8 @@ struct DecisionDetailView: View {
                     proposalRows(proposalFacts)
                 }
             }
+        case .agentQuestion:
+            agentQuestionLead(item)
         case .specRevision:
             specRevisionLead(item)
         case .specification:
@@ -807,6 +811,57 @@ struct DecisionDetailView: View {
             cardSection(attemptTimings.title) {
                 ForEach(attemptTimings.facts) { fact in
                     factRow(fact.label, value: fact.value)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func agentQuestionLead(_ item: Components.Schemas.AttentionItem) -> some View {
+        if let presentation = AgentQuestionPresentation(item) {
+            cardSection("Question") {
+                Text(presentation.stageLabel)
+                    .font(FreesideFont.sans(.callout, weight: .semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                if let kind = presentation.kindLabel {
+                    Text("Blocked on: \(kind)")
+                        .font(FreesideFont.caption)
+                        .foregroundStyle(Color.inkDim)
+                }
+                Divider()
+                Text("Recommendations are agent claims, not verified facts.")
+                    .font(FreesideFont.caption)
+                    .foregroundStyle(Color.inkDim)
+
+                ForEach(Array(presentation.decisions.enumerated()), id: \.offset) { index, decision in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(decision.question)
+                            .font(FreesideFont.sans(.callout, weight: .semibold))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(decision.whyBlocking)
+                            .font(FreesideFont.callout)
+                            .foregroundStyle(Color.inkDim)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ForEach(Array(decision.options.enumerated()), id: \.offset) { _, option in
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    Text(option.label)
+                                        .font(FreesideFont.sans(.callout, weight: .semibold))
+                                    if option.recommended {
+                                        Label("Agent recommends (unverified)", systemImage: "quote.bubble")
+                                            .font(FreesideFont.caption)
+                                            .foregroundStyle(Color.accentText)
+                                    }
+                                }
+                                Text(option.tradeoffs)
+                                    .font(FreesideFont.callout)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    if index < presentation.decisions.count - 1 {
+                        Divider()
+                    }
                 }
             }
         }

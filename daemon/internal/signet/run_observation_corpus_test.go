@@ -267,16 +267,13 @@ func (f corpusFixture) seedConversationStart(
 	if err != nil {
 		t.Fatalf("NewAgentInvocation: %v", err)
 	}
-	facts := specificationQuestionFacts(invocation)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: itemID, ProjectID: "proj-1",
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
-		Type:    domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
-		Reason:            "the agent needs a decision to proceed",
-		RequestedDecision: []domain.Action{domain.ActionAnswerWithoutRetry, domain.ActionStop},
-		AgentClaims:       []domain.AgentClaim{questionClaimFixture(facts)},
-		AgentQuestion:     facts,
-		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
+		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason: "the candidate is ready", RequestedDecision: []domain.Action{domain.ActionReturnToAgent},
+		PRHeadSHA: "cafebabe", PRReference: &domain.PRReference{Repo: "owner/repo", Number: 123},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
 		ConversationID: &conversation, Status: domain.StatusOpen,
 	}, nil)
 	if err != nil {
@@ -1702,18 +1699,14 @@ func TestRunObservationCorpusIgnoresUnrelatedItems(t *testing.T) {
 		return tx.PutRun(ctx, corpusRun(runID, corpusAttempt(runID, invocation)))
 	})
 	f.seedAdmission(t, runID, corpusStageID(runID), corpusAttempt(runID, invocation).ID, invocation)
-	// An unrelated question item bound to the same run must not change the
+	// An unrelated attention item bound to the same run must not change the
 	// authenticated projection.
-	facts := specificationQuestionFacts("inv-question")
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "unrelated-question", ProjectID: "proj-1",
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
-		Type:    domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
-		Reason:            "the agent needs a decision to proceed",
-		RequestedDecision: []domain.Action{domain.ActionAnswerWithoutRetry, domain.ActionStop},
-		AgentClaims:       []domain.AgentClaim{questionClaimFixture(facts)},
-		AgentQuestion:     facts,
-		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+		Type:    domain.AttentionReviewDiminishing, Priority: domain.PriorityNormal,
+		Reason: "review yield is diminishing", RequestedDecision: []domain.Action{domain.ActionFinishNow},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewAttentionItem: %v", err)

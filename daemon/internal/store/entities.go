@@ -433,6 +433,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	if err := tx.gateBlockedItem(ctx, item); err != nil {
 		return fmt.Errorf("put attention item %q blocked binding: %w", item.ID, err)
 	}
+	if err := tx.gateAgentQuestionItem(ctx, item); err != nil {
+		return fmt.Errorf("put attention item %q agent question binding: %w", item.ID, err)
+	}
 	existing, err := tx.existingBody(ctx, `SELECT body FROM attention_items WHERE id = ?`, item.ID)
 	if err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
@@ -479,6 +482,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 			if item.SpecRevision == nil && decoded.SpecRevision != nil {
 				item.SpecRevision = decoded.SpecRevision
 			}
+			if item.AgentQuestion == nil && decoded.AgentQuestion != nil {
+				item.AgentQuestion = decoded.AgentQuestion
+			}
 		}
 		// A constructor replay must also converge against a legacy row that
 		// predates card facts. Backfilling those rows is intentionally not a
@@ -508,6 +514,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 			if decoded.SpecRevision == nil {
 				item.SpecRevision = nil
 			}
+			if decoded.AgentQuestion == nil {
+				item.AgentQuestion = nil
+			}
 		}
 		body, err := encode(item)
 		if err != nil {
@@ -534,6 +543,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 			if err := tx.gateSpecRevisionItem(ctx, item); err != nil {
 				return fmt.Errorf("put attention item %q spec revision binding: %w", item.ID, err)
 			}
+			if err := tx.gateAgentQuestionItem(ctx, item); err != nil {
+				return fmt.Errorf("put attention item %q agent question binding: %w", item.ID, err)
+			}
 			return tx.putAttentionItemPRReference(ctx, item)
 		}
 		if err := domain.ValidateAttentionItemTransition(decoded, item); err != nil {
@@ -551,6 +563,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	}
 	if err := tx.gateSpecRevisionItem(ctx, item); err != nil {
 		return fmt.Errorf("put attention item %q spec revision binding: %w", item.ID, err)
+	}
+	if err := tx.gateAgentQuestionItem(ctx, item); err != nil {
+		return fmt.Errorf("put attention item %q agent question binding: %w", item.ID, err)
 	}
 	surface, createdSurface, changedSurface, err := tx.prepareDecisionSurface(ctx, item, old)
 	if err != nil {
@@ -1314,6 +1329,9 @@ func (tx *ReadTx) scanAttentionItemHistory(ctx context.Context, sc scanner) (dom
 	if err := tx.gateExecutionFailureItem(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
+	if err := tx.gateAgentQuestionItem(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
 	if err := tx.gateDecisionSurface(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
@@ -1349,6 +1367,9 @@ func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (do
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	if err := tx.gateExecutionFailureItem(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	if err := tx.gateAgentQuestionItem(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	if err := tx.gateReadyItemPRReference(ctx, item); err != nil {

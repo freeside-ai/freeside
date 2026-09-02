@@ -472,10 +472,17 @@ public final class DecisionModel {
     }
 
     @discardableResult
-    public func submitAnswer(_ action: Components.Schemas.Action, message: String) async -> Bool {
+    /// Submits an answer. `answerRoute` is required exactly for answer_and_retry
+    /// on an implementation-stage question (AgentQuestionPresentation.answerRoute);
+    /// the daemon refuses it anywhere else.
+    public func submitAnswer(
+        _ action: Components.Schemas.Action, message: String,
+        answerRoute: Components.Schemas.AnswerRoute? = nil
+    ) async -> Bool {
         guard action == .answer_and_retry || action == .answer_without_retry else { return false }
         return await submitMessageAction(
-            action, message: message, emptyError: "enter an answer before sending")
+            action, message: message, emptyError: "enter an answer before sending",
+            answerRoute: answerRoute)
     }
 
     @discardableResult
@@ -486,7 +493,8 @@ public final class DecisionModel {
     }
 
     private func submitMessageAction(
-        _ action: Components.Schemas.Action, message: String, emptyError: String
+        _ action: Components.Schemas.Action, message: String, emptyError: String,
+        answerRoute: Components.Schemas.AnswerRoute? = nil
     ) async -> Bool {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -498,7 +506,7 @@ public final class DecisionModel {
             return false
         }
         let generationBefore = submissionClaimGeneration
-        await submit(action, message: trimmed)
+        await submit(action, message: trimmed, answerRoute: answerRoute)
         return submissionClaimGeneration != generationBefore
     }
 
@@ -545,6 +553,7 @@ public final class DecisionModel {
         snoozeUntil: Date? = nil,
         alternativeChoices: [Components.Schemas.AlternativeChoice]? = nil,
         message: String? = nil,
+        answerRoute: Components.Schemas.AnswerRoute? = nil,
         reviewedSnapshot: Components.Schemas.AttentionItemSnapshot? = nil
     ) async {
         guard actionsEnabled, isSubmittable(action), let snapshot else { return }
@@ -590,6 +599,7 @@ public final class DecisionModel {
                 capability_manifest_digest: capabilityManifestDigest.map {
                     .init(value1: $0)
                 },
+                answer_route: answerRoute.map { .init(value1: $0) },
                 run_proposal_revision: revision.map {
                     .init(value1: $0)
                 },

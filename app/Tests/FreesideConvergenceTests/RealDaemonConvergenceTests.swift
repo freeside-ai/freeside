@@ -550,6 +550,17 @@ struct RealDaemonConvergenceTests {
         _ type: Components.Schemas.AttentionType
     ) async throws {
         let control = try ConvergenceHarness.control()
+        if type == .agent_question {
+            // Terminal-backed questions have a narrower producer contract than
+            // the type-level Signet policy exercised by the generic matrix.
+            let producer = try await control.seedItemOutcome(
+                id: ConvergenceHarness.uniqueItemID("pol-agent_question-producer"),
+                type: type, actions: [.answer_and_retry, .stop])
+            #expect(
+                producer.statusCode == 200,
+                "producer action set for agent_question rejected: \(producer.message ?? "")")
+            return
+        }
         let allowed = try #require(AttentionFixtures.phase1ActionSets[type])
         let allowedSet = Set(allowed)
         // Capability retry is parameterized by authenticated failure facts and

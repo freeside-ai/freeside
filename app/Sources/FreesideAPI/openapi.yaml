@@ -1044,12 +1044,15 @@ components:
     ObservedInvocationStatus:
       type: string
       description: The daemon's closed observation-side invocation lifecycle.
-      enum: [pending, running, completed, failed, canceled, gone]
+      enum: [pending, running, completed, failed, canceled, blocked, gone]
 
     ExecutionOutcomeStatus:
       type: string
-      description: The closed non-export terminal authority vocabulary.
-      enum: [failed, canceled, lost]
+      description: >
+        The closed non-export terminal authority vocabulary. blocked is the
+        implementer's typed stop: no candidate exists and the run waits on an
+        agent_question answer.
+      enum: [failed, canceled, lost, blocked]
 
     RunMilestone:
       type: object
@@ -1532,6 +1535,18 @@ components:
             The offered capability manifest selected by
             retry_with_capabilities. Required only for that action; the daemon
             re-derives the manifest from the run's current resolved policy.
+        answer_route:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AnswerRoute"
+          description: >
+            Where the answer goes. Required for answer_and_retry on an
+            agent_question whose facts name the implementation stage, and
+            absent for every other command. retry_implementation re-invokes
+            the implementer with the answer as operator feedback against the
+            unchanged specification; revise_specification is part of the
+            contract but the daemon refuses it as not yet available until a
+            revised specification can mint a fresh implementation identity.
         attachments:
           type: array
           items:
@@ -1591,6 +1606,7 @@ components:
         - action
         - message
         - attachments
+        - answer_route
       additionalProperties: false
       properties:
         command_id:
@@ -1626,6 +1642,14 @@ components:
           description: >
             The appended message's attachment digests in authored order;
             empty for pure decisions.
+        answer_route:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AnswerRoute"
+          description: >
+            The route an implementation-stage answer named; null for every
+            other command. Always rendered, so the record keeps one
+            byte-form.
       example:
         command_id: "cmd-1"
         device_id: "device-1"
@@ -1636,6 +1660,7 @@ components:
         action: "open_pr"
         message: ""
         attachments: []
+        answer_route: null
 
     CommandResult:
       type: object
@@ -1664,6 +1689,7 @@ components:
           action: "open_pr"
           message: ""
           attachments: []
+          answer_route: null
         revision: 1
 
     StaleVersionRejection:
@@ -2284,6 +2310,96 @@ components:
       description: The workflow stage that owns an execution outcome.
       enum: [specification, implementation, review, verification]
 
+    AnswerRoute:
+      type: string
+      description: >
+        Where a human's answer to an implementation-stage agent_question
+        re-enters the workflow.
+      enum: [retry_implementation, revise_specification]
+
+    BlockedKind:
+      type: string
+      description: >
+        Why the implementer stopped instead of producing a candidate; the
+        decisions beside it enumerate what would unblock it.
+      enum:
+        - specification_contradiction
+        - owner_decision
+        - scope_expansion
+        - capability_unavailable
+        - commit_plan_collision
+
+    DecisionOption:
+      type: object
+      description: One enumerated answer to a Decision.
+      additionalProperties: false
+      required: [label, tradeoffs]
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 4096
+        tradeoffs:
+          type: string
+          minLength: 1
+          maxLength: 4096
+
+    Decision:
+      type: object
+      description: >
+        One question the agent cannot answer without the human: what it asks,
+        why it blocks the work, two to six labeled options, and the agent's
+        recommendation, which names one option's label exactly and is an
+        agent claim, never a verified fact.
+      additionalProperties: false
+      required: [question, why_blocking, options, recommendation]
+      properties:
+        question:
+          type: string
+          minLength: 1
+          maxLength: 4096
+        why_blocking:
+          type: string
+          minLength: 1
+          maxLength: 4096
+        options:
+          type: array
+          minItems: 2
+          maxItems: 6
+          items:
+            $ref: "#/components/schemas/DecisionOption"
+        recommendation:
+          type: string
+          minLength: 1
+          maxLength: 4096
+
+    AgentQuestionFacts:
+      type: object
+      description: >
+        Typed facts on an agent_question item: the stage and invocation that
+        stopped to ask, the blocker kind on the implementation stage (null on
+        the specification stage), and the one to eight decisions the human is
+        asked to make. The item's Question claim carries the same decisions as
+        a content-addressed artifact from the asking invocation.
+      additionalProperties: false
+      required: [stage, invocation_id, kind, decisions]
+      properties:
+        stage:
+          $ref: "#/components/schemas/StageName"
+        invocation_id:
+          type: string
+          minLength: 1
+        kind:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/BlockedKind"
+        decisions:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: "#/components/schemas/Decision"
+
     ExecutionFailureFacts:
       type: object
       description: The terminal execution outcome and invocation that failed within a workflow stage.
@@ -2570,6 +2686,7 @@ components:
         - health_diagnostic
         - review_dispute
         - spec_revision
+        - agent_question
         - item_version
         - interruption_class
         - conversation_id
@@ -2797,6 +2914,13 @@ components:
           description: >
             Authenticated revision facts for a revised spec_approval item;
             null on the initial approval and every other item type.
+        agent_question:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AgentQuestionFacts"
+          description: >
+            Typed question facts, present on every agent_question item and
+            null on every other type.
         item_version:
           type: integer
           minimum: 1
@@ -2987,6 +3111,7 @@ components:
         health_diagnostic: null
         review_dispute: null
         spec_revision: null
+        agent_question: null
         item_version: 1
         interruption_class: "planned_gate"
         conversation_id: "conv-1"

@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -48,7 +51,9 @@ func newFixture(t *testing.T) fixture {
 	t.Helper()
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/signet.db"
-	s, err := store.Open(ctx, dbPath, store.Options{})
+	s, err := store.Open(ctx, dbPath, store.Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+		domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+	}})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -704,7 +709,6 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 			wantStatus domain.ItemStatus
 		}{
 			{"answer and retry", domain.ActionAnswerAndRetry, domain.AttentionAgentQuestion, domain.StatusSuperseded},
-			{"answer without retry", domain.ActionAnswerWithoutRetry, domain.AttentionAgentQuestion, domain.StatusResolved},
 			{"return to agent", domain.ActionReturnToAgent, domain.AttentionReadyForFinalReview, domain.StatusSuperseded},
 		}
 		for index, test := range tests {
@@ -714,9 +718,9 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 				item.Type = test.itemType
 				item.RequestedDecision = []domain.Action{test.action}
 				if test.itemType == domain.AttentionAgentQuestion {
-					item = mustAgentQuestionItem(t, item.ID, test.action)
+					item = mustAgentQuestionItem(t, item.ID)
 				}
-				if err := f.service.PutItem(ctx, item); err != nil {
+				if err := putTestItem(t, f, item); err != nil {
 					t.Fatal(err)
 				}
 				command := f.command(fmt.Sprintf("cmd-message-action-%d", index), test.action)
@@ -936,18 +940,18 @@ func specificationQuestionFacts(invocationID domain.InvocationID) *domain.AgentQ
 	}
 }
 
-// mustAgentQuestionItem builds a valid open agent_question item on run-1
-// offering exactly the given action.
-func mustAgentQuestionItem(t *testing.T, id domain.ItemID, action domain.Action) domain.AttentionItem {
+// mustAgentQuestionItem builds a valid open agent_question item on run-1.
+func mustAgentQuestionItem(t *testing.T, id domain.ItemID) domain.AttentionItem {
 	t.Helper()
 	runID := domain.RunID("run-1")
-	facts := specificationQuestionFacts("inv-specify-1")
+	invocationID := domain.SpecificationInvocationID(runID, len(id))
+	facts := specificationQuestionFacts(invocationID)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: id, ProjectID: "proj-1",
+		ID: domain.ItemID("question-" + invocationID), ProjectID: "proj-1",
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
 		Type:    domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
 		Reason:            "the specifier needs an owner decision",
-		RequestedDecision: []domain.Action{action},
+		RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry, domain.ActionStop},
 		AgentClaims:       []domain.AgentClaim{questionClaimFixture(facts)},
 		AgentQuestion:     facts,
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
@@ -959,6 +963,150 @@ func mustAgentQuestionItem(t *testing.T, id domain.ItemID, action domain.Action)
 	return item
 }
 
+type testSpecificationQuestionTerminal struct {
+	InvocationID        domain.InvocationID `json:"invocation_id"`
+	Iteration           int                 `json:"iteration"`
+	Status              exec.Status         `json:"status"`
+	ResearchArtifactIDs []domain.ArtifactID `json:"research_artifact_ids"`
+	DecisionArtifactID  *domain.ArtifactID  `json:"decision_artifact_id,omitempty"`
+	QuestionItemID      *domain.ItemID      `json:"question_item_id,omitempty"`
+}
+
+type testImplementationQuestionTerminal struct {
+	InvocationID domain.InvocationID `json:"invocation_id"`
+	RunID        domain.RunID        `json:"run_id"`
+	StageID      domain.StageID      `json:"stage_id"`
+	Status       exec.Status         `json:"status"`
+	Artifacts    []domain.Digest     `json:"artifacts,omitempty"`
+	Summary      string              `json:"summary,omitempty"`
+}
+
+func putTestItem(t *testing.T, f fixture, item domain.AttentionItem) error {
+	t.Helper()
+	if item.AgentQuestion == nil {
+		return f.service.PutItem(t.Context(), item)
+	}
+	facts := item.AgentQuestion
+	runID := *item.Subject.RunID
+	stageID := domain.StageID("stage-" + string(facts.InvocationID))
+	attemptID := domain.AttemptID("attempt-" + string(facts.InvocationID))
+	invocation, err := domain.NewAgentInvocation(
+		facts.InvocationID, []domain.ArtifactID{item.AgentClaims[0].Artifact}, nil, 0,
+	)
+	if err != nil {
+		return err
+	}
+	inputDigest, err := invocation.ComputeInputDigest()
+	if err != nil {
+		return err
+	}
+	stageName := string(facts.Stage)
+	var run domain.Run
+	err = f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(t.Context(), runID)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		run = domain.Run{ID: runID, ProjectID: item.ProjectID, SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
+	} else if err != nil {
+		return err
+	}
+	run.Stages = append(run.Stages, domain.Stage{
+		ID: stageID, RunID: runID, Name: stageName,
+		Attempts: []domain.Attempt{{ID: attemptID, StageID: stageID, Number: 1, InvocationID: facts.InvocationID}},
+	})
+	identityID := domain.AuthIdentityID("question-auth")
+	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: facts.InvocationID, RunID: runID, StageID: stageID, AttemptID: attemptID,
+		Backend:       "fresh_vm_read_only_volume_handoff",
+		Capabilities:  domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile: domain.EgressProviderOnly,
+		ImageRef:      domain.ImageRef("agent@sha256:" + strings.Repeat("a", 64)),
+		SpecDigest:    run.SpecDigest, PolicyDigest: run.PolicyDigest, InputDigest: inputDigest,
+		Base:      domain.BaseRevision{Repo: "owner/repo", RepositoryID: 1, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
+		Workspace: "workspace-1", AuthIdentityID: &identityID, AdmittedAt: *f.now,
+	})
+	if err != nil {
+		return err
+	}
+	claim := item.AgentClaims[0]
+	metadata := claim.Metadata
+	metadata.Source = domain.EvidenceSourceRun
+	artifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: claim.Artifact, Type: domain.ArtifactKindEvidence,
+		Digest: claim.Digest, Provenance: claim.Provenance, Metadata: metadata,
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		if err := tx.PutRun(t.Context(), run); err != nil {
+			return err
+		}
+		if err := tx.PutAgentInvocation(t.Context(), invocation); err != nil {
+			return err
+		}
+		if err := tx.RecordAuthIdentity(t.Context(), domain.AuthIdentity{
+			ID: identityID, Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 8,
+			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand},
+		}, *f.now); err != nil {
+			return err
+		}
+		if err := tx.RecordExecutionAdmission(t.Context(), admission); err != nil {
+			return err
+		}
+		if err := tx.PutArtifact(t.Context(), artifact); err != nil {
+			return err
+		}
+		var kind string
+		var body []byte
+		if facts.Stage == domain.StageNameSpecification {
+			last := strings.LastIndex(string(facts.InvocationID), "-")
+			iteration, err := strconv.Atoi(string(facts.InvocationID)[last+1:])
+			if err != nil {
+				return err
+			}
+			kind = "specification_stage_terminal"
+			body, err = json.Marshal(testSpecificationQuestionTerminal{
+				InvocationID: facts.InvocationID, Iteration: iteration, Status: exec.StatusCompleted,
+				ResearchArtifactIDs: []domain.ArtifactID{}, DecisionArtifactID: &claim.Artifact,
+				QuestionItemID: &item.ID,
+			})
+			if err != nil {
+				return err
+			}
+		} else {
+			blocked := claim
+			blocked.Label = export.BlockedEvidenceLabel
+			if err := tx.PutAgentClaims(t.Context(), facts.InvocationID, []domain.AgentClaim{blocked}); err != nil {
+				return err
+			}
+			summary := exec.TruncateSummary(facts.Decisions[0].Question)
+			if err := tx.RecordExecutionOutcome(t.Context(), domain.ExecutionOutcome{
+				InvocationID: facts.InvocationID, AdmissionID: admission.ID,
+				Status: domain.ExecutionOutcomeBlocked, Summary: summary, RecordedAt: f.now.Add(time.Second),
+			}); err != nil {
+				return err
+			}
+			kind = "production_stage_terminal"
+			body, err = json.Marshal(testImplementationQuestionTerminal{
+				InvocationID: facts.InvocationID, RunID: runID, StageID: stageID,
+				Status: exec.StatusBlocked, Artifacts: []domain.Digest{claim.Digest}, Summary: summary,
+			})
+			if err != nil {
+				return err
+			}
+		}
+		_, _, err = tx.RecordInbox(t.Context(), string(facts.InvocationID), kind, body)
+		return err
+	}); err != nil {
+		return err
+	}
+	return f.service.PutItem(t.Context(), item)
+}
+
 // TestSubmitAnswerRoutePolicy: answer_and_retry on an implementation-stage
 // question must name where the answer goes; retry_implementation is accepted,
 // revise_specification is refused as pending, and no other command may carry
@@ -967,14 +1115,14 @@ func TestSubmitAnswerRoutePolicy(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
 	kind := domain.BlockedKindOwnerDecision
-	implementation := mustAgentQuestionItem(t, "question-implementation", domain.ActionAnswerAndRetry)
+	implementation := mustAgentQuestionItem(t, "question-implementation")
 	implementation.AgentQuestion = &domain.AgentQuestionFacts{
 		Stage: domain.StageNameImplementation, InvocationID: "inv-implement-1",
 		Kind: &kind, Decisions: decisionsFixture(),
 	}
 	implementation.AgentClaims = []domain.AgentClaim{questionClaimFixture(implementation.AgentQuestion)}
 	rebuilt, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: implementation.ID, ProjectID: implementation.ProjectID, Subject: implementation.Subject,
+		ID: "question-inv-implement-1", ProjectID: implementation.ProjectID, Subject: implementation.Subject,
 		Type: implementation.Type, Priority: implementation.Priority, Reason: implementation.Reason,
 		RequestedDecision: implementation.RequestedDecision, AgentClaims: implementation.AgentClaims,
 		AgentQuestion: implementation.AgentQuestion, ItemVersion: 1,
@@ -983,9 +1131,9 @@ func TestSubmitAnswerRoutePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	specification := mustAgentQuestionItem(t, "question-specification", domain.ActionAnswerAndRetry)
+	specification := mustAgentQuestionItem(t, "question-specification")
 	for _, item := range []domain.AttentionItem{rebuilt, specification} {
-		if err := f.service.PutItem(ctx, item); err != nil {
+		if err := putTestItem(t, f, item); err != nil {
 			t.Fatal(err)
 		}
 	}

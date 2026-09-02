@@ -1143,6 +1143,11 @@ import Testing
             #expect(statusCode == 422)
 
             missing.payload.message = "Operator feedback"
+            if action == .answer_and_retry {
+                // The fixture question is implementation-stage, so the answer
+                // names its route (the daemon's validateAnswerRoute).
+                missing.payload.answer_route = .init(value1: .retry_implementation)
+            }
             let first = try await client.submitCommand(body: .json(missing)).ok.body.json
             let replay = try await client.submitCommand(body: .json(missing)).ok.body.json
             #expect(replay == first)
@@ -1305,5 +1310,47 @@ import Testing
                 artifact_digests: snapshot.item.artifact_digests
             )
         )
+    }
+}
+
+extension MockServerTests {
+    @Test func implementationAnswerRequiresARouteAndRefusesRevision() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let before = try await client.getAttentionItem(path: .init(item_id: "item-agent_question")).ok.body.json
+        #expect(before.item.agent_question?.value1.stage == .implementation)
+
+        var command = Self.command(id: "cmd-route-missing", against: before, action: .answer_and_retry)
+        command.payload.message = "Store first."
+        let missing = try await client.submitCommand(body: .json(command))
+        guard case .undocumented(let missingStatus, _) = missing else {
+            Issue.record("expected missing-route rejection, got \(missing)")
+            return
+        }
+        #expect(missingStatus == 422)
+
+        command.command_id = "cmd-route-revise"
+        command.payload.answer_route = .init(value1: .revise_specification)
+        let revise = try await client.submitCommand(body: .json(command))
+        guard case .undocumented = revise else {
+            Issue.record("expected revise_specification to be refused as pending, got \(revise)")
+            return
+        }
+
+        // A route on any other command is refused while the item is still
+        // open, before the accepted answer supersedes it.
+        var stop = Self.command(id: "cmd-route-stop", against: before, action: .stop)
+        stop.payload.answer_route = .init(value1: .retry_implementation)
+        let stopped = try await client.submitCommand(body: .json(stop))
+        guard case .undocumented(let stopStatus, _) = stopped else {
+            Issue.record("expected a routed stop to be rejected, got \(stopped)")
+            return
+        }
+        #expect(stopStatus == 422)
+
+        command.command_id = "cmd-route-retry"
+        command.payload.answer_route = .init(value1: .retry_implementation)
+        let accepted = try await client.submitCommand(body: .json(command)).ok.body.json
+        #expect(accepted.record.answer_route?.value1 == .retry_implementation)
     }
 }

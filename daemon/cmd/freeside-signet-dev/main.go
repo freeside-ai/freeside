@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -182,7 +183,11 @@ func run(ctx context.Context, cfg config) (_ *harness, err error) {
 		}
 	}
 
-	st, err := store.Open(ctx, cfg.DBPath, store.Options{})
+	st, err := store.Open(ctx, cfg.DBPath, store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -478,6 +483,8 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 			requested[i] = domain.Action(a)
 		}
 	}
+	runID := domain.RunID("run-" + req.ID)
+	itemID := domain.ItemID(req.ID)
 	var claims []domain.AgentClaim
 	if req.TextClaim != "" {
 		text := domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: req.TextClaim}
@@ -500,7 +507,53 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 			},
 		}}
 	}
-	runID := domain.RunID("run-" + req.ID)
+	var agentQuestion *domain.AgentQuestionFacts
+	if itemType == domain.AttentionAgentQuestion {
+		invocationID := domain.SpecificationInvocationID(runID, 1)
+		itemID = domain.ItemID("question-" + string(invocationID))
+		agentQuestion = &domain.AgentQuestionFacts{
+			Stage: domain.StageNameSpecification, InvocationID: invocationID,
+			Decisions: []domain.Decision{{
+				Question:    "Which compatibility target applies?",
+				WhyBlocking: "The specification cannot fix the API surface without it.",
+				Options: []domain.DecisionOption{
+					{Label: "Current and previous", Tradeoffs: "Wider support, more adapters."},
+					{Label: "Current only", Tradeoffs: "Less code, drops older clients."},
+				},
+				Recommendation: "Current and previous",
+			}},
+		}
+		digest, err := agentQuestion.ComputeDigest()
+		if err != nil {
+			controlError(w, err)
+			return
+		}
+		body, err := json.Marshal(agentQuestion.Decisions)
+		if err != nil {
+			controlError(w, err)
+			return
+		}
+		questionClaim := domain.AgentClaim{
+			Label: domain.AgentQuestionClaimLabel, Artifact: domain.ArtifactID("decisions-" + req.ID),
+			Digest: digest,
+			Provenance: domain.Provenance{
+				ProducerClass: domain.ProducerAgent, ProducerInvocationID: agentQuestion.InvocationID,
+				HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+			},
+			Metadata: domain.EvidenceMetadata{
+				MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: int64(len(body)),
+				CreatedAt: time.Now().UTC(), Source: domain.EvidenceSourceClaim,
+				Availability: domain.EvidenceAvailable,
+			},
+		}
+		if err := c.seedAgentQuestionAuthority(
+			r.Context(), runID, itemID, questionClaim,
+		); err != nil {
+			controlError(w, err)
+			return
+		}
+		claims = append(claims, questionClaim)
+	}
 	var reviewRecoveryBinding *domain.ReviewRecoveryBinding
 	if itemType == domain.AttentionReviewContradiction {
 		reviewRecoveryBinding = &domain.ReviewRecoveryBinding{
@@ -530,7 +583,7 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 	}
 	createdInstant := time.Now().UTC()
 	createdAt := &createdInstant
-	if existing, err := c.service.GetAttentionItem(r.Context(), domain.ItemID(req.ID)); err == nil {
+	if existing, err := c.service.GetAttentionItem(r.Context(), itemID); err == nil {
 		createdAt = existing.Item.CreatedAt
 	} else if !errors.Is(err, store.ErrNotFound) {
 		controlJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
@@ -556,7 +609,7 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		prReference = &domain.PRReference{Repo: "freeside-ai/demo", Number: 123}
 	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID:                               domain.ItemID(req.ID),
+		ID:                               itemID,
 		ProjectID:                        "proj-convergence",
 		Subject:                          domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
 		Type:                             itemType,
@@ -570,6 +623,7 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		CodexReenrollmentRecoveryBinding: codexReenrollmentRecoveryBinding,
 		ReviewConfigurationRecovery:      reviewConfigurationRecovery,
 		FindingAdjudication:              findingAdjudication,
+		AgentQuestion:                    agentQuestion,
 		ItemVersion:                      req.ItemVersion,
 		InterruptionClass:                domain.InterruptionPlannedGate,
 		CreatedAt:                        createdAt,
@@ -611,6 +665,104 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 
 func convergenceDigest(value string) domain.Digest {
 	return domain.Digest(contentaddr.Sum([]byte(value)))
+}
+
+func (c controlHandler) seedAgentQuestionAuthority(
+	ctx context.Context,
+	runID domain.RunID,
+	itemID domain.ItemID,
+	claim domain.AgentClaim,
+) error {
+	const iteration = 1
+	invocationID := domain.SpecificationInvocationID(runID, iteration)
+	stageID := domain.SpecificationStageID(runID)
+	attemptID := domain.AttemptID("attempt-" + string(invocationID))
+	specDigest := convergenceDigest("spec-" + string(runID))
+	policyDigest := convergenceDigest("policy-" + string(runID))
+	run := domain.Run{
+		ID: runID, ProjectID: "proj-convergence", SpecDigest: specDigest, PolicyDigest: policyDigest,
+		Stages: []domain.Stage{{
+			ID: stageID, RunID: runID, Name: "specification",
+			Attempts: []domain.Attempt{{
+				ID: attemptID, StageID: stageID, Number: iteration, InvocationID: invocationID,
+			}},
+		}},
+	}
+	invocation, err := domain.NewAgentInvocation(
+		invocationID, []domain.ArtifactID{domain.ArtifactID("input-" + string(invocationID))}, nil, 0,
+	)
+	if err != nil {
+		return err
+	}
+	inputDigest, err := invocation.ComputeInputDigest()
+	if err != nil {
+		return err
+	}
+	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: invocationID, RunID: runID, StageID: stageID, AttemptID: attemptID,
+		Backend:       "fresh_vm_read_only_volume_handoff",
+		Capabilities:  domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialLocalTrusted,
+		EgressProfile: domain.EgressCleanVerification,
+		ImageRef: domain.ImageRef(
+			"ghcr.io/freeside-ai/convergence@sha256:" + strings.Repeat("a", 64),
+		),
+		SpecDigest: specDigest, PolicyDigest: policyDigest, InputDigest: inputDigest,
+		Base: domain.BaseRevision{
+			Repo: "freeside-ai/convergence", RepositoryID: 1,
+			BaseRef: "refs/heads/main", BaseSHA: "cafebabe",
+		},
+		Workspace: "workspace-" + string(runID), AdmittedAt: claim.Metadata.CreatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	artifactMetadata := claim.Metadata
+	artifactMetadata.Source = domain.EvidenceSourceRun
+	artifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: claim.Artifact, Type: domain.ArtifactKindEvidence,
+		Digest: claim.Digest, Provenance: claim.Provenance, Metadata: artifactMetadata,
+	}, nil)
+	if err != nil {
+		return err
+	}
+	decisionArtifactID := claim.Artifact
+	terminal, err := json.Marshal(struct {
+		InvocationID        domain.InvocationID `json:"invocation_id"`
+		Iteration           int                 `json:"iteration"`
+		Status              string              `json:"status"`
+		ResearchArtifactIDs []domain.ArtifactID `json:"research_artifact_ids"`
+		SpecArtifactID      *domain.ArtifactID  `json:"spec_artifact_id,omitempty"`
+		ApprovalItemID      *domain.ItemID      `json:"approval_item_id,omitempty"`
+		SummaryDigest       *domain.Digest      `json:"summary_digest,omitempty"`
+		DecisionArtifactID  *domain.ArtifactID  `json:"decision_artifact_id,omitempty"`
+		QuestionItemID      *domain.ItemID      `json:"question_item_id,omitempty"`
+	}{
+		InvocationID: invocationID, Iteration: iteration, Status: "completed",
+		ResearchArtifactIDs: []domain.ArtifactID{}, DecisionArtifactID: &decisionArtifactID,
+		QuestionItemID: &itemID,
+	})
+	if err != nil {
+		return err
+	}
+	return c.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		if err := tx.PutAgentInvocation(ctx, invocation); err != nil {
+			return err
+		}
+		if err := tx.PutArtifact(ctx, artifact); err != nil {
+			return err
+		}
+		if err := tx.RecordExecutionAdmission(ctx, admission); err != nil {
+			return err
+		}
+		_, _, err := tx.RecordInbox(
+			ctx, string(invocationID), "specification_stage_terminal", terminal,
+		)
+		return err
+	})
 }
 
 func (c controlHandler) seedFindingAdjudicationAuthority(
