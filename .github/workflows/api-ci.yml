@@ -4,8 +4,8 @@ name: api CI
 # whole gate. The validator (vacuum) runs as a pinned, checksum-verified
 # prebuilt binary: `go run`ning it compiled vacuum and its dependency tree
 # from source on every run (~7min), and setup-go's cache can't help because
-# the daemon go.sum doesn't cover it. The binary keeps the same lint
-# invocation the local `go run` uses (api/README.md); pinning is by version
+# the daemon go.sum doesn't cover it. The binary runs the same lint
+# invocation scripts/check.sh uses locally (api/README.md); pinning is by version
 # plus sha256, matching the pinned-golangci-lint determinism convention.
 
 on:
@@ -13,10 +13,12 @@ on:
     branches: [main]
     paths:
       - "api/**"
+      - "scripts/check.sh"
       - ".github/workflows/api-ci.yml"
   pull_request:
     paths:
       - "api/**"
+      - "scripts/check.sh"
       - ".github/workflows/api-ci.yml"
 
 permissions:
@@ -45,5 +47,5 @@ jobs:
             "https://github.com/daveshanley/vacuum/releases/download/v${VACUUM_VERSION}/vacuum_${VACUUM_VERSION}_linux_x86_64.tar.gz"
           echo "${VACUUM_SHA256}  vacuum.tar.gz" | sha256sum -c -
           tar -xzf vacuum.tar.gz vacuum
-      - name: vacuum lint
-        run: ./vacuum lint -r api/vacuum.ruleset.yaml --details --fail-severity warn api/openapi.yaml
+      - name: vacuum lint (scripts/check.sh)
+        run: VACUUM=./vacuum bash scripts/check.sh api

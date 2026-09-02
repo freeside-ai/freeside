@@ -9,10 +9,12 @@ on:
     branches: [main]
     paths:
       - "daemon/**"
+      - "scripts/check.sh"
       - ".github/workflows/daemon-ci.yml"
   pull_request:
     paths:
       - "daemon/**"
+      - "scripts/check.sh"
       - ".github/workflows/daemon-ci.yml"
 
 permissions:
@@ -80,19 +82,22 @@ jobs:
           restore-keys: |
             go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
             go-build-${{ runner.os }}-${{ github.job }}-
-      - run: go build ./...
-      - name: cross-compile exporter (static linux/arm64)
-        # Guards the exporter-image build target (#73 acceptance 4): the
-        # helper must stay a static cross-compilable binary, so a creeping
-        # cgo dependency fails CI here instead of at image-build time.
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/freeside-export
-      - run: go test ./...
-      - run: go vet ./...
+      - name: build, test, vet (scripts/check.sh)
+        # The step list lives in scripts/check.sh so local runs and CI
+        # cannot drift; the exporter cross-compile guard (#73 acceptance
+        # 4) is part of its build step.
+        working-directory: .
+        run: bash scripts/check.sh daemon build test vet
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
           # Pinned like every other tool: a floating linter is
           # nondeterministic verification, and upgrades are deliberate PRs.
+          # The action owns the invocation, so this is the one step CI does
+          # not take from scripts/check.sh: golangci-lint-action@v8 has no
+          # install-only input, and routing the run through the script would
+          # mean replacing the pinned action. scripts/check.sh daemon lint
+          # runs the same `golangci-lint run` in daemon/.
           version: v2.12.2
           working-directory: daemon
 
@@ -162,5 +167,6 @@ jobs:
           restore-keys: |
             go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
             go-build-${{ runner.os }}-${{ github.job }}-
-      - run: go build ./...
-      - run: go test ./...
+      - name: build, test (scripts/check.sh)
+        working-directory: .
+        run: bash scripts/check.sh daemon build test

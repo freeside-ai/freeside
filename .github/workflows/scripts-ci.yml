@@ -2,7 +2,7 @@ name: scripts CI
 
 # Gates the repo's maintained development tools: trackercollect's Go module,
 # plus bash syntax and shellcheck over every script under scripts/ and
-# app/scripts/ (the set AGENTS.md tells contributors to run), plus the
+# app/scripts/ and the commit hook (the set scripts/check.sh runs), plus the
 # commit-message and merge-result-audit regression suites (isolated synthetic repos, no
 # network), the build-image reference regression suite, and the
 # check-agent-image regression suite (both use scripted container-runtime
@@ -25,6 +25,7 @@ on:
     paths:
       - "scripts/**"
       - "app/scripts/**"
+      - ".githooks/**"
       - "app/Apps/iOS/Info.plist"
       - "app/Freeside.xcodeproj/project.pbxproj"
       - ".github/workflows/scripts-ci.yml"
@@ -37,6 +38,7 @@ on:
     paths:
       - "scripts/**"
       - "app/scripts/**"
+      - ".githooks/**"
       - "app/Apps/iOS/Info.plist"
       - "app/Freeside.xcodeproj/project.pbxproj"
       - ".github/workflows/scripts-ci.yml"
@@ -64,10 +66,8 @@ jobs:
       SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
     steps:
       - uses: actions/checkout@v4
-      - name: bash syntax check
-        run: |
-          set -euo pipefail
-          bash -n scripts/*.sh app/scripts/*.sh
+      - name: bash syntax check (scripts/check.sh)
+        run: bash scripts/check.sh scripts syntax
       - name: Install shellcheck (pinned binary, checksum-verified)
         run: |
           set -euo pipefail
@@ -75,24 +75,10 @@ jobs:
             "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
           echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
           tar -xJf shellcheck.tar.xz "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
-      - name: shellcheck
-        run: ./shellcheck-v${SHELLCHECK_VERSION}/shellcheck scripts/*.sh app/scripts/*.sh
-      - name: build-image reference regression suite
-        run: bash scripts/test-build-image-references.sh
-      - name: commit-message regression suite
-        run: bash scripts/test-check-commit-messages.sh
-      - name: merge-result-audit regression suite
-        run: bash scripts/test-merge-result-audit.sh
-      - name: check-agent-image regression suite
-        run: bash scripts/test-check-agent-image.sh
-      - name: Mac installer recovery regression suite
-        run: bash scripts/test-install-mac-app.sh
-      - name: iOS installer regression suite
-        run: bash scripts/test-install-ios-app.sh
-      - name: vocabulary check regression suite
-        run: bash scripts/test-check-vocabulary.sh
-      - name: retired vocabulary check
-        run: bash scripts/check-vocabulary.sh
+      - name: shellcheck, regression suites, vocabulary (scripts/check.sh)
+        # One step per script call: check.sh echoes each command, so a
+        # failing suite is still named in the log.
+        run: SHELLCHECK=./shellcheck-v${SHELLCHECK_VERSION}/shellcheck bash scripts/check.sh scripts shellcheck suites vocabulary
 
   trackercollect:
     name: trackercollect (build, test, vet)
@@ -106,9 +92,9 @@ jobs:
         with:
           go-version-file: scripts/trackercollect/go.mod
           cache: false
-      - run: go build ./...
-      - run: go test ./...
-      - run: go vet ./...
+      - name: build, test, vet (scripts/check.sh)
+        working-directory: .
+        run: bash scripts/check.sh scripts trackercollect
 
   mac-installer:
     name: Mac installer real-Swift matrix
