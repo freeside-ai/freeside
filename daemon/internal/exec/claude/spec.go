@@ -103,7 +103,7 @@ func (claudeProvider) RenderPrompt(inputs stage.ProviderPromptInputs) (string, e
 }
 
 // ValidatePromptInputs runs the production Claude renderer over one fully
-// materialized bundle. Elaboration uses it before committing a follow-up
+// materialized bundle. Specification uses it before committing a follow-up
 // invocation, so content accepted for research cannot become an undeliverable
 // terminal only after Start.
 func ValidatePromptInputs(inputs exec.StageInputs) error {
@@ -259,13 +259,13 @@ const textPriorPromptPackageDirective = "<!-- freeside:render-prior-artifacts=v1
 // ValidatePromptPackageRoles refuses a composition whose trusted prompt
 // packages do not select opposite prior-artifact behavior. The directive is
 // part of the content-addressed package, so durable replay keeps the decision.
-func ValidatePromptPackageRoles(implementation, elaboration []byte) error {
+func ValidatePromptPackageRoles(implementation, specification []byte) error {
 	directive := []byte(textPriorPromptPackageDirective)
 	switch {
 	case bytes.HasPrefix(implementation, directive):
-		return fmt.Errorf("implementation prompt package enables elaboration prior artifacts")
-	case !bytes.HasPrefix(elaboration, directive):
-		return fmt.Errorf("elaboration prompt package does not enable prior artifacts")
+		return fmt.Errorf("implementation prompt package enables specification prior artifacts")
+	case !bytes.HasPrefix(specification, directive):
+		return fmt.Errorf("specification prompt package does not enable prior artifacts")
 	default:
 		return nil
 	}

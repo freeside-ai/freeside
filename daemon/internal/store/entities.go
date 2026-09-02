@@ -741,9 +741,7 @@ func (tx *ReadTx) gateSpecRevisionItem(ctx context.Context, item domain.Attentio
 	if err != nil {
 		return err
 	}
-	if currentClaim.Provenance.ProducerInvocationID != domain.InvocationID(fmt.Sprintf(
-		"inv-elaborate-%s-%d", *item.Subject.RunID, facts.Iteration,
-	)) {
+	if currentClaim.Provenance.ProducerInvocationID != domain.SpecificationInvocationID(*item.Subject.RunID, facts.Iteration) {
 		return domain.ErrParentKeyMismatch
 	}
 	currentArtifact, err := tx.GetArtifact(ctx, currentClaim.Artifact)
@@ -759,7 +757,7 @@ func (tx *ReadTx) gateSpecRevisionItem(ctx context.Context, item domain.Attentio
 		}
 		return err
 	}
-	terminal, err := decodeBlockedWaitElaborationTerminal(terminalEntry)
+	terminal, err := decodeBlockedWaitSpecificationTerminal(terminalEntry)
 	if err != nil || terminal.Iteration != facts.Iteration ||
 		terminal.SpecArtifactID == nil || *terminal.SpecArtifactID != currentArtifact.ID ||
 		terminal.ApprovalItemID == nil || *terminal.ApprovalItemID != item.ID ||
@@ -816,9 +814,7 @@ func (tx *ReadTx) gateSpecRevisionItem(ctx context.Context, item domain.Attentio
 	if err != nil {
 		return err
 	}
-	if priorClaim.Provenance.ProducerInvocationID != domain.InvocationID(fmt.Sprintf(
-		"inv-elaborate-%s-%d", *item.Subject.RunID, priorIteration,
-	)) {
+	if priorClaim.Provenance.ProducerInvocationID != domain.SpecificationInvocationID(*item.Subject.RunID, priorIteration) {
 		return domain.ErrParentKeyMismatch
 	}
 	if facts.Diff != domain.DeriveSpecDiff(priorClaim.Text.Content, currentClaim.Text.Content) {
@@ -911,7 +907,7 @@ func (tx *ReadTx) gateInitialSpecificationItem(
 		}
 		return err
 	}
-	terminal, err := decodeBlockedWaitElaborationTerminal(entry)
+	terminal, err := decodeBlockedWaitSpecificationTerminal(entry)
 	if err != nil || terminal.SpecArtifactID == nil || *terminal.SpecArtifactID != artifact.ID ||
 		terminal.ApprovalItemID == nil || *terminal.ApprovalItemID != item.ID ||
 		!blockedWaitTerminalIdentityMatches(terminal, item, artifact) ||
@@ -1053,7 +1049,7 @@ func (tx *ReadTx) blockedWaitStart(
 		}
 		return time.Time{}, err
 	}
-	terminal, err := decodeBlockedWaitElaborationTerminal(entry)
+	terminal, err := decodeBlockedWaitSpecificationTerminal(entry)
 	if err != nil || terminal.SpecArtifactID == nil ||
 		*terminal.SpecArtifactID != specification.ID ||
 		terminal.ApprovalItemID == nil || *terminal.ApprovalItemID != approval.ID ||
@@ -1065,14 +1061,12 @@ func (tx *ReadTx) blockedWaitStart(
 }
 
 func blockedWaitTerminalIdentityMatches(
-	terminal blockedWaitElaborationTerminal,
+	terminal blockedWaitSpecificationTerminal,
 	approval domain.AttentionItem,
 	specification domain.Artifact,
 ) bool {
 	if approval.Subject.RunID == nil ||
-		terminal.InvocationID != domain.InvocationID(fmt.Sprintf(
-			"inv-elaborate-%s-%d", *approval.Subject.RunID, terminal.Iteration,
-		)) {
+		terminal.InvocationID != domain.SpecificationInvocationID(*approval.Subject.RunID, terminal.Iteration) {
 		return false
 	}
 	implementationIteration, ok := strings.CutPrefix(string(specification.ID), "spec-")
@@ -1090,7 +1084,7 @@ func blockedWaitTerminalIdentityMatches(
 }
 
 func blockedWaitTerminalSummaryMatches(
-	terminal blockedWaitElaborationTerminal,
+	terminal blockedWaitSpecificationTerminal,
 	approval domain.AttentionItem,
 	specification domain.Artifact,
 ) bool {
@@ -1115,9 +1109,9 @@ func blockedWaitTerminalSummaryMatches(
 	return false
 }
 
-const blockedWaitElaborationTerminalKind = "elaboration_stage_terminal"
+const blockedWaitSpecificationTerminalKind = "specification_stage_terminal"
 
-type blockedWaitElaborationTerminal struct {
+type blockedWaitSpecificationTerminal struct {
 	InvocationID        domain.InvocationID `json:"invocation_id"`
 	Iteration           int                 `json:"iteration"`
 	Status              string              `json:"status"`
@@ -1127,17 +1121,17 @@ type blockedWaitElaborationTerminal struct {
 	SummaryDigest       *domain.Digest      `json:"summary_digest,omitempty"`
 }
 
-func decodeBlockedWaitElaborationTerminal(
+func decodeBlockedWaitSpecificationTerminal(
 	entry QueueEntry,
-) (blockedWaitElaborationTerminal, error) {
-	if entry.Kind != blockedWaitElaborationTerminalKind {
-		return blockedWaitElaborationTerminal{}, domain.ErrParentKeyMismatch
+) (blockedWaitSpecificationTerminal, error) {
+	if entry.Kind != blockedWaitSpecificationTerminalKind {
+		return blockedWaitSpecificationTerminal{}, domain.ErrParentKeyMismatch
 	}
-	var terminal blockedWaitElaborationTerminal
+	var terminal blockedWaitSpecificationTerminal
 	if err := strictjson.Decode(
 		entry.Payload, &terminal, strictjson.RejectInvalidUTF8, strictjson.Limit(1<<20),
 	); err != nil {
-		return blockedWaitElaborationTerminal{}, domain.ErrParentKeyMismatch
+		return blockedWaitSpecificationTerminal{}, domain.ErrParentKeyMismatch
 	}
 	if terminal.InvocationID == "" ||
 		string(terminal.InvocationID) != entry.IdempotencyKey ||
@@ -1145,16 +1139,16 @@ func decodeBlockedWaitElaborationTerminal(
 		terminal.ResearchArtifactIDs == nil || len(terminal.ResearchArtifactIDs) != 0 ||
 		terminal.SpecArtifactID == nil || *terminal.SpecArtifactID == "" ||
 		terminal.ApprovalItemID == nil || *terminal.ApprovalItemID == "" {
-		return blockedWaitElaborationTerminal{}, domain.ErrParentKeyMismatch
+		return blockedWaitSpecificationTerminal{}, domain.ErrParentKeyMismatch
 	}
 	if terminal.SummaryDigest != nil {
 		if _, ok := contentaddr.Parse(string(*terminal.SummaryDigest)); !ok {
-			return blockedWaitElaborationTerminal{}, domain.ErrParentKeyMismatch
+			return blockedWaitSpecificationTerminal{}, domain.ErrParentKeyMismatch
 		}
 	}
 	canonical, err := json.Marshal(terminal)
 	if err != nil || !bytes.Equal(canonical, entry.Payload) {
-		return blockedWaitElaborationTerminal{}, domain.ErrParentKeyMismatch
+		return blockedWaitSpecificationTerminal{}, domain.ErrParentKeyMismatch
 	}
 	return terminal, nil
 }

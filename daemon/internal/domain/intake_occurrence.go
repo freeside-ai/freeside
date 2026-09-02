@@ -16,7 +16,7 @@ import (
 // occurrence's derived key plus the daemon-selected subject a start assembles.
 // The record is the authority later reconciliation stands on, so it validates
 // like a contract type and the store re-gates it at reconstruction. Nothing
-// here observes issue content: the issue's text is the elaborator's research,
+// here observes issue content: the issue's text is the specifier's research,
 // never authority.
 //
 // The decline latch is derived, not stored: an occurrence that stays present
@@ -26,18 +26,18 @@ import (
 // are idempotent, so polling converges.
 
 // IntakeSubjectBinding is the daemon-selected subject and the exact
-// elaboration/start inputs a start may assemble for an occurrence (plan §5.12,
+// specification/start inputs a start may assemble for an occurrence (plan §5.12,
 // GQ1). It is minted at admission and names, rather than fetches, its inputs:
 // the project, the work-unit subject the proposal's opaque handle resolves
 // through, the policy artifact and its digest and the resolved-policy digest
-// as read at admission, and the typed elaboration source. A start whose named
+// as read at admission, and the typed specification source. A start whose named
 // input is missing or stale is refused with a durable reason; nothing falls
 // back to a placeholder. Publication metadata is operator-authored and absent
 // at label admission, so it is composed by the reconciliation loop, not bound
 // here; the target repository is named by an issue_subject source.
 //
-// ElaborationRunID is the run the admission reserves and mints the declaration
-// against: the pre-approval elaboration run, whose resolved policy the proposal
+// SpecificationRunID is the run the admission reserves and mints the declaration
+// against: the pre-approval specification run, whose resolved policy the proposal
 // resolves through and which a start augments with its invocation. It is not the
 // implementation run — that run is created fresh at spec approval, must not
 // pre-exist, and carries an immutable spec digest, so it cannot be the run that
@@ -46,13 +46,13 @@ import (
 // start needs it (issue #744; see the "Revisit when #659 begins" note in
 // devlog/2026-08-12-2015-label-intake-contracts.md).
 type IntakeSubjectBinding struct {
-	ProjectID            ProjectID         `json:"project_id"`
-	WorkUnitID           WorkUnitID        `json:"work_unit_id"`
-	ElaborationRunID     RunID             `json:"elaboration_run_id"`
-	PolicyArtifactID     ArtifactID        `json:"policy_artifact_id"`
-	PolicyArtifactDigest Digest            `json:"policy_artifact_digest"`
-	ResolvedPolicyDigest Digest            `json:"resolved_policy_digest"`
-	Source               ElaborationSource `json:"source"`
+	ProjectID            ProjectID           `json:"project_id"`
+	WorkUnitID           WorkUnitID          `json:"work_unit_id"`
+	SpecificationRunID   RunID               `json:"specification_run_id"`
+	PolicyArtifactID     ArtifactID          `json:"policy_artifact_id"`
+	PolicyArtifactDigest Digest              `json:"policy_artifact_digest"`
+	ResolvedPolicyDigest Digest              `json:"resolved_policy_digest"`
+	Source               SpecificationSource `json:"source"`
 }
 
 // Validate reports whether the binding is well-formed. It does not resolve its
@@ -66,12 +66,12 @@ func (b IntakeSubjectBinding) Validate() error {
 	if b.WorkUnitID == "" {
 		return fmt.Errorf("intake subject work_unit_id: %w", ErrEmptyID)
 	}
-	if b.ElaborationRunID == "" {
-		return fmt.Errorf("intake subject elaboration_run_id: %w", ErrEmptyID)
+	if b.SpecificationRunID == "" {
+		return fmt.Errorf("intake subject specification_run_id: %w", ErrEmptyID)
 	}
-	if b.WorkUnitID != WorkUnitIDForRun(b.ElaborationRunID) {
+	if b.WorkUnitID != WorkUnitIDForRun(b.SpecificationRunID) {
 		return fmt.Errorf("intake subject work_unit_id %q is not derived from run %q: %w",
-			b.WorkUnitID, b.ElaborationRunID, ErrIntakeOccurrenceInconsistent)
+			b.WorkUnitID, b.SpecificationRunID, ErrIntakeOccurrenceInconsistent)
 	}
 	if b.PolicyArtifactID == "" {
 		return fmt.Errorf("intake subject policy_artifact_id: %w", ErrEmptyID)
@@ -85,7 +85,7 @@ func (b IntakeSubjectBinding) Validate() error {
 			b.ResolvedPolicyDigest, ErrIntakeOccurrenceInconsistent)
 	}
 	// The policy artifact is the resolved policy's content, so its digest equals
-	// the resolved-policy digest (the invariant the elaboration path enforces:
+	// the resolved-policy digest (the invariant the specification path enforces:
 	// policyArtifact.Digest == resolvedPolicy.Digest). A binding whose two policy
 	// digests disagree could never have been the snapshot a start assembles.
 	if b.PolicyArtifactDigest != b.ResolvedPolicyDigest {
@@ -328,10 +328,10 @@ func (o IntakeOccurrence) Validate() error {
 // mints no occurrence. Accepting it here would let a tampered or mistaken
 // binding name an arbitrary specification artifact as the occurrence's subject —
 // the placeholder-artifact-as-authority GQ1 rejected — so an auto-start consumer
-// could elaborate unrelated work instead of the observed issue. Fail closed.
+// could specify unrelated work instead of the observed issue. Fail closed.
 func (o IntakeOccurrence) validateAdmissionSubjectIssue() error {
 	source := o.Admission.Subject.Source
-	if source.Kind != ElaborationSourceIssueSubject {
+	if source.Kind != SpecificationSourceIssueSubject {
 		return fmt.Errorf("intake admission subject must name the occurrence's issue, not a %q source: %w",
 			source.Kind, ErrIntakeOccurrenceInconsistent)
 	}

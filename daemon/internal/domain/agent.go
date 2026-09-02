@@ -366,7 +366,7 @@ func ValidateLineupPolicyKeys(keys []PolicyKey) error {
 		if !strings.HasPrefix(key.Key, LineupRoleKeyPrefix) {
 			continue
 		}
-		role := StageName(strings.TrimPrefix(key.Key, LineupRoleKeyPrefix))
+		role := canonicalStageName(strings.TrimPrefix(key.Key, LineupRoleKeyPrefix))
 		if !role.valid() {
 			return fmt.Errorf("lineup key %q role: %w", key.Key, ErrInvalidStageName)
 		}
@@ -393,6 +393,8 @@ func CanonicalStageRole(name string) (StageName, error) {
 		return canonical, nil
 	}
 	switch name {
+	case legacySpecificationStageName:
+		return StageNameSpecification, nil
 	case "implement":
 		return StageNameImplementation, nil
 	}

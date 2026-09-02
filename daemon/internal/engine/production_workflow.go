@@ -69,7 +69,7 @@ const (
 	productionInvocationRequestVersion       = "freeside.production-invocation/v2"
 )
 
-var ErrImplementationRunReserved = errors.New("implementation run is reserved by elaboration")
+var ErrImplementationRunReserved = errors.New("implementation run is reserved by specification")
 
 func productionStageID(runID domain.RunID) domain.StageID {
 	return domain.StageID("implement-" + string(runID))
@@ -251,14 +251,14 @@ func SubmitProductionRun(ctx context.Context, st *store.Store, spec ProductionRu
 }
 
 // submitProductionRun is the single production intake transaction. Only the
-// authenticated elaboration approval path can supply a reservation grant;
+// authenticated specification approval path can supply a reservation grant;
 // external callers use SubmitProductionRun and therefore cannot bypass a
 // pre-approval implementation claim.
 func submitProductionRun(
 	ctx context.Context,
 	st *store.Store,
 	spec ProductionRunSpec,
-	elaborationGrant *elaborationRequest,
+	specificationGrant *specificationRequest,
 ) (ProductionRun, error) {
 	if st == nil {
 		return ProductionRun{}, errors.New("submit production run: nil store")
@@ -310,7 +310,7 @@ func submitProductionRun(
 		runCreated bool
 	)
 	err = st.Write(ctx, func(tx *store.WriteTx) error {
-		if err := authorizeProductionSubmission(ctx, tx, spec, elaborationGrant); err != nil {
+		if err := authorizeProductionSubmission(ctx, tx, spec, specificationGrant); err != nil {
 			return err
 		}
 		// The digests come from the registered artifacts, not the caller: a
@@ -357,7 +357,7 @@ func submitProductionRun(
 		if err := want.Validate(); err != nil {
 			return err
 		}
-		if err := authenticateProductionAttempt(ctx, tx, spec, specArtifact.Digest, elaborationGrant); err != nil {
+		if err := authenticateProductionAttempt(ctx, tx, spec, specArtifact.Digest, specificationGrant); err != nil {
 			return err
 		}
 
@@ -571,20 +571,20 @@ func authorizeProductionSubmission(
 	ctx context.Context,
 	tx *store.WriteTx,
 	spec ProductionRunSpec,
-	grant *elaborationRequest,
+	grant *specificationRequest,
 ) error {
-	claim, err := tx.GetOutbox(ctx, elaborationImplementationClaimKey(spec.RunID))
+	claim, err := getSpecificationImplementationClaim(ctx, tx, spec.RunID)
 	if errors.Is(err, store.ErrNotFound) {
 		if grant != nil {
-			return fmt.Errorf("elaboration grant for unreserved implementation run %q: %w",
+			return fmt.Errorf("specification grant for unreserved implementation run %q: %w",
 				spec.RunID, domain.ErrParentKeyMismatch)
 		}
-		reserved, evidenceErr := hasElaborationReservationEvidence(ctx, &tx.ReadTx, spec.RunID)
+		reserved, evidenceErr := hasSpecificationReservationEvidence(ctx, &tx.ReadTx, spec.RunID)
 		if evidenceErr != nil {
 			return evidenceErr
 		}
 		if reserved {
-			return fmt.Errorf("implementation run %q has damaged elaboration reservation state: %w",
+			return fmt.Errorf("implementation run %q has damaged specification reservation state: %w",
 				spec.RunID, ErrImplementationRunReserved)
 		}
 		return nil
@@ -598,18 +598,18 @@ func authorizeProductionSubmission(
 	if err := grant.validate(); err != nil {
 		return fmt.Errorf("authenticate implementation reservation: %w", err)
 	}
-	verified, err := verifyElaborationTerminal(ctx, &tx.ReadTx, *grant)
+	verified, err := verifySpecificationTerminal(ctx, &tx.ReadTx, *grant)
 	if err != nil {
 		return fmt.Errorf("authenticate implementation reservation: %w", err)
 	}
-	if err := authorizeElaborationImplementation(verified, spec.SpecArtifactID); err != nil {
+	if err := authorizeSpecificationImplementation(verified, spec.SpecArtifactID); err != nil {
 		return fmt.Errorf("authenticate implementation reservation: %w", err)
 	}
-	if claim.Kind != KindElaborationImplementationClaim || !claim.Dispatched() ||
+	if claim.Kind != KindSpecificationImplementationClaim || !claim.Dispatched() ||
 		grant.ImplementationRunID != spec.RunID || grant.ProjectID != spec.ProjectID ||
 		grant.PolicyArtifactID != spec.PolicyArtifactID || grant.Publication != spec.Publication ||
 		grant.CampaignID != spec.CampaignID || grant.AttemptNumber != spec.AttemptNumber ||
-		!sameElaborationWorkUnit(grant.WorkUnit, spec.WorkUnit) {
+		!sameSpecificationWorkUnit(grant.WorkUnit, spec.WorkUnit) {
 		return fmt.Errorf("implementation reservation disagrees with production submission: %w",
 			domain.ErrParentKeyMismatch)
 	}
@@ -621,7 +621,7 @@ func authenticateProductionAttempt(
 	tx *store.WriteTx,
 	spec ProductionRunSpec,
 	approvedSpecDigest domain.Digest,
-	grant *elaborationRequest,
+	grant *specificationRequest,
 ) error {
 	if spec.CampaignID == "" {
 		if spec.AttemptNumber != 0 || spec.AttemptReason != "" || spec.ParentRunID != "" {
@@ -642,7 +642,7 @@ func authenticateProductionAttempt(
 		return fmt.Errorf("authenticate production attempt %s/%d: %w", spec.CampaignID, spec.AttemptNumber, err)
 	}
 	if grant == nil && attempt.Kind != domain.ProductionAttemptRetry {
-		return fmt.Errorf("initial production attempt requires elaboration grant: %w", domain.ErrParentKeyMismatch)
+		return fmt.Errorf("initial production attempt requires specification grant: %w", domain.ErrParentKeyMismatch)
 	}
 	if grant == nil && attempt.Kind == domain.ProductionAttemptRetry {
 		parentRun, err := tx.GetRun(ctx, attempt.ParentRunID)
@@ -663,16 +663,16 @@ func authenticateProductionAttempt(
 	}
 	if grant != nil {
 		if len(grant.InputArtifactIDs) != 1 {
-			return fmt.Errorf("elaboration grant source inputs: %w", domain.ErrParentKeyMismatch)
+			return fmt.Errorf("specification grant source inputs: %w", domain.ErrParentKeyMismatch)
 		}
 		sourceArtifact, err := tx.GetArtifact(ctx, grant.InputArtifactIDs[0])
 		if err != nil {
-			return fmt.Errorf("load elaboration source artifact: %w", err)
+			return fmt.Errorf("load specification source artifact: %w", err)
 		}
 		if attempt.SourceDigest != sourceArtifact.Digest ||
 			attempt.PublicationDigest != grant.PublicationDigest ||
-			attempt.ElaborationRunID != grant.ElaborationRunID {
-			return fmt.Errorf("production attempt disagrees with elaboration grant: %w", domain.ErrParentKeyMismatch)
+			attempt.SpecificationRunID != grant.SpecificationRunID {
+			return fmt.Errorf("production attempt disagrees with specification grant: %w", domain.ErrParentKeyMismatch)
 		}
 	}
 	if attempt.ImplementationRunID != spec.RunID || attempt.ApprovedSpecDigest != approvedSpecDigest ||
@@ -682,22 +682,20 @@ func authenticateProductionAttempt(
 	return nil
 }
 
-func hasElaborationReservationEvidence(
+func hasSpecificationReservationEvidence(
 	ctx context.Context, tx *store.ReadTx, implementationRunID domain.RunID,
 ) (bool, error) {
-	elaborationRunID, err := ElaborationRunIDForImplementation(implementationRunID)
-	if err != nil {
-		return false, err
-	}
-	if _, err := tx.GetRun(ctx, elaborationRunID); err == nil {
-		return true, nil
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return false, err
-	}
-	if _, err := tx.GetOutbox(ctx, string(elaborationInvocationID(elaborationRunID, 1))); err == nil {
-		return true, nil
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return false, err
+	for _, specificationRunID := range specificationRunIDCandidates(implementationRunID) {
+		if _, err := tx.GetRun(ctx, specificationRunID); err == nil {
+			return true, nil
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return false, err
+		}
+		if _, err := tx.GetOutbox(ctx, string(specificationInvocationID(specificationRunID, 1))); err == nil {
+			return true, nil
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return false, err
+		}
 	}
 	// This fallback is a conservative existence probe used only to refuse an
 	// ungranted production submission when the deterministic reservation claim
@@ -710,12 +708,12 @@ func hasElaborationReservationEvidence(
 		tx.ListDispatchedOutbox,
 		tx.ListQuarantinedOutbox,
 	} {
-		entries, err := list(ctx, KindElaborationInvocationRequested)
+		entries, err := list(ctx, KindSpecificationInvocationRequested)
 		if err != nil {
 			return false, err
 		}
 		for _, entry := range entries {
-			request, err := decodeElaborationRequest(entry)
+			request, err := decodeSpecificationRequest(entry)
 			if err == nil && request.ImplementationRunID == implementationRunID {
 				return true, nil
 			}
@@ -2052,8 +2050,11 @@ func productionQuarantineNoticeFor(prefix, reason string) bool {
 	if prefix == productionTaskQuarantinePrefix {
 		return reason == productionQuarantineUnreadableTask
 	}
-	if prefix == elaborationMarkerQuarantinePrefix {
-		return reason == elaborationQuarantineUnreadable
+	if prefix == specificationMarkerQuarantinePrefix {
+		return reason == specificationQuarantineUnreadable
+	}
+	if legacySpecificationQuarantineNoticeFor(prefix, reason) {
+		return true
 	}
 	if prefix == remediationMarkerQuarantinePrefix {
 		return reason == remediationQuarantineUnreadable

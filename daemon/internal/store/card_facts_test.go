@@ -264,7 +264,7 @@ func TestPutAttentionItemAuthenticatesInitialSpecification(t *testing.T) {
 		return tx.PutAttentionItem(ctx, item)
 	})
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {
-		t.Fatalf("put without completed elaboration terminal = %v, want ErrParentKeyMismatch", err)
+		t.Fatalf("put without completed specification terminal = %v, want ErrParentKeyMismatch", err)
 	}
 	if err := recordSpecApprovalTerminal(ctx, s, item, 1); err != nil {
 		t.Fatalf("record initial specification terminal: %v", err)
@@ -305,7 +305,7 @@ func TestPutAttentionItemAuthenticatesSpecRevisionArtifacts(t *testing.T) {
 		return tx.PutAttentionItem(ctx, item)
 	})
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {
-		t.Fatalf("put without elaboration terminal = %v, want ErrParentKeyMismatch", err)
+		t.Fatalf("put without specification terminal = %v, want ErrParentKeyMismatch", err)
 	}
 	if err := recordSpecApprovalTerminal(ctx, s, revision.priorItem, 1); err != nil {
 		t.Fatalf("record initial specification terminal: %v", err)
@@ -405,7 +405,7 @@ func TestPutAttentionItemBindsSpecRevisionAddressalsToCurrentInvocation(t *testi
 		}},
 		{"foreign invocation provenance", func(fixture *specRevisionCardFixture) {
 			provenance := fixture.item.AgentClaims[2].Provenance
-			provenance.ProducerInvocationID = "inv-elaborate-run-1-99"
+			provenance.ProducerInvocationID = "inv-specify-run-1-99"
 			fixture.item.AgentClaims[2].Provenance = provenance
 			fixture.artifacts[3].Provenance = provenance
 		}},
@@ -465,7 +465,7 @@ func TestPutAttentionItemAuthenticatesSpecRevisionCommands(t *testing.T) {
 		{"wrong iteration", func(fixture *specRevisionCardFixture) {
 			fixture.item.ID = "spec-approval-implementation-run-3"
 			currentProvenance := fixture.item.AgentClaims[0].Provenance
-			currentProvenance.ProducerInvocationID = "inv-elaborate-run-1-3"
+			currentProvenance.ProducerInvocationID = "inv-specify-run-1-3"
 			fixture.item.AgentClaims[0].Artifact = "spec-implementation-run-3"
 			fixture.item.AgentClaims[0].Provenance = currentProvenance
 			fixture.item.AgentClaims[1].Provenance = currentProvenance
@@ -525,7 +525,7 @@ func TestPutAttentionItemRejectsOmittedSpecRevisionHistory(t *testing.T) {
 	feedback, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: "spec-feedback-revise-again", Type: domain.ArtifactKindResearch, Digest: commentDigest,
 		Provenance: domain.Provenance{
-			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-elaborate-run-1-2",
+			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-specify-run-1-2",
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
 		Metadata: runMeta(),
@@ -546,7 +546,7 @@ func TestPutAttentionItemRejectsOmittedSpecRevisionHistory(t *testing.T) {
 		MediaType: domain.MediaTypeTextMarkdown, Content: "Added the authenticated source.",
 	}
 	currentProvenance := revision.item.AgentClaims[0].Provenance
-	currentProvenance.ProducerInvocationID = "inv-elaborate-run-1-3"
+	currentProvenance.ProducerInvocationID = "inv-specify-run-1-3"
 	current, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: "spec-implementation-run-3", Type: domain.ArtifactKindSpecification,
 		Digest: domain.Digest(contentaddr.Sum([]byte(currentBody))), Provenance: currentProvenance,
@@ -792,11 +792,11 @@ type specRevisionCardFixture struct {
 func specRevisionCardFact(t *testing.T) specRevisionCardFixture {
 	t.Helper()
 	priorProvenance := domain.Provenance{
-		ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-elaborate-run-1-1",
+		ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-specify-run-1-1",
 		HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 	}
 	currentProvenance := priorProvenance
-	currentProvenance.ProducerInvocationID = "inv-elaborate-run-1-2"
+	currentProvenance.ProducerInvocationID = "inv-specify-run-1-2"
 	priorBody := "# Specification\n\nKeep the request valid."
 	currentBody := "# Specification\n\nKeep the request valid and bound it to 1 MiB."
 	summaryText := domain.ClaimText{
@@ -824,7 +824,7 @@ func specRevisionCardFact(t *testing.T) specRevisionCardFixture {
 	feedback, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: "spec-feedback-revise-spec", Type: domain.ArtifactKindResearch, Digest: commentDigest,
 		Provenance: domain.Provenance{
-			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-elaborate-run-1-1",
+			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: "inv-specify-run-1-1",
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
 		Metadata: runMeta(),
@@ -969,7 +969,7 @@ func recordSpecApprovalTerminal(
 	}
 	return s.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		_, _, err := tx.RecordInbox(
-			ctx, string(terminal.InvocationID), "elaboration_stage_terminal", body,
+			ctx, string(terminal.InvocationID), "specification_stage_terminal", body,
 		)
 		return err
 	})

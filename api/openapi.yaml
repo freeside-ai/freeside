@@ -2282,7 +2282,7 @@ components:
     StageName:
       type: string
       description: The workflow stage that owns an execution outcome.
-      enum: [elaboration, implementation, review, verification]
+      enum: [specification, implementation, review, verification]
 
     ExecutionFailureFacts:
       type: object

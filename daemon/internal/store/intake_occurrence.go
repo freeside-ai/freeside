@@ -435,7 +435,7 @@ func (tx *ReadTx) deriveIntakeAdmission(
 		Subject: domain.IntakeSubjectBinding{
 			ProjectID:            declaration.ProjectID,
 			WorkUnitID:           declaration.ID,
-			ElaborationRunID:     declaration.RunID,
+			SpecificationRunID:   declaration.RunID,
 			PolicyArtifactID:     policyArtifactID,
 			PolicyArtifactDigest: policy.Digest,
 			ResolvedPolicyDigest: policy.Digest,
@@ -444,12 +444,12 @@ func (tx *ReadTx) deriveIntakeAdmission(
 	}, nil
 }
 
-// intakeIssueSubjectSource mints the issue_subject elaboration source from the
+// intakeIssueSubjectSource mints the issue_subject specification source from the
 // occurrence's own coordinates. The subject a label start assembles is always
 // this occurrence's issue, so it is derived here, never accepted from a caller.
-func intakeIssueSubjectSource(o domain.IntakeOccurrence) domain.ElaborationSource {
-	return domain.ElaborationSource{
-		Kind: domain.ElaborationSourceIssueSubject,
+func intakeIssueSubjectSource(o domain.IntakeOccurrence) domain.SpecificationSource {
+	return domain.SpecificationSource{
+		Kind: domain.SpecificationSourceIssueSubject,
 		IssueSubject: &domain.IssueSubjectRef{
 			Repo: o.Repo, RepositoryID: o.RepositoryID, IssueNumber: o.IssueNumber,
 		},
@@ -629,13 +629,13 @@ func (tx *WriteTx) RecordIntakeObservation(
 	return occurrence, nil
 }
 
-// MintIntakeDeclaration mints and persists the reserved elaboration run's
+// MintIntakeDeclaration mints and persists the reserved specification run's
 // work-unit declaration for a present occurrence (plan §5.12 item 3, issue
 // #744): bound to the occurrence's own issue, on the caller-reserved run, at the
 // project the run names and scoped to the run's resolved policy. The reserved
-// run is the pre-approval elaboration run (which can exist at admission and
-// compose with the elaboration lane), not the implementation run; the binding's
-// ElaborationRunID records it, and the reconciliation loop derives the
+// run is the pre-approval specification run (which can exist at admission and
+// compose with the specification lane), not the implementation run; the binding's
+// SpecificationRunID records it, and the reconciliation loop derives the
 // implementation run id from the occurrence's coordinates downstream. The admission transaction calls
 // this before AllocateProposalInstance, so the proposal's SubjectHandle resolves
 // through the existing ResolveProposalSubject path and admission never has to
@@ -712,7 +712,7 @@ func (tx *WriteTx) MintIntakeDeclaration(
 // occurrence and its admitted proposal, whose minted work-unit declaration
 // (recorded by MintIntakeDeclaration, resolved through the proposal handle) is
 // authoritative for (project, run, issue). The caller names only the admitted
-// proposal instance and the one elaboration input with no accessor to derive it,
+// proposal instance and the one specification input with no accessor to derive it,
 // the policy artifact. A replay converges (the re-derived binding equals the
 // stored one); a different proposal on an already-bound occurrence is an
 // immutable conflict.
@@ -758,7 +758,7 @@ func (tx *WriteTx) BindIntakeAdmission(
 
 // authenticateIntakePolicyArtifact confirms the named policy artifact exists, is
 // a policy artifact, and carries the run's resolved-policy digest — the
-// admission-time presence check for the one elaboration input the binding names.
+// admission-time presence check for the one specification input the binding names.
 // It is the write path's, not the read re-gate's: a stored binding stays readable
 // when this input later disappears (that is a start-time refusal), but a fresh
 // admission cannot name an absent or mismatched artifact.

@@ -158,7 +158,7 @@ type storedRowCanonicalizer interface{ CanonicalizeStoredRow() }
 // spelling reaches Validate in the form it now demands.
 func decode[T validator](body []byte) (T, error) {
 	var v T
-	if err := json.Unmarshal(body, &v); err != nil {
+	if err := json.Unmarshal(canonicalizeLegacyBody(body), &v); err != nil {
 		return v, err
 	}
 	if c, ok := any(&v).(storedRowCanonicalizer); ok {

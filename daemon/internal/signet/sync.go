@@ -1059,7 +1059,7 @@ func authenticateRunObservation(
 			}
 			// A conversation intent omits its run and stage (see
 			// AuthenticateInvocationDispatchIntent) and, unlike a production or
-			// elaboration attempt, has no execution admission to bind against:
+			// specification attempt, has no execution admission to bind against:
 			// the engine dispatches a conversation invocation unbound, so no
 			// admission record exists and demanding one would fail a legitimate
 			// start closed. Its attempt identity is still deterministic, so bind
@@ -1309,8 +1309,8 @@ func authenticateConversationInvocationIntent(
 	ctx context.Context, tx *store.ReadTx, entry store.QueueEntry,
 	invocation domain.InvocationID, runID domain.RunID,
 ) error {
-	if entry.Kind == string(domain.ElaborationDiscussionRequestedKind) {
-		return authenticateElaborationDiscussionInvocationIntent(ctx, tx, entry, invocation, runID)
+	if entry.Kind == string(domain.SpecificationDiscussionRequestedKind) {
+		return authenticateSpecificationDiscussionInvocationIntent(ctx, tx, entry, invocation, runID)
 	}
 	if entry.Kind != string(domain.AgentInvocationRequestedKind) {
 		return nil
@@ -1341,23 +1341,21 @@ func authenticateConversationInvocationIntent(
 	return nil
 }
 
-func authenticateElaborationDiscussionInvocationIntent(
+func authenticateSpecificationDiscussionInvocationIntent(
 	ctx context.Context, tx *store.ReadTx, entry store.QueueEntry,
 	invocation domain.InvocationID, runID domain.RunID,
 ) error {
-	request, err := domain.DecodeElaborationDiscussionInvocationIntent(entry.Payload)
+	request, err := domain.DecodeSpecificationDiscussionInvocationIntent(entry.Payload)
 	if err != nil {
 		return err
 	}
-	baseInvocationID := domain.InvocationID(fmt.Sprintf(
-		"inv-elaborate-%s-%d", request.ElaborationRunID, request.Iteration,
-	))
+	baseInvocationID := domain.SpecificationInvocationID(request.SpecificationRunID, request.Iteration)
 	baseEntry, err := tx.GetOutbox(ctx, string(baseInvocationID))
 	if err != nil {
 		return err
 	}
 	var base struct {
-		ElaborationRunID    domain.RunID        `json:"elaboration_run_id"`
+		SpecificationRunID  domain.RunID        `json:"specification_run_id"`
 		ImplementationRunID domain.RunID        `json:"implementation_run_id"`
 		ProjectID           domain.ProjectID    `json:"project_id"`
 		InvocationID        domain.InvocationID `json:"invocation_id"`
@@ -1432,14 +1430,14 @@ func authenticateElaborationDiscussionInvocationIntent(
 		return err
 	}
 	expectedInputs = append(expectedInputs, discussionArtifactID)
-	if request.InvocationID != invocation || request.ElaborationRunID != runID ||
-		baseEntry.Kind != string(domain.ElaborationInvocationRequestedKind) ||
+	if request.InvocationID != invocation || request.SpecificationRunID != runID ||
+		baseEntry.Kind != string(domain.SpecificationInvocationRequestedKind) ||
 		baseEntry.IdempotencyKey != string(baseInvocationID) || !baseEntry.Dispatched() ||
-		base.ElaborationRunID != request.ElaborationRunID ||
+		base.SpecificationRunID != request.SpecificationRunID ||
 		base.ImplementationRunID != request.ImplementationRunID || base.ProjectID != request.ProjectID ||
 		base.InvocationID != baseInvocationID || base.Iteration != request.Iteration ||
 		base.PolicyArtifactID != request.PolicyArtifactID ||
-		terminalEntry.Kind != "elaboration_stage_terminal" ||
+		terminalEntry.Kind != "specification_stage_terminal" ||
 		terminalEntry.IdempotencyKey != string(baseInvocationID) ||
 		terminal.InvocationID != baseInvocationID || terminal.Iteration != request.Iteration ||
 		terminal.Status != "completed" || terminal.SpecArtifactID == nil ||
@@ -1455,19 +1453,19 @@ func authenticateElaborationDiscussionInvocationIntent(
 		discussRequest.ItemVersion != request.ItemVersion || discussInvocation.ConversationID == nil ||
 		*discussInvocation.ConversationID != request.ConversationID ||
 		discussInvocation.ThroughSequence != request.ThroughSequence || prefixDigest != request.PrefixDigest ||
-		!authenticatesElaborationDiscussionArtifact(
+		!authenticatesSpecificationDiscussionArtifact(
 			discussionArtifact, discussionArtifactID, request.PrefixDigest, baseInvocationID,
 		) ||
 		item.ConversationID == nil || *item.ConversationID != request.ConversationID ||
 		item.ItemVersion < request.ItemVersion || item.ProjectID != request.ProjectID ||
-		item.Subject.RunID == nil || *item.Subject.RunID != request.ElaborationRunID {
-		return fmt.Errorf("elaboration discussion invocation intent does not bind durable discussion state: %w",
+		item.Subject.RunID == nil || *item.Subject.RunID != request.SpecificationRunID {
+		return fmt.Errorf("specification discussion invocation intent does not bind durable discussion state: %w",
 			domain.ErrParentKeyMismatch)
 	}
 	return nil
 }
 
-func authenticatesElaborationDiscussionArtifact(
+func authenticatesSpecificationDiscussionArtifact(
 	artifact domain.Artifact,
 	id domain.ArtifactID,
 	digest domain.Digest,

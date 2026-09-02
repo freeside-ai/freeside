@@ -72,7 +72,7 @@ type Lineage struct {
 	SourceDigest        domain.Digest                `json:"source_digest"`
 	PublicationDigest   domain.Digest                `json:"publication_digest,omitempty"`
 	ApprovedSpecDigest  domain.Digest                `json:"approved_spec_digest,omitempty"`
-	ElaborationRunID    domain.RunID                 `json:"elaboration_run_id"`
+	SpecificationRunID  domain.RunID                 `json:"specification_run_id"`
 	ImplementationRunID domain.RunID                 `json:"implementation_run_id"`
 }
 
@@ -375,7 +375,7 @@ func (s *Store) ObserveSnapshot(ctx context.Context, runID domain.RunID) (Snapsh
 				Kind: attempt.Kind, ParentRunID: attempt.ParentRunID,
 				SourceDigest: attempt.SourceDigest, PublicationDigest: attempt.PublicationDigest,
 				ApprovedSpecDigest: attempt.ApprovedSpecDigest,
-				ElaborationRunID:   attempt.ElaborationRunID, ImplementationRunID: attempt.ImplementationRunID,
+				SpecificationRunID: attempt.SpecificationRunID, ImplementationRunID: attempt.ImplementationRunID,
 			}
 		}
 

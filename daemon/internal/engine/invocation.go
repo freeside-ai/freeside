@@ -57,14 +57,14 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		}
 	}
 	var (
-		pending            []store.QueueEntry
-		pendingProduction  []store.QueueEntry
-		pendingElaboration []store.QueueEntry
-		pendingDiscussion  []store.QueueEntry
-		pendingRemediation []store.QueueEntry
-		pendingFeedback    []store.QueueEntry
-		held               bool
-		holdReason         domain.RunHoldReason
+		pending              []store.QueueEntry
+		pendingProduction    []store.QueueEntry
+		pendingSpecification []store.QueueEntry
+		pendingDiscussion    []store.QueueEntry
+		pendingRemediation   []store.QueueEntry
+		pendingFeedback      []store.QueueEntry
+		held                 bool
+		holdReason           domain.RunHoldReason
 	)
 	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 		// An engine that is not explicitly configured attended_dev honours
@@ -109,11 +109,11 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		if err != nil {
 			return err
 		}
-		pendingElaboration, err = tx.ListPendingOutbox(ctx, KindElaborationInvocationRequested)
+		pendingSpecification, err = tx.ListPendingOutbox(ctx, KindSpecificationInvocationRequested)
 		if err != nil {
 			return err
 		}
-		pendingDiscussion, err = tx.ListPendingOutbox(ctx, KindElaborationDiscussionRequested)
+		pendingDiscussion, err = tx.ListPendingOutbox(ctx, KindSpecificationDiscussionRequested)
 		if err != nil {
 			return err
 		}
@@ -138,10 +138,10 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				return 0, err
 			}
 		}
-		for _, entry := range pendingElaboration {
-			request, binding, err := e.loadElaborationBinding(ctx, entry)
+		for _, entry := range pendingSpecification {
+			request, binding, err := e.loadSpecificationBinding(ctx, entry)
 			if err != nil {
-				quarantined, quarantineErr := e.quarantinePendingElaborationMarker(ctx, entry, err)
+				quarantined, quarantineErr := e.quarantinePendingSpecificationMarker(ctx, entry, err)
 				if quarantineErr != nil {
 					return 0, quarantineErr
 				}
@@ -155,9 +155,9 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			}
 		}
 		for _, entry := range pendingDiscussion {
-			request, binding, err := e.loadElaborationDiscussionBinding(ctx, entry)
+			request, binding, err := e.loadSpecificationDiscussionBinding(ctx, entry)
 			if err != nil {
-				quarantined, quarantineErr := e.quarantinePendingElaborationDiscussionMarker(ctx, entry, err)
+				quarantined, quarantineErr := e.quarantinePendingSpecificationDiscussionMarker(ctx, entry, err)
 				if quarantineErr != nil {
 					return 0, quarantineErr
 				}
@@ -250,13 +250,13 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			return started, nil
 		}
 	}
-	for _, entry := range pendingElaboration {
-		if e.elaboration == nil {
+	for _, entry := range pendingSpecification {
+		if e.specification == nil {
 			continue
 		}
-		request, binding, err := e.loadElaborationBinding(ctx, entry)
+		request, binding, err := e.loadSpecificationBinding(ctx, entry)
 		if err != nil {
-			quarantined, quarantineErr := e.quarantinePendingElaborationMarker(ctx, entry, err)
+			quarantined, quarantineErr := e.quarantinePendingSpecificationMarker(ctx, entry, err)
 			if quarantineErr != nil {
 				return started, quarantineErr
 			}
@@ -266,18 +266,18 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
 		}
 		if err := releaseProductionQuarantine(
-			ctx, e.store, e.signet, elaborationMarkerQuarantinePrefix, binding.run.ID,
+			ctx, e.store, e.signet, specificationMarkerQuarantinePrefixFor(binding.run.ID), binding.run.ID,
 		); err != nil {
 			return started, err
 		}
 		// Submission records durable intent before a daemon composition is
 		// available to materialize it. Classify a permanent source-input
 		// refusal here, before recording an attempt, so a valid submission
-		// cannot remain pending forever when the elaborator cannot carry it.
+		// cannot remain pending forever when the specifier cannot carry it.
 		if !attemptRecorded(binding.run, request.InvocationID) {
-			if err := e.validateElaborationInvocationDelivery(ctx, binding.run, binding.invocation); err != nil {
-				if errors.Is(err, ErrElaborationInputUndeliverable) {
-					if err := e.recordElaborationFailure(ctx, binding.run, request, exec.StatusFailed, err.Error()); err != nil {
+			if err := e.validateSpecificationInvocationDelivery(ctx, binding.run, binding.invocation); err != nil {
+				if errors.Is(err, ErrSpecificationInputUndeliverable) {
+					if err := e.recordSpecificationFailure(ctx, binding.run, request, exec.StatusFailed, err.Error()); err != nil {
 						return started, err
 					}
 					continue
@@ -293,8 +293,8 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				return err
 			}); err != nil {
 				if errors.Is(err, store.ErrNotFound) {
-					cause := fmt.Errorf("%w: elaboration admission is missing", errElaborationMarkerUnreadable)
-					quarantined, quarantineErr := e.quarantinePendingElaborationMarker(ctx, entry, cause)
+					cause := fmt.Errorf("%w: specification admission is missing", errSpecificationMarkerUnreadable)
+					quarantined, quarantineErr := e.quarantinePendingSpecificationMarker(ctx, entry, cause)
 					if quarantineErr != nil {
 						return started, quarantineErr
 					}
@@ -305,9 +305,9 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				return started, fmt.Errorf("intent %q admission: %w", entry.IdempotencyKey, err)
 			}
 			if admission.EgressProfile != domain.EgressProviderOnly {
-				cause := fmt.Errorf("%w: elaboration admission has egress %q",
-					errElaborationMarkerUnreadable, admission.EgressProfile)
-				quarantined, quarantineErr := e.quarantinePendingElaborationMarker(ctx, entry, cause)
+				cause := fmt.Errorf("%w: specification admission has egress %q",
+					errSpecificationMarkerUnreadable, admission.EgressProfile)
+				quarantined, quarantineErr := e.quarantinePendingSpecificationMarker(ctx, entry, cause)
 				if quarantineErr != nil {
 					return started, quarantineErr
 				}
@@ -317,12 +317,12 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				return started, cause
 			}
 		} else if e.admission == nil || e.admission.environment.EgressProfile != domain.EgressProviderOnly {
-			return started, fmt.Errorf("elaboration requires provider_only admission: %w", exec.ErrCapabilityRefused)
+			return started, fmt.Errorf("specification requires provider_only admission: %w", exec.ErrCapabilityRefused)
 		}
-		stage, ok := findElaborationStage(binding.run)
+		stage, ok := findSpecificationStage(binding.run)
 		if !ok {
-			cause := fmt.Errorf("%w: elaboration stage missing", errElaborationMarkerUnreadable)
-			quarantined, quarantineErr := e.quarantinePendingElaborationMarker(ctx, entry, cause)
+			cause := fmt.Errorf("%w: specification stage missing", errSpecificationMarkerUnreadable)
+			quarantined, quarantineErr := e.quarantinePendingSpecificationMarker(ctx, entry, cause)
 			if quarantineErr != nil {
 				return started, quarantineErr
 			}
@@ -352,12 +352,12 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		}
 	}
 	for _, entry := range pendingDiscussion {
-		if e.elaboration == nil {
+		if e.specification == nil {
 			continue
 		}
-		request, binding, err := e.loadElaborationDiscussionBinding(ctx, entry)
+		request, binding, err := e.loadSpecificationDiscussionBinding(ctx, entry)
 		if err != nil {
-			quarantined, quarantineErr := e.quarantinePendingElaborationDiscussionMarker(ctx, entry, err)
+			quarantined, quarantineErr := e.quarantinePendingSpecificationDiscussionMarker(ctx, entry, err)
 			if quarantineErr != nil {
 				return started, quarantineErr
 			}
@@ -367,7 +367,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
 		}
 		if err := releaseProductionQuarantine(
-			ctx, e.store, e.signet, elaborationDiscussionMarkerQuarantinePrefix, binding.run.ID,
+			ctx, e.store, e.signet, specificationDiscussionMarkerQuarantinePrefixFor(binding.run.ID), binding.run.ID,
 		); err != nil {
 			return started, err
 		}
@@ -386,9 +386,9 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			}
 		} else {
 			deliveryErr := e.validateProspectiveDelivery(
-				ctx, binding.run, binding.invocation, e.elaboration.promptPackage, true, nil,
+				ctx, binding.run, binding.invocation, e.specification.promptPackage, true, nil,
 			)
-			if errors.Is(deliveryErr, ErrElaborationInputUndeliverable) {
+			if errors.Is(deliveryErr, ErrSpecificationInputUndeliverable) {
 				if err := e.acceptSpecDiscussionReply(ctx, request, unavailableSpecDiscussionReply); err != nil {
 					return started, err
 				}
@@ -398,12 +398,12 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				return started, deliveryErr
 			}
 			if e.admission == nil || e.admission.environment.EgressProfile != domain.EgressProviderOnly {
-				return started, fmt.Errorf("elaboration discussion requires provider_only admission: %w", exec.ErrCapabilityRefused)
+				return started, fmt.Errorf("specification discussion requires provider_only admission: %w", exec.ErrCapabilityRefused)
 			}
 		}
-		stage, ok := findElaborationStage(binding.run)
+		stage, ok := findSpecificationStage(binding.run)
 		if !ok {
-			return started, fmt.Errorf("intent %q: elaboration stage missing", entry.IdempotencyKey)
+			return started, fmt.Errorf("intent %q: specification stage missing", entry.IdempotencyKey)
 		}
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)
@@ -838,19 +838,19 @@ func (e *Engine) acceptCompletedInvocations(ctx context.Context) (int, error) {
 			return accepted, err
 		}
 		if !ownedProduction {
-			ownedElaboration, err := e.ownsElaborationRun(ctx, run)
+			ownedSpecification, err := e.ownsSpecificationRun(ctx, run)
 			if err != nil {
 				return accepted, err
 			}
-			if !ownedElaboration {
+			if !ownedSpecification {
 				continue
 			}
-			stage, ok := findElaborationStage(run)
+			stage, ok := findSpecificationStage(run)
 			if !ok {
 				continue
 			}
 			for _, attempt := range stage.Attempts {
-				didAccept, err := e.acceptElaborationAttempt(ctx, run, attempt)
+				didAccept, err := e.acceptSpecificationAttempt(ctx, run, attempt)
 				if err != nil {
 					return accepted, fmt.Errorf("run %q invocation %q: %w", run.ID, attempt.InvocationID, err)
 				}

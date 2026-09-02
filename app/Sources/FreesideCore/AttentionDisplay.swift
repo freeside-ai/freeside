@@ -351,7 +351,7 @@ enum AttentionDisplay {
 
     static func label(_ stage: Components.Schemas.StageName) -> String {
         switch stage {
-        case .elaboration: return "Elaboration"
+        case .specification: return "Specification"
         case .implementation: return "Implementation"
         case .review: return "Review"
         case .verification: return "Verification"

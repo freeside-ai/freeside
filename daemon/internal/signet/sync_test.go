@@ -120,7 +120,7 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	elaborationRunID, err := engine.ElaborationRunIDForImplementation("run-1")
+	specificationRunID, err := engine.SpecificationRunIDForImplementation("run-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,8 +137,8 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 		}},
 	}
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
-		elaborationInvocationID := domain.InvocationID("inv-elaborate-" + string(elaborationRunID) + "-1")
-		source, err := domain.NewArtifact(domain.ArtifactInput{ID: "artifact-source", Type: domain.ArtifactKindSpecification, Digest: "sha256:source", Provenance: domain.Provenance{ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-elaborate", HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal}, Metadata: domain.EvidenceMetadata{MediaType: domain.EvidenceMediaTextMarkdown, SizeBytes: 1, CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable}}, map[domain.Digest]bool{})
+		specificationInvocationID := domain.InvocationID("inv-specify-" + string(specificationRunID) + "-1")
+		source, err := domain.NewArtifact(domain.ArtifactInput{ID: "artifact-source", Type: domain.ArtifactKindSpecification, Digest: "sha256:source", Provenance: domain.Provenance{ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-specify", HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal}, Metadata: domain.EvidenceMetadata{MediaType: domain.EvidenceMediaTextMarkdown, SizeBytes: 1, CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable}}, map[domain.Digest]bool{})
 		if err != nil {
 			return err
 		}
@@ -148,11 +148,11 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 		if err := tx.PutProductionAttempt(ctx, domain.ProductionAttempt{
 			CampaignID: campaignID, AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
 			SourceDigest: "sha256:source", PublicationDigest: "sha256:publication",
-			ElaborationRunID: elaborationRunID, ImplementationRunID: run.ID,
+			SpecificationRunID: specificationRunID, ImplementationRunID: run.ID,
 		}); err != nil {
 			return err
 		}
-		policy, err := domain.NewResolvedPolicy(elaborationRunID, []domain.PolicyKey{{
+		policy, err := domain.NewResolvedPolicy(specificationRunID, []domain.PolicyKey{{
 			Key: "gates.spec_approval", Value: "true",
 			Provenance: domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: "sha256:policy-source"},
 		}})
@@ -160,46 +160,46 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 			return err
 		}
 		request, err := json.Marshal(map[string]any{
-			"version": "freeside.elaboration-request/v1", "elaboration_run_id": elaborationRunID,
+			"version": "freeside.specification-request/v1", "specification_run_id": specificationRunID,
 			"implementation_run_id": run.ID, "project_id": run.ProjectID,
-			"invocation_id": elaborationInvocationID, "iteration": 1,
+			"invocation_id": specificationInvocationID, "iteration": 1,
 			"campaign_id": campaignID, "attempt_number": 1,
 			"publication_digest": "sha256:publication", "input_artifact_ids": []domain.ArtifactID{source.ID},
 		})
 		if err != nil {
 			return err
 		}
-		if _, _, err := tx.EnqueueOutbox(ctx, string(elaborationInvocationID),
-			string(domain.ElaborationInvocationRequestedKind), request); err != nil {
+		if _, _, err := tx.EnqueueOutbox(ctx, string(specificationInvocationID),
+			string(domain.SpecificationInvocationRequestedKind), request); err != nil {
 			return err
 		}
-		elaborationRun := domain.Run{
-			ID: elaborationRunID, ProjectID: run.ProjectID,
+		specificationRun := domain.Run{
+			ID: specificationRunID, ProjectID: run.ProjectID,
 			SpecDigest: source.Digest, PolicyDigest: policy.Digest,
 			CampaignID: campaignID, AttemptNumber: 1,
 			Stages: []domain.Stage{{
-				ID: domain.StageID("elaborate-" + string(elaborationRunID)), RunID: elaborationRunID,
-				Name: "elaboration", Attempts: []domain.Attempt{{
-					ID:      domain.AttemptID("attempt-" + string(elaborationInvocationID)),
-					StageID: domain.StageID("elaborate-" + string(elaborationRunID)),
-					Number:  1, InvocationID: elaborationInvocationID,
+				ID: domain.StageID("specify-" + string(specificationRunID)), RunID: specificationRunID,
+				Name: "specification", Attempts: []domain.Attempt{{
+					ID:      domain.AttemptID("attempt-" + string(specificationInvocationID)),
+					StageID: domain.StageID("specify-" + string(specificationRunID)),
+					Number:  1, InvocationID: specificationInvocationID,
 				}},
 			}},
 		}
-		if err := tx.PutRun(ctx, elaborationRun); err != nil {
+		if err := tx.PutRun(ctx, specificationRun); err != nil {
 			return err
 		}
 		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
 			return err
 		}
-		if err := tx.MarkOutboxDispatched(ctx, string(elaborationInvocationID)); err != nil {
+		if err := tx.MarkOutboxDispatched(ctx, string(specificationInvocationID)); err != nil {
 			return err
 		}
 		specification, err := domain.NewArtifact(domain.ArtifactInput{
 			ID: "spec-run-1-1", Type: domain.ArtifactKindSpecification, Digest: run.SpecDigest,
 			Provenance: domain.Provenance{
 				ProducerClass:        domain.ProducerAgent,
-				ProducerInvocationID: elaborationInvocationID, HeadBinding: domain.HeadIndependent,
+				ProducerInvocationID: specificationInvocationID, HeadBinding: domain.HeadIndependent,
 				SensitivityClass: domain.SensitivityNormal,
 			},
 			Metadata: domain.EvidenceMetadata{
@@ -223,21 +223,21 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 			SpecArtifactID      *domain.ArtifactID  `json:"spec_artifact_id,omitempty"`
 			ApprovalItemID      *domain.ItemID      `json:"approval_item_id,omitempty"`
 		}{
-			InvocationID: elaborationInvocationID, Iteration: 1, Status: "completed",
+			InvocationID: specificationInvocationID, Iteration: 1, Status: "completed",
 			ResearchArtifactIDs: []domain.ArtifactID{}, SpecArtifactID: &specification.ID,
 			ApprovalItemID: &approvalID,
 		})
 		if err != nil {
 			return err
 		}
-		if _, _, err := tx.RecordInbox(ctx, string(elaborationInvocationID),
-			"elaboration_stage_terminal", terminal); err != nil {
+		if _, _, err := tx.RecordInbox(ctx, string(specificationInvocationID),
+			"specification_stage_terminal", terminal); err != nil {
 			return err
 		}
 		createdAt := time.Date(2026, 8, 12, 11, 0, 0, 0, time.UTC)
 		approval, err := domain.NewAttentionItem(domain.AttentionItemInput{
 			ID: approvalID, ProjectID: run.ProjectID,
-			Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(elaborationRunID), RunID: &elaborationRunID},
+			Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(specificationRunID), RunID: &specificationRunID},
 			Type:    domain.AttentionSpecApproval, Priority: domain.PriorityNormal, Reason: "Approve specification.",
 			RequestedDecision: []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop},
 			AgentClaims: []domain.AgentClaim{{

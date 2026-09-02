@@ -26,17 +26,17 @@ type ProductionReattemptSpec struct {
 // ProductionReattempt reports the new run and the lineage/input identities
 // the CLI exposes alongside the ordinary submit lanes.
 type ProductionReattempt struct {
-	Created                 bool
-	Run                     ProductionRun
-	Attempt                 domain.ProductionAttempt
-	ElaborationInvocationID domain.InvocationID
-	ElaborationStageID      domain.StageID
-	SourceArtifactID        domain.ArtifactID
-	RootSourceArtifactID    domain.ArtifactID
-	PolicyArtifactID        domain.ArtifactID
-	PolicyDigest            domain.Digest
-	Publication             ProductionPublication
-	HasWorkUnit             bool
+	Created                   bool
+	Run                       ProductionRun
+	Attempt                   domain.ProductionAttempt
+	SpecificationInvocationID domain.InvocationID
+	SpecificationStageID      domain.StageID
+	SourceArtifactID          domain.ArtifactID
+	RootSourceArtifactID      domain.ArtifactID
+	PolicyArtifactID          domain.ArtifactID
+	PolicyDigest              domain.Digest
+	Publication               ProductionPublication
+	HasWorkUnit               bool
 }
 
 // ReattemptProductionRun creates one new implementation attempt from the
@@ -81,7 +81,7 @@ func ReattemptProductionRun(
 		attempt        domain.ProductionAttempt
 		parentRun      domain.Run
 		parentPolicy   domain.ResolvedPolicy
-		request        elaborationRequest
+		request        specificationRequest
 		sourceArtifact domain.Artifact
 		policyArtifact domain.Artifact
 		created        bool
@@ -180,7 +180,7 @@ func ReattemptProductionRun(
 			ParentRunID: parentRun.ID, SourceDigest: parentAttempt.SourceDigest,
 			PublicationDigest:   parentAttempt.PublicationDigest,
 			ApprovedSpecDigest:  parentRun.SpecDigest,
-			ElaborationRunID:    parentAttempt.ElaborationRunID,
+			SpecificationRunID:  parentAttempt.SpecificationRunID,
 			ImplementationRunID: runID,
 		}
 		if operatorBindings != 0 {
@@ -209,7 +209,7 @@ func ReattemptProductionRun(
 		RunID: attempt.ImplementationRunID, ProjectID: parentRun.ProjectID,
 		SpecArtifactID: sourceArtifact.ID, PolicyArtifactID: policyArtifact.ID,
 		ResolvedPolicy: resolved, Publication: request.Publication,
-		WorkUnit:   cloneElaborationWorkUnit(request.WorkUnit),
+		WorkUnit:   cloneSpecificationWorkUnit(request.WorkUnit),
 		CampaignID: attempt.CampaignID, AttemptNumber: attempt.AttemptNumber,
 		AttemptReason: attempt.Reason, ParentRunID: attempt.ParentRunID,
 	})
@@ -218,10 +218,10 @@ func ReattemptProductionRun(
 	}
 	return ProductionReattempt{
 		Created: created || resumed, Run: run, Attempt: attempt, SourceArtifactID: sourceArtifact.ID,
-		RootSourceArtifactID:    request.InputArtifactIDs[0],
-		ElaborationInvocationID: elaborationInvocationID(attempt.ElaborationRunID, 1),
-		ElaborationStageID:      elaborationStageID(attempt.ElaborationRunID),
-		PolicyArtifactID:        policyArtifact.ID, PolicyDigest: policyArtifact.Digest,
+		RootSourceArtifactID:      request.InputArtifactIDs[0],
+		SpecificationInvocationID: specificationInvocationID(attempt.SpecificationRunID, 1),
+		SpecificationStageID:      specificationStageID(attempt.SpecificationRunID),
+		PolicyArtifactID:          policyArtifact.ID, PolicyDigest: policyArtifact.Digest,
 		Publication: request.Publication, HasWorkUnit: request.WorkUnit != nil,
 	}, nil
 }
@@ -272,7 +272,7 @@ func loadReattemptInputs(
 	parentRunID domain.RunID,
 	parentRun *domain.Run,
 	parentPolicy *domain.ResolvedPolicy,
-	request *elaborationRequest,
+	request *specificationRequest,
 	sourceArtifact, policyArtifact *domain.Artifact,
 ) error {
 	var err error
@@ -304,16 +304,16 @@ func loadReattemptInputs(
 		return fmt.Errorf("parent run %q publication metadata unavailable: %w",
 			parentRunID, errors.Join(err, domain.ErrParentKeyMismatch))
 	}
-	elaborationMarker, err := tx.GetOutbox(ctx,
-		string(elaborationInvocationID(parentAttempt.ElaborationRunID, 1)))
+	specificationMarker, err := tx.GetOutbox(ctx,
+		string(specificationInvocationID(parentAttempt.SpecificationRunID, 1)))
 	if err != nil {
 		return err
 	}
-	*request, err = decodeElaborationRequest(elaborationMarker)
+	*request, err = decodeSpecificationRequest(specificationMarker)
 	if err != nil {
 		return err
 	}
-	if err := authenticateElaborationRoot(ctx, &tx.ReadTx, *request); err != nil {
+	if err := authenticateSpecificationRoot(ctx, &tx.ReadTx, *request); err != nil {
 		return err
 	}
 	initialAttempt, err := tx.GetProductionAttempt(ctx, parentAttempt.CampaignID, 1)
@@ -321,7 +321,7 @@ func loadReattemptInputs(
 		return err
 	}
 	if request.CampaignID != parentAttempt.CampaignID || request.AttemptNumber != 1 ||
-		request.ElaborationRunID != initialAttempt.ElaborationRunID ||
+		request.SpecificationRunID != initialAttempt.SpecificationRunID ||
 		request.ImplementationRunID != initialAttempt.ImplementationRunID ||
 		request.PublicationDigest != initialAttempt.PublicationDigest {
 		return fmt.Errorf("parent run %q campaign root disagrees: %w",
@@ -336,7 +336,7 @@ func loadReattemptInputs(
 			parentRunID, domain.ErrParentKeyMismatch)
 	}
 	if request.Publication != publication || request.ProjectID != parentRun.ProjectID {
-		return fmt.Errorf("parent run %q elaboration binding disagrees: %w",
+		return fmt.Errorf("parent run %q specification binding disagrees: %w",
 			parentRunID, domain.ErrParentKeyMismatch)
 	}
 	invocation, err := tx.GetAgentInvocation(ctx, productionInvocationID(parentRunID))

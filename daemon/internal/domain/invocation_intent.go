@@ -15,23 +15,23 @@ type InvocationIntentKind string
 // Invocation dispatch intent kinds are durable protocol vocabulary shared by
 // the lanes that create them and readers that authenticate a started attempt.
 const (
-	AgentInvocationRequestedKind       InvocationIntentKind = "agent_invocation_requested"
-	ProductionInvocationRequestedKind  InvocationIntentKind = "production_invocation_requested"
-	ElaborationInvocationRequestedKind InvocationIntentKind = "elaboration_invocation_requested"
-	ElaborationDiscussionRequestedKind InvocationIntentKind = "elaboration_discussion_requested"
+	AgentInvocationRequestedKind         InvocationIntentKind = "agent_invocation_requested"
+	ProductionInvocationRequestedKind    InvocationIntentKind = "production_invocation_requested"
+	SpecificationInvocationRequestedKind InvocationIntentKind = "specification_invocation_requested"
+	SpecificationDiscussionRequestedKind InvocationIntentKind = "specification_discussion_requested"
 )
 
 var AllInvocationIntentKinds = []InvocationIntentKind{
 	AgentInvocationRequestedKind,
 	ProductionInvocationRequestedKind,
-	ElaborationInvocationRequestedKind,
-	ElaborationDiscussionRequestedKind,
+	SpecificationInvocationRequestedKind,
+	SpecificationDiscussionRequestedKind,
 }
 
 func (k InvocationIntentKind) valid() bool {
 	switch k {
 	case AgentInvocationRequestedKind, ProductionInvocationRequestedKind,
-		ElaborationInvocationRequestedKind, ElaborationDiscussionRequestedKind:
+		SpecificationInvocationRequestedKind, SpecificationDiscussionRequestedKind:
 		return true
 	default:
 		return false
@@ -57,14 +57,14 @@ type ConversationInvocationIntent struct {
 	ItemVersion    int            `json:"item_version"`
 }
 
-const ElaborationDiscussionInvocationIntentVersion = "freeside.elaboration-discussion-request/v1"
+const SpecificationDiscussionInvocationIntentVersion = "freeside.specification-discussion-request/v1"
 
-// ElaborationDiscussionInvocationIntent is the complete signed dispatch
+// SpecificationDiscussionInvocationIntent is the complete signed dispatch
 // intent for one provider-only specification discussion. Readers reconstruct
 // every authority-bearing field before trusting a started attempt.
-type ElaborationDiscussionInvocationIntent struct {
+type SpecificationDiscussionInvocationIntent struct {
 	Version             string         `json:"version"`
-	ElaborationRunID    RunID          `json:"elaboration_run_id"`
+	SpecificationRunID  RunID          `json:"specification_run_id"`
 	ImplementationRunID RunID          `json:"implementation_run_id"`
 	ProjectID           ProjectID      `json:"project_id"`
 	Iteration           int            `json:"iteration"`
@@ -80,18 +80,18 @@ type ElaborationDiscussionInvocationIntent struct {
 	PolicyArtifactID    ArtifactID     `json:"policy_artifact_id"`
 }
 
-func (r ElaborationDiscussionInvocationIntent) Validate() error {
+func (r SpecificationDiscussionInvocationIntent) Validate() error {
 	if !strings.HasPrefix(string(r.DiscussInvocationID), "inv-") {
-		return fmt.Errorf("invalid elaboration discussion invocation identity: %w", ErrParentKeyMismatch)
+		return fmt.Errorf("invalid specification discussion invocation identity: %w", ErrParentKeyMismatch)
 	}
 	commandID := strings.TrimPrefix(string(r.DiscussInvocationID), "inv-")
 	discussionArtifactID := ArtifactID("spec-discussion-" + commandID)
-	if r.Version != ElaborationDiscussionInvocationIntentVersion || r.ElaborationRunID == "" ||
+	if r.Version != SpecificationDiscussionInvocationIntentVersion || r.SpecificationRunID == "" ||
 		r.ImplementationRunID == "" || r.ProjectID == "" || r.Iteration < 1 || commandID == "" ||
-		r.InvocationID != InvocationID("elaboration-discussion-"+commandID) || r.ConversationID == "" ||
+		!specificationDiscussionInvocationIDMatches(r.InvocationID, commandID) || r.ConversationID == "" ||
 		r.ThroughSequence < 1 || r.ItemID == "" || r.ItemVersion < 2 || r.SpecArtifactID == "" ||
 		r.PolicyArtifactID == "" || !contentaddr.Valid(string(r.PrefixDigest)) || len(r.InputArtifactIDs) == 0 {
-		return fmt.Errorf("invalid elaboration discussion request identity: %w", ErrParentKeyMismatch)
+		return fmt.Errorf("invalid specification discussion request identity: %w", ErrParentKeyMismatch)
 	}
 	seen := make(map[ArtifactID]struct{}, len(r.InputArtifactIDs))
 	for _, id := range r.InputArtifactIDs {
@@ -112,13 +112,13 @@ func (r ElaborationDiscussionInvocationIntent) Validate() error {
 	return nil
 }
 
-func DecodeElaborationDiscussionInvocationIntent(payload []byte) (ElaborationDiscussionInvocationIntent, error) {
-	var request ElaborationDiscussionInvocationIntent
+func DecodeSpecificationDiscussionInvocationIntent(payload []byte) (SpecificationDiscussionInvocationIntent, error) {
+	var request SpecificationDiscussionInvocationIntent
 	if err := strictjson.Decode(payload, &request, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
-		return ElaborationDiscussionInvocationIntent{}, fmt.Errorf("decode elaboration discussion invocation intent: %w", err)
+		return SpecificationDiscussionInvocationIntent{}, fmt.Errorf("decode specification discussion invocation intent: %w", err)
 	}
 	if err := request.Validate(); err != nil {
-		return ElaborationDiscussionInvocationIntent{}, err
+		return SpecificationDiscussionInvocationIntent{}, err
 	}
 	return request, nil
 }
@@ -168,27 +168,27 @@ func AuthenticateInvocationDispatchIntent(
 			return fmt.Errorf("production invocation intent does not bind run %q stage %q: %w", runID, stageID, ErrParentKeyMismatch)
 		}
 		return nil
-	case ElaborationInvocationRequestedKind:
+	case SpecificationInvocationRequestedKind:
 		var request struct {
-			ElaborationRunID RunID        `json:"elaboration_run_id"`
-			InvocationID     InvocationID `json:"invocation_id"`
+			SpecificationRunID RunID        `json:"specification_run_id"`
+			InvocationID       InvocationID `json:"invocation_id"`
 		}
 		if err := strictjson.DecodeAllowingUnknownFields(entry.Payload, &request, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
-			return fmt.Errorf("decode elaboration invocation intent: %w", err)
+			return fmt.Errorf("decode specification invocation intent: %w", err)
 		}
-		if request.InvocationID != invocation || request.ElaborationRunID != runID ||
-			stageID != StageID("elaborate-"+string(runID)) {
-			return fmt.Errorf("elaboration invocation intent does not bind run %q stage %q: %w", runID, stageID, ErrParentKeyMismatch)
+		if request.InvocationID != invocation || request.SpecificationRunID != runID ||
+			stageID != SpecificationStageID(runID) {
+			return fmt.Errorf("specification invocation intent does not bind run %q stage %q: %w", runID, stageID, ErrParentKeyMismatch)
 		}
 		return nil
-	case ElaborationDiscussionRequestedKind:
-		request, err := DecodeElaborationDiscussionInvocationIntent(entry.Payload)
+	case SpecificationDiscussionRequestedKind:
+		request, err := DecodeSpecificationDiscussionInvocationIntent(entry.Payload)
 		if err != nil {
 			return err
 		}
-		if request.InvocationID != invocation || request.ElaborationRunID != runID ||
-			stageID != StageID("elaborate-"+string(runID)) {
-			return fmt.Errorf("elaboration discussion intent does not bind run %q stage %q: %w", runID, stageID, ErrParentKeyMismatch)
+		if request.InvocationID != invocation || request.SpecificationRunID != runID ||
+			stageID != SpecificationStageID(runID) {
+			return fmt.Errorf("specification discussion intent does not bind run %q stage %q: %w", runID, stageID, ErrParentKeyMismatch)
 		}
 		return nil
 	}

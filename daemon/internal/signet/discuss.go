@@ -19,7 +19,7 @@ import (
 const kindAgentInvocationRequested = string(domain.AgentInvocationRequestedKind)
 
 // MaxRequestChangesMessageBytes bounds revision feedback before the
-// elaboration loop persists and repeatedly replays it as agent input.
+// specification loop persists and repeatedly replays it as agent input.
 const MaxRequestChangesMessageBytes = domain.MaxSpecRevisionCommentBytes
 
 // The answer and return-feedback actions use the same bounded human-input
@@ -30,12 +30,12 @@ const (
 )
 
 // MaxDiscussCommandIDBytes bounds the command id so identities derived for a
-// discussion cannot bloat a later elaboration request past its aggregate
+// discussion cannot bloat a later specification request past its aggregate
 // protocol limit.
 const MaxDiscussCommandIDBytes = 256
 
 // MaxRequestChangesCommandIDBytes bounds the command id so the derived
-// spec-feedback artifact id cannot bloat the elaboration request past its
+// spec-feedback artifact id cannot bloat the specification request past its
 // aggregate protocol limit.
 const MaxRequestChangesCommandIDBytes = MaxDiscussCommandIDBytes
 
@@ -60,7 +60,7 @@ type invocationRequest struct {
 // domain deliberately does not own (the fields are content, which actions
 // require them is acceptance policy): discuss requires a non-empty message
 // and every referenced attachment already stored. request_changes carries one
-// required text comment but no attachments; its elaboration consumer binds
+// required text comment but no attachments; its specification consumer binds
 // that comment as a research artifact. Every other action carries
 // no conversation content, and silently dropping supplied content would lose
 // the user's data, so it is rejected loudly. It runs before the Write so a

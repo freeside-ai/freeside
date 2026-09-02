@@ -96,7 +96,7 @@ func TestFindingFatalPublishStrict(t *testing.T) {
 	}
 }
 
-// TestFindingFatalSpecification is the fatality table for the elaboration
+// TestFindingFatalSpecification is the fatality table for the specification
 // profile: an exhaustive per-kind decision so a new FindingKind is forced to
 // choose its class rather than defaulting silently either way.
 func TestFindingFatalSpecification(t *testing.T) {
@@ -137,7 +137,7 @@ func TestFindingFatalSpecification(t *testing.T) {
 	if !(Finding{Kind: FindingKind("")}).Fatal(&spec) {
 		t.Error("invalid zero kind must be fatal under any profile")
 	}
-	// Every inherently-commit-blocking kind must also be fatal for elaboration:
+	// Every inherently-commit-blocking kind must also be fatal for specification:
 	// a withheld commit cannot become a completed candidate.
 	for _, k := range AllFindingKinds {
 		if k.blocksCommit() && !(Finding{Kind: k}).Fatal(&spec) {

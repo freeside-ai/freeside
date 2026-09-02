@@ -630,7 +630,7 @@ func preflightFixture(t *testing.T) ([]string, *fakePreflightEnvironment) {
 	root := t.TempDir()
 	stateRoot := "/var/lib/freeside-test/state"
 	seedRoot := "/var/lib/freeside-test/seed"
-	specPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	workItemPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	rigPath := filepath.Join(root, "rig.json")
 	rig := rigHoldOutput{
 		Token: strings.Repeat("t", 32),
@@ -702,7 +702,7 @@ func preflightFixture(t *testing.T) ([]string, *fakePreflightEnvironment) {
 		"-publication-state-dir", filepath.Join(root, "app-state"),
 		"-publication-credentials-dir", filepath.Join(root, "app-creds"),
 		"-review-reasoning-effort", "high", "-review-cost-owner", "subscription:operator",
-		"-spec", specPath, "-policy", policyPath, "-publication", publicationPath,
+		"-work-item", workItemPath, "-policy", policyPath, "-publication", publicationPath,
 		"-project", "project-test", "-allowed-paths", "daemon/**",
 	}
 	return args, environment

@@ -1,4 +1,4 @@
-package elaborate_test
+package specify_test
 
 import (
 	"bytes"
@@ -13,10 +13,10 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -36,8 +36,8 @@ func TestDecodeResearchEvidenceClassifiesLegacyContentTypeLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = elaborate.DecodeResearchEvidence(body)
-	if !errors.Is(err, elaborate.ErrResearchTooLarge) || !elaborate.IsResearchRequestFailure(err) {
+	_, err = specify.DecodeResearchEvidence(body)
+	if !errors.Is(err, specify.ErrResearchTooLarge) || !specify.IsResearchRequestFailure(err) {
 		t.Fatalf("legacy oversized content type = %v, want research-size request failure", err)
 	}
 }
@@ -60,11 +60,11 @@ func TestFetcherStoresDigestAddressedResearch(t *testing.T) {
 		}
 		return response(request, http.StatusOK, "text/plain", "bounded facts"), nil
 	})
-	fetcher, err := elaborate.NewFetcher(st, blobs, transport)
+	fetcher, err := specify.NewFetcher(st, blobs, transport)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := fetcher.Fetch(t.Context(), "inv-elab-1", 1, elaborate.FetchRequest{
+	got, err := fetcher.Fetch(t.Context(), "inv-spec-1", 1, specify.FetchRequest{
 		URL: "https://DOCS.example/fact?q=1", Purpose: "confirm the contract",
 	}, []string{"https://docs.example"}, 1024)
 	if err != nil {
@@ -87,7 +87,7 @@ func TestFetcherStoresDigestAddressedResearch(t *testing.T) {
 	if err := errors.Join(readErr, closeErr); err != nil {
 		t.Fatal(err)
 	}
-	evidence, err := elaborate.DecodeResearchEvidence(storedEnvelope)
+	evidence, err := specify.DecodeResearchEvidence(storedEnvelope)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestFetcherStoresDigestAddressedResearch(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	recovered, err := fetcher.Fetch(t.Context(), "inv-elab-1", 1, elaborate.FetchRequest{
+	recovered, err := fetcher.Fetch(t.Context(), "inv-spec-1", 1, specify.FetchRequest{
 		URL: "https://DOCS.example/fact?q=1", Purpose: "confirm the contract",
 	}, []string{"https://docs.example"}, 1024)
 	if err != nil || recovered.Artifact.Digest != got.Artifact.Digest || calls.Load() != 1 {
@@ -147,7 +147,7 @@ func TestFetcherStoresDigestAddressedResearch(t *testing.T) {
 	if err := claude.ValidatePromptInputs(inputs); err != nil {
 		t.Fatalf("render recovered research: %v", err)
 	}
-	_, err = fetcher.Fetch(t.Context(), "inv-elab-1", 1, elaborate.FetchRequest{
+	_, err = fetcher.Fetch(t.Context(), "inv-spec-1", 1, specify.FetchRequest{
 		URL: "https://DOCS.example/fact?q=1", Purpose: "retarget the persisted ordinal",
 	}, []string{"https://docs.example"}, 1024)
 	if !errors.Is(err, domain.ErrParentKeyMismatch) || calls.Load() != 1 {
@@ -163,7 +163,7 @@ func TestFetcherAdversarialURLSpace(t *testing.T) {
 		calls.Add(1)
 		return response(request, http.StatusOK, "text/plain", "ok"), nil
 	})
-	fetcher, _ := elaborate.NewFetcher(st, blobs, transport)
+	fetcher, _ := specify.NewFetcher(st, blobs, transport)
 	cases := []struct {
 		name  string
 		url   string
@@ -185,11 +185,11 @@ func TestFetcherAdversarialURLSpace(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			before := calls.Load()
 			_, err := fetcher.Fetch(t.Context(), domain.InvocationID("inv-"+strings.ReplaceAll(tc.name, " ", "-")), 1,
-				elaborate.FetchRequest{URL: tc.url, Purpose: "test"}, tc.allow, 16)
+				specify.FetchRequest{URL: tc.url, Purpose: "test"}, tc.allow, 16)
 			if tc.ok && err != nil {
 				t.Fatal(err)
 			}
-			if !tc.ok && !errors.Is(err, elaborate.ErrResearchURLRefused) {
+			if !tc.ok && !errors.Is(err, specify.ErrResearchURLRefused) {
 				t.Fatalf("error = %v, want ErrResearchURLRefused", err)
 			}
 			if !tc.ok && calls.Load() != before {
@@ -234,61 +234,61 @@ func TestFetcherRedirectAndSizePolicies(t *testing.T) {
 			return response(request, http.StatusOK, "text/plain", "ok"), nil
 		}
 	})
-	fetcher, _ := elaborate.NewFetcher(st, blobs, transport)
+	fetcher, _ := specify.NewFetcher(st, blobs, transport)
 	_, err := fetcher.Fetch(t.Context(), "inv-redirect", 1,
-		elaborate.FetchRequest{URL: "https://docs.example/offsite", Purpose: "test"},
+		specify.FetchRequest{URL: "https://docs.example/offsite", Purpose: "test"},
 		[]string{"https://docs.example"}, 100)
-	if !errors.Is(err, elaborate.ErrResearchURLRefused) {
+	if !errors.Is(err, specify.ErrResearchURLRefused) {
 		t.Fatalf("redirect error = %v", err)
 	}
-	if !elaborate.IsResearchRequestFailure(err) {
+	if !specify.IsResearchRequestFailure(err) {
 		t.Fatalf("redirect is not classified as a request failure: %v", err)
 	}
 	_, err = fetcher.Fetch(t.Context(), "inv-large", 1,
-		elaborate.FetchRequest{URL: "https://docs.example/large", Purpose: "test"},
+		specify.FetchRequest{URL: "https://docs.example/large", Purpose: "test"},
 		[]string{"https://docs.example"}, 3)
-	if !errors.Is(err, elaborate.ErrResearchTooLarge) {
+	if !errors.Is(err, specify.ErrResearchTooLarge) {
 		t.Fatalf("size error = %v", err)
 	}
-	if !elaborate.IsResearchRequestFailure(err) {
+	if !specify.IsResearchRequestFailure(err) {
 		t.Fatalf("oversized response is not classified as a request failure: %v", err)
 	}
 	_, err = fetcher.Fetch(t.Context(), "inv-encoded-large", 1,
-		elaborate.FetchRequest{URL: "https://docs.example/encoded-large", Purpose: "test"},
+		specify.FetchRequest{URL: "https://docs.example/encoded-large", Purpose: "test"},
 		[]string{"https://docs.example"}, 3<<20)
-	if !errors.Is(err, elaborate.ErrResearchTooLarge) {
+	if !errors.Is(err, specify.ErrResearchTooLarge) {
 		t.Fatalf("encoded-envelope size error = %v, want ErrResearchTooLarge", err)
 	}
 	_, err = fetcher.Fetch(t.Context(), "inv-large-content-type", 1,
-		elaborate.FetchRequest{URL: "https://docs.example/large-content-type", Purpose: "test"},
+		specify.FetchRequest{URL: "https://docs.example/large-content-type", Purpose: "test"},
 		[]string{"https://docs.example"}, 100)
-	if !errors.Is(err, elaborate.ErrResearchTooLarge) {
+	if !errors.Is(err, specify.ErrResearchTooLarge) {
 		t.Fatalf("content-type size error = %v, want ErrResearchTooLarge", err)
 	}
 	_, err = fetcher.Fetch(t.Context(), "inv-forged-final", 1,
-		elaborate.FetchRequest{URL: "https://docs.example/forged-final", Purpose: "test"},
+		specify.FetchRequest{URL: "https://docs.example/forged-final", Purpose: "test"},
 		[]string{"https://docs.example"}, 100)
-	if !errors.Is(err, elaborate.ErrResearchURLRefused) {
+	if !errors.Is(err, specify.ErrResearchURLRefused) {
 		t.Fatalf("forged final URL error = %v", err)
 	}
 	for _, path := range []string{"server-error", "network-error", "non-utf8"} {
 		_, err = fetcher.Fetch(t.Context(), domain.InvocationID("inv-"+path), 1,
-			elaborate.FetchRequest{URL: "https://docs.example/" + path, Purpose: "test"},
+			specify.FetchRequest{URL: "https://docs.example/" + path, Purpose: "test"},
 			[]string{"https://docs.example"}, 100)
-		if !elaborate.IsResearchRequestFailure(err) {
+		if !specify.IsResearchRequestFailure(err) {
 			t.Errorf("%s error is not classified as a request failure: %v", path, err)
 		}
-		if path == "non-utf8" && !errors.Is(err, elaborate.ErrResearchFetchFailed) {
+		if path == "non-utf8" && !errors.Is(err, specify.ErrResearchFetchFailed) {
 			t.Errorf("%s error = %v, want ErrResearchFetchFailed", path, err)
 		}
 	}
 	_, err = fetcher.Fetch(t.Context(), "inv-unbounded", 1,
-		elaborate.FetchRequest{URL: "https://docs.example/large", Purpose: "test"},
-		[]string{"https://docs.example"}, elaborate.MaxResearchResponseBytes+1)
+		specify.FetchRequest{URL: "https://docs.example/large", Purpose: "test"},
+		[]string{"https://docs.example"}, specify.MaxResearchResponseBytes+1)
 	if err == nil {
 		t.Fatal("fetcher accepted a response bound above its hard maximum")
 	}
-	if elaborate.IsResearchRequestFailure(err) {
+	if specify.IsResearchRequestFailure(err) {
 		t.Fatalf("invalid daemon response bound classified as request failure: %v", err)
 	}
 }

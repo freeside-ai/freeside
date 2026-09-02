@@ -566,7 +566,7 @@ func specProfile() *importer.FindingProfile {
 }
 
 // TestSpecificationProfileToleratesWorkspaceDebris is the acceptance case: an
-// elaboration import whose only findings are ignored-file debris, with a valid
+// specification import whose only findings are ignored-file debris, with a valid
 // candidate commit, concludes successfully and records no rejection.
 func TestSpecificationProfileToleratesWorkspaceDebris(t *testing.T) {
 	t.Parallel()
@@ -919,15 +919,15 @@ func TestPersistsRepositoryChannel(t *testing.T) {
 		t.Error("publish-strict must persist the repo channel")
 	}
 	if persistsRepositoryChannel(&spec) {
-		t.Error("specification (elaboration) must skip the repo channel")
+		t.Error("specification must skip the repo channel")
 	}
 }
 
-// TestElaborationSkipsRepositoryBlobPersistence proves the security fix: under
-// the elaboration profile the repo-channel blobs (which may hold unscanned
+// TestSpecificationSkipsRepositoryBlobPersistence proves the security fix: under
+// the specification profile the repo-channel blobs (which may hold unscanned
 // tolerated content) never enter the durable CAS, while the manifest bytes
 // still do. Under a publishing profile the same blobs are persisted for replay.
-func TestElaborationSkipsRepositoryBlobPersistence(t *testing.T) {
+func TestSpecificationSkipsRepositoryBlobPersistence(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
@@ -973,13 +973,13 @@ func TestElaborationSkipsRepositoryBlobPersistence(t *testing.T) {
 		return d, artifacts, exportOutcome{dir: dir, manifest: manifest}
 	}
 
-	// Elaboration: repo blob skipped, manifest still stored.
+	// Specification: repo blob skipped, manifest still stored.
 	d, artifacts, out := setup()
 	if _, _, err := d.persistReleasedMaterial(ctx, intent{InvocationID: testInvoke}, out, record, nil, false); err != nil {
 		t.Fatalf("persistReleasedMaterial(skip): %v", err)
 	}
 	if _, ok := artifacts.blobs[entryDigest]; ok {
-		t.Fatal("elaboration persisted a repo-channel blob into the CAS")
+		t.Fatal("specification persisted a repo-channel blob into the CAS")
 	}
 	if _, ok := artifacts.blobs[record.ManifestDigest]; !ok {
 		t.Fatal("manifest bytes were not persisted")

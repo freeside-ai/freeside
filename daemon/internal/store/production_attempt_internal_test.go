@@ -17,7 +17,7 @@ func testInitialProductionAttempt() domain.ProductionAttempt {
 	return domain.ProductionAttempt{
 		CampaignID: derivedInitialCampaignID(implementationRunID), AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
 		SourceDigest: "sha256:source", PublicationDigest: "sha256:publication",
-		ElaborationRunID:    derivedElaborationRunID(implementationRunID),
+		SpecificationRunID:  domain.SpecificationRunIDForImplementation(implementationRunID),
 		ImplementationRunID: implementationRunID,
 	}
 }
@@ -25,10 +25,10 @@ func testInitialProductionAttempt() domain.ProductionAttempt {
 func TestProductionAttemptApprovalDecisionSetAcceptsHistoricalAndCurrentShapes(t *testing.T) {
 	legacy := []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}
 	current := []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop}
-	if !authenticElaborationApprovalDecisionSet(legacy) || !authenticElaborationApprovalDecisionSet(current) {
+	if !authenticSpecificationApprovalDecisionSet(legacy) || !authenticSpecificationApprovalDecisionSet(current) {
 		t.Fatal("historical or current specification approval decision set was rejected")
 	}
-	if authenticElaborationApprovalDecisionSet([]domain.Action{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop}) {
+	if authenticSpecificationApprovalDecisionSet([]domain.Action{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop}) {
 		t.Fatal("unrecognized specification approval decision set was accepted")
 	}
 }
@@ -60,8 +60,8 @@ func TestProductionAttemptMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 63 {
-		t.Fatalf("schema version = %d, want 63", got)
+	if got := rawVersion(t, db); got != 64 {
+		t.Fatalf("schema version = %d, want 64", got)
 	}
 	assertTableExists(t, db, "production_attempts", true)
 	st := &Store{db: db}
@@ -138,7 +138,7 @@ WHERE campaign_id = ? AND attempt_number = ?`,
 	}
 }
 
-func TestProductionAttemptAuthenticationRejectsRetryAsElaboration(t *testing.T) {
+func TestProductionAttemptAuthenticationRejectsRetryAsSpecification(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
@@ -159,19 +159,19 @@ func TestProductionAttemptAuthenticationRejectsRetryAsElaboration(t *testing.T) 
 			Reason: "retry after repair", ParentRunID: initial.ImplementationRunID,
 			SourceDigest: initial.SourceDigest, PublicationDigest: initial.PublicationDigest,
 			ApprovedSpecDigest: "sha256:approved",
-			ElaborationRunID:   initial.ElaborationRunID, ImplementationRunID: derivedRetryImplementationRunID(initial.CampaignID, 2),
+			SpecificationRunID: initial.SpecificationRunID, ImplementationRunID: derivedRetryImplementationRunID(initial.CampaignID, 2),
 		})
 	}); err != nil {
 		t.Fatal(err)
 	}
 	err = st.Read(ctx, func(tx *ReadTx) error {
 		return tx.authenticateRunProductionLineage(ctx, domain.Run{
-			ID: initial.ElaborationRunID, SpecDigest: initial.SourceDigest,
+			ID: initial.SpecificationRunID, SpecDigest: initial.SourceDigest,
 			CampaignID: initial.CampaignID, AttemptNumber: 2,
 		})
 	})
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {
-		t.Fatalf("authenticate retry as elaboration = %v, want ErrParentKeyMismatch", err)
+		t.Fatalf("authenticate retry as specification = %v, want ErrParentKeyMismatch", err)
 	}
 }
 
@@ -180,7 +180,7 @@ func TestInitialApprovalClaimsRequireMarkdownAndCanonicalDigests(t *testing.T) {
 		MediaType: domain.MediaTypeTextMarkdown, Content: "# Specification\n\nImplement the bounded workflow.",
 	}
 	provenance := domain.Provenance{
-		ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-elaborate-run-1",
+		ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-specify-run-1",
 		HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 	}
 	specification := domain.Artifact{
@@ -253,7 +253,7 @@ func TestProductionAttemptReconstructionRejectsCyclicParent(t *testing.T) {
 		Reason: "retry after repair", ParentRunID: initial.ImplementationRunID,
 		SourceDigest: initial.SourceDigest, PublicationDigest: initial.PublicationDigest,
 		ApprovedSpecDigest: "sha256:approved",
-		ElaborationRunID:   initial.ElaborationRunID, ImplementationRunID: derivedRetryImplementationRunID(initial.CampaignID, 2),
+		SpecificationRunID: initial.SpecificationRunID, ImplementationRunID: derivedRetryImplementationRunID(initial.CampaignID, 2),
 	}
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		if err := tx.PutProductionAttempt(ctx, initial); err != nil {

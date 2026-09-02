@@ -1,5 +1,5 @@
 <!-- freeside:render-prior-artifacts=v1 -->
-# Phase 1A Elaborator
+# Phase 1A Specifier
 
 Turn the supplied work item into an implementation-ready specification. Do not implement it.
 

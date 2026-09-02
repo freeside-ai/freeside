@@ -3,18 +3,18 @@ package fake_test
 import (
 	"testing"
 
-	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
-	elaboratefake "github.com/freeside-ai/freeside/daemon/internal/elaborate/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
+	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
 )
 
 func TestScriptUsesSharedCanonicalContract(t *testing.T) {
 	driver := fake.NewStageDriver()
-	want := elaborate.Output{Specification: &elaborate.Specification{
-		Summary: "Ready", Body: "# Specification\n\nImplement it.", Addressals: []elaborate.Addressal{},
+	want := specify.Output{Specification: &specify.Specification{
+		Summary: "Ready", Body: "# Specification\n\nImplement it.", Addressals: []specify.Addressal{},
 	}}
-	if err := elaboratefake.Script(driver, "inv-1", 0, 0, want); err != nil {
+	if err := specifyfake.Script(driver, "inv-1", 0, 0, want); err != nil {
 		t.Fatal(err)
 	}
 	if err := driver.Start(t.Context(), "inv-1", exec.StartSpec{}); err != nil {
@@ -34,7 +34,7 @@ func TestScriptUsesSharedCanonicalContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := elaborate.DecodeTranscript(transcript)
+	got, err := specify.DecodeTranscript(transcript)
 	if closeErr := transcript.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}

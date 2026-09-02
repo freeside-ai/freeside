@@ -1,7 +1,7 @@
-// Package elaborate owns the unit-local contract between the elaborator and
+// Package specify owns the unit-local contract between the specifier and
 // the daemon. It deliberately stays outside domain: these bytes are one
 // workflow's stage output, not shared persisted vocabulary.
-package elaborate
+package specify
 
 import (
 	"bytes"
@@ -29,8 +29,8 @@ const (
 )
 
 var (
-	ErrInvalidOutput = errors.New("invalid elaborator output")
-	ErrPolicyMissing = errors.New("elaboration policy key is missing")
+	ErrInvalidOutput = errors.New("invalid specifier output")
+	ErrPolicyMissing = errors.New("specification policy key is missing")
 )
 
 // FetchRequest asks the daemon to retrieve one research URL for a stated use.
@@ -64,7 +64,7 @@ type legacyOutput struct {
 	Reply         *string              `json:"reply"`
 }
 
-// Specification is the terminal elaborator output.
+// Specification is the terminal specifier output.
 type Specification struct {
 	Summary    string      `json:"summary"`
 	Body       string      `json:"body"`
@@ -83,14 +83,14 @@ type Output struct {
 // One tolerated presentation defect: a single Markdown code fence around the
 // whole object (issue #780). Fence-wrapping is the model class's dominant
 // output-shape failure despite the prompt forbidding it, and each occurrence
-// otherwise costs a full elaboration execution; anything beyond that exact
+// otherwise costs a full specification execution; anything beyond that exact
 // shape (prose, truncation, a second fence) still fails strict decode, with a
 // bounded prefix of the raw output preserved for diagnosis.
 func DecodeOutput(data []byte) (Output, error) {
 	var out Output
 	if err := strictjson.Decode(stripMarkdownFence(data), &out,
 		strictjson.RejectInvalidUTF8, MaxOutputBytes); err != nil {
-		return Output{}, fmt.Errorf("decode elaborator output: %w (output begins %q)",
+		return Output{}, fmt.Errorf("decode specifier output: %w (output begins %q)",
 			err, outputPrefix(data))
 	}
 	if err := out.Validate(); err != nil {
@@ -107,7 +107,7 @@ func DecodeLegacyAddressalOutput(data []byte, commentIDs map[string]string) (Out
 	var legacy legacyOutput
 	if err := strictjson.Decode(stripMarkdownFence(data), &legacy,
 		strictjson.RejectInvalidUTF8, MaxOutputBytes); err != nil {
-		return Output{}, fmt.Errorf("decode legacy elaborator output: %w (output begins %q)",
+		return Output{}, fmt.Errorf("decode legacy specifier output: %w (output begins %q)",
 			err, outputPrefix(data))
 	}
 	out := Output{
@@ -182,7 +182,7 @@ func EncodeOutput(out Output) ([]byte, error) {
 	}
 	body, err := json.Marshal(out)
 	if err != nil {
-		return nil, fmt.Errorf("encode elaborator output: %w", err)
+		return nil, fmt.Errorf("encode specifier output: %w", err)
 	}
 	if strictjson.Limit(len(body)) > MaxOutputBytes {
 		return nil, fmt.Errorf("%w: encoded output exceeds %d bytes", ErrInvalidOutput, MaxOutputBytes)

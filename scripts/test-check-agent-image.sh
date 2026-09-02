@@ -339,9 +339,9 @@ if [ "${1:-}" = submit ]; then
 	if [ "${GO_STUB_SUBMIT_SHAPE:-current}" = legacy ]; then
 		printf '%s\n' '{"run_id":"impl-run","project_id":"freeside","invocation_id":"impl-inv","stage_id":"impl-stage","implementation_run_id":"impl-run","implementation_invocation_id":"impl-inv","implementation_stage_id":"impl-stage"}'
 	elif [ "${GO_STUB_SUBMIT_SHAPE:-current}" = missing-implementation ]; then
-		printf '%s\n' '{"elaboration_run_id":"elab-run","elaboration_invocation_id":"elab-inv","elaboration_stage_id":"elab-stage"}'
+		printf '%s\n' '{"specification_run_id":"spec-run","specification_invocation_id":"spec-inv","specification_stage_id":"spec-stage"}'
 	else
-		printf '%s\n' '{"run_id":"impl-run","elaboration_run_id":"elab-run","project_id":"freeside","invocation_id":"impl-inv","stage_id":"impl-stage","implementation_run_id":"impl-run","implementation_invocation_id":"impl-inv","implementation_stage_id":"impl-stage","elaboration_invocation_id":"elab-inv","elaboration_stage_id":"elab-stage"}'
+		printf '%s\n' '{"run_id":"impl-run","specification_run_id":"spec-run","project_id":"freeside","invocation_id":"impl-inv","stage_id":"impl-stage","implementation_run_id":"impl-run","implementation_invocation_id":"impl-inv","implementation_stage_id":"impl-stage","specification_invocation_id":"spec-inv","specification_stage_id":"spec-stage"}'
 	fi
 	exit 0
 fi
@@ -358,25 +358,25 @@ if [ "${1:-}" = follow ]; then
 	count_file="${STUB_DIR:?}/follow-$run_id-count"
 	count=$(($(cat "$count_file" 2>/dev/null || echo 0) + 1))
 	printf '%s\n' "$count" >"$count_file"
-	identity='"lineage":{"campaign_id":"campaign-1","attempt_number":1,"kind":"initial","source_digest":"sha256:source","approved_spec_digest":"sha256:spec","elaboration_run_id":"elab-run","implementation_run_id":"impl-run"},"last_stage":"implementation","attention_items":[]'
+	identity='"lineage":{"campaign_id":"campaign-1","attempt_number":1,"kind":"initial","source_digest":"sha256:source","approved_spec_digest":"sha256:spec","specification_run_id":"spec-run","implementation_run_id":"impl-run"},"last_stage":"implementation","attention_items":[]'
 	if [ "$run_id" = impl-run ]; then
 		printf '{"run_id":"impl-run","state":"published","outcome":"published",%s}\n' "$identity"
 		exit 0
 	fi
 	case "${GO_STUB_VERIFY_MODE:-success}" in
-	elaboration-failure)
-		printf '{"run_id":"elab-run","state":"failed","outcome":"failed","terminal":"failed",%s,"last_attention_item":{"id":"execution-failure-inv-elaborate-elab-run-1","type":"execution_failure","status":"open","requested_decision":["retry"]}}\n' "$identity"
+	specification-failure)
+		printf '{"run_id":"spec-run","state":"failed","outcome":"failed","terminal":"failed",%s,"last_attention_item":{"id":"execution-failure-inv-specify-spec-run-1","type":"execution_failure","status":"open","requested_decision":["retry"]}}\n' "$identity"
 		;;
 	pending)
 		if [ "$count" -eq 1 ]; then state=pending; else state=implementation_bound; fi
-		printf '{"run_id":"elab-run","state":"%s","outcome":"pending",%s}\n' "$state" "$identity"
+		printf '{"run_id":"spec-run","state":"%s","outcome":"pending",%s}\n' "$state" "$identity"
 		;;
 	approval-wait)
 		if [ "$count" -eq 1 ]; then state=waiting_for_specification_approval; else state=implementation_bound; fi
-		printf '{"run_id":"elab-run","state":"%s","outcome":"pending",%s}\n' "$state" "$identity"
+		printf '{"run_id":"spec-run","state":"%s","outcome":"pending",%s}\n' "$state" "$identity"
 		;;
 	*)
-		printf '{"run_id":"elab-run","state":"implementation_bound","outcome":"pending",%s}\n' "$identity"
+		printf '{"run_id":"spec-run","state":"implementation_bound","outcome":"pending",%s}\n' "$identity"
 		;;
 	esac
 	exit 0
@@ -403,10 +403,10 @@ FREESIDED_STUB
 	if [ "${GO_STUB_MODE:-}" != lifecycle ]; then
 		exit 97
 	fi
-	if [ "${GO_STUB_VERIFY_MODE:-success}" = elaboration-failure-final ] &&
+	if [ "${GO_STUB_VERIFY_MODE:-success}" = specification-failure-final ] &&
 		[[ " ${*} " == *" -v "* ]]; then
-		[ "${FREESIDE_REAL_RUN_ELABORATION_RUN_ID:-}" = elab-run ]
-		echo 'real run elaboration failed: run=elab-run item=execution-failure-inv-elaborate-elab-run-1 reason="Elaboration ended \"failed\". Driver summary: invalid output"'
+		[ "${FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID:-}" = spec-run ]
+		echo 'real run specification failed: run=spec-run item=execution-failure-inv-specify-spec-run-1 reason="Specification ended \"failed\". Driver summary: invalid output"'
 		exit 1
 	fi
 	attempts=0
@@ -416,14 +416,14 @@ FREESIDED_STUB
 	done
 	[ -f "${STUB_DIR:?}/daemon.args.ready" ]
 	if [ "${GO_STUB_SUBMIT_SHAPE:-current}" = legacy ]; then
-		[ -z "${FREESIDE_REAL_RUN_ELABORATION_RUN_ID+x}" ]
-		elaboration_run_id='<unset>'
+		[ -z "${FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID+x}" ]
+		specification_run_id='<unset>'
 	else
-		[ "${FREESIDE_REAL_RUN_ELABORATION_RUN_ID:-}" = elab-run ]
-		elaboration_run_id=$FREESIDE_REAL_RUN_ELABORATION_RUN_ID
+		[ "${FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID:-}" = spec-run ]
+		specification_run_id=$FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID
 	fi
 	printf '%s\t%s\t%s\n' "$FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID" \
-		"$FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION" "$elaboration_run_id" \
+		"$FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION" "$specification_run_id" \
 		>>"${STUB_DIR:?}/verification-identities.log"
 	[ "$FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID" = impl-run ]
 	[ "$FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION" = impl-inv ]
@@ -431,9 +431,9 @@ FREESIDED_STUB
 	verify_count=$(($(cat "$verify_count_file" 2>/dev/null || echo 0) + 1))
 	printf '%s\n' "$verify_count" >"$verify_count_file"
 	case "${GO_STUB_VERIFY_MODE:-success}" in
-	elaboration-failure|elaboration-failure-final)
-		if [ "${GO_STUB_VERIFY_MODE}" = elaboration-failure ] || [[ " ${*} " == *" -v "* ]]; then
-			echo 'real run elaboration failed: run=elab-run item=execution-failure-inv-elaborate-elab-run-1 reason="Elaboration ended \"failed\". Driver summary: invalid output"'
+	specification-failure|specification-failure-final)
+		if [ "${GO_STUB_VERIFY_MODE}" = specification-failure ] || [[ " ${*} " == *" -v "* ]]; then
+			echo 'real run specification failed: run=spec-run item=execution-failure-inv-specify-spec-run-1 reason="Specification ended \"failed\". Driver summary: invalid output"'
 			exit 1
 		fi
 		;;
@@ -520,7 +520,7 @@ SLEEP_STUB
     FREESIDE_REAL_RUN_BASE_SHA=0123456789012345678901234567890123456789 \
     FREESIDE_REAL_RUN_REPOSITORY_CHECKOUT="$CASE_DIR/managed-checkout" \
     FREESIDE_REAL_RUN_PROMPT_PACKAGE="$input_dir/prompts.json" \
-    FREESIDE_REAL_RUN_ELABORATION_PROMPT_PACKAGE="$input_dir/elaborator.md" \
+    FREESIDE_REAL_RUN_SPECIFICATION_PROMPT_PACKAGE="$input_dir/specifier.md" \
     FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE="$input_dir/remediator.md" \
     FREESIDE_REAL_RUN_INSTRUCTIONS="$input_dir/CLAUDE.md" \
     FREESIDE_REAL_RUN_APPROVED_RECIPE="$digest" \
@@ -1130,17 +1130,17 @@ assert_not_exists "$CASE_DIR/preflight.called"
 begin_case "46 the gated real-work harness keeps both lane identities distinct"
 run_real_work lifecycle
 assert_rc 0
-assert_contains "submitted elaboration run=elab-run invocation=elab-inv"
+assert_contains "submitted specification run=spec-run invocation=spec-inv"
 assert_contains "reserved implementation run=impl-run invocation=impl-inv"
 assert_contains "gated-unattended: waiting for an operator"
-if grep -qx $'impl-run\timpl-inv\telab-run' "$CASE_DIR/verification-identities.log" &&
-  ! grep -q 'elab-inv' "$CASE_DIR/verification-identities.log"; then
+if grep -qx $'impl-run\timpl-inv\tspec-run' "$CASE_DIR/verification-identities.log" &&
+  ! grep -q 'spec-inv' "$CASE_DIR/verification-identities.log"; then
 	pass=$((pass + 1))
 else
 	report_failure "verification did not stay bound to the future implementation identity"
 fi
 if grep -qx -- '-prompt-package' "$CASE_DIR/daemon.args" &&
-  grep -qx -- '-elaboration-prompt-package' "$CASE_DIR/daemon.args" &&
+  grep -qx -- '-specification-prompt-package' "$CASE_DIR/daemon.args" &&
   grep -qx -- '-remediation-prompt-package' "$CASE_DIR/daemon.args"; then
 	pass=$((pass + 1))
 else
@@ -1168,7 +1168,7 @@ esac
 begin_case "47 a legacy production-only replay remains runnable across upgrade"
 run_real_work lifecycle legacy
 assert_rc 0
-assert_contains "legacy production-only replay: no elaboration approval gate"
+assert_contains "legacy production-only replay: no specification approval gate"
 assert_contains "reserved implementation run=impl-run invocation=impl-inv"
 assert_lacks "gated-unattended: waiting for an operator"
 if grep -qx $'impl-run\timpl-inv\t<unset>' "$CASE_DIR/verification-identities.log"; then
@@ -1189,24 +1189,24 @@ assert_rc 1
 assert_contains "submit produced no implementation run identity"
 assert_not_exists "$CASE_DIR/daemon.args"
 
-begin_case "49 durable elaboration failure exits before the polling delay"
+begin_case "49 durable specification failure exits before the polling delay"
 export FREESIDE_REAL_RUN_TIMEOUT_SECONDS=60
-run_real_work lifecycle current ok ok elaboration-failure
+run_real_work lifecycle current ok ok specification-failure
 assert_rc 1
-assert_contains "elaboration run=elab-run ended outcome=failed terminal=failed"
-assert_contains "attention=execution-failure-inv-elaborate-elab-run-1 type=execution_failure"
+assert_contains "specification run=spec-run ended outcome=failed terminal=failed"
+assert_contains "attention=execution-failure-inv-specify-spec-run-1 type=execution_failure"
 assert_not_exists "$CASE_DIR/poll-sleeps.log"
 if grep -q '^daemon-stop$' "$CASE_DIR/lifecycle.log"; then
 	pass=$((pass + 1))
 else
-	report_failure "daemon was not stopped after elaboration failure"
+	report_failure "daemon was not stopped after specification failure"
 fi
 
-begin_case "50 pending elaboration keeps polling to implementation admission"
+begin_case "50 pending specification keeps polling to implementation admission"
 run_real_work lifecycle current ok ok pending
 assert_rc 0
 assert_contains "verified ready publication"
-assert_contains "elaboration run=elab-run state=pending"
+assert_contains "specification run=spec-run state=pending"
 assert_exists "$CASE_DIR/poll-sleeps.log"
 
 begin_case "51 approval wait keeps polling to implementation admission"
@@ -1216,11 +1216,11 @@ assert_contains "verified ready publication"
 assert_contains "state=waiting_for_specification_approval"
 assert_exists "$CASE_DIR/poll-sleeps.log"
 
-begin_case "52 final verification preserves a late elaboration failure"
-run_real_work lifecycle current ok ok elaboration-failure-final
+begin_case "52 final verification preserves a late specification failure"
+run_real_work lifecycle current ok ok specification-failure-final
 assert_rc 1
-assert_contains "elaboration failed before implementation admission"
-assert_contains "run=elab-run item=execution-failure-inv-elaborate-elab-run-1"
+assert_contains "specification failed before implementation admission"
+assert_contains "run=spec-run item=execution-failure-inv-specify-spec-run-1"
 
 begin_case "53 a competing rig refuses before preflight or submit"
 run_real_work lifecycle current refuse

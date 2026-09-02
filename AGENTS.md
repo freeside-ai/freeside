@@ -301,7 +301,7 @@ The daemon (Wave 0 unit 1) and the API spec (Wave 0 unit 5) are initialized; the
 | `prompts/`    | prompt text    | not yet initialized; see docs/plan.md roadmap |
 | `policy/`     | YAML (policy)  | not yet initialized; see docs/plan.md roadmap |
 | `images/`     | OCI images     | `bash scripts/build-exporter-image.sh --local-registry-port 5000`; the agent bases are `bash scripts/build-agent-claude-image.sh --local-registry-port 5000` and `bash scripts/build-agent-codex-image.sh --local-registry-port 5000`, each followed by `bash scripts/check-agent-image.sh <ref>` on the registry-resolvable reference it prints (all need Apple `container`, and the builds need container egress; use `--registry HOST[/PATH]` for shared images); per-project images are runtime artifacts from the reusable builder (#334), manually proven before #237 and later invoked by `freesided onboard` (#238), not built from this directory |
-| `scripts/`    | Bash / Go      | `bash -n scripts/*.sh app/scripts/*.sh`; `shellcheck scripts/*.sh app/scripts/*.sh`; `bash scripts/test-build-image-references.sh`; `bash scripts/test-check-commit-messages.sh`; `bash scripts/test-merge-result-audit.sh`; `bash scripts/test-check-agent-image.sh`; `bash scripts/test-install-mac-app.sh`; `bash scripts/test-install-ios-app.sh` (CI pins shellcheck in `.github/workflows/scripts-ci.yml`); `go -C scripts/trackercollect build ./...`; `go -C scripts/trackercollect test ./...`; `go -C scripts/trackercollect vet ./...`; `bash scripts/link-plan-section-refs.sh --check` verifies that every "Section N" citation in `docs/plan.md` links to its heading anchor and that no citation or existing link is broken (drop `--check` to rewrite the links after a plan edit), with `bash scripts/test-link-plan-section-refs.sh` as its regression suite; `bash scripts/run-real-work.sh <spec> <policy> <publication>` is the §11 1A.2 real unattended run and needs Apple `container` plus the operator preconditions its header lists |
+| `scripts/`    | Bash / Go      | `bash -n scripts/*.sh app/scripts/*.sh`; `shellcheck scripts/*.sh app/scripts/*.sh`; `bash scripts/test-build-image-references.sh`; `bash scripts/test-check-commit-messages.sh`; `bash scripts/test-merge-result-audit.sh`; `bash scripts/test-check-agent-image.sh`; `bash scripts/test-install-mac-app.sh`; `bash scripts/test-install-ios-app.sh` (CI pins shellcheck in `.github/workflows/scripts-ci.yml`); `go -C scripts/trackercollect build ./...`; `go -C scripts/trackercollect test ./...`; `go -C scripts/trackercollect vet ./...`; `bash scripts/link-plan-section-refs.sh --check` verifies that every "Section N" citation in `docs/plan.md` links to its heading anchor and that no citation or existing link is broken (drop `--check` to rewrite the links after a plan edit), with `bash scripts/test-link-plan-section-refs.sh` as its regression suite; `bash scripts/check-vocabulary.sh` (repo root) refuses the pre-rename stage vocabulary in daemon non-test Go code, migrations after 0064, `api/`, `app/`, `prompts/`, and `scripts/` (one `legacy_vocabulary.go` per package is the only place the old literals may live; CI runs it), with `bash scripts/test-check-vocabulary.sh` as its regression suite; `bash scripts/run-real-work.sh <spec> <policy> <publication>` is the §11 1A.2 real unattended run and needs Apple `container` plus the operator preconditions its header lists |
 
 Lint/format and CI are established with the first component that carries code: the daemon does so here via `daemon/.golangci.yml` and `.github/workflows/daemon-ci.yml` (Linux runs build/test/vet/lint, macOS runs build/test). Later components add their own on the same pattern.
 
@@ -672,8 +672,10 @@ and lint and formatting are clean.
   `bash scripts/test-check-commit-messages.sh`,
   `bash scripts/test-merge-result-audit.sh`,
   `bash scripts/test-check-agent-image.sh`,
-  `bash scripts/test-install-mac-app.sh`, and
-  `bash scripts/test-install-ios-app.sh` also pass
+  `bash scripts/test-install-mac-app.sh`,
+  `bash scripts/test-install-ios-app.sh`, and
+  `bash scripts/test-check-vocabulary.sh` also pass, and
+  `bash scripts/check-vocabulary.sh` is clean
 - Decision note written or updated when the work hits a Decision notes
   trigger or the mandatory-note list; most work needs none
 

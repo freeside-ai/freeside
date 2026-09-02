@@ -23,13 +23,13 @@ func admittedOccurrence(t *testing.T) domain.IntakeOccurrence {
 			ProposalInstanceID: "proposal-1",
 			ProposalDigest:     domain.Digest(contentaddr.Sum([]byte("p"))),
 			Subject: domain.IntakeSubjectBinding{
-				ProjectID: "proj-1", ElaborationRunID: "run-elab-1",
-				WorkUnitID:           domain.WorkUnitIDForRun("run-elab-1"),
+				ProjectID: "proj-1", SpecificationRunID: "run-spec-1",
+				WorkUnitID:           domain.WorkUnitIDForRun("run-spec-1"),
 				PolicyArtifactID:     "policy-art-1",
 				PolicyArtifactDigest: domain.Digest(contentaddr.Sum([]byte("rp"))),
 				ResolvedPolicyDigest: domain.Digest(contentaddr.Sum([]byte("rp"))),
-				Source: domain.ElaborationSource{
-					Kind:         domain.ElaborationSourceIssueSubject,
+				Source: domain.SpecificationSource{
+					Kind:         domain.SpecificationSourceIssueSubject,
 					IssueSubject: &domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 42, IssueNumber: 7},
 				},
 			},
@@ -90,9 +90,9 @@ func TestIntakeOccurrenceValidateRejects(t *testing.T) {
 		}},
 		{"admission subject not issue_subject", domain.ErrIntakeOccurrenceInconsistent, func(o *domain.IntakeOccurrence) {
 			// A label occurrence's subject must be the issue_subject arm; a
-			// spec_artifact source would name an arbitrary artifact as authority.
-			o.Admission.Subject.Source = domain.ElaborationSource{
-				Kind: domain.ElaborationSourceSpecArtifact, SpecArtifactID: "spec-art-1",
+			// work_item_artifact source would name an arbitrary artifact as authority.
+			o.Admission.Subject.Source = domain.SpecificationSource{
+				Kind: domain.SpecificationSourceWorkItemArtifact, WorkItemArtifactID: "spec-art-1",
 			}
 		}},
 		{"refusal without admission", domain.ErrIntakeOccurrenceInconsistent, func(o *domain.IntakeOccurrence) {
@@ -164,27 +164,27 @@ func TestIntakeOccurrenceTransitions(t *testing.T) {
 	}
 }
 
-func TestElaborationSourceValidateRejects(t *testing.T) {
+func TestSpecificationSourceValidateRejects(t *testing.T) {
 	cases := []struct {
 		name string
 		want error
-		src  domain.ElaborationSource
+		src  domain.SpecificationSource
 	}{
-		{"empty kind", domain.ErrInvalidElaborationSourceKind, domain.ElaborationSource{}},
-		{"spec arm missing id", domain.ErrEmptyID, domain.ElaborationSource{Kind: domain.ElaborationSourceSpecArtifact}},
-		{"spec arm with issue", domain.ErrElaborationSourceInconsistent, domain.ElaborationSource{
-			Kind: domain.ElaborationSourceSpecArtifact, SpecArtifactID: "a",
+		{"empty kind", domain.ErrInvalidSpecificationSourceKind, domain.SpecificationSource{}},
+		{"spec arm missing id", domain.ErrEmptyID, domain.SpecificationSource{Kind: domain.SpecificationSourceWorkItemArtifact}},
+		{"spec arm with issue", domain.ErrSpecificationSourceInconsistent, domain.SpecificationSource{
+			Kind: domain.SpecificationSourceWorkItemArtifact, WorkItemArtifactID: "a",
 			IssueSubject: &domain.IssueSubjectRef{Repo: "r", RepositoryID: 1, IssueNumber: 1},
 		}},
-		{"issue arm with spec", domain.ErrElaborationSourceInconsistent, domain.ElaborationSource{
-			Kind: domain.ElaborationSourceIssueSubject, SpecArtifactID: "a",
+		{"issue arm with work item", domain.ErrSpecificationSourceInconsistent, domain.SpecificationSource{
+			Kind: domain.SpecificationSourceIssueSubject, WorkItemArtifactID: "a",
 			IssueSubject: &domain.IssueSubjectRef{Repo: "r", RepositoryID: 1, IssueNumber: 1},
 		}},
-		{"issue arm missing subject", domain.ErrElaborationSourceInconsistent, domain.ElaborationSource{
-			Kind: domain.ElaborationSourceIssueSubject,
+		{"issue arm missing subject", domain.ErrSpecificationSourceInconsistent, domain.SpecificationSource{
+			Kind: domain.SpecificationSourceIssueSubject,
 		}},
-		{"issue arm bad ref", domain.ErrNonPositive, domain.ElaborationSource{
-			Kind: domain.ElaborationSourceIssueSubject, IssueSubject: &domain.IssueSubjectRef{Repo: "r", RepositoryID: 0, IssueNumber: 1},
+		{"issue arm bad ref", domain.ErrNonPositive, domain.SpecificationSource{
+			Kind: domain.SpecificationSourceIssueSubject, IssueSubject: &domain.IssueSubjectRef{Repo: "r", RepositoryID: 0, IssueNumber: 1},
 		}},
 	}
 	for _, tc := range cases {

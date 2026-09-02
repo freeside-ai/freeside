@@ -6,6 +6,6 @@
   "parent_run_id": "run-0",
   "source_digest": "sha256:source",
   "approved_spec_digest": "sha256:spec",
-  "elaboration_run_id": "run-elaboration-1",
+  "specification_run_id": "run-specification-1",
   "implementation_run_id": "run-1"
 }

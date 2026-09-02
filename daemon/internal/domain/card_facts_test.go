@@ -397,7 +397,7 @@ func specRevisionInput(t *testing.T) domain.AttentionItemInput {
 	}
 	addressalsDigest := domain.Digest(contentaddr.Sum(body))
 	provenance := domain.Provenance{
-		ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-elaborate-2",
+		ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-specify-2",
 		HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 	}
 	runID := domain.RunID("run-1")

@@ -11,12 +11,12 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/intake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -101,12 +101,12 @@ func intakePolicyKeys(t *testing.T, mode domain.InitiatorMode, modeSource domain
 	return []domain.PolicyKey{
 		{Key: intake.PolicyRunWIPCap, Value: strconv.Itoa(wipCap), Provenance: prov(domain.ProvenancePreset)},
 		{Key: intake.PolicyInitiatorMode, Value: string(mode), Provenance: prov(modeSource)},
-		{Key: elaborate.PolicySpecApproval, Value: "true", Provenance: prov(domain.ProvenancePreset)},
-		{Key: elaborate.PolicyMaxIterations, Value: "4", Provenance: prov(domain.ProvenancePreset)},
-		{Key: elaborate.PolicyStageActiveTime, Value: "45m", Provenance: prov(domain.ProvenancePreset)},
-		{Key: elaborate.PolicyApprovalWait, Value: "4h", Provenance: prov(domain.ProvenancePreset)},
-		{Key: elaborate.PolicyResearchAllowlist, Value: "https://docs.example,https://api.github.com", Provenance: prov(domain.ProvenancePreset)},
-		{Key: elaborate.PolicyResearchMaxBytes, Value: "1048576", Provenance: prov(domain.ProvenancePreset)},
+		{Key: specify.PolicySpecApproval, Value: "true", Provenance: prov(domain.ProvenancePreset)},
+		{Key: specify.PolicyMaxIterations, Value: "4", Provenance: prov(domain.ProvenancePreset)},
+		{Key: specify.PolicyStageActiveTime, Value: "45m", Provenance: prov(domain.ProvenancePreset)},
+		{Key: specify.PolicyApprovalWait, Value: "4h", Provenance: prov(domain.ProvenancePreset)},
+		{Key: specify.PolicyResearchAllowlist, Value: "https://docs.example,https://api.github.com", Provenance: prov(domain.ProvenancePreset)},
+		{Key: specify.PolicyResearchMaxBytes, Value: "1048576", Provenance: prov(domain.ProvenancePreset)},
 		{Key: "paths", Value: "src/,docs/", Provenance: prov(domain.ProvenancePreset)},
 	}
 }
@@ -148,9 +148,9 @@ func (f intakeFixture) latestOccurrence(t *testing.T, issue int) domain.IntakeOc
 	return o
 }
 
-func (f intakeFixture) started(t *testing.T, elaborationRunID domain.RunID) bool {
+func (f intakeFixture) started(t *testing.T, specificationRunID domain.RunID) bool {
 	t.Helper()
-	present, err := engine.HasElaborationDispatchMarker(t.Context(), f.store, elaborationRunID)
+	present, err := engine.HasSpecificationDispatchMarker(t.Context(), f.store, specificationRunID)
 	if err != nil {
 		t.Fatalf("inspect marker: %v", err)
 	}
@@ -194,8 +194,8 @@ func TestIntakeProposeCreatesOneProposalPerOccurrence(t *testing.T) {
 	if item.Type != domain.AttentionRunProposal || item.Status != domain.StatusOpen {
 		t.Fatalf("proposal item = type %q status %q, want open run_proposal", item.Type, item.Status)
 	}
-	if f.started(t, o.Admission.Subject.ElaborationRunID) {
-		t.Fatal("propose mode must not start elaboration")
+	if f.started(t, o.Admission.Subject.SpecificationRunID) {
+		t.Fatal("propose mode must not start specification")
 	}
 }
 
@@ -212,7 +212,7 @@ func TestIntakeKillRecoveryConvergesOnAdmissionKey(t *testing.T) {
 	first := openIntakeFixture(t, root)
 	first.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 	before := first.latestOccurrence(t, 7)
-	if before.Admission == nil || !first.started(t, before.Admission.Subject.ElaborationRunID) {
+	if before.Admission == nil || !first.started(t, before.Admission.Subject.SpecificationRunID) {
 		t.Fatal("first run should have admitted and started")
 	}
 	if err := first.store.Close(); err != nil {
@@ -226,7 +226,7 @@ func TestIntakeKillRecoveryConvergesOnAdmissionKey(t *testing.T) {
 	if after.Ordinal != before.Ordinal ||
 		after.Admission == nil ||
 		after.Admission.ProposalInstanceID != before.Admission.ProposalInstanceID ||
-		after.Admission.Subject.ElaborationRunID != before.Admission.Subject.ElaborationRunID {
+		after.Admission.Subject.SpecificationRunID != before.Admission.Subject.SpecificationRunID {
 		t.Fatalf("restart diverged: before=%+v after=%+v", before.Admission, after.Admission)
 	}
 }
@@ -287,7 +287,7 @@ func TestIntakeProposalDoesNotOfferStartWithChanges(t *testing.T) {
 }
 
 // TestIntakeAutoStartUnderCapStarts covers acceptance #2: an override-authorized
-// auto_start below the WIP cap launches elaboration (the dispatch marker exists)
+// auto_start below the WIP cap launches specification (the dispatch marker exists)
 // and resolves the proposal card.
 func TestIntakeAutoStartUnderCapStarts(t *testing.T) {
 	t.Parallel()
@@ -300,8 +300,8 @@ func TestIntakeAutoStartUnderCapStarts(t *testing.T) {
 	if o.Refusal != nil {
 		t.Fatalf("unexpected refusal %q", o.Refusal.Reason)
 	}
-	if !f.started(t, o.Admission.Subject.ElaborationRunID) {
-		t.Fatal("authorized auto_start under cap must start elaboration")
+	if !f.started(t, o.Admission.Subject.SpecificationRunID) {
+		t.Fatal("authorized auto_start under cap must start specification")
 	}
 	if item := f.proposalItem(t, o); item.Status != domain.StatusResolved {
 		t.Fatalf("auto_start card status = %q, want resolved", item.Status)
@@ -324,7 +324,7 @@ func TestIntakeAutoStartPresetDowngrades(t *testing.T) {
 	if o.Refusal == nil || o.Refusal.Reason != domain.IntakeRefusalModeNotAuthorized {
 		t.Fatalf("refusal = %+v, want mode_not_authorized", o.Refusal)
 	}
-	if f.started(t, o.Admission.Subject.ElaborationRunID) {
+	if f.started(t, o.Admission.Subject.SpecificationRunID) {
 		t.Fatal("a downgraded auto_start must not start")
 	}
 	if item := f.proposalItem(t, o); item.Status != domain.StatusOpen {
@@ -345,13 +345,13 @@ func TestIntakeAutoStartWIPCapRefusesBeyondAndSerializes(t *testing.T) {
 	r.reconcile(t.Context(), nil)
 	first := f.latestOccurrence(t, 7)
 	second := f.latestOccurrence(t, 8)
-	if !f.started(t, first.Admission.Subject.ElaborationRunID) {
+	if !f.started(t, first.Admission.Subject.SpecificationRunID) {
 		t.Fatal("first occurrence should have taken the single WIP slot")
 	}
 	if second.Refusal == nil || second.Refusal.Reason != domain.IntakeRefusalWIPCapExhausted {
 		t.Fatalf("second refusal = %+v, want wip_cap_exhausted", second.Refusal)
 	}
-	if f.started(t, second.Admission.Subject.ElaborationRunID) {
+	if f.started(t, second.Admission.Subject.SpecificationRunID) {
 		t.Fatal("second occurrence must not start beyond the WIP cap")
 	}
 	if item := f.proposalItem(t, second); item.Status != domain.StatusOpen {
@@ -387,7 +387,7 @@ func TestIntakeWorkItemCarriesNoIssueContent(t *testing.T) {
 	var run domain.Run
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		var err error
-		run, err = tx.GetRun(t.Context(), o.Admission.Subject.ElaborationRunID)
+		run, err = tx.GetRun(t.Context(), o.Admission.Subject.SpecificationRunID)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -455,7 +455,7 @@ func TestIntakeDoesNotSupersedeDecidedProposal(t *testing.T) {
 	present := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
 	present.reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
-	if !f.started(t, o.Admission.Subject.ElaborationRunID) {
+	if !f.started(t, o.Admission.Subject.SpecificationRunID) {
 		t.Fatal("occurrence should have auto-started")
 	}
 	// Now the label is removed.
@@ -483,14 +483,14 @@ func TestIntakeLaunchesDepartedDecidedStart(t *testing.T) {
 		domain.ItemID(o.Admission.ProposalInstanceID), "operator-start-7"); err != nil {
 		t.Fatal(err)
 	}
-	if f.started(t, o.Admission.Subject.ElaborationRunID) {
+	if f.started(t, o.Admission.Subject.SpecificationRunID) {
 		t.Fatal("recording the decision must not itself launch")
 	}
 
 	// The issue departs (label removed) before the loop launched it.
 	f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: "open"}).reconcile(t.Context(), nil)
 	after := f.latestOccurrence(t, 7)
-	if !f.started(t, after.Admission.Subject.ElaborationRunID) {
+	if !f.started(t, after.Admission.Subject.SpecificationRunID) {
 		t.Fatal("a departed decided start must launch before the occurrence retires")
 	}
 	if after.State == domain.IntakeOccurrencePresent {
@@ -533,7 +533,7 @@ func TestIntakeRequiresForgeHostInAllowlist(t *testing.T) {
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
 	for i := range init.PolicyKeys {
-		if init.PolicyKeys[i].Key == elaborate.PolicyResearchAllowlist {
+		if init.PolicyKeys[i].Key == specify.PolicyResearchAllowlist {
 			init.PolicyKeys[i].Value = "https://docs.example" // no forge host
 		}
 	}

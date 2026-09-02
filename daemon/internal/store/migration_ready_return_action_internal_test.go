@@ -38,8 +38,8 @@ func TestReadyReturnActionMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 63 {
-		t.Fatalf("schema version = %d, want 63", got)
+	if got := rawVersion(t, db); got != 64 {
+		t.Fatalf("schema version = %d, want 64", got)
 	}
 
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
@@ -189,6 +189,12 @@ func seedLegacyReadyItem(t *testing.T, ctx context.Context, db execer, item doma
 
 func seedLegacyReadyBinding(t *testing.T, ctx context.Context, db *sql.DB, item domain.AttentionItem) {
 	t.Helper()
+	// The seed writes through the current store code, whose production-attempt
+	// read names the column as migration 0064 renamed it, while this schema
+	// sits before 0062. Present the column under its current name for the seed
+	// and restore it so 0064 still applies on the way to head.
+	renameProductionAttemptRunColumn(t, ctx, db, "elaboration_run_id", "specification_run_id")
+	defer renameProductionAttemptRunColumn(t, ctx, db, "specification_run_id", "elaboration_run_id")
 	runID := *item.Subject.RunID
 	invocationID := domain.InvocationID("inv-production")
 	stageID := domain.StageID("stage-production")
@@ -318,5 +324,13 @@ func seedLegacyReadyBinding(t *testing.T, ctx context.Context, db *sql.DB, item 
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func renameProductionAttemptRunColumn(t *testing.T, ctx context.Context, db *sql.DB, from, to string) {
+	t.Helper()
+	if _, err := db.ExecContext(ctx,
+		`ALTER TABLE production_attempts RENAME COLUMN `+from+` TO `+to); err != nil {
+		t.Fatalf("rename production_attempts.%s to %s: %v", from, to, err)
 	}
 }

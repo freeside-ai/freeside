@@ -146,27 +146,27 @@ func TestPromptLimitLeavesLinuxArgumentHeadroom(t *testing.T) {
 	}
 }
 
-func TestPhase1AElaboratorPromptLeavesEnvelopeHeadroom(t *testing.T) {
+func TestPhase1ASpecifierPromptLeavesEnvelopeHeadroom(t *testing.T) {
 	t.Parallel()
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate test source")
 	}
-	promptPath := filepath.Join(filepath.Dir(sourceFile), "../../../../prompts/phase-1a/elaborator.md")
+	promptPath := filepath.Join(filepath.Dir(sourceFile), "../../../../prompts/phase-1a/specifier.md")
 	prompt, err := os.ReadFile(promptPath) //nolint:gosec // fixed repository test fixture
 	if err != nil {
 		t.Fatal(err)
 	}
 	const promptPackageBudget = 4 << 10
 	if len(prompt) > promptPackageBudget {
-		t.Fatalf("elaborator prompt = %d bytes, want <= %d to preserve envelope headroom",
+		t.Fatalf("specifier prompt = %d bytes, want <= %d to preserve envelope headroom",
 			len(prompt), promptPackageBudget)
 	}
 	if len(prompt) >= maxPromptBytes {
-		t.Fatalf("elaborator prompt consumes the %d-byte rendered prompt ceiling", maxPromptBytes)
+		t.Fatalf("specifier prompt consumes the %d-byte rendered prompt ceiling", maxPromptBytes)
 	}
 	if !bytes.HasPrefix(prompt, []byte(textPriorPromptPackageDirective)) {
-		t.Fatal("elaborator prompt does not enable authenticated prior-artifact rendering")
+		t.Fatal("specifier prompt does not enable authenticated prior-artifact rendering")
 	}
 }
 
@@ -181,7 +181,7 @@ func TestPhase1ASummaryPromptContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	elaborator, err := os.ReadFile(filepath.Join(promptDir, "elaborator.md")) //nolint:gosec // fixed repository fixture
+	specifier, err := os.ReadFile(filepath.Join(promptDir, "specifier.md")) //nolint:gosec // fixed repository fixture
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,8 +198,8 @@ func TestPhase1ASummaryPromptContracts(t *testing.T) {
 		"intent, key questions, open decisions, uncertainty, and dissent",
 		"Never claim verification",
 	} {
-		if !bytes.Contains(elaborator, []byte(required)) {
-			t.Errorf("elaborator prompt omits %q", required)
+		if !bytes.Contains(specifier, []byte(required)) {
+			t.Errorf("specifier prompt omits %q", required)
 		}
 	}
 	if summaryFixtureConforms("All tests pass.") {
@@ -234,15 +234,15 @@ func summaryFixtureConforms(summary string) bool {
 
 func TestValidatePromptPackageRoles(t *testing.T) {
 	t.Parallel()
-	directed := []byte(textPriorPromptPackageDirective + "elaborator")
+	directed := []byte(textPriorPromptPackageDirective + "specifier")
 	if err := ValidatePromptPackageRoles([]byte("implementer"), directed); err != nil {
 		t.Fatal(err)
 	}
 	if err := ValidatePromptPackageRoles(directed, directed); err == nil {
 		t.Fatal("implementation prompt package enabled prior artifacts")
 	}
-	if err := ValidatePromptPackageRoles([]byte("implementer"), []byte("elaborator")); err == nil {
-		t.Fatal("elaboration prompt package omitted prior-artifact directive")
+	if err := ValidatePromptPackageRoles([]byte("implementer"), []byte("specifier")); err == nil {
+		t.Fatal("specification prompt package omitted prior-artifact directive")
 	}
 }
 
@@ -312,10 +312,10 @@ func TestRenderPromptIgnoresOpaquePriorArtifacts(t *testing.T) {
 
 func TestProviderRendersPriorsOnlyForDirectedPromptPackage(t *testing.T) {
 	t.Parallel()
-	elaboratorPrompt := []byte(textPriorPromptPackageDirective + "elaborator prompt")
+	specifierPrompt := []byte(textPriorPromptPackageDirective + "specifier prompt")
 	provider := claudeProvider{}
 	inputs := stage.ProviderPromptInputs{
-		PromptPackage: elaboratorPrompt, Specification: []byte("specification"),
+		PromptPackage: specifierPrompt, Specification: []byte("specification"),
 		PriorArtifacts: [][]byte{[]byte("authenticated research")}, Policy: []byte("policy"),
 	}
 	prompt, err := provider.RenderPrompt(inputs)
@@ -323,7 +323,7 @@ func TestProviderRendersPriorsOnlyForDirectedPromptPackage(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(prompt, "authenticated research") {
-		t.Fatalf("directed elaborator prompt omitted prior artifact:\n%s", prompt)
+		t.Fatalf("directed specifier prompt omitted prior artifact:\n%s", prompt)
 	}
 	inputs.PromptPackage = []byte("implementer prompt")
 	inputs.PriorArtifacts = [][]byte{{0xff}}

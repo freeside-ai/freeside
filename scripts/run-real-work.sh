@@ -9,7 +9,7 @@
 # runs implementation to a ready-for-review outcome and the script verifies
 # the durable export, networkless verification evidence, publication outcome,
 # and exact published head with the real-run harness test. A durable
-# elaboration failure exits promptly with its recorded diagnostic instead of
+# specification failure exits promptly with its recorded diagnostic instead of
 # waiting for the global deadline.
 #
 # It never mints its own preconditions. Every binding below is the
@@ -47,7 +47,7 @@
 #                                    and that the base is reachable; it never
 #                                    fetches into it, so keep it current.
 #   FREESIDE_REAL_RUN_PROMPT_PACKAGE trusted prompt-package file
-#   FREESIDE_REAL_RUN_ELABORATION_PROMPT_PACKAGE trusted elaborator prompt-package file
+#   FREESIDE_REAL_RUN_SPECIFICATION_PROMPT_PACKAGE trusted specifier prompt-package file
 #   FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE trusted remediator prompt-package file
 #   FREESIDE_REAL_RUN_INSTRUCTIONS   host vendor-instruction file (CLAUDE.md)
 #   FREESIDE_REAL_RUN_APPROVED_RECIPE exact recipe digest approved by onboarding
@@ -68,7 +68,7 @@
 #
 # The harness supplies FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID,
 # FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION, and (when present)
-# FREESIDE_REAL_RUN_ELABORATION_RUN_ID to its verifier after submit.
+# FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID to its verifier after submit.
 # A manual verifier run must set both to the implementation-lane identities;
 # the former generic FREESIDE_REAL_RUN_RUN_ID and
 # FREESIDE_REAL_RUN_INVOCATION names are rejected.
@@ -121,7 +121,7 @@ required=(
   FREESIDE_REAL_RUN_REPO FREESIDE_REAL_RUN_REPOSITORY_ID FREESIDE_REAL_RUN_BASE_REF
   FREESIDE_REAL_RUN_BASE_SHA FREESIDE_REAL_RUN_REPOSITORY_CHECKOUT
   FREESIDE_REAL_RUN_PROMPT_PACKAGE
-  FREESIDE_REAL_RUN_ELABORATION_PROMPT_PACKAGE FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE
+  FREESIDE_REAL_RUN_SPECIFICATION_PROMPT_PACKAGE FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE
   FREESIDE_REAL_RUN_INSTRUCTIONS
   FREESIDE_REAL_RUN_APPROVED_RECIPE
   FREESIDE_REAL_RUN_APP_STATE FREESIDE_REAL_RUN_APP_CREDS FREESIDE_REAL_RUN_PROJECT
@@ -158,7 +158,7 @@ source "$repo_root/scripts/run-real-work-supervision.sh"
 workdir="$(mktemp -d)"
 daemon_pid=""
 rig_pid=""
-elaboration_run_id=""
+specification_run_id=""
 implementation_run_id=""
 last_supervision_snapshot="$workdir/supervision.json"
 diagnostic_path=""
@@ -182,10 +182,10 @@ fi
 write_diagnostic() {
 	local selected_run="" candidate
 	[[ -z "$implementation_run_id" ]] || selected_run=$implementation_run_id
-	[[ -n "$selected_run" || -z "$elaboration_run_id" ]] || selected_run=$elaboration_run_id
+	[[ -n "$selected_run" || -z "$specification_run_id" ]] || selected_run=$specification_run_id
 	[[ -n "$selected_run" ]] || return 0
 	if [[ ! -s "$last_supervision_snapshot" ]]; then
-		for candidate in "$selected_run" "$elaboration_run_id"; do
+		for candidate in "$selected_run" "$specification_run_id"; do
 			[[ -n "$candidate" ]] || continue
 			if "$workdir/freesided" follow -db "$db_path" -run "$candidate" -snapshot \
 				-approved-recipe "$FREESIDE_REAL_RUN_APPROVED_RECIPE" \
@@ -420,7 +420,7 @@ echo "recording the auth identity binding" >&2
 env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
   -u FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID \
   -u FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION \
-  -u FREESIDE_REAL_RUN_ELABORATION_RUN_ID \
+  -u FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID \
   FREESIDE_REAL_RUN_LIVE_TEST=1 \
   go test -C "$repo_root/daemon" ./internal/integration/ \
     -run TestRealWorkItemCompletesProductionPipeline -count=1 > "$workdir/seed.log" 2>&1 || {
@@ -460,7 +460,7 @@ preflight_args=(
 	-publication-state-dir "$FREESIDE_REAL_RUN_APP_STATE"
 	-publication-credentials-dir "$FREESIDE_REAL_RUN_APP_CREDS"
 	-allowed-paths "$FREESIDE_REAL_RUN_ALLOWED_PATHS"
-	-spec "$spec_file"
+	-work-item "$spec_file"
 	-policy "$policy_file"
 	-publication "$publication_file"
 	-project "$FREESIDE_REAL_RUN_PROJECT"
@@ -513,7 +513,7 @@ require_live_rig
 submit_log="$workdir/submit.json"
 submit_args=(
   -db "$db_path"
-  --spec "$spec_file"
+  --work-item "$spec_file"
   --policy "$policy_file"
   --publication "$publication_file"
   --project "$FREESIDE_REAL_RUN_PROJECT"
@@ -527,25 +527,25 @@ fi
 
 implementation_invocation_id="$(sed -n 's/.*"implementation_invocation_id":"\([^"]*\)".*/\1/p' "$submit_log")"
 implementation_run_id="$(sed -n 's/.*"run_id":"\([^"]*\)".*/\1/p' "$submit_log")"
-elaboration_run_id="$(sed -n 's/.*"elaboration_run_id":"\([^"]*\)".*/\1/p' "$submit_log")"
-elaboration_invocation_id="$(sed -n 's/.*"elaboration_invocation_id":"\([^"]*\)".*/\1/p' "$submit_log")"
+specification_run_id="$(sed -n 's/.*"specification_run_id":"\([^"]*\)".*/\1/p' "$submit_log")"
+specification_invocation_id="$(sed -n 's/.*"specification_invocation_id":"\([^"]*\)".*/\1/p' "$submit_log")"
 if [[ -z "$implementation_invocation_id" || -z "$implementation_run_id" ]]; then
   echo "run-real-work: submit produced no implementation run identity: $(cat "$submit_log")" >&2
   exit 1
 fi
-if [[ -n "$elaboration_run_id" && -n "$elaboration_invocation_id" ]]; then
-  echo "submitted elaboration run=$elaboration_run_id invocation=$elaboration_invocation_id" >&2
-elif [[ -n "$elaboration_run_id" || -n "$elaboration_invocation_id" ]]; then
-  echo "run-real-work: submit produced a partial elaboration identity: $(cat "$submit_log")" >&2
+if [[ -n "$specification_run_id" && -n "$specification_invocation_id" ]]; then
+  echo "submitted specification run=$specification_run_id invocation=$specification_invocation_id" >&2
+elif [[ -n "$specification_run_id" || -n "$specification_invocation_id" ]]; then
+  echo "run-real-work: submit produced a partial specification identity: $(cat "$submit_log")" >&2
   exit 1
 else
-  echo "legacy production-only replay: no elaboration approval gate" >&2
+  echo "legacy production-only replay: no specification approval gate" >&2
 fi
 echo "reserved implementation run=$implementation_run_id invocation=$implementation_invocation_id" >&2
 
-elaboration_verifier_env=(-u FREESIDE_REAL_RUN_ELABORATION_RUN_ID)
-if [[ -n "$elaboration_run_id" ]]; then
-	elaboration_verifier_env+=(FREESIDE_REAL_RUN_ELABORATION_RUN_ID="$elaboration_run_id")
+specification_verifier_env=(-u FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID)
+if [[ -n "$specification_run_id" ]]; then
+	specification_verifier_env+=(FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID="$specification_run_id")
 fi
 
 echo "starting the daemon with the production Claude driver" >&2
@@ -571,7 +571,7 @@ require_live_rig
   -state-dir "$FREESIDE_REAL_RUN_STATE_ROOT" \
   -rig-token-file "$rig_acquisition" \
   -prompt-package "$FREESIDE_REAL_RUN_PROMPT_PACKAGE" \
-  -elaboration-prompt-package "$FREESIDE_REAL_RUN_ELABORATION_PROMPT_PACKAGE" \
+  -specification-prompt-package "$FREESIDE_REAL_RUN_SPECIFICATION_PROMPT_PACKAGE" \
   -remediation-prompt-package "$FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE" \
   -vendor-instructions "$FREESIDE_REAL_RUN_INSTRUCTIONS" \
   -repo "$FREESIDE_REAL_RUN_REPO" \
@@ -588,7 +588,7 @@ require_live_rig
   > "$workdir/daemon.log" 2>&1 &
 daemon_pid=$!
 
-if [[ -n "$elaboration_run_id" ]]; then
+if [[ -n "$specification_run_id" ]]; then
   echo "gated-unattended: waiting for an operator to approve or revise the generated specification" >&2
   echo "implementation verification resumes automatically after approval" >&2
 fi
@@ -597,7 +597,7 @@ fi
 # verifier as a polling mechanism. The verifier below remains the one final
 # success authority after observation reaches published.
 set +e
-real_work_supervise "$workdir/freesided" "$db_path" "$elaboration_run_id" \
+real_work_supervise "$workdir/freesided" "$db_path" "$specification_run_id" \
 	"$implementation_run_id" "$daemon_pid" \
 	"${FREESIDE_REAL_RUN_TIMEOUT_SECONDS:-2400}" "$last_supervision_snapshot"
 supervision_status=$?
@@ -619,7 +619,7 @@ daemon_pid=""
 verify_log="$workdir/verify-final.log"
 set +e
 env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
-	"${elaboration_verifier_env[@]}" \
+	"${specification_verifier_env[@]}" \
   FREESIDE_REAL_RUN_LIVE_TEST=1 \
   FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID="$implementation_run_id" \
   FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION="$implementation_invocation_id" \
@@ -627,8 +627,8 @@ env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
     -run TestRealWorkItemCompletesProductionPipeline -count=1 -v 2>&1 | tee "$verify_log"
 verify_status=${PIPESTATUS[0]}
 set -e
-if grep -q "real run elaboration failed:" "$verify_log"; then
-	echo "run-real-work: elaboration failed before implementation admission" >&2
+if grep -q "real run specification failed:" "$verify_log"; then
+	echo "run-real-work: specification failed before implementation admission" >&2
 	echo "daemon log:" >&2
 	tail -50 "$workdir/daemon.log" >&2
 	exit 1

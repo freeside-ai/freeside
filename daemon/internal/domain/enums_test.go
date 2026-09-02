@@ -218,10 +218,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["IntakeSupersessionReason"] = append(valids["IntakeSupersessionReason"], v.valid)
 	}
 	invalids["IntakeSupersessionReason"] = IntakeSupersessionReason("").valid
-	for _, v := range AllElaborationSourceKinds {
-		valids["ElaborationSourceKind"] = append(valids["ElaborationSourceKind"], v.valid)
+	for _, v := range AllSpecificationSourceKinds {
+		valids["SpecificationSourceKind"] = append(valids["SpecificationSourceKind"], v.valid)
 	}
-	invalids["ElaborationSourceKind"] = ElaborationSourceKind("").valid
+	invalids["SpecificationSourceKind"] = SpecificationSourceKind("").valid
 	for _, v := range AllProductionAttemptKinds {
 		valids["ProductionAttemptKind"] = append(valids["ProductionAttemptKind"], v.valid)
 	}

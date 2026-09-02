@@ -12,23 +12,23 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-// TestRecordExecutionExportElaborationArmMintsNoPublicationTask covers the
-// latent blocker in issue #768 decision 4: an unattended elaboration run
-// produces an export, but its ownership marker is inv-elaborate-*, not the
+// TestRecordExecutionExportSpecificationArmMintsNoPublicationTask covers the
+// latent blocker in issue #768 decision 4: an unattended specification run
+// produces an export, but its ownership marker is inv-specify-*, not the
 // inv-implement-* marker loadProductionRequest authenticates. Before this arm,
 // the unattended branch would fail there and the export-record step would retry
 // forever. The arm records the export export-only and mints no
-// KindProductionPublicationRequested task, so the elaboration commit never
+// KindProductionPublicationRequested task, so the specification commit never
 // reaches the publication lane.
-func TestRecordExecutionExportElaborationArmMintsNoPublicationTask(t *testing.T) {
+func TestRecordExecutionExportSpecificationArmMintsNoPublicationTask(t *testing.T) {
 	ctx := t.Context()
 	const (
 		repo   = "owner/repo"
 		repoID = int64(424242)
-		runID  = domain.RunID("elaboration-run")
+		runID  = domain.RunID("specification-run")
 	)
-	invocationID := elaborationInvocationID(runID, 1)
-	stageID := elaborationStageID(runID)
+	invocationID := specificationInvocationID(runID, 1)
+	stageID := specificationStageID(runID)
 	epoch := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), store.Options{
@@ -84,7 +84,7 @@ func TestRecordExecutionExportElaborationArmMintsNoPublicationTask(t *testing.T)
 	run := domain.Run{
 		ID: runID, ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
 		Stages: []domain.Stage{{
-			ID: stageID, RunID: runID, Name: "elaboration",
+			ID: stageID, RunID: runID, Name: "specification",
 			Attempts: []domain.Attempt{{
 				ID: attemptIDFor(invocationID), StageID: stageID, Number: 1, InvocationID: invocationID,
 			}},
@@ -129,7 +129,7 @@ func TestRecordExecutionExportElaborationArmMintsNoPublicationTask(t *testing.T)
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordExecutionAdmission(ctx, admission)
 	}); err != nil {
-		t.Fatalf("record unattended elaboration admission: %v", err)
+		t.Fatalf("record unattended specification admission: %v", err)
 	}
 
 	export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
@@ -140,17 +140,17 @@ func TestRecordExecutionExportElaborationArmMintsNoPublicationTask(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewExecutionExport: %v", err)
 	}
-	// The elaboration and attended arms ignore the replay (only the production
+	// The specification and attended arms ignore the replay (only the production
 	// path consumes it), so the export-only write needs no populated replay.
 	if err := RecordExecutionExport(ctx, st, export, ProductionReplay{}); err != nil {
-		t.Fatalf("record unattended elaboration export: %v", err)
+		t.Fatalf("record unattended specification export: %v", err)
 	}
 
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		if _, err := tx.GetExecutionExportRecord(ctx, invocationID); err != nil {
 			return err
 		}
-		// No publication task: the elaboration commit never enters the lane.
+		// No publication task: the specification commit never enters the lane.
 		_, err := tx.GetOutbox(ctx, productionPublicationTaskKey(runID))
 		if !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("production publication task = %v, want none", err)

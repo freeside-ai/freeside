@@ -1,4 +1,4 @@
-// Package fake scripts elaborator results through the shared exec fake. It
+// Package fake scripts specifier results through the shared exec fake. It
 // emits the same canonical output bytes the engine accepts from a real agent,
 // so workflow tests cannot drift onto a fixture-only contract.
 package fake
@@ -7,32 +7,32 @@ import (
 	"fmt"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
 )
 
-// Script registers one successful elaborator invocation with deterministic
+// Script registers one successful specifier invocation with deterministic
 // inspect progression and a canonical contract result.
 func Script(
 	driver *execfake.StageDriver,
 	id domain.InvocationID,
 	pendingInspects int,
 	runningInspects int,
-	output elaborate.Output,
+	output specify.Output,
 ) error {
 	if driver == nil {
-		return fmt.Errorf("script elaborator %q: nil stage driver", id)
+		return fmt.Errorf("script specifier %q: nil stage driver", id)
 	}
-	transcript, err := elaborate.EncodeTranscript(output)
+	transcript, err := specify.EncodeTranscript(output)
 	if err != nil {
-		return fmt.Errorf("script elaborator %q: %w", id, err)
+		return fmt.Errorf("script specifier %q: %w", id, err)
 	}
 	driver.Script(id, execfake.StageScript{
 		PendingInspects: pendingInspects,
 		RunningInspects: runningInspects,
 		Outcome:         execfake.OutcomeComplete,
-		Result:          exec.StageResult{Artifacts: []domain.Digest{}, Summary: "Elaborator returned structured output."},
+		Result:          exec.StageResult{Artifacts: []domain.Digest{}, Summary: "Specifier returned structured output."},
 		Transcript:      transcript,
 	})
 	return nil

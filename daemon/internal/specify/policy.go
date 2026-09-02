@@ -1,4 +1,4 @@
-package elaborate
+package specify
 
 import (
 	"fmt"
@@ -9,14 +9,17 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
+// policyKeyPrefix names the specification section of the resolved policy.
+const policyKeyPrefix = "specification."
+
 const (
 	PolicySpecApproval          = "gates.spec_approval"
-	PolicyMaxIterations         = "elaboration.max_iterations"
+	PolicyMaxIterations         = policyKeyPrefix + "max_iterations"
 	PolicyStageActiveTime       = "budgets.stage_active_time"
 	PolicyApprovalWait          = "waiting.spec_approval_attention_after"
 	PolicyResearchAllowlist     = "research.allowlist"
 	PolicyResearchMaxBytes      = "research.max_response_bytes"
-	MaxElaborationIterations    = 16
+	MaxSpecificationIterations  = 16
 	MaxResearchAllowlistEntries = 64
 	MaxResearchResponseBytes    = 16 << 20
 )
@@ -34,11 +37,11 @@ type Policy struct {
 // ParsePolicy fails closed when a required key is missing or malformed.
 func ParsePolicy(resolved domain.ResolvedPolicy) (Policy, error) {
 	if err := resolved.Validate(); err != nil {
-		return Policy{}, fmt.Errorf("elaboration policy: %w", err)
+		return Policy{}, fmt.Errorf("specification policy: %w", err)
 	}
 	values := make(map[string]string, len(resolved.Keys))
 	for _, key := range resolved.Keys {
-		values[key.Key] = key.Value
+		values[canonicalPolicyKey(key.Key)] = key.Value
 	}
 	require := func(key string) (string, error) {
 		value, ok := values[key]
@@ -60,9 +63,9 @@ func ParsePolicy(resolved domain.ResolvedPolicy) (Policy, error) {
 		return Policy{}, err
 	}
 	iterations, err := strconv.Atoi(iterationsValue)
-	if err != nil || iterations < 1 || iterations > MaxElaborationIterations {
+	if err != nil || iterations < 1 || iterations > MaxSpecificationIterations {
 		return Policy{}, fmt.Errorf("policy %s must be between 1 and %d",
-			PolicyMaxIterations, MaxElaborationIterations)
+			PolicyMaxIterations, MaxSpecificationIterations)
 	}
 	active, err := durationPolicy(require, PolicyStageActiveTime)
 	if err != nil {

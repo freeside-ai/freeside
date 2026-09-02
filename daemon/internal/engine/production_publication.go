@@ -693,15 +693,15 @@ func RecordExecutionExport(
 			return tx.RecordExecutionExport(ctx, executionExport)
 		})
 	case domain.ModeUnattended:
-		// An unattended elaboration run produces an export the same way, but its
+		// An unattended specification run produces an export the same way, but its
 		// output is a typed specification published outside the repo channel, and
 		// it mints no publication task: it is a separate run whose ownership
-		// marker is inv-elaborate-<run>-<iter>, not the inv-implement-<run> marker
+		// marker is inv-specify-<run>-<iter>, not the inv-implement-<run> marker
 		// loadProductionRequest authenticates below, so that call would fail
 		// before any legacy fallback. Record it export-only, mirroring the
-		// attended branch. Without this arm a debris-tolerant elaboration import
+		// attended branch. Without this arm a debris-tolerant specification import
 		// succeeds and then retries the export-record step forever (issue #768).
-		if IsElaborationInvocationIdentity(
+		if IsSpecificationInvocationIdentity(
 			executionExport.InvocationID, admission.RunID, admission.StageID,
 		) {
 			return st.Write(ctx, func(tx *store.WriteTx) error {

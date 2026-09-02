@@ -621,12 +621,12 @@ func TestIntakeReGateRejectsCrossRepositoryProject(t *testing.T) {
 			Subject: domain.IntakeSubjectBinding{
 				ProjectID:            "project-cross",
 				WorkUnitID:           declaration.ID,
-				ElaborationRunID:     policy.RunID,
+				SpecificationRunID:   policy.RunID,
 				PolicyArtifactID:     "policy-art-1",
 				PolicyArtifactDigest: policy.Digest,
 				ResolvedPolicyDigest: policy.Digest,
-				Source: domain.ElaborationSource{
-					Kind: domain.ElaborationSourceIssueSubject,
+				Source: domain.SpecificationSource{
+					Kind: domain.SpecificationSourceIssueSubject,
 					IssueSubject: &domain.IssueSubjectRef{
 						Repo: occurrence.Repo, RepositoryID: occurrence.RepositoryID, IssueNumber: occurrence.IssueNumber,
 					},

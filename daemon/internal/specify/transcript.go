@@ -1,4 +1,4 @@
-package elaborate
+package specify
 
 import (
 	"bufio"
@@ -12,7 +12,7 @@ import (
 
 const MaxTranscriptRecordBytes = strictjson.Limit(2 << 20)
 
-var ErrTranscriptResultMissing = errors.New("elaborator transcript has no successful result")
+var ErrTranscriptResultMissing = errors.New("specifier transcript has no successful result")
 
 type transcriptRecord struct {
 	Type    string  `json:"type"`
@@ -45,21 +45,21 @@ func decodeTranscript(reader io.Reader, decode func([]byte) (Output, error)) (Ou
 		if err := strictjson.DecodeAllowingUnknownFields(
 			scanner.Bytes(), &record, strictjson.RejectInvalidUTF8, MaxTranscriptRecordBytes,
 		); err != nil {
-			return Output{}, fmt.Errorf("decode elaborator transcript line %d: %w", line, err)
+			return Output{}, fmt.Errorf("decode specifier transcript line %d: %w", line, err)
 		}
 		if record.Type != "result" {
 			continue
 		}
 		if result != nil {
-			return Output{}, fmt.Errorf("decode elaborator transcript: multiple result records: %w", ErrInvalidOutput)
+			return Output{}, fmt.Errorf("decode specifier transcript: multiple result records: %w", ErrInvalidOutput)
 		}
 		if record.Subtype != "success" || record.IsError == nil || *record.IsError || record.Result == nil {
-			return Output{}, fmt.Errorf("decode elaborator transcript: unsuccessful result record: %w", ErrInvalidOutput)
+			return Output{}, fmt.Errorf("decode specifier transcript: unsuccessful result record: %w", ErrInvalidOutput)
 		}
 		result = record.Result
 	}
 	if err := scanner.Err(); err != nil {
-		return Output{}, fmt.Errorf("decode elaborator transcript: %w", err)
+		return Output{}, fmt.Errorf("decode specifier transcript: %w", err)
 	}
 	if result == nil {
 		return Output{}, ErrTranscriptResultMissing
@@ -80,7 +80,7 @@ func EncodeTranscript(out Output) ([]byte, error) {
 		Type: "result", Subtype: "success", IsError: &isError, Result: &result,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("encode elaborator transcript: %w", err)
+		return nil, fmt.Errorf("encode specifier transcript: %w", err)
 	}
 	return append(record, '\n'), nil
 }

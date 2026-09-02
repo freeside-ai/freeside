@@ -591,7 +591,7 @@ func TestConcludeClassifiesTheTimeline(t *testing.T) {
 func TestSupervisionStateSeparatesAttentionFromTerminalOutcome(t *testing.T) {
 	approved := domain.Digest("sha256:approved")
 	lineage := &observedb.Lineage{
-		ApprovedSpecDigest: approved, ElaborationRunID: fixtureRun,
+		ApprovedSpecDigest: approved, SpecificationRunID: fixtureRun,
 	}
 	for _, tc := range []struct {
 		name       string
@@ -617,7 +617,7 @@ func TestSupervisionStateSeparatesAttentionFromTerminalOutcome(t *testing.T) {
 			want:       SupervisionAttentionRequired,
 		},
 		{
-			name: "approved elaboration binds implementation",
+			name: "approved specification binds implementation",
 			snapshot: observedb.Snapshot{
 				Observation: domain.RunObservation{RunID: fixtureRun}, Attempt: lineage,
 			},

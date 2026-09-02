@@ -36,7 +36,7 @@ func (k ProductionAttemptKind) valid() bool {
 
 // ProductionAttempt is the durable, campaign-scoped identity and lineage of
 // one production acceptance attempt. ApprovedSpecDigest is empty only while
-// the initial attempt is still in elaboration; approval fills it exactly once.
+// the initial attempt is still in specification; approval fills it exactly once.
 type ProductionAttempt struct {
 	CampaignID        CampaignID            `json:"campaign_id"`
 	AttemptNumber     int                   `json:"attempt_number"`
@@ -50,7 +50,7 @@ type ProductionAttempt struct {
 	// rather than silently recomputing it from later initiator configuration.
 	Publication              json.RawMessage `json:"publication,omitempty"`
 	ApprovedSpecDigest       Digest          `json:"approved_spec_digest,omitempty"`
-	ElaborationRunID         RunID           `json:"elaboration_run_id"`
+	SpecificationRunID       RunID           `json:"specification_run_id"`
 	ImplementationRunID      RunID           `json:"implementation_run_id"`
 	OperatorCommandID        *string         `json:"operator_command_id,omitempty"`
 	RetryOfInvocationID      *InvocationID   `json:"retry_of_invocation_id,omitempty"`
@@ -59,11 +59,11 @@ type ProductionAttempt struct {
 
 // Validate reports whether the attempt's identity and lineage are coherent.
 func (a ProductionAttempt) Validate() error {
-	if a.CampaignID == "" || a.ElaborationRunID == "" || a.ImplementationRunID == "" {
-		return fmt.Errorf("campaign, elaboration, and implementation ids are required: %w", ErrEmptyID)
+	if a.CampaignID == "" || a.SpecificationRunID == "" || a.ImplementationRunID == "" {
+		return fmt.Errorf("campaign, specification, and implementation ids are required: %w", ErrEmptyID)
 	}
-	if a.ElaborationRunID == a.ImplementationRunID {
-		return fmt.Errorf("elaboration and implementation ids must differ: %w", ErrProductionAttemptInconsistent)
+	if a.SpecificationRunID == a.ImplementationRunID {
+		return fmt.Errorf("specification and implementation ids must differ: %w", ErrProductionAttemptInconsistent)
 	}
 	if a.SourceDigest == "" {
 		return fmt.Errorf("source_digest: %w", ErrEmptyField)

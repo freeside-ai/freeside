@@ -26,7 +26,7 @@ const intakePolicyArtifactID = domain.ArtifactID("policy-art-1")
 
 // putIntakePolicyArtifact seeds the policy artifact an intake subject binding
 // names. Its digest is the resolved-policy digest, since the policy artifact is
-// the resolved policy's content (the elaboration invariant the re-gate
+// the resolved policy's content (the specification invariant the re-gate
 // enforces), so both must equal the run's resolved-policy digest.
 func putIntakePolicyArtifact(t *testing.T, ctx context.Context, tx *store.WriteTx, digest domain.Digest) {
 	t.Helper()
@@ -174,7 +174,7 @@ func TestIntakeAdmissionBindingAndReGate(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if got.Admission == nil || got.Admission.Subject.Source.Kind != domain.ElaborationSourceIssueSubject {
+		if got.Admission == nil || got.Admission.Subject.Source.Kind != domain.SpecificationSourceIssueSubject {
 			return errors.New("reconstructed occurrence lost its admission")
 		}
 		ref := got.Admission.Subject.Source.IssueSubject
@@ -231,7 +231,7 @@ func TestIntakeAdmissionRejectsForeignProposal(t *testing.T) {
 }
 
 // TestIntakeAdmissionAuthenticatesPolicyArtifact proves BindIntakeAdmission
-// authenticates the one named elaboration input it cannot derive — the policy
+// authenticates the one named specification input it cannot derive — the policy
 // artifact — rejecting a missing artifact and one whose digest is not the run's
 // resolved policy. The subject's identity fields are minted, not accepted, so
 // there is no forged work unit or digest for a caller to smuggle.

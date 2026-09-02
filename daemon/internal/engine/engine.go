@@ -54,7 +54,7 @@ type Engine struct {
 	fakePublicationPolicy       *fakePublicationPolicyRecovery
 	productionPublication       *productionPublicationWorkflow
 	productionDeliveryValidator func(context.Context, exec.StartSpec) error
-	elaboration                 *elaborationWorkflow
+	specification               *specificationWorkflow
 	inference                   *inference.Client
 	// admission is the configured capability gate and durable-record writer
 	// (see WithAdmission); nil leaves dispatch exactly as it was before a
@@ -248,12 +248,12 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 	if err != nil {
 		return result, fmt.Errorf("reconcile attention discussions: %w", err)
 	}
-	if e.elaboration != nil {
-		startedRuns, blocked, gateErr := e.reconcileElaborationGates(ctx)
+	if e.specification != nil {
+		startedRuns, blocked, gateErr := e.reconcileSpecificationGates(ctx)
 		result.RunTransitions += startedRuns
 		result.BlockedItemsCreated += blocked
 		if gateErr != nil {
-			return result, fmt.Errorf("reconcile elaboration gates: %w", gateErr)
+			return result, fmt.Errorf("reconcile specification gates: %w", gateErr)
 		}
 	}
 	if e.publication != nil {

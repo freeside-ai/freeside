@@ -9,7 +9,10 @@ name: scripts CI
 # stand-ins, no network), plus the Mac and iOS installer suites (command
 # stand-ins for the build, signing, and device boundaries, no Xcode). A
 # macOS job runs the installers' real Foundation URL validator, and the
-# Mac installer's exclusive rename path.
+# Mac installer's exclusive rename path. The retired-vocabulary check
+# (scripts/check-vocabulary.sh) also runs here, so the component surfaces it
+# covers are triggers too: a change under daemon/, api/, app/, or prompts/
+# must schedule the check that guards it.
 # The suites test the script implementations only; nothing here parses
 # PR prose. Shellcheck runs as a pinned, checksum-verified prebuilt binary,
 # matching the pinned-vacuum/golangci-lint determinism convention (a
@@ -25,6 +28,11 @@ on:
       - "app/Apps/iOS/Info.plist"
       - "app/Freeside.xcodeproj/project.pbxproj"
       - ".github/workflows/scripts-ci.yml"
+      # Surfaces scripts/check-vocabulary.sh covers.
+      - "daemon/**"
+      - "api/**"
+      - "app/**"
+      - "prompts/**"
   pull_request:
     paths:
       - "scripts/**"
@@ -32,6 +40,11 @@ on:
       - "app/Apps/iOS/Info.plist"
       - "app/Freeside.xcodeproj/project.pbxproj"
       - ".github/workflows/scripts-ci.yml"
+      # Surfaces scripts/check-vocabulary.sh covers.
+      - "daemon/**"
+      - "api/**"
+      - "app/**"
+      - "prompts/**"
 
 permissions:
   contents: read
@@ -76,6 +89,10 @@ jobs:
         run: bash scripts/test-install-mac-app.sh
       - name: iOS installer regression suite
         run: bash scripts/test-install-ios-app.sh
+      - name: vocabulary check regression suite
+        run: bash scripts/test-check-vocabulary.sh
+      - name: retired vocabulary check
+        run: bash scripts/check-vocabulary.sh
 
   trackercollect:
     name: trackercollect (build, test, vet)

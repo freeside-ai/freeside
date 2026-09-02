@@ -53,7 +53,7 @@ const UnattendedInitiatorDeviceID = domain.DeviceID("daemon-label-intake")
 // started=false, so the caller launches only a start this call actually made. A
 // decided-start item is relaunched for convergence by the reconciler's
 // already-decided path, not here. It does not launch the run; the caller (the
-// label-intake loop) executes SubmitElaborationRun after the decision is
+// label-intake loop) executes SubmitSpecificationRun after the decision is
 // durable, exactly as it does for an operator-decided start.
 func (s *Service) StartRunProposalUnattended(
 	ctx context.Context, itemID domain.ItemID, commandID string,

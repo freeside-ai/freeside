@@ -324,7 +324,7 @@ func TestBindRigInvocationResourcesAddsLaterIteration(t *testing.T) {
 	if err := os.WriteFile(tokenFile, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	invocations := []domain.InvocationID{"elaboration-iteration-1", "elaboration-iteration-2"}
+	invocations := []domain.InvocationID{"specification-iteration-1", "specification-iteration-2"}
 	for _, invocationID := range invocations {
 		if err := bindRigInvocationResources(stateRoot, tokenFile, invocationID); err != nil {
 			t.Fatal(err)
@@ -508,7 +508,7 @@ func TestFullConformanceResiduePreservesGlobalGateAcrossCrash(t *testing.T) {
 }
 
 func TestRigCleanupTouchesOnlyManifestContainers(t *testing.T) {
-	stateRoot, lease, tokenFile, names := acquireBoundRig(t, "inv-elaborate", "inv-implement")
+	stateRoot, lease, tokenFile, names := acquireBoundRig(t, "inv-specify", "inv-implement")
 	t.Cleanup(func() { _ = lease.Close() })
 	foreign := "freeside-handoff-c" + strings.Repeat("f", 31) + "-agent"
 	host := &fakeRigHost{containers: map[string]bool{
