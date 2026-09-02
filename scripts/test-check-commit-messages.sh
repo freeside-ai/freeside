@@ -249,6 +249,138 @@ fi
 run_check "$shallow_repo" "$base" "$head"
 assert_rc 0
 
+run_file_check() { # <message-file>; sets OUT and RC
+  set +e
+  OUT=$("$CHECK" --message-file "$1" 2>&1)
+  RC=$?
+  set -e
+}
+
+begin_case "message-file mode accepts a valid message"
+msg=$TMP/valid.msg
+printf 'Add a fixture\n\nExplain why the fixture exists.\n' >"$msg"
+run_file_check "$msg"
+assert_rc 0
+assert_contains 'PASS: commit message'
+
+begin_case "message-file mode models normal editor strip cleanup"
+msg=$TMP/commented.msg
+printf '\n# Please enter the commit message\nAdd a fixture\n\nExplain why.\n# Changes to be committed:\n#\tmodified: x\n\n\n' >"$msg"
+run_file_check "$msg"
+assert_rc 0
+
+begin_case "message-file mode rejects a Conventional Commit subject"
+msg=$TMP/conventional.msg
+printf 'feat: add a fixture\n\nBody.\n' >"$msg"
+run_file_check "$msg"
+assert_rc 1
+assert_contains '[conventional-prefix]'
+assert_contains '[sentence-case]'
+
+begin_case "message-file mode rejects a body that is only comments"
+msg=$TMP/nobody.msg
+printf 'Add a fixture\n\n# only comments below\n' >"$msg"
+run_file_check "$msg"
+assert_rc 1
+assert_contains '[body-required]'
+
+begin_case "message-file mode fails closed on an unreadable file"
+run_file_check "$TMP/does-not-exist.msg"
+assert_rc 2
+
+begin_case "the commit-msg hook refuses a violation and accepts a valid message"
+repo=$(new_repo "case$case_number")
+mkdir -p "$repo/scripts" "$repo/.githooks"
+cp "$CHECK" "$repo/scripts/check-commit-messages.sh"
+cp "$SCRIPT_DIR/../.githooks/commit-msg" "$repo/.githooks/commit-msg"
+chmod +x "$repo/.githooks/commit-msg"
+git -C "$repo" config core.hooksPath .githooks
+set +e
+OUT=$(git -C "$repo" commit -q --allow-empty -m 'fix: hooked' 2>&1)
+RC=$?
+set -e
+assert_rc 1
+assert_contains '[conventional-prefix]'
+set +e
+OUT=$(git -C "$repo" commit -q --allow-empty -m 'Hooked commit' \
+  -m 'Explain why the hook accepted it.' 2>&1)
+RC=$?
+set -e
+assert_rc 0
+
+begin_case "the commit-msg hook exempts a merge commit"
+repo=$(new_repo "case$case_number")
+mkdir -p "$repo/scripts" "$repo/.githooks"
+cp "$CHECK" "$repo/scripts/check-commit-messages.sh"
+cp "$SCRIPT_DIR/../.githooks/commit-msg" "$repo/.githooks/commit-msg"
+chmod +x "$repo/.githooks/commit-msg"
+git -C "$repo" config core.hooksPath .githooks
+git -C "$repo" checkout -q -b side
+commit_message "$repo" $'Add a side commit\n\nProvide a commit to merge.' >/dev/null
+git -C "$repo" checkout -q main
+set +e
+OUT=$(git -C "$repo" merge --no-ff --no-edit side 2>&1)
+RC=$?
+set -e
+assert_rc 0
+OUT=$(git -C "$repo" log -1 --format=%s 2>&1)
+assert_contains 'Merge branch'
+
+begin_case "message-file mode strips comments by the configured comment char"
+repo=$(new_repo "case$case_number")
+git -C "$repo" config core.commentChar ';'
+msg=$TMP/commentchar.msg
+printf 'Add a fixture\n\n; the editor template, not a body\n' >"$msg"
+set +e
+OUT=$(cd "$repo" && "$CHECK" --message-file "$msg" 2>&1)
+RC=$?
+set -e
+assert_rc 1
+assert_contains '[body-required]'
+
+begin_case "message-file mode keeps a body line the comment char does not claim"
+msg=$TMP/hashbody.msg
+printf 'Add a fixture\n\n# a body line, since the comment char is a semicolon\n' >"$msg"
+set +e
+OUT=$(cd "$repo" && "$CHECK" --message-file "$msg" 2>&1)
+RC=$?
+set -e
+assert_rc 0
+assert_contains 'PASS: commit message'
+
+begin_case "message-file mode cuts only the configured scissors line"
+msg=$TMP/other-scissors.msg
+printf 'Add a fixture\n\n# ------------------------ >8 ------------------------\n# kept because the comment char is a semicolon\n' >"$msg"
+set +e
+OUT=$(cd "$repo" && "$CHECK" --message-file "$msg" 2>&1)
+RC=$?
+set -e
+assert_rc 0
+assert_contains 'PASS: commit message'
+
+msg=$TMP/configured-scissors.msg
+printf 'Add a fixture\n\n; ------------------------ >8 ------------------------\ndiff --git a/x b/x\n+a line git will not record\n' >"$msg"
+set +e
+OUT=$(cd "$repo" && "$CHECK" --message-file "$msg" 2>&1)
+RC=$?
+set -e
+assert_rc 1
+assert_contains '[body-required]'
+
+begin_case "message-file mode cuts a verbose template at the scissors line"
+msg=$TMP/verbose.msg
+printf 'Add a fixture\n\n# Please enter the commit message\n# ------------------------ >8 ------------------------\n# Everything below it will be ignored.\ndiff --git a/x b/x\n+a line git will not record\n' >"$msg"
+run_file_check "$msg"
+assert_rc 1
+assert_contains '[body-required]'
+
+begin_case "message-file mode keeps a body written above the scissors line"
+msg=$TMP/verbose-body.msg
+printf 'Add a fixture\n\nExplain why.\n\n# ------------------------ >8 ------------------------\ndiff --git a/x b/x\n+a line git will not record\n' >"$msg"
+run_file_check "$msg"
+assert_rc 0
+assert_contains 'PASS: commit message'
+
 echo "assertions: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then
   exit 1
