@@ -56,7 +56,7 @@ The intended experience, end to end:
 
 1. A work item arrives: you submitted it, labeled an issue, or a scanner
    proposed it.
-2. An elaboration step turns it into a specification.
+2. A specifier turns it into a specification.
 3. The specification reaches your attention inbox, and you approve it.
 4. An agent implements it in an isolated workspace, where it can work at
    full speed without stopping for permission.

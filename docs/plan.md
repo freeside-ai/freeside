@@ -149,7 +149,7 @@ Linux-portable under Section [3.3](#33-portability).
 ### The End-to-End Workflow
 
 1. A manual submission, labeled issue, or scanner proposal creates a work item.
-2. An elaborator turns it into a specification using research artifacts fetched
+2. A specifier turns it into a specification using research artifacts fetched
    by the daemon.
 3. I approve the specification in the attention inbox.
 4. An agent implements it in an isolated workspace with no GitHub credentials.
@@ -176,7 +176,7 @@ rules.
 
 Freeside is a personal-leverage tool. Useful, correct work must be worth more
 than the attention, maintenance, money, and risk it costs. The manual workflow
-already shows that elaboration, implementation, and iterative review are
+already shows that specification, implementation, and iterative review are
 useful. The open question is whether Freeside can make that workflow safe,
 durable, and low-attention without moving the danger into provider credentials,
 CI, artifact import, stale approvals, or interruption creep.
@@ -202,7 +202,7 @@ maintenance still decide whether Freeside creates a positive return.
    have lifecycles, type-specific actions, optimistic concurrency, cross-device
    synchronization, honest per-delivery status, push notification, and
    self-contained decision cards on iPhone and Mac.
-2. **Keep elaboration in the tested value proposition, but severable.** It uses
+2. **Keep specification in the tested value proposition, but severable.** It uses
    daemon-fetched research artifacts (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). (Decider: user.)
 3. **Support autonomous initiation.** Manual, label, and scan initiators run in
    `propose` or `auto_start` mode.
@@ -899,10 +899,10 @@ Section [14](#14-risks) records the residual; a project policy may exclude such 
 exposure is materially narrower than `provider_web_read` and is priced
 separately from it, never folded into that record.
 
-The 1B elaborator gets no general web access. It runs under `provider_only`
+The 1B specifier gets no general web access. It runs under `provider_only`
 and emits typed fetch requests. The daemon fetches allowed URLs and returns
 immutable, digest-addressed research artifacts, then reinvokes the
-elaborator for a bounded number of iterations. This removes the broadest
+specifier for a bounded number of iterations. This removes the broadest
 credential-exfiltration surface from the injection-exposed stage, and it
 makes research inputs provenance-bound, cacheable, and reproducible.
 Invocations bind to artifact IDs, not live web state.
@@ -1015,7 +1015,7 @@ through current configuration.
 
 #### The Stage Owns the Launch
 
-Elaboration, implementation, and review each
+Specification, implementation, and review each
 define a launch: writer or read-only, output contract, severance, session
 mode, and an auxiliary-inference policy (`forbidden`, `declared`, or
 `observed`). The adapter maps the launch to harness-native controls or
@@ -2047,11 +2047,11 @@ waiting.
 ```yaml
 project:        {repository: freeasinbird/gh-imgup, rein: tight}
 initiators:
-  - {type: manual}                      # freesided submit --spec
+  - {type: manual}                      # freesided submit --work-item
   - {type: label, label: "freeside",
      mode: auto_start}                  # explicit, recorded preset override
   - {type: scan, query: stale_prs, schedule: daily, mode: propose}   # Phase 2
-elaboration:    {driver: claude, enabled: true, egress: provider_only,
+specification:  {driver: claude, enabled: true, egress: provider_only,
                  research: daemon_fetched}
 implementation: {driver: claude, failed_execution_retries: 2,
                  egress: provider_only}
@@ -2083,11 +2083,12 @@ Additional rules:
 
 - `rein` resolves into digested per-run policy with per-key provenance.
 - **Manual initiation uses `freesided submit`.** It registers the source work
-  item as a digest-addressed artifact, creates the elaboration run, and
+  item as a digest-addressed artifact, creates the specification run, and
   reserves the deterministic implementation identity. The implementation run
-  starts only after elaboration accepts a specification and, when configured,
-  the operator approves that specification's digest. Its result names the
-  source digest and artifact, the elaboration identity and policy, and the
+  starts only after the specification stage accepts its specification and,
+  when configured, the operator approves that specification's digest. Its
+  result names the
+  source digest and artifact, the specification identity and policy, and the
   reserved implementation identity as separate lanes. The approval claim, and
   then the created run, carries the approved implementation specification
   digest.
@@ -2097,7 +2098,7 @@ Additional rules:
   idempotent. A deliberate retry allocates the campaign's next attempt number,
   which only ever increases. It binds the new implementation run to its exact
   terminal parent, the operator's reason, the original source digest, the
-  approving elaboration run, and the unchanged approved specification digest.
+  approving specification run, and the unchanged approved specification digest.
   Retrying for operational reasons never requires changing the specification
   bytes. `freesided resume` is different: it targets one exact live run and
   mints no identity, and a terminal run can only continue as a deliberate new
@@ -2126,7 +2127,7 @@ The engine, not an agent, runs deterministic policy jobs:
 - evidence publication; and
 - cleanup.
 
-Agents appear where judgment is the work: elaborator, implementer, remediator,
+Agents appear where judgment is the work: specifier, implementer, remediator,
 diagnostic, finding classifier, finding adjudicator (Section [7](#7-review-policy)), drift auditor
 (Section [7](#7-review-policy)), reviewer, shadow reviewer, and, later, briefer.
 
@@ -3542,7 +3543,7 @@ Build the installer only after the underlying interfaces survive real use. The
 | `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If the installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls. A callback or `--resume` reopens the same review after approval. |
 | `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe); the probe rules follow the table. |
 | `freesided auth add`, `auth adopt`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided identity and enrollment lifecycle (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); each subcommand's rules follow the table. |
-| `freesided submit` | Registers a manually initiated source work item, starts elaboration, and reserves its future implementation run. |
+| `freesided submit` | Registers a manually initiated source work item, starts specification, and reserves its future implementation run. |
 | `freesided reattempt --parent-run <run>` or `--campaign <campaign>` | Requires an operator reason and allocates the campaign's next attempt from an already approved specification. It refuses a live parent. |
 | `freesided resume --run <run>` | Reattaches observation to one exact non-terminal run without creating a replacement. It refuses terminal runs and points to `reattempt`. |
 
@@ -3890,7 +3891,7 @@ largest runtime unknown. It blocks only 1A.2, never 1A.0 or 1A.1.
 
 Phase 1B turns the secure path into the useful daily workflow:
 
-`labeled issue → daemon-fetched research → elaboration → spec approval →
+`labeled issue → daemon-fetched research → specification → spec approval →
 implementation → gauntlet → Freeside-invoked review (Section [7](#7-review-policy),
 pre-publication) → finding adjudication → yield-driven remediation and
 pattern sweeps → diminishing-returns or dispute item → clean: PR under a
@@ -3904,7 +3905,7 @@ chain and never a readiness prerequisite.
 
 Phase 1B adds:
 
-- the elaborator and research fetcher;
+- the specifier and research fetcher;
 - label-initiator intake (scan-query initiators stay Phase 2);
 - the Freeside-invoked review stage (Section [7](#7-review-policy); implementation #427;
   pre-publication re-anchor #527), with ReviewSource freshness verification
@@ -3966,7 +3967,7 @@ audit. The internal exit is evaluated once all three have closed.
   published-PR activity.
 - **Providers close (wave 9).** This wave delivers one agent vocabulary across
   execution, review, and daemon judgment (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); the Codex execution
-  driver and its enrollment cutover; and pi elaboration.
+  driver and its enrollment cutover; and pi specification.
 
 #### 1B.2: The Initiative View
 
@@ -4037,11 +4038,11 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **2: convergence** | Integrated | Workflow engine, real driver, end-to-end fakes, and real work. The **spine** owns integration and contract adjudication. |
 | **3 (1B.0): loop foundations** | Parallel lanes | Spine, serialized: the Section [5.16](#516-the-durable-scheduler) scheduler (four timer kinds, trusted-job ticker migration), then Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture-hook recording. Ward: #401 gates 1/2/4/5 as parallel probes, then the #404 base image pinned per gate 2's outcome. App: Mac-first operator access (Section [10](#10-operations-and-onboarding)). |
 | **4 (1B.0): the review stage** | Serial | The spine rescopes #406/#407 into review cores and execution remainders, then lands the review-selection contract core, the review ward-topology slice, #405 only if review needs a project-derived image, and #427 (landed PR-anchored under the then-open Section [7](#7-review-policy) fork, resolved pre-publication in revision 28; the implementation re-anchor #527 landed in PR #530). Its close stands the minimal loop; real-backlog use begins. |
-| **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section [7](#7-review-policy) disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section [6](#6-verification) state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section [5.2](#52-the-daemon-and-its-supervisor) contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
+| **5 (1B.0): loop depth** | Parallel lanes | Specifier and daemon research fetching with the spec-approval gate; label-initiator intake; the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section [7](#7-review-policy) disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section [6](#6-verification) state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section [5.2](#52-the-daemon-and-its-supervisor) contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section [7](#7-review-policy) finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section [10](#10-operations-and-onboarding)). 1B.0 exit. |
 | **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, one serialized chain whose positions the spine assigns at planning: the revision-40 attention-presentation cluster (the Section [4](#4-the-attention-model) recommendation shape and Section [9](#9-comprehension) typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section [5.15](#515-evidence-and-images) evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section [8](#8-observability-and-optimization-telemetry)/9 comprehension-telemetry contracts the wave-10 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section [9](#9-comprehension) summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section [9](#9-comprehension) altitude; facts stay distinct from claims. |
 | **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. Human-gated follow-up filing with the `effect_proposal` card (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); the clean-machine onboarding proof (#428); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters. Exit proof: a clean machine reaches an unattended real run; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
-| **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), whether daemon judgment roles consume lineups (#900, decided before any utility agent exists), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on shadow evidence (none existed at the wave-6 exit because the shadow configuration was never approved for a project, #1001; #397 `starts-after` #898 and #869 `starts-after` #899 are recorded under the ambiguity rule for wave-9 planning to confirm), then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). Ward fronts with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866) and guided enrollment with the two-step cutover (#867). The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and elaboration agent (#895) `starts-after` #897 and #867, elaboration only, with its pre-adoption gates run against the pinned build. The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because tracker titles must match this section's resolver pattern. Deferral drain: the agent and provider clusters. Exit proof: a real unattended Codex run and a pi elaboration; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. 1B.1 exit evaluation. |
+| **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), whether daemon judgment roles consume lineups (#900, decided before any utility agent exists), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on shadow evidence (none existed at the wave-6 exit because the shadow configuration was never approved for a project, #1001; #397 `starts-after` #898 and #869 `starts-after` #899 are recorded under the ambiguity rule for wave-9 planning to confirm), then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). Ward fronts with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866) and guided enrollment with the two-step cutover (#867). The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and specification agent (#895) `starts-after` #897 and #867, specification only, with its pre-adoption gates run against the pinned build. The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because tracker titles must match this section's resolver pattern. Deferral drain: the agent and provider clusters. Exit proof: a real unattended Codex run and a pi specification; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. 1B.1 exit evaluation. |
 | **10 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, `exclusive-with` every open contract unit), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
 
 Wave 7's transaction closure also retires the `publish_blocked`
@@ -4117,7 +4118,7 @@ above:
 grep -rniE --exclude-dir=reviews "current (phase|wave)([^'[:alnum:]_]|$)|wave [0-9]+[^.]*underway" README.md AGENTS.md docs/
 ```
 
-The 1A backlog also serves as elaborator fixtures.
+The 1A backlog also serves as specifier fixtures.
 
 ### Phase 2: Breadth and Hardening
 
@@ -4178,7 +4179,7 @@ Safety failures are:
 
 **Kill criterion:** stop if agents work acceptably in the manual workflow but
 Freeside does not materially raise useful, correct work per unit of attention.
-Elaborator weakness alone is not a kill criterion.
+Specifier weakness alone is not a kill criterion.
 
 ## 13. Decisions Log
 
