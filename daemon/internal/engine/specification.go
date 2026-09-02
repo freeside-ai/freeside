@@ -194,6 +194,12 @@ type specificationTerminal struct {
 	SpecArtifactID      *domain.ArtifactID  `json:"spec_artifact_id,omitempty"`
 	ApprovalItemID      *domain.ItemID      `json:"approval_item_id,omitempty"`
 	SummaryDigest       *domain.Digest      `json:"summary_digest,omitempty"`
+	// DecisionArtifactID and QuestionItemID bind a needs_decision terminal:
+	// the specifier stopped on owner decisions and the run carries no
+	// specification, so no implementation can start from it. QuestionItemID
+	// is the agent_question item the answer transaction re-enters through.
+	DecisionArtifactID *domain.ArtifactID `json:"decision_artifact_id,omitempty"`
+	QuestionItemID     *domain.ItemID     `json:"question_item_id,omitempty"`
 }
 
 type specificationPriorArtifactEnvelope struct {
@@ -1214,6 +1220,7 @@ type verifiedSpecificationTerminal struct {
 	terminal      specificationTerminal
 	specification *domain.Artifact
 	approval      *domain.AttentionItem
+	question      *domain.AttentionItem
 	commands      []domain.Command
 }
 
@@ -1414,6 +1421,68 @@ func verifySpecificationOutput(
 		return domain.Artifact{}, err
 	}
 	return artifact, nil
+}
+
+// verifySpecificationQuestion re-derives a needs_decision terminal from
+// current state: the decisions artifact carries the invocation's agent
+// provenance, the agent_question item exists with the expected identity, its
+// facts name this invocation, and the item's single Question claim binds
+// the artifact's digest, which is the content address of the facts'
+// decisions. A decoded terminal is never trusted to have created either.
+func verifySpecificationQuestion(
+	ctx context.Context,
+	tx *store.ReadTx,
+	request specificationRequest,
+	terminal specificationTerminal,
+) (domain.AttentionItem, error) {
+	expectedArtifact := specificationDecisionArtifactID(request)
+	expectedItem := specificationQuestionItemID(request)
+	if terminal.DecisionArtifactID == nil || *terminal.DecisionArtifactID != expectedArtifact ||
+		terminal.QuestionItemID == nil || *terminal.QuestionItemID != expectedItem {
+		return domain.AttentionItem{}, fmt.Errorf("specification terminal %q decision identity mismatch: %w",
+			request.InvocationID, domain.ErrParentKeyMismatch)
+	}
+	artifact, err := tx.GetArtifact(ctx, expectedArtifact)
+	if err != nil {
+		return domain.AttentionItem{}, err
+	}
+	if err := requireSpecificationOutputProvenance(
+		artifact, domain.ArtifactKindEvidence, domain.ProducerAgent, request.InvocationID,
+	); err != nil {
+		return domain.AttentionItem{}, err
+	}
+	item, err := tx.GetAttentionItem(ctx, expectedItem)
+	if err != nil {
+		return domain.AttentionItem{}, err
+	}
+	facts := item.AgentQuestion
+	if item.ProjectID != request.ProjectID || item.Type != domain.AttentionAgentQuestion ||
+		item.Subject.RunID == nil || *item.Subject.RunID != request.SpecificationRunID ||
+		facts == nil || facts.Stage != domain.StageNameSpecification ||
+		facts.InvocationID != request.InvocationID {
+		return domain.AttentionItem{}, fmt.Errorf("specification question %q disagrees with its terminal: %w",
+			expectedItem, domain.ErrParentKeyMismatch)
+	}
+	body, err := json.Marshal(facts.Decisions)
+	if err != nil {
+		return domain.AttentionItem{}, err
+	}
+	if domain.Digest(contentaddr.Sum(body)) != artifact.Digest {
+		return domain.AttentionItem{}, fmt.Errorf("specification question %q decisions disagree with artifact %q: %w",
+			expectedItem, expectedArtifact, domain.ErrParentKeyMismatch)
+	}
+	bound := 0
+	for _, claim := range item.AgentClaims {
+		if claim.Label == domain.AgentQuestionClaimLabel && claim.Artifact == artifact.ID &&
+			claim.Digest == artifact.Digest {
+			bound++
+		}
+	}
+	if bound != 1 {
+		return domain.AttentionItem{}, fmt.Errorf("specification question %q binds %d decision claims: %w",
+			expectedItem, bound, domain.ErrParentKeyMismatch)
+	}
+	return item, nil
 }
 
 func verifySpecificationApproval(
@@ -1783,6 +1852,14 @@ func verifySpecificationTerminal(
 			request.InvocationID, domain.ErrParentKeyMismatch)
 	}
 	verified := verifiedSpecificationTerminal{binding: binding, entry: entry, terminal: terminal}
+	if terminal.DecisionArtifactID != nil {
+		question, err := verifySpecificationQuestion(ctx, tx, request, terminal)
+		if err != nil {
+			return verifiedSpecificationTerminal{}, err
+		}
+		verified.question = &question
+		return verified, nil
+	}
 	if terminal.SpecArtifactID == nil {
 		return verified, nil
 	}
@@ -2045,9 +2122,15 @@ func (e *Engine) acceptSpecificationAttempt(ctx context.Context, run domain.Run,
 		}
 		return e.acceptResearchRequests(ctx, run, request, output.FetchRequests, settings)
 	}
+	if len(output.Decisions) > 0 {
+		if request.Iteration >= settings.MaxIterations {
+			return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed, ErrSpecificationIterationsExhausted.Error())
+		}
+		return e.acceptSpecificationDecisions(ctx, run, request, output.Decisions)
+	}
 	if output.Reply != nil || output.Specification == nil {
 		return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed,
-			fmt.Errorf("%w: ordinary specification must return research requests or a specification", specify.ErrInvalidOutput).Error())
+			fmt.Errorf("%w: ordinary specification must return research requests, a specification, or decisions", specify.ErrInvalidOutput).Error())
 	}
 	if importer.ContainsSecret([]byte(output.Specification.Summary)) ||
 		importer.ContainsSecret([]byte(output.Specification.Body)) {
@@ -2558,6 +2641,168 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 	return true, nil
 }
 
+// specificationDecisionArtifactID names the content-addressed decisions
+// artifact a needs_decision terminal binds, keyed like the specification
+// artifact so a replay converges on the same identity.
+func specificationDecisionArtifactID(request specificationRequest) domain.ArtifactID {
+	return domain.ArtifactID(fmt.Sprintf("decisions-%s-%d", request.ImplementationRunID, request.Iteration))
+}
+
+// specificationQuestionItemID names the agent_question item a needs_decision
+// terminal creates; the answer transactions locate the asking invocation
+// through the item's Question claim, not through this id.
+func specificationQuestionItemID(request specificationRequest) domain.ItemID {
+	return domain.ItemID("question-" + string(request.InvocationID))
+}
+
+// Scan decoded card text separately because JSON string escaping can hide
+// credential delimiters from the encoded decisions artifact scan.
+func decisionsContainSecret(decisions []domain.Decision) bool {
+	for _, decision := range decisions {
+		if importer.ContainsSecret([]byte(decision.Question)) ||
+			importer.ContainsSecret([]byte(decision.WhyBlocking)) ||
+			importer.ContainsSecret([]byte(decision.Recommendation)) {
+			return true
+		}
+		for _, option := range decision.Options {
+			if importer.ContainsSecret([]byte(option.Label)) ||
+				importer.ContainsSecret([]byte(option.Tradeoffs)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// acceptSpecificationDecisions records a needs_decision result: the decisions
+// as an agent artifact, one agent_question item bound to the run and the
+// asking invocation, and a completed terminal with no specification. The run
+// stays implementation-ineligible under either spec_approval setting until
+// answer_and_retry re-invokes the specifier with the answer as a
+// human_feedback prior artifact (#919's transaction).
+func (e *Engine) acceptSpecificationDecisions(
+	ctx context.Context, run domain.Run, request specificationRequest, decisions []domain.Decision,
+) (bool, error) {
+	if decisionsContainSecret(decisions) {
+		return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed,
+			fmt.Errorf("%w: decisions contain credential-shaped content", specify.ErrInvalidOutput).Error())
+	}
+	body, err := json.Marshal(decisions)
+	if err != nil {
+		return false, err
+	}
+	if importer.ContainsSecret(body) {
+		return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed,
+			fmt.Errorf("%w: decisions contain credential-shaped content", specify.ErrInvalidOutput).Error())
+	}
+	digest := domain.Digest(contentaddr.Sum(body))
+	if _, err := e.specification.blobs.Put(digest, bytes.NewReader(body)); err != nil {
+		return false, err
+	}
+	createdAt := e.specification.now().UTC()
+	artifactID := specificationDecisionArtifactID(request)
+	artifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: artifactID, Type: domain.ArtifactKindEvidence, Digest: digest,
+		Provenance: domain.Provenance{
+			ProducerClass:        domain.ProducerAgent,
+			ProducerInvocationID: request.InvocationID, HeadBinding: domain.HeadIndependent,
+			SensitivityClass: domain.SensitivityNormal,
+		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: int64(len(body)),
+			CreatedAt: createdAt, Source: domain.EvidenceSourceRun,
+			Availability: domain.EvidenceAvailable,
+		},
+	}, nil)
+	if err != nil {
+		return false, err
+	}
+	subject := domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID}
+	names, err := displayNames(ctx, e.store, run.ProjectID, subject)
+	if err != nil {
+		return false, err
+	}
+	itemID := specificationQuestionItemID(request)
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: itemID, ProjectID: run.ProjectID, Subject: subject,
+		Type: domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
+		Reason:            decisions[0].Question,
+		RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry, domain.ActionStop},
+		AgentClaims: []domain.AgentClaim{{
+			Label: domain.AgentQuestionClaimLabel, Artifact: artifact.ID, Digest: artifact.Digest,
+			Provenance: artifact.Provenance,
+			Metadata: domain.EvidenceMetadata{
+				MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: int64(len(body)),
+				CreatedAt: createdAt, Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+			},
+		}},
+		AgentQuestion: &domain.AgentQuestionFacts{
+			Stage: domain.StageNameSpecification, InvocationID: request.InvocationID, Decisions: decisions,
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+		CreatedAt: &createdAt, DisplayNames: names,
+	}, nil)
+	if err != nil {
+		return false, err
+	}
+	terminal := specificationTerminal{
+		InvocationID: request.InvocationID, Iteration: request.Iteration,
+		Status: exec.StatusCompleted, ResearchArtifactIDs: []domain.ArtifactID{},
+		DecisionArtifactID: &artifactID, QuestionItemID: &itemID,
+	}
+	terminalBody, err := encodeSpecificationTerminal(terminal)
+	if err != nil {
+		return false, err
+	}
+	if err := runDurableTransitionHook(e.specification.transitionHook,
+		DurableTransitionSpecificationOutcome, DurableTransitionBefore); err != nil {
+		return false, err
+	}
+	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
+		verified, err := verifySpecificationChain(ctx, &tx.ReadTx, request)
+		if err != nil {
+			return err
+		}
+		if verified.binding.run.ID != run.ID {
+			return fmt.Errorf("decision transition run disagrees: %w", domain.ErrParentKeyMismatch)
+		}
+		if _, found, err := tx.LookupExecutionAdmission(ctx, request.InvocationID); err != nil {
+			return err
+		} else if !found {
+			return store.ErrNotFound
+		}
+		stored, inserted, err := tx.RecordInbox(ctx, string(request.InvocationID), kindSpecificationTerminal, terminalBody)
+		if err != nil {
+			return err
+		}
+		if !inserted && (stored.Kind != kindSpecificationTerminal || !bytes.Equal(stored.Payload, terminalBody)) {
+			return fmt.Errorf("specification terminal %q disagrees: %w",
+				request.InvocationID, domain.ErrImmutableTransition)
+		}
+		if !inserted {
+			return errReplay
+		}
+		if err := tx.PutArtifact(ctx, artifact); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
+	})
+	if errors.Is(err, errReplay) {
+		return false, nil
+	}
+	if MutableAdmissionPolicyRefusal(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := runDurableTransitionHook(e.specification.transitionHook,
+		DurableTransitionSpecificationOutcome, DurableTransitionAfter); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (e *Engine) readArtifactBody(ctx context.Context, id domain.ArtifactID) (string, error) {
 	_, body, err := e.readArtifactWithBody(ctx, id)
 	return body, err
@@ -2874,15 +3119,23 @@ func (t specificationTerminal) validate() error {
 	}
 	hasResearch := len(t.ResearchArtifactIDs) > 0
 	hasSpec := t.SpecArtifactID != nil
+	hasDecisions := t.DecisionArtifactID != nil
 	if t.Status == exec.StatusCompleted {
-		if hasResearch == hasSpec {
-			return fmt.Errorf("completed specification terminal must bind research or a specification: %w", domain.ErrParentKeyMismatch)
+		if boolCount(hasResearch)+boolCount(hasSpec)+boolCount(hasDecisions) != 1 {
+			return fmt.Errorf("completed specification terminal must bind research, a specification, or decisions: %w", domain.ErrParentKeyMismatch)
 		}
-	} else if hasResearch || hasSpec || t.ApprovalItemID != nil || t.SummaryDigest != nil {
+	} else if hasResearch || hasSpec || hasDecisions || t.ApprovalItemID != nil ||
+		t.SummaryDigest != nil || t.QuestionItemID != nil {
 		return fmt.Errorf("unsuccessful specification terminal carries output: %w", domain.ErrParentKeyMismatch)
 	}
 	if t.ApprovalItemID != nil && !hasSpec {
 		return fmt.Errorf("approval item has no specification: %w", domain.ErrParentKeyMismatch)
+	}
+	if hasDecisions != (t.QuestionItemID != nil) {
+		return fmt.Errorf("decisions and their question item must bind together: %w", domain.ErrParentKeyMismatch)
+	}
+	if hasDecisions && (*t.DecisionArtifactID == "" || *t.QuestionItemID == "") {
+		return domain.ErrEmptyID
 	}
 	if t.SummaryDigest != nil && t.ApprovalItemID == nil {
 		return fmt.Errorf("summary digest has no approval item: %w", domain.ErrParentKeyMismatch)
