@@ -85,7 +85,8 @@ type ExecutionFailureFacts struct {
 }
 
 func (f ExecutionFailureFacts) Validate() error {
-	if !f.Outcome.valid() || !f.Stage.valid() || f.InvocationID == "" {
+	// A blocked terminal is a question for the human, never a failure card.
+	if !f.Outcome.valid() || f.Outcome == ExecutionOutcomeBlocked || !f.Stage.valid() || f.InvocationID == "" {
 		return fmt.Errorf("execution failure outcome %q stage %q invocation %q: %w",
 			f.Outcome, f.Stage, f.InvocationID, ErrCardFactInconsistent)
 	}

@@ -63,14 +63,7 @@ func (h *artifactStoreHarness) ReadClaims(
 	t *testing.T, id domain.InvocationID,
 ) ([]domain.AgentClaim, bool, error) {
 	t.Helper()
-	claims, err := readAgentClaims(t.Context(), h.store, id)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	return claims, true, nil
+	return h.adapter.LookupClaims(t.Context(), id)
 }
 
 func (h *artifactStoreHarness) IsConflict(err error) bool {

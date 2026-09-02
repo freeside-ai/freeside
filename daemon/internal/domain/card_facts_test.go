@@ -118,6 +118,10 @@ func TestCardFactValidation(t *testing.T) {
 		domain.DisplayName{Source: domain.DisplayNameSourceName},
 		domain.CostSoFar{Currency: "usd", Amount: "01", Invocations: 0},
 		domain.ExecutionFailureFacts{Outcome: domain.ExecutionOutcomeFailed},
+		domain.ExecutionFailureFacts{
+			Outcome: domain.ExecutionOutcomeBlocked, Stage: domain.StageNameImplementation,
+			InvocationID: "inv-1",
+		},
 		domain.PublishBlockFacts{},
 		domain.PublishBlockFacts{HoldReason: &hold, TrustRule: &rule},
 		domain.DiffStats{FilesChanged: -1, BaseSHA: "base", HeadSHA: "head"},

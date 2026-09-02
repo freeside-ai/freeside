@@ -178,4 +178,7 @@ type Artifacts interface {
 	// inline text, or order) is a conflict, never a silent overwrite. An empty
 	// set records nothing.
 	RecordClaims(ctx context.Context, id domain.InvocationID, claims []domain.AgentClaim) error
+	// LookupClaims reconstructs the immutable claim set for terminal recovery.
+	// found is false only when no set was recorded for the invocation.
+	LookupClaims(ctx context.Context, id domain.InvocationID) (claims []domain.AgentClaim, found bool, err error)
 }

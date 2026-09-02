@@ -895,6 +895,10 @@ const (
 	ExecutionOutcomeFailed   ExecutionOutcomeStatus = "failed"
 	ExecutionOutcomeCanceled ExecutionOutcomeStatus = "canceled"
 	ExecutionOutcomeLost     ExecutionOutcomeStatus = "lost"
+	// ExecutionOutcomeBlocked records an implementer that stopped on a
+	// typed blocked outcome: no candidate exists, the decisions live in the
+	// invocation's agent claims, and the run waits on a human answer.
+	ExecutionOutcomeBlocked ExecutionOutcomeStatus = "blocked"
 )
 
 // AllExecutionOutcomeStatuses is the single registration point for durable
@@ -903,11 +907,12 @@ var AllExecutionOutcomeStatuses = []ExecutionOutcomeStatus{
 	ExecutionOutcomeFailed,
 	ExecutionOutcomeCanceled,
 	ExecutionOutcomeLost,
+	ExecutionOutcomeBlocked,
 }
 
 func (s ExecutionOutcomeStatus) valid() bool {
 	switch s {
-	case ExecutionOutcomeFailed, ExecutionOutcomeCanceled, ExecutionOutcomeLost:
+	case ExecutionOutcomeFailed, ExecutionOutcomeCanceled, ExecutionOutcomeLost, ExecutionOutcomeBlocked:
 		return true
 	default:
 		return false

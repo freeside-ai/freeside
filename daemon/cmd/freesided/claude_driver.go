@@ -1185,6 +1185,21 @@ func (a artifactStore) RecordClaims(
 	})
 }
 
+func (a artifactStore) LookupClaims(
+	ctx context.Context, id domain.InvocationID,
+) ([]domain.AgentClaim, bool, error) {
+	var claims []domain.AgentClaim
+	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		claims, err = tx.GetAgentClaims(ctx, id)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, false, nil
+	}
+	return claims, err == nil, err
+}
+
 // transportSeeder adapts the publish transport's exact-base checkouts to the
 // driver's Seeder port. These are the only materialization paths that stamp
 // the canonical repository name and numeric identity ward refuses to seed a

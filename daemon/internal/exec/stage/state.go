@@ -95,6 +95,10 @@ type intent struct {
 	RecordedAt time.Time         `json:"recorded_at"`
 	CommitDate time.Time         `json:"commit_date"`
 	Result     *exec.StageResult `json:"result,omitempty"`
+	// PendingUsage bridges the record-outcome-before-result crash window for
+	// non-completed terminals. The public outcome remains the status authority;
+	// these private measurements only complete its reconstructed StageResult.
+	PendingUsage []exec.UsageMeasurement `json:"pending_usage,omitempty"`
 }
 
 type durableInputs struct {
@@ -167,6 +171,8 @@ func (i intent) validate() error {
 		return fmt.Errorf("driver intent %q is committed without a result", i.InvocationID)
 	case i.Phase != phaseCommitted && i.Result != nil:
 		return fmt.Errorf("driver intent %q carries a result in phase %q", i.InvocationID, i.Phase)
+	case (i.Phase == phaseCommitted || i.Phase == phaseLost) && len(i.PendingUsage) > 0:
+		return fmt.Errorf("driver intent %q carries pending usage in terminal phase %q", i.InvocationID, i.Phase)
 	case i.Export != nil && i.Export.Replay != nil &&
 		i.Export.CommitPlanPresent != (i.Export.Replay.CommitPlanDigest != nil):
 		return fmt.Errorf("driver intent %q replay disagrees with commit-plan presence", i.InvocationID)
@@ -185,6 +191,11 @@ func (i intent) validate() error {
 	}
 	if i.Result != nil {
 		return i.Result.Validate()
+	}
+	for index, measurement := range i.PendingUsage {
+		if err := measurement.Validate(); err != nil {
+			return fmt.Errorf("driver intent %q pending usage %d: %w", i.InvocationID, index, err)
+		}
 	}
 	return nil
 }
@@ -363,6 +374,8 @@ func (d *Driver) restoreDurableOutcome(
 		)
 	}
 	in.Export = nil
+	usage := slices.Clone(in.PendingUsage)
+	in.PendingUsage = nil
 	switch stored.Status {
 	case domain.ExecutionOutcomeFailed:
 		in.Phase = phaseCommitted
@@ -370,6 +383,7 @@ func (d *Driver) restoreDurableOutcome(
 			InvocationID: in.InvocationID,
 			Status:       exec.StatusFailed,
 			Summary:      stored.Summary,
+			Usage:        usage,
 		}
 	case domain.ExecutionOutcomeCanceled:
 		in.Phase = phaseCommitted
@@ -377,6 +391,39 @@ func (d *Driver) restoreDurableOutcome(
 			InvocationID: in.InvocationID,
 			Status:       exec.StatusCanceled,
 			Summary:      stored.Summary,
+			Usage:        usage,
+		}
+	case domain.ExecutionOutcomeBlocked:
+		claims, found, err := d.artifacts.LookupClaims(ctx, in.InvocationID)
+		if err != nil {
+			return intent{}, false, fmt.Errorf("%w: outcome recovery %s claims: %w",
+				ErrRecoveryRetryable, in.InvocationID, err)
+		}
+		artifacts := make([]domain.Digest, 0, len(claims))
+		blockedClaims := 0
+		for _, claim := range claims {
+			if claim.Provenance.ProducerInvocationID != in.InvocationID {
+				return intent{}, false, fmt.Errorf(
+					"%w: outcome recovery %s claim belongs to %s",
+					ErrUnsupportedStart, in.InvocationID, claim.Provenance.ProducerInvocationID)
+			}
+			if claim.Label == export.BlockedEvidenceLabel {
+				blockedClaims++
+			}
+			artifacts = append(artifacts, claim.Digest)
+		}
+		if !found || blockedClaims != 1 {
+			return intent{}, false, fmt.Errorf(
+				"%w: outcome recovery %s has %d blocked claims",
+				ErrUnsupportedStart, in.InvocationID, blockedClaims)
+		}
+		in.Phase = phaseCommitted
+		in.Result = &exec.StageResult{
+			InvocationID: in.InvocationID,
+			Status:       exec.StatusBlocked,
+			Artifacts:    artifacts,
+			Summary:      stored.Summary,
+			Usage:        usage,
 		}
 	case domain.ExecutionOutcomeLost:
 		in.Phase = phaseLost

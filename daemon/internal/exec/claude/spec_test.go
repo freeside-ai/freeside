@@ -3,6 +3,7 @@ package claude
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	osexec "os/exec"
@@ -458,6 +459,67 @@ func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 	} {
 		if !strings.Contains(script[summaryGuard:], field) {
 			t.Errorf("summary descriptor omits %q", field)
+		}
+	}
+	blockedGuard := at("if [ -f '" + export.BlockedEvidencePath + "' ] && [ ! -L '" +
+		export.BlockedEvidencePath + "' ]")
+	if blockedGuard < summaryGuard || blockedGuard > marker {
+		t.Error("the blocked descriptor is not declared after the writer and before its outcome marker")
+	}
+	for _, field := range []string{
+		`"label":"` + export.BlockedEvidenceLabel + `"`,
+		`"media_type":"application/json"`,
+		`"path":"` + export.BlockedEvidencePath + `"`,
+		`"head_binding":"head_independent"`,
+		`"sensitivity_class":"normal"`,
+		`"producer_invocation_id":"inv-1"`,
+	} {
+		if !strings.Contains(script[blockedGuard:], field) {
+			t.Errorf("blocked descriptor omits %q", field)
+		}
+	}
+}
+
+// TestFixedSourceDescriptorComposes proves the shell-composed descriptor
+// (prefix, comma-joined fragments, closing brackets) is exactly the encoded
+// manifest for every present-source combination, so the post-writer shell
+// cannot declare a shape the export helper rejects.
+func TestFixedSourceDescriptorComposes(t *testing.T) {
+	t.Parallel()
+	transcript := export.EvidenceSource{
+		Label: "agent-transcript", MediaType: "application/jsonl", Path: transcriptEvidencePath,
+		HeadBinding: export.EvidenceHeadIndependent, SensitivityClass: export.EvidenceSensitivitySensitive,
+		ProducerInvocationID: "inv-1",
+	}
+	summary := export.EvidenceSource{
+		Label: export.SummaryEvidenceLabel, MediaType: "text/markdown", Path: export.SummaryEvidencePath,
+		HeadBinding: export.EvidenceHeadIndependent, SensitivityClass: export.EvidenceSensitivitySensitive,
+		ProducerInvocationID: "inv-1",
+	}
+	blocked := export.EvidenceSource{
+		Label: export.BlockedEvidenceLabel, MediaType: "application/json", Path: export.BlockedEvidencePath,
+		HeadBinding: export.EvidenceHeadIndependent, SensitivityClass: export.EvidenceSensitivityNormal,
+		ProducerInvocationID: "inv-1",
+	}
+	for _, sources := range [][]export.EvidenceSource{
+		{transcript, summary}, {transcript, blocked}, {transcript, summary, blocked},
+	} {
+		fragments := make([]string, 0, len(sources))
+		for _, source := range sources {
+			fragments = append(fragments, evidenceSourceFragment(source.Label, source))
+		}
+		composed := evidenceDescriptorPrefix() + strings.Join(fragments, ",") + "]}"
+		want, err := json.Marshal(export.EvidenceSourceManifest{
+			Version: export.EvidenceSourceVersion, Sources: sources,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if composed != string(want) {
+			t.Fatalf("composed descriptor = %s, want %s", composed, want)
+		}
+		if _, err := export.DecodeEvidenceSourceManifest([]byte(composed)); err != nil {
+			t.Fatalf("composed descriptor does not decode: %v", err)
 		}
 	}
 }

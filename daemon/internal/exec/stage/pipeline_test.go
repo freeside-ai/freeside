@@ -85,7 +85,7 @@ func TestEvidenceIsPersistedBeforeTheExportIsRemoved(t *testing.T) {
 	}
 	in := intent{InvocationID: testInvoke}
 
-	digests, err := d.persistEvidence(ctx, in, out, nil)
+	digests, err := d.persistEvidence(ctx, in, out, nil, nil)
 	if err != nil {
 		t.Fatalf("persistEvidence: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestEvidenceBlobMissingFromTheExportFailsTheStage(t *testing.T) {
 			}},
 		},
 	}
-	if _, err := d.persistEvidence(context.Background(), intent{InvocationID: testInvoke}, out, nil); err == nil {
+	if _, err := d.persistEvidence(context.Background(), intent{InvocationID: testInvoke}, out, nil, nil); err == nil {
 		t.Fatal("a missing evidence blob was accepted")
 	}
 }
@@ -580,7 +580,7 @@ func TestSpecificationProfileToleratesWorkspaceDebris(t *testing.T) {
 			{Kind: importer.FindingSecretScanSkipped, Path: "dist/big.bin"},
 		},
 	}
-	if err := d.validateImportFindings(rejectionIntent(), imported, specProfile()); err != nil {
+	if err := d.validateImportFindings(rejectionIntent(), imported, specProfile(), true); err != nil {
 		t.Fatalf("specification profile rejected pure debris: %v", err)
 	}
 	if _, found, err := exports.LookupExportRejection(context.Background(), testInvoke); err != nil || found {
@@ -603,7 +603,7 @@ func TestValidateImportFindingsRejectsWithoutWriting(t *testing.T) {
 			{Kind: importer.FindingSecret, Path: "config.yaml", Rule: "aws_key", Line: 12},
 		},
 	}
-	err := d.validateImportFindings(rejectionIntent(), imported, specProfile())
+	err := d.validateImportFindings(rejectionIntent(), imported, specProfile(), true)
 	if !errors.Is(err, errDefinitiveExportRejection) {
 		t.Fatalf("secret under specification = %v, want definitive rejection", err)
 	}
@@ -683,7 +683,7 @@ func TestPublishStrictRejectsAnyFinding(t *testing.T) {
 		CommitSHA: strings.Repeat("c", 40),
 		Findings:  []importer.Finding{{Kind: importer.FindingAllowlistViolation, Path: "outside-scope.txt"}},
 	}
-	if err := d.validateImportFindings(rejectionIntent(), imported, nil); !errors.Is(err, errDefinitiveExportRejection) {
+	if err := d.validateImportFindings(rejectionIntent(), imported, nil, true); !errors.Is(err, errDefinitiveExportRejection) {
 		t.Fatalf("publish-strict finding = %v, want definitive rejection", err)
 	}
 }
@@ -697,12 +697,12 @@ func TestPublishStrictToleratesAdvisoryFinding(t *testing.T) {
 	d := newTestDriver(t, &stubGate{}, newStubExports())
 	advisory := importer.Finding{Kind: importer.FindingReviewerInstructionPath, Path: "AGENTS.md"}
 	imported := importer.Result{CommitSHA: strings.Repeat("c", 40), Findings: []importer.Finding{advisory}}
-	if err := d.validateImportFindings(rejectionIntent(), imported, nil); err != nil {
+	if err := d.validateImportFindings(rejectionIntent(), imported, nil, true); err != nil {
 		t.Fatalf("advisory-only findings = %v, want tolerated", err)
 	}
 	imported.Findings = append(imported.Findings,
 		importer.Finding{Kind: importer.FindingAutomationControlPath, Path: ".github/workflows/ci.yml"})
-	if err := d.validateImportFindings(rejectionIntent(), imported, nil); !errors.Is(err, errDefinitiveExportRejection) {
+	if err := d.validateImportFindings(rejectionIntent(), imported, nil, true); !errors.Is(err, errDefinitiveExportRejection) {
 		t.Fatalf("advisory with fatal sibling = %v, want definitive rejection", err)
 	}
 }

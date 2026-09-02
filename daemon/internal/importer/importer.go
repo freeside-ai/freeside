@@ -124,6 +124,13 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 			return result, nil
 		}
 	}
+	if opts.ExpectNoChanges {
+		if len(changes) > 0 || planPresent {
+			return Result{}, fmt.Errorf("%w: %d changes, commit plan present: %t",
+				ErrUnexpectedChanges, len(changes), planPresent)
+		}
+		return result, nil
+	}
 	if opts.Policy.CommitPlan == domain.CommitPlanPlanPreferred {
 		if len(changes) == 0 {
 			if planPresent {

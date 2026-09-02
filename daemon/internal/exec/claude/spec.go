@@ -160,18 +160,38 @@ func agentCommand(prompt, sessionID string, invocationID domain.InvocationID, pr
 	if err != nil {
 		panic("marshal fixed Claude transcript descriptor: " + err.Error())
 	}
-	summaryDescriptor, err := json.Marshal(export.EvidenceSourceManifest{
-		Version: export.EvidenceSourceVersion,
-		Sources: []export.EvidenceSource{transcriptSource, {
-			Label: export.SummaryEvidenceLabel, MediaType: "text/markdown",
-			Path: export.SummaryEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
-			SensitivityClass:     export.EvidenceSensitivitySensitive,
-			ProducerInvocationID: string(invocationID),
-		}},
-	})
-	if err != nil {
-		panic("marshal fixed Claude summary descriptor: " + err.Error())
+	summarySource := export.EvidenceSource{
+		Label: export.SummaryEvidenceLabel, MediaType: "text/markdown",
+		Path: export.SummaryEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+		SensitivityClass:     export.EvidenceSensitivitySensitive,
+		ProducerInvocationID: string(invocationID),
 	}
+	// The blocked outcome is the second launcher-fixed source: the agent
+	// controls only whether the file exists and its decisions, never the
+	// label, path, media type, or provenance the daemon attaches.
+	blockedSource := export.EvidenceSource{
+		Label: export.BlockedEvidenceLabel, MediaType: "application/json",
+		Path: export.BlockedEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+		SensitivityClass:     export.EvidenceSensitivityNormal,
+		ProducerInvocationID: string(invocationID),
+	}
+	descriptorPrefix := evidenceDescriptorPrefix()
+	sourceFragment := evidenceSourceFragment
+	fileExists := func(p string) string {
+		return "[ -f " + shellQuote(p) + " ] && [ ! -L " + shellQuote(p) + " ]"
+	}
+	// After the writer exits, redeclare the descriptor for whichever fixed
+	// sources exist. One descriptor is written, listing every present
+	// source, so the evidence channel never carries a source the workspace
+	// lacks. Each fragment appears once to keep the sh argument under the
+	// Linux single-argument limit.
+	declareFixedSources := "sources=" + shellQuote(sourceFragment("transcript", transcriptSource)) + "; declare=0; " +
+		"if " + fileExists(export.SummaryEvidencePath) + "; then " +
+		"sources=\"$sources\"," + shellQuote(sourceFragment("summary", summarySource)) + "; declare=1; fi; " +
+		"if " + fileExists(export.BlockedEvidencePath) + "; then " +
+		"sources=\"$sources\"," + shellQuote(sourceFragment("blocked", blockedSource)) + "; declare=1; fi; " +
+		"if [ \"$declare\" = 1 ]; then printf '%s\\n' " + shellQuote(descriptorPrefix) + "\"$sources\"']}' > " +
+		shellQuote(transcriptDescriptorPath) + "; fi; "
 	// hydrate runs before the chown sweep; guardPrefix turns the token check
 	// into a two-branch guard that reports the prepare failure and skips the
 	// agent. Both are empty/"if " with no preparation, so the command stays
@@ -206,7 +226,7 @@ func agentCommand(prompt, sessionID string, invocationID domain.InvocationID, pr
 			"--output-format stream-json --verbose --dangerously-skip-permissions "+
 			"--safe-mode --session-id %s --append-system-prompt-file %s "+
 			"> %s 2>&1; status=$?; set -e; unset token; fi; "+
-			"if [ -f %s ] && [ ! -L %s ]; then printf '%%s\\n' %s > %s; fi; "+
+			"%s"+
 			"rm -rf -- %s; "+
 			"printf '%%s %%s\\n' %s \"$status\" > %s; sync; exit \"$status\"",
 		shellQuote(path.Dir(transcriptPath)), hydrate,
@@ -228,12 +248,33 @@ func agentCommand(prompt, sessionID string, invocationID domain.InvocationID, pr
 		shellQuote(ward.ClaudeConfigRootTarget), agentUID, agentGID, shellQuote(prompt),
 		shellQuote(sessionID), shellQuote(instructionBundlePath),
 		shellQuote(transcriptPath),
-		shellQuote(export.SummaryEvidencePath), shellQuote(export.SummaryEvidencePath),
-		shellQuote(string(summaryDescriptor)), shellQuote(transcriptDescriptorPath),
+		declareFixedSources,
 		shellQuote(workspaceDir+"/node_modules"),
 		shellQuote(ward.WriterNoncePlaceholder),
 		shellQuote(writerOutcomePath),
 	)}
+}
+
+// evidenceSourceFragment renders one fixed evidence source as the JSON
+// array element the post-writer shell appends to the descriptor.
+func evidenceSourceFragment(name string, source export.EvidenceSource) string {
+	body, err := json.Marshal(source)
+	if err != nil {
+		panic("marshal fixed Claude " + name + " source: " + err.Error())
+	}
+	return string(body)
+}
+
+// evidenceDescriptorPrefix is the descriptor manifest with its sources
+// elided up to the opening bracket; the shell appends the fragments that
+// exist, comma-separated, and closes the array and object, so the composed
+// bytes are exactly what json.Marshal emits for the same source list.
+func evidenceDescriptorPrefix() string {
+	head, err := json.Marshal(export.EvidenceSourceManifest{Version: export.EvidenceSourceVersion})
+	if err != nil {
+		panic("marshal fixed Claude descriptor head: " + err.Error())
+	}
+	return strings.TrimSuffix(string(head), "null}") + "["
 }
 
 // shellJoin renders an argv as space-separated single-quoted shell words.
