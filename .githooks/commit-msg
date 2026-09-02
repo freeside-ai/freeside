@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# commit-msg — catch mechanical message-policy failures early on the normal
+# editor/strip-cleanup path. Pull-request CI remains authoritative because
+# this hook cannot observe Git's later cleanup mode or the effective `auto`
+# comment character.
+#
+# Enable once per clone:
+#   git config core.hooksPath .githooks
+set -euo pipefail
+
+# Merge commits are exempt, matching the range check's --no-merges: git runs
+# this hook for `git merge` too, and the default "Merge branch ..." message
+# carries no body, so an unconditional check would abort an ordinary
+# base-freshness merge.
+if [ -e "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+  exit 0
+fi
+
+root=$(git rev-parse --show-toplevel)
+exec bash "$root/scripts/check-commit-messages.sh" --message-file "$1"

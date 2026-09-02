@@ -7,12 +7,14 @@ on:
       - "app/**"
       - "api/openapi.yaml"
       - "scripts/test-install-mac-app.sh"
+      - "scripts/check.sh"
       - ".github/workflows/app-ci.yml"
   pull_request:
     paths:
       - "app/**"
       - "api/openapi.yaml"
       - "scripts/test-install-mac-app.sh"
+      - "scripts/check.sh"
       - ".github/workflows/app-ci.yml"
 
 permissions:
@@ -43,9 +45,8 @@ jobs:
             echo "swift-format ${version} != pinned ${SWIFT_FORMAT_VERSION}" >&2
             exit 1
           fi
-      - name: Lint
-        working-directory: app
-        run: xcrun swift-format lint --strict --recursive Sources Tests Apps Package.swift
+      - name: Lint (scripts/check.sh)
+        run: bash scripts/check.sh app format
       - name: Check formatting drift
         working-directory: app
         run: |
@@ -70,12 +71,8 @@ jobs:
           path: ~/.cache/org.swift.swiftpm
           key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
           restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
-      - name: Verify generated API client
-        working-directory: app
-        run: ./scripts/generate-api-client.sh
-      - name: Test Swift package
-        working-directory: app
-        run: swift test --only-use-versions-from-resolved-file
+      - name: Verify generated API client and test the package (scripts/check.sh)
+        run: bash scripts/check.sh app generate test
 
   # The macOS twin of `package`, and the only job that runs
   # FreesideCoreTests: Package.swift declares those targets only under
@@ -92,9 +89,8 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
-      - name: Test Swift package
-        working-directory: app
-        run: swift test --only-use-versions-from-resolved-file
+      - name: Test Swift package (scripts/check.sh)
+        run: bash scripts/check.sh app test
 
   apps:
     name: apps (macOS + iOS)
@@ -113,31 +109,5 @@ jobs:
           restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
       - name: Test Mac installer with the real exclusive rename
         run: FREESIDE_TEST_REAL_RENAME=true bash scripts/test-install-mac-app.sh
-      - name: Build macOS app
-        working-directory: app
-        run: >-
-          xcodebuild
-          -project Freeside.xcodeproj
-          -scheme FreesideMac
-          -destination 'platform=macOS'
-          -onlyUsePackageVersionsFromResolvedFile
-          -skipPackageUpdates
-          -skipPackagePluginValidation
-          CODE_SIGNING_ALLOWED=NO
-          COMPILER_INDEX_STORE_ENABLE=NO
-          build
-      - name: Build iOS app
-        working-directory: app
-        run: >-
-          xcodebuild
-          -project Freeside.xcodeproj
-          -scheme FreesideIOS
-          -destination 'generic/platform=iOS Simulator'
-          -onlyUsePackageVersionsFromResolvedFile
-          -skipPackageUpdates
-          -skipPackagePluginValidation
-          CODE_SIGNING_ALLOWED=NO
-          COMPILER_INDEX_STORE_ENABLE=NO
-          ARCHS=arm64
-          ONLY_ACTIVE_ARCH=YES
-          build
+      - name: Build macOS and iOS apps (scripts/check.sh)
+        run: bash scripts/check.sh app build-mac build-ios

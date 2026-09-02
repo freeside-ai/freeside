@@ -1,0 +1,35 @@
+name: docs CI
+
+# Runs the `docs` component's standard checks (scripts/check.sh docs), so a
+# plan-only change cannot merge with a broken "Section N" citation.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/plan.md"
+      - "scripts/link-plan-section-refs.sh"
+      - "scripts/check.sh"
+      - ".github/workflows/docs-ci.yml"
+  pull_request:
+    paths:
+      - "docs/plan.md"
+      - "scripts/link-plan-section-refs.sh"
+      - "scripts/check.sh"
+      - ".github/workflows/docs-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    name: docs (plan links)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: plan links (scripts/check.sh)
+        run: bash scripts/check.sh docs

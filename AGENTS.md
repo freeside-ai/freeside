@@ -2,7 +2,7 @@
 
 **Freeside** is an agent control plane: a local, durable workflow controller that grants agents the autonomy to turn work items into evidence-backed pull requests and interrupts a human only when judgment is required. The spec, architecture, and roadmap live in [`docs/plan.md`](docs/plan.md); read it first and argue changes against it. This file holds the conventions that apply to every session: decision notes, branch, PR, and commit discipline, and the monorepo's scope rules.
 
-Freeside is a monorepo. A component directory holds only a `README.md` stating its purpose until the roadmap phase that fills it (`docs/plan.md` §11 and the README name the phase). Do not scaffold a component ahead of its phase. The Build, Test, Run table below shows which components carry code today. The API schema is provisional (plan §11 Wave 0; decision record in `docs/history/decisions.md`).
+Freeside is a monorepo. A component directory holds only a `README.md` stating its purpose until the roadmap phase that fills it (`docs/plan.md` §11 and the README name the phase). Do not scaffold a component ahead of its phase. The API schema is provisional (plan §11 Wave 0; decision record in `docs/history/decisions.md`).
 
 CLAUDE.md is a pointer that imports this file; edit AGENTS.md, never the pointer.
 
@@ -289,17 +289,21 @@ translate agent jargon or search for the conclusion.
 
 ## Build, Test, Run
 
-Per-component commands land here with each component's first PR (`docs/plan.md` §11). `prompts/` and `policy/` are not yet initialized. Lint, format, and CI follow the daemon's pattern, `daemon/.golangci.yml` and `.github/workflows/daemon-ci.yml` (Linux runs build, test, vet, and lint; macOS runs build and test); each new component establishes its own on that pattern in its first PR.
-
-| Component  | Toolchain      | Commands |
-| ---------- | -------------- | -------- |
-| `daemon/`  | Go             | `cd daemon`; `go build ./...`; `go test ./...`; `go vet ./...`; `golangci-lint run`. Opt-in live suites are skipped by default and CI-blind: `FREESIDE_PUBLISH_LIVE_TEST`, `FREESIDE_WARD_LIVE_TEST`, `FREESIDE_CLAUDE_TOKEN_LIVE_TEST`, `FREESIDE_CODEX_ENROLLMENT_LIVE_TEST`, `FREESIDE_REAL_RUN_LIVE_TEST`; each test's skip message lists the rest of its environment. |
-| `app/`     | Xcode / SPM    | `cd app`; `./scripts/generate-api-client.sh`; `swift test`; `xcrun swift-format lint --strict --recursive Sources Tests Apps Package.swift`; `xcodebuild -project Freeside.xcodeproj -scheme FreesideMac -destination 'platform=macOS' -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO build`; `xcodebuild -project Freeside.xcodeproj -scheme FreesideIOS -destination 'generic/platform=iOS Simulator' -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO build`. From the repo root, `bash scripts/run-convergence.sh` runs the §5.14 real-daemon convergence and builds the daemon harness. `./scripts/install-mac-app.sh --daemon-path </absolute/path/to/freesided> [--server-url <url>] [--launch]` installs or updates the operator's own signed FreesideMac and needs an `Apple Development` signing identity; `./scripts/install-ios-app.sh --device <name-or-udid> [--server-url <url>] [--launch]` builds, signs, and installs FreesideIOS on a physical iPhone under free provisioning and needs Xcode plus a trusted device with Developer Mode. See app/README.md for both. |
-| `api/`     | OpenAPI (spec) | `go run github.com/daveshanley/vacuum@v0.29.9 lint -r api/vacuum.ruleset.yaml --details --fail-severity warn api/openapi.yaml` (from the repo root; see api/README.md). |
-| `prompts/` | prompt text    | Not yet initialized; see the docs/plan.md roadmap. |
-| `policy/`  | YAML (policy)  | Not yet initialized; see the docs/plan.md roadmap. |
-| `images/`  | OCI images     | `bash scripts/build-exporter-image.sh --local-registry-port 5000`; the agent bases `bash scripts/build-agent-claude-image.sh --local-registry-port 5000` and `bash scripts/build-agent-codex-image.sh --local-registry-port 5000`, each followed by `bash scripts/check-agent-image.sh <ref>` on the registry-resolvable reference it prints. All need Apple `container`, the builds need container egress, and `--registry HOST[/PATH]` targets a shared registry. Per-project images are runtime artifacts of the reusable builder (#334), invoked by `freesided onboard` (#238), not built from this directory. |
-| `scripts/` | Bash / Go      | `bash -n scripts/*.sh app/scripts/*.sh`; `shellcheck scripts/*.sh app/scripts/*.sh` (CI pins shellcheck in `.github/workflows/scripts-ci.yml`); the regression suites `bash scripts/test-build-image-references.sh`, `bash scripts/test-check-commit-messages.sh`, `bash scripts/test-merge-result-audit.sh`, `bash scripts/test-check-agent-image.sh`, `bash scripts/test-install-mac-app.sh`, `bash scripts/test-install-ios-app.sh`, `bash scripts/test-link-plan-section-refs.sh`, and `bash scripts/test-check-vocabulary.sh`; `go -C scripts/trackercollect build ./...`; `go -C scripts/trackercollect test ./...`; `go -C scripts/trackercollect vet ./...`. `bash scripts/link-plan-section-refs.sh --check` verifies that every "Section N" citation in `docs/plan.md` links to its heading anchor and that no citation or existing link is broken (drop `--check` to rewrite the links after a plan edit). `bash scripts/check-vocabulary.sh` (repo root; CI runs it) refuses the pre-rename stage vocabulary in daemon non-test Go code, migrations after 0064, `api/`, `app/`, `prompts/`, and `scripts/`; one `legacy_vocabulary.go` per package is the only place the old literals may live. `bash scripts/run-real-work.sh <spec> <policy> <publication>` is the §11 1A.2 real unattended run and needs Apple `container` plus the operator preconditions its header lists. |
+`bash scripts/check.sh <component> [step...]` runs a component's standard
+checks from the repo root, and CI runs those steps through the same script,
+so its step table is the authoritative check list; the one exception is
+daemon lint, which CI runs through golangci-lint-action at the same pinned
+version. `bash scripts/check.sh --list` prints the components (`daemon`,
+`app`, `api`, `scripts`, `convergence`, `docs`) and their steps; the script
+header documents the tool overrides and the daemon's opt-in live suites. Operator
+tools that are not checks live with their component: installers in
+app/README.md, image builds in images/README.md, the real unattended run in
+the `scripts/run-real-work.sh` header, and the API linter pin in
+api/README.md. `prompts/` and `policy/` are not yet initialized. Lint,
+format, and CI follow the daemon's pattern, `daemon/.golangci.yml` and
+`.github/workflows/daemon-ci.yml` (Linux runs build, test, vet, and lint;
+macOS runs build and test); each new component adds its own on that pattern
+in its first PR and registers its steps in `scripts/check.sh`.
 
 ## Daemon Coding Conventions
 
@@ -417,11 +421,8 @@ escalation.
 
 Integration evidence belongs to one base commit (the "Repeat integration
 checks when the base moves" rule under Pull Requests). The merge-result audit
-is the mechanical defense: a branch carrying stale or inverse content can
-silently revert already-merged sibling work through a clean 3-way merge (#47
-reverted #48; #49 recovered it). The audit builds the prospective merge
-result against the current base tip without mutating the checkout and
-enforces the unit's declared path scope on it.
+is its mechanical defense; the script header carries the incident it answers
+and its guarantees.
 
 - The spine role owns final integration ordering when several PRs are ready.
   A unit's Dependencies field records typed `merges-after` integration
@@ -429,16 +430,12 @@ enforces the unit's declared path scope on it.
 - After any merge to `main`, every remaining open PR's integration evidence is
   stale until revalidated against the new tip.
 - Before final handoff, and again after any base advance: fetch the default
-  branch, run
+  branch and run
   `scripts/merge-result-audit.sh origin/main <head-branch> <allowed-path>...`
-  against that exact tip, review the complete prospective change set it
-  prints, and record the resolved base SHA plus the audit command and verdict
-  in the PR's Verification section.
-- Pass the allowed paths explicitly as the unit's declared scope; the audit
-  never parses PR prose. It guarantees conflict detection, exact-base binding,
-  complete prospective-diff visibility, and path-boundary enforcement. It does
-  not infer semantic intent, so an in-scope reversion still needs a reviewer's
-  eyes on the printed change set.
+  against that exact tip, with the unit's declared scope as the allowed
+  paths. Read the whole change set it prints: the audit cannot see intent,
+  so an in-scope reversion still passes. Record the resolved base SHA, the
+  audit command, and the verdict in the PR's Verification section.
 
 <!-- agents-md:managed:branches -->
 
@@ -639,28 +636,16 @@ all three.
 
 ## Mechanical Commit-Message Checks
 
-Pull-request CI runs `bash scripts/check-commit-messages.sh <base-ref>
-<head-ref>` (locally, usually
-`bash scripts/check-commit-messages.sh origin/main HEAD`). It resolves the
-merge base and checks every non-merge commit in `merge-base..head` (merge
-commits and mainline commits brought in by a base-freshness merge are exempt)
-and reports every offending commit and rule in one run. Every checked commit
-must have:
-
-- A subject of at most 72 characters that does not end in a period and does
-  not begin with a lowercase ASCII letter (acronym-, identifier-, and
-  digit-led subjects are valid), a blank line 2, and a body with at least one
-  non-blank line.
-- Body lines of at most 72 characters. A line with no whitespace is exempt so
-  an unbreakable URL, object ID, or ref stays intact.
-- No forbidden prefix or marker, matched case-insensitively: a Conventional
-  Commit type (`build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`,
-  `refactor`, `revert`, `style`, `test`, including scoped and breaking forms
-  such as `feat(api):` and `refactor!:`), `fixup!`, `squash!`, a standalone
-  `WIP`, or a review-cleanup subject (`Address review`, `Address PR review`,
-  `Address pull request review`, `Apply review feedback` with optional `PR`
-  or `pull request` before `review`, `PR feedback`, `Pull request feedback`).
-  Fold review work into its owning commit instead.
+Before your first commit in a clone, run `git config core.hooksPath
+.githooks`: the commit hook gives a best-effort early check on the normal
+editor/strip-cleanup path. Git does not give that hook its later cleanup mode
+or the effective `core.commentChar=auto` character, so pull-request CI is the
+exact authority. The rules (subject and body shape, 72-character limits, and
+the forbidden Conventional Commit, autosquash, WIP, and review-cleanup
+prefixes) are in the header of `scripts/check-commit-messages.sh`. CI runs the
+script over every non-merge commit in `merge-base..head`, and
+`bash scripts/check-commit-messages.sh origin/main HEAD` checks a branch
+locally.
 
 <!-- agents-md:managed:done -->
 
@@ -674,29 +659,16 @@ and lint and formatting are clean.
 
 <!-- agents-md:project:done-checks -->
 
-<!-- Pre-code scaffold: this repo holds no code yet, so the only
-     verification is document coherence. Real per-component checks (Go
-     test/vet/lint for daemon/, on Linux as well as macOS from day one
-     per plan §3.3; swift build/test/format for app/; OpenAPI lint +
-     generator round-trip for api/; schema validation for policy/) MUST
-     be added to this block with each component's first PR, and the
-     finish line's "lint/build/test" steps become live then. -->
-
 - Docs coherent: README, AGENTS.md, and docs/plan.md do not contradict
   each other for the touched scope
 - Scope declared: the PR body names which component directories the work
   unit touches (see Monorepo scope discipline)
 - Merge-result audit run against freshly fetched `origin/main` before
   handoff, base SHA and verdict recorded in PR Verification (see
-  Integration ordering and merge-result audit); when `scripts/` is in
-  scope, `bash scripts/test-build-image-references.sh`,
-  `bash scripts/test-check-commit-messages.sh`,
-  `bash scripts/test-merge-result-audit.sh`,
-  `bash scripts/test-check-agent-image.sh`,
-  `bash scripts/test-install-mac-app.sh`,
-  `bash scripts/test-install-ios-app.sh`, and
-  `bash scripts/test-check-vocabulary.sh` also pass, and
-  `bash scripts/check-vocabulary.sh` is clean
+  Integration ordering and merge-result audit)
+- `bash scripts/check.sh <component>` passes for every component in scope;
+  for `scripts/` that includes its regression suites and the vocabulary
+  check
 - Decision note written or updated when the work hits a Decision notes
   trigger or the mandatory-note list; most work needs none
 
@@ -713,13 +685,13 @@ one. Runtime AttentionItems (docs/plan.md §4) are a different system: this
 section governs building Freeside, not running it.
 
 The gates below bind every session and live here. The mechanics that
-implement them (the lane glossary, the claim-lease protocol, the
-session-start queries, session end, the escalation routing rules, and the
-tracking-issue format) live in
+implement them (the lane glossary, the work-unit issue shape, the claim-lease
+protocol, the session-start queries, session end, the escalation routing
+rules, and the tracking-issue format) live in
 [`docs/coordination.md`](docs/coordination.md). Read it before claiming a
-unit, filing a deferral, starting an issue-backed session, creating or
-updating a tracking issue, or starting any work that carries dependencies or
-blockers.
+unit, creating a work-unit issue, filing a deferral, starting an issue-backed
+session, creating or updating a tracking issue, or starting any work that
+carries dependencies or blockers.
 
 ### Work Units
 
@@ -734,39 +706,16 @@ Scheduled self-selection (the scheduling door under Pickup in
 docs/coordination.md) remains this project's explicit self-selection opt-in,
 unchanged by the persistence rule.
 
-One issue per issue-backed work unit, created from the work-unit template:
-
-- Source devlog entry (optional; cite the originating decision note's filename
-  only when the issue genuinely started there).
-- Objective.
-- Non-goals (`none` allowed).
-- Affected interfaces/contracts: the interface surfaces the unit touches, not
-  the whole work contract; the issue as a whole is the contract.
-- Acceptance: the fixture/test list is the spec.
-- Scope / declared paths.
-- Dependencies: `starts-after`, `merges-after`, `stacked-on`, and
-  `exclusive-with`, never untyped issue refs. Record an unknown or materially
-  ambiguous relationship as `starts-after` until the spine resolves it.
-
-Labels: `lane:*` for ownership area, `kind:*` for type. Milestones carry the
-phase (1A, 1B). Each wave has a pinned tracking issue listing its units,
-maintained by the spine role. Any issue that tracks other issues (a wave
-tracker or an ad hoc tracker over a set of units) records their
-implementation order per the tracking-issue format in docs/coordination.md.
-
-Wave state resolves per the §11 three-state resolver over every pinned issue
-whose title matches the canonical wave-tracker pattern: exactly one open match
-is active-wave state, exactly one closed match is inter-wave state, and zero
-or multiple matches are an invalid authority state for spine repair. The
-scheduling door exists only in active-wave state, because it needs an open
-current tracker to list the unit. Fiat (`Plan #N`, `Handle #N`) is
-independent of wave state and may proceed in either state after all ordinary
-gates pass.
-
-Here and below, **scheduled** means both a milestone and a listing on the
-current tracking issue. The spine changes those fields as one planning
-operation; either field alone is a spine-repair error and does not open the
-scheduling door (fiat remains independent).
+One issue per issue-backed work unit, created from the work-unit template;
+its Dependencies field takes only the typed relationships `starts-after`,
+`merges-after`, `stacked-on`, and `exclusive-with`, and an unknown or
+materially ambiguous relationship is recorded as `starts-after` until the
+spine resolves it. The template's fields, the labels and milestones, the §11
+three-state wave resolver, and the definition of **scheduled** (a milestone
+plus a listing on the current tracking issue, set together by the spine) are
+in docs/coordination.md §Work-Unit Issues. Fiat (`Plan #N`, `Handle #N`) is
+independent of wave state; the scheduling door exists only in active-wave
+state.
 
 ### Lane Names
 
