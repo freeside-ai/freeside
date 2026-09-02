@@ -10,5 +10,6 @@
   ],
   "action": "open_pr",
   "message": "",
-  "attachments": []
+  "attachments": [],
+  "answer_route": null
 }

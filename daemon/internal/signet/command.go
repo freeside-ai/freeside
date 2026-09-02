@@ -52,6 +52,9 @@ type DecisionPayload struct {
 	SnoozeUntil              *time.Time
 	AlternativeChoices       []AlternativeChoice
 	CapabilityManifestDigest *domain.Digest
+	// AnswerRoute is required for answer_and_retry on an implementation-stage
+	// agent_question and forbidden everywhere else (validateAnswerRoute).
+	AnswerRoute *domain.AnswerRoute
 }
 
 // AlternativeChoice replaces one finding's recommended route with an offered

@@ -958,3 +958,81 @@ func mustAgentQuestionItem(t *testing.T, id domain.ItemID, action domain.Action)
 	}
 	return item
 }
+
+// TestSubmitAnswerRoutePolicy: answer_and_retry on an implementation-stage
+// question must name where the answer goes; retry_implementation is accepted,
+// revise_specification is refused as pending, and no other command may carry
+// a route.
+func TestSubmitAnswerRoutePolicy(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	kind := domain.BlockedKindOwnerDecision
+	implementation := mustAgentQuestionItem(t, "question-implementation", domain.ActionAnswerAndRetry)
+	implementation.AgentQuestion = &domain.AgentQuestionFacts{
+		Stage: domain.StageNameImplementation, InvocationID: "inv-implement-1",
+		Kind: &kind, Decisions: decisionsFixture(),
+	}
+	implementation.AgentClaims = []domain.AgentClaim{questionClaimFixture(implementation.AgentQuestion)}
+	rebuilt, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: implementation.ID, ProjectID: implementation.ProjectID, Subject: implementation.Subject,
+		Type: implementation.Type, Priority: implementation.Priority, Reason: implementation.Reason,
+		RequestedDecision: implementation.RequestedDecision, AgentClaims: implementation.AgentClaims,
+		AgentQuestion: implementation.AgentQuestion, ItemVersion: 1,
+		InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	specification := mustAgentQuestionItem(t, "question-specification", domain.ActionAnswerAndRetry)
+	for _, item := range []domain.AttentionItem{rebuilt, specification} {
+		if err := f.service.PutItem(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	retry := domain.AnswerRouteRetryImplementation
+	revise := domain.AnswerRouteReviseSpecification
+	tests := []struct {
+		name   string
+		item   domain.AttentionItem
+		action domain.Action
+		route  *domain.AnswerRoute
+		want   error
+	}{
+		{"implementation without route", rebuilt, domain.ActionAnswerAndRetry, nil, signet.ErrAnswerRouteRequired},
+		{"implementation revise pending", rebuilt, domain.ActionAnswerAndRetry, &revise, signet.ErrUnsupportedAction},
+		{"specification with route", specification, domain.ActionAnswerAndRetry, &retry, signet.ErrContentNotAllowed},
+		{"stop with route", specification, domain.ActionStop, &retry, signet.ErrContentNotAllowed},
+		{"implementation retry", rebuilt, domain.ActionAnswerAndRetry, &retry, nil},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot, err := f.service.GetAttentionItem(ctx, test.item.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := f.command(fmt.Sprintf("cmd-route-%d", index), test.action)
+			command.Payload.ItemID = test.item.ID
+			command.Payload.ItemVersion = snapshot.Item.ItemVersion
+			command.Payload.PRHeadSHA = snapshot.Item.PRHeadSHA
+			command.Payload.ArtifactDigests = snapshot.Item.ArtifactDigests
+			command.Payload.AnswerRoute = test.route
+			command.ExpectedEntityVersion = snapshot.EntityVersion
+			if test.action != domain.ActionStop {
+				command.Payload.Message = "Target both versions."
+			}
+			result, err := f.service.Submit(ctx, command)
+			if test.want != nil {
+				if !errors.Is(err, test.want) {
+					t.Fatalf("Submit = %v, want %v", err, test.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Submit: %v", err)
+			}
+			if result.Record.AnswerRoute == nil || *result.Record.AnswerRoute != retry {
+				t.Fatalf("recorded answer route = %v, want %s", result.Record.AnswerRoute, retry)
+			}
+		})
+	}
+}

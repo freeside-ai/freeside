@@ -158,3 +158,32 @@ func TestCommandBindsSameAs(t *testing.T) {
 		})
 	}
 }
+
+func TestCommandAnswerRoute(t *testing.T) {
+	base := domain.CommandInput{
+		CommandID: "cmd-route", DeviceID: "device-1", ItemID: "item-1", ItemVersion: 1,
+		Action: domain.ActionAnswerAndRetry, Message: "Target both versions.",
+	}
+	for _, route := range domain.AllAnswerRoutes {
+		in := base
+		in.AnswerRoute = &route
+		command, err := domain.NewCommand(in)
+		if err != nil {
+			t.Fatalf("NewCommand(%s) = %v", route, err)
+		}
+		if command.AnswerRoute == nil || *command.AnswerRoute != route {
+			t.Fatalf("answer route = %v, want %s", command.AnswerRoute, route)
+		}
+		// The recorded route is detached from the caller's pointer.
+		route = "mutated"
+		if *command.AnswerRoute == "mutated" {
+			t.Fatal("answer route remained caller-owned")
+		}
+	}
+	invalid := domain.AnswerRoute("elsewhere")
+	in := base
+	in.AnswerRoute = &invalid
+	if _, err := domain.NewCommand(in); !errors.Is(err, domain.ErrInvalidAnswerRoute) {
+		t.Fatalf("invalid answer route error = %v, want ErrInvalidAnswerRoute", err)
+	}
+}

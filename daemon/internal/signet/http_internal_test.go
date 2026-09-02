@@ -64,6 +64,15 @@ func TestWriteCommandErrorClassifiesOversizedRequestChanges(t *testing.T) {
 	}
 }
 
+func TestWriteCommandErrorClassifiesInvalidAnswerRoute(t *testing.T) {
+	t.Parallel()
+	recorder := httptest.NewRecorder()
+	writeCommandError(recorder, nil, fmt.Errorf("submit answer: %w", domain.ErrInvalidAnswerRoute))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("invalid answer route -> %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
 func TestNoOpProposalRevisionHTTPMappingIsAuthoritative(t *testing.T) {
 	t.Parallel()
 	recorder := httptest.NewRecorder()

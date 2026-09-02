@@ -196,6 +196,31 @@ func (k BlockedWaitKind) valid() bool {
 	}
 }
 
+// AnswerRoute says where a human's answer to an implementation-stage
+// agent_question goes: back to the implementer against the unchanged
+// specification, or to the specifier as request-changes feedback.
+type AnswerRoute string
+
+const (
+	AnswerRouteRetryImplementation AnswerRoute = "retry_implementation"
+	AnswerRouteReviseSpecification AnswerRoute = "revise_specification"
+)
+
+// AllAnswerRoutes lists every valid AnswerRoute.
+var AllAnswerRoutes = []AnswerRoute{
+	AnswerRouteRetryImplementation,
+	AnswerRouteReviseSpecification,
+}
+
+func (r AnswerRoute) valid() bool {
+	switch r {
+	case AnswerRouteRetryImplementation, AnswerRouteReviseSpecification:
+		return true
+	default:
+		return false
+	}
+}
+
 // BlockedKind classifies why the implementer stopped instead of producing a
 // candidate. Each kind names what the answer has to change; the decisions
 // carried beside it enumerate the choices.

@@ -178,6 +178,7 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 			ItemVersion: in.Payload.ItemVersion, PRHeadSHA: in.Payload.PRHeadSHA,
 			ArtifactDigests: in.Payload.ArtifactDigests, Action: in.Payload.Action,
 			Message: message, Attachments: in.Payload.Attachments,
+			AnswerRoute: in.Payload.AnswerRoute,
 		})
 	}
 	// Build the structural command first, without interpreting parameterized
@@ -249,6 +250,9 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 			// judgment (the #65 ordering), and an error here rolls the Write
 			// back, so no revision is consumed.
 			if err := s.validateCommandContent(command); err != nil {
+				return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+			}
+			if err := validateAnswerRoute(command, item); err != nil {
 				return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 			}
 			if item.Status != domain.StatusOpen {

@@ -2,11 +2,13 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -105,6 +107,7 @@ func TestOperatorFeedbackInputAuthenticatesAcceptedCommand(t *testing.T) {
 		CommandID: "answer-work", Action: domain.ActionAnswerAndRetry,
 		Message: "Use the tokenizer from the shared package.",
 	}
+	questionItem := domain.AttentionItem{AgentQuestion: specificationQuestionFacts("inv-question")}
 	request := operatorFeedbackRequest{
 		RunID: "run-1", BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40),
 	}
@@ -124,15 +127,17 @@ func TestOperatorFeedbackInputAuthenticatesAcceptedCommand(t *testing.T) {
 		name    string
 		command domain.Command
 		patch   []byte
+		item    domain.AttentionItem
 	}{
-		{"returned candidate with patch", returned, patch},
-		{"answer without patch", answered, nil},
+		{"returned candidate with patch", returned, patch, domain.AttentionItem{}},
+		{"answer without patch", answered, nil, questionItem},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sealed, body := seal(t, newOperatorFeedbackInput(
 				request.RunID, tc.command, request.BaseSHA, request.HeadSHA, tc.patch,
+				tc.item.AgentQuestion,
 			))
-			if err := authenticateOperatorFeedbackInputBody(sealed, tc.command, body); err != nil {
+			if err := authenticateOperatorFeedbackInputBody(sealed, tc.command, tc.item, body); err != nil {
 				t.Fatalf("canonical feedback input rejected: %v", err)
 			}
 		})
@@ -152,10 +157,22 @@ func TestOperatorFeedbackInputAuthenticatesAcceptedCommand(t *testing.T) {
 		{"patch on an answer", answered, func(input *operatorFeedbackInput) {
 			input.CandidatePatchBase64 = patch
 		}},
+		{"question", answered, func(input *operatorFeedbackInput) {
+			input.Question.Decisions[0].Question = "A substituted question?"
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			item := questionItem
+			if tc.command.Action == domain.ActionReturnToAgent {
+				item = domain.AttentionItem{}
+			}
+			alteredQuestion := item.AgentQuestion
+			if item.AgentQuestion != nil {
+				alteredQuestion = specificationQuestionFacts(item.AgentQuestion.InvocationID)
+			}
 			altered := newOperatorFeedbackInput(
 				request.RunID, tc.command, request.BaseSHA, request.HeadSHA, nil,
+				alteredQuestion,
 			)
 			if tc.command.Action == domain.ActionReturnToAgent {
 				altered.CandidatePatchBase64 = patch
@@ -163,7 +180,7 @@ func TestOperatorFeedbackInputAuthenticatesAcceptedCommand(t *testing.T) {
 			tc.mutate(&altered)
 			sealed, body := seal(t, altered)
 			if err := authenticateOperatorFeedbackInputBody(
-				sealed, tc.command, body,
+				sealed, tc.command, item, body,
 			); !errors.Is(err, errOperatorFeedbackMarkerUnreadable) {
 				t.Fatalf("coherently altered feedback bundle = %v, want unreadable marker", err)
 			}
@@ -174,7 +191,7 @@ func TestOperatorFeedbackInputAuthenticatesAcceptedCommand(t *testing.T) {
 		sealed := request
 		sealed.InputArtifactDigest = domain.Digest(contentaddr.Sum([]byte("{")))
 		if err := authenticateOperatorFeedbackInputBody(
-			sealed, returned, []byte("{"),
+			sealed, returned, domain.AttentionItem{}, []byte("{"),
 		); !errors.Is(err, errOperatorFeedbackMarkerUnreadable) {
 			t.Fatalf("undecodable feedback body = %v, want unreadable marker", err)
 		}
@@ -186,52 +203,7 @@ func TestAnswerAndRetryRecordsSpecificationInputAndEnqueuesNextIteration(t *test
 	f.submit(t)
 	driver := f.newDriver(t)
 	engine := f.newEngine(t, driver)
-	sourceID := specificationInvocationID("specification-run", 1)
-
-	var run domain.Run
-	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
-		var err error
-		run, err = tx.GetRun(t.Context(), "specification-run")
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	stage, ok := findSpecificationStage(run)
-	if !ok {
-		t.Fatal("submitted specification run has no specification stage")
-	}
-	stage.Attempts = append(stage.Attempts, domain.Attempt{
-		ID: attemptIDFor(sourceID), StageID: stage.ID, Number: 1, InvocationID: sourceID,
-	})
-	for index := range run.Stages {
-		if run.Stages[index].ID == stage.ID {
-			run.Stages[index] = stage
-		}
-	}
-	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
-		return tx.PutRun(t.Context(), run)
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	runID := run.ID
-	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: "question-specification", ProjectID: run.ProjectID,
-		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
-		Type:    domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
-		Reason:            "the specifier needs an operator answer",
-		RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry},
-		AgentClaims:       []domain.AgentClaim{questionClaimFixture(sourceID)},
-		AgentQuestion:     specificationQuestionFacts(sourceID),
-		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
-		Status: domain.StatusOpen,
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := f.signet.PutItem(t.Context(), item); err != nil {
-		t.Fatal(err)
-	}
+	run, _, item := seedSpecificationQuestion(t, f, engine)
 	snapshot, err := f.signet.GetAttentionItem(t.Context(), item.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -286,8 +258,12 @@ func TestAnswerAndRetryRecordsSpecificationInputAndEnqueuesNextIteration(t *test
 	if readErr != nil || closeErr != nil {
 		t.Fatal(errors.Join(readErr, closeErr))
 	}
-	if strings.TrimSpace(string(body)) != answer {
-		t.Fatalf("recorded answer = %q, want %q", body, answer)
+	var recorded specificationAnswerInput
+	if err := json.Unmarshal(body, &recorded); err != nil {
+		t.Fatal(err)
+	}
+	if recorded.Answer != answer || !reflect.DeepEqual(recorded.Question, *item.AgentQuestion) {
+		t.Fatalf("recorded answer = %#v, want answer and authenticated question", recorded)
 	}
 	// Advance the clock so the replay stamps a different answer-artifact
 	// created_at: the transition must stay idempotent against the
@@ -314,6 +290,132 @@ func TestAnswerThenRevisionKeepsCanonicalSpecificationInputOrder(t *testing.T) {
 	}
 	if !slices.Equal(revised.InputArtifactIDs, want) {
 		t.Fatalf("answer-then-revision inputs = %v, want %v", revised.InputArtifactIDs, want)
+	}
+}
+
+func TestOperatorFeedbackInputIDsPreserveAuthenticatedRetryChain(t *testing.T) {
+	f := newSpecificationFixture(t, false, 4)
+	runID := domain.RunID("run-feedback-chain")
+	rootID := productionInvocationID(runID)
+	sourceID := operatorFeedbackInvocationID("prior")
+	stageID := operatorFeedbackStageID(sourceID)
+	root, err := domain.NewAgentInvocation(rootID, []domain.ArtifactID{f.source.ID}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorID := domain.ArtifactID("operator-feedback-prior")
+	prior := testSpecificationArtifact(t, priorID, domain.ArtifactKindEvidence,
+		domain.Digest(contentaddr.Sum([]byte("prior feedback"))), domain.ProducerDaemon, sourceID)
+	source, err := domain.NewAgentInvocation(
+		sourceID, []domain.ArtifactID{f.source.ID, priorID}, nil, 0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputDigest, err := source.ComputeInputDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := domain.Run{
+		ID: runID, ProjectID: "project-1", SpecDigest: f.source.Digest, PolicyDigest: f.policyArt.Digest,
+		Stages: []domain.Stage{
+			{ID: productionStageID(runID), RunID: runID, Name: productionStageName},
+			{ID: stageID, RunID: runID, Name: productionStageName, Attempts: []domain.Attempt{{
+				ID: attemptIDFor(sourceID), StageID: stageID, Number: 1, InvocationID: sourceID,
+			}}},
+		},
+	}
+	identityID := domain.AuthIdentityID("auth-1")
+	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: sourceID, RunID: runID, StageID: stageID, AttemptID: attemptIDFor(sourceID),
+		Backend:       "fresh_vm_read_only_volume_handoff",
+		Capabilities:  domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile: domain.EgressProviderOnly,
+		ImageRef:      domain.ImageRef("agent@sha256:" + strings.Repeat("a", 64)),
+		SpecDigest:    run.SpecDigest, PolicyDigest: run.PolicyDigest, InputDigest: inputDigest,
+		Base:      domain.BaseRevision{Repo: "owner/repo", RepositoryID: 1, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
+		Workspace: "workspace-1", AuthIdentityID: &identityID, AdmittedAt: *f.now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		if err := tx.PutRun(t.Context(), run); err != nil {
+			return err
+		}
+		if err := tx.PutAgentInvocation(t.Context(), root); err != nil {
+			return err
+		}
+		if err := tx.PutAgentInvocation(t.Context(), source); err != nil {
+			return err
+		}
+		if err := tx.PutArtifact(t.Context(), prior); err != nil {
+			return err
+		}
+		return tx.RecordExecutionAdmission(t.Context(), admission)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var got []domain.ArtifactID
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		got, err = operatorFeedbackInputIDs(
+			t.Context(), tx, run, root, sourceID, "operator-feedback-current",
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []domain.ArtifactID{f.source.ID, priorID, "operator-feedback-current"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("chained feedback inputs = %v, want %v", got, want)
+	}
+	current := testSpecificationArtifact(t, "operator-feedback-current", domain.ArtifactKindEvidence,
+		domain.Digest(contentaddr.Sum([]byte("current feedback"))), domain.ProducerDaemon, sourceID)
+	engine := f.newEngine(t, f.newDriver(t))
+	engine.productionPublication = &productionPublicationWorkflow{
+		remediationPromptPackage: f.implementationPrompt,
+	}
+	var delivered []domain.Digest
+	engine.productionDeliveryValidator = func(_ context.Context, spec exec.StartSpec) error {
+		delivered = slices.Clone(spec.StageInputs.PriorArtifactDigests)
+		return errors.Join(ErrProductionInputUndeliverable, exec.ErrInputTooLarge)
+	}
+	prospective, err := domain.NewAgentInvocation(
+		operatorFeedbackInvocationID("current"), got, nil, 0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = engine.validateOperatorFeedbackDelivery(t.Context(), run, prospective, current)
+	if !errors.Is(err, ErrProductionInputUndeliverable) || len(delivered) != 2 ||
+		delivered[0] != prior.Digest || delivered[1] != current.Digest {
+		t.Fatalf("prospective cumulative delivery = %v, %v, want prior and current refusal", delivered, err)
+	}
+	tampered := source
+	tampered.InputIDs = append(tampered.InputIDs, "forged-input")
+	body, err := json.Marshal(tampered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", f.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close() //nolint:errcheck // test cleanup
+	if _, err := db.ExecContext(t.Context(),
+		`UPDATE agent_invocations SET body = ? WHERE id = ?`, string(body), sourceID); err != nil {
+		t.Fatal(err)
+	}
+	err = f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		_, err := operatorFeedbackInputIDs(
+			t.Context(), tx, run, root, sourceID, "operator-feedback-forged",
+		)
+		return err
+	})
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("tampered inherited input digest = %v, want ErrParentKeyMismatch", err)
 	}
 }
 
@@ -495,60 +597,8 @@ func TestReturnToAgentRecordsFeedbackAndCandidatePatchForResumedWork(t *testing.
 func TestAnswerAtSpecificationIterationLimitRecordsFailure(t *testing.T) {
 	f := newSpecificationFixture(t, false, 1)
 	f.submit(t)
-	sourceID := specificationInvocationID("specification-run", 1)
-	var (
-		run   domain.Run
-		entry store.QueueEntry
-	)
-	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
-		var err error
-		run, err = tx.GetRun(t.Context(), "specification-run")
-		if err != nil {
-			return err
-		}
-		entry, err = tx.GetOutbox(t.Context(), string(sourceID))
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	request, err := decodeSpecificationRequest(entry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage, ok := findSpecificationStage(run)
-	if !ok {
-		t.Fatal("submitted specification run has no specification stage")
-	}
-	stage.Attempts = append(stage.Attempts, domain.Attempt{
-		ID: attemptIDFor(sourceID), StageID: stage.ID, Number: 1, InvocationID: sourceID,
-	})
-	for index := range run.Stages {
-		if run.Stages[index].ID == stage.ID {
-			run.Stages[index] = stage
-		}
-	}
-	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
-		return tx.PutRun(t.Context(), run)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	runID := run.ID
-	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: "question-specification-limit", ProjectID: run.ProjectID,
-		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
-		Type:    domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
-		Reason:            "the specifier needs an operator answer",
-		RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry},
-		AgentClaims:       []domain.AgentClaim{questionClaimFixture(sourceID)},
-		AgentQuestion:     specificationQuestionFacts(sourceID),
-		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := f.signet.PutItem(t.Context(), item); err != nil {
-		t.Fatal(err)
-	}
+	engine := f.newEngine(t, f.newDriver(t))
+	run, request, item := seedSpecificationQuestion(t, f, engine)
 	snapshot, err := f.signet.GetAttentionItem(t.Context(), item.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -563,7 +613,6 @@ func TestAnswerAtSpecificationIterationLimitRecordsFailure(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	engine := f.newEngine(t, f.newDriver(t))
 	if transitions, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || transitions != 0 {
 		t.Fatalf("limited answer reconciliation = %d, %v", transitions, err)
 	}
@@ -577,6 +626,51 @@ func TestAnswerAtSpecificationIterationLimitRecordsFailure(t *testing.T) {
 		}
 		if failure.Type != domain.AttentionExecutionFailure || failure.Status != domain.StatusOpen {
 			return fmt.Errorf("iteration-limit failure = %#v", failure)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUndeliverableSpecificationAnswerRecordsFailure(t *testing.T) {
+	f := newSpecificationFixture(t, false, 4)
+	f.submit(t)
+	engine := f.newEngine(t, f.newDriver(t))
+	run, request, item := seedSpecificationQuestion(t, f, engine)
+	snapshot, err := f.signet.GetAttentionItem(t.Context(), item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "answer-undeliverable", DeviceID: "device-1", ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionAnswerAndRetry,
+			ItemVersion: item.ItemVersion, ArtifactDigests: item.ArtifactDigests,
+			Message: "Target the current API version.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	engine.specification.validateDelivery = func(context.Context, exec.StartSpec) error {
+		return errors.Join(ErrSpecificationInputUndeliverable, exec.ErrInputTooLarge)
+	}
+	if transitions, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || transitions != 0 {
+		t.Fatalf("undeliverable answer reconciliation = %d, %v", transitions, err)
+	}
+	if transitions, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || transitions != 0 {
+		t.Fatalf("replayed undeliverable answer reconciliation = %d, %v", transitions, err)
+	}
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		if _, err := tx.GetOutbox(t.Context(), string(specificationInvocationID(run.ID, 2))); !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("next iteration marker = %w, want ErrNotFound", err)
+		}
+		failure, err := tx.GetAttentionItem(t.Context(), specificationRevisionFailureItemID(request))
+		if err != nil {
+			return err
+		}
+		if failure.Type != domain.AttentionExecutionFailure || failure.Status != domain.StatusOpen {
+			return fmt.Errorf("undeliverable answer failure = %#v", failure)
 		}
 		return nil
 	}); err != nil {
@@ -824,47 +918,8 @@ func assertSpecificationAnswerRestart(
 	t.Helper()
 	f := newSpecificationFixture(t, false, 4)
 	f.submit(t)
-	sourceID := specificationInvocationID("specification-run", 1)
-	var run domain.Run
-	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
-		var err error
-		run, err = tx.GetRun(t.Context(), "specification-run")
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	stage, ok := findSpecificationStage(run)
-	if !ok {
-		t.Fatal("submitted specification run has no specification stage")
-	}
-	stage.Attempts = append(stage.Attempts, domain.Attempt{
-		ID: attemptIDFor(sourceID), StageID: stage.ID, Number: 1, InvocationID: sourceID,
-	})
-	for index := range run.Stages {
-		if run.Stages[index].ID == stage.ID {
-			run.Stages[index] = stage
-		}
-	}
-	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error { return tx.PutRun(t.Context(), run) }); err != nil {
-		t.Fatal(err)
-	}
-	runID := run.ID
-	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: "question-answer-restart", ProjectID: run.ProjectID,
-		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
-		Type:    domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
-		Reason:            "the specifier needs an operator answer",
-		RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry},
-		AgentClaims:       []domain.AgentClaim{questionClaimFixture(sourceID)},
-		AgentQuestion:     specificationQuestionFacts(sourceID),
-		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := f.signet.PutItem(t.Context(), item); err != nil {
-		t.Fatal(err)
-	}
+	seedEngine := f.newEngine(t, f.newDriver(t))
+	run, _, item := seedSpecificationQuestion(t, f, seedEngine)
 	snapshot, err := f.signet.GetAttentionItem(t.Context(), item.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -913,6 +968,75 @@ func assertSpecificationAnswerRestart(
 	}); err != nil {
 		t.Fatalf("recovered specification answer identities: %v", err)
 	}
+}
+
+func seedSpecificationQuestion(
+	t *testing.T, f specificationFixture, engine *Engine,
+) (domain.Run, specificationRequest, domain.AttentionItem) {
+	t.Helper()
+	invocationID := specificationInvocationID("specification-run", 1)
+	var (
+		run        domain.Run
+		invocation domain.AgentInvocation
+		request    specificationRequest
+	)
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(t.Context(), "specification-run")
+		if err != nil {
+			return err
+		}
+		invocation, err = tx.GetAgentInvocation(t.Context(), invocationID)
+		if err != nil {
+			return err
+		}
+		entry, err := tx.GetOutbox(t.Context(), string(invocationID))
+		if err != nil {
+			return err
+		}
+		request, err = decodeSpecificationRequest(entry)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stage, ok := findSpecificationStage(run)
+	if !ok {
+		t.Fatal("submitted specification run has no specification stage")
+	}
+	stage.Attempts = append(stage.Attempts, domain.Attempt{
+		ID: attemptIDFor(invocationID), StageID: stage.ID, Number: 1, InvocationID: invocationID,
+	})
+	for index := range run.Stages {
+		if run.Stages[index].ID == stage.ID {
+			run.Stages[index] = stage
+		}
+	}
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.PutRun(t.Context(), run)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admission, admitted, err := engine.admitAttempt(
+		t.Context(), invocationBinding{run: run, invocation: invocation}, stage, invocationID,
+	)
+	if err != nil || !admitted {
+		t.Fatalf("admit specification question producer = %t, %v", admitted, err)
+	}
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.RecordExecutionAdmission(t.Context(), admission)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if created, err := engine.acceptSpecificationDecisions(
+		t.Context(), run, request, decisionsFixture(),
+	); err != nil || !created {
+		t.Fatalf("record specification question = %t, %v", created, err)
+	}
+	item, err := f.signet.GetAttentionItem(t.Context(), specificationQuestionItemID(request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return run, request, item.Item
 }
 
 func assertImplementationFeedbackRestart(

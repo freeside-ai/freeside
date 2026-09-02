@@ -55,6 +55,7 @@ const (
 	KindOperatorFeedbackInvocationRequested = "operator_feedback_invocation_requested"
 	operatorFeedbackRequestVersion          = "freeside.operator-feedback-request/v1"
 	operatorFeedbackInputVersion            = "freeside.operator-feedback-input/v1"
+	specificationAnswerInputVersion         = "freeside.specification-answer-input/v1"
 	operatorFeedbackInstruction             = "Use the operator feedback as recorded input. Preserve the existing candidate, apply the supplied patch when present, and return a complete revised candidate."
 	operatorFeedbackMarkerQuarantinePrefix  = "operator-feedback-marker-quarantined-"
 	operatorFeedbackQuarantineUnreadable    = "A stored operator-feedback marker could not be authenticated. The run is held out of the feedback lane, and resumes by itself once the marker reconstructs again."
@@ -77,14 +78,15 @@ type operatorFeedbackRequest struct {
 }
 
 type operatorFeedbackInput struct {
-	Version              string        `json:"version"`
-	RunID                domain.RunID  `json:"run_id"`
-	Action               domain.Action `json:"action"`
-	Feedback             string        `json:"feedback"`
-	Instruction          string        `json:"instruction"`
-	BaseSHA              string        `json:"base_sha,omitempty"`
-	HeadSHA              string        `json:"head_sha,omitempty"`
-	CandidatePatchBase64 []byte        `json:"candidate_patch_base64,omitempty"`
+	Version              string                     `json:"version"`
+	RunID                domain.RunID               `json:"run_id"`
+	Action               domain.Action              `json:"action"`
+	Feedback             string                     `json:"feedback"`
+	Instruction          string                     `json:"instruction"`
+	BaseSHA              string                     `json:"base_sha,omitempty"`
+	HeadSHA              string                     `json:"head_sha,omitempty"`
+	CandidatePatchBase64 []byte                     `json:"candidate_patch_base64,omitempty"`
+	Question             *domain.AgentQuestionFacts `json:"question,omitempty"`
 }
 
 func newOperatorFeedbackInput(
@@ -92,12 +94,32 @@ func newOperatorFeedbackInput(
 	command domain.Command,
 	base, head string,
 	patch []byte,
+	question *domain.AgentQuestionFacts,
 ) operatorFeedbackInput {
 	return operatorFeedbackInput{
 		Version: operatorFeedbackInputVersion, RunID: runID, Action: command.Action,
 		Feedback: strings.TrimSpace(command.Message), Instruction: operatorFeedbackInstruction,
-		BaseSHA: base, HeadSHA: head, CandidatePatchBase64: patch,
+		BaseSHA: base, HeadSHA: head, CandidatePatchBase64: patch, Question: question,
 	}
+}
+
+type specificationAnswerInput struct {
+	Version  string                    `json:"version"`
+	Question domain.AgentQuestionFacts `json:"question"`
+	Answer   string                    `json:"answer"`
+}
+
+func newSpecificationAnswerInput(
+	item domain.AttentionItem, command domain.Command,
+) (specificationAnswerInput, error) {
+	if item.AgentQuestion == nil || command.Action != domain.ActionAnswerAndRetry {
+		return specificationAnswerInput{}, domain.ErrParentKeyMismatch
+	}
+	return specificationAnswerInput{
+		Version:  specificationAnswerInputVersion,
+		Question: *item.AgentQuestion,
+		Answer:   strings.TrimSpace(command.Message),
+	}, nil
 }
 
 func operatorFeedbackInvocationID(commandID string) domain.InvocationID {
@@ -114,6 +136,51 @@ func operatorFeedbackArtifactID(commandID string) domain.ArtifactID {
 
 func operatorFeedbackUndeliverableItemID(commandID string) domain.ItemID {
 	return domain.ItemID("operator-feedback-undeliverable-" + commandID)
+}
+
+// operatorFeedbackInputIDs preserves the source implementation's cumulative
+// input chain. A blocked retry keeps every prior daemon-authored input,
+// including remediation context or an earlier candidate patch, and appends
+// only the new answer.
+func operatorFeedbackInputIDs(
+	ctx context.Context,
+	tx *store.ReadTx,
+	run domain.Run,
+	root domain.AgentInvocation,
+	source domain.InvocationID,
+	current domain.ArtifactID,
+) ([]domain.ArtifactID, error) {
+	stage, found := productionStageForInvocation(run, source)
+	if !found || len(root.InputIDs) != 1 {
+		return nil, domain.ErrParentKeyMismatch
+	}
+	var admittedInput domain.Digest
+	if source != root.ID {
+		admission, err := tx.GetExecutionAdmissionRecord(ctx, source)
+		if err != nil {
+			return nil, err
+		}
+		if admission.RunID != run.ID || admission.StageID != stage.ID ||
+			admission.AttemptID != attemptIDFor(source) {
+			return nil, domain.ErrParentKeyMismatch
+		}
+		admittedInput = admission.InputDigest
+	}
+	invocation, err := tx.GetAgentInvocation(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	if invocation.ConversationID != nil || invocation.ThroughSequence != 0 ||
+		len(invocation.InputIDs) == 0 || invocation.InputIDs[0] != root.InputIDs[0] {
+		return nil, domain.ErrParentKeyMismatch
+	}
+	if source != root.ID {
+		inputDigest, err := invocation.ComputeInputDigest()
+		if err != nil || inputDigest != admittedInput {
+			return nil, errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+	}
+	return append(slices.Clone(invocation.InputIDs), current), nil
 }
 
 func (r operatorFeedbackRequest) validate() error {
@@ -314,6 +381,16 @@ func (e *Engine) reconcileOperatorFeedbackActions(
 				}
 				continue
 			}
+			// An implementation-stage answer names its route at submit; only
+			// retry_implementation re-invokes the implementer here. A revision
+			// route never reaches this dispatcher until the campaign identity
+			// decision lands, so anything else is a malformed command.
+			if command.AnswerRoute == nil || *command.AnswerRoute != domain.AnswerRouteRetryImplementation {
+				joined = errors.Join(joined, fmt.Errorf(
+					"operator feedback command %q has no implementation answer route: %w",
+					command.CommandID, domain.ErrParentKeyMismatch))
+				continue
+			}
 		}
 		made, err := e.enqueueImplementationFeedback(ctx, item, command)
 		created += boolCount(made)
@@ -382,9 +459,16 @@ func (e *Engine) enqueueSpecificationAnswer(
 		return false, e.recordSpecificationRevisionFailure(
 			ctx, run, request, exec.StatusFailed, ErrSpecificationIterationsExhausted.Error())
 	}
-	feedbackBody := strings.TrimSpace(command.Message)
-	digest := domain.Digest(contentaddr.Sum([]byte(feedbackBody)))
-	if _, err := e.specification.blobs.Put(digest, strings.NewReader(feedbackBody)); err != nil {
+	feedbackInput, err := newSpecificationAnswerInput(item, command)
+	if err != nil {
+		return false, err
+	}
+	feedbackBody, err := json.Marshal(feedbackInput)
+	if err != nil {
+		return false, err
+	}
+	digest := domain.Digest(contentaddr.Sum(feedbackBody))
+	if _, err := e.specification.blobs.Put(digest, bytes.NewReader(feedbackBody)); err != nil {
 		return false, err
 	}
 	feedbackID := domain.ArtifactID("answer-" + command.CommandID)
@@ -395,7 +479,7 @@ func (e *Engine) enqueueSpecificationAnswer(
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
 		},
 		Metadata: domain.EvidenceMetadata{
-			MediaType: domain.EvidenceMediaTextPlain, SizeBytes: int64(len(feedbackBody)),
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: int64(len(feedbackBody)),
 			CreatedAt: e.specification.now().UTC(), Source: domain.EvidenceSourceRun,
 			Availability: domain.EvidenceAvailable,
 		},
@@ -414,6 +498,10 @@ func (e *Engine) enqueueSpecificationAnswer(
 	}
 	if err := e.validateProspectiveDelivery(ctx, run, invocation,
 		e.specification.promptPackage, true, map[domain.ArtifactID]domain.Artifact{feedback.ID: feedback}); err != nil {
+		if errors.Is(err, ErrSpecificationInputUndeliverable) {
+			return false, e.recordSpecificationRevisionFailure(
+				ctx, run, request, exec.StatusFailed, err.Error())
+		}
 		return false, err
 	}
 	if err := runDurableTransitionHook(e.specification.transitionHook,
@@ -543,7 +631,17 @@ func (e *Engine) persistImplementationFeedback(
 		*item.Subject.RunID != runID || item.ProjectID != run.ProjectID {
 		return false, domain.ErrParentKeyMismatch
 	}
-	input := newOperatorFeedbackInput(runID, command, base, head, patch)
+	var inputIDs []domain.ArtifactID
+	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		inputIDs, err = operatorFeedbackInputIDs(
+			ctx, tx, run, root, source, operatorFeedbackArtifactID(command.CommandID),
+		)
+		return err
+	}); err != nil {
+		return false, err
+	}
+	input := newOperatorFeedbackInput(runID, command, base, head, patch, item.AgentQuestion)
 	body, err := json.Marshal(input)
 	if err != nil {
 		return false, err
@@ -552,9 +650,6 @@ func (e *Engine) persistImplementationFeedback(
 		return e.recordOperatorFeedbackUndeliverable(ctx, item, command)
 	}
 	digest := domain.Digest(contentaddr.Sum(body))
-	if _, err := e.productionPublication.artifacts.Put(digest, bytes.NewReader(body)); err != nil {
-		return false, err
-	}
 	request := operatorFeedbackRequest{
 		Version: operatorFeedbackRequestVersion, InvocationID: operatorFeedbackInvocationID(command.CommandID),
 		RunID: runID, CommandID: command.CommandID, ItemID: item.ID,
@@ -588,8 +683,17 @@ func (e *Engine) persistImplementationFeedback(
 		return false, err
 	}
 	invocation, err := domain.NewAgentInvocation(
-		request.InvocationID, []domain.ArtifactID{root.InputIDs[0], request.InputArtifactID}, nil, 0)
+		request.InvocationID, inputIDs, nil, 0)
 	if err != nil {
+		return false, err
+	}
+	if _, err := e.productionPublication.artifacts.Put(digest, bytes.NewReader(body)); err != nil {
+		return false, err
+	}
+	if err := e.validateOperatorFeedbackDelivery(ctx, run, invocation, artifact); err != nil {
+		if errors.Is(err, ErrProductionInputUndeliverable) {
+			return e.recordOperatorFeedbackUndeliverable(ctx, item, command)
+		}
 		return false, err
 	}
 	stage := domain.Stage{ID: request.StageID, RunID: runID, Name: productionStageName}
@@ -653,6 +757,30 @@ func (e *Engine) persistImplementationFeedback(
 		return false, err
 	}
 	return inserted, nil
+}
+
+func (e *Engine) validateOperatorFeedbackDelivery(
+	ctx context.Context, run domain.Run, invocation domain.AgentInvocation, artifact domain.Artifact,
+) error {
+	if e.productionDeliveryValidator == nil {
+		return nil
+	}
+	inputDigest, err := invocation.ComputeInputDigest()
+	if err != nil {
+		return err
+	}
+	snapshot, err := e.stageInputSnapshotWithArtifacts(
+		ctx, invocationBinding{run: run, invocation: invocation}, inputDigest,
+		e.productionPublication.remediationPromptPackage, false,
+		map[domain.ArtifactID]domain.Artifact{artifact.ID: artifact},
+	)
+	if err != nil {
+		return err
+	}
+	return e.productionDeliveryValidator(ctx, exec.StartSpec{
+		InputDigest: inputDigest, SpecDigest: run.SpecDigest,
+		PolicyDigest: run.PolicyDigest, StageInputs: &snapshot,
+	})
 }
 
 func (e *Engine) operatorFeedbackUndeliverableRecorded(
@@ -734,7 +862,7 @@ func (e *Engine) recordOperatorFeedbackUndeliverable(
 		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 			ID: itemID, ProjectID: source.ProjectID,
 			Subject: subject, Type: domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
-			Reason:            "Operator feedback input cannot be delivered to the implementation agent because the candidate is too large.",
+			Reason:            "Operator feedback input cannot be delivered to the implementation agent because the cumulative input exceeds delivery limits.",
 			RequestedDecision: []domain.Action{domain.ActionAcknowledge},
 			ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
 			CreatedAt: &createdAt, DisplayNames: names, Status: domain.StatusOpen,
@@ -851,6 +979,12 @@ func authenticateOperatorFeedbackTransition(
 	if err != nil {
 		return operatorFeedbackRequest{}, ProductionPublication{}, err
 	}
+	expectedInputs, err := operatorFeedbackInputIDs(
+		ctx, tx, run, initial, request.SourceInvocationID, request.InputArtifactID,
+	)
+	if err != nil {
+		return operatorFeedbackRequest{}, ProductionPublication{}, err
+	}
 	provenance := artifact.Provenance
 	wantHeadBinding := domain.HeadIndependent
 	wantSourceHead := ""
@@ -859,8 +993,7 @@ func authenticateOperatorFeedbackTransition(
 		wantSourceHead = request.HeadSHA
 	}
 	if invocation.ConversationID != nil || initial.ConversationID != nil ||
-		!slices.Equal(invocation.InputIDs,
-			[]domain.ArtifactID{initial.InputIDs[0], request.InputArtifactID}) ||
+		!slices.Equal(invocation.InputIDs, expectedInputs) ||
 		initialInput.Type != domain.ArtifactKindSpecification || initialInput.Digest != run.SpecDigest ||
 		artifact.Type != domain.ArtifactKindEvidence || artifact.Digest != request.InputArtifactDigest ||
 		provenance.ProducerClass != domain.ProducerDaemon ||
@@ -968,10 +1101,17 @@ func (e *Engine) authenticateOperatorFeedbackInput(
 	if e.productionPublication == nil || e.productionPublication.artifacts == nil {
 		return errors.New("operator-feedback artifact store is unavailable")
 	}
-	var command domain.Command
+	var (
+		command domain.Command
+		item    domain.AttentionItem
+	)
 	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		command, err = tx.GetCommand(ctx, request.CommandID)
+		if err != nil {
+			return err
+		}
+		item, err = tx.GetAttentionItemRecord(ctx, request.ItemID)
 		if err != nil {
 			return err
 		}
@@ -997,7 +1137,7 @@ func (e *Engine) authenticateOperatorFeedbackInput(
 	if err != nil {
 		return classifyOperatorFeedbackMarkerError(err)
 	}
-	return authenticateOperatorFeedbackInputBody(request, command, body)
+	return authenticateOperatorFeedbackInputBody(request, command, item, body)
 }
 
 // authenticateOperatorFeedbackInputBody binds the stored feedback input to the
@@ -1010,6 +1150,7 @@ func (e *Engine) authenticateOperatorFeedbackInput(
 func authenticateOperatorFeedbackInputBody(
 	request operatorFeedbackRequest,
 	command domain.Command,
+	item domain.AttentionItem,
 	body []byte,
 ) error {
 	var stored operatorFeedbackInput
@@ -1023,6 +1164,7 @@ func authenticateOperatorFeedbackInputBody(
 	}
 	expected, err := json.Marshal(newOperatorFeedbackInput(
 		request.RunID, command, request.BaseSHA, request.HeadSHA, stored.CandidatePatchBase64,
+		item.AgentQuestion,
 	))
 	if err != nil {
 		return err

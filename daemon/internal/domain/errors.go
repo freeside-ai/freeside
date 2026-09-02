@@ -18,6 +18,7 @@ var (
 	// Enum-membership failures.
 	ErrUnknownAttentionType             = errors.New("unknown attention type")
 	ErrInvalidBlockedKind               = errors.New("invalid blocked kind")
+	ErrInvalidAnswerRoute               = errors.New("invalid answer route")
 	ErrInvalidSubjectType               = errors.New("invalid subject type")
 	ErrInvalidProducerClass             = errors.New("invalid producer class")
 	ErrInvalidArtifactKind              = errors.New("invalid artifact kind")

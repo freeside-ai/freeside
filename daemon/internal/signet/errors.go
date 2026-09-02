@@ -55,6 +55,12 @@ var (
 // there is nothing to accept without one.
 var ErrMessageRequired = errors.New("discuss requires a non-empty message")
 
+// ErrAnswerRouteRequired is returned for answer_and_retry on an
+// implementation-stage agent_question that names no answer_route: the
+// daemon cannot choose for the human whether the answer re-invokes the
+// implementer or revises the specification.
+var ErrAnswerRouteRequired = errors.New("answer_and_retry on an implementation-stage question requires an answer_route")
+
 // ErrContentNotAllowed is returned when a command whose action carries no
 // conversation content arrives with a message or attachments: recording the
 // command while dropping the content would silently lose the user's data, so

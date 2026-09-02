@@ -8,7 +8,8 @@
     "artifact_digests": [],
     "action": "approve",
     "message": "",
-    "attachments": []
+    "attachments": [],
+    "answer_route": null
   },
   "revision": 25
 }

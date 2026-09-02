@@ -13,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -314,5 +315,86 @@ func (f blockedImplementationFixture) assertQuestion(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestBlockedImplementationAnswerRetriesImplementer: answer_and_retry routed
+// to retry_implementation re-invokes the implementer on the same run with the
+// answer as operator feedback, against the unchanged specification digest.
+func TestBlockedImplementationAnswerRetriesImplementer(t *testing.T) {
+	f := newBlockedImplementationFixture(t, domain.BlockedKindOwnerDecision, decisionsFixture()[0].Question)
+	f.engine.productionPublication = &productionPublicationWorkflow{
+		store: f.store, attention: f.signet, artifacts: f.blobs,
+		now: func() time.Time { return *f.now },
+	}
+	if _, err := f.engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	f.assertQuestion(t)
+	specDigestBefore := f.run.SpecDigest
+
+	snapshot, err := f.signet.GetAttentionItem(t.Context(), f.questionID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := domain.AnswerRouteRetryImplementation
+	const answer = "Current and previous: keep both adapters."
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "answer-implementation", DeviceID: "device-1", ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: f.questionID(), Action: domain.ActionAnswerAndRetry,
+			ItemVersion: snapshot.Item.ItemVersion, ArtifactDigests: snapshot.Item.ArtifactDigests,
+			Message: answer, AnswerRoute: &route,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	created, err := f.engine.reconcileOperatorFeedback(t.Context())
+	if err != nil || created != 1 {
+		t.Fatalf("reconcileOperatorFeedback = %d, %v", created, err)
+	}
+	feedbackID := operatorFeedbackInvocationID("answer-implementation")
+	var (
+		entry   store.QueueEntry
+		run     domain.Run
+		pending []store.QueueEntry
+	)
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		if entry, err = tx.GetOutbox(t.Context(), string(feedbackID)); err != nil {
+			return err
+		}
+		if run, err = tx.GetRun(t.Context(), f.run.ID); err != nil {
+			return err
+		}
+		pending, err = tx.ListPendingOutbox(t.Context(), KindSpecificationInvocationRequested)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request, err := decodeOperatorFeedbackRequest(entry)
+	if err != nil || request.RunID != f.run.ID || request.SourceInvocationID != f.attempt.InvocationID ||
+		request.CommandID != "answer-implementation" || request.HeadSHA != "" {
+		t.Fatalf("operator feedback request = %#v, %v", request, err)
+	}
+	body, err := loadFakePublicationBlob(f.blobs, request.InputArtifactDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var input operatorFeedbackInput
+	if err := json.Unmarshal(body, &input); err != nil {
+		t.Fatal(err)
+	}
+	if input.Feedback != answer || !reflect.DeepEqual(input.Question, snapshot.Item.AgentQuestion) {
+		t.Fatalf("implementation answer input = %#v, want answer and authenticated question", input)
+	}
+	if run.SpecDigest != specDigestBefore {
+		t.Fatalf("retry changed the specification digest to %s", run.SpecDigest)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("retry_implementation enqueued %d specification requests", len(pending))
+	}
+	if replay, err := f.engine.reconcileOperatorFeedback(t.Context()); err != nil || replay != 0 {
+		t.Fatalf("replayed feedback reconciliation = %d, %v", replay, err)
 	}
 }

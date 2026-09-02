@@ -1388,7 +1388,15 @@ func authenticateSpecificationAnswerTransition(
 	if err != nil {
 		return err
 	}
-	if artifact.Digest != domain.Digest(contentaddr.Sum([]byte(strings.TrimSpace(command.Message)))) {
+	answer, err := newSpecificationAnswerInput(item, command)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(answer)
+	if err != nil {
+		return err
+	}
+	if artifact.Digest != domain.Digest(contentaddr.Sum(body)) {
 		return domain.ErrParentKeyMismatch
 	}
 	if err := requireSpecificationOutputProvenance(

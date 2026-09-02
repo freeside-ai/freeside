@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -226,8 +227,16 @@ func TestSpecificationNeedsDecisionAnswerReinvokesSpecifierWithHumanFeedback(t *
 		t.Fatal("second specification provider inputs were not captured")
 	}
 	answerArtifact := f.artifact(t, "answer-answer-question")
+	answerBody, err := json.Marshal(specificationAnswerInput{
+		Version:  specificationAnswerInputVersion,
+		Question: *specificationQuestionFacts(firstID),
+		Answer:   answer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	assertSpecificationPriorArtifacts(t, prompt, []expectedSpecificationPriorArtifact{{
-		role: "human_feedback", digest: answerArtifact.Digest, body: answer,
+		role: "human_feedback", digest: answerArtifact.Digest, body: string(answerBody),
 	}})
 	if _, err := f.run("implementation-run"); err != nil {
 		t.Fatalf("auto-approved implementation after the answered specification = %v", err)
