@@ -125,10 +125,13 @@ func readyReturnCandidate(
 	tx *sql.Tx,
 	id domain.ItemID,
 ) (readyReturnRewrite, bool, error) {
+	// This runs at schema version 0062, before 0063 added readiness_detail,
+	// so the column is projected as NULL: every row here predates the detail,
+	// and the shared scanner's column list must still line up.
 	item, snapshot, err := scanAttentionItemRecord(tx.QueryRowContext(ctx,
 		`SELECT id, project_id, conversation_id, item_type, status, health_posture,
-		        subject_run_id, readiness_summary, yield_history, entity_version,
-		        as_of_revision, body
+		        subject_run_id, readiness_summary, NULL AS readiness_detail, yield_history,
+		        entity_version, as_of_revision, body
 		 FROM attention_items WHERE id = ?`, id))
 	if err != nil {
 		return readyReturnRewrite{}, false, nil
@@ -151,7 +154,7 @@ func readyReturnCandidate(
 	if err != nil || item.PRReference == nil || *item.PRReference != anchored {
 		return readyReturnRewrite{}, false, nil
 	}
-	binding, ok, err := readyBindingForMigration(ctx, tx, id)
+	binding, ok, err := readyBindingForMigration(ctx, tx, item)
 	if err != nil {
 		return readyReturnRewrite{}, false, err
 	}
@@ -192,8 +195,9 @@ func readyReturnCandidate(
 func readyBindingForMigration(
 	ctx context.Context,
 	tx *sql.Tx,
-	itemID domain.ItemID,
+	item domain.AttentionItem,
 ) (domain.ReadyItemPRBinding, bool, error) {
+	itemID := item.ID
 	var (
 		storedItemID, storedRunID, producingID, publicationID string
 		storedIdentity, recordedAt                            string
@@ -220,7 +224,7 @@ func readyBindingForMigration(
 		return domain.ReadyItemPRBinding{}, false, nil
 	}
 	reader := ReadTx{tx: tx}
-	if err := reader.validateReadyItemPRBinding(ctx, binding); err != nil {
+	if err := reader.validateReadyItemPRBindingAgainst(ctx, item, binding); err != nil {
 		return domain.ReadyItemPRBinding{}, false, nil
 	}
 	return binding, true, nil

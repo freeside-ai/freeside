@@ -691,10 +691,83 @@ enum AttentionDisplay {
         case .ready_clean: verdict = "Clean"
         case .ready_degraded: verdict = "Degraded"
         }
-        return [
+        var rows = [
             BindingRow(label: "Readiness", value: verdict),
             BindingRow(label: "Evaluation set", value: readiness.evaluation_set_digest),
         ]
+        guard let detail = item.readiness_detail?.value1 else { return rows }
+        rows.append(BindingRow(label: "Bound head", value: detail.candidate_head))
+        rows.append(
+            BindingRow(label: "Bound base", value: "\(detail.base.base_ref)@\(detail.base.base_sha)"))
+        for requirement in detail.requirements {
+            var value = [
+                label(requirement.check_class), label(requirement.kind), label(requirement.state),
+            ].joined(separator: ", ")
+            if let proof = requirement.proof_recipe_digest?.value1 {
+                value += ", proof \(proof)"
+            }
+            rows.append(BindingRow(label: "Requirement \(requirement.requirement_key)", value: value))
+            if let waiver = requirement.waiver?.value1 {
+                rows.append(
+                    BindingRow(
+                        label: "Waiver \(waiver.id)",
+                        value:
+                            "\(waiver.dimension), \(label(waiver.authority)), "
+                            + waiver.granted_at.formatted(.iso8601)))
+            }
+        }
+        return rows
+    }
+
+    /// A revision shortened for a card row; the inspector keeps the full
+    /// daemon value. Only a hex object name is abbreviated. The other
+    /// coordinates a readiness invalidation carries on its axis, a base ref
+    /// and a "repository_id#pr_number" identity, put their meaning in the
+    /// tail, so truncating them can render two different values identically
+    /// and hide the very change the row exists to name.
+    static func shortRevision(_ value: String) -> String {
+        guard value.count > 12, value.allSatisfy(\.isHexDigit) else { return value }
+        return String(value.prefix(12))
+    }
+
+    static func label(_ state: Components.Schemas.ReadinessRequirementState) -> String {
+        switch state {
+        case .passed: return "Passed"
+        case .failed: return "Failed"
+        case .not_run: return "Not run"
+        case .not_applicable: return "Not applicable"
+        }
+    }
+
+    static func label(_ checkClass: Components.Schemas.VerificationCheckClass) -> String {
+        switch checkClass {
+        case .clean_verification: return "Clean verification"
+        case .independent_review: return "Independent review"
+        case .repo_change_policy: return "Repo change policy"
+        }
+    }
+
+    static func label(_ kind: Components.Schemas.RequirementKind) -> String {
+        switch kind {
+        case .required: return "Required"
+        case .optional: return "Optional"
+        }
+    }
+
+    static func label(_ authority: Components.Schemas.WaiverGrantingAuthority) -> String {
+        switch authority {
+        case .explicit_human_approval: return "Explicit human approval"
+        case .daemon_trusted_configuration: return "Daemon trusted configuration"
+        }
+    }
+
+    static func label(_ reason: Components.Schemas.ReadinessInvalidationReason) -> String {
+        switch reason {
+        case .head_changed: return "Head changed"
+        case .base_advanced: return "Base advanced"
+        case .retargeted: return "Retargeted"
+        case .identity_changed: return "Identity changed"
+        }
     }
 
     static func findingAdjudicationRows(

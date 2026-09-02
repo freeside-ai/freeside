@@ -78,6 +78,53 @@
     "class": "ready_degraded",
     "evaluation_set_digest": "sha256:evaluation-degraded"
   },
+  "readiness_detail": {
+    "evaluation_set_digest": "sha256:evaluation-degraded",
+    "candidate_head": "cafebabe",
+    "base": {
+      "base_ref": "main",
+      "base_sha": "deadbeef"
+    },
+    "requirements": [
+      {
+        "requirement_key": "clean-verification",
+        "check_class": "clean_verification",
+        "kind": "required",
+        "state": "passed",
+        "proof_recipe_digest": "sha256:recipe",
+        "waiver": null
+      },
+      {
+        "requirement_key": "independent-review",
+        "check_class": "independent_review",
+        "kind": "required",
+        "state": "passed",
+        "proof_recipe_digest": "sha256:review-config",
+        "waiver": null
+      },
+      {
+        "requirement_key": "license-headers",
+        "check_class": "repo_change_policy",
+        "kind": "optional",
+        "state": "not_run",
+        "proof_recipe_digest": null,
+        "waiver": null
+      },
+      {
+        "requirement_key": "repo-change-policy",
+        "check_class": "repo_change_policy",
+        "kind": "required",
+        "state": "failed",
+        "proof_recipe_digest": null,
+        "waiver": {
+          "id": "waiver-1",
+          "dimension": "repo_change_policy",
+          "authority": "explicit_human_approval",
+          "granted_at": "2026-01-02T02:04:05Z"
+        }
+      }
+    ]
+  },
   "yield_history": {
     "rounds": [
       {

@@ -35,7 +35,8 @@ func TestReadinessEnumsRegistered(t *testing.T) {
 	t.Parallel()
 	if len(domain.AllRequirementKinds) != 2 || len(domain.AllAdvisoryOutcomes) != 2 ||
 		len(domain.AllReadinessVerdictClasses) != 3 || len(domain.AllWaiverGrantingAuthorities) != 2 ||
-		len(domain.AllVerificationCheckClasses) != 3 || len(domain.AllWaiverLifecycleStatuses) != 3 {
+		len(domain.AllVerificationCheckClasses) != 3 || len(domain.AllWaiverLifecycleStatuses) != 3 ||
+		len(domain.AllReadinessRequirementStates) != 4 {
 		t.Fatal("readiness enum registry lost a member")
 	}
 }
@@ -125,6 +126,36 @@ func TestEvaluateReadinessPreservesCleanAndDegraded(t *testing.T) {
 	}
 	if degraded.Class != domain.ReadinessReadyDegraded || len(degraded.AdvisoryOutcomes) != 1 || degraded.EvaluationSetDigest == clean.EvaluationSetDigest {
 		t.Fatalf("degraded = %+v, clean = %+v", degraded, clean)
+	}
+
+	// The card-facing projection reproduces each verdict's class and carries
+	// its digest, head, and base without re-evaluating anything.
+	cleanDetail, err := domain.NewReadinessDetail(readinessTarget(readinessBase("base")), clean, []domain.CheckState{passed, optionalPassed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleanDetail.Class() != clean.Class || cleanDetail.EvaluationSetDigest != clean.EvaluationSetDigest ||
+		cleanDetail.CandidateHead != "head" || cleanDetail.Base != (domain.ReadinessBoundBase{BaseRef: "refs/heads/main", BaseSHA: "base"}) ||
+		len(cleanDetail.Requirements) != 2 || cleanDetail.Requirements[0].RequirementKey != "optional" ||
+		cleanDetail.Requirements[1].State != domain.ReadinessRequirementPassed ||
+		cleanDetail.Requirements[1].ProofRecipeDigest == nil || *cleanDetail.Requirements[1].ProofRecipeDigest != "sha256:recipe" {
+		t.Fatalf("clean detail = %+v", cleanDetail)
+	}
+	degradedDetail, err := domain.NewReadinessDetail(readinessTarget(readinessBase("base")), degraded, []domain.CheckState{optionalFailed, passed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if degradedDetail.Class() != degraded.Class || degradedDetail.EvaluationSetDigest != degraded.EvaluationSetDigest ||
+		degradedDetail.Requirements[0].State != domain.ReadinessRequirementFailed || degradedDetail.Requirements[0].Waiver != nil {
+		t.Fatalf("degraded detail = %+v", degradedDetail)
+	}
+	// Recorded states that imply another class than the verdict are refused,
+	// so the projection cannot contradict the summary it explains.
+	if _, err := domain.NewReadinessDetail(readinessTarget(readinessBase("base")), clean, []domain.CheckState{optionalFailed, passed}); !errors.Is(err, domain.ErrReadinessDetailInconsistent) {
+		t.Fatalf("NewReadinessDetail() with a degrading state under a clean verdict error = %v, want ErrReadinessDetailInconsistent", err)
+	}
+	if _, err := domain.NewReadinessDetail(readinessTarget(nil), clean, []domain.CheckState{passed, optionalPassed}); !errors.Is(err, domain.ErrEmptyField) {
+		t.Fatalf("NewReadinessDetail() without a base error = %v, want ErrEmptyField", err)
 	}
 }
 

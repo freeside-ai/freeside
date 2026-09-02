@@ -143,6 +143,7 @@ import Testing
     @Test func legacyReadinessIsPresentAsExplicitNullOnTheMockWire() async throws {
         var legacy = AttentionFixtures.fixture(type: .ready_for_final_review)
         legacy.item.readiness = nil
+        legacy.item.readiness_detail = nil
         legacy.item.yield_history = nil
         let transport = MockServerTransport(server: MockServer(items: [legacy]))
         let request = HTTPRequest(
@@ -163,6 +164,8 @@ import Testing
 
         #expect(item.keys.contains("readiness"))
         #expect(item["readiness"] is NSNull)
+        #expect(item.keys.contains("readiness_detail"))
+        #expect(item["readiness_detail"] is NSNull)
         #expect(item.keys.contains("yield_history"))
         #expect(item["yield_history"] is NSNull)
     }

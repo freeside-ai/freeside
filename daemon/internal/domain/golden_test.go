@@ -2,6 +2,8 @@ package domain_test
 
 import (
 	"encoding/json"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +127,27 @@ func TestGolden(t *testing.T) {
 	readiness := domain.ReadinessSummary{
 		Class: domain.ReadinessReadyClean, EvaluationSetDigest: "sha256:evaluation-clean",
 	}
+	// The detail behind the summary (issue #982): the production set's two
+	// required checks, both passed against the published head and admitted
+	// base, so the card can list every requirement and its bound coordinates.
+	verificationRecipe := domain.Digest("sha256:recipe")
+	reviewRecipe := domain.Digest("sha256:review-config")
+	readinessDetail := domain.ReadinessDetail{
+		EvaluationSetDigest: readiness.EvaluationSetDigest, CandidateHead: "cafebabe",
+		Base: domain.ReadinessBoundBase{BaseRef: "main", BaseSHA: "deadbeef"},
+		Requirements: []domain.ReadinessRequirement{
+			{
+				RequirementKey: "clean-verification", CheckClass: domain.CheckClassCleanVerification,
+				Kind: domain.RequirementRequired, State: domain.ReadinessRequirementPassed,
+				ProofRecipeDigest: &verificationRecipe,
+			},
+			{
+				RequirementKey: "independent-review", CheckClass: domain.CheckClassIndependentReview,
+				Kind: domain.RequirementRequired, State: domain.ReadinessRequirementPassed,
+				ProofRecipeDigest: &reviewRecipe,
+			},
+		},
+	}
 	yieldHistory := domain.ReviewYieldHistory{
 		Rounds: []domain.ReviewYieldRound{
 			{
@@ -157,6 +180,7 @@ func TestGolden(t *testing.T) {
 		PRHeadSHA:         "cafebabe",
 		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
 		Readiness:         &readiness,
+		ReadinessDetail:   &readinessDetail,
 		YieldHistory:      &yieldHistory,
 		CommitPlanNotice:  &noticeReason,
 		DisplayNames:      &displayNames,
@@ -197,6 +221,29 @@ func TestGolden(t *testing.T) {
 	degradedItem := item
 	degradedItem.Readiness = &domain.ReadinessSummary{
 		Class: domain.ReadinessReadyDegraded, EvaluationSetDigest: "sha256:evaluation-degraded",
+	}
+	// Degraded: the same two passes plus a waived required policy failure and
+	// an optional check that never ran, so the goldens pin the waiver's
+	// identity and granting authority beside the advisory entry.
+	degradedDetail := readinessDetail
+	degradedDetail.EvaluationSetDigest = degradedItem.Readiness.EvaluationSetDigest
+	degradedDetail.Requirements = append(slices.Clone(readinessDetail.Requirements),
+		domain.ReadinessRequirement{
+			RequirementKey: "license-headers", CheckClass: domain.CheckClassRepoChangePolicy,
+			Kind: domain.RequirementOptional, State: domain.ReadinessRequirementNotRun,
+		},
+		domain.ReadinessRequirement{
+			RequirementKey: "repo-change-policy", CheckClass: domain.CheckClassRepoChangePolicy,
+			Kind: domain.RequirementRequired, State: domain.ReadinessRequirementFailed,
+			Waiver: &domain.ReadinessWaiver{
+				ID: "waiver-1", Dimension: "repo_change_policy",
+				Authority: domain.WaiverAuthorityHumanApproval, GrantedAt: ts.Add(-time.Hour),
+			},
+		},
+	)
+	degradedItem.ReadinessDetail = &degradedDetail
+	if err := degradedItem.Validate(); err != nil {
+		t.Fatal(err)
 	}
 	item, err = item.WithTiming([]domain.AttentionDelivery{delivery})
 	if err != nil {
@@ -1479,11 +1526,61 @@ func TestReadinessGoldenContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof, err := domain.NewCheckProof(proofResolution, "head-sha", &domain.BaseRevision{
+	base := domain.BaseRevision{
 		Repo: "freeside-ai/freeside", RepositoryID: 1, BaseRef: "refs/heads/main", BaseSHA: "base-sha",
-	}, "sha256:review-config")
+	}
+	proof, err := domain.NewCheckProof(proofResolution, "head-sha", &base, "sha256:review-config")
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The card-facing detail (issue #982) projected from the same target,
+	// verdict, and states as the verdict itself: clean from the passed review
+	// alone, degraded from the review beside the waived policy failure.
+	passedState, err := domain.NewPassedCheckState(proofResolution, proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := domain.EvaluationTarget{CandidateHead: "head-sha", Base: &base}
+	cleanVerdict, err := domain.EvaluateReadiness(target, []domain.RequirementResolution{proofResolution}, []domain.CheckState{passedState}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanDetail, err := domain.NewReadinessDetail(target, cleanVerdict, []domain.CheckState{passedState})
+	if err != nil {
+		t.Fatal(err)
+	}
+	degradedVerdict, err := domain.EvaluateReadiness(target, []domain.RequirementResolution{resolution, proofResolution}, []domain.CheckState{passedState, state}, func(r domain.RequirementResolution, w domain.ValidatedDegradedWaiver) error {
+		return domain.ValidateDegradedWaiver(r, lifecycle, w)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	degradedDetail, err := domain.NewReadinessDetail(target, degradedVerdict, []domain.CheckState{state, passedState})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Blocked is representable in the detail shape (a required non-pass with
+	// no waiver) but never on a ready item, which the summary's ready-only
+	// classes enforce; the golden pins the shape and the item pins the refusal.
+	blockedDetail := cleanDetail
+	blockedDetail.Requirements = append(slices.Clone(cleanDetail.Requirements), domain.ReadinessRequirement{
+		RequirementKey: "unwaived-policy", CheckClass: domain.CheckClassRepoChangePolicy,
+		Kind: domain.RequirementRequired, State: domain.ReadinessRequirementFailed,
+	})
+	if err := blockedDetail.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if blockedDetail.Class() != domain.ReadinessBlocked {
+		t.Fatalf("blocked detail class = %q", blockedDetail.Class())
+	}
+	blockedInput := validItemInput(domain.AttentionReadyForFinalReview)
+	blockedInput.PRHeadSHA = "head-sha"
+	blockedInput.Readiness = &domain.ReadinessSummary{
+		Class: domain.ReadinessReadyClean, EvaluationSetDigest: blockedDetail.EvaluationSetDigest,
+	}
+	blockedInput.ReadinessDetail = &blockedDetail
+	if _, err := domain.NewAttentionItem(blockedInput, nil); !errors.Is(err, domain.ErrReadinessDetailInconsistent) {
+		t.Fatalf("ready item with a blocked detail error = %v, want ErrReadinessDetailInconsistent", err)
 	}
 	fixtures := []struct {
 		name  string
@@ -1496,6 +1593,9 @@ func TestReadinessGoldenContracts(t *testing.T) {
 		{"check_state", state},
 		{"readiness_summary", summary},
 		{"readiness_verdict", verdict},
+		{"readiness_detail_clean", cleanDetail},
+		{"readiness_detail_degraded", degradedDetail},
+		{"readiness_detail_blocked", blockedDetail},
 	}
 	for _, fixture := range fixtures {
 		t.Run(fixture.name, func(t *testing.T) {

@@ -162,6 +162,26 @@ func TestProductionReadyItemPreservesReadinessSummary(t *testing.T) {
 		TerminalOutcome: domain.ReviewClean,
 	}
 
+	recipe := domain.Digest("sha256:recipe")
+	detailFor := func(verdict domain.ReadinessVerdict) domain.ReadinessDetail {
+		detail := domain.ReadinessDetail{
+			EvaluationSetDigest: verdict.EvaluationSetDigest,
+			CandidateHead:       checkpoint.Imported.CommitSHA,
+			Base:                domain.ReadinessBoundBase{BaseRef: "main", BaseSHA: strings.Repeat("b", 40)},
+			Requirements: []domain.ReadinessRequirement{{
+				RequirementKey: "clean-verification", CheckClass: domain.CheckClassCleanVerification,
+				Kind: domain.RequirementRequired, State: domain.ReadinessRequirementPassed,
+				ProofRecipeDigest: &recipe,
+			}},
+		}
+		if verdict.Class == domain.ReadinessReadyDegraded {
+			detail.Requirements = append(detail.Requirements, domain.ReadinessRequirement{
+				RequirementKey: "optional-check", CheckClass: domain.CheckClassRepoChangePolicy,
+				Kind: domain.RequirementOptional, State: domain.ReadinessRequirementFailed,
+			})
+		}
+		return detail
+	}
 	for _, verdict := range []domain.ReadinessVerdict{
 		{Class: domain.ReadinessReadyClean, EvaluationSetDigest: "sha256:evaluation-clean"},
 		{
@@ -177,7 +197,8 @@ func TestProductionReadyItemPreservesReadinessSummary(t *testing.T) {
 			if err := verdict.Validate(); err != nil {
 				t.Fatalf("test verdict: %v", err)
 			}
-			item, err := w.readyItem(t.Context(), task, checkpoint, published, verdict, yieldHistory)
+			readiness := productionReadiness{verdict: verdict, detail: detailFor(verdict)}
+			item, err := w.readyItem(t.Context(), task, checkpoint, published, readiness, yieldHistory)
 			if err != nil {
 				t.Fatalf("readyItem: %v", err)
 			}
@@ -185,6 +206,9 @@ func TestProductionReadyItemPreservesReadinessSummary(t *testing.T) {
 				item.Readiness.EvaluationSetDigest != verdict.EvaluationSetDigest {
 				t.Fatalf("ready item summary = %+v, want %q / %q",
 					item.Readiness, verdict.Class, verdict.EvaluationSetDigest)
+			}
+			if item.ReadinessDetail == nil || !reflect.DeepEqual(*item.ReadinessDetail, readiness.detail) {
+				t.Fatalf("ready item detail = %+v, want %+v", item.ReadinessDetail, readiness.detail)
 			}
 			if item.YieldHistory == nil || !reflect.DeepEqual(*item.YieldHistory, yieldHistory) {
 				t.Fatalf("ready item yield history = %+v, want %+v", item.YieldHistory, yieldHistory)

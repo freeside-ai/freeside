@@ -24,6 +24,7 @@
   "pr_head_sha": "",
   "pr_reference": null,
   "readiness": null,
+  "readiness_detail": null,
   "yield_history": {
     "rounds": [
       {

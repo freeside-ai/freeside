@@ -480,6 +480,13 @@ type AttentionItem struct {
 	// always set it; nil remains valid for legacy persisted items and fake-mode
 	// items that never ran Section 6 verification. Once created it is immutable.
 	Readiness *ReadinessSummary `json:"readiness"`
+	// ReadinessDetail is the card-facing projection of the evaluation behind
+	// Readiness (issue #982): the bound head and base and every requirement's
+	// state, proof recipe, or waiver identity and granting authority. Production
+	// creators always set it beside Readiness; nil remains valid for legacy
+	// persisted items and fake-mode items. Once created it is immutable, and it
+	// never appears without the summary it details.
+	ReadinessDetail *ReadinessDetail `json:"readiness_detail"`
 	// YieldHistory preserves the deterministic per-round routed-review digest
 	// on ready_for_final_review and review_diminishing_returns items. Production
 	// ready-item creators always set it, and the diminishing producer will once
@@ -590,6 +597,7 @@ type AttentionItemInput struct {
 	PRHeadSHA                        string
 	PRReference                      *PRReference
 	Readiness                        *ReadinessSummary
+	ReadinessDetail                  *ReadinessDetail
 	YieldHistory                     *ReviewYieldHistory
 	CommitPlanNotice                 *CommitPlanNoticeReason
 	ReviewRecoveryBinding            *ReviewRecoveryBinding
@@ -645,6 +653,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		PRHeadSHA:                        in.PRHeadSHA,
 		PRReference:                      clonePtr(in.PRReference),
 		Readiness:                        clonePtr(in.Readiness),
+		ReadinessDetail:                  cloneReadinessDetail(in.ReadinessDetail),
 		YieldHistory:                     cloneReviewYieldHistory(in.YieldHistory),
 		CommitPlanNotice:                 clonePtr(in.CommitPlanNotice),
 		ReviewRecoveryBinding:            clonePtr(in.ReviewRecoveryBinding),
@@ -697,6 +706,21 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		}
 	}
 	return item, nil
+}
+
+// cloneReadinessDetail deep-copies the detail so a caller's later mutation of
+// its entries or their pointer fields cannot reach the constructed item.
+func cloneReadinessDetail(detail *ReadinessDetail) *ReadinessDetail {
+	if detail == nil {
+		return nil
+	}
+	cloned := *detail
+	cloned.Requirements = slices.Clone(detail.Requirements)
+	for index := range cloned.Requirements {
+		cloned.Requirements[index].ProofRecipeDigest = clonePtr(detail.Requirements[index].ProofRecipeDigest)
+		cloned.Requirements[index].Waiver = clonePtr(detail.Requirements[index].Waiver)
+	}
+	return &cloned
 }
 
 func cloneReviewYieldHistory(history *ReviewYieldHistory) *ReviewYieldHistory {
@@ -796,6 +820,36 @@ func (i AttentionItem) Validate() error {
 		}
 		if err := i.Readiness.Validate(); err != nil {
 			return fmt.Errorf("item %s: %w", i.ID, err)
+		}
+	}
+	if i.ReadinessDetail != nil {
+		if i.Type != AttentionReadyForFinalReview {
+			return fmt.Errorf("item %s type %q carries readiness detail: %w",
+				i.ID, i.Type, ErrReadinessDetailInconsistent)
+		}
+		if err := i.ReadinessDetail.Validate(); err != nil {
+			return fmt.Errorf("item %s: %w", i.ID, err)
+		}
+		// The detail explains the summary, so it binds to the summary's exact
+		// evaluation set and class and to the head the item was published at.
+		// A blocked detail can never agree with a summary, which admits only
+		// the ready classes, so a ready item cannot carry blocked reasons.
+		if i.Readiness == nil {
+			return fmt.Errorf("item %s readiness detail without a summary: %w",
+				i.ID, ErrReadinessDetailInconsistent)
+		}
+		if i.ReadinessDetail.EvaluationSetDigest != i.Readiness.EvaluationSetDigest {
+			return fmt.Errorf("item %s readiness detail evaluation set %q against summary %q: %w",
+				i.ID, i.ReadinessDetail.EvaluationSetDigest, i.Readiness.EvaluationSetDigest,
+				ErrReadinessDetailInconsistent)
+		}
+		if class := i.ReadinessDetail.Class(); class != i.Readiness.Class {
+			return fmt.Errorf("item %s readiness detail implies %q against summary %q: %w",
+				i.ID, class, i.Readiness.Class, ErrReadinessDetailInconsistent)
+		}
+		if i.ReadinessDetail.CandidateHead != i.PRHeadSHA {
+			return fmt.Errorf("item %s readiness detail head %q against pr head %q: %w",
+				i.ID, i.ReadinessDetail.CandidateHead, i.PRHeadSHA, ErrReadinessDetailInconsistent)
 		}
 	}
 	if i.YieldHistory != nil {

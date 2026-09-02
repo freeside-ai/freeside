@@ -1767,6 +1767,14 @@ type productionTaskOutcome struct {
 	prNumber  int
 }
 
+// productionReadiness is the §6 verdict beside its card-facing projection
+// (issue #982). currentReadinessVerdict builds both from one evaluation, so
+// the ready item's summary and detail can never describe different sets.
+type productionReadiness struct {
+	verdict domain.ReadinessVerdict
+	detail  domain.ReadinessDetail
+}
+
 type productionBinding struct {
 	run            domain.Run
 	declaration    *domain.WorkUnitDeclaration
@@ -2126,7 +2134,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			return productionTaskOutcome{}, err
 		}
 		if readyExists || finalizedIntent {
-			verdict, _, err := w.assertReviewedCandidate(
+			readiness, _, err := w.assertReviewedCandidate(
 				ctx, task, binding, checkpoint, reviewInstructions,
 			)
 			if err != nil {
@@ -2171,7 +2179,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			candidate.DispositionHistory = &history
 			if readyExists {
 				published, err := w.loadReadyPublicationOutcome(
-					ctx, task, binding, checkpoint, candidate, verdict,
+					ctx, task, binding, checkpoint, candidate, readiness,
 				)
 				if err != nil {
 					if held, handled, holdErr := w.holdPublicationRepairRefusal(
@@ -4115,12 +4123,12 @@ func (w *productionPublicationWorkflow) currentReadinessVerdict(
 	checkpoint productionVerificationCheckpoint,
 	reviewInstructions exec.ReviewInstructionBinding,
 	reviewRecord domain.ReviewRecord,
-) (domain.ReadinessVerdict, func(context.Context) error, error) {
+) (productionReadiness, func(context.Context) error, error) {
 	resolutions, err := productionReadinessResolutions(
 		binding, w.store.VerificationFloorRegistryGeneration(),
 	)
 	if err != nil {
-		return domain.ReadinessVerdict{}, nil, err
+		return productionReadiness{}, nil, err
 	}
 	// EvaluateReadiness rejects only an empty resolution set, not a strict
 	// subset of the requirement set: it trusts its caller to pass the complete
@@ -4134,7 +4142,7 @@ func (w *productionPublicationWorkflow) currentReadinessVerdict(
 	}
 	for _, definition := range domain.ProductionRequirementDefinitions() {
 		if _, ok := resolved[definition.Key]; !ok {
-			return domain.ReadinessVerdict{}, nil, fmt.Errorf(
+			return productionReadiness{}, nil, fmt.Errorf(
 				"production readiness resolution set omits requirement %q: %w",
 				definition.Key, domain.ErrParentKeyMismatch)
 		}
@@ -4144,36 +4152,43 @@ func (w *productionPublicationWorkflow) currentReadinessVerdict(
 		resolutions[0], task.HeadSHA, &base, binding.image.RecipeDigest,
 	)
 	if err != nil {
-		return domain.ReadinessVerdict{}, nil, err
+		return productionReadiness{}, nil, err
 	}
 	verificationState, err := domain.NewPassedCheckState(resolutions[0], verificationProof)
 	if err != nil {
-		return domain.ReadinessVerdict{}, nil, err
+		return productionReadiness{}, nil, err
 	}
 	reviewRecipeDigest, err := digestJSON(struct {
 		Configuration domain.Digest `json:"configuration"`
 		Instructions  domain.Digest `json:"instructions"`
 	}{reviewRecord.ConfigurationDigest, reviewInstructions.ResultDigest})
 	if err != nil {
-		return domain.ReadinessVerdict{}, nil, err
+		return productionReadiness{}, nil, err
 	}
 	reviewProof, err := domain.NewCheckProof(resolutions[1], task.HeadSHA, &base, reviewRecipeDigest)
 	if err != nil {
-		return domain.ReadinessVerdict{}, nil, err
+		return productionReadiness{}, nil, err
 	}
 	reviewState, err := domain.NewPassedCheckState(resolutions[1], reviewProof)
 	if err != nil {
-		return domain.ReadinessVerdict{}, nil, err
+		return productionReadiness{}, nil, err
 	}
 	states := []domain.CheckState{verificationState, reviewState}
 	target := domain.EvaluationTarget{CandidateHead: task.HeadSHA, Base: &base}
 	verdict, err := domain.EvaluateReadiness(target, resolutions, states, nil)
 	if err != nil {
-		return domain.ReadinessVerdict{}, nil, err
+		return productionReadiness{}, nil, err
 	}
 	if checkpoint.Authorization.VerificationOutcome != domain.VerificationPassed ||
 		verdict.Class == domain.ReadinessBlocked {
-		return domain.ReadinessVerdict{}, nil, fmt.Errorf("current verification set is blocked: %w", domain.ErrParentKeyMismatch)
+		return productionReadiness{}, nil, fmt.Errorf("current verification set is blocked: %w", domain.ErrParentKeyMismatch)
+	}
+	// The card-facing detail is projected from the same target, verdict, and
+	// states as the verdict itself, so its bound head, base, and entries are
+	// the evaluation's, never re-derived by the item producer.
+	detail, err := domain.NewReadinessDetail(target, verdict, states)
+	if err != nil {
+		return productionReadiness{}, nil, err
 	}
 	// The verdict above is a pure evaluation; persistence is a separate,
 	// recipe-gated step returned as a closure so the caller runs it only when
@@ -4199,7 +4214,7 @@ func (w *productionPublicationWorkflow) currentReadinessVerdict(
 			return tx.RecordCheckProof(ctx, reviewProof)
 		})
 	}
-	return verdict, persist, nil
+	return productionReadiness{verdict: verdict, detail: detail}, persist, nil
 }
 
 func (w *productionPublicationWorkflow) assertReviewedCandidate(
@@ -4208,25 +4223,25 @@ func (w *productionPublicationWorkflow) assertReviewedCandidate(
 	binding productionBinding,
 	checkpoint productionVerificationCheckpoint,
 	reviewInstructions exec.ReviewInstructionBinding,
-) (domain.ReadinessVerdict, func(context.Context) error, error) {
+) (productionReadiness, func(context.Context) error, error) {
 	if err := w.shadowReviewBlocksReady(ctx, task, binding); err != nil {
-		return domain.ReadinessVerdict{}, nil, err
+		return productionReadiness{}, nil, err
 	}
 	record, failure, err := w.latestReviewState(ctx, task.RunID)
 	if err != nil {
-		return domain.ReadinessVerdict{}, nil, err
+		return productionReadiness{}, nil, err
 	}
 	approved, err := w.reviewConfigurationApproved(ctx, binding)
 	if err != nil {
-		return domain.ReadinessVerdict{}, nil, err
+		return productionReadiness{}, nil, err
 	}
 	if !approved {
-		return domain.ReadinessVerdict{}, nil, reviewConfigurationUnapprovedError(
+		return productionReadiness{}, nil, reviewConfigurationUnapprovedError(
 			binding.profile.Review.ConfigDigest, w.reviewConfigurationDigest,
 		)
 	}
 	if record != nil && record.ConfigurationDigest != w.reviewConfigurationDigest {
-		return domain.ReadinessVerdict{}, nil, fmt.Errorf(
+		return productionReadiness{}, nil, fmt.Errorf(
 			"clean review record configuration is %s: %w",
 			record.ConfigurationDigest,
 			reviewConfigurationUnapprovedError(
@@ -4238,7 +4253,7 @@ func (w *productionPublicationWorkflow) assertReviewedCandidate(
 	if record != nil {
 		roundComplete, err = w.reviewRoundDispositionComplete(ctx, *record)
 		if err != nil {
-			return domain.ReadinessVerdict{}, nil, err
+			return productionReadiness{}, nil, err
 		}
 	}
 	if binding.profile.Review.Mode != domain.ReviewFreesideInvoked ||
@@ -4248,7 +4263,7 @@ func (w *productionPublicationWorkflow) assertReviewedCandidate(
 		record.BaseSHA != binding.admission.Base.BaseSHA ||
 		record.HeadSHA != task.HeadSHA ||
 		(failure != nil && failure.Round >= record.Round) {
-		return domain.ReadinessVerdict{}, nil, fmt.Errorf(
+		return productionReadiness{}, nil, fmt.Errorf(
 			"published candidate lacks a clean, candidate-bound review record under the current trust-approved reviewer configuration: %w",
 			domain.ErrParentKeyMismatch,
 		)
@@ -4271,7 +4286,7 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 	// re-gate keeps every crash-recovery call site correct, including an
 	// old-order run that published before recording a clean, candidate-bound
 	// review.
-	verdict, persistReadiness, err := w.assertReviewedCandidate(ctx, task, binding, checkpoint, reviewInstructions)
+	readiness, persistReadiness, err := w.assertReviewedCandidate(ctx, task, binding, checkpoint, reviewInstructions)
 	if err != nil {
 		// Decision 2 promises operator-visible disposition, not a lane-fatal
 		// error. The re-gate stays fail-closed (never silent readiness); only
@@ -4312,7 +4327,7 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		return productionTaskOutcome{}, err
 	}
 	readyExists, err := w.hasCompatibleReadyItem(
-		ctx, task, binding, checkpoint, published, verdict, yieldHistory,
+		ctx, task, binding, checkpoint, published, readiness, yieldHistory,
 	)
 	if err != nil {
 		return productionTaskOutcome{}, err
@@ -4337,7 +4352,7 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		if err := persistReadiness(ctx); err != nil {
 			return productionTaskOutcome{}, err
 		}
-		ready, err := w.readyItem(ctx, task, checkpoint, published, verdict, yieldHistory)
+		ready, err := w.readyItem(ctx, task, checkpoint, published, readiness, yieldHistory)
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
@@ -4402,7 +4417,7 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		return productionTaskOutcome{}, err
 	}
 	return productionTaskOutcome{
-		completed: true, accepted: accepted, readiness: &verdict, prNumber: published.PRNumber,
+		completed: true, accepted: accepted, readiness: &readiness.verdict, prNumber: published.PRNumber,
 	}, nil
 }
 
@@ -4428,13 +4443,13 @@ func (w *productionPublicationWorkflow) hasCompatibleReadyItem(
 	binding productionBinding,
 	checkpoint productionVerificationCheckpoint,
 	published publish.Result,
-	verdict domain.ReadinessVerdict,
+	readiness productionReadiness,
 	yieldHistory domain.ReviewYieldHistory,
 ) (bool, error) {
 	historicalRecipes := mapsClone(w.approvedRecipes)
 	historicalRecipes[binding.image.RecipeDigest] = true
 	expectedReady, err := w.readyItemWithRecipes(
-		ctx, task, checkpoint, published, verdict, yieldHistory, historicalRecipes,
+		ctx, task, checkpoint, published, readiness, yieldHistory, historicalRecipes,
 	)
 	if err != nil {
 		return false, err
@@ -4444,7 +4459,7 @@ func (w *productionPublicationWorkflow) hasCompatibleReadyItem(
 		redactedCheckpoint := checkpoint
 		redactedCheckpoint.Artifacts = nil
 		expectedRedacted, err = w.readyItemWithRecipes(
-			ctx, task, redactedCheckpoint, published, verdict, yieldHistory, historicalRecipes,
+			ctx, task, redactedCheckpoint, published, readiness, yieldHistory, historicalRecipes,
 		)
 		if err != nil {
 			return false, err
@@ -4798,7 +4813,7 @@ func (w *productionPublicationWorkflow) loadReadyPublicationOutcome(
 	binding productionBinding,
 	checkpoint productionVerificationCheckpoint,
 	candidate publish.Candidate,
-	verdict domain.ReadinessVerdict,
+	readiness productionReadiness,
 ) (publish.Result, error) {
 	yieldHistory, err := w.reviewYieldHistory(ctx, task.RunID)
 	if err != nil {
@@ -4814,7 +4829,7 @@ func (w *productionPublicationWorkflow) loadReadyPublicationOutcome(
 			Identity: identity, Branch: outcome.Branch, PRNumber: outcome.PRNumber,
 		}
 		compatible, err := w.hasCompatibleReadyItem(
-			ctx, task, binding, checkpoint, published, verdict, yieldHistory,
+			ctx, task, binding, checkpoint, published, readiness, yieldHistory,
 		)
 		if err != nil {
 			return err
@@ -5623,11 +5638,11 @@ func (w *productionPublicationWorkflow) readyItem(
 	task productionPublicationTask,
 	checkpoint productionVerificationCheckpoint,
 	published publish.Result,
-	verdict domain.ReadinessVerdict,
+	readiness productionReadiness,
 	yieldHistory domain.ReviewYieldHistory,
 ) (domain.AttentionItem, error) {
 	return w.readyItemWithRecipes(
-		ctx, task, checkpoint, published, verdict, yieldHistory, w.approvedRecipes,
+		ctx, task, checkpoint, published, readiness, yieldHistory, w.approvedRecipes,
 	)
 }
 
@@ -5636,7 +5651,7 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 	task productionPublicationTask,
 	checkpoint productionVerificationCheckpoint,
 	published publish.Result,
-	verdict domain.ReadinessVerdict,
+	readiness productionReadiness,
 	yieldHistory domain.ReviewYieldHistory,
 	approvedRecipes map[domain.Digest]bool,
 ) (domain.AttentionItem, error) {
@@ -5665,8 +5680,9 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 			Repo: checkpoint.Authorization.Repo, Number: published.PRNumber,
 		},
 		Readiness: &domain.ReadinessSummary{
-			Class: verdict.Class, EvaluationSetDigest: verdict.EvaluationSetDigest,
+			Class: readiness.verdict.Class, EvaluationSetDigest: readiness.verdict.EvaluationSetDigest,
 		},
+		ReadinessDetail:  &readiness.detail,
 		YieldHistory:     &yieldHistory,
 		DiffStats:        checkpoint.DiffStats,
 		DisplayNames:     names,

@@ -663,6 +663,28 @@
                                     snapshot.item,
                                     at: dynamicTypeSize,
                                     detailWidth: 1_200))))
+                    // The other readiness shapes the daemon can hand the card
+                    // (issue #982): a degraded verdict listing its waiver and
+                    // advisory entries, and a verdict the daemon invalidated,
+                    // rendered stale beside the bound and observed heads.
+                    surfaces.append(
+                        Surface(
+                            name: "decision-ready_for_final_review-degraded-1200",
+                            width: 1_200,
+                            view: AnyView(
+                                detail.screenshotCard(
+                                    AttentionFixtures.degradedReady().item,
+                                    at: dynamicTypeSize,
+                                    detailWidth: 1_200))))
+                    surfaces.append(
+                        Surface(
+                            name: "decision-ready_for_final_review-stale-1200",
+                            width: 1_200,
+                            view: AnyView(
+                                detail.screenshotCard(
+                                    AttentionFixtures.staleReady().item,
+                                    at: dynamicTypeSize,
+                                    detailWidth: 1_200))))
                 }
 
                 if snapshot.item._type == .review_diminishing_returns {

@@ -1,0 +1,26 @@
+{
+  "evaluation_set_digest": "sha256:811f80658755ffa6125d6df821e635c5cf4c4faec9cd702d348d05f7603bb2b3",
+  "candidate_head": "head-sha",
+  "base": {
+    "base_ref": "refs/heads/main",
+    "base_sha": "base-sha"
+  },
+  "requirements": [
+    {
+      "requirement_key": "review",
+      "check_class": "independent_review",
+      "kind": "required",
+      "state": "passed",
+      "proof_recipe_digest": "sha256:review-config",
+      "waiver": null
+    },
+    {
+      "requirement_key": "unwaived-policy",
+      "check_class": "repo_change_policy",
+      "kind": "required",
+      "state": "failed",
+      "proof_recipe_digest": null,
+      "waiver": null
+    }
+  ]
+}

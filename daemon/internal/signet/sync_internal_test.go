@@ -33,6 +33,39 @@ func TestNormalizeAttentionItemCarriesReadinessAndLegacyNull(t *testing.T) {
 	}
 }
 
+func TestNormalizeAttentionItemCarriesReadinessDetailAndLegacyNull(t *testing.T) {
+	recipe := domain.Digest("sha256:recipe")
+	for name, detail := range map[string]*domain.ReadinessDetail{
+		"present": {
+			EvaluationSetDigest: "sha256:evaluation", CandidateHead: "head",
+			Base: domain.ReadinessBoundBase{BaseRef: "main", BaseSHA: "base"},
+			Requirements: []domain.ReadinessRequirement{{
+				RequirementKey: "clean-verification", CheckClass: domain.CheckClassCleanVerification,
+				Kind: domain.RequirementRequired, State: domain.ReadinessRequirementPassed,
+				ProofRecipeDigest: &recipe,
+			}},
+		},
+		"legacy": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			body, err := json.Marshal(normalizeAttentionItem(domain.AttentionItem{ReadinessDetail: detail}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := `"readiness_detail":null`
+			if detail != nil {
+				want = `"readiness_detail":{"evaluation_set_digest":"sha256:evaluation","candidate_head":"head",` +
+					`"base":{"base_ref":"main","base_sha":"base"},"requirements":[{"requirement_key":"clean-verification",` +
+					`"check_class":"clean_verification","kind":"required","state":"passed",` +
+					`"proof_recipe_digest":"sha256:recipe","waiver":null}]}`
+			}
+			if !strings.Contains(string(body), want) {
+				t.Fatalf("sync item = %s, want %s", body, want)
+			}
+		})
+	}
+}
+
 func TestAuthenticateElaborationDiscussionArtifact(t *testing.T) {
 	id := domain.ArtifactID("spec-discussion-command-1")
 	digest := domain.Digest("sha256:" + strings.Repeat("a", 64))

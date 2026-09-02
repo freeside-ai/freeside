@@ -18,10 +18,10 @@ VALUES (?, ?, ?, ?)`
 SELECT state, command_id, reason, occurred_at
 FROM unattended_operation_transitions ORDER BY id DESC LIMIT 1`
 	listOpenAttentionItemsByTypeSQL = `
-SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, yield_history, entity_version, as_of_revision, body
+SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body
 FROM attention_items WHERE item_type = ? AND status = 'open' ORDER BY id`
 	listOpenAttentionItemsForRunSQL = `
-SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, yield_history, entity_version, as_of_revision, body
+SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body
 FROM attention_items WHERE subject_run_id = ? AND status = 'open' ORDER BY id`
 	attentionRunBodyLookupSQL = `
 SELECT id, item_type, status, subject_run_id, body
