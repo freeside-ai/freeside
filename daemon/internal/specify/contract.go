@@ -71,12 +71,14 @@ type Specification struct {
 	Addressals []Addressal `json:"addressals"`
 }
 
-// Output is exactly one loop decision: request research, return a spec, or
-// answer a discussion turn without advancing the specification.
+// Output is exactly one loop decision: request research, return a spec,
+// answer a discussion turn without advancing the specification, or hand the
+// human the decisions that block an implementation-ready specification.
 type Output struct {
-	FetchRequests []FetchRequest `json:"fetch_requests"`
-	Specification *Specification `json:"specification"`
-	Reply         *string        `json:"reply"`
+	FetchRequests []FetchRequest    `json:"fetch_requests"`
+	Specification *Specification    `json:"specification"`
+	Reply         *string           `json:"reply"`
+	Decisions     []domain.Decision `json:"decisions"`
 }
 
 // DecodeOutput strictly reconstructs and validates one typed stage payload.
@@ -195,8 +197,16 @@ func (o Output) Validate() error {
 	hasFetch := len(o.FetchRequests) > 0
 	hasSpec := o.Specification != nil
 	hasReply := o.Reply != nil
-	if boolCount(hasFetch)+boolCount(hasSpec)+boolCount(hasReply) != 1 {
-		return fmt.Errorf("%w: exactly one of fetch_requests, specification, or reply is required", ErrInvalidOutput)
+	hasDecisions := len(o.Decisions) > 0
+	if boolCount(hasFetch)+boolCount(hasSpec)+boolCount(hasReply)+boolCount(hasDecisions) != 1 {
+		return fmt.Errorf("%w: exactly one of fetch_requests, specification, reply, or decisions is required",
+			ErrInvalidOutput)
+	}
+	if hasDecisions {
+		if err := domain.ValidateDecisions(o.Decisions); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidOutput, err)
+		}
+		return nil
 	}
 	if hasFetch {
 		if len(o.FetchRequests) > MaxFetchRequests {
