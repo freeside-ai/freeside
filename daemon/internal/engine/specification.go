@@ -92,6 +92,9 @@ func WithSpecification(cfg SpecificationConfig) Option {
 			return fmt.Errorf("with specification: prompt package digest %q is not canonical",
 				cfg.PromptPackageDigest)
 		}
+		if e.artifacts == nil && cfg.Blobs != nil {
+			e.artifacts = cfg.Blobs
+		}
 		e.specification = &specificationWorkflow{
 			fetcher: cfg.Fetcher, blobs: cfg.Blobs, now: cfg.Now,
 			promptPackage:    cfg.PromptPackageDigest,

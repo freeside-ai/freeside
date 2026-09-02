@@ -31,6 +31,11 @@ const (
 	OutcomeComplete Outcome = "complete"
 	// OutcomeFail commits the scripted result with StatusFailed.
 	OutcomeFail Outcome = "fail"
+	// OutcomeBlocked commits the scripted result with StatusBlocked: the
+	// implementer stopped on a typed blocked outcome and produced no
+	// candidate. The decisions live in the invocation's recorded claims,
+	// which a test plants beside the script.
+	OutcomeBlocked Outcome = "blocked"
 	// OutcomeCrashBeforeResult loses the session before any result is
 	// committed: Inspect reports StatusGone, Collect returns ErrNoResult.
 	OutcomeCrashBeforeResult Outcome = "crash_before_result"
@@ -46,6 +51,7 @@ const (
 var AllOutcomes = []Outcome{
 	OutcomeComplete,
 	OutcomeFail,
+	OutcomeBlocked,
 	OutcomeCrashBeforeResult,
 	OutcomeCrashAfterResult,
 }
@@ -55,7 +61,7 @@ var AllOutcomes = []Outcome{
 // the exhaustive linter forces a new member to be handled.
 func (o Outcome) valid() bool {
 	switch o {
-	case OutcomeComplete, OutcomeFail, OutcomeCrashBeforeResult, OutcomeCrashAfterResult:
+	case OutcomeComplete, OutcomeFail, OutcomeBlocked, OutcomeCrashBeforeResult, OutcomeCrashAfterResult:
 		return true
 	default:
 		return false
@@ -266,6 +272,10 @@ func (d *StageDriver) Inspect(_ context.Context, id domain.InvocationID) (exec.I
 		s.finished = true
 		d.commit(id, s.script.Result, exec.StatusFailed)
 		status = exec.StatusFailed
+	case OutcomeBlocked:
+		s.finished = true
+		d.commit(id, s.script.Result, exec.StatusBlocked)
+		status = exec.StatusBlocked
 	case OutcomeCrashBeforeResult:
 		s.lost = true
 		return exec.Inspection{Status: exec.StatusGone}, nil

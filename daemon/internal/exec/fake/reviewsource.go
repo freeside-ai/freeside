@@ -227,6 +227,10 @@ func (s *ReviewSource) Inspect(_ context.Context, id domain.InvocationID) (exec.
 		s.commit(id, sess.script.Result)
 		s.mustPersistLocked("inspect", id)
 		return exec.StatusGone, nil
+	case OutcomeBlocked:
+		// A review never stops on a question; the outcome belongs to the
+		// stage driver, so a review script carrying it is a fixture defect.
+		return "", fmt.Errorf("fake review source inspect %s: outcome %q is not a review outcome", id, sess.script.Outcome)
 	}
 	return "", fmt.Errorf("fake review source inspect %s: unknown outcome %q", id, sess.script.Outcome)
 }
@@ -273,6 +277,8 @@ func (s *ReviewSource) Poll(_ context.Context, id domain.InvocationID) (exec.Rev
 		// The crash is observed via Inspect (which sets lost, and commits the
 		// crash-after result); until then the review is still running.
 		return exec.ReviewResult{}, fmt.Errorf("fake review source poll %s: %w", id, exec.ErrResultNotReady)
+	case OutcomeBlocked:
+		return exec.ReviewResult{}, fmt.Errorf("fake review source poll %s: outcome %q is not a review outcome", id, sess.script.Outcome)
 	}
 	return exec.ReviewResult{}, fmt.Errorf("fake review source poll %s: unknown outcome %q", id, sess.script.Outcome)
 }
