@@ -179,17 +179,25 @@ func TestOverrideClassification(t *testing.T) {
 	}
 	decided := []comprehension.DecidedCommand{
 		// Followed: chose the recommended approve.
-		{Command: recommendedCommand(t, "c1", "item-a", domain.ActionApprove, domain.ActionApprove, src, full.Digest),
-			ItemType: domain.AttentionReadyForFinalReview},
+		{
+			Command:  recommendedCommand(t, "c1", "item-a", domain.ActionApprove, domain.ActionApprove, src, full.Digest),
+			ItemType: domain.AttentionReadyForFinalReview,
+		},
 		// Voluntary: chose request_changes though approve was offered.
-		{Command: recommendedCommand(t, "c2", "item-a", domain.ActionRequestChanges, domain.ActionApprove, src, full.Digest),
-			ItemType: domain.AttentionReadyForFinalReview},
+		{
+			Command:  recommendedCommand(t, "c2", "item-a", domain.ActionRequestChanges, domain.ActionApprove, src, full.Digest),
+			ItemType: domain.AttentionReadyForFinalReview,
+		},
 		// Forced: approve was not on the surface.
-		{Command: recommendedCommand(t, "c3", "item-d", domain.ActionRequestChanges, domain.ActionApprove, src, noApprove.Digest),
-			ItemType: domain.AttentionReadyForFinalReview},
+		{
+			Command:  recommendedCommand(t, "c3", "item-d", domain.ActionRequestChanges, domain.ActionApprove, src, noApprove.Digest),
+			ItemType: domain.AttentionReadyForFinalReview,
+		},
 		// Unclassified: no surface digest on the evidence.
-		{Command: recommendedCommand(t, "c4", "item-e", domain.ActionRequestChanges, domain.ActionApprove, src, ""),
-			ItemType: domain.AttentionReadyForFinalReview},
+		{
+			Command:  recommendedCommand(t, "c4", "item-e", domain.ActionRequestChanges, domain.ActionApprove, src, ""),
+			ItemType: domain.AttentionReadyForFinalReview,
+		},
 	}
 	got := comprehension.Compute(events, []domain.DecisionActionSurface{full, noApprove}, decided, nil).Overrides
 	if len(got) != 1 {

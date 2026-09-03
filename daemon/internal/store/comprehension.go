@@ -122,8 +122,10 @@ func (tx *WriteTx) PutDecisionActionSurface(
 			"put decision action surface %q: %w", surface.Digest, err)
 	}
 	inserted, err := tx.putImmutableInserted(ctx, insertDecisionActionSurfaceSQL,
-		[]any{surface.Digest, surface.DeviceID, surface.ItemID, surface.ItemDecisionSurfaceDigest,
-			surface.ClientCapabilityDigest, body, formatTime(derivedAt)},
+		[]any{
+			surface.Digest, surface.DeviceID, surface.ItemID, surface.ItemDecisionSurfaceDigest,
+			surface.ClientCapabilityDigest, body, formatTime(derivedAt),
+		},
 		selectDecisionActionSurfaceBodySQL, []any{surface.Digest}, body)
 	if err != nil {
 		return domain.DecisionActionSurface{}, fmt.Errorf(
@@ -316,9 +318,7 @@ func (tx *ComprehensionReadTx) ListComprehensionDefects(ctx context.Context) ([]
 	defer func() { _ = rows.Close() }()
 	var defects []domain.ComprehensionDefect
 	for rows.Next() {
-		var (
-			itemID, claimDigest, recordedAt, reason string
-		)
+		var itemID, claimDigest, recordedAt, reason string
 		if err := rows.Scan(&itemID, &claimDigest, &recordedAt, &reason); err != nil {
 			return nil, fmt.Errorf("list comprehension defects: %w", err)
 		}
