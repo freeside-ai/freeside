@@ -20,6 +20,28 @@ import Testing
         }
     }
 
+    @Test func servedSurfaceIsAuthoritativeOverTheLocalFilter() {
+        // The daemon-served surface offers only two of the three requested
+        // actions, so the third is unavailable even though it is not `.pending`.
+        let requested: [Components.Schemas.Action] = [.approve, .request_changes, .discuss]
+        let served: [Components.Schemas.Action] = [.approve, .discuss]
+        let ranking = DecisionActionRanking(requested: requested, servedActions: served)
+        #expect(Set(ranking.unavailable) == [.request_changes])
+        let visible =
+            ranking.principal + [ranking.reviewing].compactMap { $0 } + ranking.overflow
+            + [ranking.recommended].compactMap { $0 }
+        #expect(Set(visible) == Set(served))
+    }
+
+    @Test func anEmptyServedSurfaceIsNotDecidableHere() {
+        // The device is offered nothing for the item: not decidable here, and
+        // every requested action is unavailable.
+        let ranking = DecisionActionRanking(
+            requested: [.approve, .discuss], servedActions: [])
+        #expect(ranking.notDecidableHere)
+        #expect(Set(ranking.unavailable) == [.approve, .discuss])
+    }
+
     /// Every Section 4 Phase 1 action, against the client's capability table:
     /// one it can faithfully collect and execute is offered, one it cannot is
     /// omitted from the action surface and recorded in the drill-down. No

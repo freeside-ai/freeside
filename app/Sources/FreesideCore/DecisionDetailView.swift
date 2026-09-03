@@ -159,7 +159,17 @@ struct DecisionDetailView: View {
             // sync epoch (the id carries the store's cache generation), so a
             // card left open across a restore recertifies the re-bootstrapped
             // snapshot instead of sitting on a stale validation (issue #162).
-            .task(id: model.revalidationID) { await model.validate() }
+            .task(id: model.revalidationID) {
+                // Record card_opened the moment the card is on screen, before
+                // validation and the action-surface fetch, so open-to-decision
+                // includes their latency and a fast resolve-and-leave still
+                // records the open (plan §8, §9).
+                model.emitCardOpened()
+                await model.validate()
+                // Fetch the device's action surface separately, after the open
+                // is recorded (plan §8).
+                await model.refreshActionSurface()
+            }
             .sheet(item: $proposalEditor) { editor in
                 switch editor {
                 case .revision:
@@ -311,6 +321,7 @@ struct DecisionDetailView: View {
     private func revealTechnicalDetailsIfRequested(using scrollProxy: ScrollViewProxy) {
         guard let detailsRevealRequest, detailsRevealRequest.itemID == itemID else { return }
         detailsExpanded.wrappedValue = true
+        model.emitDetailsOpenedBeforeActing()
         #if os(macOS)
             inspectorBinding.wrappedValue = true
         #else
@@ -327,6 +338,7 @@ struct DecisionDetailView: View {
         ) {
             guard let detailsRevealRequest, detailsRevealRequest.itemID == itemID else { return }
             detailsExpanded.wrappedValue = true
+            model.emitDetailsOpenedBeforeActing()
             withAnimation {
                 scrollProxy.scrollTo(ScrollTarget.technicalDetails, anchor: .top)
             }
@@ -2406,6 +2418,7 @@ struct DecisionDetailView: View {
                     tint: .accentText,
                     wash: .accentWash
                 )
+                .onAppear { model.emitNotDecidableHereShown() }
             }
             if item._type == .blocked {
                 Text("A blocked item is informational; it resolves when the external wait clears.")
@@ -2429,7 +2442,8 @@ struct DecisionDetailView: View {
         return DecisionActionRanking(
             requested: item.requested_decision,
             recommendedAction: DecisionRecommendationPresentation.of(item)?.action,
-            reservesRecommendedAction: composition.modules.contains(.recommendation))
+            reservesRecommendedAction: composition.modules.contains(.recommendation),
+            servedActions: model.actionSurface?.actions)
     }
 
     @ViewBuilder

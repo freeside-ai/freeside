@@ -1715,9 +1715,8 @@ components:
             Findings omitted from this list retain their recommended route.
             Absent for every other action; finding IDs must be distinct.
         decision_action_surface_digest:
+          type: string
           nullable: true
-          allOf:
-            - $ref: "#/components/schemas/Digest"
           description: >
             The digest of the DecisionActionSurface the client rendered the
             decision from (plan §8). Optional comprehension telemetry: the

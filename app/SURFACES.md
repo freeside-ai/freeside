@@ -112,7 +112,7 @@ user sees.
 | Light (Freeside) and dark (Straylight) palettes; status colors never borrow the accent (plan §15) | Done for every Done screen: contrast-safe text/wash/border tokens with Increased Contrast cuts, the three faces, bordered state chips, and quiet-neutral success (`devlog/2026-08-21-1430-design-language-restyle.md`); the macOS window title, segmented controls, and menu-bar status item (badge included) stay system chrome. iOS has no icon |
 | Schedules synced and shown on the run list | Done; a schedules page is Later |
 | Deterministic screenshot coverage across the inbox, every Phase 1 card, decision banners, the shared unavailable state, macOS inspector/reflow/operational summary, runs, timeline, and pairing at six Dynamic Type sizes | Done; pixel digests fail with inspectable PNG dumps and record only through `FREESIDE_RECORD_SCREENSHOTS=1` |
-| "Opened" receipts per delivery, and drill-down counts per card (plan §5.14, §8) | Not yet; API exists (`reportDeliveryOpened`) |
+| Comprehension telemetry: capability registration, the daemon-derived action surface, and typed decision-path events (plan §8, §9) | Done: session-start capability registration, per-item action-surface adoption in the decision ranking, and a persisted best-effort event queue emitting card_opened, details_opened_before_acting, not_decidable_here_shown, action_taken, and recommendation_override. `drill_down_opened`'s emission (the AttachmentRow trigger) and the per-delivery "Opened" receipt (`reportDeliveryOpened`) are the remaining view wiring |
 | Device revocation | Not yet; API exists (`revokeDevice`), no screen |
 
 ## Open Questions
@@ -130,7 +130,7 @@ open until a unit answers them; answering is a design decision.
 8. **Per-run isolation class, credential mode, and egress profile.** The plan says "report honestly"; the run timeline is the likely home. Tracked by #979 (plan §11, wave 9), which also carries harness, model, effort, cost owner, and the independence rule.
 9. **Daemon unreachable.** The external ntfy alert has no in-app counterpart beyond showing unreachability.
 10. **Trust-profile review at onboarding.** Answered by plan revision 41: CLI-only; the app never shows it.
-11. **Comprehension-defect capture** for sampled decision audits (plan §8, §9).
+11. **Comprehension-defect capture** for sampled decision audits (plan §8, §9). The daemon records a defect via `freesided comprehension record-defect`; finding them stays manual (a sampled decision-audit workflow is a non-goal), and there is no in-app capture surface.
 12. **Fault-class capture placement.** On the card at resolution, or a follow-up prompt?
 
 Search and export of items or evidence are not in the plan at all; they

@@ -14,10 +14,23 @@ struct DecisionActionRanking: Equatable {
     init(
         requested: [Components.Schemas.Action],
         recommendedAction: Components.Schemas.Action? = nil,
-        reservesRecommendedAction: Bool = true
+        reservesRecommendedAction: Bool = true,
+        servedActions: [Components.Schemas.Action]? = nil
     ) {
-        unavailable = requested.filter { ActionOutcome.of($0) == .pending }
-        let available = requested.filter { ActionOutcome.of($0) != .pending }
+        // The daemon-served action surface is authoritative when present: it is
+        // the item's requested decisions already intersected with this device's
+        // capability contract (plan §8), so an action the surface omits is
+        // unavailable here. Without a surface (the fetch failed, or an older
+        // build) the local not-`.pending` filter stands.
+        let available: [Components.Schemas.Action]
+        if let servedActions {
+            let served = Set(servedActions)
+            available = requested.filter { served.contains($0) }
+            unavailable = requested.filter { !served.contains($0) }
+        } else {
+            unavailable = requested.filter { ActionOutcome.of($0) == .pending }
+            available = requested.filter { ActionOutcome.of($0) != .pending }
+        }
         let authoritativeRecommendation =
             reservesRecommendedAction
             ? recommendedAction.flatMap { recommendation in

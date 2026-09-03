@@ -137,6 +137,13 @@ public actor MockServer {
     private var runsByID: [String: Components.Schemas.RunSnapshot] = [:]
     private var schedulesByID: [String: Components.Schemas.ScheduleSnapshot] = [:]
     private var timelinesByRunID: [String: Components.Schemas.RunTimeline] = [:]
+    // Comprehension telemetry (plan §8): the device capability contracts, the
+    // derived action surfaces keyed by their digest, and the recorded events
+    // keyed by (device, event_id). Written through their own operations; events
+    // never move the revision, mirroring the daemon's internal write path.
+    private var capabilityContractsByDevice: [String: Components.Schemas.ClientCapabilityContract] = [:]
+    private var actionSurfacesByDigest: [String: Components.Schemas.DecisionActionSurface] = [:]
+    private var comprehensionEventsByKey: [String: Components.Schemas.ComprehensionEvent] = [:]
 
     struct DeliveryKey: Hashable, Comparable {
         let itemID: String
@@ -831,6 +838,145 @@ public actor MockServer {
         return .ok(snapshot)
     }
 
+    // MARK: - Comprehension telemetry (plan §8)
+
+    struct CapabilityInvalidError: Error { let reason: String }
+    struct ActionSurfaceMismatchError: Error { let commandID: String }
+    struct InvalidComprehensionEventError: Error {
+        let eventID: String
+        let reason: String
+    }
+
+    enum ActionSurfaceOutcome {
+        case ok(Components.Schemas.DecisionActionSurface)
+        case noContract
+        case unknownItem
+    }
+
+    enum ComprehensionEventOutcome {
+        case ok(Components.Schemas.ComprehensionEvent)
+        case unknownItem
+    }
+
+    /// Registers the device's capability contract (plan §5.14, §8). Idempotent
+    /// by content: the same canonical action set yields the same digest, and
+    /// registering it again never moves the revision.
+    func registerCapabilityContract(
+        deviceID: String, actions: [Components.Schemas.Action]
+    ) throws -> Components.Schemas.ClientCapabilityContract {
+        let canonical = Array(Set(actions)).sorted { $0.rawValue < $1.rawValue }
+        guard !canonical.isEmpty else {
+            throw CapabilityInvalidError(reason: "actions must be non-empty")
+        }
+        let digest = MockContractValidation.sha256Digest(
+            of: "capability:" + canonical.map(\.rawValue).joined(separator: ","))
+        let contract = Components.Schemas.ClientCapabilityContract(
+            device_id: deviceID, actions: canonical, digest: digest)
+        capabilityContractsByDevice[deviceID] = contract
+        return contract
+    }
+
+    /// Derives, and records on first sight, the device's action surface for the
+    /// item's current decision surface: the intersection of the item's requested
+    /// decisions with the device's capability contract. Telemetry evidence only;
+    /// never widens the offered actions.
+    func getActionSurface(deviceID: String, itemID: String) throws -> ActionSurfaceOutcome {
+        guard let current = try servedSnapshot(itemID: itemID) else { return .unknownItem }
+        guard let contract = capabilityContractsByDevice[deviceID] else { return .noContract }
+        let contractSet = Set(contract.actions)
+        let offered = current.item.requested_decision.filter { contractSet.contains($0) }
+        let canonical = Array(Set(offered)).sorted { $0.rawValue < $1.rawValue }
+        let itemSurfaceDigest = current.item.decision_surface.digest
+        let digest = MockContractValidation.sha256Digest(
+            of: "surface:" + deviceID + "|" + itemSurfaceDigest + "|" + contract.digest
+                + "|" + canonical.map(\.rawValue).joined(separator: ","))
+        let surface = Components.Schemas.DecisionActionSurface(
+            device_id: deviceID, item_id: itemID,
+            item_decision_surface_digest: itemSurfaceDigest,
+            client_capability_digest: contract.digest,
+            actions: canonical, digest: digest)
+        actionSurfacesByDigest[digest] = surface
+        return .ok(surface)
+    }
+
+    /// Ingests one comprehension event, idempotent by (device, event_id) and
+    /// without moving the revision. Action-bearing kinds must reference a
+    /// matching accepted command.
+    func recordComprehensionEvent(
+        deviceID: String, eventID: String, input: Components.Schemas.ComprehensionEventInput
+    ) throws -> ComprehensionEventOutcome {
+        let key = deviceID + "|" + eventID
+        if let existing = comprehensionEventsByKey[key] {
+            return .ok(existing)
+        }
+        guard try servedSnapshot(itemID: input.item_id) != nil else { return .unknownItem }
+        let actionBearing = input.kind == .action_taken || input.kind == .recommendation_override
+        if actionBearing {
+            guard let commandID = input.command_id, !commandID.isEmpty,
+                let surfaceDigest = input.decision_action_surface_digest,
+                let recorded = resultsByCommandID[commandID],
+                recorded.record.device_id == deviceID,
+                recorded.record.item_id == input.item_id,
+                let evidence = recorded.record.decision_evidence,
+                evidence.value1.action_surface_digest == surfaceDigest
+            else {
+                throw InvalidComprehensionEventError(
+                    eventID: eventID, reason: "no matching accepted command")
+            }
+        } else if input.decision_action_surface_digest != nil
+            || (input.command_id?.isEmpty == false)
+        {
+            throw InvalidComprehensionEventError(
+                eventID: eventID, reason: "kind carries a command or surface reference")
+        }
+        let event = Components.Schemas.ComprehensionEvent(
+            device_id: deviceID, event_id: eventID, item_id: input.item_id,
+            kind: input.kind, item_decision_surface_digest: input.item_decision_surface_digest,
+            decision_action_surface_digest: input.decision_action_surface_digest,
+            command_id: input.command_id ?? "", occurred_at: input.occurred_at,
+            sequence: input.sequence, received_at: currentTime)
+        comprehensionEventsByKey[key] = event
+        return .ok(event)
+    }
+
+    /// Revalidates a referenced action surface and derives the daemon-stamped
+    /// decision evidence for a command. The client's surface is never trusted: a
+    /// foreign, stale, or unknown surface, or a selected action the surface does
+    /// not offer, throws ActionSurfaceMismatchError. When neither a surface nor a
+    /// recommendation is present, the command carries no evidence.
+    private func stampedDecisionEvidence(
+        for command: Components.Schemas.ClientCommand,
+        item current: Components.Schemas.AttentionItemSnapshot
+    ) throws -> Components.Schemas.CommandDecisionEvidence? {
+        var recommendedAction: Components.Schemas.Action?
+        var recommendationSource: Components.Schemas.RecommendationSource?
+        if let rec = current.item.recommendation {
+            recommendedAction = rec.value1.action
+            recommendationSource = rec.value1.source
+        }
+        var surfaceDigest = ""
+        if let digest = command.payload.decision_action_surface_digest {
+            guard let surface = actionSurfacesByDigest[digest],
+                surface.device_id == command.device_id,
+                surface.item_id == command.payload.item_id,
+                surface.item_decision_surface_digest == current.item.decision_surface.digest,
+                let contract = capabilityContractsByDevice[command.device_id],
+                surface.client_capability_digest == contract.digest,
+                surface.actions.contains(command.payload.action)
+            else {
+                throw ActionSurfaceMismatchError(commandID: command.command_id)
+            }
+            surfaceDigest = digest
+        }
+        if surfaceDigest.isEmpty && recommendedAction == nil && recommendationSource == nil {
+            return nil
+        }
+        return .init(
+            action_surface_digest: surfaceDigest,
+            recommended_action: recommendedAction.map { .init(value1: $0) },
+            recommendation_source: recommendationSource.map { .init(value1: $0) })
+    }
+
     /// Mirrors the daemon's recomputeItemTiming (signet delivery.go): the
     /// receipt's write re-derives the item's timing aggregates from the
     /// full delivery set in the same "transaction" (same revision), and
@@ -1097,6 +1243,10 @@ public actor MockServer {
             throw ActionNotOfferedError(
                 commandID: command.command_id, action: payload.action, itemID: payload.item_id)
         }
+        // Revalidate a referenced action surface and derive the daemon-stamped
+        // decision evidence before any state mutation (plan §8). A foreign,
+        // stale, or unknown surface rejects here, never widening the offered set.
+        let stampedEvidence = try stampedDecisionEvidence(for: command, item: current)
         if payload.action == .retry_with_capabilities {
             guard let digest = payload.capability_manifest_digest?.value1,
                 current.item.execution_failure?.value1.offered_manifests?.contains(where: {
@@ -1381,7 +1531,8 @@ public actor MockServer {
                 // attachment order is authored, never canonicalized.
                 message: recordedMessage,
                 attachments: payload.attachments ?? [],
-                answer_route: payload.answer_route.map { .init(value1: $0.value1) }
+                answer_route: payload.answer_route.map { .init(value1: $0.value1) },
+                decision_evidence: stampedEvidence.map { .init(value1: $0) }
             ),
             revision: revision
         )
