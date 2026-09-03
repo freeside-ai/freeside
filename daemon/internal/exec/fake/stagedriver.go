@@ -31,6 +31,10 @@ const (
 	OutcomeComplete Outcome = "complete"
 	// OutcomeFail commits the scripted result with StatusFailed.
 	OutcomeFail Outcome = "fail"
+	// OutcomeCancel commits the scripted result with StatusCanceled, the way
+	// the real stage driver ends a stage the daemon's own shutdown cancels. It
+	// is a scripted terminal, distinct from Cancel, which a caller invokes.
+	OutcomeCancel Outcome = "cancel"
 	// OutcomeBlocked commits the scripted result with StatusBlocked: the
 	// implementer stopped on a typed blocked outcome and produced no
 	// candidate. The decisions live in the invocation's recorded claims,
@@ -51,6 +55,7 @@ const (
 var AllOutcomes = []Outcome{
 	OutcomeComplete,
 	OutcomeFail,
+	OutcomeCancel,
 	OutcomeBlocked,
 	OutcomeCrashBeforeResult,
 	OutcomeCrashAfterResult,
@@ -61,7 +66,7 @@ var AllOutcomes = []Outcome{
 // the exhaustive linter forces a new member to be handled.
 func (o Outcome) valid() bool {
 	switch o {
-	case OutcomeComplete, OutcomeFail, OutcomeBlocked, OutcomeCrashBeforeResult, OutcomeCrashAfterResult:
+	case OutcomeComplete, OutcomeFail, OutcomeCancel, OutcomeBlocked, OutcomeCrashBeforeResult, OutcomeCrashAfterResult:
 		return true
 	default:
 		return false
@@ -272,6 +277,10 @@ func (d *StageDriver) Inspect(_ context.Context, id domain.InvocationID) (exec.I
 		s.finished = true
 		d.commit(id, s.script.Result, exec.StatusFailed)
 		status = exec.StatusFailed
+	case OutcomeCancel:
+		s.finished = true
+		d.commit(id, s.script.Result, exec.StatusCanceled)
+		status = exec.StatusCanceled
 	case OutcomeBlocked:
 		s.finished = true
 		d.commit(id, s.script.Result, exec.StatusBlocked)
