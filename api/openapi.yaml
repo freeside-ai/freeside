@@ -421,6 +421,40 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /attention/items/{item_id}/action-surface:
+    get:
+      operationId: getActionSurface
+      tags: [attention]
+      summary: Derive the authenticated device's action surface for an item
+      description: |
+        Returns the DecisionActionSurface the authenticated device is offered
+        for the item's current decision surface (plan §5.14, §8): the
+        intersection of the item's requested decisions with the device's
+        registered capability contract. Deliberately not a ClientCommand, like
+        reportDeliveryOpened: the surface is comprehension telemetry, derived
+        and persisted on first sight, and it never widens the item's actions.
+        The device comes solely from the bearer credential. A device that has
+        registered no capability contract earns 409; a missing item is 404.
+      parameters:
+        - $ref: "#/components/parameters/ItemID"
+      responses:
+        "200":
+          description: The derived action surface.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisionActionSurface"
+        "409":
+          description: >
+            The device has registered no capability contract, so the surface
+            cannot be derived. The client registers one (session start) first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /commands:
     post:
       operationId: submitCommand
@@ -587,6 +621,46 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /devices/{device_id}/capability-contract:
+    put:
+      operationId: registerCapabilityContract
+      tags: [attention]
+      summary: Register the device's action capability contract
+      description: |
+        Records the set of decision actions the authenticated device's app
+        build can present and submit (plan §5.14, §8), so the daemon can derive
+        the device's action surface for each item. Deliberately not a
+        ClientCommand: it is comprehension telemetry, not a decision on an
+        attention item. The path device must equal the bearer credential's
+        device (else a plain 404, the deliveries posture): a device registers
+        only its own contract. Idempotent by content: re-registering the same
+        action set returns the same contract without moving the server
+        revision.
+      parameters:
+        - $ref: "#/components/parameters/DeviceID"
+      requestBody:
+        required: true
+        description: The actions the app build can present.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClientCapabilityContractInput"
+      responses:
+        "200":
+          description: The registered capability contract.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientCapabilityContract"
+        "400":
+          description: The action set is empty or contains an unknown action.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /attachments/{digest}:
     parameters:
       - name: digest
@@ -658,6 +732,56 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+
+  /telemetry/comprehension/{event_id}:
+    put:
+      operationId: recordComprehensionEvent
+      tags: [attention]
+      summary: Record one comprehension event
+      description: |
+        Ingests one typed decision-path event (plan §8). Deliberately not a
+        ClientCommand, like reportDeliveryOpened: it records a fact, makes no
+        judgment, and has no version precondition. Recording never advances the
+        server revision. The device is the bearer credential's and the event_id
+        is the path idempotency key, so the body carries neither; received_at is
+        daemon-stamped. Idempotent by (device, event_id): replaying returns the
+        recorded event unchanged. The action-bearing kinds (action_taken,
+        recommendation_override) must reference an accepted command that belongs
+        to the device and item and carries the same action surface digest.
+      parameters:
+        - $ref: "#/components/parameters/EventID"
+      requestBody:
+        required: true
+        description: The client-supplied fields of the event.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComprehensionEventInput"
+      responses:
+        "200":
+          description: >
+            The recorded event, whether this request recorded it or replayed an
+            already-recorded (device, event_id).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComprehensionEvent"
+        "400":
+          description: >
+            The event is malformed for its kind, or an action-bearing event
+            references no matching accepted command.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The authenticated device is no longer active.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
 components:
   securitySchemes:
@@ -739,6 +863,14 @@ components:
       schema:
         type: integer
         minimum: 1
+    EventID:
+      name: event_id
+      in: path
+      required: true
+      description: The client-generated comprehension event idempotency key.
+      schema:
+        type: string
+        minLength: 1
 
   responses:
     NotFound:
@@ -1582,6 +1714,18 @@ components:
             Per-finding offered routes selected by choose_alternative_route.
             Findings omitted from this list retain their recommended route.
             Absent for every other action; finding IDs must be distinct.
+        decision_action_surface_digest:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Digest"
+          description: >
+            The digest of the DecisionActionSurface the client rendered the
+            decision from (plan §8). Optional comprehension telemetry: the
+            daemon revalidates it against the live device, item decision
+            surface, capability contract, and offered-action set, and stamps
+            it onto the command's decision_evidence. It never widens the
+            offered actions; it can only reject. Absent for a client build
+            that does not adopt the action surface.
       example:
         item_id: "item-1"
         action: "open_pr"
@@ -1607,6 +1751,7 @@ components:
         - message
         - attachments
         - answer_route
+        - decision_evidence
       additionalProperties: false
       properties:
         command_id:
@@ -1650,6 +1795,16 @@ components:
             The route an implementation-stage answer named; null for every
             other command. Always rendered, so the record keeps one
             byte-form.
+        decision_evidence:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/CommandDecisionEvidence"
+          description: >
+            The daemon-stamped decision context (plan §8): the accepted
+            action surface digest and the item's recommendation at
+            acceptance. Comprehension telemetry read by the §9 override
+            query; never an authorization input. Null when the command
+            referenced no surface and the item had no recommendation.
       example:
         command_id: "cmd-1"
         device_id: "device-1"
@@ -1661,6 +1816,40 @@ components:
         message: ""
         attachments: []
         answer_route: null
+        decision_evidence: null
+
+    CommandDecisionEvidence:
+      type: object
+      description: >
+        The daemon-authored decision context stamped onto an accepted command
+        (domain.CommandDecisionEvidence, plan §8): the DecisionActionSurface it
+        referenced and the item's recommendation at acceptance. It is telemetry
+        evidence read by the §9 override query, never caller-supplied and never
+        an authorization input. An empty action_surface_digest is the intended
+        unclassified case, not a loss.
+      required: [action_surface_digest, recommended_action, recommendation_source]
+      additionalProperties: false
+      properties:
+        action_surface_digest:
+          type: string
+          description: >
+            The digest of the referenced DecisionActionSurface, or empty when
+            the command carried no surface (an older client, or a command
+            accepted before this contract). The override query counts an empty
+            digest as unclassified.
+        recommended_action:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Action"
+          description: >
+            The item's recommended action at acceptance, or null when the item
+            carried no recommendation. Stamped together with
+            recommendation_source or not at all.
+        recommendation_source:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RecommendationSource"
+          description: The authority behind the recommendation, or null.
 
     CommandResult:
       type: object
@@ -1690,6 +1879,7 @@ components:
           message: ""
           attachments: []
           answer_route: null
+          decision_evidence: null
         revision: 1
 
     StaleVersionRejection:
@@ -2316,6 +2506,208 @@ components:
         Where a human's answer to an implementation-stage agent_question
         re-enters the workflow.
       enum: [retry_implementation, revise_specification]
+
+    ComprehensionEventKind:
+      type: string
+      description: >
+        One typed decision-path event the clients emit (plan §8, §9). The six
+        kinds are the only comprehension events collected; they are tied to
+        §9's specific measures, never an unrestricted clickstream.
+      enum:
+        - card_opened
+        - drill_down_opened
+        - details_opened_before_acting
+        - action_taken
+        - recommendation_override
+        - not_decidable_here_shown
+
+    ClientCapabilityContractInput:
+      type: object
+      description: >
+        The actions the device's app build can present and submit (plan §5.14,
+        §8), registered by the device so the daemon can derive its action
+        surface. The daemon content-addresses the action set, so every device
+        on one app build shares a digest.
+      required: [actions]
+      additionalProperties: false
+      properties:
+        actions:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/Action"
+          description: The non-empty set of actions the build can present.
+      example:
+        actions: ["approve", "request_changes", "discuss", "stop"]
+
+    ClientCapabilityContract:
+      type: object
+      description: The registered capability contract (domain.ClientCapabilityContract).
+      required: [device_id, actions, digest]
+      additionalProperties: false
+      properties:
+        device_id:
+          type: string
+          minLength: 1
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Action"
+          description: The canonical (sorted, deduplicated) action set.
+        digest:
+          type: string
+          description: The content address of the canonical action set.
+      example:
+        device_id: "device-1"
+        actions: ["approve", "discuss", "request_changes", "stop"]
+        digest: "sha256:..."
+
+    DecisionActionSurface:
+      type: object
+      description: >
+        The daemon-derived actions offered to one device for one item's
+        decision surface (domain.DecisionActionSurface, plan §5.14, §8): the
+        intersection of the item's requested decisions with the device's
+        capability contract. Telemetry evidence only; it never widens the
+        item's actions and never authorizes a command.
+      required:
+        - device_id
+        - item_id
+        - item_decision_surface_digest
+        - client_capability_digest
+        - actions
+        - digest
+      additionalProperties: false
+      properties:
+        device_id:
+          type: string
+          minLength: 1
+        item_id:
+          type: string
+          minLength: 1
+        item_decision_surface_digest:
+          type: string
+          description: The item's current decision surface digest.
+        client_capability_digest:
+          type: string
+          description: The device's capability contract digest.
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Action"
+          description: The canonical offered-action intersection, possibly empty.
+        digest:
+          type: string
+          description: The content address of the four binding fields.
+      example:
+        device_id: "device-1"
+        item_id: "item-1"
+        item_decision_surface_digest: "sha256:..."
+        client_capability_digest: "sha256:..."
+        actions: ["dismiss", "open_pr"]
+        digest: "sha256:..."
+
+    ComprehensionEventInput:
+      type: object
+      description: >
+        The client-supplied fields of one comprehension event (plan §8). The
+        device is the bearer credential's and the event_id is the path
+        idempotency key, so neither appears here; received_at is
+        daemon-stamped. The action-bearing kinds (action_taken,
+        recommendation_override) carry decision_action_surface_digest and
+        command_id; every other kind carries neither.
+      required: [item_id, kind, item_decision_surface_digest, occurred_at, sequence]
+      additionalProperties: false
+      properties:
+        item_id:
+          type: string
+          minLength: 1
+        kind:
+          $ref: "#/components/schemas/ComprehensionEventKind"
+        item_decision_surface_digest:
+          type: string
+          description: The item decision surface digest the client rendered.
+        decision_action_surface_digest:
+          type: string
+          nullable: true
+          description: >
+            The referenced action surface digest; present only on the
+            action-bearing kinds.
+        command_id:
+          type: string
+          description: >
+            The accepted command the event reports; present only on the
+            action-bearing kinds, otherwise empty.
+        occurred_at:
+          type: string
+          format: date-time
+          description: The client-observed UTC instant the event occurred.
+        sequence:
+          type: integer
+          minimum: 1
+          description: The per-device client sequence number.
+      example:
+        item_id: "item-1"
+        kind: "card_opened"
+        item_decision_surface_digest: "sha256:..."
+        occurred_at: "2026-01-02T03:04:05Z"
+        sequence: 1
+
+    ComprehensionEvent:
+      type: object
+      description: The recorded comprehension event (domain.ComprehensionEvent).
+      required:
+        - device_id
+        - event_id
+        - item_id
+        - kind
+        - item_decision_surface_digest
+        - decision_action_surface_digest
+        - command_id
+        - occurred_at
+        - sequence
+        - received_at
+      additionalProperties: false
+      properties:
+        device_id:
+          type: string
+          minLength: 1
+        event_id:
+          type: string
+          minLength: 1
+        item_id:
+          type: string
+          minLength: 1
+        kind:
+          $ref: "#/components/schemas/ComprehensionEventKind"
+        item_decision_surface_digest:
+          type: string
+        decision_action_surface_digest:
+          type: string
+          nullable: true
+        command_id:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        sequence:
+          type: integer
+          minimum: 1
+        received_at:
+          type: string
+          format: date-time
+          description: The daemon-stamped UTC ingestion instant.
+      example:
+        device_id: "device-1"
+        event_id: "event-1"
+        item_id: "item-1"
+        kind: "card_opened"
+        item_decision_surface_digest: "sha256:..."
+        decision_action_surface_digest: null
+        command_id: ""
+        occurred_at: "2026-01-02T03:04:05Z"
+        sequence: 1
+        received_at: "2026-01-02T03:04:06Z"
 
     BlockedKind:
       type: string
