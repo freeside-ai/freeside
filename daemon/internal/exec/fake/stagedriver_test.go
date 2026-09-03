@@ -274,6 +274,38 @@ func TestStageDriverCancel(t *testing.T) {
 	}
 }
 
+// TestStageDriverScriptedCancellation drives OutcomeCancel: a stage the
+// daemon's own shutdown cancels ends with a committed canceled result once its
+// inspect steps are spent, distinct from the caller-invoked Cancel above.
+func TestStageDriverScriptedCancellation(t *testing.T) {
+	d := fake.NewStageDriver()
+	d.Script("inv-1", fake.StageScript{
+		RunningInspects: 1,
+		Outcome:         fake.OutcomeCancel,
+		Result:          exec.StageResult{Summary: "shut down mid-stage"},
+	})
+
+	if err := d.Start(t.Context(), "inv-1", exec.StartSpec{}); err != nil {
+		t.Fatal(err)
+	}
+	seen := inspectUntilTerminalOrGone(t, d, "inv-1")
+	want := []exec.Status{exec.StatusRunning, exec.StatusCanceled}
+	if !slices.Equal(seen, want) {
+		t.Errorf("status sequence = %v, want %v", seen, want)
+	}
+
+	result, err := d.Collect(t.Context(), "inv-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != exec.StatusCanceled || result.InvocationID != "inv-1" {
+		t.Errorf("canceled result = %+v; want inv-1, canceled", result)
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("canceled result must validate: %v", err)
+	}
+}
+
 // TestStageDriverGuards covers the contract's identity guards: one committed
 // intent per id, loud unscripted starts, unknown ids.
 func TestStageDriverGuards(t *testing.T) {

@@ -1153,33 +1153,54 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		outcomeRecorded bool
 	)
 	err = e.store.Read(ctx, func(tx *store.ReadTx) error {
-		// A driver-recorded blocked outcome is not a reason to skip: the
-		// engine still has to collect the blocked terminal and raise its
-		// agent_question item, then converge on the same outcome record.
-		if outcome, outcomeErr := tx.GetExecutionOutcomeRecord(ctx, attempt.InvocationID); outcomeErr == nil &&
-			outcome.Status != domain.ExecutionOutcomeBlocked {
-			outcomeRecorded = true
-			return nil
-		} else if outcomeErr != nil && !errors.Is(outcomeErr, store.ErrNotFound) {
-			return outcomeErr
-		}
-		entry, err := tx.GetInbox(ctx, string(attempt.InvocationID))
-		if errors.Is(err, store.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
+		// The terminal inbox row is checked first: once collection has recorded
+		// one, every later pass re-authenticates it against the driver through
+		// the `recorded` path below, never the skip.
+		//
 		// A stored row is a reconstruction boundary, not authority. Trusting
 		// the kind alone would let a corrupted or fabricated row permanently
 		// suppress this attempt's collection: no accepted result, and no
 		// execution_failure item either, which is the one outcome that makes
 		// a failure invisible rather than loud.
-		terminal, err := decodeProductionTerminal(entry, run)
-		if err != nil {
+		entry, err := tx.GetInbox(ctx, string(attempt.InvocationID))
+		switch {
+		case err == nil:
+			terminal, err := decodeProductionTerminal(entry, run)
+			if err != nil {
+				return err
+			}
+			recorded = &terminal
+			return nil
+		case !errors.Is(err, store.ErrNotFound):
 			return err
 		}
-		recorded = &terminal
+		// No terminal row. Skip collection only for the #842 delivery refusal:
+		// the one engine path that records a failed outcome and its
+		// execution_failure item without ever starting the driver or writing a
+		// terminal row, so collecting it would call the driver on an invocation
+		// it never saw and fail the pass on a dispatched marker. Both the
+		// outcome record and that item must be present, because that pair is
+		// exactly what recordProductionDeliveryRefusal leaves behind.
+		//
+		// A driver-recorded failed, canceled, or lost outcome has no item yet
+		// (the driver records the outcome before the engine's next pass), so
+		// the engine must still collect the terminal and raise it;
+		// executionFailureFacts then converges on that stored record. A blocked
+		// outcome carries an agent_question item, not an execution_failure one,
+		// so it is collected too.
+		if _, outcomeErr := tx.GetExecutionOutcomeRecord(ctx, attempt.InvocationID); errors.Is(outcomeErr, store.ErrNotFound) {
+			return nil
+		} else if outcomeErr != nil {
+			return outcomeErr
+		}
+		if _, itemErr := tx.GetAttentionItem(
+			ctx, domain.ItemID("execution-failure-"+string(attempt.InvocationID)),
+		); errors.Is(itemErr, store.ErrNotFound) {
+			return nil
+		} else if itemErr != nil {
+			return itemErr
+		}
+		outcomeRecorded = true
 		return nil
 	})
 	if err != nil {
