@@ -19,8 +19,8 @@ func TestEffectProposalMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 64 {
-		t.Fatalf("schema version = %d, want 64", got)
+	if got := rawVersion(t, db); got != 65 {
+		t.Fatalf("schema version = %d, want 65", got)
 	}
 	for _, table := range []string{
 		"effect_proposal_instances", "effect_proposal_items", "effect_proposal_revisions",

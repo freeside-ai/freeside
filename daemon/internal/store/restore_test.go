@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,6 +140,89 @@ func TestRestoreLeavesTheConnectionClean(t *testing.T) {
 	}
 	if _, err := s.Restore(ctx, second); err != nil {
 		t.Fatalf("second Restore: %v", err)
+	}
+}
+
+// TestRestoreRoundTripsComprehensionRows guards migration 0065's append-only
+// delete triggers against restore. A restore issues DELETE FROM against every
+// table; the new decision_action_surfaces, comprehension_events, and
+// comprehension_defects tables each carry a BEFORE DELETE trigger that aborts
+// the delete, so once any of them holds a row a restore fails unless it
+// suspends those guards. Seed one row in each new append-only table,
+// checkpoint, then restore, and confirm the copy succeeds, the rows survive,
+// and the guards are canonically reinstated (a second restore re-verifies them).
+func TestRestoreRoundTripsComprehensionRows(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+	f := newFixtures(t)
+	seedComprehensionDeps(t, ctx, s, f)
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	contract, actionSurface, cardOpened, actionTaken := comprehensionFixtures(t, f, ts)
+	defect := domain.ComprehensionDefect{
+		ItemID: f.item.ID, ClaimDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		RecordedAt: ts.Add(3 * time.Hour), Reason: "the readiness summary overstated the passing checks",
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutDeviceCapabilityContract(ctx, contract, ts); err != nil {
+			return err
+		}
+		_, err := tx.PutDecisionActionSurface(ctx, actionSurface, ts)
+		return err
+	}); err != nil {
+		t.Fatalf("write contract/surface: %v", err)
+	}
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if _, err := tx.RecordComprehensionEvent(ctx, cardOpened); err != nil {
+			return err
+		}
+		if _, err := tx.RecordComprehensionEvent(ctx, actionTaken); err != nil {
+			return err
+		}
+		return tx.RecordComprehensionDefect(ctx, defect)
+	}); err != nil {
+		t.Fatalf("record events/defect: %v", err)
+	}
+
+	checkpoint := filepath.Join(t.TempDir(), "checkpoint.db")
+	if err := s.Checkpoint(ctx, checkpoint); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	// Restore over a live database that already holds comprehension rows: the
+	// DELETE FROM in the copy would abort on the append-only triggers if the
+	// restore did not suspend them.
+	if _, err := s.Restore(ctx, checkpoint); err != nil {
+		t.Fatalf("Restore with comprehension rows present: %v", err)
+	}
+
+	var (
+		surfaces []domain.DecisionActionSurface
+		events   []domain.ComprehensionEvent
+		defects  []domain.ComprehensionDefect
+	)
+	if err := s.ReadComprehension(ctx, func(tx *store.ComprehensionReadTx) error {
+		var err error
+		if surfaces, err = tx.ListDecisionActionSurfaces(ctx); err != nil {
+			return err
+		}
+		if events, err = tx.ListComprehensionEvents(ctx); err != nil {
+			return err
+		}
+		defects, err = tx.ListComprehensionDefects(ctx)
+		return err
+	}); err != nil {
+		t.Fatalf("read comprehension after restore: %v", err)
+	}
+	if len(surfaces) != 1 || len(events) != 2 || len(defects) != 1 {
+		t.Fatalf("after restore: surfaces=%d events=%d defects=%d, want 1/2/1",
+			len(surfaces), len(events), len(defects))
+	}
+
+	// A second restore re-runs suspendDeleteGuards, which reads each trigger's
+	// SQL and rejects a non-canonical definition. It passes only if the first
+	// restore reinstated all four guards exactly.
+	if _, err := s.Restore(ctx, checkpoint); err != nil {
+		t.Fatalf("second Restore (guards not canonically reinstated?): %v", err)
 	}
 }
 

@@ -19,7 +19,12 @@ var safeTableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 const outboxPublicationInsertTrigger = "outbox_publication_intent_requires_current_insert"
 
-const usageObservationsDeleteTrigger = "usage_observations_append_only_delete"
+const (
+	usageObservationsDeleteTrigger      = "usage_observations_append_only_delete"
+	decisionActionSurfacesDeleteTrigger = "decision_action_surfaces_append_only_delete"
+	comprehensionEventsDeleteTrigger    = "comprehension_events_append_only_delete"
+	comprehensionDefectsDeleteTrigger   = "comprehension_defects_append_only_delete"
+)
 
 const canonicalOutboxPublicationInsertTriggerSQL = `CREATE TRIGGER outbox_publication_intent_requires_current_insert
 BEFORE INSERT ON outbox
@@ -33,6 +38,44 @@ BEFORE DELETE ON usage_observations
 BEGIN
     SELECT RAISE(ABORT, 'usage observations are append-only');
 END`
+
+const canonicalDecisionActionSurfacesDeleteTriggerSQL = `CREATE TRIGGER decision_action_surfaces_append_only_delete
+BEFORE DELETE ON decision_action_surfaces
+BEGIN
+    SELECT RAISE(ABORT, 'decision action surfaces are append-only');
+END`
+
+const canonicalComprehensionEventsDeleteTriggerSQL = `CREATE TRIGGER comprehension_events_append_only_delete
+BEFORE DELETE ON comprehension_events
+BEGIN
+    SELECT RAISE(ABORT, 'comprehension events are append-only');
+END`
+
+const canonicalComprehensionDefectsDeleteTriggerSQL = `CREATE TRIGGER comprehension_defects_append_only_delete
+BEFORE DELETE ON comprehension_defects
+BEGIN
+    SELECT RAISE(ABORT, 'comprehension defects are append-only');
+END`
+
+// deleteGuard names an append-only BEFORE DELETE trigger a restore must lift
+// around its wholesale delete+reinsert and canonically reinstate before commit.
+type deleteGuard struct {
+	name         string
+	canonicalSQL string
+}
+
+// appendOnlyDeleteGuards is every append-only delete trigger a restore must
+// suspend. A restore issues DELETE FROM against every table, so a table whose
+// BEFORE DELETE trigger aborts the delete blocks the whole restore once it
+// holds any row. Each new append-only table (migration 0065 added three) must
+// register its guard here, or a restore fails the moment that table is
+// non-empty.
+var appendOnlyDeleteGuards = []deleteGuard{
+	{usageObservationsDeleteTrigger, canonicalUsageObservationsDeleteTriggerSQL},
+	{decisionActionSurfacesDeleteTrigger, canonicalDecisionActionSurfacesDeleteTriggerSQL},
+	{comprehensionEventsDeleteTrigger, canonicalComprehensionEventsDeleteTriggerSQL},
+	{comprehensionDefectsDeleteTrigger, canonicalComprehensionDefectsDeleteTriggerSQL},
+}
 
 // Checkpoint writes a consistent snapshot of the live database to path: a
 // standalone SQLite file carrying the schema, every row, and the current
@@ -166,7 +209,7 @@ func (s *Store) restoreFromSource(
 	if err != nil {
 		return ServerState{}, err
 	}
-	usageDeleteTriggerSQL, err := suspendUsageDeleteTrigger(ctx, tx)
+	suspendedDeleteGuards, err := suspendDeleteGuards(ctx, tx)
 	if err != nil {
 		return ServerState{}, err
 	}
@@ -185,7 +228,7 @@ func (s *Store) restoreFromSource(
 	if err := restorePublicationInsertTrigger(ctx, tx, publicationInsertTriggerSQL); err != nil {
 		return ServerState{}, err
 	}
-	if err := restoreUsageDeleteTrigger(ctx, tx, usageDeleteTriggerSQL); err != nil {
+	if err := restoreDeleteGuards(ctx, tx, suspendedDeleteGuards); err != nil {
 		return ServerState{}, err
 	}
 	// Overwrite the epoch the checkpoint carried with a fresh one, in the same
@@ -275,7 +318,7 @@ func (s *Store) restoreFromDatabase(
 	if err != nil {
 		return ServerState{}, err
 	}
-	usageDeleteTriggerSQL, err := suspendUsageDeleteTrigger(ctx, tx)
+	suspendedDeleteGuards, err := suspendDeleteGuards(ctx, tx)
 	if err != nil {
 		return ServerState{}, err
 	}
@@ -290,7 +333,7 @@ func (s *Store) restoreFromDatabase(
 	if err := restorePublicationInsertTrigger(ctx, tx, publicationInsertTriggerSQL); err != nil {
 		return ServerState{}, err
 	}
-	if err := restoreUsageDeleteTrigger(ctx, tx, usageDeleteTriggerSQL); err != nil {
+	if err := restoreDeleteGuards(ctx, tx, suspendedDeleteGuards); err != nil {
 		return ServerState{}, err
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -337,29 +380,39 @@ func restorePublicationInsertTrigger(ctx context.Context, tx *sql.Tx, definition
 	return nil
 }
 
-// suspendUsageDeleteTrigger opens the restore-only exception to the
-// append-only delete guard. The complete same-schema copy is atomic, and a
-// rollback restores both the dropped trigger and the pre-restore rows.
-func suspendUsageDeleteTrigger(ctx context.Context, tx *sql.Tx) (string, error) {
-	var definition string
-	if err := tx.QueryRowContext(ctx,
-		`SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?`,
-		usageObservationsDeleteTrigger,
-	).Scan(&definition); err != nil {
-		return "", fmt.Errorf("restore: read usage delete guard: %w", err)
+// suspendDeleteGuards opens the restore-only exception to every append-only
+// delete guard: it verifies each trigger's definition is canonical, drops it,
+// and returns the guards it suspended for restoreDeleteGuards to reinstate
+// before commit. The complete same-schema copy is atomic, and a rollback
+// restores both the dropped triggers and the pre-restore rows. A drifted
+// definition fails closed rather than silently reinstating an unexpected
+// trigger.
+func suspendDeleteGuards(ctx context.Context, tx *sql.Tx) ([]deleteGuard, error) {
+	suspended := make([]deleteGuard, 0, len(appendOnlyDeleteGuards))
+	for _, guard := range appendOnlyDeleteGuards {
+		var definition string
+		if err := tx.QueryRowContext(ctx,
+			`SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?`,
+			guard.name,
+		).Scan(&definition); err != nil {
+			return nil, fmt.Errorf("restore: read %s guard: %w", guard.name, err)
+		}
+		if definition != guard.canonicalSQL {
+			return nil, fmt.Errorf("restore: %s guard definition is not canonical", guard.name)
+		}
+		if _, err := tx.ExecContext(ctx, `DROP TRIGGER "`+guard.name+`"`); err != nil {
+			return nil, fmt.Errorf("restore: suspend %s guard: %w", guard.name, err)
+		}
+		suspended = append(suspended, guard)
 	}
-	if definition != canonicalUsageObservationsDeleteTriggerSQL {
-		return "", fmt.Errorf("restore: usage delete guard definition is not canonical")
-	}
-	if _, err := tx.ExecContext(ctx, `DROP TRIGGER "`+usageObservationsDeleteTrigger+`"`); err != nil {
-		return "", fmt.Errorf("restore: suspend usage delete guard: %w", err)
-	}
-	return definition, nil
+	return suspended, nil
 }
 
-func restoreUsageDeleteTrigger(ctx context.Context, tx *sql.Tx, definition string) error {
-	if _, err := tx.ExecContext(ctx, definition); err != nil {
-		return fmt.Errorf("restore: reinstate usage delete guard: %w", err)
+func restoreDeleteGuards(ctx context.Context, tx *sql.Tx, guards []deleteGuard) error {
+	for _, guard := range guards {
+		if _, err := tx.ExecContext(ctx, guard.canonicalSQL); err != nil {
+			return fmt.Errorf("restore: reinstate %s guard: %w", guard.name, err)
+		}
 	}
 	return nil
 }

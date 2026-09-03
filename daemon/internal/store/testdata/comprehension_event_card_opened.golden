@@ -1,0 +1,12 @@
+{
+  "device_id": "device-1",
+  "event_id": "event-card-1",
+  "item_id": "item-1",
+  "kind": "card_opened",
+  "item_decision_surface_digest": "sha256:adb47dbdf777e31d85c004f469268ebb5bfa486fb3d05fd3a56c7730ff242092",
+  "decision_action_surface_digest": null,
+  "command_id": "",
+  "occurred_at": "2026-01-02T03:04:05Z",
+  "sequence": 1,
+  "received_at": "2026-01-02T03:04:06Z"
+}
