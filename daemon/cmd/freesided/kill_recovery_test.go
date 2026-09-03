@@ -27,6 +27,15 @@ import (
 
 const killTestCommandID = "discuss-kill-recovery"
 
+// processWaitBound is the single wall-clock ceiling for every wait on the
+// spawned kill-test daemon: readiness, the item/result/marker polls, and the
+// HTTP client timeout. It bounds a hang, not a healthy start. A healthy start
+// prints readiness in well under a second and the whole test passes in about
+// 3s; the bound fires only when the real subprocess stops making progress.
+// Sized for a loaded host and a race-instrumented binary: 12x the 5s deadline
+// that tripped under a concurrent build, and twice the old 30s race value.
+const processWaitBound = 60 * time.Second
+
 var killTestInvocationID = domain.InvocationID("inv-" + killTestCommandID)
 
 type processFixture struct {
@@ -91,7 +100,7 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 
 func waitForDurableStop(t *testing.T, root string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(processWaitBound)
 	for time.Now().Before(deadline) {
 		st, err := store.Open(context.Background(), filepath.Join(root, "freeside.db"), store.Options{})
 		if err == nil {
@@ -116,7 +125,7 @@ func waitForDurableStop(t *testing.T, root string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("restarted freesided did not file a durable-stop item within 5s")
+	t.Fatalf("restarted freesided did not file a durable-stop item within %s", processWaitBound)
 }
 
 func killRecoveryReadinessFixture(t *testing.T) (domain.RequirementResolution, domain.ValidatedDegradedWaiver, domain.WaiverLifecycleEvent) {
@@ -284,8 +293,8 @@ func startProcessFixture(
 			t.Fatalf("decode freesided readiness: %v; stderr=%s", decoded.err, p.stderr.String())
 		}
 		p.ready = decoded.value
-	case <-time.After(readinessDeadline()):
-		t.Fatalf("freesided did not emit readiness within %s", readinessDeadline())
+	case <-time.After(processWaitBound):
+		t.Fatalf("freesided did not emit readiness within %s", processWaitBound)
 	}
 	return p
 }
@@ -328,7 +337,7 @@ func pairProcessDevice(t *testing.T, ready readiness) *processClient {
 	if err != nil {
 		t.Fatalf("marshal pairing request: %v", err)
 	}
-	client := &http.Client{Timeout: time.Second}
+	client := &http.Client{Timeout: processWaitBound}
 	response, err := client.Post(ready.APIURL+"/pairing", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("pair process device: %v", err)
@@ -350,10 +359,10 @@ func pairProcessDevice(t *testing.T, ready readiness) *processClient {
 
 func (c *processClient) waitForItem(t *testing.T, id domain.ItemID) signet.AttentionItemSnapshot {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(processWaitBound)
 	for time.Now().Before(deadline) {
 		var item signet.AttentionItemSnapshot
-		status := c.getJSON(t, "/attention/items/"+string(id), &item)
+		status := c.getJSON(t, deadline, "/attention/items/"+string(id), &item)
 		if status == http.StatusOK {
 			return item
 		}
@@ -362,7 +371,7 @@ func (c *processClient) waitForItem(t *testing.T, id domain.ItemID) signet.Atten
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("item %q did not appear within 5s", id)
+	t.Fatalf("item %q did not appear within %s", id, processWaitBound)
 	return signet.AttentionItemSnapshot{}
 }
 
@@ -413,13 +422,13 @@ func (c *processClient) submit(
 
 func (c *processClient) waitForAcceptedResult(t *testing.T) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(processWaitBound)
 	for time.Now().Before(deadline) {
 		var item signet.AttentionItemSnapshot
-		if c.getJSON(t, "/attention/items/feedback-"+string(defaultFakeRunID), &item) == http.StatusOK &&
+		if c.getJSON(t, deadline, "/attention/items/feedback-"+string(defaultFakeRunID), &item) == http.StatusOK &&
 			item.Item.ConversationID != nil {
 			var conversation signet.ConversationSnapshot
-			if c.getJSON(t, "/conversations/"+string(*item.Item.ConversationID), &conversation) == http.StatusOK &&
+			if c.getJSON(t, deadline, "/conversations/"+string(*item.Item.ConversationID), &conversation) == http.StatusOK &&
 				len(conversation.Conversation.Messages) == 2 &&
 				conversation.Conversation.Status == domain.ConversationIdle {
 				return
@@ -427,12 +436,17 @@ func (c *processClient) waitForAcceptedResult(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("restarted freesided did not accept the committed result within 5s")
+	t.Fatalf("restarted freesided did not accept the committed result within %s", processWaitBound)
 }
 
-func (c *processClient) getJSON(t *testing.T, path string, target any) int {
+// getJSON issues one poll request bounded by deadline, the enclosing loop's
+// processWaitBound ceiling, so a request that starts late and then stalls
+// cannot extend the wait past that single bound with a fresh client timeout.
+func (c *processClient) getJSON(t *testing.T, deadline time.Time, path string, target any) int {
 	t.Helper()
-	request, err := http.NewRequest(http.MethodGet, c.baseURL+path, nil)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		t.Fatalf("new GET %s: %v", path, err)
 	}
@@ -452,7 +466,7 @@ func (c *processClient) getJSON(t *testing.T, path string, target any) int {
 
 func waitForMarker(t *testing.T, path, want string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(processWaitBound)
 	for time.Now().Before(deadline) {
 		body, err := os.ReadFile(path) //nolint:gosec // test-owned marker path
 		if err == nil {
@@ -466,7 +480,7 @@ func waitForMarker(t *testing.T, path, want string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("kill checkpoint %q did not appear within 5s", want)
+	t.Fatalf("kill checkpoint %q did not appear within %s", want, processWaitBound)
 }
 
 func assertKillRecoveryState(t *testing.T, root string, acceptedResults int) {
