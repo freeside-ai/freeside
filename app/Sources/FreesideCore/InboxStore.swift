@@ -1,5 +1,7 @@
+import Foundation
 import FreesideAPI
 import Observation
+import OpenAPIRuntime
 
 /// The single client-side source of truth for attention item snapshots:
 /// the inbox list and every decision card read the same table, so a
@@ -89,6 +91,11 @@ public final class InboxStore {
     /// moves and releases ignore it (their loss only offers a harmless,
     /// idempotent verbatim resend on relaunch).
     public var pendingCommandsObserver: (() -> Bool)?
+    /// Reports every comprehension-telemetry mutation (an enqueue, or a drain
+    /// that sent or dropped events) so the sync coordinator persists the queue
+    /// and the registered-capability fingerprint as they change (plan §8). The
+    /// queue is best-effort: a lost persist only re-sends idempotent events.
+    public var comprehensionObserver: (() -> Void)?
     public private(set) var snapshotsByID: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     public private(set) var conversationsByID: [String: Components.Schemas.ConversationSnapshot] = [:]
     public var scope: Scope = .open
@@ -133,6 +140,31 @@ public final class InboxStore {
     /// verbatim resend returns the recorded result or an authoritative
     /// rejection (plan §5.14 sync test 4).
     public private(set) var pendingCommandsByItemID: [String: PendingCommandEntry] = [:]
+    /// One queued comprehension event: the client-generated idempotency key and
+    /// the event body. Codable because the queue persists in the disk cache — a
+    /// telemetry event should survive a relaunch and drain on the next round,
+    /// exactly like the pending-command ledger (plan §8, delivery-receipt
+    /// discipline). It carries identifiers, digests, and instants, never prose.
+    public nonisolated struct QueuedComprehensionEvent: Codable, Equatable, Sendable {
+        public let eventID: String
+        public let input: Components.Schemas.ComprehensionEventInput
+
+        public init(eventID: String, input: Components.Schemas.ComprehensionEventInput) {
+            self.eventID = eventID
+            self.input = input
+        }
+    }
+
+    /// The best-effort comprehension-telemetry queue, drained after each sync
+    /// round and after a submit. Events are idempotent by their event id, so a
+    /// retry is safe.
+    public private(set) var comprehensionQueue: [QueuedComprehensionEvent] = []
+    /// The per-device event sequence; monotonic across the session and
+    /// persisted so it keeps climbing across a relaunch.
+    public private(set) var comprehensionSequence: Int = 0
+    /// The fingerprint of the capability contract last registered with the
+    /// daemon, so session start re-registers only a changed action set.
+    public var registeredCapabilityFingerprint: String?
     /// Process-local claims held only while an external PR URL is opening.
     /// They coordinate re-created cards without entering the replay ledger:
     /// a crash before navigation succeeds must never resurrect a command that
@@ -369,6 +401,12 @@ public final class InboxStore {
         // A new epoch: every prior per-item validation is now stale, even
         // for rows a subsequent bootstrap repopulates (issue #162).
         cacheGeneration += 1
+        // The epoch can be a daemon restore that rolled the capability row
+        // back, so the last-registered fingerprint no longer proves a live
+        // server-side contract. Clearing it forces one idempotent
+        // re-registration next round instead of skipping it and 409-ing every
+        // action-surface request (plan §8).
+        registeredCapabilityFingerprint = nil
     }
 
     private func captureStatusesForCurrentOrder() {
@@ -532,6 +570,95 @@ public final class InboxStore {
             pendingCommandsByItemID[itemID] =
                 PendingCommandEntry(command: entry.command, state: .unresolved)
         }
+    }
+
+    /// Appends one comprehension event to the best-effort queue, stamping a
+    /// fresh client event id and the next per-device sequence (plan §8). The
+    /// caller supplies the surface and command references the event kind
+    /// requires; the daemon validates the by-kind contract.
+    public func enqueueComprehensionEvent(
+        kind: Components.Schemas.ComprehensionEventKind,
+        itemID: String,
+        itemDecisionSurfaceDigest: String,
+        decisionActionSurfaceDigest: String?,
+        commandID: String?
+    ) {
+        comprehensionSequence += 1
+        let input = Components.Schemas.ComprehensionEventInput(
+            item_id: itemID,
+            kind: kind,
+            item_decision_surface_digest: itemDecisionSurfaceDigest,
+            decision_action_surface_digest: decisionActionSurfaceDigest,
+            command_id: commandID,
+            occurred_at: Date(),
+            sequence: comprehensionSequence)
+        comprehensionQueue.append(
+            QueuedComprehensionEvent(eventID: UUID().uuidString, input: input))
+        comprehensionObserver?()
+    }
+
+    /// Drains the queue best-effort: each event is sent through the typed
+    /// client and removed on success. A definitive client rejection (a 4xx: a
+    /// malformed or unbacked event, a missing item/device) drops the poison
+    /// entry so the queue stops looping on it; a transient 5xx and a transport
+    /// outage keep it for the next round.
+    public func drainComprehensionEvents() async {
+        guard !comprehensionQueue.isEmpty else { return }
+        // Remove only the events this drain definitively settled, never a whole
+        // snapshot of the queue. Actor isolation yields at each network await,
+        // so a concurrent drain or enqueue may add or settle events in between;
+        // replacing the live queue with a stale `remaining` snapshot could drop
+        // an event another drain kept after a transport failure. A settled id is
+        // one the daemon accepted (idempotent by event id) or definitively
+        // rejected as poison.
+        var settled: Set<String> = []
+        for queued in comprehensionQueue {
+            do {
+                let output = try await client.recordComprehensionEvent(
+                    path: .init(event_id: queued.eventID),
+                    body: .json(queued.input)
+                )
+                switch output {
+                case .ok:
+                    settled.insert(queued.eventID)
+                case .badRequest, .forbidden, .notFound:
+                    // A definitive client rejection: the same event will never
+                    // be accepted, so drop it rather than loop forever.
+                    settled.insert(queued.eventID)
+                case .undocumented(let statusCode, _):
+                    // Drop only definitive client errors (4xx). A transient 5xx
+                    // is retryable, so leave it queued for the next drain.
+                    if (400..<500).contains(statusCode) {
+                        settled.insert(queued.eventID)
+                    }
+                }
+            } catch {
+                // A transport outage (no HTTP response) leaves the event queued
+                // for the next round.
+            }
+        }
+        if !settled.isEmpty {
+            comprehensionQueue.removeAll { settled.contains($0.eventID) }
+            comprehensionObserver?()
+        }
+    }
+
+    /// Restores the persisted telemetry queue, sequence, and registered
+    /// fingerprint at relaunch, but only when the cache belongs to this device.
+    /// A deployment cache reused across a re-pair carries the prior device's
+    /// state, and a comprehension event records no device id of its own, so a
+    /// foreign queue would resend under the new bearer credential and a foreign
+    /// fingerprint would suppress this device's own registration. Both are
+    /// dropped on a device mismatch, mirroring the pending-command ledger's
+    /// per-entry device guard (plan §8).
+    public func restoreComprehension(
+        queue: [QueuedComprehensionEvent], sequence: Int, fingerprint: String?,
+        owningDeviceID: String?
+    ) {
+        guard owningDeviceID == device.deviceID else { return }
+        comprehensionQueue = queue
+        comprehensionSequence = max(comprehensionSequence, sequence)
+        registeredCapabilityFingerprint = fingerprint
     }
 
     private func sortKey(

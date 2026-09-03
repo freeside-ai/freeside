@@ -263,6 +263,15 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 				return fmt.Errorf("submit command %q: %w", command.CommandID,
 					&StaleVersionError{CommandID: command.CommandID, Replacement: item, Snapshot: snap})
 			}
+			// Revalidate a referenced action surface (never trusting the client's
+			// copy) and stamp the daemon-authored decision evidence — the
+			// accepted surface digest and the item's recommendation — onto the
+			// command for the §9 override query.
+			command, err = s.stampDecisionEvidence(
+				ctx, tx, command, item, in.Payload.DecisionActionSurfaceDigest, snap)
+			if err != nil {
+				return err
+			}
 			// PutCommand re-gates openness and checks the payload's binding
 			// authority and the action-offered set. Submit has already re-gated the
 			// durable item's offered set against current per-type signet policy.
@@ -345,6 +354,15 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 				if canonical, commandErr := newCommand(message); commandErr == nil {
 					command = canonical
 				}
+			}
+			// Preserve the daemon-stamped decision evidence from the original
+			// acceptance: it is telemetry metadata, not part of the command's
+			// client-authored identity. Without this a retry (in particular one
+			// carrying a different or absent action surface digest) would rebuild
+			// a command with no evidence and collide with the recorded one under
+			// a false immutable conflict instead of converging (§5.14 test 4).
+			if stored, _, storedErr := tx.GetCommandSnapshot(ctx, command.CommandID); storedErr == nil {
+				command.DecisionEvidence = stored.DecisionEvidence
 			}
 			// A byte-identical replay is a no-op inside PutCommand; a changed
 			// body under the same id surfaces its ErrImmutableConflict here,

@@ -62,6 +62,13 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 	mux.Handle("POST /commands", h.authenticated(h.submitCommand))
 	mux.Handle("PUT /attachments/{digest}", h.authenticated(h.putAttachment))
 	mux.Handle("GET /attachments/{digest}", h.authenticated(h.getAttachment))
+	// Comprehension telemetry (plan §8, §5.14): capability registration, the
+	// daemon-derived action surface, and event ingestion. Each is deliberately
+	// not a ClientCommand, like reportDeliveryOpened. The device is always the
+	// bearer credential's; the capability path device must equal it (else 404).
+	mux.Handle("PUT /devices/{device_id}/capability-contract", h.authenticated(h.registerCapabilityContract))
+	mux.Handle("GET /attention/items/{item_id}/action-surface", h.authenticated(h.getActionSurface))
+	mux.Handle("PUT /telemetry/comprehension/{event_id}", h.authenticated(h.recordComprehensionEvent))
 	return mux
 }
 
@@ -315,13 +322,14 @@ type decisionPayloadRequest struct {
 	// pure decisions omit them); the service's per-action content policy
 	// decides whether their presence or absence is an error, so nil maps to
 	// the zero values rather than a required-field 400 here.
-	Message                  *string                   `json:"message"`
-	Attachments              *[]domain.Digest          `json:"attachments"`
-	RunProposalRevision      *RunProposalRevisionInput `json:"run_proposal_revision"`
-	SnoozeUntil              *time.Time                `json:"snooze_until"`
-	AlternativeChoices       []AlternativeChoice       `json:"alternative_choices"`
-	CapabilityManifestDigest *domain.Digest            `json:"capability_manifest_digest"`
-	AnswerRoute              *domain.AnswerRoute       `json:"answer_route"`
+	Message                     *string                   `json:"message"`
+	Attachments                 *[]domain.Digest          `json:"attachments"`
+	RunProposalRevision         *RunProposalRevisionInput `json:"run_proposal_revision"`
+	SnoozeUntil                 *time.Time                `json:"snooze_until"`
+	AlternativeChoices          []AlternativeChoice       `json:"alternative_choices"`
+	CapabilityManifestDigest    *domain.Digest            `json:"capability_manifest_digest"`
+	AnswerRoute                 *domain.AnswerRoute       `json:"answer_route"`
+	DecisionActionSurfaceDigest *domain.Digest            `json:"decision_action_surface_digest"`
 }
 
 func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authenticatedDevice domain.DeviceID) {
@@ -373,6 +381,10 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 		route := *request.Payload.AnswerRoute
 		payload.AnswerRoute = &route
 	}
+	if request.Payload.DecisionActionSurfaceDigest != nil {
+		digest := *request.Payload.DecisionActionSurfaceDigest
+		payload.DecisionActionSurfaceDigest = &digest
+	}
 	if request.Payload.Message != nil {
 		payload.Message = *request.Payload.Message
 	}
@@ -389,6 +401,128 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 		return
 	}
 	writeJSON(w, http.StatusOK, normalizeCommandResult(result))
+}
+
+type capabilityContractRequest struct {
+	Actions []domain.Action `json:"actions"`
+}
+
+// registerCapabilityContract records the actions the authenticated device's app
+// build can present. The path device must equal the bearer credential's device
+// (else a plain 404, the deliveries posture): a device registers only its own
+// contract.
+func (h httpHandler) registerCapabilityContract(w http.ResponseWriter, r *http.Request, deviceID domain.DeviceID) {
+	if domain.DeviceID(r.PathValue("device_id")) != deviceID {
+		writeJSON(w, http.StatusNotFound, errorResponse{Message: "not found"})
+		return
+	}
+	var request capabilityContractRequest
+	if err := decodeRequest(w, r, &request); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Message: "request body is too large"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
+		return
+	}
+	contract, err := h.service.RegisterClientCapability(r.Context(), deviceID, request.Actions)
+	if err != nil {
+		if errors.Is(err, ErrDeviceNotActive) {
+			writeJSON(w, http.StatusForbidden, errorResponse{Message: err.Error()})
+			return
+		}
+		if errors.Is(err, domain.ErrEmptyField) || errors.Is(err, domain.ErrInvalidAction) ||
+			errors.Is(err, domain.ErrActionsNotCanonical) || errors.Is(err, domain.ErrEmptyID) {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
+			return
+		}
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, contract)
+}
+
+// getActionSurface derives the action surface the authenticated device is
+// offered for one item's current decision surface. A device that has registered
+// no capability contract earns 409; a missing item is 404.
+func (h httpHandler) getActionSurface(w http.ResponseWriter, r *http.Request, deviceID domain.DeviceID) {
+	surface, err := h.service.DeriveActionSurface(r.Context(), deviceID, domain.ItemID(r.PathValue("item_id")))
+	if err != nil {
+		if errors.Is(err, ErrDeviceNotActive) {
+			writeJSON(w, http.StatusForbidden, errorResponse{Message: err.Error()})
+			return
+		}
+		if errors.Is(err, ErrCapabilityNotRegistered) {
+			writeJSON(w, http.StatusConflict, errorResponse{Message: err.Error()})
+			return
+		}
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, surface)
+}
+
+type comprehensionEventRequest struct {
+	ItemID                      domain.ItemID                 `json:"item_id"`
+	Kind                        domain.ComprehensionEventKind `json:"kind"`
+	ItemDecisionSurfaceDigest   domain.Digest                 `json:"item_decision_surface_digest"`
+	DecisionActionSurfaceDigest *domain.Digest                `json:"decision_action_surface_digest"`
+	CommandID                   string                        `json:"command_id"`
+	OccurredAt                  time.Time                     `json:"occurred_at"`
+	Sequence                    int                           `json:"sequence"`
+}
+
+// recordComprehensionEvent ingests one typed decision-path event. The device is
+// the bearer credential's and the event_id is the path idempotency key, so the
+// body carries neither. A malformed event or an unbacked action reference is a
+// 400; a revoked device is 403; a missing item is 404.
+func (h httpHandler) recordComprehensionEvent(w http.ResponseWriter, r *http.Request, deviceID domain.DeviceID) {
+	var request comprehensionEventRequest
+	if err := decodeRequest(w, r, &request); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Message: "request body is too large"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
+		return
+	}
+	event, err := h.service.RecordComprehensionEvent(r.Context(), domain.ComprehensionEventInput{
+		DeviceID: deviceID, EventID: r.PathValue("event_id"), ItemID: request.ItemID,
+		Kind: request.Kind, ItemDecisionSurfaceDigest: request.ItemDecisionSurfaceDigest,
+		DecisionActionSurfaceDigest: request.DecisionActionSurfaceDigest,
+		CommandID:                   request.CommandID, OccurredAt: request.OccurredAt, Sequence: request.Sequence,
+	})
+	if err != nil {
+		if errors.Is(err, ErrDeviceNotActive) {
+			writeJSON(w, http.StatusForbidden, errorResponse{Message: err.Error()})
+			return
+		}
+		if isComprehensionRequestError(err) {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
+			return
+		}
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, event)
+}
+
+// isComprehensionRequestError classifies the deterministic invalid-client-input
+// rejections of comprehension ingestion as 400.
+func isComprehensionRequestError(err error) bool {
+	for _, target := range []error{
+		ErrComprehensionEventUnbacked,
+		domain.ErrInvalidComprehensionEventKind, domain.ErrComprehensionEventInconsistent,
+		domain.ErrInvalidDigest, domain.ErrEmptyID, domain.ErrNonPositive,
+		domain.ErrMissingTimestamp, domain.ErrTimestampNotUTC,
+	} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
 }
 
 type pairingRequest struct {
@@ -544,6 +678,10 @@ func isCommandRequestError(err error) bool {
 		ErrAlternativeNotOffered, ErrInvalidCapabilityRetryDecisionPayload,
 		ErrCapabilityManifestNotOffered,
 		ErrMessageRequired, ErrContentNotAllowed, ErrAnswerRouteRequired, ErrAttachmentNotStored,
+		// A referenced action surface that does not match the command is
+		// deterministic invalid client input (a foreign/stale/unknown surface),
+		// rejected before the write, so it is a 400 like the cases beside it.
+		ErrActionSurfaceMismatch,
 		// An over-limit request_changes message is deterministic invalid
 		// client input, rejected by validateCommandContent before the write,
 		// so it is a 400 like the empty-message and content-not-allowed cases

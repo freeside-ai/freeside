@@ -47,6 +47,19 @@ public struct CachedState: Codable, Equatable, Sendable {
     /// degrades independently: a corrupt section costs the retry
     /// affordance, never the rows and cursors around it.
     public var pendingCommands: [String: InboxStore.PendingCommandEntry]?
+    /// The best-effort comprehension-telemetry queue and its state (plan §8),
+    /// persisted alongside the ledger and degrading independently: like the
+    /// ledger they are additive optionals, so an older client ignores them and
+    /// a newer client tolerates their absence.
+    public var comprehensionQueue: [InboxStore.QueuedComprehensionEvent]?
+    public var comprehensionSequence: Int?
+    public var registeredCapabilityFingerprint: String?
+    /// The device that owns the comprehension queue and fingerprint above. A
+    /// comprehension event carries no device id, so a cache reused across a
+    /// re-pair is told apart only by this owner: a mismatch on restore drops
+    /// both device-scoped sections rather than resending or suppressing under
+    /// the new credential (plan §8).
+    public var comprehensionDeviceID: String?
 
     public init(
         cursors: SyncCursors?,
@@ -55,7 +68,11 @@ public struct CachedState: Codable, Equatable, Sendable {
         runs: [Components.Schemas.RunSnapshot] = [],
         schedules: [Components.Schemas.ScheduleSnapshot] = [],
         runTimelines: [Components.Schemas.RunTimeline] = [],
-        pendingCommands: [String: InboxStore.PendingCommandEntry]? = nil
+        pendingCommands: [String: InboxStore.PendingCommandEntry]? = nil,
+        comprehensionQueue: [InboxStore.QueuedComprehensionEvent]? = nil,
+        comprehensionSequence: Int? = nil,
+        registeredCapabilityFingerprint: String? = nil,
+        comprehensionDeviceID: String? = nil
     ) {
         self.cursors = cursors
         self.attentionItems = attentionItems
@@ -64,6 +81,10 @@ public struct CachedState: Codable, Equatable, Sendable {
         self.schedules = schedules
         self.runTimelines = runTimelines
         self.pendingCommands = pendingCommands
+        self.comprehensionQueue = comprehensionQueue
+        self.comprehensionSequence = comprehensionSequence
+        self.registeredCapabilityFingerprint = registeredCapabilityFingerprint
+        self.comprehensionDeviceID = comprehensionDeviceID
     }
 
     public init(from decoder: any Decoder) throws {
@@ -87,6 +108,16 @@ public struct CachedState: Codable, Equatable, Sendable {
         // section loads as absent without failing the whole file.
         pendingCommands = try? container.decodeIfPresent(
             [String: InboxStore.PendingCommandEntry].self, forKey: .pendingCommands)
+        // The telemetry queue and its state degrade independently too: an
+        // undecodable section loads absent, costing at most queued events.
+        comprehensionQueue = try? container.decodeIfPresent(
+            [InboxStore.QueuedComprehensionEvent].self, forKey: .comprehensionQueue)
+        comprehensionSequence = try? container.decodeIfPresent(
+            Int.self, forKey: .comprehensionSequence)
+        registeredCapabilityFingerprint = try? container.decodeIfPresent(
+            String.self, forKey: .registeredCapabilityFingerprint)
+        comprehensionDeviceID = try? container.decodeIfPresent(
+            String.self, forKey: .comprehensionDeviceID)
     }
 }
 

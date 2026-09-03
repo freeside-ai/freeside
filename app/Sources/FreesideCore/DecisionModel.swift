@@ -63,6 +63,27 @@ public final class DecisionModel {
     /// eviction cannot certify the rows a later bootstrap repopulates —
     /// `actionsEnabled` fails closed until a fresh validation (#162).
     private var validatedCacheGeneration = 0
+    /// The daemon-derived action surface for this device and item (plan §8),
+    /// fetched when the card opens. It drives the action ranking's available
+    /// set and is referenced by the submitted command and the action-bearing
+    /// telemetry events. Nil until fetched, or when the fetch failed (an older
+    /// build, or a device with no registered contract): the local filter and a
+    /// digest-free command then stand.
+    public private(set) var actionSurface: Components.Schemas.DecisionActionSurface?
+    /// The store cache generation the action surface was fetched under. An
+    /// epoch eviction (a daemon restore) bumps it, so a surface derived
+    /// against a now-dead epoch is refetched rather than reused (issue #162).
+    private var actionSurfaceCacheGeneration = 0
+    /// Advances on every action-surface fetch. Only the newest fetch may
+    /// install its result, so an overlapping or cancelled fetch whose response
+    /// lands out of order cannot install a surface the stale check would then
+    /// trust (issue #162).
+    private var actionSurfaceRequestGeneration = 0
+    private var cardOpenedEmitted = false
+    private var actionEventsEmittedCommandID: String?
+    private var drillDownEmitted = false
+    private var detailsRevealEmitted = false
+    private var notDecidableEmitted = false
 
     public init(store: InboxStore, itemID: String) {
         self.store = store
@@ -261,6 +282,130 @@ public final class DecisionModel {
     /// Refetches the item's canonical state and swaps it into the store,
     /// so the card can never expose an action against a state it hasn't
     /// seen (plan §5.14 sync test 9: no stale action on a resolved item).
+    /// The item's current decision surface digest, from the fetched action
+    /// surface or the cached item. Every comprehension event carries it.
+    private var itemDecisionSurfaceDigest: String? {
+        actionSurface?.item_decision_surface_digest
+            ?? store.snapshotsByID[itemID]?.item.decision_surface.digest
+    }
+
+    /// Records card_opened once, the moment the decision card appears, using
+    /// the item's cached decision-surface digest. Emitted before validation and
+    /// the action-surface fetch (`refreshActionSurface`) so the reported
+    /// open-to-decision duration includes their latency and a fast
+    /// resolve-and-leave still records the open (plan §8, §9; issue #924).
+    public func emitCardOpened() {
+        guard !cardOpenedEmitted,
+            let digest = store.snapshotsByID[itemID]?.item.decision_surface.digest
+        else { return }
+        cardOpenedEmitted = true
+        store.enqueueComprehensionEvent(
+            kind: .card_opened, itemID: itemID, itemDecisionSurfaceDigest: digest,
+            decisionActionSurfaceDigest: nil, commandID: nil)
+        Task { await store.drainComprehensionEvents() }
+    }
+
+    /// Fetches the device's action surface for this item (best-effort). Runs
+    /// after card_opened so the open event never waits on the network. Called
+    /// when the decision card appears and whenever the cache is evicted.
+    public func refreshActionSurface() async {
+        // Refetch when the cached surface no longer matches the item's current
+        // decision-surface digest, or when a sync-epoch eviction (a daemon
+        // restore) invalidated the epoch it was derived under. A card left open
+        // across either change (`revalidationID` reruns this) would otherwise
+        // filter actions through the stale surface and submit its superseded
+        // digest, which the daemon rejects as stale (plan §8; issue #162).
+        let currentItemDigest = store.snapshotsByID[itemID]?.item.decision_surface.digest
+        let surfaceIsStale =
+            actionSurface.map {
+                $0.item_decision_surface_digest != currentItemDigest
+                    || actionSurfaceCacheGeneration != store.cacheGeneration
+            } ?? true
+        guard surfaceIsStale else { return }
+        // Capture the request generation and the digest/epoch this fetch is
+        // for. The response is installed only if this is still the newest fetch
+        // and the item's decision surface and cache epoch have not changed
+        // since: an overlapping or cancelled fetch whose response lands out of
+        // order must not install a surface the stale check would then trust and
+        // stamp onto later commands (which the daemon rejects as stale).
+        actionSurfaceRequestGeneration += 1
+        let generation = actionSurfaceRequestGeneration
+        let expectedItemDigest = currentItemDigest
+        let expectedCacheGeneration = store.cacheGeneration
+        // Drop the stale surface before awaiting its replacement: once
+        // validation enables the card, a submit that races this refetch must
+        // not carry the superseded digest. With no surface the card falls back
+        // to the local filter and a digest-free command until the refetch lands.
+        actionSurface = nil
+        let fetched = try? await store.client.getActionSurface(
+            path: .init(item_id: itemID)
+        ).ok.body.json
+        guard generation == actionSurfaceRequestGeneration,
+            store.cacheGeneration == expectedCacheGeneration,
+            store.snapshotsByID[itemID]?.item.decision_surface.digest == expectedItemDigest
+        else { return }
+        actionSurface = fetched
+        actionSurfaceCacheGeneration = store.cacheGeneration
+    }
+
+    /// Emits action_taken, and recommendation_override when the chosen action
+    /// differs from the item's recommendation, once per accepted command. The
+    /// caller passes the surface the command was built against, not the model's
+    /// current `actionSurface`: a shared sync can replace or clear the latter
+    /// during the submit await, and the daemon rejects an action event whose
+    /// digest does not match the command's stamped evidence (plan §8). Emits
+    /// only when a surface backed the command.
+    private func emitDecisionEvents(
+        for record: Components.Schemas.CommandRecord,
+        surface: Components.Schemas.DecisionActionSurface?
+    ) async {
+        guard let surface,
+            actionEventsEmittedCommandID != record.command_id
+        else { return }
+        actionEventsEmittedCommandID = record.command_id
+        store.enqueueComprehensionEvent(
+            kind: .action_taken, itemID: itemID,
+            itemDecisionSurfaceDigest: surface.item_decision_surface_digest,
+            decisionActionSurfaceDigest: surface.digest, commandID: record.command_id)
+        let recommended = store.snapshotsByID[itemID]?.item.recommendation?.value1.action
+        if let recommended, recommended != record.action {
+            store.enqueueComprehensionEvent(
+                kind: .recommendation_override, itemID: itemID,
+                itemDecisionSurfaceDigest: surface.item_decision_surface_digest,
+                decisionActionSurfaceDigest: surface.digest, commandID: record.command_id)
+        }
+        await store.drainComprehensionEvents()
+    }
+
+    /// Emits drill_down_opened once when the card's evidence drill-down displays.
+    public func emitDrillDownOpened() {
+        emitViewEvent(&drillDownEmitted, kind: .drill_down_opened)
+    }
+
+    /// Emits details_opened_before_acting once when technical details reveal
+    /// while no command is in flight.
+    public func emitDetailsOpenedBeforeActing() {
+        guard phase == .idle else { return }
+        emitViewEvent(&detailsRevealEmitted, kind: .details_opened_before_acting)
+    }
+
+    /// Emits not_decidable_here_shown once when the card offers this device no
+    /// action for the item.
+    public func emitNotDecidableHereShown() {
+        emitViewEvent(&notDecidableEmitted, kind: .not_decidable_here_shown)
+    }
+
+    private func emitViewEvent(
+        _ emitted: inout Bool, kind: Components.Schemas.ComprehensionEventKind
+    ) {
+        guard !emitted, let digest = itemDecisionSurfaceDigest else { return }
+        emitted = true
+        store.enqueueComprehensionEvent(
+            kind: kind, itemID: itemID, itemDecisionSurfaceDigest: digest,
+            decisionActionSurfaceDigest: nil, commandID: nil)
+        Task { await store.drainComprehensionEvents() }
+    }
+
     public func validate() async {
         validationGeneration += 1
         let generation = validationGeneration
@@ -581,6 +726,11 @@ public final class DecisionModel {
         } else {
             urlToOpen = nil
         }
+        // Snapshot the surface the command is built against. A shared sync can
+        // replace or clear `actionSurface` while submitCommand is suspended, so
+        // the action telemetry must emit from this immutable value, not the
+        // model's current surface, to match the stamped evidence (plan §8).
+        let submittedSurface = actionSurface
         let command = Components.Schemas.ClientCommand(
             command_id: UUID().uuidString,
             device_id: store.device.deviceID,
@@ -604,7 +754,8 @@ public final class DecisionModel {
                     .init(value1: $0)
                 },
                 snooze_until: snoozeUntil,
-                alternative_choices: alternativeChoices
+                alternative_choices: alternativeChoices,
+                decision_action_surface_digest: submittedSurface?.digest
             )
         )
         if let urlToOpen {
@@ -670,6 +821,16 @@ public final class DecisionModel {
                         command, message: "the daemon returned an invalid command result")
                     return
                 }
+                // Emit the §8 action telemetry from the validated result before
+                // the read-your-write refetch. A transient GET failure, the
+                // snooze-404 branch, or an eviction during the refetch all
+                // settle this accepted command without reaching the post-refetch
+                // path, so emitting here keeps action_taken and
+                // recommendation_override from being dropped. The events are
+                // idempotent by id, and the daemon re-validates each against the
+                // recorded command, so an emit for a command a later restore
+                // rolls back is harmlessly poison-dropped.
+                await emitDecisionEvents(for: result.record, surface: submittedSurface)
                 // Read-your-write BEFORE settling. Not every action resolves
                 // its item (plan §4: viewing a PR is navigation, acknowledge
                 // means seen, never resolved), so read-your-write is a
@@ -1208,6 +1369,19 @@ public final class DecisionModel {
                 appliedRecord = result.record
                 submissionError = nil
                 phase = .applied
+                // The original submit lost its response before it could emit, so
+                // an in-session replay is the first confirmation of this accepted
+                // command: emit its §8 action telemetry here too (idempotent by
+                // id). Emit only from a surface whose digest still matches the
+                // replayed command's stamped evidence; a cross-relaunch replay
+                // runs on a recreated model whose action surface is gone (or a
+                // sync may have replaced it), so a non-matching surface makes
+                // the surface-referenced events an accepted best-effort loss
+                // rather than an emit the daemon rejects as unbacked.
+                let replaySurface =
+                    actionSurface?.digest == command.payload.decision_action_surface_digest
+                    ? actionSurface : nil
+                await emitDecisionEvents(for: result.record, surface: replaySurface)
                 if command.payload.action != .snooze {
                     store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
                 }

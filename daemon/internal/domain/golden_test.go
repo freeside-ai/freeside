@@ -1014,6 +1014,52 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Comprehension telemetry (plan §8, §9): the capability contract a device
+	// registers, the daemon-derived action surface, one plain and one
+	// action-bearing event, an operator-recorded defect, and a command carrying
+	// the daemon-stamped decision evidence.
+	clientCapabilityContract, err := domain.NewClientCapabilityContract("device-1",
+		[]domain.Action{domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionDismiss, domain.ActionApprove})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decisionActionSurface, err := domain.DeriveDecisionActionSurface("device-1", decisionSurface, clientCapabilityContract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	comprehensionCardOpened, err := domain.NewComprehensionEvent(domain.ComprehensionEventInput{
+		DeviceID: "device-1", EventID: "event-card-1", ItemID: "item-1",
+		Kind: domain.ComprehensionCardOpened, ItemDecisionSurfaceDigest: decisionSurface.Digest,
+		OccurredAt: ts, Sequence: 1,
+	}, ts.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	actionSurfaceDigest := decisionActionSurface.Digest
+	comprehensionActionTaken, err := domain.NewComprehensionEvent(domain.ComprehensionEventInput{
+		DeviceID: "device-1", EventID: "event-action-1", ItemID: "item-1",
+		Kind: domain.ComprehensionActionTaken, ItemDecisionSurfaceDigest: decisionSurface.Digest,
+		DecisionActionSurfaceDigest: &actionSurfaceDigest, CommandID: "cmd-1",
+		OccurredAt: ts.Add(time.Minute), Sequence: 2,
+	}, ts.Add(time.Minute+time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	comprehensionDefect := domain.ComprehensionDefect{
+		ItemID: "item-1", ClaimDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		RecordedAt: ts.Add(3 * time.Hour), Reason: "the readiness summary overstated the passing checks",
+	}
+	evidenceAction := domain.ActionOpenPR
+	evidenceSource := domain.RecommendationDaemonPolicy
+	commandWithEvidence, err := command.WithDecisionEvidence(domain.CommandDecisionEvidence{
+		ActionSurfaceDigest:  decisionActionSurface.Digest,
+		RecommendedAction:    &evidenceAction,
+		RecommendationSource: &evidenceSource,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	projectImage, err := domain.NewProjectImage(domain.ProjectImageInput{
 		Repository: "freeasinbird/gh-imgup", RepositoryID: 1278475858,
 		CommitSHA:          "6ab4e3dff2be53f74bde9b8b3150290775152f9f",
@@ -1438,6 +1484,12 @@ func TestGolden(t *testing.T) {
 		{"codex_reenrollment_recovery_transition", reenrollmentTransition},
 		{"classification", classification},
 		{"command_discuss", discussCommand},
+		{"client_capability_contract", clientCapabilityContract},
+		{"decision_action_surface", decisionActionSurface},
+		{"comprehension_event_card_opened", comprehensionCardOpened},
+		{"comprehension_event_action_taken", comprehensionActionTaken},
+		{"comprehension_defect", comprehensionDefect},
+		{"command_with_decision_evidence", commandWithEvidence},
 		{"conversation", conversation},
 		{"message", msg},
 		{"agent_invocation", invocation},

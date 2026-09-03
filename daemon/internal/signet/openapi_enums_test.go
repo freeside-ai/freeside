@@ -32,6 +32,7 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 	want := map[string][]string{
 		"Action":                    enumStrings(domain.AllActions),
 		"AttentionType":             enumStrings(domain.AllAttentionTypes),
+		"ComprehensionEventKind":    enumStrings(domain.AllComprehensionEventKinds),
 		"RecommendationSource":      enumStrings(domain.AllRecommendationSources),
 		"JudgmentSite":              enumStrings(domain.AllJudgmentSites),
 		"DisplayNameSource":         enumStrings(domain.AllDisplayNameSources),

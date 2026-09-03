@@ -16,6 +16,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["AttentionType"] = append(valids["AttentionType"], v.valid)
 	}
 	invalids["AttentionType"] = AttentionType("").valid
+	for _, v := range AllComprehensionEventKinds {
+		valids["ComprehensionEventKind"] = append(valids["ComprehensionEventKind"], v.valid)
+	}
+	invalids["ComprehensionEventKind"] = ComprehensionEventKind("").valid
 	for _, v := range AllHealthPostures {
 		valids["HealthPosture"] = append(valids["HealthPosture"], v.valid)
 	}

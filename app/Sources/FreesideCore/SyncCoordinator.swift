@@ -84,6 +84,14 @@ public final class SyncCoordinator {
             if let pending = cached.pendingCommands {
                 store.restorePendingCommands(pending)
             }
+            // The telemetry queue restores alongside the ledger, and for the
+            // same reason: a queued event survives the relaunch that follows
+            // and drains on the next round (plan §8).
+            store.restoreComprehension(
+                queue: cached.comprehensionQueue ?? [],
+                sequence: cached.comprehensionSequence ?? 0,
+                fingerprint: cached.registeredCapabilityFingerprint,
+                owningDeviceID: cached.comprehensionDeviceID)
         }
         // Freshness stays .unvalidated until a round-trip settles it:
         // the cached view renders immediately, but nothing claims it is
@@ -104,6 +112,31 @@ public final class SyncCoordinator {
         store.pendingCommandsObserver = { [weak self] in
             self?.persist() ?? false
         }
+        // Persist the telemetry queue on every mutation, like the ledger, so a
+        // queued event survives a relaunch (plan §8).
+        store.comprehensionObserver = { [weak self] in _ = self?.persist() }
+    }
+
+    /// Registers the capability contract when the local action set differs from
+    /// the last one registered, then drains the telemetry queue. Both are
+    /// best-effort: a failure retries on the next round. Runs after a
+    /// successful bootstrap so it has a settled session.
+    private func postRoundHousekeeping() async {
+        let actions = ClientCapability.presentableActions
+        let fingerprint = ClientCapability.fingerprint(of: actions)
+        if store.registeredCapabilityFingerprint != fingerprint {
+            do {
+                _ = try await store.client.registerCapabilityContract(
+                    path: .init(device_id: store.device.deviceID),
+                    body: .json(.init(actions: actions))
+                ).ok
+                store.registeredCapabilityFingerprint = fingerprint
+                persist()
+            } catch {
+                // Best-effort: a failed registration retries next round.
+            }
+        }
+        await store.drainComprehensionEvents()
     }
 
     /// Full resync: the canonical snapshot replaces the cached rows and
@@ -121,7 +154,9 @@ public final class SyncCoordinator {
                 let snapshot = try ok.body.json
                 try ConversationContractValidation.validate(
                     snapshot.conversations, maximumRevision: snapshot.revision)
-                if !adopt(snapshot) {
+                if adopt(snapshot) {
+                    await postRoundHousekeeping()
+                } else {
                     // A same-epoch partial read completed while this
                     // bootstrap response was in flight. Fetch one new
                     // canonical snapshot rather than replacing that newer
@@ -498,9 +533,16 @@ public final class SyncCoordinator {
     @discardableResult
     private func persist() -> Bool {
         let pending = store.pendingCommandsByItemID
+        let comprehensionQueue = store.comprehensionQueue
+        let fingerprint = store.registeredCapabilityFingerprint
         // Nothing worth a file: keeping one would undo an eviction. An
-        // empty ledger is durably recorded by definition.
-        guard cursors != nil || !pending.isEmpty else {
+        // empty ledger is durably recorded by definition. The telemetry queue
+        // and fingerprint keep a file alive on their own, so a queued event or
+        // a registered contract survives a relaunch with no cursors.
+        guard
+            cursors != nil || !pending.isEmpty || !comprehensionQueue.isEmpty
+                || fingerprint != nil
+        else {
             cache.discard()
             return true
         }
@@ -516,7 +558,12 @@ public final class SyncCoordinator {
                     schedules: cursors == nil ? [] : schedules,
                     runTimelines: cursors == nil
                         ? [] : timelinesByRunID.keys.sorted().compactMap { timelinesByRunID[$0] },
-                    pendingCommands: pending
+                    pendingCommands: pending,
+                    comprehensionQueue: comprehensionQueue,
+                    comprehensionSequence: store.comprehensionSequence,
+                    registeredCapabilityFingerprint: fingerprint,
+                    comprehensionDeviceID: comprehensionQueue.isEmpty && fingerprint == nil
+                        ? nil : store.device.deviceID
                 ))
             return true
         } catch {

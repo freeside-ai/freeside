@@ -130,6 +130,9 @@ func main() {
 		case "rig":
 			runRigMain(os.Args[2:])
 			return
+		case "comprehension":
+			runComprehensionMain(os.Args[2:])
+			return
 		}
 	}
 	flags := flag.NewFlagSet("freesided", flag.ContinueOnError)

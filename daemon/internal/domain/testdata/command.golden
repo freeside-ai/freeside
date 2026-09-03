@@ -11,5 +11,6 @@
   "action": "open_pr",
   "message": "",
   "attachments": [],
-  "answer_route": null
+  "answer_route": null,
+  "decision_evidence": null
 }

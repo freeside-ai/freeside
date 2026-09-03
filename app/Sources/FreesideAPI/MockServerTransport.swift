@@ -322,6 +322,16 @@ public struct MockServerTransport: ClientTransport {
                     body: Components.Schemas._Error(
                         message: "malformed command: \(rejection.reason)")
                 )
+            } catch let rejection as MockServer.ActionSurfaceMismatchError {
+                // The daemon maps ErrActionSurfaceMismatch to 400 (a
+                // deterministic invalid-client-input rejection).
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(
+                        message:
+                            "command \(rejection.commandID) references an invalid decision action surface"
+                    )
+                )
             } catch let rejection as MockServer.ProposalSnoozedError {
                 return try Self.json(
                     status: .badRequest,
@@ -443,9 +453,131 @@ public struct MockServerTransport: ClientTransport {
                 headerFields: [.contentType: "application/octet-stream"]
             )
             return (response, HTTPBody(bytes))
+        case "registerCapabilityContract":
+            guard let deviceID = Self.deviceID(inCapabilityPath: request.path),
+                deviceID == authenticatedDevice
+            else {
+                // The path device must equal the credential device (deliveries
+                // posture): a mismatch is a plain 404.
+                return try Self.json(
+                    status: .notFound,
+                    body: Components.Schemas._Error(
+                        message: "no entity exists under the identifier"))
+            }
+            guard let body else {
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(message: "request body is required"))
+            }
+            let data = try await Data(collecting: body, upTo: 1 << 20)
+            guard
+                let input = try? Self.decoder.decode(
+                    Components.Schemas.ClientCapabilityContractInput.self, from: data)
+            else {
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(message: "malformed request body"))
+            }
+            do {
+                let contract = try await server.registerCapabilityContract(
+                    deviceID: deviceID, actions: input.actions)
+                return try Self.json(status: .ok, body: contract)
+            } catch is MockServer.CapabilityInvalidError {
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(message: "actions must be non-empty"))
+            }
+        case "getActionSurface":
+            guard let itemID = Self.itemID(inActionSurfacePath: request.path) else {
+                return try Self.json(
+                    status: .notFound,
+                    body: Components.Schemas._Error(
+                        message: "no entity exists under the identifier"))
+            }
+            switch try await server.getActionSurface(
+                deviceID: authenticatedDevice ?? "", itemID: itemID)
+            {
+            case .ok(let surface):
+                return try Self.json(status: .ok, body: surface)
+            case .noContract:
+                return try Self.json(
+                    status: .conflict,
+                    body: Components.Schemas._Error(
+                        message: "device has not registered a capability contract"))
+            case .unknownItem:
+                return try Self.json(
+                    status: .notFound,
+                    body: Components.Schemas._Error(
+                        message: "no entity exists under the identifier"))
+            }
+        case "recordComprehensionEvent":
+            guard let eventID = Self.eventID(inTelemetryPath: request.path) else {
+                return try Self.json(
+                    status: .notFound,
+                    body: Components.Schemas._Error(
+                        message: "no entity exists under the identifier"))
+            }
+            guard let body else {
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(message: "request body is required"))
+            }
+            let data = try await Data(collecting: body, upTo: 1 << 20)
+            guard
+                let input = try? Self.decoder.decode(
+                    Components.Schemas.ComprehensionEventInput.self, from: data)
+            else {
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(message: "malformed request body"))
+            }
+            do {
+                switch try await server.recordComprehensionEvent(
+                    deviceID: authenticatedDevice ?? "", eventID: eventID, input: input)
+                {
+                case .ok(let event):
+                    return try Self.json(status: .ok, body: event)
+                case .unknownItem:
+                    return try Self.json(
+                        status: .notFound,
+                        body: Components.Schemas._Error(
+                            message: "no entity exists under the identifier"))
+                }
+            } catch is MockServer.InvalidComprehensionEventError {
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(message: "invalid comprehension event"))
+            }
         default:
             return (HTTPResponse(status: .notImplemented), nil)
         }
+    }
+
+    /// `/devices/{device_id}/capability-contract`: the id is the segment ahead
+    /// of the trailing verb.
+    private static func deviceID(inCapabilityPath path: String?) -> String? {
+        let parts = path?.split(separator: "/") ?? []
+        guard parts.count >= 2, parts.last == "capability-contract" else { return nil }
+        return String(parts[parts.count - 2]).removingPercentEncoding
+    }
+
+    /// `/attention/items/{item_id}/action-surface`.
+    private static func itemID(inActionSurfacePath path: String?) -> String? {
+        let parts = (path?.split(separator: "/") ?? [])
+            .map { String($0).removingPercentEncoding ?? String($0) }
+        guard parts.count == 4, parts[0] == "attention", parts[1] == "items",
+            parts[3] == "action-surface"
+        else { return nil }
+        return parts[2]
+    }
+
+    /// `/telemetry/comprehension/{event_id}`.
+    private static func eventID(inTelemetryPath path: String?) -> String? {
+        let parts = (path?.split(separator: "/") ?? [])
+            .map { String($0).removingPercentEncoding ?? String($0) }
+        guard parts.count == 3, parts[0] == "telemetry", parts[1] == "comprehension"
+        else { return nil }
+        return parts[2]
     }
 
     private static func runProposalItemID(_ path: String?) -> String? {

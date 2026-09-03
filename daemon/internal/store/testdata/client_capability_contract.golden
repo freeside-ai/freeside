@@ -1,0 +1,10 @@
+{
+  "device_id": "device-1",
+  "actions": [
+    "approve",
+    "dismiss",
+    "open_pr",
+    "return_to_agent"
+  ],
+  "digest": "sha256:ca72252356aff8282dc52b2b0448b6f04b4db206917852d63a20522e78b8494a"
+}

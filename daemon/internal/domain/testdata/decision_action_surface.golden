@@ -1,0 +1,12 @@
+{
+  "device_id": "device-1",
+  "item_id": "item-1",
+  "item_decision_surface_digest": "sha256:adb47dbdf777e31d85c004f469268ebb5bfa486fb3d05fd3a56c7730ff242092",
+  "client_capability_digest": "sha256:ca72252356aff8282dc52b2b0448b6f04b4db206917852d63a20522e78b8494a",
+  "actions": [
+    "dismiss",
+    "open_pr",
+    "return_to_agent"
+  ],
+  "digest": "sha256:8dd6210cd81e5b2faf8823c08f426a70b1494633177cc5d93e218de3fbe80f47"
+}

@@ -903,6 +903,40 @@ func (s JudgmentSite) valid() bool {
 	}
 }
 
+// ComprehensionEventKind is one typed decision-path event the clients emit
+// (plan §8, §9). The six kinds are the only comprehension events collected;
+// events are tied to §9's specific measures, never an unrestricted clickstream.
+// The zero value is invalid by design.
+type ComprehensionEventKind string
+
+const (
+	ComprehensionCardOpened                ComprehensionEventKind = "card_opened"
+	ComprehensionDrillDownOpened           ComprehensionEventKind = "drill_down_opened"
+	ComprehensionDetailsOpenedBeforeActing ComprehensionEventKind = "details_opened_before_acting"
+	ComprehensionActionTaken               ComprehensionEventKind = "action_taken"
+	ComprehensionRecommendationOverride    ComprehensionEventKind = "recommendation_override"
+	ComprehensionNotDecidableHereShown     ComprehensionEventKind = "not_decidable_here_shown"
+)
+
+// AllComprehensionEventKinds is the single registration point for comprehension
+// event kinds.
+var AllComprehensionEventKinds = []ComprehensionEventKind{
+	ComprehensionCardOpened, ComprehensionDrillDownOpened,
+	ComprehensionDetailsOpenedBeforeActing, ComprehensionActionTaken,
+	ComprehensionRecommendationOverride, ComprehensionNotDecidableHereShown,
+}
+
+func (k ComprehensionEventKind) valid() bool {
+	switch k {
+	case ComprehensionCardOpened, ComprehensionDrillDownOpened,
+		ComprehensionDetailsOpenedBeforeActing, ComprehensionActionTaken,
+		ComprehensionRecommendationOverride, ComprehensionNotDecidableHereShown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Priority orders competing items. Provisional (plan §4 names the field but
 // enumerates no members); flagged for spine review, tightened by a later
 // kind:contract change.
