@@ -12,5 +12,9 @@
   "message": "",
   "attachments": [],
   "answer_route": null,
-  "decision_evidence": null
+  "decision_evidence": {
+    "action_surface_digest": "sha256:8dd6210cd81e5b2faf8823c08f426a70b1494633177cc5d93e218de3fbe80f47",
+    "recommended_action": "open_pr",
+    "recommendation_source": "daemon_policy"
+  }
 }

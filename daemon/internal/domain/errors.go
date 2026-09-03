@@ -389,3 +389,17 @@ var (
 	ErrDecisionSurfaceNotCanonical = errors.New("decision surface set field is not sorted and deduplicated")
 	ErrDecisionSurfaceEpoch        = errors.New("decision surface epoch must advance by exactly one per surface change")
 )
+
+// Comprehension telemetry (plan §8, §9; comprehension.go). The digest
+// mismatches are content-address refusals on decode; the inconsistency
+// sentinels guard the by-kind field contract and the derived-surface shape.
+var (
+	ErrInvalidComprehensionEventKind       = errors.New("invalid comprehension event kind")
+	ErrActionsNotCanonical                 = errors.New("action set is not in canonical (sorted, deduplicated) order")
+	ErrCapabilityContractDigestMismatch    = errors.New("client capability contract digest does not match its canonical content")
+	ErrDecisionActionSurfaceDigestMismatch = errors.New("decision action surface digest does not match its canonical content")
+	ErrDecisionActionSurfaceInconsistent   = errors.New("decision action surface fields are internally inconsistent")
+	ErrComprehensionEventInconsistent      = errors.New("comprehension event fields do not match the event kind's contract")
+	ErrComprehensionDefectTooLarge         = errors.New("comprehension defect reason exceeds the inline size cap")
+	ErrCommandDecisionEvidenceInconsistent = errors.New("command decision evidence recommendation action and source must be present together")
+)

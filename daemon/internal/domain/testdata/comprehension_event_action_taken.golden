@@ -1,0 +1,12 @@
+{
+  "device_id": "device-1",
+  "event_id": "event-action-1",
+  "item_id": "item-1",
+  "kind": "action_taken",
+  "item_decision_surface_digest": "sha256:adb47dbdf777e31d85c004f469268ebb5bfa486fb3d05fd3a56c7730ff242092",
+  "decision_action_surface_digest": "sha256:8dd6210cd81e5b2faf8823c08f426a70b1494633177cc5d93e218de3fbe80f47",
+  "command_id": "cmd-1",
+  "occurred_at": "2026-01-02T03:05:05Z",
+  "sequence": 2,
+  "received_at": "2026-01-02T03:05:06Z"
+}

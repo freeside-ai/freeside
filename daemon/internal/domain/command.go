@@ -48,6 +48,69 @@ type Command struct {
 	// implementer or revises the specification. Which items require or forbid
 	// it is the acceptance boundary's policy, not a domain invariant.
 	AnswerRoute *AnswerRoute `json:"answer_route"`
+	// DecisionEvidence is the daemon-stamped record of the decision context the
+	// command was accepted in (plan §8, §9): the action surface it referenced
+	// and the item's recommendation at acceptance. It is never caller-supplied,
+	// so it is absent from CommandInput; NewCommand leaves it nil and
+	// WithDecisionEvidence stamps it at the acceptance boundary. It is telemetry
+	// evidence read by the §9 override query, never an authorization input.
+	DecisionEvidence *CommandDecisionEvidence `json:"decision_evidence"`
+}
+
+// CommandDecisionEvidence is the decision context the daemon stamps onto an
+// accepted command. ActionSurfaceDigest is the derived DecisionActionSurface
+// the command referenced; it may be empty when the command carried no surface
+// (a command accepted before this unit, or one submitted without a digest),
+// which the override query counts as unclassified rather than losing.
+// RecommendedAction and RecommendationSource are the item's recommendation at
+// acceptance, stamped together or not at all.
+type CommandDecisionEvidence struct {
+	ActionSurfaceDigest  Digest                `json:"action_surface_digest"`
+	RecommendedAction    *Action               `json:"recommended_action"`
+	RecommendationSource *RecommendationSource `json:"recommendation_source"`
+}
+
+// Validate reports whether the evidence is well-formed. An empty
+// ActionSurfaceDigest is accepted (the unclassified case); a present one must
+// be a content address. The recommendation action and source are stamped from
+// the item's recommendation, so they are present together or absent together.
+func (e CommandDecisionEvidence) Validate() error {
+	if e.ActionSurfaceDigest != "" && !isSHA256Digest(string(e.ActionSurfaceDigest)) {
+		return fmt.Errorf("command decision evidence action_surface_digest %q: %w", e.ActionSurfaceDigest, ErrInvalidDigest)
+	}
+	if e.RecommendedAction != nil && !e.RecommendedAction.valid() {
+		return fmt.Errorf("command decision evidence recommended_action %q: %w", *e.RecommendedAction, ErrInvalidAction)
+	}
+	if e.RecommendationSource != nil && !e.RecommendationSource.valid() {
+		return fmt.Errorf("command decision evidence recommendation_source %q: %w", *e.RecommendationSource, ErrInvalidRecommendationSource)
+	}
+	if (e.RecommendedAction == nil) != (e.RecommendationSource == nil) {
+		return fmt.Errorf("command %w", ErrCommandDecisionEvidenceInconsistent)
+	}
+	return nil
+}
+
+// WithDecisionEvidence returns a copy of the command stamped with the
+// daemon-derived decision evidence. It is the only way DecisionEvidence is set:
+// NewCommand leaves it nil. The copy detaches the command's slices so the
+// returned value does not alias the receiver's backing arrays.
+func (c Command) WithDecisionEvidence(evidence CommandDecisionEvidence) (Command, error) {
+	if err := evidence.Validate(); err != nil {
+		return Command{}, err
+	}
+	stamped := CommandDecisionEvidence{
+		ActionSurfaceDigest:  evidence.ActionSurfaceDigest,
+		RecommendedAction:    clonePtr(evidence.RecommendedAction),
+		RecommendationSource: clonePtr(evidence.RecommendationSource),
+	}
+	c.ArtifactDigests = append([]Digest{}, c.ArtifactDigests...)
+	c.Attachments = append([]Digest{}, c.Attachments...)
+	c.AnswerRoute = clonePtr(c.AnswerRoute)
+	c.DecisionEvidence = &stamped
+	if err := c.Validate(); err != nil {
+		return Command{}, err
+	}
+	return c, nil
 }
 
 // CommandInput carries the caller-supplied fields of a Command. The bound
@@ -159,6 +222,11 @@ func (c Command) Validate() error {
 			return fmt.Errorf("command %s attachments[%d] %q: %w", c.CommandID, idx, d, ErrDuplicate)
 		}
 		seenAtt[d] = struct{}{}
+	}
+	if c.DecisionEvidence != nil {
+		if err := c.DecisionEvidence.Validate(); err != nil {
+			return fmt.Errorf("command %s: %w", c.CommandID, err)
+		}
 	}
 	return nil
 }
