@@ -55,6 +55,12 @@ type DecisionPayload struct {
 	// AnswerRoute is required for answer_and_retry on an implementation-stage
 	// agent_question and forbidden everywhere else (validateAnswerRoute).
 	AnswerRoute *domain.AnswerRoute
+	// DecisionActionSurfaceDigest optionally references the daemon-derived
+	// DecisionActionSurface the client rendered the decision from (plan §8). It
+	// is telemetry evidence: acceptance revalidates it and stamps it onto the
+	// command, but it never widens the offered actions. Absent for a client
+	// build that does not adopt the action surface.
+	DecisionActionSurfaceDigest *domain.Digest
 }
 
 // AlternativeChoice replaces one finding's recommended route with an offered

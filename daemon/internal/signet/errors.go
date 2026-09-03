@@ -50,6 +50,27 @@ var (
 	ErrProposalSnoozed                           = errors.New("proposal is snoozed")
 )
 
+// ErrCapabilityNotRegistered is returned when the action surface is requested
+// for a device that has not registered a capability contract: the daemon
+// cannot derive the offered-action intersection without it, so the client must
+// register (session start) before fetching a surface (plan §5.14, §8).
+var ErrCapabilityNotRegistered = errors.New("device has not registered a capability contract")
+
+// ErrActionSurfaceMismatch rejects a command that references a decision action
+// surface which is not valid for it: a foreign device, a different item, a
+// stale capability contract, an unknown digest, or a selected action the
+// surface does not offer. The surface is telemetry evidence only, so it can
+// only reject a command, never widen its offered actions (plan §5.14, §8). A
+// stale item decision surface is the separate stale-version class.
+var ErrActionSurfaceMismatch = errors.New("referenced decision action surface is not valid for this command")
+
+// ErrComprehensionEventUnbacked rejects an action-bearing comprehension event
+// whose referenced command does not exist, belongs to another device or item,
+// or carries a different action surface digest in its stamped evidence (plan
+// §8). Ingestion records facts, but an action_taken event must point at a real
+// accepted decision.
+var ErrComprehensionEventUnbacked = errors.New("comprehension event references no matching accepted command")
+
 // ErrMessageRequired is returned for a discuss command with an empty message:
 // the discuss transaction's first step is "append message" (plan §5.14), so
 // there is nothing to accept without one.
