@@ -75,6 +75,35 @@ struct DecisionCardComposition: Equatable {
         claims.filter { $0.label == AgentClaimLabels.summary && $0.text != nil }
     }
 
+    /// Whether this type's `reason` carries the agent's own summary rather
+    /// than a daemon-authored context fact. `acceptSpecification` sets a
+    /// specification approval's `reason` from the agent's summary and builds
+    /// its `freeside.summary` claim from the same bytes, so a Context section
+    /// would repeat the labeled claim stripped of its unverified register
+    /// (#1098). The rule is per type, never a comparison of the two strings.
+    /// The switch is exhaustive so a new type has to answer the question.
+    static func reasonIsAgentSummary(_ type: Components.Schemas.AttentionType) -> Bool {
+        switch type {
+        case .spec_approval:
+            return true
+        case .execution_failure, .agent_question, .review_diminishing_returns, .review_dispute,
+            .review_contradiction, .review_configuration, .finding_adjudication,
+            .ready_for_final_review, .publish_blocked, .run_proposal, .system_health, .blocked:
+            return false
+        }
+    }
+
+    /// Whether the card renders a Context section for `item`. The section is
+    /// dropped only when the type's `reason` is the agent's summary *and*
+    /// that summary has a claim to render under. A specification approval
+    /// persisted before summary claims carries its `Specification` claim
+    /// alone, a shape `verifySpecificationApprovalClaims` in
+    /// daemon/internal/engine/specification.go still accepts, and dropping
+    /// Context there would take the item's reason off the card entirely.
+    func rendersContext(for item: Components.Schemas.AttentionItem) -> Bool {
+        !Self.reasonIsAgentSummary(item._type) || summaries(from: item.agent_claims).isEmpty
+    }
+
     static let sharedModuleSet = DecisionCardModule.allCases
 
     /// Every composition places `.facts` ahead of `actionInsertionIndex`: the
@@ -147,12 +176,17 @@ struct DecisionCardComposition: Equatable {
                 actionInsertionIndex: 3,
                 reviewingActionInsertionIndex: nil)
         case .spec_approval:
+            // Plan §9 has this card lead with the ask and a plan-altitude
+            // summary and put the full specification below, so `.summary`
+            // renders ahead of the action region while `.specification` opens
+            // the region below it. A revision still leads: `.specRevision`
+            // carries the diff-from-last-reviewed facts and stays first.
             return .init(
                 modules: [
-                    .recommendation, .specRevision, .facts, .specification, .factBlock, .summary,
+                    .recommendation, .specRevision, .summary, .facts, .specification, .factBlock,
                     .claims, .evidence, .details,
                 ],
-                actionInsertionIndex: 3,
+                actionInsertionIndex: 4,
                 reviewingActionInsertionIndex: nil)
         case .review_contradiction, .review_configuration,
             .publish_blocked, .run_proposal:

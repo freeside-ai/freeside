@@ -447,8 +447,10 @@ struct DecisionDetailView: View {
                 .fixedSize(horizontal: false, vertical: true)
             // The ask and the daemon's reason are one question and its answer,
             // so nothing renders between them. The reason stays labeled
-            // because the daemon writes it as a sentence fragment.
-            if item.spec_revision == nil {
+            // because the daemon writes it as a sentence fragment. A type
+            // whose reason is the agent's summary shows it once, under the
+            // unverified claim label, and gets no Context section (#1098).
+            if composition.rendersContext(for: item) {
                 context(item)
             }
 
