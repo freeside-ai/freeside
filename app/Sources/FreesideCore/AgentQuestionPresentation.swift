@@ -43,16 +43,6 @@ public struct AgentQuestionPresentation: Equatable, Sendable {
         }
     }
 
-    /// Who stopped to ask.
-    public var stageLabel: String {
-        switch stage {
-        case .specification: return "The specifier stopped to ask"
-        case .implementation: return "The implementer stopped to ask"
-        case .review: return "The reviewer stopped to ask"
-        case .verification: return "The verifier stopped to ask"
-        }
-    }
-
     /// The blocker kind in operator words; nil on the specification stage,
     /// which has no blocker taxonomy.
     public var kindLabel: String? {

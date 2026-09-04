@@ -188,6 +188,7 @@ import Testing
             .publish_blocked: ["Failed trust rule"],
             .system_health: ["Diagnostic", "Impairs"],
             .blocked: ["Waiting on", "Waiting for", "Blocking item"],
+            .agent_question: ["Stage", "Blocked on"],
         ]
         let now = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
         for (type, labels) in expected {
@@ -201,6 +202,7 @@ import Testing
             item.publish_block = nil
             item.health_diagnostic = nil
             item.blocked_on = nil
+            item.agent_question = nil
             item.reason = "the build stage failed twice and the run has waited 18h"
             #expect(AttentionDisplay.cardFacts(item, now: now).isEmpty)
         }
@@ -208,7 +210,7 @@ import Testing
         // The remaining types lead with an ask, an artifact, or their own
         // module, so they contribute no fact rows.
         for type in [
-            Components.Schemas.AttentionType.spec_approval, .agent_question,
+            Components.Schemas.AttentionType.spec_approval,
             .finding_adjudication, .run_proposal, .review_contradiction, .review_configuration,
         ] {
             #expect(

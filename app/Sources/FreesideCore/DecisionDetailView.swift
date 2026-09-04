@@ -891,53 +891,60 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// The card's ask is the shell's question; this module carries the
+    /// decisions the agent stopped on, and each one leads with its own
+    /// question in the serif. Who stopped and what blocks the run are facts,
+    /// so they render once as fact rows rather than as a preface the operator
+    /// reads before reaching anything to answer (#1107).
+    ///
+    /// The daemon types the decision structure, but the question, the
+    /// blocking explanation, the option labels, and the tradeoffs are all
+    /// prose from the asking invocation's Question claim, so each decision
+    /// renders in the claim register the card uses everywhere else: the
+    /// dashed border and a register label above the question. Plan §9 has
+    /// this type lead with "the question as a labeled agent claim,
+    /// self-contained: what is blocked and any enumerated options", and
+    /// without the register an operator reads agent prose in the solid
+    /// daemon-fact box. The per-option marker stays on the recommendation it
+    /// qualifies; it speaks for one option, not for the question around it.
     @ViewBuilder
     private func agentQuestionLead(_ item: Components.Schemas.AttentionItem) -> some View {
         if let presentation = AgentQuestionPresentation(item) {
-            cardSection("Question") {
-                Text(presentation.stageLabel)
-                    .font(FreesideFont.sans(.callout, weight: .semibold))
-                    .fixedSize(horizontal: false, vertical: true)
-                if let kind = presentation.kindLabel {
-                    Text("Blocked on: \(kind)")
-                        .font(FreesideFont.caption)
+            ForEach(Array(presentation.decisions.enumerated()), id: \.offset) { _, decision in
+                VStack(alignment: .leading, spacing: 8) {
+                    KeywordLabel(text: "Agent question (unverified)")
+                    Text(decision.question)
+                        .font(FreesideFont.itemTitle)
+                        .foregroundStyle(Color.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(decision.whyBlocking)
+                        .font(FreesideFont.callout)
                         .foregroundStyle(Color.inkDim)
-                }
-                Divider()
-                Text("Recommendations are agent claims, not verified facts.")
-                    .font(FreesideFont.caption)
-                    .foregroundStyle(Color.inkDim)
-
-                ForEach(Array(presentation.decisions.enumerated()), id: \.offset) { index, decision in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(decision.question)
-                            .font(FreesideFont.sans(.callout, weight: .semibold))
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text(decision.whyBlocking)
-                            .font(FreesideFont.callout)
-                            .foregroundStyle(Color.inkDim)
-                            .fixedSize(horizontal: false, vertical: true)
-                        ForEach(Array(decision.options.enumerated()), id: \.offset) { _, option in
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                    Text(option.label)
-                                        .font(FreesideFont.sans(.callout, weight: .semibold))
-                                    if option.recommended {
-                                        Label("Agent recommends (unverified)", systemImage: "quote.bubble")
-                                            .font(FreesideFont.caption)
-                                            .foregroundStyle(Color.accentText)
-                                    }
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(Array(decision.options.enumerated()), id: \.offset) { _, option in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text(option.label)
+                                    .font(FreesideFont.sans(.callout, weight: .semibold))
+                                if option.recommended {
+                                    Label(
+                                        "Agent recommends (unverified)",
+                                        systemImage: "quote.bubble"
+                                    )
+                                    .font(FreesideFont.caption)
+                                    .foregroundStyle(Color.accentText)
                                 }
-                                Text(option.tradeoffs)
-                                    .font(FreesideFont.callout)
-                                    .fixedSize(horizontal: false, vertical: true)
                             }
+                            Text(option.tradeoffs)
+                                .font(FreesideFont.callout)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    if index < presentation.decisions.count - 1 {
-                        Divider()
-                    }
                 }
+                .foregroundStyle(Color.ink)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .freesideCard(dashed: true)
             }
         }
     }

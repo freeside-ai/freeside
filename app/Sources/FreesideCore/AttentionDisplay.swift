@@ -227,11 +227,22 @@ enum AttentionDisplay {
                     .init("Pull request", "\(pull.repo)#\(pull.number)", monospaced: true))
             }
             return rows
-        // The ask leads a spec approval and an agent question, the adjudication
-        // artifact leads finding_adjudication, the authenticated proposal
-        // snapshot leads run_proposal, and the recovery bindings these two
-        // recovery types lead with are already their own rows.
-        case .spec_approval, .agent_question, .finding_adjudication, .run_proposal,
+        case .agent_question:
+            // The decisions lead the card, so these two say who stopped and
+            // what the run waits on, once, below them: they were a stage
+            // sentence and a caption inside the question module until the
+            // question took the lead (#1107).
+            guard let facts = item.agent_question?.value1 else { return [] }
+            var rows: [FactRow] = [.init("Stage", label(facts.stage))]
+            if let kind = facts.kind?.value1 {
+                rows.append(.init("Blocked on", AgentQuestionPresentation.kindLabel(kind)))
+            }
+            return rows
+        // The ask leads a spec approval, the adjudication artifact leads
+        // finding_adjudication, the authenticated proposal snapshot leads
+        // run_proposal, and the recovery bindings these two recovery types
+        // lead with are already their own rows.
+        case .spec_approval, .finding_adjudication, .run_proposal,
             .review_contradiction, .review_configuration:
             return []
         }
