@@ -36,8 +36,20 @@ enum FreesidePalette {
     static let rule = FreesideColorCuts(
         day: 0xD6CDB2, dusk: 0x322A1E,
         dayIC: ruleStrong.day, duskIC: ruleStrong.dusk)
+    // A secondary control's outline: quiet enough that a filled primary
+    // still leads, and promoted to ruleStrong under Increased Contrast the
+    // way every other structural hairline is.
+    static let secondaryBorder = FreesideColorCuts(
+        day: 0xC9BFA2, dusk: 0x3D3426,
+        dayIC: ruleStrong.day, duskIC: ruleStrong.dusk)
     static let ink = FreesideColorCuts(day: 0x2B2416, dusk: 0xEAE3CF)
     static let inkDim = FreesideColorCuts(day: 0x675D49, dusk: 0xB3A88E)
+    // Disabled and validating text. Darker than the handoff's #94896E,
+    // which is 2.99:1 on ground-2 by day and misses the project's 3:1
+    // floor for disabled text; Increased Contrast promotes it to inkDim.
+    static let inkFaint = FreesideColorCuts(
+        day: 0x827858, dusk: 0x7D7460,
+        dayIC: inkDim.day, duskIC: inkDim.dusk)
     static let accentText = FreesideColorCuts(
         day: 0x7D5C0E, dusk: 0xC2912E, dayIC: 0x6B4E0B, duskIC: 0xE0AE46)
     static let accentBorder = FreesideColorCuts(
@@ -109,8 +121,12 @@ extension Color {
     static let sidebarGround = freeside(FreesidePalette.sidebarGround)
     static let rule = freeside(FreesidePalette.rule)
     static let ruleStrong = freeside(FreesidePalette.ruleStrong)
+    /// The outline of a secondary control: present, never competing.
+    static let secondaryBorder = freeside(FreesidePalette.secondaryBorder)
     static let ink = freeside(FreesidePalette.ink)
     static let inkDim = freeside(FreesidePalette.inkDim)
+    /// Disabled and validating text: readable, plainly not actionable.
+    static let inkFaint = freeside(FreesidePalette.inkFaint)
     /// Bronze by day, tawny by dusk: attention, never success.
     static let accentText = freeside(FreesidePalette.accentText)
     static let accentBorder = freeside(FreesidePalette.accentBorder)
