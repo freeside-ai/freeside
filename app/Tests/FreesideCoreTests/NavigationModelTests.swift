@@ -78,6 +78,7 @@ import Testing
             navigation.advanceAfterConclusion(
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: navigation.operatorNavigationRevision,
+                advancesToNextItem: true,
                 store: store) == .advanced)
         #expect(navigation.attentionSelection == expectedNext)
 
@@ -88,10 +89,42 @@ import Testing
             navigation.advanceAfterConclusion(
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: navigation.operatorNavigationRevision,
+                advancesToNextItem: true,
                 store: store) == .inboxClear)
         #expect(navigation.selectedTab == .inbox)
         #expect(navigation.attentionSelection == nil)
         #expect(navigation.inboxPath.isEmpty)
+    }
+
+    @Test func conclusionReturnsToTheInboxWhenNotAdvancingToTheNextItem() async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(
+                colorSchemeRaw: nil,
+                selectionRaw: "item-spec_approval"))
+
+        // Default path: open items remain, but the operator has not opted into
+        // advancing, so focus returns to the inbox with nothing selected.
+        #expect(
+            navigation.advanceAfterConclusion(
+                itemID: "item-spec_approval",
+                expectedOperatorNavigationRevision: navigation.operatorNavigationRevision,
+                advancesToNextItem: false,
+                store: store) == .returnedToInbox)
+        #expect(navigation.selectedTab == .inbox)
+        #expect(navigation.attentionSelection == nil)
+        #expect(navigation.inboxPath.isEmpty)
+
+        let only = try #require(store.snapshotsByID["item-spec_approval"])
+        store.replaceAll(with: [only])
+        navigation.route(to: .attentionItem("item-spec_approval"))
+        #expect(
+            navigation.advanceAfterConclusion(
+                itemID: "item-spec_approval",
+                expectedOperatorNavigationRevision: navigation.operatorNavigationRevision,
+                advancesToNextItem: false,
+                store: store) == .inboxClear)
     }
 
     @Test func conclusionDoesNotOverrideManualNavigationDuringTheDelay() async {
@@ -108,6 +141,7 @@ import Testing
             navigation.advanceAfterConclusion(
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: expectedRevision,
+                advancesToNextItem: false,
                 store: store) == .cancelled)
         #expect(navigation.attentionSelection == "item-blocked")
 
@@ -117,6 +151,7 @@ import Testing
             navigation.advanceAfterConclusion(
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: runExpectedRevision,
+                advancesToNextItem: false,
                 store: store) == .cancelled)
         #expect(navigation.selectedTab == .runs)
     }
@@ -137,6 +172,7 @@ import Testing
             navigation.advanceAfterConclusion(
                 itemID: "item-blocked",
                 expectedOperatorNavigationRevision: expectedRevision,
+                advancesToNextItem: true,
                 store: store) == .advanced)
     }
 
@@ -155,6 +191,7 @@ import Testing
             navigation.advanceAfterConclusion(
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: expectedRevision,
+                advancesToNextItem: false,
                 store: store) == .cancelled)
     }
 
@@ -174,6 +211,7 @@ import Testing
             navigation.advanceAfterConclusion(
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: expectedRevision,
+                advancesToNextItem: false,
                 store: store) == .cancelled)
     }
 
@@ -192,6 +230,7 @@ import Testing
             navigation.advanceAfterConclusion(
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: expectedRevision,
+                advancesToNextItem: false,
                 store: store) == .cancelled)
     }
 
@@ -210,6 +249,7 @@ import Testing
             navigation.advanceAfterConclusion(
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: expectedRevision,
+                advancesToNextItem: true,
                 store: store) == .advanced)
     }
 }

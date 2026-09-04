@@ -5,11 +5,61 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 )
+
+// writeExecutable prevents the ETXTBSY race described in go.dev/issue/22315:
+// a parallel fork can inherit a script's write descriptor until its own exec.
+// forkExec holds ForkLock for writing, so this read lock prevents forks while
+// the write descriptor is open, including the interval before Close.
+func writeExecutable(t *testing.T, path string, body []byte) {
+	t.Helper()
+	syscall.ForkLock.RLock()
+	err := os.WriteFile(path, body, 0o700) //nolint:gosec // G306: test-owned executable
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteExecutableSurvivesParallelForks(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux enforces ETXTBSY for these scripts")
+	}
+	t.Parallel()
+	var stop atomic.Bool
+	var forks sync.WaitGroup
+	for range 16 {
+		forks.Go(func() {
+			for !stop.Load() {
+				if err := exec.CommandContext(t.Context(), "/bin/true").Run(); err != nil {
+					t.Errorf("parallel fork: %v", err)
+					return
+				}
+			}
+		})
+	}
+	defer func() {
+		stop.Store(true)
+		forks.Wait()
+	}()
+	path := filepath.Join(t.TempDir(), "script.sh")
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		writeExecutable(t, path, []byte("#!/bin/sh\nexit 0\n"))
+		if err := exec.CommandContext(t.Context(), path).Run(); err != nil { //nolint:gosec // G204: test-owned executable
+			t.Fatal(err)
+		}
+	}
+}
 
 // stubGit writes a fake git binary that appends every invocation's
 // argument vector, full environment, and working directory to recPath,
@@ -21,9 +71,7 @@ func stubGit(t *testing.T, recPath string, extra string, exit int) string {
 	path := filepath.Join(t.TempDir(), "git")
 	script := "#!/bin/sh\nrec='" + recPath + "'\n{\nprintf 'BEGIN\\n'\nfor a in \"$@\"; do printf 'ARG %s\\n' \"$a\"; done\nenv | sed 's/^/ENV /'\nprintf 'CWD %s\\n' \"$PWD\"\n} >> \"$rec\"\n" +
 		extra + "exit " + strconv.Itoa(exit) + "\n"
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil { //nolint:gosec // G306: a stub binary must be executable
-		t.Fatal(err)
-	}
+	writeExecutable(t, path, []byte(script))
 	return path
 }
 
@@ -174,36 +222,67 @@ func credentialConfigEnv(e string) bool {
 // the token in any form.
 func TestTransportErrorRedactsFailureStreams(t *testing.T) {
 	t.Parallel()
-	rec := filepath.Join(t.TempDir(), "record")
 	leak := "printf 'fatal: leaked %s\\n' \"$GIT_CONFIG_VALUE_0\" >&2\n"
-	r, err := newNetRunner(stubGit(t, rec, leak, 3), t.TempDir(), "https")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _, runErr := r.runAuthed(t.Context(), stubToken(), "push", "https://example.invalid/o/r.git", "x:refs/heads/x")
-	if runErr == nil {
-		t.Fatal("stub failure did not surface")
-	}
-	if !errors.Is(runErr, ErrGitTransport) {
-		t.Errorf("error class = %v, want ErrGitTransport", runErr)
-	}
-	var tge *TransportGitError
-	if !errors.As(runErr, &tge) {
-		t.Fatalf("error type = %T, want *TransportGitError", runErr)
-	}
-	if tge.ExitCode != 3 {
-		t.Errorf("exit code = %d, want 3", tge.ExitCode)
-	}
-	if !tge.Refusal.valid() {
-		t.Errorf("refusal %q is not a registered class", tge.Refusal)
-	}
-	rendered := fmt.Sprintf("%v | %+v | %#v | %s", runErr, runErr, tge, tge.Args)
-	for _, form := range stubTokenForms() {
-		if strings.Contains(rendered, form) {
-			t.Errorf("token bytes in rendered error: %s", rendered)
-		}
-	}
-	if strings.Contains(rendered, "leaked") {
-		t.Errorf("stderr text in rendered error: %s", rendered)
+	for _, tc := range []struct {
+		name     string
+		extra    string
+		exitCode int
+		cause    string
+	}{
+		{name: "ordinary exit", extra: leak, exitCode: 3},
+		{name: "signal death", extra: leak + "kill -KILL $$\n", exitCode: -1, cause: "signal: killed"},
+		{name: "startup failure", exitCode: -1, cause: "no such file or directory"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "missing-git")
+			if tc.name != "startup failure" {
+				path = stubGit(t, filepath.Join(t.TempDir(), "record"), tc.extra, 3)
+			}
+			r, err := newNetRunner(path, t.TempDir(), "https")
+			if err != nil {
+				t.Fatal(err)
+			}
+			tok := stubToken()
+			_, _, runErr := r.run(t.Context(), &tok, "push", "https://example.invalid/o/r.git", "x:refs/heads/x")
+			if !errors.Is(runErr, ErrGitTransport) {
+				t.Errorf("error class = %v, want ErrGitTransport", runErr)
+			}
+			var tge *TransportGitError
+			if !errors.As(runErr, &tge) {
+				t.Fatalf("error type = %T, want *TransportGitError", runErr)
+			}
+			if tge.ExitCode != tc.exitCode {
+				t.Errorf("exit code = %d, want %d", tge.ExitCode, tc.exitCode)
+			}
+			if !tge.Refusal.valid() {
+				t.Errorf("refusal %q is not a registered class", tge.Refusal)
+			}
+			if tc.name == "startup failure" {
+				var pathErr *os.PathError
+				if !errors.As(runErr, &pathErr) || !errors.Is(runErr, os.ErrNotExist) {
+					t.Errorf("startup error = %v, want missing-executable PathError", runErr)
+				}
+			}
+			want := "git push https://example.invalid/o/r.git x:refs/heads/x: exit 3: unknown"
+			if tc.exitCode == -1 {
+				want = fmt.Sprintf("git push https://example.invalid/o/r.git x:refs/heads/x: exit -1 (%v): unknown", tge.Err)
+				if !strings.Contains(tge.Error(), tc.cause) {
+					t.Errorf("error = %v, want cause %q", tge, tc.cause)
+				}
+			}
+			if tge.Error() != want {
+				t.Errorf("error = %q, want %q", tge.Error(), want)
+			}
+			rendered := fmt.Sprintf("%v | %+v | %#v | %s", runErr, runErr, tge, tge.Args)
+			for _, form := range stubTokenForms() {
+				if strings.Contains(rendered, form) {
+					t.Errorf("token bytes in rendered error: %s", rendered)
+				}
+			}
+			if strings.Contains(rendered, "leaked") {
+				t.Errorf("stderr text in rendered error: %s", rendered)
+			}
+		})
 	}
 }

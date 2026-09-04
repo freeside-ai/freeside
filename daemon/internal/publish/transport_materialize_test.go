@@ -30,16 +30,10 @@ func TestCappedMaterializationBufferStopsStreamingCommand(t *testing.T) {
 	}
 
 	producer := filepath.Join(t.TempDir(), "producer.sh")
-	if err := os.WriteFile(
+	writeExecutable(t,
 		producer,
 		[]byte("#!/bin/sh\nwhile :; do printf '0123456789abcdef0123456789abcdef\\n'; done\n"),
-		0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(producer, 0o700); err != nil { //nolint:gosec // executable test-owned producer
-		t.Fatal(err)
-	}
+	)
 	runner, err := newNetRunner(producer, t.TempDir(), "file")
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +104,7 @@ func TestRetainWorktreePopulatesImportedCandidate(t *testing.T) {
 	}
 	batchLog := filepath.Join(t.TempDir(), "cat-file-batches")
 	gitWrapper := filepath.Join(t.TempDir(), "git-wrapper.sh")
-	if err := os.WriteFile(gitWrapper, []byte(fmt.Sprintf(`#!/bin/sh
+	writeExecutable(t, gitWrapper, []byte(fmt.Sprintf(`#!/bin/sh
 for arg
 do
 	if [ "$arg" = "--batch" ]; then
@@ -118,12 +112,7 @@ do
 	fi
 done
 exec git "$@"
-`, batchLog)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(gitWrapper, 0o700); err != nil { //nolint:gosec // executable test-owned git wrapper
-		t.Fatal(err)
-	}
+`, batchLog)))
 	remote.transport.gitPath = gitWrapper
 
 	retained := filepath.Join(t.TempDir(), "review-workspace")

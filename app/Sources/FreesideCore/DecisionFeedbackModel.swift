@@ -55,7 +55,6 @@ final class DecisionFeedbackModel {
 
     func present(
         _ conclusion: DecisionConclusion,
-        advancesAutomatically: Bool,
         advance: @escaping @MainActor () -> Void
     ) {
         advanceTask?.cancel()
@@ -67,11 +66,11 @@ final class DecisionFeedbackModel {
         // changes beneath it.
         announce("\(conclusion.actionLabel) applied.")
 
-        if advancesAutomatically {
-            advanceTask = schedule(Self.advanceDelay) { [weak self] in
-                guard self?.conclusion == conclusion else { return }
-                advance()
-            }
+        // The advance is always scheduled; the closure decides where it goes,
+        // so the destination (next item or the inbox) is the caller's choice.
+        advanceTask = schedule(Self.advanceDelay) { [weak self] in
+            guard self?.conclusion == conclusion else { return }
+            advance()
         }
         dismissalTask = schedule(Self.dismissalDelay) { [weak self] in
             guard self?.conclusion == conclusion else { return }

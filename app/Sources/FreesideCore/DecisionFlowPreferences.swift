@@ -6,22 +6,25 @@ import SwiftUI
 @Observable
 public final class DecisionFlowPreferences {
     private enum Key {
-        static let advancesAutomatically = "FreesideDecisionAdvancesAutomatically"
+        // Kept from when the default was "advance": an operator's explicit
+        // choice survives the flip. An unset key now means the inbox, and an
+        // explicit value still selects that operator's behavior. The only two
+        // behaviors are the inbox (off) and the next item (on).
+        static let advancesToNextItem = "FreesideDecisionAdvancesAutomatically"
     }
 
     private let defaults: UserDefaults
 
-    public var advancesAutomatically: Bool {
+    public var advancesToNextItem: Bool {
         didSet {
-            defaults.set(advancesAutomatically, forKey: Key.advancesAutomatically)
+            defaults.set(advancesToNextItem, forKey: Key.advancesToNextItem)
         }
     }
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        advancesAutomatically =
-            defaults.object(forKey: Key.advancesAutomatically) == nil
-            ? true : defaults.bool(forKey: Key.advancesAutomatically)
+        // Unset reads false: the default is to return to the inbox.
+        advancesToNextItem = defaults.bool(forKey: Key.advancesToNextItem)
     }
 }
 
@@ -37,11 +40,13 @@ public struct DecisionFlowSettingsView: View {
         Form {
             Section("Decision Flow") {
                 Toggle(
-                    "Advance after decisions",
-                    isOn: $preferences.advancesAutomatically)
-                Text("Move to the next highest-priority inbox item after a decision is applied.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    "Advance to the next item",
+                    isOn: $preferences.advancesToNextItem)
+                Text(
+                    "After a decision is applied, open the next highest-priority inbox item instead of returning to the inbox."
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

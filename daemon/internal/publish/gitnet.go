@@ -62,7 +62,8 @@ func (r TransportRefusal) valid() bool {
 
 // TransportGitError reports a failed transport invocation: the fixed
 // daemon-authored argument vector, the exit code, and the classified
-// refusal. Unlike the importer's GitError it never carries stderr:
+// refusal. A failure without an exit status also names its cause.
+// Unlike the importer's GitError it never carries stderr:
 // transport stderr is remote-influenced text on an authenticated
 // channel, and the class enum is the only thing extracted from it.
 type TransportGitError struct {
@@ -73,6 +74,9 @@ type TransportGitError struct {
 }
 
 func (e *TransportGitError) Error() string {
+	if e.ExitCode == -1 && e.Err != nil {
+		return fmt.Sprintf("git %s: exit -1 (%v): %s", strings.Join(e.Args, " "), e.Err, e.Refusal)
+	}
 	return fmt.Sprintf("git %s: exit %d: %s", strings.Join(e.Args, " "), e.ExitCode, e.Refusal)
 }
 
