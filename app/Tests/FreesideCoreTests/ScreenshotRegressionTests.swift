@@ -51,6 +51,7 @@
                 ProcessInfo.processInfo.environment["FREESIDE_RECORD_SCREENSHOTS"] == "1"
             let overrides = try loadOverrides()
             if recording {
+                try validateRecordingHost(hosted: isHostedRunner)
                 try validateRecordingOperatingSystem(
                     operatingSystemKey, baselineKey: baselineOperatingSystemKey)
             }
@@ -114,6 +115,13 @@
                 #expect(
                     Set(actual.values).count > 45,
                     "The six-size matrix must exercise more than the prior two-state rendering")
+            }
+        }
+
+        @Test func recordingIsRefusedOnAHostedRunner() throws {
+            try validateRecordingHost(hosted: false)
+            #expect(throws: ScreenshotError.self) {
+                try validateRecordingHost(hosted: true)
             }
         }
 
@@ -1340,6 +1348,12 @@
             return SHA256.hash(data: input).map { String(format: "%02x", $0) }.joined()
         }
 
+        /// The override manifest holds the hosted GitHub Actions runner's
+        /// rasters, keyed by the runner's OS. They are not OS-version renders:
+        /// the runner draws the same text-heavy surfaces differently from a
+        /// local host on the identical macOS build (26.6.2, 25G83, #1139), so a
+        /// local run always compares against the universal baseline and only a
+        /// hosted runner applies the block for its OS.
         private func loadManifest(
             overrides: [String: [String: String]]
         ) throws -> [String: String] {
@@ -1349,9 +1363,21 @@
             else { throw ScreenshotError.missingManifest }
             let baseline = try JSONDecoder().decode(
                 [String: String].self, from: Data(contentsOf: url))
-            return baseline.merging(overrides[operatingSystemKey] ?? [:]) { _, override in
+            let applicable = isHostedRunner ? overrides[operatingSystemKey] ?? [:] : [:]
+            return baseline.merging(applicable) { _, override in
                 override
             }
+        }
+
+        private var isHostedRunner: Bool {
+            ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true"
+        }
+
+        /// A hosted runner renders the override rasters, never the universal
+        /// baseline, so recording there would bless runner pixels for every
+        /// host.
+        private func validateRecordingHost(hosted: Bool) throws {
+            guard !hosted else { throw ScreenshotError.recordingRefusedOnHostedRunner }
         }
 
         private func loadOverrides() throws -> [String: [String: String]] {
@@ -1414,6 +1440,7 @@
         case missingSeededImage
         case pngEncodingFailed
         case preferencesUnavailable
+        case recordingRefusedOnHostedRunner
         case recordingRequiresBaselineOperatingSystem(expected: String, actual: String)
         case renderFailed
         case unstableRender
