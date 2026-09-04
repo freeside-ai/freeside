@@ -360,6 +360,17 @@ func submitProductionRun(
 		if err := authenticateProductionAttempt(ctx, tx, spec, specArtifact.Digest, specificationGrant); err != nil {
 			return err
 		}
+		// A later attempt's admission retires the open recovery cards its
+		// earlier attempts left behind: the campaign has moved past those runs
+		// (contract #1127). Placed inside this transaction so the supersession
+		// rolls back with it if the submission is refused below.
+		if spec.CampaignID != "" && spec.AttemptNumber >= 2 {
+			if err := supersedeEarlierAttemptFailures(
+				ctx, tx, spec.CampaignID, spec.AttemptNumber, spec.AttemptReason,
+			); err != nil {
+				return err
+			}
+		}
 
 		existing, err := tx.GetRun(ctx, spec.RunID)
 		switch {
@@ -2113,6 +2124,78 @@ func readProductionQuarantineItem(
 		return domain.AttentionItem{}, false, err
 	}
 	return item, true, nil
+}
+
+// productionExecutionFailureCardPrefix is the deterministic id prefix every
+// real execution-failure recovery card shares: productionFailureItem and
+// productionDeliveryRefusalItem here, and the specification failure and
+// spec-revision cards in specification.go, all mint
+// "execution-failure-"+<identity>. A quarantine notice is an execution_failure
+// item too, but its id carries a "-quarantined-" marker prefix instead, so
+// this prefix separates a recovery card from a synthetic marker notice without
+// depending on the card's optional ExecutionFailure facts (a delivery-refusal
+// card can carry none) or on tracking the full quarantine-reason set.
+const productionExecutionFailureCardPrefix = "execution-failure-"
+
+// supersedeEarlierAttemptFailures retires every open execution-failure
+// recovery card raised by an earlier attempt of this campaign, once a later
+// attempt reaches admission. It supersedes rather than resolves, following
+// releaseProductionQuarantine and supersedeBlockedHold: nothing was decided,
+// the campaign advanced past the run the card described. Each retired card
+// appends which attempt superseded it and why, so its history stays legible
+// under Resolved and the client row already reads "This execution failure item
+// is superseded." with no app change.
+//
+// The sweep runs at admission, not publication: a reattempt requires its
+// parent run to be final, so no earlier-attempt failure card can appear after
+// a later attempt is admitted (contract #1127). It is idempotent because the
+// open-only read finds nothing to write on a replayed admission.
+func supersedeEarlierAttemptFailures(
+	ctx context.Context,
+	tx *store.WriteTx,
+	campaignID domain.CampaignID,
+	attemptNumber int,
+	reason string,
+) error {
+	var runIDs []domain.RunID
+	for n := 1; n < attemptNumber; n++ {
+		earlier, err := tx.GetProductionAttempt(ctx, campaignID, n)
+		if err != nil {
+			return fmt.Errorf("load earlier attempt %s/%d: %w", campaignID, n, err)
+		}
+		// Every attempt shares attempt 1's specification run, so the
+		// specification run id dedups to a single entry across the campaign.
+		for _, runID := range []domain.RunID{earlier.SpecificationRunID, earlier.ImplementationRunID} {
+			if !slices.Contains(runIDs, runID) {
+				runIDs = append(runIDs, runID)
+			}
+		}
+	}
+	// A deterministic write order keeps the item versions a test observes
+	// stable and independent of attempt-load order.
+	slices.Sort(runIDs)
+	for _, runID := range runIDs {
+		items, err := tx.ListOpenAttentionItemRecordsForRun(ctx, runID)
+		if err != nil {
+			return fmt.Errorf("list open items for earlier-attempt run %q: %w", runID, err)
+		}
+		for _, item := range items {
+			if item.Type != domain.AttentionExecutionFailure ||
+				!strings.HasPrefix(string(item.ID), productionExecutionFailureCardPrefix) {
+				continue
+			}
+			item.Reason += fmt.Sprintf(
+				" Superseded by attempt %d of this campaign (reattempt reason: %s); no recovery choice is needed.",
+				attemptNumber, reason,
+			)
+			item.Status = domain.StatusSuperseded
+			item.ItemVersion++
+			if err := tx.PutAttentionItem(ctx, item); err != nil {
+				return fmt.Errorf("supersede earlier-attempt failure card %q: %w", item.ID, err)
+			}
+		}
+	}
+	return nil
 }
 
 // releaseProductionQuarantine supersedes the open quarantine notice once the
