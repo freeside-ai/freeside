@@ -231,24 +231,44 @@ struct DecisionGraphicPresentations: Equatable {
 }
 
 struct DecisionChecklistPresentation: Equatable {
-    enum Result: Equatable {
-        case passed
+    /// A row's severity class. The declaration order is the sort order the
+    /// checklist renders in, most severe first, so `allCases` is both the
+    /// grouping key and the order the verdict line counts in.
+    enum Result: Equatable, CaseIterable {
         case failed
-        case informational
+        case waived
+        case advisory
+        case note
+        case passed
 
         var marker: String {
             switch self {
+            case .failed, .waived, .advisory: "!"
+            case .note: "•"
             case .passed: "✓"
-            case .failed: "!"
-            case .informational: "•"
             }
         }
 
         var accessibilityState: String {
             switch self {
-            case .passed: "passed"
             case .failed: "needs attention"
-            case .informational: "informational"
+            case .waived: "waived"
+            case .advisory: "advisory"
+            case .note: "informational"
+            case .passed: "passed"
+            }
+        }
+
+        /// The verdict line's token for `count` rows of this class. Only
+        /// `note` is a noun and pluralizes; the other words are states that
+        /// read the same at any count.
+        func countToken(_ count: Int) -> String {
+            switch self {
+            case .failed: "\(count) failed"
+            case .waived: "\(count) waived"
+            case .advisory: "\(count) advisory"
+            case .note: count == 1 ? "1 note" : "\(count) notes"
+            case .passed: "\(count) passed"
             }
         }
     }
@@ -261,12 +281,26 @@ struct DecisionChecklistPresentation: Equatable {
         var id: String { label }
     }
 
+    /// The daemon's verdict row, drawn as the module's leading line rather
+    /// than as a row. Optional because the initializer is type-agnostic,
+    /// though only `ready_for_final_review` composes a checklist.
+    let verdict: Row?
+    /// Every row but the verdict, grouped by severity class and keeping the
+    /// daemon's order inside each class.
     let rows: [Row]
+    /// The count tokens alone, without the verdict word.
+    let countSummary: String
+    let verdictLine: String
     let summary: String
     let accessibilitySummary: String
 
+    /// The rows drawn above the passed disclosure.
+    var leadingRows: [Row] { rows.filter { $0.result != .passed } }
+    var passedRows: [Row] { rows.filter { $0.result == .passed } }
+
     init?(_ item: Components.Schemas.AttentionItem) {
         var rows: [Row] = []
+        var verdict: Row?
         let detail = item.readiness_detail?.value1
         let invalidation = item.readiness_invalidation?.value1
         let freshness = item.base_freshness?.value1
@@ -276,22 +310,19 @@ struct DecisionChecklistPresentation: Equatable {
         // nothing itself and derives no reason from the verdict class.
         let stale = invalidation != nil || freshness?.advanced == true
         if invalidation != nil {
-            rows.append(
-                .init(label: "Verification verdict", value: "Invalidated", result: .failed))
+            verdict = .init(label: "Verification verdict", value: "Invalidated", result: .failed)
         } else if let readiness = item.readiness?.value1 {
-            let verdict: String
+            let word: String
             switch readiness._class {
-            case .ready_clean: verdict = "Clean"
-            case .ready_degraded: verdict = "Degraded"
+            case .ready_clean: word = "Clean"
+            case .ready_degraded: word = "Degraded"
             }
-            rows.append(
-                .init(
-                    label: "Verification verdict",
-                    value: stale ? "\(verdict), stale" : verdict,
-                    result: stale || readiness._class == .ready_degraded ? .failed : .passed))
+            verdict = .init(
+                label: "Verification verdict",
+                value: stale ? "\(word), stale" : word,
+                result: stale || readiness._class == .ready_degraded ? .failed : .passed)
         } else if item._type == .ready_for_final_review {
-            rows.append(
-                .init(label: "Verification verdict", value: "Unavailable", result: .failed))
+            verdict = .init(label: "Verification verdict", value: "Unavailable", result: .failed)
         }
         if let detail {
             rows.append(
@@ -319,7 +350,7 @@ struct DecisionChecklistPresentation: Equatable {
                 .init(
                     label: "Commit plan",
                     value: AttentionDisplay.label(notice),
-                    result: .informational))
+                    result: .note))
         }
         if let freshness {
             rows.append(
@@ -355,29 +386,25 @@ struct DecisionChecklistPresentation: Equatable {
                 }
             }
         }
-        guard !rows.isEmpty else { return nil }
-        self.rows = rows
-        let checks = rows.filter { $0.result != .informational }
-        let failures = checks.filter { $0.result == .failed }.count
-        let informationalCount = rows.count - checks.count
-        let checkSummary =
-            checks.isEmpty
-            ? nil
-            : failures == 0
-                ? "all \(checks.count) checks passed"
-                : "\(failures) of \(checks.count) checks need attention"
-        let informationalSummary =
-            informationalCount == 0
-            ? nil
-            : informationalCount == 1
-                ? "1 informational note"
-                : "\(informationalCount) informational notes"
-        summary =
-            "Readiness checklist: "
-            + [checkSummary, informationalSummary].compactMap { $0 }.joined(separator: "; ") + "."
+        guard verdict != nil || !rows.isEmpty else { return nil }
+        self.verdict = verdict
+        // Group by class rather than sorting, so each class keeps the
+        // daemon's row order without relying on sort stability.
+        self.rows = Result.allCases.flatMap { result in rows.filter { $0.result == result } }
+        let countTokens = Result.allCases.compactMap { result -> String? in
+            let count = rows.filter { $0.result == result }.count
+            return count == 0 ? nil : result.countToken(count)
+        }
+        countSummary = countTokens.joined(separator: " · ")
+        let tokens = ([verdict?.value].compactMap { $0 } + countTokens)
+        verdictLine = tokens.joined(separator: " · ")
+        // The spoken label joins the same tokens with commas: a middle dot
+        // is a visual separator whose readout depends on the listener's
+        // punctuation verbosity.
+        summary = "Readiness checklist: " + tokens.joined(separator: ", ") + "."
         accessibilitySummary =
             summary + " "
-            + rows.map { row in
+            + ([verdict].compactMap { $0 } + self.rows).map { row in
                 "\(row.label): \(row.value), \(row.result.accessibilityState)"
             }.joined(separator: "; ") + "."
     }
@@ -399,7 +426,7 @@ extension DecisionChecklistPresentation {
         case .passed:
             return .init(label: label, value: state, result: .passed)
         case .not_applicable:
-            return .init(label: label, value: state, result: .informational)
+            return .init(label: label, value: state, result: .note)
         case .failed, .not_run:
             if let waiver = requirement.waiver?.value1 {
                 return .init(
@@ -408,10 +435,11 @@ extension DecisionChecklistPresentation {
                         "\(state), waived for \(waiver.dimension) by "
                         + AttentionDisplay.label(waiver.authority).lowercased()
                         + ", waiver \(waiver.id)",
-                    result: .failed)
+                    result: .waived)
             }
             return .init(
-                label: label, value: advisory ? "\(state) (advisory)" : state, result: .failed)
+                label: label, value: advisory ? "\(state) (advisory)" : state,
+                result: advisory ? .advisory : .failed)
         }
     }
 }
@@ -597,30 +625,101 @@ private struct DecisionModuleContainer<Content: View>: View {
 }
 
 struct DecisionChecklistModuleView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var passedExpanded = false
     let presentation: DecisionChecklistPresentation
 
     var body: some View {
         DecisionModuleContainer(title: "Readiness checklist") {
-            ForEach(presentation.rows) { row in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(row.result.marker)
-                        .font(FreesideFont.sans(.callout, weight: .bold))
-                        .foregroundStyle(
-                            row.result == .failed
-                                ? Color.waxText
-                                : row.result == .informational ? Color.inkDim : Color.ink)
-                    Text(row.label)
-                    Spacer(minLength: 8)
-                    Text(row.value)
-                        .font(FreesideFont.monoCaption)
-                        .foregroundStyle(row.result == .failed ? Color.waxText : Color.inkDim)
+            verdictLine
+            ForEach(presentation.leadingRows) { row in
+                checklistRow(row)
+            }
+            let passed = presentation.passedRows
+            if !passed.isEmpty {
+                DisclosureGroup(isExpanded: $passedExpanded) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(passed) { row in
+                            checklistRow(row)
+                        }
+                    }
+                    .padding(.top, 4)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        KeywordLabel(text: "\(passed.count) passed")
+                        // Closed, the labels still name every passed
+                        // requirement, so no row drops out of the surface.
+                        if !passedExpanded {
+                            Text(passed.map(\.label).joined(separator: " · "))
+                                .font(FreesideFont.monoCaption)
+                                .foregroundStyle(Color.inkDim)
+                        }
+                    }
                 }
             }
-            Text(presentation.summary)
-                .foregroundStyle(Color.inkDim)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(presentation.accessibilitySummary))
+    }
+
+    /// The module's first line: the daemon's verdict word, then the counts of
+    /// the rows below it.
+    @ViewBuilder private var verdictLine: some View {
+        // The rows below stack at an accessibility size through the
+        // fact-row rule; the leading line follows them rather than
+        // wrapping its counts into a narrow trailing column.
+        let layout =
+            dynamicTypeSize >= .accessibility1
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
+        layout {
+            if let verdict = presentation.verdict {
+                Text(verdict.value)
+                    .font(FreesideFont.sans(.callout, weight: .semibold))
+                    .foregroundStyle(verdict.result == .failed ? Color.waxText : Color.ink)
+            }
+            if !presentation.countSummary.isEmpty {
+                Text(presentation.countSummary)
+                    .font(FreesideFont.monoCaption)
+                    .foregroundStyle(Color.inkDim)
+            }
+        }
+    }
+
+    @ViewBuilder private func checklistRow(
+        _ row: DecisionChecklistPresentation.Row
+    ) -> some View {
+        let markerColor: Color =
+            switch row.result {
+            case .failed, .waived: .waxText
+            case .advisory, .note: .inkDim
+            case .passed: .ink
+            }
+        let valueColor: Color = row.result == .failed || row.result == .waived ? .waxText : .inkDim
+        let marker = Text(row.result.marker)
+            .font(FreesideFont.sans(.callout, weight: .bold))
+            .foregroundStyle(markerColor)
+        let value = Text(row.value)
+            .font(FreesideFont.monoCaption)
+            .foregroundStyle(valueColor)
+        // The fact-row rule owns when a value is too long for a trailing
+        // column; the marker keeps the checklist's own row shape.
+        if FactRow.stacks(row.value, at: dynamicTypeSize) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    marker
+                    Text(row.label)
+                }
+                value.fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                marker
+                Text(row.label)
+                Spacer(minLength: 8)
+                value
+            }
+        }
     }
 }
 
