@@ -10,6 +10,18 @@ import SwiftUI
 
 /// The attention inbox, scoped to open work by default.
 struct InboxView: View {
+    static func orderingCaption(for scope: InboxStore.Scope) -> String {
+        let open =
+            "Newest first; overdue leads. Priority breaks ties within the past hour, past day, and older."
+        let resolved =
+            "Newest decision first, using creation time when no decision time is available."
+        switch scope {
+        case .open: return open
+        case .resolved: return resolved
+        case .all: return "Open items first. \(open) Resolved items follow. \(resolved)"
+        }
+    }
+
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     #if os(macOS)
         @FocusedValue(\.decisionCommandActions) private var decisionCommandActions
@@ -65,6 +77,10 @@ struct InboxView: View {
             case .loaded:
                 VStack(spacing: 0) {
                     scopeBar
+                        .padding(.horizontal)
+                        .padding(.bottom, 8)
+
+                    orderingCaption
                         .padding(.horizontal)
                         .padding(.bottom, 8)
 
@@ -262,11 +278,20 @@ struct InboxView: View {
         #endif
     }
 
-    /// The project-owned row composition without List and Picker, whose
+    private var orderingCaption: some View {
+        Text(Self.orderingCaption(for: store.scope))
+            .font(FreesideFont.caption)
+            .foregroundStyle(Color.inkDim)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The project-owned caption and rows without List and Picker, whose
     /// AppKit-backed controls ImageRenderer cannot draw off-screen.
     @ViewBuilder
     func screenshotContent(now: Date) -> some View {
         VStack(spacing: 8) {
+            orderingCaption
             ForEach(Array(store.rows.prefix(5)), id: \.item.id) { snapshot in
                 InboxRowView(
                     item: snapshot.item,

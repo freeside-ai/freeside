@@ -68,9 +68,10 @@ public final class SyncCoordinator {
     public init(
         client: any APIProtocol,
         device: DeviceIdentity = .mock,
-        cache: CacheStore
+        cache: CacheStore,
+        inboxOrderNow: @escaping () -> Date = Date.init
     ) {
-        store = InboxStore(client: client, device: device)
+        store = InboxStore(client: client, device: device, now: inboxOrderNow)
         self.cache = cache
         if let cached = cache.load() {
             if let cursors = cached.cursors,
@@ -246,6 +247,7 @@ public final class SyncCoordinator {
                         // whole cache current (test 11).
                         await bootstrap()
                     } else {
+                        store.rebuildTimeBasedOrder()
                         store.freshness = .fresh
                         lastUpdatedAt = .now
                     }

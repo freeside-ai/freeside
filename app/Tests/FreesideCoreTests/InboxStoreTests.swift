@@ -1,3 +1,4 @@
+import Foundation
 import FreesideAPI
 import Testing
 
@@ -60,26 +61,153 @@ import Testing
         }
     }
 
-    @Test func rowsSortOpenItemsFirstThenPriority() async {
-        let store = await makeStore(server: MockServer())
-        store.scope = .all
-        guard var resolved = store.snapshotsByID["item-execution_failure"] else {
-            Issue.record("missing seeded snapshot")
-            return
-        }
-        resolved.item.status = .resolved
-        let snapshots = store.snapshotsByID.values.map {
-            $0.item.id == resolved.item.id ? resolved : $0
-        }
-        store.replaceAll(with: snapshots)
+    private let orderNow = AttentionFixtures.createdInstant.addingTimeInterval(3 * 86_400)
 
-        let statuses = store.rows.map(\.item.status)
-        let firstNonOpen = statuses.firstIndex { $0 != .open } ?? statuses.count
-        #expect(!statuses[..<firstNonOpen].contains { $0 != .open })
-        #expect(!statuses[firstNonOpen...].contains(.open))
-        // The urgent item left the open set, so the high-priority one leads.
-        #expect(store.rows.first?.item.priority == .high)
-        #expect(store.rows.last?.item.id == "item-execution_failure")
+    private func orderingItem(
+        _ id: String, age: TimeInterval?, priority: Components.Schemas.Priority = .normal
+    ) -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = AttentionFixtures.fixture(type: .spec_approval)
+        snapshot.item.id = id
+        snapshot.item.created_at = age.map { orderNow.addingTimeInterval(-$0) }
+        snapshot.item.priority = priority
+        return snapshot
+    }
+
+    @Test func rowsSortOpenBeforeConcludedThenNewestConclusionFirst() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()), now: { orderNow })
+        let open = orderingItem("open", age: 172_800, priority: .low)
+        var older = orderingItem("older", age: 60, priority: .urgent)
+        older.item.status = .resolved
+        older.item.decided_at = orderNow.addingTimeInterval(-600)
+        var newer = orderingItem("newer", age: 172_800, priority: .low)
+        newer.item.status = .dismissed
+        newer.item.decided_at = orderNow.addingTimeInterval(-60)
+        var fallback = orderingItem("fallback", age: 300)
+        fallback.item.status = .superseded
+        var tied = fallback
+        tied.item.id = "tied"
+        tied.item.priority = .urgent
+        var undated = orderingItem("undated", age: nil)
+        undated.item.status = .resolved
+        store.replaceAll(with: [older, fallback, undated, newer, tied, open])
+        store.scope = .all
+
+        #expect(store.rows.map(\.item.id) == ["open", "newer", "fallback", "tied", "older", "undated"])
+        store.scope = .resolved
+        #expect(store.rows.map(\.item.id) == ["newer", "fallback", "tied", "older", "undated"])
+    }
+
+    @Test func recentNormalDecisionLeadsOlderHighPriorityAndIsTheNextItem() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()), now: { orderNow })
+        store.replaceAll(with: [
+            orderingItem("old-high", age: 172_800, priority: .high),
+            orderingItem("current", age: 0),
+            orderingItem("recent-normal", age: 300),
+        ])
+
+        #expect(store.rows.map(\.item.id) == ["current", "recent-normal", "old-high"])
+        #expect(store.nextOpenItemID(excluding: "current") == "recent-normal")
+    }
+
+    @Test func sameBandUsesPriorityThenRecencyThenServerOrder() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()), now: { orderNow })
+        store.replaceAll(with: [
+            orderingItem("low", age: 0, priority: .low),
+            orderingItem("normal-older", age: 600),
+            orderingItem("tie-first", age: 60),
+            orderingItem("high", age: 900, priority: .high),
+            orderingItem("tie-second", age: 60),
+            orderingItem("urgent", age: 1800, priority: .urgent),
+        ])
+
+        #expect(
+            store.rows.map(\.item.id) == [
+                "urgent", "high", "tie-first", "tie-second", "normal-older", "low",
+            ])
+    }
+
+    @Test func overdueLeadsAndFutureDeadlineDoesNotReorder() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()), now: { orderNow })
+        var overdue = orderingItem("overdue", age: 172_800, priority: .low)
+        overdue.item.expires_when = orderNow.addingTimeInterval(-1)
+        var atDeadline = orderingItem("at-deadline", age: 172_800)
+        atDeadline.item.expires_when = orderNow
+        var future = orderingItem("future", age: 1800)
+        future.item.expires_when = orderNow.addingTimeInterval(1)
+        store.replaceAll(with: [
+            orderingItem("urgent", age: 0, priority: .urgent), future,
+            orderingItem("newer", age: 60), overdue, atDeadline,
+        ])
+
+        #expect(store.rows.map(\.item.id) == ["at-deadline", "overdue", "urgent", "newer", "future"])
+    }
+
+    @Test func ageBandEdgesAndMissingDatesAreOrderedExplicitly() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()), now: { orderNow })
+        store.replaceAll(with: [
+            orderingItem("undated-first", age: nil),
+            orderingItem("day", age: 86_400),
+            orderingItem("undated-second", age: nil),
+            orderingItem("hour", age: 3600, priority: .urgent),
+            orderingItem("under-day", age: 86_399, priority: .low),
+            orderingItem("under-hour", age: 3599, priority: .low),
+            orderingItem("older", age: 172_800),
+        ])
+
+        #expect(
+            store.rows.map(\.item.id) == [
+                "under-hour", "hour", "under-day", "day", "older", "undated-first", "undated-second",
+            ])
+    }
+
+    @Test(arguments: [false, true])
+    func orderClockChangesOnlyWhenExplicitlyRebuilt(refresh: Bool) async {
+        var instant = orderNow
+        var clockReads = 0
+        let snapshots = [
+            orderingItem("older-high", age: 3600, priority: .high),
+            orderingItem("recent-normal", age: 3599),
+        ]
+        let store = InboxStore(
+            client: APIClientFactory.mock(server: MockServer(items: snapshots)),
+            now: {
+                clockReads += 1
+                return instant
+            })
+        store.replaceAll(with: snapshots)
+        #expect(clockReads == 1)
+        #expect(store.rows.map(\.item.id) == ["recent-normal", "older-high"])
+
+        instant = orderNow.addingTimeInterval(1)
+        #expect(store.rows.map(\.item.id) == ["recent-normal", "older-high"])
+        #expect(store.nextOpenItemID(excluding: "other") == "recent-normal")
+        #expect(clockReads == 1)
+        if refresh {
+            await store.refresh()
+        } else {
+            store.replaceAll(with: snapshots)
+        }
+        #expect(clockReads == 2)
+        #expect(store.rows.map(\.item.id) == ["older-high", "recent-normal"])
+    }
+
+    @Test func timeBasedOrderRebuildRetainsLocalConclusionFeedback() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()), now: { orderNow })
+        var snapshot = orderingItem("confirmed", age: 60)
+        store.replaceAll(with: [snapshot])
+        snapshot.item.status = .resolved
+        snapshot.entity_version += 1
+        store.apply(snapshot)
+
+        store.rebuildTimeBasedOrder()
+
+        #expect(store.rows.map(\.item.id) == ["confirmed"])
+        #expect(store.count(in: .open) == 1)
+        #expect(store.count(in: .resolved) == 0)
+        #expect(store.nextOpenItemID(excluding: "other") == nil)
+        store.replaceAll(with: [snapshot])
+        #expect(store.rows.isEmpty)
+        #expect(store.count(in: .resolved) == 1)
     }
 
     @Test func scopeDefaultsToOpenAndResolvedItemsRemainFindable() async throws {

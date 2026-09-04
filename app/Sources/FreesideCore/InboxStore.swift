@@ -173,8 +173,11 @@ public final class InboxStore {
     private var serverOrder: [String] = []
     /// Filtering uses the status captured by the last full list rebuild. A
     /// resolving command can therefore show its applied confirmation on the
-    /// open card; the next refresh moves it into the resolved scope.
+    /// open card; the next full list rebuild moves it into the resolved scope.
     private var statusAtOrderRebuild: [String: Components.Schemas.ItemStatus] = [:]
+    private let now: () -> Date
+    /// Age bands and deadlines advance when a refresh confirms the list current.
+    private var orderInstant = Date.distantPast
     /// Same-epoch visibility removals retain the last rendered entity version
     /// so an older in-flight list/bootstrap cannot resurrect a snoozed row.
     /// A strictly newer snapshot is the release transition and clears it.
@@ -192,15 +195,19 @@ public final class InboxStore {
     /// completion cannot clobber a newer one in either direction.
     private var refreshGeneration = 0
 
-    public init(client: any APIProtocol, device: DeviceIdentity = .mock) {
+    public init(
+        client: any APIProtocol, device: DeviceIdentity = .mock,
+        now: @escaping () -> Date = Date.init
+    ) {
         self.client = client
         self.device = device
+        self.now = now
         attachments = AttachmentLoader(client: client)
     }
 
     /// The inbox rows in the selected scope: open items first when scopes are
-    /// combined, urgent-to-low within a status, server order as the stable
-    /// tiebreak.
+    /// combined; overdue open items lead, then age bands, priority and recency.
+    /// Concluded items use conclusion time. Server order breaks remaining ties.
     public var rows: [Components.Schemas.AttentionItemSnapshot] {
         filteredRows(in: scope, projectID: projectID).sorted { lhs, rhs in
             let (lhsKey, rhsKey) = (
@@ -395,6 +402,7 @@ public final class InboxStore {
         conversationsByID = [:]
         serverOrder = []
         statusAtOrderRebuild = [:]
+        orderInstant = .distantPast
         projectID = nil
         removalVersionFloors = [:]
         loadState = .idle
@@ -410,10 +418,17 @@ public final class InboxStore {
     }
 
     private func captureStatusesForCurrentOrder() {
+        rebuildTimeBasedOrder()
         statusAtOrderRebuild = [:]
         for id in serverOrder {
             statusAtOrderRebuild[id] = snapshotsByID[id]?.item.status
         }
+    }
+
+    /// Re-bands the list without clearing the captured statuses
+    /// that keep local decision confirmations visible until a full list rebuild.
+    func rebuildTimeBasedOrder() {
+        orderInstant = now()
     }
 
     public func repairProjectFilter() {
@@ -664,16 +679,24 @@ public final class InboxStore {
     private func sortKey(
         _ snapshot: Components.Schemas.AttentionItemSnapshot, index: Int,
         status: Components.Schemas.ItemStatus
-    ) -> (Int, Int, Int) {
-        let statusRank = status == .open ? 0 : 1
+    ) -> (Int, Int, Int, Int, TimeInterval, Int) {
+        let item = snapshot.item
+        guard status == .open else {
+            let conclusion = item.decided_at ?? item.created_at
+            return (1, 0, 0, 0, conclusion.map { -$0.timeIntervalSince1970 } ?? .infinity, index)
+        }
+        let overdueRank = item.expires_when.map { $0 <= orderInstant ? 0 : 1 } ?? 1
+        let age = item.created_at.map { orderInstant.timeIntervalSince($0) } ?? .infinity
+        let ageBand = age < 3600 ? 0 : (age < 86_400 ? 1 : 2)
         let priorityRank: Int
-        switch snapshot.item.priority {
+        switch item.priority {
         case .urgent: priorityRank = 0
         case .high: priorityRank = 1
         case .normal: priorityRank = 2
         case .low: priorityRank = 3
         }
-        return (statusRank, priorityRank, index)
+        let recency = item.created_at.map { -$0.timeIntervalSince1970 } ?? .infinity
+        return (0, overdueRank, ageBand, priorityRank, recency, index)
     }
 
     private func filteredRows(

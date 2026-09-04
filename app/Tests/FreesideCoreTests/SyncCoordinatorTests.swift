@@ -185,6 +185,73 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         #expect(cache.saveCount == savesAfterBootstrap)
     }
 
+    @Test(arguments: [false, true])
+    func unchangedRefreshAdvancesAgeBandsAndDeadlines(manual: Bool) async throws {
+        let initialInstant = AttentionFixtures.createdInstant.addingTimeInterval(172_800)
+        var instant = initialInstant
+        var clockReads = 0
+        var high = AttentionFixtures.fixture(type: .spec_approval)
+        high.item.created_at = initialInstant.addingTimeInterval(-3599)
+        high.item.priority = .high
+        var normal = AttentionFixtures.fixture(type: .agent_question)
+        normal.item.created_at = initialInstant.addingTimeInterval(-300)
+        normal.item.priority = .normal
+        var deadline = AttentionFixtures.fixture(type: .execution_failure)
+        deadline.item.created_at = initialInstant.addingTimeInterval(-172_800)
+        deadline.item.priority = .low
+        deadline.item.expires_when = initialInstant.addingTimeInterval(2)
+        let cache = CountingCacheStore()
+        let server = MockServer(items: [high, normal, deadline])
+        let bootstrapCalls = Counter()
+        let coordinator = SyncCoordinator(
+            client: APIClientFactory.mock(server: server), cache: cache,
+            inboxOrderNow: {
+                clockReads += 1
+                return instant
+            })
+        await coordinator.bootstrap()
+        let cursors = try #require(coordinator.cursors)
+        let snapshots = coordinator.store.snapshotsByID
+        let savesAfterBootstrap = cache.saveCount
+        #expect(clockReads == 1)
+        #expect(coordinator.store.rows.map(\.item.id) == [high.item.id, normal.item.id, deadline.item.id])
+
+        instant = initialInstant.addingTimeInterval(1)
+        await server.setBeforeRespond { operationID in
+            if operationID == "getSyncRevision" { throw InjectedFailure() }
+        }
+        await coordinator.heartbeat()
+        #expect(clockReads == 1)
+        #expect(coordinator.store.rows.first?.item.id == high.item.id)
+        await server.setBeforeRespond { operationID in
+            if operationID == "getSyncBootstrap" { await bootstrapCalls.increment() }
+        }
+        if manual {
+            await coordinator.refresh()
+        } else {
+            await coordinator.heartbeat()
+        }
+        #expect(clockReads == 2)
+        #expect(coordinator.store.rows.map(\.item.id) == [normal.item.id, high.item.id, deadline.item.id])
+        #expect(coordinator.store.nextOpenItemID(excluding: "other") == normal.item.id)
+
+        instant = initialInstant.addingTimeInterval(2)
+        if manual {
+            await coordinator.refresh()
+        } else {
+            await coordinator.heartbeat()
+        }
+        #expect(clockReads == 3)
+        #expect(coordinator.store.rows.map(\.item.id) == [deadline.item.id, normal.item.id, high.item.id])
+        #expect(coordinator.store.nextOpenItemID(excluding: "other") == deadline.item.id)
+        #expect(coordinator.store.snapshotsByID == snapshots)
+        #expect(coordinator.cursors == cursors)
+        #expect(await bootstrapCalls.count == 0)
+        if !manual {
+            #expect(cache.saveCount == savesAfterBootstrap)
+        }
+    }
+
     @Test func runAndTimelinePartialReadsDoNotMarkTheCacheCurrent() async throws {
         let server = MockServer()
         let cache = InMemoryCacheStore()
