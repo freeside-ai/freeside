@@ -54,6 +54,21 @@ func openUnattendedFixtureAtWithIdentity(
 	t *testing.T, root string, seed bool, identity domain.AuthIdentity,
 ) *workflowFixture {
 	t.Helper()
+	return openUnattendedFixtureWith(t, root, seed, identity, nil, nil)
+}
+
+// openUnattendedFixtureWith composes the unattended fixture through two
+// caller hooks. environment widens the admission composition before the
+// engine binds it: the default declares no enforceable egress profiles, so
+// only a widened composition can offer or re-gate a capability manifest.
+// compose contributes engine options that need the fixture's own store and
+// blob store, such as the specification workflow.
+func openUnattendedFixtureWith(
+	t *testing.T, root string, seed bool, identity domain.AuthIdentity,
+	environment func(*engine.AdmissionEnvironment),
+	compose func(*store.Store, *signet.BlobStore) []engine.Option,
+) *workflowFixture {
+	t.Helper()
 	ctx := context.Background()
 	floor := []exec.Capability{exec.CapPostExitExport}
 	profile := unattendedTrustProfile(t)
@@ -64,6 +79,9 @@ func openUnattendedFixtureAtWithIdentity(
 	env.Base.Repo, env.Base.RepositoryID = profile.Repo, profile.RepositoryID
 	identityID := identity.ID
 	env.AuthIdentityID = &identityID
+	if environment != nil {
+		environment(&env)
+	}
 	backend := fake.RunnerBackend{
 		BackendName: string(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		Caps:        exec.NewCapabilitySet(conformantCeiling(t)...),
@@ -126,12 +144,19 @@ func openUnattendedFixtureAtWithIdentity(
 	if err != nil {
 		t.Fatalf("fake.NewStageDriverAt: %v", err)
 	}
-	workflow, err := engine.New(st, attention, driver,
-		engine.WithAdmission(backend, floor, env, func() time.Time { return admittedAt }))
+	options := []engine.Option{
+		engine.WithAdmission(backend, floor, env, func() time.Time { return admittedAt }),
+	}
+	if compose != nil {
+		options = append(options, compose(st, blobs)...)
+	}
+	workflow, err := engine.New(st, attention, driver, options...)
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
-	return &workflowFixture{root: root, store: st, signet: attention, driver: driver, engine: workflow}
+	return &workflowFixture{
+		root: root, store: st, blobs: blobs, signet: attention, driver: driver, engine: workflow,
+	}
 }
 
 // stopOperations seeds a decision carrier and accepts stop_unattended on it
