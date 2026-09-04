@@ -64,6 +64,8 @@ const (
 		FROM work_unit_completions WHERE unit_id = ?`
 	getWorkUnitCompletionSQL = `SELECT unit_id, body, recorded_at
 		FROM work_unit_completions WHERE unit_id = ?`
+	listWorkUnitCompletionsSQL = `SELECT unit_id, body, recorded_at
+		FROM work_unit_completions ORDER BY recorded_at, unit_id`
 )
 
 // RecordWorkUnitDeclaration records one unit's declaration, write-once: a
@@ -105,10 +107,10 @@ func (tx *ReadTx) scanWorkUnitDeclaration(sc scanner) (domain.WorkUnitDeclaratio
 	return d, nil
 }
 
-// errDeclarationUnsupported is the declaration re-gate's fail-closed
+// ErrDeclarationUnsupported is the declaration re-gate's fail-closed
 // verdict: the stored declaration disagrees with the run and resolved
 // policy it claims to describe.
-var errDeclarationUnsupported = errors.New(
+var ErrDeclarationUnsupported = errors.New(
 	"stored work-unit declaration is not supported by its run and resolved policy")
 
 // GetWorkUnitDeclarationByRun returns the declaration captured with the
@@ -149,23 +151,23 @@ func (tx *ReadTx) GetWorkUnitDeclaration(ctx context.Context, unitID domain.Work
 func (tx *ReadTx) regateWorkUnitDeclaration(ctx context.Context, d domain.WorkUnitDeclaration) error {
 	run, err := tx.GetRun(ctx, d.RunID)
 	if errors.Is(err, ErrNotFound) {
-		return errDeclarationUnsupported
+		return ErrDeclarationUnsupported
 	}
 	if err != nil {
 		return err
 	}
 	if run.ProjectID != d.ProjectID {
-		return errDeclarationUnsupported
+		return ErrDeclarationUnsupported
 	}
 	policy, err := tx.GetResolvedPolicy(ctx, d.RunID)
 	if errors.Is(err, ErrNotFound) {
-		return errDeclarationUnsupported
+		return ErrDeclarationUnsupported
 	}
 	if err != nil {
 		return err
 	}
 	if !slices.Equal(d.DeclaredPaths, domain.CanonicalDeclaredPaths(policy)) {
-		return errDeclarationUnsupported
+		return ErrDeclarationUnsupported
 	}
 	return nil
 }
@@ -393,26 +395,59 @@ func (tx *InternalTx) RecordWorkUnitCompletion(ctx context.Context, c domain.Wor
 
 // scanWorkUnitCompletion reconstructs one completion row.
 func (tx *ReadTx) scanWorkUnitCompletion(sc scanner) (domain.WorkUnitCompletion, error) {
+	_, c, err := tx.scanIdentifiedWorkUnitCompletion(sc)
+	return c, err
+}
+
+// scanIdentifiedWorkUnitCompletion reconstructs one completion row and
+// returns its unit id even when the reconstruction fails, so a caller that
+// isolates a damaged row can still name it.
+func (tx *ReadTx) scanIdentifiedWorkUnitCompletion(
+	sc scanner,
+) (domain.WorkUnitID, domain.WorkUnitCompletion, error) {
 	var (
 		unitID, recordedAt string
 		body               []byte
 	)
 	if err := sc.Scan(&unitID, &body, &recordedAt); err != nil {
-		return domain.WorkUnitCompletion{}, err
+		return "", domain.WorkUnitCompletion{}, err
 	}
 	c, err := decode[domain.WorkUnitCompletion](body)
 	if err != nil {
-		return domain.WorkUnitCompletion{}, err
+		return domain.WorkUnitID(unitID), domain.WorkUnitCompletion{},
+			fmt.Errorf("%w: %w", errRowInconsistent, err)
 	}
 	if c.UnitID != domain.WorkUnitID(unitID) || formatTime(c.RecordedAt) != recordedAt {
-		return domain.WorkUnitCompletion{}, errRowInconsistent
+		return domain.WorkUnitID(unitID), domain.WorkUnitCompletion{}, errRowInconsistent
 	}
-	return c, nil
+	return domain.WorkUnitID(unitID), c, nil
 }
 
-// errCompletionUnsupported is the completion re-gate's fail-closed verdict:
-// the stored done bit is not derivable from the store's own evidence.
-var errCompletionUnsupported = errors.New(
+// IsRowVerdict reports whether err is one of the store's own fail-closed
+// verdicts about a single row rather than an infrastructure failure. A
+// verdict means the row is not derivable from the store's evidence, which is
+// the answer a re-gate exists to give, so a caller that isolates rows may log
+// and skip it. Anything else is a database, context, or transaction failure
+// that must still propagate: without that split a transient error reads as a
+// refused row, and a caller silently treats a healthy row as absent.
+//
+// It is exported because the isolation has to be applied by the callers that
+// walk rows one at a time, notably the start-up completion reconcile, and
+// they cannot re-derive this list without drifting from it.
+func IsRowVerdict(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, ErrNotFound) || errors.Is(err, ErrDeclarationUnsupported) ||
+		errors.Is(err, ErrCompletionUnsupported) || errors.Is(err, errRowInconsistent) ||
+		errors.Is(err, domain.ErrParentKeyMismatch)
+}
+
+// ErrCompletionUnsupported is the completion re-gate's fail-closed verdict:
+// the stored done bit is not derivable from the store's own evidence. It is
+// exported so a read boundary can tell this verdict (and ErrNotFound) from
+// an infrastructure failure and fail closed on exactly the former.
+var ErrCompletionUnsupported = errors.New(
 	"stored completion is not supported by the recorded declaration, binding, and facts")
 
 // GetWorkUnitCompletion returns the unit's completion record, or
@@ -434,9 +469,58 @@ func (tx *ReadTx) GetWorkUnitCompletion(ctx context.Context, unitID domain.WorkU
 		return domain.WorkUnitCompletion{}, fmt.Errorf("get work unit completion %s: %w", unitID, err)
 	}
 	if !supported {
-		return domain.WorkUnitCompletion{}, fmt.Errorf("get work unit completion %s: %w", unitID, errCompletionUnsupported)
+		return domain.WorkUnitCompletion{}, fmt.Errorf("get work unit completion %s: %w", unitID, ErrCompletionUnsupported)
 	}
 	return c, nil
+}
+
+// ListWorkUnitCompletions returns every recorded completion the store's own
+// evidence supports, in recorded order, plus the unit ids of rows the
+// re-gate refused. Each row passes the same fail-closed re-derivation
+// GetWorkUnitCompletion applies; an unsupported row is reported by id rather
+// than failing the whole list, so a start-up sweep can log and skip it
+// without trusting it. That isolation covers every fail-closed verdict the
+// re-derivation can reach, not only a missing row: the start-up reconcile
+// runs this list before the daemon is built, so a single damaged completion,
+// declaration, or binding must not keep the daemon from starting. Only an
+// infrastructure failure fails the whole list.
+func (tx *ReadTx) ListWorkUnitCompletions(ctx context.Context) ([]domain.WorkUnitCompletion, []domain.WorkUnitID, error) {
+	rows, err := tx.tx.QueryContext(ctx, listWorkUnitCompletionsSQL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list work unit completions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var (
+		supported   []domain.WorkUnitCompletion
+		unsupported []domain.WorkUnitID
+	)
+	for rows.Next() {
+		unitID, c, err := tx.scanIdentifiedWorkUnitCompletion(rows)
+		if IsRowVerdict(err) {
+			unsupported = append(unsupported, unitID)
+			continue
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("list work unit completions: %w", err)
+		}
+		ok, err := tx.completionSupported(ctx, c)
+		if IsRowVerdict(err) {
+			unsupported = append(unsupported, c.UnitID)
+			continue
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("list work unit completions %s: %w", c.UnitID, err)
+		}
+		if !ok {
+			unsupported = append(unsupported, c.UnitID)
+			continue
+		}
+		supported = append(supported, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("list work unit completions: %w", err)
+	}
+	return supported, unsupported, nil
 }
 
 // completionSupported re-derives the completion from stored inputs. A
@@ -445,26 +529,32 @@ func (tx *ReadTx) GetWorkUnitCompletion(ctx context.Context, unitID domain.WorkU
 // corruption the re-gate exists to refuse.
 func (tx *ReadTx) completionSupported(ctx context.Context, c domain.WorkUnitCompletion) (bool, error) {
 	declaration, err := tx.GetWorkUnitDeclaration(ctx, c.UnitID)
-	if errors.Is(err, ErrNotFound) {
+	if IsRowVerdict(err) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
 	binding, err := tx.GetWorkUnitPRBinding(ctx, c.UnitID)
-	if errors.Is(err, ErrNotFound) {
+	if IsRowVerdict(err) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
 	pulls, err := tx.ListPullMergeFacts(ctx, binding.RepositoryID, binding.PRNumber)
+	if IsRowVerdict(err) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
 	var issues []domain.IssueStateFact
 	if declaration.BoundIssue != nil {
 		issues, err = tx.ListIssueStateFacts(ctx, binding.RepositoryID, *declaration.BoundIssue)
+		if IsRowVerdict(err) {
+			return false, nil
+		}
 		if err != nil {
 			return false, err
 		}

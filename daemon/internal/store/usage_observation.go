@@ -7,53 +7,55 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
 
-// RunBillableCost is the render-only billable projection exposed outside the
-// observation reader. Unknown units make CompleteUnits false and are never
-// added to USDMicros.
-type RunBillableCost struct {
-	USDMicros     int64
-	InvocationIDs []domain.InvocationID
-	Present       bool
-	CompleteUnits bool
+// runBillableCost is the render-only billable projection of one run's usage
+// rows. Unknown units make completeUnits false and are never added to
+// usdMicros.
+type runBillableCost struct {
+	usdMicros     int64
+	invocationIDs []domain.InvocationID
+	present       bool
+	completeUnits bool
 }
 
-// ProjectRunBillableCost reads the isolated observation surface and returns
-// only the aggregate needed by attention-card presentation. It does not expose
-// raw usage rows to admission or policy code.
-func (s *Store) ProjectRunBillableCost(
+// projectRunBillableCost aggregates the usage rows through the transaction's
+// own connection. The store opens one connection (Open sets
+// SetMaxOpenConns(1)), so an aggregate a Read callback needs must run inside
+// that same transaction rather than through a nested ReadUsage.
+func (tx *ReadTx) projectRunBillableCost(
 	ctx context.Context, runID domain.RunID,
-) (RunBillableCost, error) {
-	var observations []domain.UsageObservation
-	if err := s.ReadUsage(ctx, func(tx *UsageReadTx) error {
-		var err error
-		observations, err = tx.ListRunUsageObservations(ctx, runID)
-		return err
-	}); err != nil {
-		return RunBillableCost{}, err
+) (runBillableCost, error) {
+	rows, err := tx.tx.QueryContext(ctx, listRunUsageObservationsSQL, runID)
+	if err != nil {
+		return runBillableCost{}, fmt.Errorf("list run usage observations %q: %w", runID, err)
+	}
+	observations, err := scanUsageObservations(rows, fmt.Sprintf("list run usage observations %q", runID))
+	if err != nil {
+		return runBillableCost{}, err
 	}
 	totals, err := domain.ProjectRunUsage(observations)
 	if err != nil {
-		return RunBillableCost{}, err
+		return runBillableCost{}, err
 	}
-	projection := RunBillableCost{CompleteUnits: true}
+	projection := runBillableCost{completeUnits: true}
 	for _, total := range totals {
 		if total.Kind != domain.UsageMeasurementBillableCost {
 			continue
 		}
-		projection.Present = true
+		projection.present = true
 		if total.Unit != "usd_micros" {
-			projection.CompleteUnits = false
+			projection.completeUnits = false
 			continue
 		}
-		if total.Quantity > math.MaxInt64-projection.USDMicros {
-			return RunBillableCost{}, domain.ErrUsageQuantityOverflow
+		if total.Quantity > math.MaxInt64-projection.usdMicros {
+			return runBillableCost{}, domain.ErrUsageQuantityOverflow
 		}
-		projection.USDMicros += total.Quantity
+		projection.usdMicros += total.Quantity
 	}
 	invocations := make(map[domain.InvocationID]struct{})
 	for _, observation := range observations {
@@ -61,12 +63,78 @@ func (s *Store) ProjectRunBillableCost(
 			invocations[domain.InvocationID(observation.InvocationID)] = struct{}{}
 		}
 	}
-	projection.InvocationIDs = make([]domain.InvocationID, 0, len(invocations))
+	projection.invocationIDs = make([]domain.InvocationID, 0, len(invocations))
 	for invocationID := range invocations {
-		projection.InvocationIDs = append(projection.InvocationIDs, invocationID)
+		projection.invocationIDs = append(projection.invocationIDs, invocationID)
 	}
-	slices.Sort(projection.InvocationIDs)
+	slices.Sort(projection.invocationIDs)
 	return projection, nil
+}
+
+// BillableCostSoFar returns the run's render-only spend figure, or nil while
+// no billable observation exists. It is the one aggregate the ordinary read
+// transaction exposes over usage rows: the rows themselves stay behind
+// UsageReadTx, so admission and policy callers still cannot reach them. The
+// figure is complete only when every admitted invocation (execution
+// admissions, review records, and review failures) has a billable
+// observation and every observed unit is usd_micros; an admitted invocation
+// with no observation, or an unknown unit, marks the amount a lower bound.
+func (tx *ReadTx) BillableCostSoFar(
+	ctx context.Context, runID domain.RunID,
+) (*domain.CostSoFar, error) {
+	projection, err := tx.projectRunBillableCost(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	if !projection.present {
+		return nil, nil
+	}
+	observedInvocations := make(map[domain.InvocationID]struct{})
+	for _, invocationID := range projection.invocationIDs {
+		observedInvocations[invocationID] = struct{}{}
+	}
+	admittedInvocations := make(map[domain.InvocationID]struct{})
+	admissions, err := tx.ListRunExecutionAdmissionRecords(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	for _, admission := range admissions {
+		admittedInvocations[admission.InvocationID] = struct{}{}
+	}
+	reviews, err := tx.ListReviewRecords(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	for _, review := range reviews {
+		admittedInvocations[review.InvocationID] = struct{}{}
+	}
+	failures, err := tx.ListReviewFailures(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	for _, failure := range failures {
+		admittedInvocations[failure.InvocationID] = struct{}{}
+	}
+	complete := projection.completeUnits
+	for invocationID := range admittedInvocations {
+		if _, ok := observedInvocations[invocationID]; !ok {
+			complete = false
+			break
+		}
+	}
+	return &domain.CostSoFar{
+		Currency: "USD", Amount: usdMicrosDecimal(projection.usdMicros),
+		Invocations: len(observedInvocations), Complete: complete,
+	}, nil
+}
+
+func usdMicrosDecimal(micros int64) string {
+	whole, fraction := micros/1_000_000, micros%1_000_000
+	if fraction == 0 {
+		return fmt.Sprintf("%d", whole)
+	}
+	fractionText := strings.TrimRight(fmt.Sprintf("%06d", fraction), "0")
+	return fmt.Sprintf("%d.%s", whole, fractionText)
 }
 
 const (

@@ -261,6 +261,27 @@ func TestBillableCostSoFarProjectsUsageObservations(t *testing.T) {
 		t.Fatalf("cost = %#v, want %#v", got, want)
 	}
 
+	// An admitted invocation with no billable observation yet (here a review
+	// failure, which the completeness rule counts as admitted) marks the
+	// amount a lower bound without adding to it.
+	if err := engine.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewFailure(ctx, domain.ReviewFailure{
+			InvocationID: "review-usage-unobserved", RunID: run.ID, Round: 1,
+			BaseSHA: "base", HeadSHA: "head", Class: domain.ReviewFailureConfiguration,
+			Reason: "configuration refused", ObservedAt: observedAt,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = billableCostSoFar(ctx, engine.store, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want.Complete = false
+	if got == nil || *got != *want {
+		t.Fatalf("cost with an unobserved admitted invocation = %#v, want %#v", got, want)
+	}
+
 	if err := appendUsageObservations(ctx, engine.store, attempt.InvocationID, []exec.UsageMeasurement{
 		{
 			Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementBillableCost,

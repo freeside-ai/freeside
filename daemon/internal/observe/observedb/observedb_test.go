@@ -1270,3 +1270,42 @@ func keys(m map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+// TestObserveConclusionRefusesUnauthenticatedCompletion: run_milestones
+// carries no run foreign key, so an observation-only timeline can present a
+// work_unit_completed milestone with no run behind it. The legacy fallback
+// keeps the milestone-only conclusion for every other outcome, but a
+// completion is a powerless mirror of a completion record, and with no run
+// there is nothing to bind it to: the read fails closed instead of reporting
+// a final completed outcome no gate ever authenticated.
+func TestObserveConclusionRefusesUnauthenticatedCompletion(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	st, _, err := topicstore.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := domain.RunID("run-orphan")
+	publicationInvocationID := domain.ProductionPublicationInvocationID(runID)
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: runID, Kind: domain.MilestoneWorkUnitCompleted,
+			InvocationID: &publicationInvocationID,
+			RecordedAt:   time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		})
+	}); err != nil {
+		t.Fatalf("append orphan milestone: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = observed.Close() })
+	_, conclusion, err := observed.ObserveConclusion(ctx, runID)
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("ObserveConclusion() = %+v, %v, want ErrParentKeyMismatch", conclusion, err)
+	}
+}

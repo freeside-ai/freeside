@@ -231,6 +231,41 @@ func (tx *ReadTx) GetRunSnapshot(ctx context.Context, id domain.RunID) (Snapshot
 	return Snapshotted[domain.Run]{Value: run, Snapshot: snapshot}, nil
 }
 
+// RunSuccessor returns the run that retried runID, if any: the earliest
+// attempt whose parent_run_id names it (attempt_number, then id; a row with
+// no attempt number sorts last). A run with a successor is finished for the
+// runs list whatever its own outcome, because the engine only retries a
+// final run and the successor now owns the work. Zero children is the
+// ordinary case and never an error.
+//
+// The extracted column only selects the candidate; the row is then
+// reconstructed through scanRunSnapshot, the same returned-object trust gate
+// every other run read runs. That gate cross-checks the canonical body
+// against every extracted column (the 0048 rule) and re-runs the production
+// lineage against the attempt row, so neither a divergent lineage column nor
+// a forged retry authority can make a parent report a successor it does not
+// have. A candidate that fails the gate fails this read closed rather than
+// silently promoting the next child, exactly as a damaged row does when the
+// run is served in its own right.
+func (tx *ReadTx) RunSuccessor(ctx context.Context, runID domain.RunID) (domain.RunID, bool, error) {
+	successor, _, err := tx.scanRunSnapshot(ctx, tx.tx.QueryRowContext(ctx,
+		`SELECT id, project_id, policy_digest, campaign_id, attempt_number, attempt_reason,
+                parent_run_id, entity_version, as_of_revision, body
+         FROM runs WHERE parent_run_id = ?
+         ORDER BY attempt_number IS NULL, attempt_number, id LIMIT 1`,
+		runID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("run %q successor: %w", runID, err)
+	}
+	if successor.ParentRunID != runID {
+		return "", false, fmt.Errorf("run %q successor %q: %w", runID, successor.ID, errRowInconsistent)
+	}
+	return successor.ID, true, nil
+}
+
 const putConversationSQL = `
 INSERT INTO conversations (id, entity_version, as_of_revision, body)
 VALUES (?, 1, ?, ?)
