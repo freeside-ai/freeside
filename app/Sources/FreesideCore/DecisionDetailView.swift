@@ -1822,7 +1822,12 @@ struct DecisionDetailView: View {
         value: String,
         monospaced: Bool = false
     ) -> some View {
-        DecisionFactRow(label: label, value: value, monospaced: monospaced)
+        // No `valueColor`: a trailing value inherits the row's own ink, so a
+        // monospaced fact stays dim in the row, and a stacked value keeps the
+        // full-ink contrast against its dim label.
+        FactRow(label: label, value: value)
+            .font(monospaced ? FreesideFont.monoCaption : FreesideFont.callout)
+            .foregroundStyle(monospaced ? Color.inkDim : Color.ink)
     }
 
     /// One labeled attachment row. Content leads in the evidence layer and its
@@ -2611,34 +2616,6 @@ struct DecisionDetailView: View {
             capabilityRetrySnapshot = nil
         }
     #endif
-}
-
-private struct DecisionFactRow: View {
-    let label: String
-    let value: String
-    let monospaced: Bool
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
-    var body: some View {
-        Group {
-            if dynamicTypeSize >= .accessibility1 {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(label)
-                        .foregroundStyle(Color.inkDim)
-                    Text(value)
-                        .foregroundStyle(Color.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            } else {
-                LabeledContent(label) {
-                    Text(value)
-                        .multilineTextAlignment(.trailing)
-                }
-            }
-        }
-        .font(monospaced ? FreesideFont.monoCaption : FreesideFont.callout)
-        .foregroundStyle(monospaced ? Color.inkDim : Color.ink)
-    }
 }
 
 private struct FindingListLabelStyle: LabelStyle {

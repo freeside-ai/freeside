@@ -410,6 +410,61 @@ struct KeywordLabel: View {
     }
 }
 
+/// One label-and-value fact: the shared rule that decides between a
+/// trailing value and a stacked one, used by the decision detail facts,
+/// the pairing details, and the operational summary.
+///
+/// Font and row-level color stay with the caller, so each surface keeps
+/// its own register.
+struct FactRow: View {
+    /// A value longer than this stacks at every type size
+    /// (`--fs-fact-row-stack-threshold`). A digest or an invocation id has
+    /// nowhere to wrap, so a trailing value either breaks mid-token or
+    /// squeezes the label out of the row. Counted in grapheme clusters,
+    /// which is what the token's character count means for the ASCII
+    /// labels, ids, and digests these rows carry.
+    static let stackThreshold = 40
+
+    /// An accessibility size stacks every row; below that, only a value
+    /// too long for the trailing column does.
+    static func stacks(_ value: String, at size: DynamicTypeSize) -> Bool {
+        size >= .accessibility1 || value.count > stackThreshold
+    }
+
+    let label: String
+    let value: String
+    /// Set where the value carries its own color. Nil leaves a trailing
+    /// value inheriting the row's foreground style.
+    var valueColor: Color? = nil
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        if Self.stacks(value, at: dynamicTypeSize) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .foregroundStyle(Color.inkDim)
+                Text(value)
+                    .foregroundStyle(valueColor ?? .ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            LabeledContent(label) {
+                valueText
+                    .multilineTextAlignment(.trailing)
+            }
+        }
+    }
+
+    @ViewBuilder private var valueText: some View {
+        let text = Text(value)
+        if let valueColor {
+            text.foregroundStyle(valueColor)
+        } else {
+            text
+        }
+    }
+}
+
 /// The four control states of the design language (plan §15) in one
 /// recipe: a filled primary, an outlined secondary, an unadorned tertiary,
 /// and a disabled state drawn as its own rule-bordered, faint-text shape.

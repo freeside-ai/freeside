@@ -107,13 +107,9 @@ struct OperationalSummaryView: View {
         value: String,
         valueColor: Color = .ink
     ) -> some View {
-        LabeledContent(label) {
-            Text(value)
-                .foregroundStyle(valueColor)
-                .multilineTextAlignment(.trailing)
-        }
-        .font(FreesideFont.callout)
-        .foregroundStyle(Color.inkDim)
+        FactRow(label: label, value: value, valueColor: valueColor)
+            .font(FreesideFont.callout)
+            .foregroundStyle(Color.inkDim)
     }
 
     private var daemonStateColor: Color {
