@@ -57,9 +57,12 @@ public final class PairingModel {
         self.displayName = displayName ?? Self.systemDeviceName()
     }
 
+    /// Whether Pair may be pressed. The preview must have answered for the
+    /// current code: a rejected or unanswered code has no facts, and pairing
+    /// against one the operator has not seen described is a blind exchange.
     public var canSubmit: Bool {
         !Self.canonicalPairingCode(pairingCode).isEmpty && !displayName.isEmpty
-            && phase != .pairing
+            && phase != .pairing && facts != nil
     }
 
     public func prefillPairingCode(_ code: String) {

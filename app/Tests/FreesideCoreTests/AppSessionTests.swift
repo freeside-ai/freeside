@@ -56,6 +56,9 @@ private struct FailingCredentialStore: DeviceCredentialStore {
         #expect(!model.canSubmit)
         model.pairingCode = "483911"
         model.displayName = "Ben's iPhone"
+        // Pair stays closed until the preview answers for this code.
+        #expect(!model.canSubmit)
+        await model.refreshFacts()
         #expect(model.canSubmit)
 
         let credential = try #require(await model.pair())
@@ -80,7 +83,29 @@ private struct FailingCredentialStore: DeviceCredentialStore {
 
         #expect(model.pairingCode == "AB011XYZ")
         #expect(model.formattedPairingCode == "AB01-1XYZ")
+        await model.refreshFacts()
         #expect(await model.pair() != nil)
+    }
+
+    @Test func rejectedPreviewLeavesPairDisabled() async {
+        let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])
+        let model = PairingModel(
+            client: APIClientFactory.mock(server: server),
+            credentials: InMemoryCredentialStore(),
+            displayName: "Studio Mac")
+
+        model.pairingCode = "000000"
+        await model.refreshFacts()
+
+        #expect(model.facts == nil)
+        #expect(!model.canSubmit)
+        #expect(await model.pair() == nil)
+
+        // A code the daemon does describe opens the control again.
+        model.pairingCode = "483911"
+        await model.refreshFacts()
+        #expect(model.facts != nil)
+        #expect(model.canSubmit)
     }
 
     @Test func deviceNamePrefillRemainsEditable() {
@@ -143,6 +168,7 @@ private struct FailingCredentialStore: DeviceCredentialStore {
                 client: APIClientFactory.mock(server: server), credentials: credentials)
             model.pairingCode = "483911"
             model.displayName = "Malformed grant"
+            await model.refreshFacts()
 
             #expect(await model.pair() == nil)
             #expect(try credentials.load() == nil)
@@ -178,6 +204,7 @@ private struct FailingCredentialStore: DeviceCredentialStore {
                 credentials: InMemoryCredentialStore())
             model.pairingCode = "483911"
             model.displayName = "Loopback grant"
+            await model.refreshFacts()
 
             let credential = try #require(await model.pair())
             #expect(credential.ntfySubscription.serverURL == serverURL)
@@ -199,6 +226,7 @@ private struct FailingCredentialStore: DeviceCredentialStore {
                 client: APIClientFactory.mock(server: server), credentials: credentials)
             model.pairingCode = "483911"
             model.displayName = "Malformed grant"
+            await model.refreshFacts()
 
             #expect(await model.pair() == nil)
             #expect(try credentials.load() == nil)
@@ -212,20 +240,27 @@ private struct FailingCredentialStore: DeviceCredentialStore {
     }
 
     @Test func rejectionSurfacesOneUndifferentiatedMessage() async throws {
-        let server = MockServer(
-            authMode: .enforcing,
-            pairingCodes: ["gone": .consumed, "old": .expired])
         let credentials = InMemoryCredentialStore()
-        let model = PairingModel(
-            client: APIClientFactory.mock(server: server), credentials: credentials)
-        model.displayName = "probe"
 
+        // Pair is closed until the preview describes the code, so the
+        // rejection the operator can still reach is a code that dies
+        // between the preview and the exchange. Each way of dying must
+        // read the same.
         var failures: Set<String> = []
-        for code in ["gone", "old", "never-minted"] {
-            model.pairingCode = code
+        for deadState in [MockServer.PairingCodeState.consumed, .expired] {
+            let server = MockServer(
+                authMode: .enforcing, pairingCodes: ["483911": .valid])
+            let model = PairingModel(
+                client: APIClientFactory.mock(server: server), credentials: credentials)
+            model.displayName = "probe"
+            model.pairingCode = "483911"
+            await model.refreshFacts()
+            #expect(model.canSubmit)
+
+            await server.seedPairingCode("483911", state: deadState)
             #expect(await model.pair() == nil)
             guard case .failed(let message) = model.phase else {
-                Issue.record("expected a rejection for \(code), got \(model.phase)")
+                Issue.record("expected a rejection for \(deadState), got \(model.phase)")
                 continue
             }
             failures.insert(message)
@@ -245,6 +280,7 @@ private struct FailingCredentialStore: DeviceCredentialStore {
             credentials: FailingCredentialStore())
         model.pairingCode = "483911"
         model.displayName = "Ben's iPhone"
+        await model.refreshFacts()
 
         #expect(await model.pair() == nil)
 
@@ -508,6 +544,7 @@ private struct FailingCredentialStore: DeviceCredentialStore {
 
         model.pairingCode = "483911"
         model.displayName = "Ben's iPhone"
+        await model.refreshFacts()
         let credential = try #require(await model.pair())
         session.completePairing(credential)
 
@@ -582,6 +619,7 @@ private struct FailingCredentialStore: DeviceCredentialStore {
         }
         model.pairingCode = "483911"
         model.displayName = "Ben's iPhone"
+        await model.refreshFacts()
         let credential = try #require(await model.pair())
         session.completePairing(credential)
 
@@ -617,6 +655,7 @@ private struct FailingCredentialStore: DeviceCredentialStore {
         }
         model.pairingCode = "483911"
         model.displayName = "Ben's iPhone"
+        await model.refreshFacts()
         let credential = try #require(await model.pair())
         session.completePairing(credential)
 
