@@ -509,6 +509,11 @@ func testSubmitCommandSpecificationDigest(
 	if err != nil {
 		t.Fatal(err)
 	}
+	// These two subtests prove the attended composition holds the allocation
+	// without losing it; neither reaches admission, so neither is evidence
+	// that the selected manifest is rechecked there. That proof is
+	// TestCapabilityRetryAdmitsUnderTheSelectedManifest and its siblings in
+	// daemon/internal/integration/capability_retry_test.go (issue #1102).
 	for name, restarted := range map[string]*engine.Engine{
 		"admission disabled":       withoutAdmission,
 		"selected profile removed": withoutSelectedProfile,
