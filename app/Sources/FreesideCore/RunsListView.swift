@@ -5,7 +5,7 @@ struct RunsListView: View {
     let runs: [Components.Schemas.RunSnapshot]
     let schedules: [Components.Schemas.ScheduleSnapshot]
     @Binding var selection: String?
-    @State private var projectID: String?
+    @State private var filter: RunListFilter
     private let navigationPath: Binding<[String]>?
     private let onRefresh: @MainActor () async -> Void
 
@@ -13,12 +13,14 @@ struct RunsListView: View {
         runs: [Components.Schemas.RunSnapshot],
         schedules: [Components.Schemas.ScheduleSnapshot],
         selection: Binding<String?>,
+        initialScope: RunListFilter.Scope = .active,
         navigationPath: Binding<[String]>? = nil,
         onRefresh: @escaping @MainActor () async -> Void = {}
     ) {
         self.runs = runs
         self.schedules = schedules
         _selection = selection
+        _filter = State(initialValue: RunListFilter(scope: initialScope))
         self.navigationPath = navigationPath
         self.onRefresh = onRefresh
     }
@@ -28,13 +30,22 @@ struct RunsListView: View {
     }
 
     private var visibleRuns: [Components.Schemas.RunSnapshot] {
-        RunDisplay.sortedRuns(
-            runs.filter { projectID == nil || $0.run.project_id == projectID })
+        filter.rows(in: runs)
     }
 
     var body: some View {
+        let rows = visibleRuns
         VStack(spacing: 0) {
-            Picker("Project", selection: $projectID) {
+            Picker("Scope", selection: $filter.scope) {
+                ForEach(RunListFilter.Scope.allCases) { scope in
+                    Text("\(scope.label) \(filter.count(in: runs, scope: scope))").tag(scope)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.bottom, 8)
+
+            Picker("Project", selection: $filter.projectID) {
                 Text("All projects").tag(String?.none)
                 ForEach(projects, id: \.self) { project in
                     Text(project).tag(String?.some(project))
@@ -44,46 +55,21 @@ struct RunsListView: View {
             .padding(.horizontal)
             .padding(.bottom, 8)
 
-            if visibleRuns.isEmpty {
+            if rows.isEmpty {
                 UnavailableStateView(
-                    title: "No runs",
+                    title: filter.scope == .all ? "No runs" : "No \(filter.scope.label.lowercased()) runs",
                     systemImage: "point.3.connected.trianglepath.dotted",
-                    description: "Runs for this project will appear here.")
+                    description: "Runs in this scope will appear here.")
             } else {
                 #if os(iOS)
-                    List(visibleRuns, id: \.run.id) { snapshot in
-                        NavigationLink(value: snapshot.run.id) {
-                            RunRowView(
-                                run: snapshot.run,
-                                schedules: schedules.filter {
-                                    $0.schedule.run_id == snapshot.run.id
-                                        && $0.schedule.status == .armed
-                                })
-                        }
-                        .listRowInsets(
-                            EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)
-                        )
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
+                    List {
+                        listRows(rows)
                     }
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
                 #else
-                    List(visibleRuns, id: \.run.id, selection: $selection) { snapshot in
-                        RunRowView(
-                            run: snapshot.run,
-                            schedules: schedules.filter {
-                                $0.schedule.run_id == snapshot.run.id
-                                    && $0.schedule.status == .armed
-                            },
-                            isSelected: selection == snapshot.run.id
-                        )
-                        .hidesSystemListSelection()
-                        .listRowInsets(
-                            EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)
-                        )
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
+                    List(selection: $selection) {
+                        listRows(rows)
                     }
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
@@ -91,13 +77,22 @@ struct RunsListView: View {
             }
         }
         .navigationTitle("Runs")
-        .onChange(of: projectID) {
+        .onAppear { revealSelectedRun() }
+        .onChange(of: selection) { revealSelectedRun() }
+        .onChange(of: navigationPath?.wrappedValue) { revealSelectedRun() }
+        .onChange(of: filter.scope) {
+            repairFilterAndSelection()
+        }
+        .onChange(of: filter.projectID) {
             repairFilterAndSelection()
         }
         .onChange(of: projects) {
+            revealSelectedRun()
             repairFilterAndSelection()
         }
         .onChange(of: runs.map(\.run.id)) {
+            // A launch link can arrive before its snapshot has loaded.
+            revealSelectedRun()
             repairFilterAndSelection()
         }
         #if os(iOS)
@@ -105,17 +100,42 @@ struct RunsListView: View {
         #endif
     }
 
-    private func repairFilterAndSelection() {
-        if let projectID, !projects.contains(projectID) {
-            self.projectID = nil
+    private func listRows(_ snapshots: [Components.Schemas.RunSnapshot]) -> some View {
+        ForEach(snapshots, id: \.run.id) { snapshot in
+            Group {
+                #if os(iOS)
+                    NavigationLink(value: snapshot.run.id) { row(snapshot) }
+                #else
+                    row(snapshot)
+                        .hidesSystemListSelection()
+                #endif
+            }
+            .tag(snapshot.run.id)
+            .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
         }
-        let effectiveProject = projectID.flatMap { projects.contains($0) ? $0 : nil }
+    }
+
+    private func row(_ snapshot: Components.Schemas.RunSnapshot) -> some View {
+        RunRowView(
+            run: snapshot.run,
+            identityLine: RunDisplay.identityLine(snapshot.run, runs: runs),
+            secondaryLine: RunDisplay.secondaryLine(snapshot.run, runs: runs),
+            spendLine: RunDisplay.spendLine(snapshot.run),
+            schedules: schedules.filter {
+                $0.schedule.run_id == snapshot.run.id && $0.schedule.status == .armed
+            },
+            isSelected: selection == snapshot.run.id)
+    }
+
+    private func repairFilterAndSelection() {
+        if let projectID = filter.projectID, !projects.contains(projectID) {
+            filter.projectID = nil
+        }
+        let availableIDs = Set(visibleRuns.map(\.run.id))
         #if os(iOS)
             if let path = navigationPath?.wrappedValue {
-                let availableIDs = Set(
-                    runs.filter {
-                        effectiveProject == nil || $0.run.project_id == effectiveProject
-                    }.map(\.run.id))
                 let repairedPath = NavigationModel.repairedPath(
                     path,
                     availableIDs: availableIDs)
@@ -124,33 +144,81 @@ struct RunsListView: View {
                 }
             }
         #else
-            if let selection,
-                !runs.contains(where: {
-                    $0.run.id == selection
-                        && (effectiveProject == nil || $0.run.project_id == effectiveProject)
-                })
-            {
+            if let selection, !availableIDs.contains(selection) {
                 self.selection = nil
             }
         #endif
+    }
+
+    private func revealSelectedRun() {
+        #if os(iOS)
+            let selectedID = navigationPath?.wrappedValue.last
+        #else
+            let selectedID = selection
+        #endif
+        if let run = runs.first(where: { $0.run.id == selectedID })?.run {
+            filter.reveal(run)
+        }
     }
 
     /// The project-owned row composition without List and Picker, whose
     /// AppKit-backed controls ImageRenderer cannot draw off-screen.
     @ViewBuilder
     func screenshotContent() -> some View {
-        VStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(visibleRuns.prefix(5)), id: \.run.id) { snapshot in
-                RunRowView(
-                    run: snapshot.run,
-                    schedules: schedules.filter {
-                        $0.schedule.run_id == snapshot.run.id && $0.schedule.status == .armed
-                    },
-                    isSelected: selection == snapshot.run.id
-                )
+                row(snapshot)
             }
         }
         .padding()
+    }
+}
+
+/// Scope counts and rows use the same lifecycle and project predicate.
+struct RunListFilter {
+    enum Scope: String, CaseIterable, Identifiable {
+        case active, finished, all
+
+        var id: Self { self }
+        var label: String {
+            switch self {
+            case .active: "Active"
+            case .finished: "Finished"
+            case .all: "All"
+            }
+        }
+
+        func includes(_ run: Components.Schemas.Run) -> Bool {
+            switch self {
+            case .active: run.lifecycle == .active
+            case .finished: run.lifecycle == .finished
+            case .all: true
+            }
+        }
+    }
+
+    var scope: Scope = .active
+    var projectID: String?
+
+    func rows(in runs: [Components.Schemas.RunSnapshot]) -> [Components.Schemas.RunSnapshot] {
+        RunDisplay.sortedRuns(runs.filter { includes($0.run, scope: scope) })
+    }
+
+    func count(in runs: [Components.Schemas.RunSnapshot], scope: Scope) -> Int {
+        runs.count { includes($0.run, scope: scope) }
+    }
+
+    private func includes(_ run: Components.Schemas.Run, scope: Scope) -> Bool {
+        (projectID == nil || run.project_id == projectID) && scope.includes(run)
+    }
+
+    mutating func reveal(_ run: Components.Schemas.Run) {
+        if !scope.includes(run) {
+            scope = run.lifecycle == .active ? .active : .finished
+        }
+        if let projectID, projectID != run.project_id {
+            self.projectID = nil
+        }
     }
 }
 
@@ -159,6 +227,9 @@ struct RunsListView: View {
 private struct RunRowView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let run: Components.Schemas.Run
+    let identityLine: String?
+    let secondaryLine: RunDisplay.SecondaryLine
+    let spendLine: String?
     let schedules: [Components.Schemas.ScheduleSnapshot]
     var isSelected = false
 
@@ -177,8 +248,13 @@ private struct RunRowView: View {
                     RunOutcomeBadge(outcome: run.outcome)
                 }
             }
+            if let identityLine {
+                Text(identityLine)
+                    .font(FreesideFont.monoCaption)
+                    .foregroundStyle(Color.inkDim)
+            }
             Group {
-                switch RunDisplay.secondaryLine(run) {
+                switch secondaryLine {
                 case .hold(let label):
                     // A hold is attention; on a failed or lost run it
                     // reads as part of the failure and keeps wax.
@@ -187,9 +263,23 @@ private struct RunRowView: View {
                 case .milestone(let label):
                     Text(label)
                         .foregroundStyle(Color.inkDim)
+                case .completion(let label):
+                    Text(label)
+                        .foregroundStyle(Color.ink)
+                case .supersession(let label):
+                    // Campaign identity already names its successor on this line.
+                    if identityLine == nil {
+                        Text(label)
+                            .foregroundStyle(Color.inkDim)
+                    }
                 }
             }
             .font(FreesideFont.caption)
+            if let spendLine {
+                Text(spendLine)
+                    .font(FreesideFont.caption)
+                    .foregroundStyle(Color.inkDim)
+            }
             if !schedules.isEmpty {
                 WrappingHStack(horizontalSpacing: 6, verticalSpacing: 6) {
                     ForEach(schedules, id: \.schedule.id) { snapshot in
@@ -267,6 +357,8 @@ enum RunDisplay {
     enum SecondaryLine: Equatable {
         case hold(String)
         case milestone(String)
+        case supersession(String)
+        case completion(String)
     }
 
     static func sortedRuns(
@@ -294,7 +386,12 @@ enum RunDisplay {
     }
 
     static func primaryLine(_ run: Components.Schemas.Run) -> String {
-        var parts = [run.project_id]
+        let names = run.display_names?.value1
+        let project = names?.project.text ?? ""
+        var parts = [project.isEmpty ? run.project_id : project]
+        if let workUnit = names?.work_unit.text, !workUnit.isEmpty {
+            parts.append(workUnit)
+        }
         if let stage = run.stages.last {
             parts.append(stage.name.capitalized)
             if let round = round(stage) {
@@ -304,7 +401,40 @@ enum RunDisplay {
         return parts.joined(separator: " · ")
     }
 
-    static func secondaryLine(_ run: Components.Schemas.Run) -> SecondaryLine {
+    static func identityLine(
+        _ run: Components.Schemas.Run, runs: [Components.Schemas.RunSnapshot]
+    ) -> String? {
+        guard run.campaign_id != nil, let attempt = run.attempt_number else { return nil }
+        let identity = "Attempt \(attempt)"
+        if let successor = successorLabel(run, runs: runs) {
+            return "\(identity) · superseded by \(successor)"
+        }
+        return identity
+    }
+
+    private static func successorLabel(
+        _ run: Components.Schemas.Run, runs: [Components.Schemas.RunSnapshot]
+    ) -> String? {
+        guard let successorID = run.superseded_by else { return nil }
+        if let attempt = runs.first(where: { $0.run.id == successorID })?.run.attempt_number {
+            return "attempt \(attempt)"
+        }
+        return successorID
+    }
+
+    static func spendLine(_ run: Components.Schemas.Run) -> String? {
+        run.billable_cost_so_far.map { AttentionDisplay.costSoFar($0.value1) }
+    }
+
+    static func secondaryLine(
+        _ run: Components.Schemas.Run, runs: [Components.Schemas.RunSnapshot] = []
+    ) -> SecondaryLine {
+        if let successor = successorLabel(run, runs: runs) {
+            return .supersession("Superseded by \(successor)")
+        }
+        if let completion = run.completion?.value1 {
+            return .completion("Merged PR #\(completion.pr_number)")
+        }
         if let hold = run.hold_reason?.value1 {
             return .hold(label(hold))
         }

@@ -248,7 +248,7 @@ enum AttentionDisplay {
         }
     }
 
-    private static func costSoFar(_ cost: Components.Schemas.CostSoFar) -> String {
+    static func costSoFar(_ cost: Components.Schemas.CostSoFar) -> String {
         let invocations =
             cost.invocations == 1 ? "1 invocation" : "\(cost.invocations) invocations"
         return "\(cost.currency) \(cost.amount) across \(invocations)"

@@ -916,6 +916,19 @@
                             selection: .constant(activeRun.run.id)
                         ).screenshotContent()
                     )))
+            for scope in [RunListFilter.Scope.finished, .all] {
+                surfaces.append(
+                    Surface(
+                        name: "runs-list-\(scope.rawValue)",
+                        view: AnyView(
+                            RunsListView(
+                                runs: runs,
+                                schedules: schedules,
+                                selection: .constant(nil),
+                                initialScope: scope
+                            ).screenshotContent()
+                        )))
+            }
             surfaces.append(
                 Surface(
                     name: "operational-summary",
