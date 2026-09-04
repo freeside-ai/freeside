@@ -19,8 +19,24 @@ import Testing
         #expect(summary.highestPriorityTitle == AttentionDisplay.title(urgent.item))
         #expect(summary.highestPriorityLabel == "Urgent")
         #expect(summary.waitingLongestTitle == AttentionDisplay.title(older.item))
-        #expect(summary.activeRunCount == 1)
+        #expect(summary.activeRunCount == 3)
         #expect(summary.daemonState == .connected)
+    }
+
+    @Test func activeCountUsesLifecycleIncludingPublishedAndExcludingSupersededPending() throws {
+        var superseded = RunFixtures.defaultRuns()[0]
+        superseded.run.superseded_by = "successor"
+        superseded.run.lifecycle = .finished
+        let runs = RunFixtures.defaultRuns() + [superseded]
+        let summary = OperationalSummary(openSnapshots: [], runs: runs, freshness: .fresh)
+        #expect(summary.activeRunCount == RunListFilter().count(in: runs, scope: .active))
+        #expect(summary.activeRunCount == 3)
+
+        let published = try #require(runs.first { $0.run.outcome == .published })
+        let publishedOnly = OperationalSummary(openSnapshots: [], runs: [published], freshness: .fresh)
+        let supersededOnly = OperationalSummary(openSnapshots: [], runs: [superseded], freshness: .fresh)
+        #expect(publishedOnly.activeRunCount == 1)
+        #expect(supersededOnly.activeRunCount == 0)
     }
 
     @Test func retainedOpenProjectionDoesNotReapplyLiveStatus() {

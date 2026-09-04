@@ -43,7 +43,7 @@ struct OperationalSummary: Equatable {
         highestPriorityTitle = highestPriority.map(AttentionDisplay.title)
         highestPriorityLabel = highestPriority.map { AttentionDisplay.label($0.priority) }
         waitingLongestTitle = waitingLongest.map(AttentionDisplay.title)
-        activeRunCount = runs.count { $0.run.outcome == .pending }
+        activeRunCount = runs.count { $0.run.lifecycle == .active }
         daemonState =
             switch freshness {
             case .unvalidated: .checking

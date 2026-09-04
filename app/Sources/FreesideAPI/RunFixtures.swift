@@ -18,11 +18,12 @@ public enum RunFixtures {
                 lifecycle: .active, hold: .verification_findings,
                 campaignID: "campaign-freeside-acceptance",
                 campaignAttempt: 2, attemptReason: "Retry after repairing the acceptance rig",
-                parentRunID: "run-freeside-656", cost: activeCost),
+                parentRunID: "run-freeside-656", cost: activeCost, workUnit: "#724"),
             snapshot(
                 id: readyRunID, projectID: "freeside", stage: "publication",
                 attempt: 1, milestone: .publication_ready, outcome: .published,
-                lifecycle: .active, campaignID: "campaign-freeside-ready", campaignAttempt: 1),
+                lifecycle: .active, campaignID: "campaign-freeside-ready", campaignAttempt: 1,
+                workUnit: "#654"),
             snapshot(
                 id: "run-oriole-121", projectID: "oriole", stage: "verification",
                 attempt: 1, milestone: .terminal_recorded, outcome: .failed, lifecycle: .finished),
@@ -31,21 +32,29 @@ public enum RunFixtures {
             snapshot(
                 id: legacyRunID, projectID: "freeside", stage: "implementation",
                 attempt: 1, milestone: nil, outcome: .unobserved, lifecycle: .finished),
+            snapshot(
+                id: "run-freeside-656", projectID: "freeside", stage: "implementation",
+                attempt: 1, milestone: .terminal_recorded, outcome: .failed, lifecycle: .finished,
+                campaignID: "campaign-freeside-acceptance", campaignAttempt: 1,
+                supersededBy: activeRunID, workUnit: "#724"),
+            snapshot(
+                id: "run-freeside-specification", projectID: "freeside", stage: "specification",
+                attempt: 1, milestone: .execution_export_recorded, outcome: .pending,
+                lifecycle: .active, workUnit: "#724"),
+            completedRun(),
         ].map { projectingObservationTimes($0, from: timelines[$0.run.id]) }
     }
 
     /// A completed run (#1134): the work unit's PR merged and closed its
     /// bound issue, so the outcome is completed, the lifecycle finished, and
-    /// the summary carries the completion facts and the spend figure. Kept
-    /// out of `defaultRuns()` so the pinned screenshots do not move until the
-    /// runs list renders it (#1129).
+    /// the summary carries the completion facts and the spend figure.
     public static func completedRun() -> Components.Schemas.RunSnapshot {
         projectingObservationTimes(
             snapshot(
                 id: completedRunID, projectID: "freeside", stage: "publication",
                 attempt: 1, milestone: .work_unit_completed, outcome: .completed,
                 lifecycle: .finished, campaignID: "campaign-freeside-completed", campaignAttempt: 1,
-                completion: completedFacts, cost: completedCost),
+                completion: completedFacts, cost: completedCost, workUnit: "#80"),
             from: completedTimeline())
     }
 
@@ -159,6 +168,21 @@ public enum RunFixtures {
                 invocations: [],
                 completion: nil,
                 billable_cost_so_far: nil),
+            .init(
+                as_of_revision: 12, as_of: date(900), run_id: "run-freeside-656",
+                milestones: [
+                    milestone(.run_submitted, runID: "run-freeside-656", minute: 0),
+                    milestone(.terminal_recorded, runID: "run-freeside-656", minute: 15),
+                ],
+                invocations: [], completion: nil, billable_cost_so_far: nil),
+            .init(
+                as_of_revision: 12, as_of: date(300), run_id: "run-freeside-specification",
+                milestones: [
+                    milestone(.run_submitted, runID: "run-freeside-specification", minute: 0),
+                    milestone(.execution_export_recorded, runID: "run-freeside-specification", minute: 5),
+                ],
+                invocations: [], completion: nil, billable_cost_so_far: nil),
+            completedTimeline(),
         ]
     }
 
@@ -181,7 +205,8 @@ public enum RunFixtures {
         parentRunID: String? = nil,
         supersededBy: String? = nil,
         completion: Components.Schemas.WorkUnitCompletionFacts? = nil,
-        cost: Components.Schemas.CostSoFar? = nil
+        cost: Components.Schemas.CostSoFar? = nil,
+        workUnit: String? = nil
     ) -> Components.Schemas.RunSnapshot {
         let stageID = "stage-\(id)"
         return .init(
@@ -190,6 +215,12 @@ public enum RunFixtures {
             run: .init(
                 id: id,
                 project_id: projectID,
+                display_names: workUnit.map {
+                    .init(
+                        value1: .init(
+                            project: .init(text: projectID, source: .name),
+                            work_unit: .init(text: $0, source: .name)))
+                },
                 created_at: nil,
                 last_activity_at: nil,
                 spec_digest: "sha256:\(String(repeating: "1", count: 64))",
