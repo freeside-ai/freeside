@@ -85,7 +85,7 @@ func TestRunSnapshotProjectsObservationTimestamps(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := runSnapshot(
 				run, store.Snapshot{EntityVersion: 1}, tc.observation,
-				domain.ConcludeRun(tc.observation), 1, nil,
+				domain.ConcludeRun(tc.observation), 1, nil, runProjectionFacts{},
 			).Run
 			assertOptionalInstant(t, "created_at", got.CreatedAt, tc.wantCreated)
 			assertOptionalInstant(t, "last_activity_at", got.LastActivityAt, tc.wantLastActivity)

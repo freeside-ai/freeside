@@ -44,16 +44,39 @@ func TestSignetWireGoldens(t *testing.T) {
 		PolicyDigest: domain.Digest("sha256:" + strings.Repeat("3", 64)),
 	}
 	invocationID := domain.InvocationID("inv-569")
+	publicationInvocationID := domain.ProductionPublicationInvocationID(runID)
+	mergedAt := createdAt.Add(3 * time.Hour)
+	// The observation pins a completed run (#1134): the timeline ends with
+	// work_unit_completed, and the projection facts carry the completion,
+	// the superseding attempt, and the spend figure.
 	observation := domain.RunObservation{
 		RunID: runID,
-		Milestones: []domain.RunMilestone{{
-			RunID: runID, Kind: domain.MilestoneRunSubmitted,
-			InvocationID: &invocationID, RecordedAt: createdAt,
-		}},
+		Milestones: []domain.RunMilestone{
+			{
+				RunID: runID, Kind: domain.MilestoneRunSubmitted,
+				InvocationID: &invocationID, RecordedAt: createdAt,
+			},
+			{
+				RunID: runID, Kind: domain.MilestonePublicationReady,
+				InvocationID: &publicationInvocationID, RecordedAt: createdAt.Add(2 * time.Hour),
+			},
+			{
+				RunID: runID, Kind: domain.MilestoneWorkUnitCompleted,
+				InvocationID: &publicationInvocationID, RecordedAt: mergedAt,
+			},
+		},
 		Invocations: []domain.InvocationObservation{{
 			InvocationID: invocationID, RunID: runID,
-			Status: domain.ObservedStatusRunning, Live: true, ObservedAt: acceptedAt,
+			Status: domain.ObservedStatusCompleted, Live: false, ObservedAt: acceptedAt,
 		}},
+	}
+	boundIssue := 724
+	facts := runProjectionFacts{
+		completion: &WorkUnitCompletionFacts{
+			PRNumber: 725, MergeCommitSHA: strings.Repeat("5", 40),
+			BoundIssue: &boundIssue, RecordedAt: mergedAt,
+		},
+		cost: &domain.CostSoFar{Currency: "USD", Amount: "17.5", Invocations: 1, Complete: true},
 	}
 	conversation := domain.Conversation{ID: conversationID, Status: domain.ConversationIdle}
 	schedule := domain.Schedule{
@@ -114,6 +137,7 @@ func TestSignetWireGoldens(t *testing.T) {
 							Project:  domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
 							WorkUnit: domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
 						},
+						facts,
 					),
 				},
 				Conversations: []ConversationSnapshot{
@@ -125,7 +149,7 @@ func TestSignetWireGoldens(t *testing.T) {
 			},
 		},
 		{name: "server-revision", value: ServerRevision{SyncEpoch: "sync-epoch-569", Revision: 23}},
-		{name: "run-timeline", value: runTimeline(observation, 23, acceptedAt)},
+		{name: "run-timeline", value: runTimeline(observation, 23, acceptedAt, facts)},
 		{name: "pairing-facts", value: pairingFacts},
 		{
 			name: "pairing-grant",
