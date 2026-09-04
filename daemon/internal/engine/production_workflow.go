@@ -112,10 +112,6 @@ func productionVerificationInvocationIDForProducer(
 	return ""
 }
 
-func productionPublicationInvocationID(runID domain.RunID) domain.InvocationID {
-	return domain.InvocationID("publish-production-" + string(runID))
-}
-
 // productionInvocationRequest is the outbox payload for one production
 // dispatch intent. Unlike the conversation lane's request it carries the run
 // and stage directly: there is no attention item to resolve them through.
@@ -299,7 +295,7 @@ func submitProductionRun(
 		return ProductionRun{}, fmt.Errorf("submit production run %q: %w", spec.RunID, err)
 	}
 	publicationReservation, err := publish.NewReservation(
-		productionPublicationInvocationID(spec.RunID), spec.RunID,
+		domain.ProductionPublicationInvocationID(spec.RunID), spec.RunID,
 	)
 	if err != nil {
 		return ProductionRun{}, fmt.Errorf("submit production run %q publication reservation: %w", spec.RunID, err)

@@ -26,7 +26,7 @@ func validMilestone(kind RunMilestoneKind) RunMilestone {
 		m.Reason = &reason
 	case MilestoneRunSubmitted, MilestoneInvocationAdmitted,
 		MilestoneInvocationStarted, MilestoneExecutionExportRecorded,
-		MilestonePublicationReady:
+		MilestonePublicationReady, MilestoneWorkUnitCompleted:
 	}
 	return m
 }
@@ -56,6 +56,134 @@ func TestRunOutcomeRegistrationAndConclusion(t *testing.T) {
 	}
 	if err := conclusion.Validate(); err != nil {
 		t.Fatalf("ConcludeRun().Validate() = %v", err)
+	}
+}
+
+// TestConcludeRunWorkUnitCompletedOutranksPublication pins the completed
+// outcome: the merge is the run's last word, so work_unit_completed outranks
+// both the ready and the blocked publication authorities, and the completed
+// conclusion carries no reason or terminal.
+func TestConcludeRunWorkUnitCompletedOutranksPublication(t *testing.T) {
+	inv := InvocationID("publish-production-run-1")
+	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	reason := HoldBaseAdvanced
+	milestones := []RunMilestone{
+		{
+			RunID: "run-1", Kind: MilestonePublicationBlocked, InvocationID: &inv,
+			Reason: &reason, RecordedAt: base,
+		},
+		{
+			RunID: "run-1", Kind: MilestonePublicationReady, InvocationID: &inv,
+			RecordedAt: base.Add(time.Minute),
+		},
+		{
+			RunID: "run-1", Kind: MilestoneWorkUnitCompleted, InvocationID: &inv,
+			RecordedAt: base.Add(2 * time.Minute),
+		},
+	}
+	got := ConcludeRun(RunObservation{RunID: "run-1", Milestones: milestones})
+	want := RunConclusion{Outcome: RunOutcomeCompleted, Final: true}
+	if got != want {
+		t.Fatalf("ConcludeRun(completed) = %+v, want %+v", got, want)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("ConcludeRun(completed).Validate() = %v", err)
+	}
+	// Timeline order does not matter: the completion fact outranks a later
+	// block or ready append too.
+	reordered := []RunMilestone{milestones[2], milestones[0], milestones[1]}
+	if got := ConcludeRun(RunObservation{RunID: "run-1", Milestones: reordered}); got != want {
+		t.Fatalf("ConcludeRun(completed first) = %+v, want %+v", got, want)
+	}
+	concludedAt, ok := RunObservation{RunID: "run-1", Milestones: milestones}.ConcludedAt()
+	if !ok || !concludedAt.Equal(base.Add(2*time.Minute)) {
+		t.Fatalf("ConcludedAt() = %v, %v, want the completion instant", concludedAt, ok)
+	}
+}
+
+// TestPublicationReadyStands pins the recorders' precondition for the
+// completion milestone: a ready that follows the last block stands, a ready
+// before a later block does not, and no ready at all never stands.
+func TestPublicationReadyStands(t *testing.T) {
+	inv := InvocationID("publish-production-run-1")
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	reason := HoldBaseAdvanced
+	ready := RunMilestone{RunID: "run-1", Kind: MilestonePublicationReady, InvocationID: &inv, RecordedAt: at}
+	blocked := RunMilestone{RunID: "run-1", Kind: MilestonePublicationBlocked, InvocationID: &inv, Reason: &reason, RecordedAt: at}
+	submitted := RunMilestone{RunID: "run-1", Kind: MilestoneRunSubmitted, InvocationID: &inv, RecordedAt: at}
+	for _, tc := range []struct {
+		name       string
+		milestones []RunMilestone
+		want       bool
+	}{
+		{"no milestones", nil, false},
+		{"no ready", []RunMilestone{submitted, blocked}, false},
+		{"ready alone", []RunMilestone{submitted, ready}, true},
+		{"ready after block", []RunMilestone{blocked, ready}, true},
+		{"ready before block", []RunMilestone{ready, blocked}, false},
+	} {
+		if got := PublicationReadyStands(RunObservation{RunID: "run-1", Milestones: tc.milestones}); got != tc.want {
+			t.Errorf("%s: PublicationReadyStands() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestRunConclusionValidateCompletedShape pins that completed, like
+// published, is final and carries neither a reason nor a terminal.
+func TestRunConclusionValidateCompletedShape(t *testing.T) {
+	if err := (RunConclusion{Outcome: RunOutcomeCompleted, Final: true}).Validate(); err != nil {
+		t.Fatalf("completed final: Validate() = %v", err)
+	}
+	reason := HoldBaseAdvanced
+	terminal := ObservedStatusCompleted
+	for _, tc := range []struct {
+		name string
+		c    RunConclusion
+	}{
+		{"not final", RunConclusion{Outcome: RunOutcomeCompleted}},
+		{"with reason", RunConclusion{Outcome: RunOutcomeCompleted, Reason: &reason, Final: true}},
+		{"with terminal", RunConclusion{Outcome: RunOutcomeCompleted, Terminal: &terminal, Final: true}},
+	} {
+		if err := tc.c.Validate(); !errors.Is(err, ErrRunOutcomeDetailMismatch) {
+			t.Errorf("%s: Validate() = %v, want %v", tc.name, err, ErrRunOutcomeDetailMismatch)
+		}
+	}
+}
+
+// TestLifecycleOf pins the active-or-finished split over every outcome, with
+// and without a superseding attempt (#1134).
+func TestLifecycleOf(t *testing.T) {
+	for _, lifecycle := range AllRunLifecycles {
+		if !lifecycle.valid() {
+			t.Errorf("registered lifecycle %q is invalid", lifecycle)
+		}
+	}
+	if RunLifecycle("").valid() || RunLifecycle("done").valid() {
+		t.Error("an unregistered lifecycle validates")
+	}
+	wantAlone := map[RunOutcome]RunLifecycle{
+		RunOutcomeUnobserved: RunLifecycleFinished,
+		RunOutcomePending:    RunLifecycleActive,
+		RunOutcomePublished:  RunLifecycleActive,
+		RunOutcomeBlocked:    RunLifecycleActive,
+		RunOutcomeFailed:     RunLifecycleFinished,
+		RunOutcomeLost:       RunLifecycleFinished,
+		RunOutcomeCompleted:  RunLifecycleFinished,
+	}
+	if len(wantAlone) != len(AllRunOutcomes) {
+		t.Fatalf("lifecycle table covers %d outcomes, registry has %d", len(wantAlone), len(AllRunOutcomes))
+	}
+	for _, outcome := range AllRunOutcomes {
+		conclusion := RunConclusion{Outcome: outcome}
+		if got := LifecycleOf(conclusion, false); got != wantAlone[outcome] {
+			t.Errorf("LifecycleOf(%s, alone) = %s, want %s", outcome, got, wantAlone[outcome])
+		}
+		if got := LifecycleOf(conclusion, true); got != RunLifecycleFinished {
+			t.Errorf("LifecycleOf(%s, superseded) = %s, want finished", outcome, got)
+		}
+	}
+	if got := LifecycleOf(RunConclusion{}, false); got != RunLifecycleFinished {
+		t.Errorf("LifecycleOf(zero outcome) = %s, want finished", got)
 	}
 }
 
@@ -212,6 +340,22 @@ func TestRunMilestoneValidatePerKind(t *testing.T) {
 		m.Outcome = &bad
 		if err := m.Validate(); !errors.Is(err, ErrInvalidExecOutcome) {
 			t.Errorf("invalid outcome: Validate() = %v, want %v", err, ErrInvalidExecOutcome)
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*RunMilestone)
+	}{
+		{"terminal", func(m *RunMilestone) { m.Terminal = &terminal }},
+		{"outcome", func(m *RunMilestone) { m.Outcome = &outcome }},
+		{"reason", func(m *RunMilestone) { m.Reason = &reason }},
+		{"no invocation", func(m *RunMilestone) { m.InvocationID = nil }},
+	} {
+		m := validMilestone(MilestoneWorkUnitCompleted)
+		tc.mutate(&m)
+		if err := m.Validate(); !errors.Is(err, ErrMilestoneDetailMismatch) {
+			t.Errorf("work_unit_completed with %s: Validate() = %v, want %v",
+				tc.name, err, ErrMilestoneDetailMismatch)
 		}
 	}
 	{

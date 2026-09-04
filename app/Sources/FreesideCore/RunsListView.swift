@@ -212,7 +212,7 @@ private struct RunRowView: View {
     private var holdIsFailure: Bool {
         switch run.outcome {
         case .failed, .lost: true
-        case .unobserved, .pending, .published, .blocked: false
+        case .unobserved, .pending, .published, .blocked, .completed: false
         }
     }
 }
@@ -233,7 +233,7 @@ struct RunOutcomeBadge: View {
         switch outcome {
         case .unobserved: .inkDim
         case .pending: .waterText
-        case .published: .ink
+        case .published, .completed: .ink
         case .blocked: .accentText
         case .failed, .lost: .waxText
         }
@@ -328,6 +328,7 @@ enum RunDisplay {
         case .unobserved: "Not observed"
         case .pending: "In progress"
         case .published: "Ready"
+        case .completed: "Merged"
         case .blocked: "Blocked"
         case .failed: "Failed"
         case .lost: "Lost"

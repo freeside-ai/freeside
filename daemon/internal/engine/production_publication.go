@@ -866,7 +866,7 @@ func RecordProductionExecutionExport(
 		LegacyRemediationNoop: legacyNoop,
 		VerificationID: productionVerificationInvocationIDForProducer(
 			run.ID, executionExport.InvocationID),
-		PublicationID: productionPublicationInvocationID(run.ID),
+		PublicationID: domain.ProductionPublicationInvocationID(run.ID),
 		HeadSHA:       executionExport.HeadSHA, Artifacts: artifacts,
 		Replay: replay, Publication: publication,
 		Summary: fmt.Sprintf("Imported candidate %s over base %s.",
@@ -1143,7 +1143,7 @@ func (t productionPublicationTask) validate() error {
 		!validProducer ||
 		(t.LegacyRemediationNoop && !remediationProducer) ||
 		t.VerificationID != productionVerificationInvocationIDForProducer(t.RunID, t.ProducingInvocationID) ||
-		t.PublicationID != productionPublicationInvocationID(t.RunID) ||
+		t.PublicationID != domain.ProductionPublicationInvocationID(t.RunID) ||
 		!validCommitSHA(t.HeadSHA) {
 		return fmt.Errorf("invalid production publication task: %w", domain.ErrParentKeyMismatch)
 	}
@@ -4606,7 +4606,7 @@ func (w *productionPublicationWorkflow) recordAttendedPublicationHolds(ctx conte
 		}
 		if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
 			return recordRunHold(ctx, tx, runID,
-				productionPublicationInvocationID(runID),
+				domain.ProductionPublicationInvocationID(runID),
 				domain.HoldAttendedModeActive, now)
 		}); err != nil {
 			w.holdPace.forget("hold:" + string(runID))

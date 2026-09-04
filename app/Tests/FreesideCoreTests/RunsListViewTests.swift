@@ -15,6 +15,27 @@ import Testing
         #expect(run.parent_run_id == "run-freeside-656")
     }
 
+    /// A completed run (#1134) carries the widened contract without any new
+    /// rendering: the outcome labels quietly, the lifecycle is finished, and
+    /// the summary carries the completion facts and the spend figure.
+    @Test func completedRunCarriesCompletionLifecycleAndSpend() {
+        let run = RunFixtures.completedRun().run
+
+        #expect(run.outcome == .completed)
+        #expect(run.lifecycle == .finished)
+        #expect(run.superseded_by == nil)
+        #expect(run.completion?.value1.pr_number == 105)
+        #expect(run.completion?.value1.bound_issue == 80)
+        #expect(run.billable_cost_so_far?.value1.amount == "23.75")
+        #expect(RunDisplay.label(Components.Schemas.RunOutcome.completed) == "Merged")
+        #expect(RunDisplay.secondaryLine(run) == .milestone("Work Unit Completed"))
+        for snapshot in RunFixtures.defaultRuns() {
+            let finished = snapshot.run.lifecycle == .finished
+            let terminal = [.failed, .lost, .unobserved].contains(snapshot.run.outcome)
+            #expect(finished == terminal, "\(snapshot.run.id) lifecycle mirrors its outcome")
+        }
+    }
+
     @Test func rowLinesSeparateIdentityFromTheCurrentHold() {
         let active = RunFixtures.defaultRuns().first {
             $0.run.id == RunFixtures.activeRunID

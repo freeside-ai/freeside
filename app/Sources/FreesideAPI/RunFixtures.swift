@@ -6,6 +6,7 @@ public enum RunFixtures {
     public static let activeRunID = "run-freeside-657"
     public static let readyRunID = "run-freeside-654"
     public static let legacyRunID = "run-freeside-540"
+    public static let completedRunID = "run-freeside-640"
 
     public static func defaultRuns() -> [Components.Schemas.RunSnapshot] {
         let timelines = Dictionary(
@@ -14,23 +15,66 @@ public enum RunFixtures {
             snapshot(
                 id: activeRunID, projectID: "freeside", stage: "implementation",
                 attempt: 2, milestone: .invocation_started, outcome: .pending,
-                hold: .verification_findings, campaignID: "campaign-freeside-acceptance",
+                lifecycle: .active, hold: .verification_findings,
+                campaignID: "campaign-freeside-acceptance",
                 campaignAttempt: 2, attemptReason: "Retry after repairing the acceptance rig",
-                parentRunID: "run-freeside-656"),
+                parentRunID: "run-freeside-656", cost: activeCost),
             snapshot(
                 id: readyRunID, projectID: "freeside", stage: "publication",
                 attempt: 1, milestone: .publication_ready, outcome: .published,
-                campaignID: "campaign-freeside-ready", campaignAttempt: 1),
+                lifecycle: .active, campaignID: "campaign-freeside-ready", campaignAttempt: 1),
             snapshot(
                 id: "run-oriole-121", projectID: "oriole", stage: "verification",
-                attempt: 1, milestone: .terminal_recorded, outcome: .failed),
+                attempt: 1, milestone: .terminal_recorded, outcome: .failed, lifecycle: .finished),
             // A pre-migration-0024 legacy run: structural stages but no
             // observation milestones, so an unobserved outcome and no timeline.
             snapshot(
                 id: legacyRunID, projectID: "freeside", stage: "implementation",
-                attempt: 1, milestone: nil, outcome: .unobserved),
+                attempt: 1, milestone: nil, outcome: .unobserved, lifecycle: .finished),
         ].map { projectingObservationTimes($0, from: timelines[$0.run.id]) }
     }
+
+    /// A completed run (#1134): the work unit's PR merged and closed its
+    /// bound issue, so the outcome is completed, the lifecycle finished, and
+    /// the summary carries the completion facts and the spend figure. Kept
+    /// out of `defaultRuns()` so the pinned screenshots do not move until the
+    /// runs list renders it (#1129).
+    public static func completedRun() -> Components.Schemas.RunSnapshot {
+        projectingObservationTimes(
+            snapshot(
+                id: completedRunID, projectID: "freeside", stage: "publication",
+                attempt: 1, milestone: .work_unit_completed, outcome: .completed,
+                lifecycle: .finished, campaignID: "campaign-freeside-completed", campaignAttempt: 1,
+                completion: completedFacts, cost: completedCost),
+            from: completedTimeline())
+    }
+
+    public static func completedTimeline() -> Components.Schemas.RunTimeline {
+        .init(
+            as_of_revision: 12, as_of: date(2_400), run_id: completedRunID,
+            milestones: [
+                milestone(.run_submitted, runID: completedRunID, minute: 0),
+                milestone(.invocation_started, runID: completedRunID, minute: 1),
+                milestone(.terminal_recorded, runID: completedRunID, minute: 12),
+                milestone(.publication_ready, runID: completedRunID, minute: 18),
+                milestone(.work_unit_completed, runID: completedRunID, minute: 40),
+            ],
+            invocations: [
+                .init(
+                    invocation_id: "inv-\(completedRunID)-1", run_id: completedRunID,
+                    status: .completed, live: false, observed_at: date(720))
+            ],
+            completion: .init(value1: completedFacts),
+            billable_cost_so_far: .init(value1: completedCost))
+    }
+
+    private static let completedFacts = Components.Schemas.WorkUnitCompletionFacts(
+        pr_number: 105, merge_commit_sha: String(repeating: "5", count: 40),
+        bound_issue: 80, recorded_at: date(2_400))
+    private static let completedCost = Components.Schemas.CostSoFar(
+        currency: "USD", amount: "23.75", invocations: 2, complete: true)
+    private static let activeCost = Components.Schemas.CostSoFar(
+        currency: "USD", amount: "8.5", invocations: 1, complete: false)
 
     public static func defaultSchedules() -> [Components.Schemas.ScheduleSnapshot] {
         let created = date(0)
@@ -75,7 +119,9 @@ public enum RunFixtures {
                     .init(
                         invocation_id: "inv-\(activeRunID)-2", run_id: activeRunID,
                         status: .running, live: true, observed_at: date(2_100))
-                ]),
+                ],
+                completion: nil,
+                billable_cost_so_far: .init(value1: activeCost)),
             .init(
                 as_of_revision: 12, as_of: date(1_080), run_id: readyRunID,
                 milestones: [
@@ -88,7 +134,9 @@ public enum RunFixtures {
                     .init(
                         invocation_id: "inv-\(readyRunID)-1", run_id: readyRunID,
                         status: .completed, live: false, observed_at: date(1_080))
-                ]),
+                ],
+                completion: nil,
+                billable_cost_so_far: nil),
             .init(
                 as_of_revision: 12, as_of: date(600), run_id: "run-oriole-121",
                 milestones: [
@@ -100,13 +148,17 @@ public enum RunFixtures {
                     .init(
                         invocation_id: "inv-run-oriole-121-1", run_id: "run-oriole-121",
                         status: .failed, live: false, observed_at: date(600))
-                ]),
+                ],
+                completion: nil,
+                billable_cost_so_far: nil),
             // The legacy run's timeline is empty: no milestones synthesized,
             // matching the daemon's no-backfill projection of an unobserved run.
             .init(
                 as_of_revision: 12, as_of: date(0), run_id: legacyRunID,
                 milestones: [],
-                invocations: []),
+                invocations: [],
+                completion: nil,
+                billable_cost_so_far: nil),
         ]
     }
 
@@ -121,11 +173,15 @@ public enum RunFixtures {
         attempt: Int,
         milestone: Components.Schemas.RunMilestoneKind?,
         outcome: Components.Schemas.RunOutcome,
+        lifecycle: Components.Schemas.RunLifecycle,
         hold: Components.Schemas.RunHoldReason? = nil,
         campaignID: String? = nil,
         campaignAttempt: Int? = nil,
         attemptReason: String? = nil,
-        parentRunID: String? = nil
+        parentRunID: String? = nil,
+        supersededBy: String? = nil,
+        completion: Components.Schemas.WorkUnitCompletionFacts? = nil,
+        cost: Components.Schemas.CostSoFar? = nil
     ) -> Components.Schemas.RunSnapshot {
         let stageID = "stage-\(id)"
         return .init(
@@ -153,7 +209,11 @@ public enum RunFixtures {
                 ],
                 latest_milestone: milestone.map { .init(value1: $0) },
                 outcome: outcome,
-                hold_reason: hold.map { .init(value1: $0) }))
+                hold_reason: hold.map { .init(value1: $0) },
+                lifecycle: lifecycle,
+                superseded_by: supersededBy,
+                completion: completion.map { .init(value1: $0) },
+                billable_cost_so_far: cost.map { .init(value1: $0) }))
     }
 
     static func projectingObservationTimes(

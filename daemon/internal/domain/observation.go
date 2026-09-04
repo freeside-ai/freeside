@@ -55,6 +55,12 @@ const (
 	// MilestonePublicationBlocked: publication reached a definitive block;
 	// Reason carries the closed cause code.
 	MilestonePublicationBlocked RunMilestoneKind = "publication_blocked"
+	// MilestoneWorkUnitCompleted: the run's work unit satisfied its declared
+	// completion criterion (the PR merged, or the bound issue closed by that
+	// merge). The milestone is invocation-only, carrying the same publication
+	// invocation as publication_ready; the PR, merge commit, and bound issue
+	// stay on the re-gated work_unit_completions row, the single authority.
+	MilestoneWorkUnitCompleted RunMilestoneKind = "work_unit_completed"
 )
 
 // AllRunMilestoneKinds is the single registration point for milestone kinds.
@@ -67,6 +73,7 @@ var AllRunMilestoneKinds = []RunMilestoneKind{
 	MilestoneTerminalRecorded,
 	MilestonePublicationReady,
 	MilestonePublicationBlocked,
+	MilestoneWorkUnitCompleted,
 }
 
 func (k RunMilestoneKind) valid() bool {
@@ -74,7 +81,8 @@ func (k RunMilestoneKind) valid() bool {
 	case MilestoneRunSubmitted, MilestoneInvocationAdmitted,
 		MilestoneInvocationStarted, MilestoneExecutionExportRecorded,
 		MilestoneExecutionOutcomeRecorded, MilestoneTerminalRecorded,
-		MilestonePublicationReady, MilestonePublicationBlocked:
+		MilestonePublicationReady, MilestonePublicationBlocked,
+		MilestoneWorkUnitCompleted:
 		return true
 	default:
 		return false
@@ -350,7 +358,7 @@ func (m RunMilestone) Validate() error {
 				m.Kind, *m.Terminal, ErrInvalidObservedStatus)
 		}
 		return nil
-	case MilestonePublicationReady:
+	case MilestonePublicationReady, MilestoneWorkUnitCompleted:
 		return check(true, false, false, false)
 	case MilestonePublicationBlocked:
 		return check(true, false, false, true)
@@ -585,7 +593,8 @@ func (o RunObservation) SubmittedAt() (time.Time, bool) {
 }
 
 // ConcludedAt returns the instant the run's final outcome was recorded, if
-// one was: the latest of the publication and terminal milestones.
+// one was: the latest of the publication, completion, and terminal
+// milestones.
 func (o RunObservation) ConcludedAt() (time.Time, bool) {
 	var (
 		latest time.Time
@@ -594,7 +603,7 @@ func (o RunObservation) ConcludedAt() (time.Time, bool) {
 	for _, m := range o.Milestones {
 		switch m.Kind {
 		case MilestoneTerminalRecorded, MilestonePublicationReady,
-			MilestonePublicationBlocked:
+			MilestonePublicationBlocked, MilestoneWorkUnitCompleted:
 			if m.RecordedAt.After(latest) {
 				latest = m.RecordedAt
 				found = true
@@ -672,6 +681,11 @@ const (
 	RunOutcomeBlocked    RunOutcome = "blocked"
 	RunOutcomeFailed     RunOutcome = "failed"
 	RunOutcomeLost       RunOutcome = "lost"
+	// RunOutcomeCompleted marks a published run whose work unit then
+	// satisfied its completion criterion: the PR merged. It is a distinct
+	// terminal outcome rather than "published plus a milestone" so every
+	// consumer keeps switching on one field instead of re-deriving it.
+	RunOutcomeCompleted RunOutcome = "completed"
 )
 
 // AllRunOutcomes is the single registration point for run outcomes.
@@ -682,12 +696,13 @@ var AllRunOutcomes = []RunOutcome{
 	RunOutcomeBlocked,
 	RunOutcomeFailed,
 	RunOutcomeLost,
+	RunOutcomeCompleted,
 }
 
 func (o RunOutcome) valid() bool {
 	switch o {
 	case RunOutcomeUnobserved, RunOutcomePending, RunOutcomePublished,
-		RunOutcomeBlocked, RunOutcomeFailed, RunOutcomeLost:
+		RunOutcomeBlocked, RunOutcomeFailed, RunOutcomeLost, RunOutcomeCompleted:
 		return true
 	default:
 		return false
@@ -732,7 +747,7 @@ func (c RunConclusion) Validate() error {
 	switch c.Outcome {
 	case RunOutcomeUnobserved, RunOutcomePending:
 		return check(false, false, false)
-	case RunOutcomePublished:
+	case RunOutcomePublished, RunOutcomeCompleted:
 		return check(false, false, true)
 	case RunOutcomeBlocked:
 		return check(true, false, true)
@@ -743,7 +758,8 @@ func (c RunConclusion) Validate() error {
 }
 
 // ConcludeRun classifies a run from its milestone timeline. A definitive
-// publication block outranks ready because it is the actionable result.
+// publication block outranks ready because it is the actionable result; a
+// work-unit completion outranks both because the merge is the last word.
 func ConcludeRun(observation RunObservation) RunConclusion {
 	// An empty history is a pre-0024 legacy run: 0024 backfills no
 	// milestones, so classify it as unobserved rather than pending. The
@@ -764,11 +780,14 @@ func ConcludeRun(observation RunObservation) RunConclusion {
 		terminalInvocation InvocationID
 		blocked            *RunHoldReason
 		published          bool
+		completed          bool
 	)
 	for _, milestone := range observation.Milestones {
 		switch milestone.Kind {
 		case MilestonePublicationReady:
 			published = true
+		case MilestoneWorkUnitCompleted:
+			completed = true
 		case MilestonePublicationBlocked:
 			blocked = milestone.Reason
 		case MilestoneTerminalRecorded:
@@ -783,6 +802,8 @@ func ConcludeRun(observation RunObservation) RunConclusion {
 		}
 	}
 	switch {
+	case completed:
+		return RunConclusion{Outcome: RunOutcomeCompleted, Final: true}
 	case blocked != nil:
 		return RunConclusion{Outcome: RunOutcomeBlocked, Reason: blocked, Final: true}
 	case published:
@@ -828,4 +849,78 @@ func concludeTerminalOutcome(terminal ObservedInvocationStatus) (RunOutcome, boo
 		return RunOutcomePending, false
 	}
 	return RunOutcomePending, false
+}
+
+// PublicationReadyStands reports whether the timeline's publication_ready
+// authority is current: a ready milestone exists and none of the definitive
+// publication_blocked milestones follows the last one. The sync boundary
+// serves work_unit_completed only over such a history, and the recorders
+// consult the same rule before mirroring a completion, because a milestone
+// is append-only and one the boundary refuses would exclude the run for
+// good. Dispatch switch without default so the exhaustive linter forces a
+// new kind to be classified.
+func PublicationReadyStands(observation RunObservation) bool {
+	lastReady, lastBlock := -1, -1
+	for index, milestone := range observation.Milestones {
+		switch milestone.Kind {
+		case MilestonePublicationReady:
+			lastReady = index
+		case MilestonePublicationBlocked:
+			lastBlock = index
+		case MilestoneRunSubmitted, MilestoneInvocationAdmitted,
+			MilestoneInvocationStarted, MilestoneExecutionExportRecorded,
+			MilestoneExecutionOutcomeRecorded, MilestoneTerminalRecorded,
+			MilestoneWorkUnitCompleted:
+		}
+	}
+	return lastReady >= 0 && lastReady > lastBlock
+}
+
+// RunLifecycle is the operator-facing split of the runs list: whether the
+// daemon or the operator still has something to do with the run. It is a
+// separate derivation from RunConclusion.Final, which is engine input meaning
+// "the daemon will not change this outcome on its own"; a blocked run is
+// final yet active, because the operator still holds a decision. The zero
+// value "" is invalid by design.
+type RunLifecycle string
+
+const (
+	RunLifecycleActive   RunLifecycle = "active"
+	RunLifecycleFinished RunLifecycle = "finished"
+)
+
+// AllRunLifecycles is the single registration point for lifecycles.
+var AllRunLifecycles = []RunLifecycle{RunLifecycleActive, RunLifecycleFinished}
+
+func (l RunLifecycle) valid() bool {
+	switch l {
+	case RunLifecycleActive, RunLifecycleFinished:
+		return true
+	default:
+		return false
+	}
+}
+
+// LifecycleOf derives a run's lifecycle from its conclusion and whether a
+// later attempt superseded it. A superseded run is finished whatever its
+// outcome: the engine only retries a final run, and the successor now owns
+// the work. Otherwise completed, failed, lost, and unobserved are finished
+// (unobserved is a pre-0024 legacy run, chosen in #733 so it is never shown
+// in flight; a legacy run still running gains a liveness observation and
+// becomes pending). Pending, published with no completion yet, and blocked
+// with no successor are active: something is still pending for the daemon or
+// the operator. Dispatch switch without default so the exhaustive linter
+// forces a new outcome to be classified; the trailing return covers the
+// invalid zero value.
+func LifecycleOf(conclusion RunConclusion, superseded bool) RunLifecycle {
+	if superseded {
+		return RunLifecycleFinished
+	}
+	switch conclusion.Outcome {
+	case RunOutcomeCompleted, RunOutcomeFailed, RunOutcomeLost, RunOutcomeUnobserved:
+		return RunLifecycleFinished
+	case RunOutcomePending, RunOutcomePublished, RunOutcomeBlocked:
+		return RunLifecycleActive
+	}
+	return RunLifecycleFinished
 }
