@@ -627,6 +627,27 @@
                                     .diff, item: revised.item))))
                 }
 
+                if snapshot.item._type == .finding_adjudication {
+                    // One finding open: its proposal and daemon facts expand in
+                    // place, above the action region, while the other finding
+                    // stays a single row (#1107).
+                    let expandedDetail = DecisionDetailView(
+                        store: store,
+                        itemID: snapshot.item.id,
+                        expandedFindings: ["review-finding-17"],
+                        graphics: graphics,
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        now: screenshotNow)
+                    surfaces.append(
+                        Surface(
+                            name: "decision-finding_adjudication-expanded",
+                            view: AnyView(
+                                expandedDetail.screenshotCard(
+                                    snapshot.item,
+                                    at: dynamicTypeSize))))
+                }
+
                 if snapshot.item._type == .ready_for_final_review {
                     // The card carries this item's commit-plan fact, so the
                     // inspector beside it must not repeat a Facts section.
@@ -663,6 +684,45 @@
                                     snapshot.item,
                                     at: dynamicTypeSize,
                                     detailWidth: 1_200))))
+                    // The same card with the inspector open and the
+                    // inspector's Evidence disclosure open with it, which is
+                    // the state the pointer row exists for: the packet is
+                    // being drawn beside the card, so the card's own Evidence
+                    // module stands down to "N attachments → inspector"
+                    // (#1107). Only the evidence preference is raised here, so
+                    // this surface differs from
+                    // decision-ready_for_final_review-1200 in exactly the
+                    // module under test; with the default preferences the
+                    // inspector shows nothing and the card keeps its rows, so
+                    // recording that state would pin a card identical to the
+                    // one above and catch no pointer regression at all.
+                    let openEvidenceSuite = "FreesideScreenshotReadyInspectorOpenPreferences"
+                    guard let openEvidenceDefaults = UserDefaults(suiteName: openEvidenceSuite)
+                    else {
+                        throw ScreenshotError.preferencesUnavailable
+                    }
+                    openEvidenceDefaults.removePersistentDomain(forName: openEvidenceSuite)
+                    let openEvidencePreferences = DecisionSectionPreferences(
+                        defaults: openEvidenceDefaults)
+                    openEvidencePreferences.evidenceExpanded = true
+                    let readyInspectorOpen = DecisionDetailView(
+                        store: store,
+                        itemID: snapshot.item.id,
+                        graphics: graphics,
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        now: screenshotNow,
+                        sectionPreferences: openEvidencePreferences)
+                    surfaces.append(
+                        Surface(
+                            name: "decision-ready_for_final_review-inspector-open-1200",
+                            width: 1_200,
+                            view: AnyView(
+                                readyInspectorOpen.screenshotCard(
+                                    snapshot.item,
+                                    at: dynamicTypeSize,
+                                    detailWidth: 1_200,
+                                    inspectorPresented: true))))
                     // The other readiness shapes the daemon can hand the card
                     // (issue #982): a degraded verdict listing its waiver and
                     // advisory entries, and a verdict the daemon invalidated,

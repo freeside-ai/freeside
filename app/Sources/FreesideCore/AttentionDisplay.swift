@@ -187,12 +187,13 @@ enum AttentionDisplay {
                 .init("Completion evidence", dispute.completion_evidence, monospaced: true),
             ]
         case .ready_for_final_review:
+            // Diff alone: the checklist's "Bound to" row above carries the
+            // readiness candidate's head and base, and Details keeps this
+            // diff's own base and head as Diff base and Diff head, so
+            // repeating them here made one datum render in three card modules
+            // (#1107).
             guard let diff = item.diff_stats?.value1 else { return [] }
-            return [
-                .init("Diff", diffStats(diff)),
-                .init("Base", diff.base_sha, monospaced: true),
-                .init("Head", diff.head_sha, monospaced: true),
-            ]
+            return [.init("Diff", diffStats(diff))]
         case .publish_blocked:
             guard let block = item.publish_block?.value1 else { return [] }
             if let rule = block.trust_rule?.value1 {
@@ -226,11 +227,22 @@ enum AttentionDisplay {
                     .init("Pull request", "\(pull.repo)#\(pull.number)", monospaced: true))
             }
             return rows
-        // The ask leads a spec approval and an agent question, the adjudication
-        // artifact leads finding_adjudication, the authenticated proposal
-        // snapshot leads run_proposal, and the recovery bindings these two
-        // recovery types lead with are already their own rows.
-        case .spec_approval, .agent_question, .finding_adjudication, .run_proposal,
+        case .agent_question:
+            // The decisions lead the card, so these two say who stopped and
+            // what the run waits on, once, below them: they were a stage
+            // sentence and a caption inside the question module until the
+            // question took the lead (#1107).
+            guard let facts = item.agent_question?.value1 else { return [] }
+            var rows: [FactRow] = [.init("Stage", label(facts.stage))]
+            if let kind = facts.kind?.value1 {
+                rows.append(.init("Blocked on", AgentQuestionPresentation.kindLabel(kind)))
+            }
+            return rows
+        // The ask leads a spec approval, the adjudication artifact leads
+        // finding_adjudication, the authenticated proposal snapshot leads
+        // run_proposal, and the recovery bindings these two recovery types
+        // lead with are already their own rows.
+        case .spec_approval, .finding_adjudication, .run_proposal,
             .review_contradiction, .review_configuration:
             return []
         }
@@ -615,6 +627,16 @@ enum AttentionDisplay {
         rows.append(.init(label: "Item version", value: "\(item.item_version)"))
         if !item.pr_head_sha.isEmpty {
             rows.append(.init(label: "PR head", value: item.pr_head_sha))
+        }
+        // The diff's own base and head, which no other layer is guaranteed to
+        // render: the checklist's "Bound to" row reads readiness_detail, which
+        // a legacy or fake-mode item can omit, and it shows the readiness
+        // candidate's coordinates rather than these. Audit coordinates belong
+        // in the technical bindings, so the card can stop repeating them
+        // without losing them (#1107).
+        if let diff = item.diff_stats?.value1 {
+            rows.append(.init(label: "Diff base", value: diff.base_sha))
+            rows.append(.init(label: "Diff head", value: diff.head_sha))
         }
         rows.append(contentsOf: attachmentDigestRows(item))
         if let priorProposalDigest {

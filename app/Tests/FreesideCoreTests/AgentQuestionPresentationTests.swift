@@ -9,7 +9,6 @@ struct AgentQuestionPresentationTests {
         let presentation = try #require(AgentQuestionPresentation(item))
 
         #expect(presentation.stage == .implementation)
-        #expect(presentation.stageLabel == "The implementer stopped to ask")
         #expect(presentation.kindLabel == "Owner decision")
         #expect(presentation.decisions.count == AttentionFixtures.agentQuestionDecisions.count)
         let decision = try #require(presentation.decisions.first)
@@ -27,7 +26,7 @@ struct AgentQuestionPresentationTests {
                 decisions: AttentionFixtures.agentQuestionDecisions))
         let presentation = try #require(AgentQuestionPresentation(item))
 
-        #expect(presentation.stageLabel == "The specifier stopped to ask")
+        #expect(presentation.stage == .specification)
         #expect(presentation.kindLabel == nil)
         #expect(AgentQuestionPresentation.answerRoute(for: item) == nil)
     }

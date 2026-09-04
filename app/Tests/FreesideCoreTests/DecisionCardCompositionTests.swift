@@ -550,4 +550,99 @@ import Testing
             #expect(summaryIndex < composition.actionInsertionIndex)
         }
     }
+
+    /// The iOS sticky footer offers the recommended action exactly when the
+    /// button is off screen. Reordering the block to put the reason above the
+    /// button (#1107) made the block's own frame the wrong thing to measure:
+    /// a long reason leaves the block's top on screen with the button below
+    /// the fold, which has to count as not visible.
+    @Test func theRecommendedActionIsVisibleOnlyWhileItsButtonIsOnScreen() {
+        let viewport: CGFloat = 800
+
+        // Fully on screen.
+        #expect(
+            DecisionDetailView.recommendationActionVisible(
+                frame: CGRect(x: 0, y: 300, width: 560, height: 44),
+                viewportHeight: viewport))
+        // Pushed below the fold by a long reason, with the block's top still
+        // on screen: the regression this guards.
+        #expect(
+            !DecisionDetailView.recommendationActionVisible(
+                frame: CGRect(x: 0, y: 900, width: 560, height: 44),
+                viewportHeight: viewport))
+        // Scrolled off the top.
+        #expect(
+            !DecisionDetailView.recommendationActionVisible(
+                frame: CGRect(x: 0, y: -60, width: 560, height: 44),
+                viewportHeight: viewport))
+        // Straddling each edge still counts as reachable.
+        #expect(
+            DecisionDetailView.recommendationActionVisible(
+                frame: CGRect(x: 0, y: -20, width: 560, height: 44),
+                viewportHeight: viewport))
+        #expect(
+            DecisionDetailView.recommendationActionVisible(
+                frame: CGRect(x: 0, y: 780, width: 560, height: 44),
+                viewportHeight: viewport))
+        // Without the scroll space, as on the macOS inspector, the top-edge
+        // test stands alone.
+        #expect(
+            DecisionDetailView.recommendationActionVisible(
+                frame: CGRect(x: 0, y: 900, width: 560, height: 44),
+                viewportHeight: nil))
+    }
+
+    /// The collapsed finding row carries what decides the route, and drops the
+    /// confidence term the daemon did not record rather than showing an empty
+    /// one (#1107).
+    @Test func aCollapsedFindingRowNamesTheFindingAndWhatDecidesItsRoute() throws {
+        let binding = try #require(
+            AttentionFixtures.fixture(type: .finding_adjudication).item
+                .finding_adjudication?.value1)
+        var proposal = try #require(binding.proposals.first)
+
+        #expect(
+            DecisionDetailView.findingSummary(proposal)
+                == "review-finding-17 · Decline · Contradictory · High")
+
+        proposal.confidence = nil
+        #expect(
+            DecisionDetailView.findingSummary(proposal)
+                == "review-finding-17 · Decline · Contradictory")
+    }
+
+    /// The row's four values are separated by "·" on screen, which reads as
+    /// four bare words, so the spoken form names the field each one answers
+    /// and drops the confidence term with the value.
+    @Test func theCollapsedFindingRowIsSpokenWithItsFieldNames() throws {
+        let binding = try #require(
+            AttentionFixtures.fixture(type: .finding_adjudication).item
+                .finding_adjudication?.value1)
+        var proposal = try #require(binding.proposals.first)
+
+        #expect(
+            DecisionDetailView.findingSummaryAccessibilityLabel(proposal)
+                == "Finding review-finding-17, recommended route Decline, "
+                + "goal relationship Contradictory, confidence High")
+
+        proposal.confidence = nil
+        #expect(
+            DecisionDetailView.findingSummaryAccessibilityLabel(proposal)
+                == "Finding review-finding-17, recommended route Decline, "
+                + "goal relationship Contradictory")
+    }
+
+    /// The card's Evidence module points at the open inspector rather than
+    /// drawing the same attachments beside it, and the pointer counts them in
+    /// the operator's words (#1107).
+    @Test func theEvidencePointerCountsTheAttachmentsItStandsFor() {
+        #expect(DecisionDetailView.evidencePointer(1) == "1 attachment → inspector")
+        #expect(DecisionDetailView.evidencePointer(3) == "3 attachments → inspector")
+        #expect(
+            DecisionDetailView.evidencePointerAccessibilityLabel(1)
+                == "1 attachment, shown in the inspector")
+        #expect(
+            DecisionDetailView.evidencePointerAccessibilityLabel(3)
+                == "3 attachments, shown in the inspector")
+    }
 }
