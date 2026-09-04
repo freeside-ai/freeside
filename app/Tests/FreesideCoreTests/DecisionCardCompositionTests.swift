@@ -63,11 +63,18 @@ import Testing
         #expect(revision.diff.lines_removed == 1)
         #expect(
             composition.modules == [
-                .recommendation, .specRevision, .facts, .specification, .factBlock, .summary,
+                .recommendation, .specRevision, .summary, .facts, .specification, .factBlock,
                 .claims, .evidence, .details,
             ])
         #expect(
             composition.modules.firstIndex(of: .specRevision).map {
+                $0 < composition.actionInsertionIndex
+            } == true)
+        // §9 leads this card with a plan-altitude summary and puts the full
+        // specification below it, so the summary layer that now carries the
+        // reason has to render above the action region (#1098).
+        #expect(
+            composition.modules.firstIndex(of: .summary).map {
                 $0 < composition.actionInsertionIndex
             } == true)
         #expect(
@@ -491,5 +498,56 @@ import Testing
 
         #expect(presentation.summary.contains("Reviewer: The guard is required."))
         #expect(presentation.summary.contains("Agent: The state is unreachable."))
+    }
+
+    /// Only `spec_approval` carries the agent's summary in `reason`, so only
+    /// that card drops its Context section; every other type keeps rendering
+    /// the daemon's own context fact (#1098).
+    @Test func onlySpecificationApprovalsCarryTheirSummaryAsReason() {
+        #expect(DecisionCardComposition.reasonIsAgentSummary(.spec_approval))
+        for type in AttentionFixtures.phase1Types where type != .spec_approval {
+            #expect(!DecisionCardComposition.reasonIsAgentSummary(type))
+        }
+    }
+
+    /// The fixtures reproduce the producer relation the predicate above
+    /// depends on: `acceptSpecification` writes `reason` and the
+    /// `freeside.summary` claim from the same agent summary, first iteration
+    /// and revision alike (#1098).
+    @Test func specificationFixturesRepeatTheDaemonsSummaryRelation() throws {
+        for item in [
+            AttentionFixtures.fixture(type: .spec_approval).item,
+            AttentionFixtures.revisedSpecification().item,
+        ] {
+            let summary = try #require(
+                item.agent_claims.first { $0.label == AgentClaimLabels.summary }?.text?.content)
+            #expect(item.reason == summary)
+        }
+    }
+
+    /// A specification approval persisted before summary claims carries its
+    /// `Specification` claim alone, so the card has no unverified layer to
+    /// move the reason into and keeps Context rather than dropping the text
+    /// entirely (#1098).
+    @Test func legacySpecificationApprovalsKeepTheirContextSection() {
+        let composition = DecisionCardComposition.forType(.spec_approval)
+        var item = AttentionFixtures.fixture(type: .spec_approval).item
+        #expect(!composition.rendersContext(for: item))
+        item.agent_claims.removeAll { $0.label == AgentClaimLabels.summary }
+        #expect(composition.rendersContext(for: item))
+    }
+
+    /// A type only drops Context because its summary layer renders the same
+    /// text, so every such type has to compose that module and render it in
+    /// the lead: dropping Context moved the reason out of the position §9
+    /// reserves for a plan-altitude summary, and the summary module has to
+    /// take that position back (#1098).
+    @Test func typesThatMoveTheirReasonLeadWithTheSummaryModule() throws {
+        for type in AttentionFixtures.phase1Types
+        where DecisionCardComposition.reasonIsAgentSummary(type) {
+            let composition = DecisionCardComposition.forType(type)
+            let summaryIndex = try #require(composition.modules.firstIndex(of: .summary))
+            #expect(summaryIndex < composition.actionInsertionIndex)
+        }
     }
 }

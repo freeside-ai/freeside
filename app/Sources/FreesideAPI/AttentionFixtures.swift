@@ -134,7 +134,9 @@ public enum AttentionFixtures {
         ]
         let addressalsDigest = MockContractValidation.addressalsDigest(addressals)
         snapshot.item.id = "spec-approval-run-spec_approval-2"
-        snapshot.item.reason = "A revised specification is ready for approval"
+        // `reason` stays the summary-claim text inherited from the base
+        // fixture: the daemon sets it from the agent summary on every
+        // specification iteration, revisions included (#1098).
         snapshot.item.item_version = 2
         if let specificationIndex = snapshot.item.agent_claims.firstIndex(where: {
             $0.label == "Specification"
@@ -474,7 +476,9 @@ public enum AttentionFixtures {
                     "**P1 shadow finding** at `daemon/main.go:42`: the sampled reviewer found a blocking defect."
                 case .execution_failure:
                     "The **build** attempt likely failed because the fixture's generated client is stale."
-                case .spec_approval, .agent_question, .review_diminishing_returns,
+                case .spec_approval:
+                    specApprovalSummary
+                case .agent_question, .review_diminishing_returns,
                     .review_contradiction, .review_configuration, .finding_adjudication,
                     .ready_for_final_review, .publish_blocked, .run_proposal:
                     "Work on **\(key)** is ready; one decision is open."
@@ -997,10 +1001,16 @@ public enum AttentionFixtures {
             availability: .available)
     }
 
+    /// The `spec_approval` fixture's `freeside.summary` claim text, which is
+    /// also its `reason`: the daemon's `acceptSpecification` writes both from
+    /// the agent's summary, so a fixture that gave them different sentences
+    /// hid the duplication the card used to render (#1098).
+    static let specApprovalSummary = "Work on **spec_approval** is ready; one decision is open."
+
     private static func reason(type: Components.Schemas.AttentionType) -> String {
         switch type {
         case .spec_approval:
-            return "the spec for the auth work is ready for approval"
+            return specApprovalSummary
         case .execution_failure:
             return "the build stage failed twice on the same test"
         case .agent_question:
