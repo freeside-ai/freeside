@@ -368,9 +368,10 @@ public struct FreesideRootView: View {
             switch navigation.advanceAfterConclusion(
                 itemID: conclusion.itemID,
                 expectedOperatorNavigationRevision: operatorNavigationRevision,
+                advancesToNextItem: flowPreferences.advancesAutomatically,
                 store: coordinator.store)
             {
-            case .advanced:
+            case .advanced, .returnedToInbox:
                 showsInboxClearResult = false
             case .inboxClear:
                 showsInboxClearResult = true
