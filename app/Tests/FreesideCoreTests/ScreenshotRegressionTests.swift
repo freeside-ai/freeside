@@ -194,7 +194,6 @@
                     actionLabel: "Approve",
                     resultingStatus: .resolved,
                     at: screenshotNow),
-                advancesAutomatically: false,
                 advance: {})
             surfaces.append(
                 Surface(

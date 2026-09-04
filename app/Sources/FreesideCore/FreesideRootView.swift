@@ -361,10 +361,7 @@ public struct FreesideRootView: View {
         coordinator: SyncCoordinator
     ) {
         let operatorNavigationRevision = navigation.operatorNavigationRevision
-        feedback.present(
-            conclusion,
-            advancesAutomatically: flowPreferences.advancesAutomatically
-        ) {
+        feedback.present(conclusion) {
             switch navigation.advanceAfterConclusion(
                 itemID: conclusion.itemID,
                 expectedOperatorNavigationRevision: operatorNavigationRevision,
