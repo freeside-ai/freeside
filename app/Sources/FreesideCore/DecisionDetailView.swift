@@ -474,7 +474,7 @@ struct DecisionDetailView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .buttonStyle(FreesideActionButtonStyle(tone: .neutral))
+                .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
             }
 
             #if os(macOS)
@@ -2383,9 +2383,12 @@ struct DecisionDetailView: View {
             if showsValidationProgress && model.validation == .pending {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small).tint(.waterText)
+                    // The label reads as the disabled state it describes;
+                    // the spinner keeps its water tint because the work is
+                    // still in progress.
                     Text("Validating current state…")
                         .font(FreesideFont.monoCaption)
-                        .foregroundStyle(Color.inkDim)
+                        .foregroundStyle(Color.inkFaint)
                 }
             }
 
@@ -2395,20 +2398,20 @@ struct DecisionDetailView: View {
                 if stackedLayout {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(Array(ranking.principal.enumerated()), id: \.offset) { _, action in
-                            actionButton(action, item: item, tone: .neutral)
+                            actionButton(action, item: item, tone: .secondary)
                         }
                     }
                 } else {
                     HStack(alignment: .top, spacing: 8) {
                         ForEach(Array(ranking.principal.enumerated()), id: \.offset) { _, action in
-                            actionButton(action, item: item, tone: .neutral)
+                            actionButton(action, item: item, tone: .secondary)
                         }
                     }
                 }
             }
 
             if includesReviewing, let reviewing = ranking.reviewing {
-                actionButton(reviewing, item: item, tone: .neutral)
+                actionButton(reviewing, item: item, tone: .secondary)
             }
 
             overflowMenu(ranking.overflow, item: item)
@@ -2433,7 +2436,7 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func reviewingAction(_ item: Components.Schemas.AttentionItem) -> some View {
         if let reviewing = actionRanking(item).reviewing {
-            actionButton(reviewing, item: item, tone: .neutral)
+            actionButton(reviewing, item: item, tone: .secondary)
         }
     }
 
@@ -2479,13 +2482,15 @@ struct DecisionDetailView: View {
                     }
                 }
             } label: {
-                Text("More")
-                    .frame(maxWidth: .infinity)
+                Text("More actions \u{25BE}")
             }
             .menuStyle(.button)
-            .buttonStyle(FreesideActionButtonStyle(tone: .neutral))
+            .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
             .disabled(!model.actionsEnabled)
             .accessibilityLabel("More decision actions")
+            // Subordinate to the actions above it, and centered under them
+            // on both layouts rather than filling a row of its own.
+            .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 
@@ -2697,43 +2702,44 @@ struct RunProposalRevisionSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                LabeledContent("Intent", value: "Implement subject")
+            VStack(spacing: 0) {
+                Form {
+                    LabeledContent("Intent", value: "Implement subject")
+                        .listRowBackground(Color.ground2)
+                    LabeledContent("Expected cost (units)") {
+                        expectedCostField
+                    }
                     .listRowBackground(Color.ground2)
-                LabeledContent("Expected cost (units)") {
-                    expectedCostField
+                    Stepper("Components: \(componentCount)", value: $componentCount, in: 1...32)
+                        .listRowBackground(Color.ground2)
+                    LabeledContent(
+                        "Declared paths", value: "\(originalFacts.scope.declared_path_count)"
+                    )
+                    .listRowBackground(Color.ground2)
+                    Toggle("Touches control plane", isOn: $touchesControlPlane)
+                        .listRowBackground(Color.ground2)
                 }
-                .listRowBackground(Color.ground2)
-                Stepper("Components: \(componentCount)", value: $componentCount, in: 1...32)
-                    .listRowBackground(Color.ground2)
-                LabeledContent(
-                    "Declared paths", value: "\(originalFacts.scope.declared_path_count)"
-                )
-                .listRowBackground(Color.ground2)
-                Toggle("Touches control plane", isOn: $touchesControlPlane)
-                    .listRowBackground(Color.ground2)
-            }
-            .formStyle(.grouped)
-            .font(FreesideFont.body)
-            .foregroundStyle(Color.ink)
-            .navigationTitle("Start with changes")
-            .tint(.accentText)
-            .scrollContentBackground(.hidden)
-            .background(Color.ground)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Submit") {
+                .formStyle(.grouped)
+                .font(FreesideFont.body)
+                .foregroundStyle(Color.ink)
+                .navigationTitle("Start with changes")
+                .tint(.accentText)
+                .scrollContentBackground(.hidden)
+
+                // The submit is a body control in the primary recipe, not a
+                // toolbar item; Return and Escape still reach it.
+                FreesideSheetActionRow(
+                    submitLabel: "Submit",
+                    isSubmitEnabled: revision != nil,
+                    submit: {
                         if let revision {
                             submit(revision)
                             dismiss()
                         }
-                    }
-                    .disabled(revision == nil)
-                }
+                    },
+                    cancel: { dismiss() })
             }
+            .background(Color.ground)
         }
         .frame(minWidth: 380, minHeight: 280)
     }
@@ -2765,18 +2771,10 @@ struct RunProposalRevisionSheet: View {
             Text("Expected cost must be a whole number from 1 to 1,000,000 units.")
                 .font(FreesideFont.caption)
                 .foregroundStyle(Color.inkDim)
-            HStack(spacing: 12) {
-                Text("Cancel")
-                    .font(FreesideFont.sans(.body, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .freesideCard()
-                Text("Submit")
-                    .font(FreesideFont.sans(.body, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .freesideCard(border: revision == nil ? .rule : .accentBorder)
-            }
+            FreesideSheetActionRow(
+                submitLabel: "Submit",
+                isSubmitEnabled: revision != nil,
+                submit: {}, cancel: {})
         }
         .padding(24)
         .frame(maxWidth: 560, alignment: .leading)
@@ -2830,33 +2828,36 @@ struct RunProposalSnoozeSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                DatePicker(
-                    "Snooze until", selection: $until, in: now...,
-                    displayedComponents: [.date, .hourAndMinute]
-                )
-                .listRowBackground(Color.ground2)
-            }
-            .formStyle(.grouped)
-            .font(FreesideFont.body)
-            .foregroundStyle(Color.ink)
-            .navigationTitle("Snooze proposal")
-            .tint(.accentText)
-            .scrollContentBackground(.hidden)
-            .background(Color.ground)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+            VStack(spacing: 0) {
+                Form {
+                    DatePicker(
+                        "Snooze until", selection: $until, in: now...,
+                        displayedComponents: [.date, .hourAndMinute]
+                    )
+                    .listRowBackground(Color.ground2)
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Snooze") {
+                .formStyle(.grouped)
+                .font(FreesideFont.body)
+                .foregroundStyle(Color.ink)
+                .navigationTitle("Snooze proposal")
+                .tint(.accentText)
+                .scrollContentBackground(.hidden)
+
+                FreesideSheetActionRow(
+                    submitLabel: "Snooze",
+                    // Against the current time, not the sheet's opening one:
+                    // a chosen moment that has since passed is no longer a
+                    // snooze. The screenshot composition uses the injected
+                    // `now` instead, so its golden stays deterministic.
+                    isSubmitEnabled: Self.isValidSnooze(until: until, now: Date()),
+                    submit: {
                         guard Self.isValidSnooze(until: until, now: Date()) else { return }
                         submit(until)
                         dismiss()
-                    }
-                    .disabled(!Self.isValidSnooze(until: until, now: Date()))
-                }
+                    },
+                    cancel: { dismiss() })
             }
+            .background(Color.ground)
         }
         .frame(minWidth: 380, minHeight: 220)
     }
@@ -2877,18 +2878,10 @@ struct RunProposalSnoozeSheet: View {
             Text("The proposal returns to the inbox at this date and time.")
                 .font(FreesideFont.caption)
                 .foregroundStyle(Color.inkDim)
-            HStack(spacing: 12) {
-                Text("Cancel")
-                    .font(FreesideFont.sans(.body, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .freesideCard()
-                Text("Snooze")
-                    .font(FreesideFont.sans(.body, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .freesideCard(border: .accentBorder)
-            }
+            FreesideSheetActionRow(
+                submitLabel: "Snooze",
+                isSubmitEnabled: Self.isValidSnooze(until: until, now: now),
+                submit: {}, cancel: {})
         }
         .padding(24)
         .frame(maxWidth: 560, alignment: .leading)

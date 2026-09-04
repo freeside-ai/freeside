@@ -22,6 +22,10 @@ import Testing
     @Test func everyUsedSemanticPairMeetsItsContrastThreshold() {
         #expect(FreesidePalette.rule.dayIC == FreesidePalette.ruleStrong.day)
         #expect(FreesidePalette.rule.duskIC == FreesidePalette.ruleStrong.dusk)
+        #expect(FreesidePalette.secondaryBorder.dayIC == FreesidePalette.ruleStrong.day)
+        #expect(FreesidePalette.secondaryBorder.duskIC == FreesidePalette.ruleStrong.dusk)
+        #expect(FreesidePalette.inkFaint.dayIC == FreesidePalette.inkDim.day)
+        #expect(FreesidePalette.inkFaint.duskIC == FreesidePalette.inkDim.dusk)
 
         for pair in Self.usedPairs {
             for cut in Cut.allCases {
@@ -89,8 +93,20 @@ import Testing
             "waterText", FreesidePalette.waterText, on: "waterWash",
             FreesidePalette.waterWash),
 
+        // Disabled and validating text. It must stay readable while reading
+        // as unavailable, so it clears the disabled floor rather than the
+        // body one, on every ground a disabled control can sit on.
+        disabledText("inkFaint", FreesidePalette.inkFaint, on: "ground", FreesidePalette.ground),
+        disabledText(
+            "inkFaint", FreesidePalette.inkFaint, on: "ground2", FreesidePalette.ground2),
+        disabledText(
+            "inkFaint", FreesidePalette.inkFaint, on: "ground3", FreesidePalette.ground3),
+
         // Meaningful outlines and indicators. Standard structural hairlines
         // stay decorative; Increased Contrast promotes them to ruleStrong.
+        // secondaryBorder is intentionally absent for the same reason rule
+        // is: it is a hairline at 1.58:1 by day and relies on the Increased
+        // Contrast promotion to ruleStrong, asserted above.
         border(
             "accentBorder", FreesidePalette.accentBorder, on: "ground",
             FreesidePalette.ground),
@@ -128,6 +144,18 @@ import Testing
         Pair(
             foregroundName: foregroundName, foreground: foreground,
             backgroundName: backgroundName, background: background, minimum: 4.5)
+    }
+
+    /// Disabled text carries no action, so the project floor for it is the
+    /// 3:1 non-text minimum rather than the 4.5:1 body minimum: it must be
+    /// readable enough to name the unavailable action, and no more.
+    private static func disabledText(
+        _ foregroundName: String, _ foreground: FreesideColorCuts,
+        on backgroundName: String, _ background: FreesideColorCuts
+    ) -> Pair {
+        Pair(
+            foregroundName: foregroundName, foreground: foreground,
+            backgroundName: backgroundName, background: background, minimum: 3)
     }
 
     private static func border(

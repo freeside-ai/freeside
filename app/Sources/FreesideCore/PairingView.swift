@@ -77,9 +77,13 @@ struct PairingView: View {
                             Text("Pair this device")
                         }
                     }
+                    .buttonStyle(FreesideActionButtonStyle(tone: .primary))
                     .disabled(!model.canSubmit)
                 }
-                .listRowBackground(Color.ground2)
+                // The filled control draws its own ground; a list row behind
+                // it would put ground-2 inside ground-2.
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
             .formStyle(.grouped)
             .font(FreesideFont.body)
@@ -175,11 +179,9 @@ struct PairingView: View {
             )
             .font(FreesideFont.caption)
             .foregroundStyle(Color.inkDim)
-            Text("Pair this device")
-                .font(FreesideFont.sans(.body, weight: .semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-                .freesideCard(border: model.canSubmit ? .accentBorder : .rule)
+            Button("Pair this device") {}
+                .buttonStyle(FreesideActionButtonStyle(tone: .primary))
+                .disabled(!model.canSubmit)
         }
         .padding(24)
         .frame(maxWidth: 560, alignment: .leading)

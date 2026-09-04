@@ -887,6 +887,21 @@
                     name: "pairing",
                     view: AnyView(PairingView(model: pairing) { _ in }.screenshotContent())
                 ))
+            // The same surface before the daemon has described the code:
+            // no facts, and Pair drawn in the disabled recipe.
+            let awaitingFacts = PairingModel(
+                client: client,
+                credentials: InMemoryCredentialStore(),
+                pairingCode: "000000"
+            )
+            awaitingFacts.displayName = "Operator's iPhone"
+            await awaitingFacts.refreshFacts()
+            surfaces.append(
+                Surface(
+                    name: "pairing-awaiting-facts",
+                    view: AnyView(
+                        PairingView(model: awaitingFacts) { _ in }.screenshotContent())
+                ))
             let runProposalFacts = Components.Schemas.RunProposalFactsSnapshot(
                 as_of_revision: 12,
                 entity_version: 12,

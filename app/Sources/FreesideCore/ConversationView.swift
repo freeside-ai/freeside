@@ -110,74 +110,67 @@ struct MessageComposerSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 12) {
-                if !rendersInteractiveControls {
-                    Text(title)
-                        .font(FreesideFont.sans(.title3, weight: .semibold))
-                        .foregroundStyle(Color.ink)
-                }
-                Text(prompt)
-                    .font(FreesideFont.callout)
-                    .foregroundStyle(Color.inkDim)
-                if rendersInteractiveControls {
-                    TextEditor(text: $message)
-                        .font(FreesideFont.callout)
-                        .scrollContentBackground(.hidden)
-                        .padding(8)
-                        .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
-                        .accessibilityLabel("Message")
-                } else {
-                    Text("Message")
+            VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 12) {
+                    if !rendersInteractiveControls {
+                        Text(title)
+                            .font(FreesideFont.sans(.title3, weight: .semibold))
+                            .foregroundStyle(Color.ink)
+                    }
+                    Text(prompt)
                         .font(FreesideFont.callout)
                         .foregroundStyle(Color.inkDim)
-                        .padding(8)
-                        .frame(maxWidth: .infinity, minHeight: 190, alignment: .topLeading)
-                        .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
-                }
-                if let byteLimit {
-                    Text("\(byteCount) of \(byteLimit) bytes")
-                        .font(FreesideFont.caption)
-                        .foregroundStyle(byteCount > byteLimit ? Color.waxText : Color.inkDim)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-                if !rendersInteractiveControls {
-                    Divider()
-                    HStack {
-                        Text("Cancel")
-                            .foregroundStyle(Color.accentText)
-                        Spacer()
-                        Text(submitLabel)
-                            .foregroundStyle(canSubmit ? Color.accentText : Color.inkDim)
+                    if rendersInteractiveControls {
+                        TextEditor(text: $message)
+                            .font(FreesideFont.callout)
+                            .scrollContentBackground(.hidden)
+                            .padding(8)
+                            .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
+                            .accessibilityLabel("Message")
+                    } else {
+                        Text("Message")
+                            .font(FreesideFont.callout)
+                            .foregroundStyle(Color.inkDim)
+                            .padding(8)
+                            .frame(maxWidth: .infinity, minHeight: 190, alignment: .topLeading)
+                            .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
                     }
-                    .font(FreesideFont.callout)
+                    if let byteLimit {
+                        Text("\(byteCount) of \(byteLimit) bytes")
+                            .font(FreesideFont.caption)
+                            .foregroundStyle(byteCount > byteLimit ? Color.waxText : Color.inkDim)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
                 }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // The submit lives in the sheet body rather than the toolbar so
+                // it carries the design language's primary recipe; the row keeps
+                // the Return and Escape bindings the placements supplied.
+                FreesideSheetActionRow(
+                    submitLabel: submitLabel,
+                    isSubmitEnabled: canSubmit && !isSubmitting,
+                    submit: performSubmit,
+                    cancel: { dismiss() })
             }
-            .padding()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.ground2)
             .navigationTitle(title)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(submitLabel) {
-                        let draft = trimmedMessage
-                        isSubmitting = true
-                        Task {
-                            let didClaimCommand = await submit(draft)
-                            isSubmitting = false
-                            if didClaimCommand {
-                                dismiss()
-                            }
-                        }
-                    }
-                    .disabled(!canSubmit || isSubmitting)
-                }
-            }
         }
         .frame(minWidth: 380, minHeight: 300)
+    }
+
+    private func performSubmit() {
+        let draft = trimmedMessage
+        isSubmitting = true
+        Task {
+            let didClaimCommand = await submit(draft)
+            isSubmitting = false
+            if didClaimCommand {
+                dismiss()
+            }
+        }
     }
 }

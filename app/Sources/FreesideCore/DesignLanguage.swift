@@ -36,8 +36,20 @@ enum FreesidePalette {
     static let rule = FreesideColorCuts(
         day: 0xD6CDB2, dusk: 0x322A1E,
         dayIC: ruleStrong.day, duskIC: ruleStrong.dusk)
+    // A secondary control's outline: quiet enough that a filled primary
+    // still leads, and promoted to ruleStrong under Increased Contrast the
+    // way every other structural hairline is.
+    static let secondaryBorder = FreesideColorCuts(
+        day: 0xC9BFA2, dusk: 0x3D3426,
+        dayIC: ruleStrong.day, duskIC: ruleStrong.dusk)
     static let ink = FreesideColorCuts(day: 0x2B2416, dusk: 0xEAE3CF)
     static let inkDim = FreesideColorCuts(day: 0x675D49, dusk: 0xB3A88E)
+    // Disabled and validating text. Darker than the handoff's #94896E,
+    // which is 2.99:1 on ground-2 by day and misses the project's 3:1
+    // floor for disabled text; Increased Contrast promotes it to inkDim.
+    static let inkFaint = FreesideColorCuts(
+        day: 0x827858, dusk: 0x7D7460,
+        dayIC: inkDim.day, duskIC: inkDim.dusk)
     static let accentText = FreesideColorCuts(
         day: 0x7D5C0E, dusk: 0xC2912E, dayIC: 0x6B4E0B, duskIC: 0xE0AE46)
     static let accentBorder = FreesideColorCuts(
@@ -109,8 +121,12 @@ extension Color {
     static let sidebarGround = freeside(FreesidePalette.sidebarGround)
     static let rule = freeside(FreesidePalette.rule)
     static let ruleStrong = freeside(FreesidePalette.ruleStrong)
+    /// The outline of a secondary control: present, never competing.
+    static let secondaryBorder = freeside(FreesidePalette.secondaryBorder)
     static let ink = freeside(FreesidePalette.ink)
     static let inkDim = freeside(FreesidePalette.inkDim)
+    /// Disabled and validating text: readable, plainly not actionable.
+    static let inkFaint = freeside(FreesidePalette.inkFaint)
     /// Bronze by day, tawny by dusk: attention, never success.
     static let accentText = freeside(FreesidePalette.accentText)
     static let accentBorder = freeside(FreesidePalette.accentBorder)
@@ -372,62 +388,156 @@ struct KeywordLabel: View {
     }
 }
 
-/// The full-width action button: filled for primary, outlined for secondary
-/// and destructive, with disabled controls at 45% opacity.
+/// The four control states of the design language (plan §15) in one
+/// recipe: a filled primary, an outlined secondary, an unadorned tertiary,
+/// and a disabled state drawn as its own rule-bordered, faint-text shape.
+/// Disabled is never the enabled look faded out, because opacity dims the
+/// border and the label together and leaves neither reliably legible.
 struct FreesideActionButtonStyle: ButtonStyle {
     enum Tone {
+        /// The one recommended action: filled, and at most one per region.
         case primary
-        case neutral
+        /// An equally available alternative: outlined on ground-2.
+        case secondary
+        /// A way out or a way deeper, subordinate to both: text only.
+        case tertiary
+        /// Destructive in content: the wax outline, never a filled control.
         case destructive
+    }
 
-        var labelColor: Color {
-            switch self {
-            case .primary: .ground2
-            case .neutral: .inkDim
-            case .destructive: .waxText
-            }
-        }
-
-        var borderColor: Color {
-            switch self {
-            case .primary: .accentBorder
-            case .neutral: .rule
-            case .destructive: .waxText
-            }
-        }
+    /// The corner the control is cut with: cards use the 6pt radius the
+    /// rest of the card chrome uses, sheet submits use the spec's pill.
+    enum Corners {
+        case rounded
+        case pill
     }
 
     let tone: Tone
+    var corners: Corners = .rounded
+    /// Whether the control fills its row. A tertiary button always hugs its
+    /// label: a full-width control with no fill and no border reads as a
+    /// row of dead space rather than as a button.
+    var expands: Bool = true
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(FreesideFont.sans(.body, weight: .medium))
-            .foregroundStyle(tone.labelColor)
+            .foregroundStyle(labelColor)
             .lineLimit(2)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 12)
             .padding(.vertical, dynamicTypeSize >= .accessibility1 ? 12 : 7)
-            .frame(minHeight: dynamicTypeSize >= .accessibility1 ? 52 : nil)
-            .frame(maxWidth: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(fillColor(isPressed: configuration.isPressed))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(tone.borderColor, lineWidth: 1)
-            )
-            .opacity(isEnabled ? 1 : 0.45)
-            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .frame(minHeight: dynamicTypeSize >= .accessibility1 ? 52 : 44)
+            .frame(maxWidth: hugsLabel ? nil : .infinity)
+            .background(shape.fill(fillColor(isPressed: configuration.isPressed)))
+            .overlay(shape.strokeBorder(borderColor, lineWidth: 1))
+            .contentShape(shape)
+    }
+
+    private var hugsLabel: Bool {
+        tone == .tertiary || !expands
+    }
+
+    /// One shape for fill, border, and hit target. A pill is the spec's
+    /// 999pt radius rather than a `Capsule`, so both corner styles are the
+    /// same concrete type and the border still strokes inside its bounds.
+    private var shape: RoundedRectangle {
+        switch corners {
+        case .rounded: RoundedRectangle(cornerRadius: 6)
+        case .pill: RoundedRectangle(cornerRadius: 999)
+        }
+    }
+
+    /// Disabled resolves before tone: every disabled label takes the same
+    /// faint cut, so "not available now" is one shape to learn rather than
+    /// four.
+    private var labelColor: Color {
+        guard isEnabled else { return .inkFaint }
+        switch tone {
+        case .primary: return .ground2
+        case .secondary: return .ink
+        case .tertiary: return .inkDim
+        case .destructive: return .waxText
+        }
+    }
+
+    /// The one place a disabled control does not read uniformly: a tertiary
+    /// is text-only when enabled, so drawing a border once it goes
+    /// unavailable would have it gain chrome as it loses function. Its faint
+    /// label carries the state instead (issue #1105, ledger line 08).
+    private var borderColor: Color {
+        guard isEnabled else { return tone == .tertiary ? .clear : .rule }
+        switch tone {
+        case .primary: return .accentBorder
+        case .secondary: return .secondaryBorder
+        case .tertiary: return .clear
+        case .destructive: return .waxText
+        }
     }
 
     private func fillColor(isPressed: Bool) -> Color {
+        guard isEnabled else { return .clear }
         switch tone {
-        case .primary: .accentText
-        case .neutral, .destructive: isPressed ? .ground3 : .ground2
+        case .primary: return .accentText
+        case .tertiary: return .clear
+        case .secondary, .destructive: return isPressed ? .ground3 : .ground2
         }
+    }
+}
+
+/// The submit row a sheet ends with: Cancel as a tertiary text button and
+/// the submit as a primary pill, both hugging their labels. Three sheets
+/// draw it, and it carries the Return and Escape bindings the system
+/// toolbar placements used to supply.
+struct FreesideSheetActionRow: View {
+    let submitLabel: String
+    var isSubmitEnabled: Bool = true
+    let submit: () -> Void
+    let cancel: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+            content
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        // Side by side the two labels cannot both hug their text at an
+        // accessibility size without wrapping mid-word, so they stack and
+        // the submit takes the full width, keeping the pill a pill.
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(spacing: 12) {
+                submitButton(expands: true)
+                cancelButton.frame(maxWidth: .infinity)
+            }
+        } else {
+            HStack(spacing: 12) {
+                cancelButton
+                Spacer(minLength: 12)
+                submitButton(expands: false)
+            }
+        }
+    }
+
+    private var cancelButton: some View {
+        Button("Cancel", action: cancel)
+            .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
+            .keyboardShortcut(.cancelAction)
+    }
+
+    private func submitButton(expands: Bool) -> some View {
+        Button(submitLabel, action: submit)
+            .buttonStyle(
+                FreesideActionButtonStyle(tone: .primary, corners: .pill, expands: expands)
+            )
+            .keyboardShortcut(.defaultAction)
+            .disabled(!isSubmitEnabled)
     }
 }
 

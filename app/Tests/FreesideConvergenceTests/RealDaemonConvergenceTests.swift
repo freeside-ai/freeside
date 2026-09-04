@@ -320,8 +320,11 @@ struct RealDaemonConvergenceTests {
 
     @Test func consumedAndUnknownCodesRejectUndifferentiated() async throws {
         // Test 13, client face: a consumed code cannot pair a second
-        // device, and the UI can say no more than the daemon did — a
-        // consumed code and a never-minted one read identically. The
+        // device, and the UI can say no more than the daemon did. Pair is
+        // closed until the preview describes the code, so the two dead
+        // codes now surface on two paths and neither says why: a code
+        // consumed after its preview is refused with the one rejection
+        // message, and a never-minted code never opens Pair at all. The
         // expired-code half is deliberately not driven here: the daemon
         // collapses expired and consumed into one undifferentiated
         // rejection (this very anti-probing contract), and expiry is
@@ -330,30 +333,45 @@ struct RealDaemonConvergenceTests {
         let control = try ConvergenceHarness.control()
         let code = try await control.mintPairingCode()
 
+        // Both devices see the same live code before either redeems it.
         let winner = PairingModel(
             client: APIClientFactory.live(serverURL: apiURL),
             credentials: InMemoryCredentialStore())
         winner.pairingCode = code
         winner.displayName = "Convergence 13"
+        await winner.refreshFacts()
+
+        let loser = PairingModel(
+            client: APIClientFactory.live(serverURL: apiURL),
+            credentials: InMemoryCredentialStore())
+        loser.pairingCode = code
+        loser.displayName = "Convergence 13 probe"
+        await loser.refreshFacts()
+        #expect(loser.canSubmit)
+
         let credential = await winner.pair()
         #expect(credential != nil)
         #expect(credential?.token.hasPrefix("fsd1.") == true)
 
-        var failures: Set<String> = []
-        for probe in [code, "ZZZZZZZZ"] {
-            let loser = PairingModel(
-                client: APIClientFactory.live(serverURL: apiURL),
-                credentials: InMemoryCredentialStore())
-            loser.pairingCode = probe
-            loser.displayName = "Convergence 13 probe"
-            #expect(await loser.pair() == nil)
-            guard case .failed(let message) = loser.phase else {
-                Issue.record("expected a rejection for \(probe), got \(loser.phase)")
-                continue
-            }
-            failures.insert(message)
+        #expect(await loser.pair() == nil)
+        guard case .failed(let message) = loser.phase else {
+            Issue.record("expected a rejection for the consumed code, got \(loser.phase)")
+            return
         }
-        #expect(failures.count == 1)
+        #expect(message.contains("invalid, expired, or already used"))
+
+        // A never-minted code is refused by the preview, which reports no
+        // facts and no reason; the exchange is never attempted.
+        let unknown = PairingModel(
+            client: APIClientFactory.live(serverURL: apiURL),
+            credentials: InMemoryCredentialStore())
+        unknown.pairingCode = "ZZZZZZZZ"
+        unknown.displayName = "Convergence 13 probe"
+        await unknown.refreshFacts()
+
+        #expect(unknown.facts == nil)
+        #expect(!unknown.canSubmit)
+        #expect(unknown.phase == .idle)
     }
 
     @Test func simultaneousPairingAttemptsYieldOneDevice() async throws {
