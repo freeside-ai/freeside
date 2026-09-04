@@ -82,12 +82,16 @@ type Output struct {
 }
 
 // DecodeOutput strictly reconstructs and validates one typed stage payload.
-// One tolerated presentation defect: a single Markdown code fence around the
-// whole object (issue #780). Fence-wrapping is the model class's dominant
-// output-shape failure despite the prompt forbidding it, and each occurrence
-// otherwise costs a full specification execution; anything beyond that exact
-// shape (prose, truncation, a second fence) still fails strict decode, with a
-// bounded prefix of the raw output preserved for diagnosis.
+// Two tolerated presentation defects: a single Markdown code fence around the
+// whole object (issue #780), and leading or trailing whitespace on the prose
+// fields (summary, body, reply, addressal response; issue #1123). Both are
+// the model class's dominant output-shape failures despite the prompt
+// forbidding them, and each occurrence otherwise costs a full specification
+// execution; a trailing newline on a ten-kilobyte body carries no meaning the
+// operator could act on. Identifiers (fetch URLs, comment IDs) stay strict.
+// Anything beyond those exact shapes (prose, truncation, a second fence)
+// still fails strict decode, with a bounded prefix of the raw output
+// preserved for diagnosis.
 func DecodeOutput(data []byte) (Output, error) {
 	var out Output
 	if err := strictjson.Decode(stripMarkdownFence(data), &out,
@@ -95,6 +99,7 @@ func DecodeOutput(data []byte) (Output, error) {
 		return Output{}, fmt.Errorf("decode specifier output: %w (output begins %q)",
 			err, outputPrefix(data))
 	}
+	out.trimProse()
 	if err := out.Validate(); err != nil {
 		return Output{}, err
 	}
@@ -134,10 +139,31 @@ func DecodeLegacyAddressalOutput(data []byte, commentIDs map[string]string) (Out
 			}
 		}
 	}
+	out.trimProse()
 	if err := out.Validate(); err != nil {
 		return Output{}, err
 	}
 	return out, nil
+}
+
+// trimProse strips surrounding whitespace from the free-text fields before
+// validation, which then still rejects a field that was whitespace only.
+// Trimming happens here, at the decode boundary, so every stored
+// specification, reply, and addressal is the trimmed text and the digest
+// over it is stable.
+func (o *Output) trimProse() {
+	if o.Reply != nil {
+		trimmed := strings.TrimSpace(*o.Reply)
+		o.Reply = &trimmed
+	}
+	if o.Specification == nil {
+		return
+	}
+	o.Specification.Summary = strings.TrimSpace(o.Specification.Summary)
+	o.Specification.Body = strings.TrimSpace(o.Specification.Body)
+	for i := range o.Specification.Addressals {
+		o.Specification.Addressals[i].Response = strings.TrimSpace(o.Specification.Addressals[i].Response)
+	}
 }
 
 // fenceTagPattern admits the optional language tag on an opening fence line
