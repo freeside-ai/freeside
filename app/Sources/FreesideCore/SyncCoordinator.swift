@@ -17,7 +17,16 @@ import OpenAPIRuntime
 @MainActor
 @Observable
 public final class SyncCoordinator {
+    /// The foreground refresh cadence and the age at which the last
+    /// successful refresh is called stale, declared together because the
+    /// cadence must stay well under the threshold: both apps' heartbeat
+    /// loops run every `heartbeatInterval`, while the banner waits
+    /// `stalenessThreshold`, so a Stale banner means several consecutive
+    /// rounds all ended without reaching a stamp (`performHeartbeat` or the
+    /// bootstrap `adopt`), not a single missed beat. `SyncCoordinatorTests`
+    /// pins the ordering between the two.
     public static let stalenessThreshold: TimeInterval = 60
+    public static let heartbeatInterval: Duration = .seconds(15)
 
     public enum TimelineLoadState: Equatable, Sendable {
         case idle
