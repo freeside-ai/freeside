@@ -971,6 +971,7 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 		DBPath:        filepath.Join(root, "freeside.db"),
 		FakeDriverDir: filepath.Join(root, "driver"),
 		ListenAddr:    "127.0.0.1:0", ReconcileInterval: 5 * time.Millisecond,
+		SeedWalkingSkeleton: true,
 	})
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -1049,6 +1050,42 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("freesided did not accept the fake result within 2s")
+}
+
+// TestRunWithoutSeedFlagLeavesTheStoreEmpty is the #1127 half of the
+// walking-skeleton seed gate: the default fake driver, which is exactly what
+// the Mac installer launches, seeds no demo run and so raises no demo approval
+// card in a freshly onboarded production store. The seeded path is proven by
+// TestRunDrivesFakeWorkflow, which now opts in with SeedWalkingSkeleton.
+func TestRunWithoutSeedFlagLeavesTheStoreEmpty(t *testing.T) {
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	h, err := run(ctx, nil, config{
+		DBPath:        filepath.Join(root, "freeside.db"),
+		FakeDriverDir: filepath.Join(root, "driver"),
+		ListenAddr:    "127.0.0.1:0", ReconcileInterval: 5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	t.Cleanup(func() {
+		cancel()
+		if err := h.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+
+	if err := h.store.Read(ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetRun(ctx, defaultFakeRunID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("get walking-skeleton run = %v, want ErrNotFound", err)
+		}
+		if _, err := tx.GetAttentionItem(ctx, "approval-"+domain.ItemID(defaultFakeRunID)); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("get walking-skeleton approval = %v, want ErrNotFound", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read store: %v", err)
+	}
 }
 
 func waitForItem(t *testing.T, attention *signet.Service, id domain.ItemID) signet.AttentionItemSnapshot {
