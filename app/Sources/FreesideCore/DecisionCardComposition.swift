@@ -724,6 +724,9 @@ struct DecisionChecklistModuleView: View {
 }
 
 struct DecisionYieldChartModuleView: View {
+    /// A fixed key beside accessibility-size text reads as a speck, and a
+    /// legend that can't be identified does not key anything.
+    @ScaledMetric(relativeTo: .caption) private var legendSwatch: CGFloat = 8
     let presentation: DecisionYieldPresentation
     var showsBars = true
 
@@ -756,11 +759,28 @@ struct DecisionYieldChartModuleView: View {
                     }
                 }
             }
-            Text(presentation.summary)
-                .foregroundStyle(Color.inkDim)
+            // The bars carry two fills with no other key; the legend names
+            // them where they render.
+            if showsBars {
+                HStack(spacing: 12) {
+                    legendToken(color: .accentBorder, text: "new")
+                    legendToken(color: .waxText, text: "recurring")
+                }
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(presentation.summary))
+    }
+
+    private func legendToken(color: Color, text: String) -> some View {
+        HStack(spacing: 4) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(color)
+                .frame(width: legendSwatch, height: legendSwatch)
+            Text(text)
+                .font(FreesideFont.monoCaption)
+                .foregroundStyle(Color.inkDim)
+        }
     }
 }
 
@@ -787,8 +807,6 @@ struct DecisionComparisonModuleView: View {
                     .background(RoundedRectangle(cornerRadius: 6).fill(Color.neutralWash))
                 }
             }
-            Text(presentation.summary)
-                .foregroundStyle(Color.inkDim)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(presentation.summary))
