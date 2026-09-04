@@ -591,4 +591,18 @@ import Testing
                 frame: CGRect(x: 0, y: 900, width: 560, height: 44),
                 viewportHeight: nil))
     }
+
+    /// The card's Evidence module points at the open inspector rather than
+    /// drawing the same attachments beside it, and the pointer counts them in
+    /// the operator's words (#1107).
+    @Test func theEvidencePointerCountsTheAttachmentsItStandsFor() {
+        #expect(DecisionDetailView.evidencePointer(1) == "1 attachment → inspector")
+        #expect(DecisionDetailView.evidencePointer(3) == "3 attachments → inspector")
+        #expect(
+            DecisionDetailView.evidencePointerAccessibilityLabel(1)
+                == "1 attachment, shown in the inspector")
+        #expect(
+            DecisionDetailView.evidencePointerAccessibilityLabel(3)
+                == "3 attachments, shown in the inspector")
+    }
 }

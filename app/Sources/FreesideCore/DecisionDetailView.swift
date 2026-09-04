@@ -126,7 +126,8 @@ struct DecisionDetailView: View {
                                 proposalFacts: model.proposalFacts,
                                 accessibilityLayout: isAccessibilityLayout,
                                 compactLayout: horizontalSizeClass == .compact,
-                                wideLayout: usesWideLayout
+                                wideLayout: usesWideLayout,
+                                inspectorPresented: inspectorBinding.wrappedValue
                             )
                             .padding(14)
                             .freesideCard()
@@ -441,7 +442,8 @@ struct DecisionDetailView: View {
         rendersInteractiveControls: Bool = true,
         accessibilityLayout: Bool,
         compactLayout: Bool,
-        wideLayout: Bool
+        wideLayout: Bool,
+        inspectorPresented: Bool = false
     ) -> some View {
         let composition = DecisionCardComposition.forType(item._type)
         VStack(alignment: .leading, spacing: 16) {
@@ -504,7 +506,8 @@ struct DecisionDetailView: View {
                             composition: composition,
                             proposalFacts: proposalFacts,
                             rendersInteractiveControls: rendersInteractiveControls,
-                            accessibilityLayout: accessibilityLayout)
+                            accessibilityLayout: accessibilityLayout,
+                            inspectorPresented: inspectorPresented)
                         if index + 1 == composition.reviewingActionInsertionIndex {
                             reviewingAction(item)
                         }
@@ -525,7 +528,8 @@ struct DecisionDetailView: View {
                                     composition: composition,
                                     proposalFacts: proposalFacts,
                                     rendersInteractiveControls: rendersInteractiveControls,
-                                    accessibilityLayout: accessibilityLayout)
+                                    accessibilityLayout: accessibilityLayout,
+                                    inspectorPresented: inspectorPresented)
                                 if index + 1 == composition.reviewingActionInsertionIndex {
                                     reviewingAction(item)
                                 }
@@ -551,7 +555,8 @@ struct DecisionDetailView: View {
                             composition: composition,
                             proposalFacts: proposalFacts,
                             rendersInteractiveControls: rendersInteractiveControls,
-                            accessibilityLayout: accessibilityLayout)
+                            accessibilityLayout: accessibilityLayout,
+                            inspectorPresented: inspectorPresented)
                         if index + 1 == composition.actionInsertionIndex {
                             actionRegion(
                                 item,
@@ -574,7 +579,8 @@ struct DecisionDetailView: View {
                         composition: composition,
                         proposalFacts: proposalFacts,
                         rendersInteractiveControls: rendersInteractiveControls,
-                        accessibilityLayout: accessibilityLayout)
+                        accessibilityLayout: accessibilityLayout,
+                        inspectorPresented: inspectorPresented)
                     if index + 1 == composition.actionInsertionIndex {
                         actions(
                             item,
@@ -630,7 +636,8 @@ struct DecisionDetailView: View {
         composition: DecisionCardComposition,
         proposalFacts: Components.Schemas.RunProposalFactsSnapshot?,
         rendersInteractiveControls: Bool,
-        accessibilityLayout: Bool
+        accessibilityLayout: Bool,
+        inspectorPresented: Bool
     ) -> some View {
         switch module {
         case .facts:
@@ -711,10 +718,38 @@ struct DecisionDetailView: View {
         case .evidence:
             #if os(macOS)
                 if composition.reviewingActionInsertionIndex != nil {
-                    evidence(
-                        item,
-                        accessibilityLayout: accessibilityLayout,
-                        rendersInteractiveControls: rendersInteractiveControls)
+                    // The open inspector renders the same attachments beside
+                    // the card, so the card's own Evidence module collapses to
+                    // a pointer at the packet rather than drawing it twice
+                    // (#1107). Closing the inspector restores the rows.
+                    //
+                    // The pointer waits on the inspector's own Evidence
+                    // disclosure, which starts closed and persists its state.
+                    // At ordinary type sizes the card's module ignores that
+                    // preference and always draws its rows (`lowerSection`
+                    // only builds a DisclosureGroup for the accessibility
+                    // layout), so pointing at a closed inspector section would
+                    // take visible attachments off screen and leave them
+                    // nowhere. Duplication is what the row exists to prevent,
+                    // and there is none while the inspector is not drawing
+                    // them.
+                    if inspectorPresented, evidenceExpanded.wrappedValue,
+                        !item.evidence_snapshot.isEmpty
+                    {
+                        cardSection("Evidence") {
+                            Text(Self.evidencePointer(item.evidence_snapshot.count))
+                                .foregroundStyle(Color.inkDim)
+                                .accessibilityLabel(
+                                    Text(
+                                        Self.evidencePointerAccessibilityLabel(
+                                            item.evidence_snapshot.count)))
+                        }
+                    } else {
+                        evidence(
+                            item,
+                            accessibilityLayout: accessibilityLayout,
+                            rendersInteractiveControls: rendersInteractiveControls)
+                    }
                 }
             #else
                 evidence(
@@ -1166,6 +1201,19 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// The card's Evidence module while the inspector holds the same packet:
+    /// how many attachments it has and where they are, never a second copy of
+    /// the rows themselves.
+    static func evidencePointer(_ count: Int) -> String {
+        "\(count == 1 ? "1 attachment" : "\(count) attachments") → inspector"
+    }
+
+    /// The pointer row spoken: the arrow is a direction, not a character worth
+    /// reading out.
+    static func evidencePointerAccessibilityLabel(_ count: Int) -> String {
+        "\(count == 1 ? "1 attachment" : "\(count) attachments"), shown in the inspector"
+    }
+
     @ViewBuilder
     private func evidence(
         _ item: Components.Schemas.AttentionItem,
@@ -1328,7 +1376,8 @@ struct DecisionDetailView: View {
         at dynamicTypeSize: DynamicTypeSize,
         proposalFacts: Components.Schemas.RunProposalFactsSnapshot? = nil,
         compactLayout: Bool = false,
-        detailWidth: CGFloat = 560
+        detailWidth: CGFloat = 560,
+        inspectorPresented: Bool = false
     ) -> some View {
         let wideLayout = detailWidth >= 1_000 && dynamicTypeSize < .accessibility1
         card(
@@ -1337,7 +1386,8 @@ struct DecisionDetailView: View {
             rendersInteractiveControls: false,
             accessibilityLayout: dynamicTypeSize >= .accessibility1,
             compactLayout: compactLayout,
-            wideLayout: wideLayout
+            wideLayout: wideLayout,
+            inspectorPresented: inspectorPresented
         )
         .padding(14)
         .freesideCard()

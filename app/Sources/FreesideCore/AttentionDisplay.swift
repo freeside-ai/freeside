@@ -187,12 +187,13 @@ enum AttentionDisplay {
                 .init("Completion evidence", dispute.completion_evidence, monospaced: true),
             ]
         case .ready_for_final_review:
+            // Diff alone: the checklist's "Bound to" row above carries the
+            // readiness candidate's head and base, and Details keeps this
+            // diff's own base and head as Diff base and Diff head, so
+            // repeating them here made one datum render in three card modules
+            // (#1107).
             guard let diff = item.diff_stats?.value1 else { return [] }
-            return [
-                .init("Diff", diffStats(diff)),
-                .init("Base", diff.base_sha, monospaced: true),
-                .init("Head", diff.head_sha, monospaced: true),
-            ]
+            return [.init("Diff", diffStats(diff))]
         case .publish_blocked:
             guard let block = item.publish_block?.value1 else { return [] }
             if let rule = block.trust_rule?.value1 {
@@ -615,6 +616,16 @@ enum AttentionDisplay {
         rows.append(.init(label: "Item version", value: "\(item.item_version)"))
         if !item.pr_head_sha.isEmpty {
             rows.append(.init(label: "PR head", value: item.pr_head_sha))
+        }
+        // The diff's own base and head, which no other layer is guaranteed to
+        // render: the checklist's "Bound to" row reads readiness_detail, which
+        // a legacy or fake-mode item can omit, and it shows the readiness
+        // candidate's coordinates rather than these. Audit coordinates belong
+        // in the technical bindings, so the card can stop repeating them
+        // without losing them (#1107).
+        if let diff = item.diff_stats?.value1 {
+            rows.append(.init(label: "Diff base", value: diff.base_sha))
+            rows.append(.init(label: "Diff head", value: diff.head_sha))
         }
         rows.append(contentsOf: attachmentDigestRows(item))
         if let priorProposalDigest {

@@ -184,7 +184,7 @@ import Testing
             .execution_failure: ["Outcome", "Failing stage", "Invocation"],
             .review_diminishing_returns: ["Cost so far"],
             .review_dispute: ["Run", "Round", "Disputed findings", "Completion evidence"],
-            .ready_for_final_review: ["Diff", "Base", "Head"],
+            .ready_for_final_review: ["Diff"],
             .publish_blocked: ["Failed trust rule"],
             .system_health: ["Diagnostic", "Impairs"],
             .blocked: ["Waiting on", "Waiting for", "Blocking item"],
@@ -231,7 +231,7 @@ import Testing
         #expect(
             AttentionDisplay.cardFacts(
                 AttentionFixtures.fixture(type: .ready_for_final_review).item, now: now
-            ).map(\.value) == ["12 files, +240 -31", "deadbeef", "cafebabe"])
+            ).map(\.value) == ["12 files, +240 -31"])
         #expect(
             AttentionDisplay.cardFacts(
                 AttentionFixtures.fixture(type: .publish_blocked).item, now: now
@@ -414,6 +414,28 @@ import Testing
 
         #expect(rows.contains(.init(label: "PR head", value: "cafebabe")))
         #expect(rows.contains(.init(label: "Head", value: "cafebabe")))
+    }
+
+    /// The diff's base and head are audit coordinates, so Details carries them
+    /// whatever the readiness shape. The card renders Diff alone (#1107), and
+    /// the checklist's "Bound to" row needs `readiness_detail`, which the
+    /// schema lets a legacy or fake-mode item omit, so without these rows a
+    /// legacy item renders its diff's base nowhere at all.
+    @Test func detailBindingsCarryTheDiffBaseAndHead() {
+        let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
+
+        let rows = AttentionDisplay.detailBindingRows(item)
+
+        #expect(rows.contains(.init(label: "Diff base", value: "deadbeef")))
+        #expect(rows.contains(.init(label: "Diff head", value: "cafebabe")))
+
+        var legacy = item
+        legacy.readiness_detail = nil
+        let legacyRows = AttentionDisplay.detailBindingRows(legacy)
+
+        #expect(legacyRows.contains(.init(label: "Diff base", value: "deadbeef")))
+        #expect(legacyRows.contains(.init(label: "Diff head", value: "cafebabe")))
+        #expect(!legacyRows.contains { $0.label == "Bound base" })
     }
 
     @Test func detailBindingsExposeExactCreatedAndDueTimestamps() {
