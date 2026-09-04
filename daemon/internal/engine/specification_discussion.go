@@ -311,6 +311,7 @@ func (e *Engine) enqueuePendingSpecDiscussion(
 	ctx context.Context, verified verifiedSpecificationTerminal,
 ) (bool, error) {
 	var pending *store.QueueEntry
+	var markerID domain.InvocationID
 	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 		commands, err := tx.ListCommandsForItem(ctx, verified.approval.ID)
 		if err != nil {
@@ -331,6 +332,10 @@ func (e *Engine) enqueuePendingSpecDiscussion(
 				return domain.ErrDuplicate
 			}
 			pending = &entry
+			markerID, err = specificationDiscussionMarkerIdentity(ctx, tx, command.CommandID)
+			if err != nil {
+				return err
+			}
 		}
 		return nil
 	}); err != nil {
@@ -346,11 +351,21 @@ func (e *Engine) enqueuePendingSpecDiscussion(
 	if discussion == nil || discussion.item.ID != verified.approval.ID {
 		return false, domain.ErrParentKeyMismatch
 	}
-	return e.enqueueSpecDiscussion(ctx, verified, *discussion)
+	return e.enqueueSpecDiscussion(ctx, verified, *discussion, markerID)
 }
 
+// enqueueSpecDiscussion re-derives the marker on every pass, so markerID is
+// the identity the stored marker already carries rather than one minted from
+// the command. A marker queued before the rename (#986) keeps its key
+// forever, because its agent-invocation row, dispatched marks, and terminal
+// inbox key all embed it; minting the current family beside it would queue a
+// second marker for the same accepted command and start both (#1100).
+// markerID names this function's command: loadAttentionDiscussion verified
+// that the pending entry's key is its invocation ID, and the caller resolved
+// markerID from that same key.
 func (e *Engine) enqueueSpecDiscussion(
-	ctx context.Context, verified verifiedSpecificationTerminal, discussion attentionDiscussion,
+	ctx context.Context, verified verifiedSpecificationTerminal,
+	discussion attentionDiscussion, markerID domain.InvocationID,
 ) (bool, error) {
 	base := verified.binding.request
 	digest, prefix, err := discussion.conversation.PrefixContent(discussion.invocation.ThroughSequence)
@@ -383,7 +398,7 @@ func (e *Engine) enqueueSpecDiscussion(
 	request := specificationDiscussionRequest{
 		Version: specificationDiscussionRequestVersion, SpecificationRunID: base.SpecificationRunID,
 		ImplementationRunID: base.ImplementationRunID, ProjectID: base.ProjectID,
-		Iteration: base.Iteration, InvocationID: specDiscussionInvocationID(commandID),
+		Iteration: base.Iteration, InvocationID: markerID,
 		DiscussInvocationID: discussion.invocation.ID, ConversationID: discussion.conversation.ID,
 		ThroughSequence: discussion.invocation.ThroughSequence, PrefixDigest: digest,
 		ItemID: discussion.item.ID, ItemVersion: discussion.request.ItemVersion,
