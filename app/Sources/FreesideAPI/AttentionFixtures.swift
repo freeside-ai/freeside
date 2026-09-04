@@ -106,6 +106,8 @@ public enum AttentionFixtures {
 
             ## Verification
             - Run the migration suite against a production-shaped snapshot.
+
+            Reads go through *the new reader* with `TokenStore.read` per [the token RFC](https://example.invalid/rfc) and keep <b>every</b> **active session**.
             """
         let revisedSpecification = """
             # Authentication Migration
@@ -124,6 +126,8 @@ public enum AttentionFixtures {
             ## Verification
             - Run the migration suite against a production-shaped snapshot.
             - Confirm restored sessions authenticate through the prior reader.
+
+            Reads go through *the new reader* with `TokenStore.read` per [the token RFC](https://example.invalid/rfc) and keep <b>every</b> **active session**.
             """
         let commentID = "fixture-request-changes"
         let comment = "Keep the migration order and make rollback explicit."
@@ -447,6 +451,8 @@ public enum AttentionFixtures {
 
                 ## Verification
                 - Run the migration suite against a production-shaped snapshot.
+
+                Reads go through *the new reader* with `TokenStore.read` per [the token RFC](https://example.invalid/rfc) and keep <b>every</b> **active session**.
                 """
             agentClaims[0] = agentClaim(
                 label: "Specification",

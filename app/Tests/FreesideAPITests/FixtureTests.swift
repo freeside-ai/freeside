@@ -3,6 +3,23 @@ import FreesideAPI
 import Testing
 
 @Suite struct FixtureTests {
+    @Test func revisedSpecificationKeepsTheInitialSpecificationDigest() throws {
+        let initial = AttentionFixtures.fixture(type: .spec_approval).item
+        let revised = AttentionFixtures.revisedSpecification().item
+        let original = try #require(initial.agent_claims.first { $0.label == "Specification" })
+        let revision = try #require(revised.spec_revision?.value1)
+        #expect(revision.prior_spec_digest == original.digest)
+        let revisedText = try #require(revised.agent_claims.first { $0.label == "Specification" }?.text).content
+        let priorText =
+            revisedText
+            .replacingOccurrences(
+                of: "Restore the prior schema before retrying the deploy.",
+                with: "Implicit rollback after a failed deploy."
+            )
+            .replacingOccurrences(of: "\n- Confirm restored sessions authenticate through the prior reader.", with: "")
+        #expect(priorText == original.text?.content)
+    }
+
     /// Independent transcription of plan §4's per-type action table plus
     /// review recovery actions from issues #580, #611, and #684. Signet's policy
     /// pins `blocked` read-only (no actions), which the schema permits
