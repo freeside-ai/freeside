@@ -7,6 +7,7 @@ import Observation
 public final class NavigationModel {
     enum ConclusionAdvanceResult: Equatable {
         case advanced
+        case returnedToInbox
         case inboxClear
         case cancelled
     }
@@ -84,15 +85,20 @@ public final class NavigationModel {
         operatorNavigationRevision += 1
     }
 
+    /// Leave a just-concluded item once its receipt delay expires. The default
+    /// destination is the inbox: clear the selection so the list stays visible
+    /// with no item open. Only when `advancesToNextItem` is set, and an open
+    /// item remains, does focus move to the next one instead.
     func advanceAfterConclusion(
         itemID: String,
         expectedOperatorNavigationRevision: Int,
+        advancesToNextItem: Bool,
         store: InboxStore
     ) -> ConclusionAdvanceResult {
         // Rebuilding the open scope may remove the concluded item from either
         // navigation container before the delay expires, so nil remains the
         // same route. A different concrete destination is deliberate operator
-        // navigation and must win over automatic advance.
+        // navigation and must win over the automatic move.
         guard operatorNavigationRevision == expectedOperatorNavigationRevision,
             selectedTab == .inbox,
             attentionSelection == nil || attentionSelection == itemID,
@@ -100,14 +106,15 @@ public final class NavigationModel {
         else {
             return .cancelled
         }
-        if let nextItemID = store.nextOpenItemID(excluding: itemID) {
+        let nextItemID = store.nextOpenItemID(excluding: itemID)
+        if advancesToNextItem, let nextItemID {
             route(to: .attentionItem(nextItemID))
             return .advanced
         }
         selectedTab = .inbox
         attentionSelection = nil
         inboxPath = []
-        return .inboxClear
+        return nextItemID == nil ? .inboxClear : .returnedToInbox
     }
 
     public func moveAttentionSelection(by offset: Int, store: InboxStore) {

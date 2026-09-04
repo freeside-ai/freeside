@@ -25,7 +25,7 @@ import Testing
             resultingStatus: .resolved,
             at: Date(timeIntervalSince1970: 1_700_000_000))
 
-        model.present(conclusion, advancesAutomatically: true) {
+        model.present(conclusion) {
             events.append("advance")
         }
 
@@ -41,28 +41,6 @@ import Testing
         #expect(model.conclusion == nil)
     }
 
-    @Test func automaticAdvanceCanBeDisabledWithoutHidingTheReceipt() {
-        var scheduled: [ScheduledAction] = []
-        let model = DecisionFeedbackModel(
-            announce: { _ in },
-            schedule: { delay, action in
-                scheduled.append(.init(delay: delay, action: action))
-                return Task {}
-            })
-
-        model.present(
-            .init(
-                itemID: "item-spec_approval",
-                actionLabel: "Approve",
-                resultingStatus: .resolved,
-                at: .now),
-            advancesAutomatically: false,
-            advance: { Issue.record("automatic advance ran while disabled") })
-
-        #expect(model.conclusion != nil)
-        #expect(scheduled.map(\.delay) == [.seconds(6)])
-    }
-
     @Test func snoozeReceiptHasNoUnavailableViewDestination() {
         let feedback = DecisionFeedbackModel(
             announce: { _ in },
@@ -73,7 +51,6 @@ import Testing
                 actionLabel: "Snooze",
                 resultingStatus: nil,
                 at: .now),
-            advancesAutomatically: false,
             advance: {})
 
         #expect(feedback.conclusion?.hasQueryableItem == false)
@@ -89,10 +66,7 @@ import Testing
             store: store,
             itemID: "item-spec_approval",
             onConclusion: { conclusion in
-                feedback.present(
-                    conclusion,
-                    advancesAutomatically: false,
-                    advance: {})
+                feedback.present(conclusion, advance: {})
             })
         await model.validate()
 

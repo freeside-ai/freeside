@@ -295,8 +295,8 @@ public struct FreesideRootView: View {
             @Bindable var preferences = flowPreferences
             return Menu {
                 Toggle(
-                    "Advance after decisions",
-                    isOn: $preferences.advancesAutomatically)
+                    "Advance to the next item",
+                    isOn: $preferences.advancesToNextItem)
             } label: {
                 Label("Decision Flow", systemImage: "gearshape")
             }
@@ -361,16 +361,14 @@ public struct FreesideRootView: View {
         coordinator: SyncCoordinator
     ) {
         let operatorNavigationRevision = navigation.operatorNavigationRevision
-        feedback.present(
-            conclusion,
-            advancesAutomatically: flowPreferences.advancesAutomatically
-        ) {
+        feedback.present(conclusion) {
             switch navigation.advanceAfterConclusion(
                 itemID: conclusion.itemID,
                 expectedOperatorNavigationRevision: operatorNavigationRevision,
+                advancesToNextItem: flowPreferences.advancesToNextItem,
                 store: coordinator.store)
             {
-            case .advanced:
+            case .advanced, .returnedToInbox:
                 showsInboxClearResult = false
             case .inboxClear:
                 showsInboxClearResult = true
