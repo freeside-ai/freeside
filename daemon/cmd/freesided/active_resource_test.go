@@ -386,6 +386,9 @@ func TestActiveResourceCompletionUsesPersistedSharedPRFacts(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	for _, runID := range []domain.RunID{"run-shared-first", "run-shared-second"} {
+		assertCompletionMilestone(t, st, runID, activeResourceTestTime)
+	}
 }
 
 func TestActiveResourcePRCompletionIgnoresOptionalBoundIssue(t *testing.T) {
@@ -421,6 +424,20 @@ func TestActiveResourcePRCompletionIgnoresOptionalBoundIssue(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	var recordedAt time.Time
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		completion, err := tx.GetWorkUnitCompletion(ctx, domain.WorkUnitIDForRun("run-pr-only"))
+		recordedAt = completion.RecordedAt
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertCompletionMilestone(t, st, "run-pr-only", recordedAt)
+	// A second pass over the settled unit appends nothing new.
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("second Reconcile = %v, %v", failures, err)
+	}
+	assertCompletionMilestone(t, st, "run-pr-only", recordedAt)
 }
 
 func TestActiveResourceHonorsHistoricalCompletionAfterIssueReopens(t *testing.T) {

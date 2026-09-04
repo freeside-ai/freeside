@@ -964,11 +964,16 @@ func (r activeResourceReconciler) commit(ctx context.Context, observation active
 			if !ok {
 				return errors.New("persisted resource facts do not support observed work-unit completion")
 			}
-			if _, err := tx.GetWorkUnitCompletion(ctx, completion.UnitID); errors.Is(err, store.ErrNotFound) {
+			persisted, err := tx.GetWorkUnitCompletion(ctx, completion.UnitID)
+			if errors.Is(err, store.ErrNotFound) {
 				if err := tx.RecordWorkUnitCompletion(ctx, completion); err != nil {
 					return err
 				}
+				persisted = completion
 			} else if err != nil {
+				return err
+			}
+			if err := appendWorkUnitCompletedMilestone(ctx, tx, declaration.RunID, persisted); err != nil {
 				return err
 			}
 		}

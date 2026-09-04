@@ -80,7 +80,7 @@ type mergeCapture struct {
 func (c mergeCapture) observe(
 	ctx context.Context, st *store.Store,
 	item domain.AttentionItem, watch domain.ScheduleBaseWatch, firedAt time.Time,
-) (func(context.Context, *store.InternalTx) error, error) {
+) (func(context.Context, *store.WriteTx) error, error) {
 	if c.pull == nil || item.Subject.RunID == nil {
 		return nil, nil
 	}
@@ -263,7 +263,7 @@ func (c mergeCapture) observe(
 	if !material {
 		return nil, nil
 	}
-	return func(ctx context.Context, tx *store.InternalTx) error {
+	return func(ctx context.Context, tx *store.WriteTx) error {
 		if _, err := tx.AppendPullMergeFact(ctx, pullFact); err != nil {
 			return err
 		}
@@ -276,9 +276,10 @@ func (c mergeCapture) observe(
 			return nil
 		}
 		// A concurrent pass may have settled the unit between the
-		// observation and this transaction; the write-once record stands.
-		if _, err := tx.GetWorkUnitCompletion(ctx, completion.UnitID); err == nil {
-			return nil
+		// observation and this transaction; the write-once record stands,
+		// and its milestone converges on the record's instant.
+		if persisted, err := tx.GetWorkUnitCompletion(ctx, completion.UnitID); err == nil {
+			return appendWorkUnitCompletedMilestone(ctx, tx, declaration.RunID, persisted)
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return err
 		}
@@ -319,8 +320,26 @@ func (c mergeCapture) observe(
 		if !ok {
 			return errors.New("persisted resource facts do not support observed work-unit completion")
 		}
-		return tx.RecordWorkUnitCompletion(ctx, persistedCompletion)
+		if err := tx.RecordWorkUnitCompletion(ctx, persistedCompletion); err != nil {
+			return err
+		}
+		return appendWorkUnitCompletedMilestone(ctx, tx, persistedDeclaration.RunID, persistedCompletion)
 	}, nil
+}
+
+// workUnitCompletedMilestone is the observation mirror of a recorded
+// completion (#1134): invocation-only, on the run's publication invocation,
+// at the record's instant. The record stays the single authority for the
+// PR, merge commit, and bound issue; the sync boundary re-binds the
+// milestone to it on every read. Writers go through
+// appendWorkUnitCompletedMilestone, which applies the boundary's
+// precondition.
+func workUnitCompletedMilestone(runID domain.RunID, completion domain.WorkUnitCompletion) domain.RunMilestone {
+	invocation := domain.ProductionPublicationInvocationID(runID)
+	return domain.RunMilestone{
+		RunID: runID, Kind: domain.MilestoneWorkUnitCompleted,
+		InvocationID: &invocation, RecordedAt: completion.RecordedAt,
+	}
 }
 
 // withCapture composes the capture commit onto a consumption. The capture
@@ -328,7 +347,7 @@ func (c mergeCapture) observe(
 // consumption commits; a prior Commit's ErrStaleConsumption abandons the
 // capture too, and the next fire re-derives it from current state.
 func withCapture(
-	c scheduler.Consumption, capture func(context.Context, *store.InternalTx) error,
+	c scheduler.Consumption, capture func(context.Context, *store.WriteTx) error,
 ) scheduler.Consumption {
 	if capture == nil {
 		return c
@@ -340,7 +359,7 @@ func withCapture(
 				return err
 			}
 		}
-		return capture(ctx, &tx.InternalTx)
+		return capture(ctx, tx)
 	}
 	return c
 }

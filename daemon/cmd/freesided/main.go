@@ -851,6 +851,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	// A completion recorded before migration 0066 gains its
+	// work_unit_completed milestone once (#1134); a store already carrying
+	// the milestones is a no-op.
+	if err := reconcileWorkUnitCompletionMilestones(parent, st, logger); err != nil {
+		return nil, err
+	}
 	d := &daemon{
 		lock:  lock,
 		store: st, attention: attention, workflow: workflow, driver: driver,

@@ -401,6 +401,7 @@ func TestClaudeSchedulerCapturesCompletionWithBaseAdvance(t *testing.T) {
 			if len(pulls) != 1 || len(issues) != 1 || completion == nil {
 				t.Fatalf("advance capture state = %v %v %v", pulls, issues, completion)
 			}
+			assertCompletionMilestone(t, st, "run-cap", completion.RecordedAt)
 		})
 	}
 }
@@ -863,6 +864,17 @@ func capturedRunWithCriterion(
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// Publication convergence records the ready milestone alongside the ready
+	// item; the completion mirror is written only over a standing ready.
+	publicationInvocation := authority.publicationInvocationID
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: runID, Kind: domain.MilestonePublicationReady,
+			InvocationID: &publicationInvocation, RecordedAt: binding.RecordedAt,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return item
 }
 
@@ -1024,7 +1036,7 @@ func TestMergeCaptureCompletionUsesPersistedSharedPRFacts(t *testing.T) {
 		if err != nil || commit == nil {
 			t.Fatalf("observe %s = (commit=%t, err=%v)", captured.item.ID, commit != nil, err)
 		}
-		if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := st.Write(ctx, func(tx *store.WriteTx) error {
 			return commit(ctx, tx)
 		}); err != nil {
 			t.Fatal(err)
@@ -1039,6 +1051,21 @@ func TestMergeCaptureCompletionUsesPersistedSharedPRFacts(t *testing.T) {
 			if !completion.RecordedAt.Equal(firstAt) {
 				t.Fatalf("completion %s recorded_at = %s, want persisted %s",
 					runID, completion.RecordedAt, firstAt)
+			}
+			// The capture transaction mirrors the completion as the
+			// run's work_unit_completed milestone at the same instant.
+			observation, err := tx.ObserveRun(ctx, runID)
+			if err != nil {
+				return err
+			}
+			var completed []domain.RunMilestone
+			for _, milestone := range observation.Milestones {
+				if milestone.Kind == domain.MilestoneWorkUnitCompleted {
+					completed = append(completed, milestone)
+				}
+			}
+			if len(completed) != 1 || !completed[0].RecordedAt.Equal(firstAt) {
+				t.Fatalf("completion %s milestones = %+v, want one at %s", runID, completed, firstAt)
 			}
 		}
 		pulls, err := tx.ListPullMergeFacts(ctx, 424242, 450)
