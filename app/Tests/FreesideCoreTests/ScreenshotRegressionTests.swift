@@ -929,6 +929,32 @@
                             ).screenshotContent()
                         )))
             }
+            for colorScheme in [ColorScheme.light, .dark] {
+                surfaces.append(
+                    Surface(
+                        name: "runs-selected-differentiate-without-color"
+                            + (colorScheme == .dark ? "-dark" : ""),
+                        width: 560,
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            VStack(spacing: 8) {
+                                ForEach([false, true], id: \.self) { isSelected in
+                                    RunRowView(
+                                        run: activeRun.run,
+                                        identityLine: RunDisplay.identityLine(activeRun.run, runs: runs),
+                                        secondaryLine: RunDisplay.secondaryLine(activeRun.run, runs: runs),
+                                        spendLine: RunDisplay.spendLine(activeRun.run),
+                                        schedules: schedules.filter {
+                                            $0.schedule.run_id == activeRun.run.id
+                                                && $0.schedule.status == .armed
+                                        },
+                                        isSelected: isSelected,
+                                        differentiateWithoutColorOverride: true)
+                                }
+                            }
+                            .padding()
+                        )))
+            }
             surfaces.append(
                 Surface(
                     name: "operational-summary",

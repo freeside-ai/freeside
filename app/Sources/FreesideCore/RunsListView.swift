@@ -222,18 +222,50 @@ struct RunListFilter {
     }
 }
 
-/// One run as a ground-2 card; the selected row's border turns
-/// accent-dim in place of the platform selection highlight.
-private struct RunRowView: View {
+/// One run as a ground-2 card. Selection uses a leading bar and wash,
+/// with a stronger wash under Differentiate Without Color.
+struct RunRowView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
     let run: Components.Schemas.Run
     let identityLine: String?
     let secondaryLine: RunDisplay.SecondaryLine
     let spendLine: String?
     let schedules: [Components.Schemas.ScheduleSnapshot]
     var isSelected = false
+    var differentiateWithoutColorOverride: Bool?
 
     var body: some View {
+        HStack(spacing: 0) {
+            if isSelected {
+                Rectangle()
+                    .fill(Color.accentText)
+                    .frame(width: 4)
+                    .accessibilityHidden(true)
+            }
+            content
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(
+                    isSelected
+                        ? (effectiveDifferentiateWithoutColor ? Color.accentWash : .accentWashSoft)
+                        : .ground2)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(isSelected ? Color.clear : .rule, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var effectiveDifferentiateWithoutColor: Bool {
+        differentiateWithoutColorOverride ?? differentiateWithoutColor
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 7) {
             if dynamicTypeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 7) {
@@ -288,9 +320,6 @@ private struct RunRowView: View {
                 }
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .freesideCard(border: isSelected ? .accentBorder : .rule)
     }
 
     private var primaryLine: some View {
