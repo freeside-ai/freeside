@@ -123,6 +123,49 @@ func TestOutputRejectsCardinalityAndPresentationOverflow(t *testing.T) {
 	}
 }
 
+// TestDecodeOutputTrimsProse pins the whitespace tolerance (issue #1123): the
+// prose fields decode trimmed, an all-whitespace field is still empty and
+// rejected, and the identifier fields stay strict.
+func TestDecodeOutputTrimsProse(t *testing.T) {
+	t.Run("specification prose", func(t *testing.T) {
+		out, err := specify.DecodeOutput([]byte(`{"fetch_requests":[],"specification":{"summary":"  Gate the lifecycle.  ","body":"# Objective\n\nRequire approval.\n","addressals":[{"comment_id":"c1","response":"Addressed.\n"}]}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Specification.Summary != "Gate the lifecycle." {
+			t.Fatalf("summary = %q", out.Specification.Summary)
+		}
+		if out.Specification.Body != "# Objective\n\nRequire approval." {
+			t.Fatalf("body = %q", out.Specification.Body)
+		}
+		if out.Specification.Addressals[0].Response != "Addressed." {
+			t.Fatalf("response = %q", out.Specification.Addressals[0].Response)
+		}
+	})
+	t.Run("reply", func(t *testing.T) {
+		out, err := specify.DecodeOutput([]byte(`{"fetch_requests":[],"specification":null,"reply":"\n Not yet. \n"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if *out.Reply != "Not yet." {
+			t.Fatalf("reply = %q", *out.Reply)
+		}
+	})
+	rejected := []struct{ name, body string }{
+		{"whitespace-only body", `{"fetch_requests":[],"specification":{"summary":"s","body":" \n ","addressals":[]}}`},
+		{"whitespace-only reply", `{"fetch_requests":[],"specification":null,"reply":"  "}`},
+		{"padded comment id", `{"fetch_requests":[],"specification":{"summary":"s","body":"b","addressals":[{"comment_id":" c1","response":"r"}]}}`},
+		{"padded fetch url", `{"fetch_requests":[{"url":" https://example.com/a","purpose":"p"}],"specification":null}`},
+	}
+	for _, tc := range rejected {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := specify.DecodeOutput([]byte(tc.body)); !errors.Is(err, specify.ErrInvalidOutput) {
+				t.Fatalf("err = %v, want ErrInvalidOutput", err)
+			}
+		})
+	}
+}
+
 // TestDecodeOutputToleratesSingleFence enumerates the fence-tolerance input
 // space (issue #780): exactly one whole-payload Markdown fence pair decodes;
 // every other presentation defect still fails strict decode and carries a
