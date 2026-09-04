@@ -13,11 +13,7 @@ import (
 // tables have no foreign keys, so no fixture rows are needed.
 func seedObservationStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(context.Background(), t.TempDir()+"/observation.db", Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := openTemplateStoreAt(t, t.TempDir()+"/observation.db", Options{})
 	return s
 }
 

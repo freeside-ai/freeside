@@ -17,6 +17,7 @@ import (
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 type attentionDiscussionFixture struct {
@@ -36,14 +37,11 @@ func newAttentionDiscussionFixture(
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "state.db")
-	st, err := store.Open(t.Context(), dbPath, store.Options{
+	st := storetest.Open(t, dbPath, store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	closed := false
 	t.Cleanup(func() {
 		if !closed {
@@ -574,11 +572,7 @@ func TestAttentionDiscussionRecoversAfterStoreRestart(t *testing.T) {
 	if err := f.store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := store.Open(t.Context(), f.dbPath, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
+	reopened := storetest.Open(t, f.dbPath, store.Options{})
 	f.store = reopened
 	f.signet = signet.NewService(reopened, signet.WithClock(func() time.Time { return f.now }))
 	engine := f.engine(t, true)

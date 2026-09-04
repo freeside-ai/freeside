@@ -12,16 +12,14 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestApproveShadowReviewCommandTwoPass(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
-	st, err := store.Open(ctx, dbPath, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, dbPath, store.Options{})
 	profile := approveShadowReviewProfile(t)
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordTrustProfile(ctx, profile, time.Now().UTC())
@@ -61,11 +59,10 @@ func TestApproveShadowReviewCommandTwoPass(t *testing.T) {
 	if complete.Status != "complete" || complete.Approval != review.Approval {
 		t.Fatalf("complete = %#v, review = %#v", complete, review)
 	}
-	st, err = store.OpenReadOnly(ctx, dbPath, store.Options{})
+	st, err := store.OpenReadOnly(ctx, dbPath, store.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = st.Close() })
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		return tx.RequireShadowReviewConfigurationApproved(
 			ctx, domain.ShadowReviewClaudeLocal, configuration,

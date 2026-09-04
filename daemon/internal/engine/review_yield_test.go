@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestDeriveReviewYieldHistoryTracksNewRecurringAndDispositions(t *testing.T) {
@@ -177,10 +178,7 @@ func TestDeriveReviewYieldHistoryResetsRecurrenceForNewReviewerConfiguration(t *
 func TestReviewYieldHistoryDerivesPersistedMultiRoundHistoryAfterRestart(t *testing.T) {
 	ctx := t.Context()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
-	st, err := store.Open(ctx, dbPath, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, dbPath, store.Options{})
 	run := domain.Run{
 		ID: "run-yield-restart", ProjectID: "project-yield-restart",
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
@@ -249,11 +247,7 @@ func TestReviewYieldHistoryDerivesPersistedMultiRoundHistoryAfterRestart(t *test
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	st, err = store.Open(ctx, dbPath, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st = storetest.Open(t, dbPath, store.Options{})
 
 	got, err := (&productionPublicationWorkflow{store: st}).reviewYieldHistory(ctx, run.ID)
 	if err != nil {

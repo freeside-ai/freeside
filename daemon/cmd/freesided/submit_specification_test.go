@@ -20,6 +20,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 type submitSpecificationBackend struct{}
@@ -114,15 +115,11 @@ func testSubmitCommandSpecificationDigest(
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(t.Context(), cfg.DBPath, store.Options{
+	st := storetest.Open(t, cfg.DBPath, store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
 	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
 	if err != nil {
 		t.Fatal(err)

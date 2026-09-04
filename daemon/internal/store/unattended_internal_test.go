@@ -209,11 +209,7 @@ func TestAttentionHealthPostureReconstructionFailsClosed(t *testing.T) {
 func TestTamperedTransitionFailsClosed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	s, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 
 	carrier, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "carrier-1", ProjectID: "proj-1",

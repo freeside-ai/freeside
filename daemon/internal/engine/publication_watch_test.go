@@ -9,14 +9,12 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func watchTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "store.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	t.Cleanup(func() {
 		if err := st.Close(); err != nil {
 			t.Errorf("Close: %v", err)

@@ -54,12 +54,7 @@ func enrollmentEntry(fence int64) domain.EnrollmentGeneration {
 
 func openEnrollmentStore(t *testing.T) *Store {
 	t.Helper()
-	ctx := context.Background()
-	s, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	return s
 }
 

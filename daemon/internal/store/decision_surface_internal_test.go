@@ -140,12 +140,7 @@ func rawSurfaceRow(t *testing.T, ctx context.Context, db *sql.DB, id domain.Item
 
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
-	st, err := Open(context.Background(), filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st
+	return openTemplateStore(t, Options{})
 }
 
 func putItem(t *testing.T, ctx context.Context, st *Store, item domain.AttentionItem) {

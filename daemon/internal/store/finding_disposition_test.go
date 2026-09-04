@@ -19,6 +19,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func dispositionReviewRecord(
@@ -87,10 +88,7 @@ func TestFindingDispositionsPersistAcrossRestart(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "store.db")
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, path, store.Options{})
 	run := domain.Run{
 		ID: "run-dispositions", ProjectID: "project-1",
 		SpecDigest: adjSpecDigest, PolicyDigest: adjPolicyDigest,
@@ -146,11 +144,7 @@ func TestFindingDispositionsPersistAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
+	reopened := storetest.Open(t, path, store.Options{})
 	if err := reopened.Read(ctx, func(tx *store.ReadTx) error {
 		got, err := tx.ListFindingDispositions(ctx, run.ID)
 		if err != nil {
@@ -444,6 +438,12 @@ func TestPutFindingDispositionRejectsUnboundRemediationReview(t *testing.T) {
 func TestFindingDispositionSurvivesProcessKill(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "store.db")
+	// A reexecuted helper cannot share the parent's cached template. Prepare
+	// its file here so its readiness budget covers the write being tested.
+	prepared := storetest.Open(t, path, store.Options{})
+	if err := prepared.Close(); err != nil {
+		t.Fatal(err)
+	}
 	binary, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -493,11 +493,7 @@ func TestFindingDispositionSurvivesProcessKill(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	reopened, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatalf("open after kill: %v", err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
+	reopened := storetest.Open(t, path, store.Options{})
 	err = reopened.Read(ctx, func(tx *store.ReadTx) error {
 		got, err := tx.GetFindingDisposition(ctx, "finding-kill", 1)
 		if err != nil {
@@ -519,10 +515,7 @@ func TestFindingDispositionKillWriter(t *testing.T) {
 		t.Skip("helper process")
 	}
 	ctx := context.Background()
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, path, store.Options{})
 	at := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	run := domain.Run{ID: "run-kill", ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
 	finding := domain.Finding{ID: "finding-kill", RunID: run.ID, Source: "codex", CreatedAt: at}

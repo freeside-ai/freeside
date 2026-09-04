@@ -57,11 +57,7 @@ func internalRoutedCandidate(
 func TestShadowReviewReconstructionRegatesRegisteredSource(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/shadow-source.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/shadow-source.db", Options{})
 	run := domain.Run{ID: "run-shadow-source", ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
 	finding := domain.Finding{
 		ID: "shadow-source-finding", RunID: run.ID, Source: string(domain.ShadowReviewClaudeLocal), Severity: "P2",
@@ -91,7 +87,7 @@ func TestShadowReviewReconstructionRegatesRegisteredSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	decoded["source"] = "decoded_shadow_flag"
-	body, err = json.Marshal(decoded)
+	body, err := json.Marshal(decoded)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,11 +108,7 @@ func TestShadowReviewReconstructionRegatesRegisteredSource(t *testing.T) {
 func TestShadowReviewReconstructionRegatesFindingSourceSchema(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/shadow-finding-schema.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/shadow-finding-schema.db", Options{})
 	at := time.Date(2026, 8, 24, 4, 15, 0, 0, time.UTC)
 	run := domain.Run{
 		ID: "run-shadow-finding-schema", ProjectID: "project-1",
@@ -146,7 +138,7 @@ func TestShadowReviewReconstructionRegatesFindingSourceSchema(t *testing.T) {
 		`UPDATE findings SET body = json_set(body, '$.severity', '') WHERE id = ?`, finding.ID); err != nil {
 		t.Fatal(err)
 	}
-	err = st.Read(ctx, func(tx *ReadTx) error {
+	err := st.Read(ctx, func(tx *ReadTx) error {
 		_, err := tx.GetShadowReviewRecord(ctx, record.InvocationID)
 		return err
 	})
@@ -175,11 +167,7 @@ func TestShadowReviewReconstructionRegatesRoutedCandidate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			st, err := Open(ctx, t.TempDir()+"/shadow-candidate.db", Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = st.Close() })
+			st := openTemplateStoreAt(t, t.TempDir()+"/shadow-candidate.db", Options{})
 			run := domain.Run{
 				ID:        domain.RunID("run-shadow-reconstruction-" + strings.ReplaceAll(tc.name, " ", "-")),
 				ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
@@ -229,11 +217,7 @@ func TestShadowReviewReconstructionRegatesRoutedCandidate(t *testing.T) {
 func TestShadowFindingCannotBindRoutedAdjudication(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/shadow-routing.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/shadow-routing.db", Options{})
 	run := domain.Run{
 		ID: "run-shadow-routing", ProjectID: "project-1",
 		SpecDigest:   domain.Digest("sha256:" + strings.Repeat("a", 64)),
@@ -294,11 +278,7 @@ func TestShadowAndRoutedReviewSchemaRejectsDualLinkedFinding(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			st, err := Open(ctx, t.TempDir()+"/dual-link.db", Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = st.Close() })
+			st := openTemplateStoreAt(t, t.TempDir()+"/dual-link.db", Options{})
 			run := domain.Run{
 				ID: domain.RunID("run-schema-" + name), ProjectID: "project-1",
 				SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
@@ -329,7 +309,7 @@ func TestShadowAndRoutedReviewSchemaRejectsDualLinkedFinding(t *testing.T) {
 			}
 
 			if shadowFirst {
-				_, err = st.db.ExecContext(ctx, `INSERT INTO review_record_findings
+				_, err := st.db.ExecContext(ctx, `INSERT INTO review_record_findings
 					(invocation_id, finding_id, ordinal) VALUES (?, ?, 0)`, "routed-schema-1", finding.ID)
 				if err == nil {
 					t.Fatal("schema accepted a shadow finding in routed review")
@@ -358,11 +338,7 @@ func TestShadowAndRoutedReviewSchemaRejectsDualLinkedFinding(t *testing.T) {
 func TestShadowReviewSchemaRejectsDuplicateInvocationAndFindingParent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/shadow-identity.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/shadow-identity.db", Options{})
 	at := time.Date(2026, 8, 24, 6, 30, 0, 0, time.UTC)
 	run := domain.Run{
 		ID: "run-shadow-identity", ProjectID: "project-1",
@@ -481,11 +457,7 @@ func TestShadowReviewSchemaRejectsDuplicateInvocationAndFindingParent(t *testing
 func TestShadowReviewSchemaRejectsRetryInvocationOverlap(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/shadow-retry-identity.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/shadow-retry-identity.db", Options{})
 	at := time.Date(2026, 8, 24, 7, 15, 0, 0, time.UTC)
 	retryRun := domain.Run{
 		ID: "run-shadow-retry-routed", ProjectID: "project-1",
@@ -571,11 +543,7 @@ func TestShadowReviewSchemaRejectsRetryInvocationOverlap(t *testing.T) {
 func TestReviewReconstructionRejectsDuplicateShadowRetryInvocation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/duplicate-shadow-retry-invocation.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/duplicate-shadow-retry-invocation.db", Options{})
 	at := time.Date(2026, 8, 24, 7, 30, 0, 0, time.UTC)
 	run := domain.Run{
 		ID: "run-duplicate-shadow-retry", ProjectID: "project-1",
@@ -634,11 +602,7 @@ func TestReviewReconstructionRejectsDuplicateShadowRetryInvocation(t *testing.T)
 func TestReviewReconstructionRejectsDuplicateShadowInvocation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/duplicate-shadow-invocation.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/duplicate-shadow-invocation.db", Options{})
 	at := time.Date(2026, 8, 24, 6, 45, 0, 0, time.UTC)
 	run := domain.Run{
 		ID: "run-duplicate-shadow-invocation", ProjectID: "project-1",
@@ -702,11 +666,7 @@ func TestReviewReconstructionRejectsDuplicateShadowInvocation(t *testing.T) {
 func TestShadowReconstructionRejectsFindingWithMultipleParents(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/duplicate-shadow-parent.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/duplicate-shadow-parent.db", Options{})
 	at := time.Date(2026, 8, 24, 6, 50, 0, 0, time.UTC)
 	run := domain.Run{
 		ID: "run-duplicate-shadow-parent", ProjectID: "project-1",
@@ -792,11 +752,7 @@ func TestShadowReconstructionRejectsFindingWithMultipleParents(t *testing.T) {
 func TestReviewReconstructionRejectsDualLinkedFinding(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/dual-link-reconstruction.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/dual-link-reconstruction.db", Options{})
 	at := time.Date(2026, 8, 24, 7, 0, 0, 0, time.UTC)
 	run := domain.Run{
 		ID: "run-dual-reconstruction", ProjectID: "project-1",

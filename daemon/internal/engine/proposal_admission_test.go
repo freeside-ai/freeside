@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func proposalAdmissionFixture(t *testing.T, commandID string) ProposalAdmission {
@@ -75,11 +76,7 @@ func seedProposalAdmissionPolicy(t *testing.T, ctx context.Context, st *store.St
 
 func TestProposalAdmissionRetryAndDeliberateRepeat(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "store.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	engine := &Engine{store: st}
 	at := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	request := proposalAdmissionFixture(t, "command-1")
@@ -123,10 +120,7 @@ func TestProposalAdmissionCrashRecovery(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "store.db")
 	request := proposalAdmissionFixture(t, "command-crash")
 	at := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
-	firstStore, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	firstStore := storetest.Open(t, path, store.Options{})
 	seedProposalAdmissionPolicy(t, ctx, firstStore, request)
 	first, err := (&Engine{store: firstStore}).admitProposalAt(ctx, request, at)
 	if err != nil {
@@ -136,11 +130,7 @@ func TestProposalAdmissionCrashRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	recoveredStore, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = recoveredStore.Close() })
+	recoveredStore := storetest.Open(t, path, store.Options{})
 	recovered, err := (&Engine{store: recoveredStore}).admitProposalAt(ctx, request, at.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
@@ -152,11 +142,7 @@ func TestProposalAdmissionCrashRecovery(t *testing.T) {
 
 func TestProposalAdmissionGateUsesResolvedPolicyNotRein(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "store.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	request := proposalAdmissionFixture(t, "command-1")
 	seedProposalAdmissionPolicy(t, ctx, st, request)
 	result, err := (&Engine{store: st}).admitProposalAt(ctx, request, time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC))
@@ -172,11 +158,7 @@ func TestProposalAdmissionGateUsesResolvedPolicyNotRein(t *testing.T) {
 
 func TestProposalAdmissionRejectsUnregisteredOrForeignWorkUnit(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "store.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	request := proposalAdmissionFixture(t, "command-unregistered")
 	engine := &Engine{store: st}
 	if _, err := engine.admitProposalAt(ctx, request, time.Now().UTC()); !errors.Is(err, store.ErrNotFound) {
@@ -191,11 +173,7 @@ func TestProposalAdmissionRejectsUnregisteredOrForeignWorkUnit(t *testing.T) {
 
 func TestProposalAdmissionRejectsScopeOutsideDurableDeclaration(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "store.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	request := proposalAdmissionFixture(t, "command-scope-mismatch")
 	seedProposalAdmissionPolicy(t, ctx, st, request)
 	before, err := st.ServerState(ctx)

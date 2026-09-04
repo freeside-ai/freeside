@@ -13,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // issueSubjectReservation mirrors what the label-intake admission persists
@@ -30,11 +31,7 @@ type issueSubjectReservation struct {
 func newIssueSubjectReservation(t *testing.T, stageAttempts ...domain.Attempt) issueSubjectReservation {
 	t.Helper()
 	root := t.TempDir()
-	st, err := store.Open(t.Context(), filepath.Join(root, "state.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(root, "state.db"), store.Options{})
 	blobs, err := signet.NewBlobStore(filepath.Join(root, "blobs"))
 	if err != nil {
 		t.Fatal(err)

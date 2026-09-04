@@ -38,11 +38,7 @@ func TestFindingDispositionMigrationAppliesFromHead(t *testing.T) {
 func seedFindingDisposition(t *testing.T) (*Store, domain.ReviewDispositionRecord, domain.Finding) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/store.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/store.db", Options{})
 	run := domain.Run{ID: "run-tamper", ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
 	at := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	finding := domain.Finding{ID: "finding-tamper", RunID: run.ID, Source: "codex", CreatedAt: at}

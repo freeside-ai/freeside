@@ -8,6 +8,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // unattendedAdmissionFixture is the encrypted-backup unattended admission the
@@ -212,10 +213,7 @@ func TestStopClosesUnattendedAdmission(t *testing.T) {
 	f := unattendedAdmissionFixture(t)
 	path := tempDBPath(t)
 
-	s, err := store.Open(ctx, path, unattendedOptions())
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := storetest.Open(t, path, unattendedOptions())
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutRun(ctx, f.run); err != nil {
 			return err
@@ -237,11 +235,7 @@ func TestStopClosesUnattendedAdmission(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	reopened, err := store.Open(ctx, path, unattendedOptions())
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
+	reopened := storetest.Open(t, path, unattendedOptions())
 	if err := recordAdmission(t, reopened, f.admission); !errors.Is(err, domain.ErrUnattendedOperationStopped) {
 		t.Fatalf("unattended admission after restart = %v, want %v", err, domain.ErrUnattendedOperationStopped)
 	}

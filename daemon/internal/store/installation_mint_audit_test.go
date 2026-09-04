@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func installationMintAuditFixture() store.InstallationMintAudit {
@@ -249,11 +250,8 @@ func TestInstallationMintAuditPersistsAcrossReopen(t *testing.T) {
 	ctx := context.Background()
 	path := tempDBPath(t)
 
-	s, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	err = s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	s := storetest.Open(t, path, store.Options{})
+	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		_, err := tx.RecordInstallationMint(ctx, installationMintAuditFixture())
 		return err
 	})

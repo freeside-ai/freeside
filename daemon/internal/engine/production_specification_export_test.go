@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // TestRecordExecutionExportSpecificationArmMintsNoPublicationTask covers the
@@ -31,7 +32,7 @@ func TestRecordExecutionExportSpecificationArmMintsNoPublicationTask(t *testing.
 	stageID := specificationStageID(runID)
 	epoch := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), store.Options{
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "state.db"), store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 			domain.ModeUnattended:  domain.NewCapabilitySnapshot(domain.CapPostExitExport),
@@ -46,10 +47,6 @@ func TestRecordExecutionExportSpecificationArmMintsNoPublicationTask(t *testing.
 			}, nil
 		}),
 	})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
 
 	ceiling, ok := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
 	if !ok {

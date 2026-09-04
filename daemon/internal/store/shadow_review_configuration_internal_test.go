@@ -187,11 +187,7 @@ func seededInternalShadowConfigurationApproval(
 ) (context.Context, *Store, domain.ShadowReviewConfigurationApproval) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "freeside.db"), Options{})
 	profile := internalShadowTrustProfile(
 		t, "example/repo", 44, internalShadowConfigurationDigest("1"),
 	)

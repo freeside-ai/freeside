@@ -20,6 +20,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func productionPublicationMetadata() engine.ProductionPublication {
@@ -279,15 +280,11 @@ func openProductionFixture(t *testing.T) *workflowFixture {
 	t.Helper()
 	ctx := context.Background()
 	root := t.TempDir()
-	st, err := store.Open(ctx, filepath.Join(root, "freeside.db"), store.Options{
+	st := storetest.Open(t, filepath.Join(root, "freeside.db"), store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: {},
 		},
 	})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, testIdentity, admittedAt)
 	}); err != nil {

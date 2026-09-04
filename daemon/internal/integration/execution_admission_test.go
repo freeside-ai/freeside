@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 var (
@@ -65,15 +66,11 @@ func openAdmittingFixture(
 	t.Helper()
 	ctx := context.Background()
 	root := t.TempDir()
-	st, err := store.Open(ctx, filepath.Join(root, "freeside.db"), store.Options{
+	st := storetest.Open(t, filepath.Join(root, "freeside.db"), store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: storeFloor,
 		},
 	})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, testIdentity, admittedAt)
 	}); err != nil {
@@ -223,15 +220,11 @@ func TestAdmissionConfigurationIsDetached(t *testing.T) {
 	env.AuthIdentityID = &identity
 
 	root := t.TempDir()
-	st, err := store.Open(ctx, filepath.Join(root, "freeside.db"), store.Options{
+	st := storetest.Open(t, filepath.Join(root, "freeside.db"), store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(floor...),
 		},
 	})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, testIdentity, admittedAt)
 	}); err != nil {
@@ -911,13 +904,9 @@ func reopenWithFloor(t *testing.T, f *workflowFixture, floor domain.CapabilitySn
 		t.Fatalf("store.Close: %v", err)
 	}
 	f.store = nil
-	reopened, err := store.Open(context.Background(), filepath.Join(f.root, "freeside.db"), store.Options{
+	reopened := storetest.Open(t, filepath.Join(f.root, "freeside.db"), store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{domain.ModeAttendedDev: floor},
 	})
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
 	return reopened
 }
 

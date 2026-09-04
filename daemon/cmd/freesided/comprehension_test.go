@@ -11,16 +11,14 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/observe/comprehension"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestComprehensionCommandRecordDefectAndMeasures(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
-	st, err := store.Open(ctx, dbPath, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, dbPath, store.Options{})
 	runID := domain.RunID("run-1")
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-1", ProjectID: "proj-1",

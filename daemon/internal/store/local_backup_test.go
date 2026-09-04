@@ -12,6 +12,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 type backupArtifactSet map[domain.Digest]bool
@@ -52,10 +53,7 @@ func TestLocalCheckpointHealthEvaluatesEveryDimension(t *testing.T) {
 	}
 	writeCheckpointGeneratedAt(t, checkpointPath, now)
 
-	restoreTest, err := store.Open(ctx, restoreTestPath, store.Options{})
-	if err != nil {
-		t.Fatalf("open restore test: %v", err)
-	}
+	restoreTest := storetest.Open(t, restoreTestPath, store.Options{})
 	if _, err := restoreTest.Restore(ctx, checkpointPath); err != nil {
 		_ = restoreTest.Close()
 		t.Fatalf("restore test: %v", err)

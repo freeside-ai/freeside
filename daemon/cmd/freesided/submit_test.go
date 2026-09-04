@@ -22,6 +22,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
@@ -370,10 +371,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	// The durable state a replayed submission converged on: the private
 	// specification run, artifacts, invocation, and pending dispatch intent. The
 	// implementation run remains only a reservation until approval.
-	st, err := store.Open(ctx, cfg.DBPath, store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	st := storetest.Open(t, cfg.DBPath, store.Options{})
 	defer func() { _ = st.Close() }()
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		if _, err := tx.GetRun(ctx, first.RunID); !errors.Is(err, store.ErrNotFound) {
@@ -861,10 +859,7 @@ func TestSubmitCommandReplaysMatchingPreSpecificationProductionRun(t *testing.T)
 	if _, err := loadOrCreateTopicKey(cfg.DBPath, false); err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(ctx, cfg.DBPath, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, cfg.DBPath, store.Options{})
 	defer func() { _ = st.Close() }()
 	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
 	if err != nil {
@@ -954,11 +949,7 @@ func TestStoreAdmissionAuthorityDerivesFallbackCommitMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(ctx, cfg.DBPath, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, cfg.DBPath, store.Options{})
 	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
 	if err != nil {
 		t.Fatal(err)
@@ -1214,10 +1205,7 @@ func TestSubmitCommandCapturesWorkUnitDeclaration(t *testing.T) {
 		t.Fatalf("work unit id = %q, want derived from run %q", declared.WorkUnitID, declared.RunID)
 	}
 
-	st, err := store.Open(ctx, cfg.DBPath, store.Options{})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := storetest.Open(t, cfg.DBPath, store.Options{})
 	defer func() { _ = st.Close() }()
 	var stored domain.WorkUnitDeclarationInput
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {

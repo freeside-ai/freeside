@@ -28,11 +28,7 @@ func TestFindingAdjudicationPreCommitmentBodyReconstructs(t *testing.T) {
 	if artifact.DecisionSurfaceDigest != "" {
 		t.Fatalf("fixture decision surface digest = %q, want empty", artifact.DecisionSurfaceDigest)
 	}
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	findings := make([]domain.Finding, 0, len(artifact.Entries))
 	ids := make([]domain.FindingID, 0, len(artifact.Entries))
 	for _, entry := range artifact.Entries {
@@ -227,11 +223,7 @@ func TestMigrateFindingAdjudicationRevisionsPreservesInitialRows(t *testing.T) {
 func TestFindingAdjudicationRevisionColumnsAreCrossChecked(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	artifact := seedMigrationAdjudication(t, ctx, st)
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		return tx.PutFindingAdjudication(ctx, artifact)

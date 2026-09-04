@@ -23,6 +23,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // The issue-#394 scenario fixtures: an operator client following an
@@ -135,15 +136,11 @@ func TestApprovedImplementationRemainsServedWhenObservationLagsExport(t *testing
 	ctx := context.Background()
 	root := t.TempDir()
 	now := time.Date(2026, 8, 15, 4, 0, 0, 0, time.UTC)
-	st, err := store.Open(ctx, filepath.Join(root, "state.db"), store.Options{
+	st := storetest.Open(t, filepath.Join(root, "state.db"), store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
 	blobs, err := signet.NewBlobStore(filepath.Join(root, "blobs"))
 	if err != nil {
 		t.Fatal(err)

@@ -144,11 +144,7 @@ VALUES (?, 'proj-1', NULL, 'blocked', 'open', NULL, 1, 1, ?)`, row.id, row.body)
 func TestAttentionSubjectRunBindingWriteAndRead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	item := attentionItemForRun(t, "selected-item", "run-selected")
 	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
 		t.Fatalf("PutAttentionItem: %v", err)
@@ -195,10 +191,7 @@ func TestListOpenAttentionItemsForRunIsolatesUnrelatedRows(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "store.db")
 	recipe := domain.Digest("sha256:recipe-now-stale")
-	approving, err := Open(ctx, path, Options{ApprovedRecipes: map[domain.Digest]bool{recipe: true}})
-	if err != nil {
-		t.Fatalf("Open approving store: %v", err)
-	}
+	approving := openTemplateStoreAt(t, path, Options{ApprovedRecipes: map[domain.Digest]bool{recipe: true}})
 	selected := attentionItemForRun(t, "selected-item", "run-selected")
 	stale := attentionItemWithEvidence(t, "stale-item", "run-stale", recipe)
 	malformed := attentionItemForRun(t, "malformed-item", "run-malformed")
@@ -216,11 +209,7 @@ func TestListOpenAttentionItemsForRunIsolatesUnrelatedRows(t *testing.T) {
 		t.Fatalf("close approving store: %v", err)
 	}
 
-	closed, err := Open(ctx, path, Options{})
-	if err != nil {
-		t.Fatalf("Open closed-policy store: %v", err)
-	}
-	t.Cleanup(func() { _ = closed.Close() })
+	closed := openTemplateStoreAt(t, path, Options{})
 	if _, err := closed.db.ExecContext(ctx,
 		`UPDATE attention_items SET body = '{' WHERE id = ?`, malformed.ID); err != nil {
 		t.Fatalf("malform unrelated body: %v", err)
@@ -296,17 +285,13 @@ func TestListOpenAttentionItemsForRunRejectsSelectedCorruption(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-			if err != nil {
-				t.Fatalf("Open: %v", err)
-			}
-			t.Cleanup(func() { _ = st.Close() })
+			st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 			item := attentionItemForRun(t, "selected-item", "run-selected")
 			if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
 				t.Fatalf("PutAttentionItem: %v", err)
 			}
 			tc.mutate(t, ctx, st, item)
-			err = st.Read(ctx, func(tx *ReadTx) error {
+			err := st.Read(ctx, func(tx *ReadTx) error {
 				_, err := tx.ListOpenAttentionItemsForRun(ctx, "run-selected")
 				return err
 			})
@@ -389,11 +374,7 @@ func TestListOpenAttentionItemsForRunRejectsAmbiguousSelectedBody(t *testing.T) 
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-			if err != nil {
-				t.Fatalf("Open: %v", err)
-			}
-			t.Cleanup(func() { _ = st.Close() })
+			st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 			item := attentionItemForRun(t, "selected-item", "run-selected")
 			if err := st.Write(ctx, func(tx *WriteTx) error {
 				return tx.PutAttentionItem(ctx, item)
@@ -426,11 +407,7 @@ WHERE id = ?`, body, tc.column, tc.status, item.ID); err != nil {
 func TestListOpenAttentionItemsForRunRejectsSQLiteInvalidBodyRetargetedFromRun(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	item := attentionItemForRun(t, "selected-item", "run-selected")
 	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
 		t.Fatalf("PutAttentionItem: %v", err)
@@ -459,11 +436,7 @@ UPDATE attention_items SET body = ?, subject_run_id = 'run-other' WHERE id = ?`,
 func TestAttentionSubjectRunBindingReconstructionRejectsRetargetedBody(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	item := attentionItemForRun(t, "selected-item", "run-selected")
 	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
 		t.Fatalf("PutAttentionItem: %v", err)
@@ -491,11 +464,7 @@ func TestAttentionSubjectRunBindingReconstructionRejectsRetargetedBody(t *testin
 func TestListOpenAttentionItemsChecksSubjectRunBinding(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	item := attentionItemForRun(t, "selected-item", "run-selected")
 	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
 		t.Fatalf("PutAttentionItem: %v", err)
@@ -504,7 +473,7 @@ func TestListOpenAttentionItemsChecksSubjectRunBinding(t *testing.T) {
 		`UPDATE attention_items SET subject_run_id = 'run-other' WHERE id = ?`, item.ID); err != nil {
 		t.Fatalf("retarget column: %v", err)
 	}
-	err = st.Read(ctx, func(tx *ReadTx) error {
+	err := st.Read(ctx, func(tx *ReadTx) error {
 		_, err := tx.ListOpenAttentionItems(ctx, domain.AttentionBlocked)
 		return err
 	})

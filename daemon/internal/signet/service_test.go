@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // fixture is the §5.14 test bed: a service over a fresh store seeded with one
@@ -51,12 +52,9 @@ func newFixture(t *testing.T) fixture {
 	t.Helper()
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/signet.db"
-	s, err := store.Open(ctx, dbPath, store.Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+	s := storetest.Open(t, dbPath, store.Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 		domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 	}})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
 	t.Cleanup(func() {
 		if err := s.Close(); err != nil {
 			t.Errorf("Close: %v", err)

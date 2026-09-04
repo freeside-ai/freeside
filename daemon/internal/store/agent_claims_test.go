@@ -7,6 +7,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // agentClaimFixtures builds an invocation and a two-claim set (an image claim
@@ -64,11 +65,8 @@ func TestAgentClaimsRoundTripAcrossReopen(t *testing.T) {
 		Metadata: claimMeta(domain.EvidenceMediaImagePNG),
 	}}
 
-	s, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	err = s.Write(ctx, func(tx *store.WriteTx) error {
+	s := storetest.Open(t, path, store.Options{})
+	err := s.Write(ctx, func(tx *store.WriteTx) error {
 		// The invocation rows come first: PutAgentClaims foreign-keys to them.
 		if err := tx.PutAgentInvocation(ctx, invA); err != nil {
 			return err

@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 type immediateShadowSource struct {
@@ -130,11 +131,7 @@ func (retainingShadowTransport) PushHead(
 func TestShadowReviewRecordsClassifiesSamplesAndBlocksReady(t *testing.T) {
 	ctx := t.Context()
 	dir := t.TempDir()
-	st, err := store.Open(ctx, filepath.Join(dir, "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(dir, "freeside.db"), store.Options{})
 	now := time.Date(2026, 8, 24, 14, 0, 0, 0, time.UTC)
 	runID := domain.RunID("run-shadow-review")
 	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
@@ -426,11 +423,7 @@ func TestShadowReviewFindingNeedsAttentionUsesClassifierCeiling(t *testing.T) {
 func TestPersistedLowerShadowReviewRecoversBeforeDisabledLaunchPolicy(t *testing.T) {
 	ctx := t.Context()
 	dir := t.TempDir()
-	st, err := store.Open(ctx, filepath.Join(dir, "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(dir, "freeside.db"), store.Options{})
 	now := time.Date(2026, 8, 24, 16, 0, 0, 0, time.UTC)
 	runID := domain.RunID("run-shadow-recovery-disabled")
 	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
@@ -533,11 +526,7 @@ func TestPersistedLowerShadowReviewRecoversBeforeDisabledLaunchPolicy(t *testing
 
 func TestShadowReviewFailureIsClassifiedAndDoesNotBlockRoutedGate(t *testing.T) {
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	runID := domain.RunID("run-shadow-failure")
 	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
 		Key: shadowReviewRatePolicyKey, Value: "1",
@@ -637,11 +626,7 @@ func TestShadowReviewFailureIsClassifiedAndDoesNotBlockRoutedGate(t *testing.T) 
 
 func TestLateCompletedShadowReviewExpiresWithoutBlockingRoutedGate(t *testing.T) {
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	runID := domain.RunID("run-shadow-timeout")
 	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
 		Key: shadowReviewRatePolicyKey, Value: "1",

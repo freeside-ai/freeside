@@ -11,6 +11,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 const testReviewerLogin = "chatgpt-codex-connector"
@@ -370,15 +371,11 @@ func TestActiveResourceNativeNotModifiedRecordsNothing(t *testing.T) {
 func TestActiveResourceNativeCommitFailureEvictsCache(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "store.db")
-	st, err := store.Open(ctx, dbPath, store.Options{
+	st := storetest.Open(t, dbPath, store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
 	})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
 
 	item := activeReadyItem(t, st)
 	armActiveTestSchedules(t, st, item)

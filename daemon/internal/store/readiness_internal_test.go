@@ -122,10 +122,7 @@ func TestReadinessRecordsRecoverAndReGateAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "store.db")
 	resolution, cleanResolution, proof, waiver, event := storeReadinessFixture(t)
-	st, err := Open(ctx, path, readinessWaiverOptions(waiver.GrantDigest))
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := openTemplateStoreAt(t, path, readinessWaiverOptions(waiver.GrantDigest))
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		if err := tx.RecordRequirementResolution(ctx, resolution); err != nil {
 			return err
@@ -144,10 +141,7 @@ func TestReadinessRecordsRecoverAndReGateAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	st, err = Open(ctx, path, readinessWaiverOptions(waiver.GrantDigest))
-	if err != nil {
-		t.Fatal(err)
-	}
+	st = openTemplateStoreAt(t, path, readinessWaiverOptions(waiver.GrantDigest))
 	defer st.Close() //nolint:errcheck // test cleanup; assertions report read failures
 	if err := st.Read(ctx, func(tx *ReadTx) error {
 		if got, err := tx.GetRequirementResolution(ctx, resolution.Digest); err != nil || got.Digest != resolution.Digest {
@@ -170,10 +164,7 @@ func TestWaiverRevocationFailsClosedAndFloorTightensOnly(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "store.db")
 	resolution, _, _, waiver, grant := storeReadinessFixture(t)
-	st, err := Open(ctx, path, readinessWaiverOptions(waiver.GrantDigest))
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := openTemplateStoreAt(t, path, readinessWaiverOptions(waiver.GrantDigest))
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		if err := tx.RecordRequirementResolution(ctx, resolution); err != nil {
 			return err
@@ -203,14 +194,11 @@ func TestWaiverRevocationFailsClosedAndFloorTightensOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tightened, err := Open(ctx, path, Options{
+	tightened := openTemplateStoreAt(t, path, Options{
 		VerificationFloorRegistryGeneration: 2,
 		WaiverGrantApprovals:                readinessWaiverOptions(waiver.GrantDigest).WaiverGrantApprovals,
 		TrustedRequirementSets:              readinessFixtureSets(),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer tightened.Close() //nolint:errcheck // test cleanup; assertions report read failures
 	if err := tightened.Read(ctx, func(tx *ReadTx) error {
 		_, err := tx.GetRequirementResolution(ctx, resolution.Digest)
@@ -269,12 +257,9 @@ func TestRequirementResolutionReGatesAgainstTrustedRegistry(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{TrustedRequirementSets: readinessFixtureSets()})
-			if err != nil {
-				t.Fatal(err)
-			}
+			st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{TrustedRequirementSets: readinessFixtureSets()})
 			defer st.Close() //nolint:errcheck // test cleanup; assertions report failures
-			err = st.Write(ctx, func(tx *WriteTx) error {
+			err := st.Write(ctx, func(tx *WriteTx) error {
 				return tx.RecordRequirementResolution(ctx, test.resolution)
 			})
 			if !errors.Is(err, test.wantErr) {
@@ -302,10 +287,7 @@ func TestCheckProofReGatesRecipeAuthorityByClass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := Open(ctx, path, readinessWaiverOptions(waiver.GrantDigest))
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := openTemplateStoreAt(t, path, readinessWaiverOptions(waiver.GrantDigest))
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		if err := tx.RecordRequirementResolution(ctx, resolution); err != nil {
 			return err
@@ -329,10 +311,7 @@ func TestCheckProofReGatesRecipeAuthorityByClass(t *testing.T) {
 
 	revoked := readinessWaiverOptions(waiver.GrantDigest)
 	revoked.ApprovedRecipes = nil
-	st, err = Open(ctx, path, revoked)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st = openTemplateStoreAt(t, path, revoked)
 	defer st.Close() //nolint:errcheck // test cleanup; assertions report failures
 	if err := st.Read(ctx, func(tx *ReadTx) error {
 		if _, err := tx.GetCheckProof(ctx, proof.Digest); !errors.Is(err, domain.ErrUnapprovedRecipe) {
@@ -367,10 +346,7 @@ func TestIndependentReviewProofRequiresAssertedAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := Open(ctx, path, Options{TrustedRequirementSets: sets})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := openTemplateStoreAt(t, path, Options{TrustedRequirementSets: sets})
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		if err := tx.RecordRequirementResolution(ctx, resolution); err != nil {
 			return err
@@ -391,10 +367,7 @@ func TestIndependentReviewProofRequiresAssertedAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	st, err = Open(ctx, path, Options{TrustedRequirementSets: sets})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st = openTemplateStoreAt(t, path, Options{TrustedRequirementSets: sets})
 	defer st.Close() //nolint:errcheck // test cleanup; assertions report failures
 	if err := st.Read(ctx, func(tx *ReadTx) error {
 		// Reconstruction fails closed too: a reader without the asserted
@@ -416,12 +389,9 @@ func TestDegradedWaiverRequiresDaemonOwnedGrantApproval(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	resolution, _, _, waiver, event := storeReadinessFixture(t)
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{TrustedRequirementSets: readinessFixtureSets()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{TrustedRequirementSets: readinessFixtureSets()})
 	defer st.Close() //nolint:errcheck // test cleanup; assertions report failures
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		if err := tx.RecordRequirementResolution(ctx, resolution); err != nil {
 			return err
 		}

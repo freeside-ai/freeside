@@ -18,11 +18,8 @@ import (
 func TestGetProjectRejectsTamperedRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		// The body is a self-consistent, valid Project bound to repository 1; the
 		// extracted column says 2. decode accepts the body, the cross-check rejects
 		// the pair.
@@ -50,11 +47,8 @@ func TestGetProjectRejectsTamperedRow(t *testing.T) {
 func TestGetProjectRejectsUndecodableRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		// A column that satisfies the table CHECK, but a body Project.Validate
 		// rejects (empty repository name).
 		body := `{"id":"project-invalid","repo":"","repository_id":5}`
@@ -81,11 +75,8 @@ func TestGetProjectRejectsUndecodableRow(t *testing.T) {
 func TestRegisterProjectRejectsReplayOverCorruptColumn(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		project, err := domain.NewProject("project-x", "owner/repo", 5)
 		if err != nil {
 			return err

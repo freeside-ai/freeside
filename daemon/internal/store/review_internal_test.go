@@ -14,11 +14,7 @@ import (
 func TestReviewRecordReadRevalidatesCanonicalBody(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/review.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/review.db", Options{})
 	run := domain.Run{
 		ID: "run-review-tamper", ProjectID: "project-1",
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
@@ -61,11 +57,7 @@ func TestReviewRecordReadRevalidatesCanonicalBody(t *testing.T) {
 func TestListReviewRecordsRejectsRunKeyOmissionTamper(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/review-list.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/review-list.db", Options{})
 	first := domain.Run{ID: "run-review-list", ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
 	second := domain.Run{ID: "run-review-list-foreign", ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
@@ -107,11 +99,7 @@ func TestListReviewRecordsRejectsRunKeyOmissionTamper(t *testing.T) {
 func TestReviewRecordReadPreservesLegacyMissingInstructionAuthority(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/review.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/review.db", Options{})
 	run := domain.Run{
 		ID: "run-review-legacy", ProjectID: "project-1",
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
@@ -170,11 +158,7 @@ func TestReviewRecordReadPreservesLegacyMissingInstructionAuthority(t *testing.T
 func TestReviewFailureReadRevalidatesCanonicalBody(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/review-failure.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/review-failure.db", Options{})
 	run := domain.Run{
 		ID: "run-review-failure", ProjectID: "project-1",
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
@@ -197,7 +181,7 @@ func TestReviewFailureReadRevalidatesCanonicalBody(t *testing.T) {
 		 WHERE invocation_id = ?`, failure.InvocationID); err != nil {
 		t.Fatal(err)
 	}
-	err = st.Read(ctx, func(tx *ReadTx) error {
+	err := st.Read(ctx, func(tx *ReadTx) error {
 		_, err := tx.GetReviewFailure(ctx, failure.InvocationID)
 		return err
 	})
@@ -209,11 +193,7 @@ func TestReviewFailureReadRevalidatesCanonicalBody(t *testing.T) {
 func TestReviewRetryReadRevalidatesCanonicalBody(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/review-retry.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/review-retry.db", Options{})
 	run := domain.Run{
 		ID: "run-review-retry-tamper", ProjectID: "project-1",
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
@@ -239,7 +219,7 @@ func TestReviewRetryReadRevalidatesCanonicalBody(t *testing.T) {
 		 WHERE run_id = ?`, run.ID); err != nil {
 		t.Fatal(err)
 	}
-	err = st.Read(ctx, func(tx *ReadTx) error {
+	err := st.Read(ctx, func(tx *ReadTx) error {
 		_, err := tx.GetReviewRetry(ctx, run.ID)
 		return err
 	})

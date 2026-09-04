@@ -21,7 +21,7 @@ import (
 func TestCheckpointRestoreRotatesEpochAndRollsBackData(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	s := openStore(t, store.Options{})
+	s := openRawStore(t, store.Options{})
 
 	convID := domain.ConversationID("conv-1")
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
@@ -109,7 +109,7 @@ func TestCheckpointRestoreRotatesEpochAndRollsBackData(t *testing.T) {
 func TestRestoreLeavesTheConnectionClean(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	s := openStore(t, store.Options{})
+	s := openRawStore(t, store.Options{})
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutAttentionItem(ctx, newItem(t, "item-1", nil, 1))
 	}); err != nil {
@@ -154,7 +154,7 @@ func TestRestoreLeavesTheConnectionClean(t *testing.T) {
 func TestRestoreRoundTripsComprehensionRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+	s := openRawStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
 	seedComprehensionDeps(t, ctx, s, f)
 	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -233,7 +233,7 @@ func TestRestoreRoundTripsComprehensionRows(t *testing.T) {
 func TestCheckpointFileIsOwnerOnly(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	s := openStore(t, store.Options{})
+	s := openRawStore(t, store.Options{})
 	path := filepath.Join(t.TempDir(), "checkpoint.db")
 	if err := s.Checkpoint(ctx, path); err != nil {
 		t.Fatalf("Checkpoint: %v", err)

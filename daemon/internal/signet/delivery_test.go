@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // fakeNtfy records what the pipeline actually publishes and answers with a
@@ -326,10 +327,7 @@ func TestReportDeliveryOpenedRegatesItemOnReplay(t *testing.T) {
 	}
 
 	// Seed the item and open the receipt while the recipe is approved.
-	approving, err := store.Open(ctx, path, store.Options{ApprovedRecipes: approved})
-	if err != nil {
-		t.Fatalf("Open approving: %v", err)
-	}
+	approving := storetest.Open(t, path, store.Options{ApprovedRecipes: approved})
 	device := domain.Device{
 		ID: "device-1", DisplayName: "Ben's iPhone",
 		Status: domain.DeviceActive, PairedAt: start,
@@ -357,10 +355,7 @@ func TestReportDeliveryOpenedRegatesItemOnReplay(t *testing.T) {
 	}
 
 	// Reopen with nothing approved: the item's evidence now fails closed.
-	closed, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatalf("Open closed: %v", err)
-	}
+	closed := storetest.Open(t, path, store.Options{})
 	t.Cleanup(func() {
 		if err := closed.Close(); err != nil {
 			t.Errorf("Close closed: %v", err)

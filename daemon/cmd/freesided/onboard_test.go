@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestParseOnboardConfigBuildEgress(t *testing.T) {
@@ -225,11 +226,7 @@ func TestTrustedInstallationChecksEveryLocalRegistration(t *testing.T) {
 
 func TestAttendedImportUsesCurrentActiveTrustProfile(t *testing.T) {
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo: "example/repo", RepositoryID: 44,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,

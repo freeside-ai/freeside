@@ -82,11 +82,7 @@ func TestProductionAttemptMigrationAppliesFromHead(t *testing.T) {
 func TestProductionAttemptReconstructionRejectsTamperedLineage(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	attempt := testInitialProductionAttempt()
 	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutProductionAttempt(ctx, attempt) }); err != nil {
 		t.Fatal(err)
@@ -96,7 +92,7 @@ UPDATE production_attempts SET source_digest = 'sha256:forged'
 WHERE campaign_id = ? AND attempt_number = 1`, attempt.CampaignID); err != nil {
 		t.Fatal(err)
 	}
-	err = st.Read(ctx, func(tx *ReadTx) error {
+	err := st.Read(ctx, func(tx *ReadTx) error {
 		_, err := tx.GetProductionAttempt(ctx, attempt.CampaignID, attempt.AttemptNumber)
 		return err
 	})
@@ -108,11 +104,7 @@ WHERE campaign_id = ? AND attempt_number = 1`, attempt.CampaignID); err != nil {
 func TestProductionAttemptReconstructionRejectsStructurallyInvalidTuple(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	attempt := testInitialProductionAttempt()
 	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutProductionAttempt(ctx, attempt) }); err != nil {
 		t.Fatal(err)
@@ -141,11 +133,7 @@ WHERE campaign_id = ? AND attempt_number = ?`,
 func TestProductionAttemptAuthenticationRejectsRetryAsSpecification(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	initial := testInitialProductionAttempt()
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		if err := tx.PutProductionAttempt(ctx, initial); err != nil {
@@ -164,7 +152,7 @@ func TestProductionAttemptAuthenticationRejectsRetryAsSpecification(t *testing.T
 	}); err != nil {
 		t.Fatal(err)
 	}
-	err = st.Read(ctx, func(tx *ReadTx) error {
+	err := st.Read(ctx, func(tx *ReadTx) error {
 		return tx.authenticateRunProductionLineage(ctx, domain.Run{
 			ID: initial.SpecificationRunID, SpecDigest: initial.SourceDigest,
 			CampaignID: initial.CampaignID, AttemptNumber: 2,
@@ -242,11 +230,7 @@ func TestInitialApprovalClaimsRequireMarkdownAndCanonicalDigests(t *testing.T) {
 func TestProductionAttemptReconstructionRejectsCyclicParent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	initial := testInitialProductionAttempt()
 	retry := domain.ProductionAttempt{
 		CampaignID: initial.CampaignID, AttemptNumber: 2, Kind: domain.ProductionAttemptRetry,

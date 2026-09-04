@@ -11,6 +11,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/contract"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // artifactStoreHarness binds the production artifactStore adapter to the shared
@@ -30,11 +31,7 @@ func newArtifactStoreHarness(t *testing.T) contract.ArtifactsHarness {
 func newArtifactStoreFixture(t *testing.T) *artifactStoreHarness {
 	t.Helper()
 	root := t.TempDir()
-	st, err := store.Open(t.Context(), root+"/state.db", store.Options{})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, root+"/state.db", store.Options{})
 	blobs, err := signet.NewBlobStore(root + "/blobs")
 	if err != nil {
 		t.Fatalf("open blob store: %v", err)
@@ -181,10 +178,7 @@ func TestRecordClaimsSurvivesStoreReopen(t *testing.T) {
 	id := domain.InvocationID("inv-adapter-reopen")
 	claims := adapterClaimSet(id)
 
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := storetest.Open(t, path, store.Options{})
 	blobs, err := signet.NewBlobStore(root + "/blobs")
 	if err != nil {
 		t.Fatalf("open blob store: %v", err)
@@ -203,11 +197,7 @@ func TestRecordClaimsSurvivesStoreReopen(t *testing.T) {
 		t.Fatalf("close store: %v", err)
 	}
 
-	reopened, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatalf("reopen store: %v", err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
+	reopened := storetest.Open(t, path, store.Options{})
 	got, err := readAgentClaims(ctx, reopened, id)
 	if err != nil {
 		t.Fatalf("read claim record after reopen: %v", err)
@@ -224,11 +214,7 @@ func TestRecordClaimsIsAtomicAndConverges(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
-	st, err := store.Open(ctx, root+"/state.db", store.Options{})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, root+"/state.db", store.Options{})
 	blobs, err := signet.NewBlobStore(root + "/blobs")
 	if err != nil {
 		t.Fatalf("open blob store: %v", err)

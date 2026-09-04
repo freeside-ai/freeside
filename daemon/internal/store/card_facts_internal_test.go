@@ -16,11 +16,7 @@ import (
 func TestPutAttentionItemRegatesRestoredSpecRevision(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/spec-revision.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/spec-revision.db", Options{})
 
 	item, priorItem, command, artifacts := internalSpecRevisionFixture(t)
 	if err := recordInternalSpecApprovalTerminal(ctx, st, priorItem, 1); err != nil {
@@ -56,7 +52,7 @@ func TestPutAttentionItemRegatesRestoredSpecRevision(t *testing.T) {
 	updated.ItemVersion++
 	updated.Status = domain.StatusSuperseded
 	updated.SpecRevision = nil
-	err = st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, updated) })
+	err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, updated) })
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("update carrying restored forged revision = %v, want ErrParentKeyMismatch", err)
 	}
@@ -65,11 +61,7 @@ func TestPutAttentionItemRegatesRestoredSpecRevision(t *testing.T) {
 func TestPutAttentionItemRestoresValidSpecRevision(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/spec-revision.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/spec-revision.db", Options{})
 
 	item, priorItem, command, artifacts := internalSpecRevisionFixture(t)
 	if err := recordInternalSpecApprovalTerminal(ctx, st, priorItem, 1); err != nil {
@@ -269,11 +261,7 @@ func recordInternalSpecApprovalTerminal(
 func TestAttentionItemReadAuthenticatesReviewDisputeBinding(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/card-facts.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/card-facts.db", Options{})
 
 	at := time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC)
 	run := domain.Run{
@@ -372,11 +360,7 @@ func TestAttentionItemReadAuthenticatesReviewDisputeBinding(t *testing.T) {
 func TestAttentionItemReadAuthenticatesBlockedWait(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/blocked-card-fact.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/blocked-card-fact.db", Options{})
 
 	at := time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC)
 	invocationID := domain.InvocationID("inv-specify-run-blocked-card-fact-1")
@@ -791,11 +775,7 @@ func TestCostCompletenessEnumerationsRejectCopiedRunIDTamper(t *testing.T) {
 	t.Run("review failure", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
-		st, err := Open(ctx, t.TempDir()+"/review-failure-card-fact.db", Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = st.Close() })
+		st := openTemplateStoreAt(t, t.TempDir()+"/review-failure-card-fact.db", Options{})
 		run := domain.Run{
 			ID: "run-review-failure-card-fact", ProjectID: "project-1",
 			SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
@@ -826,7 +806,7 @@ func TestCostCompletenessEnumerationsRejectCopiedRunIDTamper(t *testing.T) {
 			failure.InvocationID); err != nil {
 			t.Fatal(err)
 		}
-		err = st.Read(ctx, func(tx *ReadTx) error {
+		err := st.Read(ctx, func(tx *ReadTx) error {
 			_, err := tx.ListReviewFailures(ctx, run.ID)
 			return err
 		})
