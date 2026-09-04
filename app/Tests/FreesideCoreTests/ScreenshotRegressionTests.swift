@@ -1008,6 +1008,41 @@
                             systemImage: "sidebar.trailing",
                             description: "Select an item to inspect its facts."))))
 
+            // Freshness banner over fresh vs. genuinely stale data (#1130).
+            // The banner compares `lastUpdatedAt` against the wall clock at
+            // render time, so each surface's timestamp carries a margin large
+            // enough to survive the suite's own runtime: makeSurfaces builds
+            // the whole array before any surface renders, and these are
+            // appended last, so a slow or loaded runner can render them well
+            // after `Date()` was read. The fresh surface's update sits an
+            // hour ahead, so no plausible render delay can age it past the
+            // threshold; it always draws the empty (fresh) banner. The stale
+            // surface's update sits just past the threshold in the past and
+            // only ages further, so it always draws the Stale row. The fresh
+            // empty-banner image is the pre-fix regression witness (the old
+            // banner drew the Stale row for fresh data), and the trailing
+            // label keeps it non-empty so `render` does not fail on a nil
+            // raster.
+            func freshnessSurface(name: String, lastUpdatedAt: Date) -> Surface {
+                Surface(
+                    name: name,
+                    width: 640,
+                    view: AnyView(
+                        VStack(spacing: 0) {
+                            FreshnessBanner(freshness: .fresh, lastUpdatedAt: lastUpdatedAt)
+                            Text("Inbox").padding()
+                        }))
+            }
+            surfaces.append(
+                freshnessSurface(
+                    name: "freshness-banner-fresh",
+                    lastUpdatedAt: Date().addingTimeInterval(3_600)))
+            surfaces.append(
+                freshnessSurface(
+                    name: "freshness-banner-stale",
+                    lastUpdatedAt: Date().addingTimeInterval(
+                        -(SyncCoordinator.stalenessThreshold + 1))))
+
             return surfaces
         }
 

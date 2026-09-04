@@ -14,14 +14,21 @@ struct FreshnessBanner: View {
     }
 
     var body: some View {
-        TimelineView(.explicit(Self.staleAt(lastUpdatedAt: lastUpdatedAt).map { [$0] } ?? [])) {
-            context in
+        // Re-evaluate on the minute boundaries measured from the last
+        // update, the schedule `LastUpdatedLabel` below already uses. An
+        // explicit schedule cannot drive this: SwiftUI dates the very first
+        // render at the schedule's own entry, so a single entry at
+        // `lastUpdatedAt + stalenessThreshold` left `context.date` already
+        // past the threshold at mount and pinned the banner on whenever
+        // `lastUpdatedAt` was set (#1130). A periodic schedule instead
+        // renders with the latest entry at or before now, and its entries at
+        // `lastUpdatedAt + k × stalenessThreshold` are exactly the instants
+        // the staleness comparison can flip.
+        TimelineView(
+            .periodic(from: lastUpdatedAt ?? .now, by: SyncCoordinator.stalenessThreshold)
+        ) { context in
             banner(at: context.date)
         }
-    }
-
-    static func staleAt(lastUpdatedAt: Date?) -> Date? {
-        lastUpdatedAt.map { $0.addingTimeInterval(SyncCoordinator.stalenessThreshold) }
     }
 
     @ViewBuilder
