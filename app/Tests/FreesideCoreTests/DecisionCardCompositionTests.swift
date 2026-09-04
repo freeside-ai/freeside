@@ -258,15 +258,17 @@ import Testing
         let degraded = try #require(
             DecisionChecklistPresentation(AttentionFixtures.degradedReady().item))
 
-        #expect(clean.rows.first?.result == .passed)
-        #expect(clean.rows.first?.value == "Clean")
-        #expect(clean.rows.first(where: { $0.label == "Commit plan" })?.result == .informational)
-        #expect(clean.summary == "Readiness checklist: all 5 checks passed; 1 informational note.")
+        #expect(clean.verdict?.result == .passed)
+        #expect(clean.verdict?.value == "Clean")
+        #expect(clean.rows.first(where: { $0.label == "Commit plan" })?.result == .note)
+        #expect(clean.verdictLine == "Clean · 1 note · 4 passed")
+        #expect(clean.summary == "Readiness checklist: Clean, 1 note, 4 passed.")
         #expect(
             clean.accessibilitySummary.contains(
                 "Commit plan: Plan present, not honored, informational"))
-        #expect(degraded.rows.first?.result == .failed)
-        #expect(degraded.rows.first?.value == "Degraded")
+        #expect(degraded.verdict?.result == .failed)
+        #expect(degraded.verdict?.value == "Degraded")
+        #expect(degraded.verdictLine == "Degraded · 1 waived · 1 advisory · 1 note · 4 passed")
 
         var invalidated = AttentionFixtures.fixture(type: .ready_for_final_review).item
         invalidated.status = .superseded
@@ -277,11 +279,11 @@ import Testing
                 observed: "feedface",
                 observed_at: Date(timeIntervalSince1970: 0)))
         let invalidatedChecklist = try #require(DecisionChecklistPresentation(invalidated))
-        #expect(invalidatedChecklist.rows.first?.result == .failed)
-        #expect(invalidatedChecklist.rows.first?.value == "Invalidated")
+        #expect(invalidatedChecklist.verdict?.result == .failed)
+        #expect(invalidatedChecklist.verdict?.value == "Invalidated")
         #expect(
             invalidatedChecklist.summary
-                == "Readiness checklist: 3 of 6 checks need attention; 1 informational note.")
+                == "Readiness checklist: Invalidated, 2 failed, 1 note, 3 passed.")
         #expect(
             invalidatedChecklist.accessibilitySummary.contains(
                 "Verification verdict: Invalidated, needs attention"))
@@ -290,8 +292,8 @@ import Testing
         legacyInvalidated.readiness = nil
         legacyInvalidated.readiness_detail = nil
         let legacyChecklist = try #require(DecisionChecklistPresentation(legacyInvalidated))
-        #expect(legacyChecklist.rows.first?.result == .failed)
-        #expect(legacyChecklist.rows.first?.value == "Invalidated")
+        #expect(legacyChecklist.verdict?.result == .failed)
+        #expect(legacyChecklist.verdict?.value == "Invalidated")
         #expect(
             legacyChecklist.accessibilitySummary.contains(
                 "Verification verdict: Invalidated, needs attention"))
@@ -303,64 +305,85 @@ import Testing
         informationalOnly.base_freshness = nil
         let informationalChecklist = try #require(
             DecisionChecklistPresentation(informationalOnly))
-        #expect(informationalChecklist.rows.map(\.result) == [.failed, .informational])
-        #expect(informationalChecklist.rows.first?.value == "Unavailable")
-        #expect(
-            informationalChecklist.summary
-                == "Readiness checklist: 1 of 1 checks need attention; 1 informational note.")
+        #expect(informationalChecklist.verdict?.result == .failed)
+        #expect(informationalChecklist.rows.map(\.result) == [.note])
+        #expect(informationalChecklist.verdict?.value == "Unavailable")
+        #expect(informationalChecklist.summary == "Readiness checklist: Unavailable, 1 note.")
         #expect(
             informationalChecklist.accessibilitySummary.contains(
                 "Verification verdict: Unavailable, needs attention"))
 
         informationalOnly.commit_plan_notice = nil
         let unavailableOnly = try #require(DecisionChecklistPresentation(informationalOnly))
-        #expect(unavailableOnly.rows.map(\.result) == [.failed])
+        #expect(unavailableOnly.verdict?.result == .failed)
+        #expect(unavailableOnly.rows.isEmpty)
+        #expect(unavailableOnly.summary == "Readiness checklist: Unavailable.")
 
         var currentWithoutVerdict = AttentionFixtures.fixture(type: .ready_for_final_review).item
         currentWithoutVerdict.readiness = nil
         currentWithoutVerdict.readiness_detail = nil
         let currentChecklist = try #require(DecisionChecklistPresentation(currentWithoutVerdict))
-        #expect(currentChecklist.rows.first?.value == "Unavailable")
-        #expect(currentChecklist.summary.contains("checks need attention"))
-        #expect(!currentChecklist.summary.contains("checks passed"))
+        #expect(currentChecklist.verdict?.value == "Unavailable")
+        // Without a readiness detail the terminal-review row is the only
+        // check left, so the line counts it: the verdict word is
+        // unavailable, not the rows it would have summarized.
+        #expect(
+            currentChecklist.verdictLine == "Unavailable · 1 note · 1 passed")
+        #expect(
+            currentChecklist.summary == "Readiness checklist: Unavailable, 1 note, 1 passed.")
     }
 
     @Test func checklistListsEveryRequirementWithItsWaiverAndBoundCoordinates() throws {
         let clean = try #require(
             DecisionChecklistPresentation(
                 AttentionFixtures.fixture(type: .ready_for_final_review).item))
+        #expect(clean.verdict?.label == "Verification verdict")
+        // Severity first, the daemon's order inside each class.
         #expect(
             clean.rows.map(\.label) == [
-                "Verification verdict", "Bound to", "clean-verification", "independent-review",
-                "Commit plan", "Terminal review",
+                "Commit plan", "Bound to", "clean-verification", "independent-review",
+                "Terminal review",
             ])
         #expect(
             clean.rows[1] == .init(label: "Bound to", value: "cafebabe on main@deadbeef", result: .passed))
         #expect(clean.rows[2] == .init(label: "clean-verification", value: "Passed", result: .passed))
+        #expect(clean.passedRows.count == 4)
+        #expect(clean.leadingRows.map(\.label) == ["Commit plan"])
 
         let degraded = try #require(
             DecisionChecklistPresentation(AttentionFixtures.degradedReady().item))
-        #expect(degraded.rows.first == .init(label: "Verification verdict", value: "Degraded", result: .failed))
+        #expect(
+            degraded.verdict == .init(label: "Verification verdict", value: "Degraded", result: .failed))
+        #expect(
+            degraded.rows.map(\.result) == [.waived, .advisory, .note, .passed, .passed, .passed, .passed])
+        #expect(degraded.rows.first?.label == "repo-change-policy")
         #expect(
             degraded.rows.first(where: { $0.label == "license-headers (optional)" })
-                == .init(label: "license-headers (optional)", value: "Not run (advisory)", result: .failed))
+                == .init(
+                    label: "license-headers (optional)", value: "Not run (advisory)",
+                    result: .advisory))
         #expect(
-            degraded.rows.first(where: { $0.label == "repo-change-policy" })
+            degraded.rows.first
                 == .init(
                     label: "repo-change-policy",
                     value: "Failed, waived for repo_change_policy by explicit human approval, waiver waiver-1",
-                    result: .failed))
-        #expect(degraded.summary == "Readiness checklist: 3 of 7 checks need attention; 1 informational note.")
+                    result: .waived))
+        // The waiver sentence is the value the S6 fact-row rule stacks.
+        #expect(try #require(degraded.rows.first).value.count > FactRow.stackThreshold)
+        #expect(degraded.passedRows.count == 4)
+        #expect(
+            degraded.summary
+                == "Readiness checklist: Degraded, 1 waived, 1 advisory, 1 note, 4 passed.")
 
         // The daemon's invalidation demotes the verdict and its bound
         // coordinates and shows both sides of the divergence.
         let stale = try #require(DecisionChecklistPresentation(AttentionFixtures.staleReady().item))
-        #expect(stale.rows[0] == .init(label: "Verification verdict", value: "Invalidated", result: .failed))
-        #expect(stale.rows[1] == .init(label: "Bound to", value: "cafebabe on main@deadbeef", result: .failed))
+        #expect(stale.verdict == .init(label: "Verification verdict", value: "Invalidated", result: .failed))
+        #expect(stale.rows[0] == .init(label: "Bound to", value: "cafebabe on main@deadbeef", result: .failed))
         #expect(
-            stale.rows[2]
+            stale.rows[1]
                 == .init(label: "Head changed", value: "bound cafebabe, observed feedface", result: .failed))
-        #expect(stale.rows[3].result == .passed)
+        #expect(stale.rows[2].result == .note)
 
         // A base advance the watch observed is the other staleness axis: the
         // verdict is still the daemon's, but it no longer describes the base.
@@ -371,9 +394,9 @@ import Testing
                 advanced: true, observed_at: AttentionFixtures.createdInstant))
         let advancedChecklist = try #require(DecisionChecklistPresentation(advanced))
         #expect(
-            advancedChecklist.rows[0]
+            advancedChecklist.verdict
                 == .init(label: "Verification verdict", value: "Clean, stale", result: .failed))
-        #expect(advancedChecklist.rows[1].result == .failed)
+        #expect(advancedChecklist.rows[0].result == .failed)
         #expect(
             advancedChecklist.rows.first(where: { $0.label == "Base freshness" })
                 == .init(
@@ -390,6 +413,28 @@ import Testing
         #expect(
             AttentionDisplay.shortRevision("release/2026-09-candidate")
                 == "release/2026-09-candidate")
+    }
+
+    /// The module is one accessibility element, and the passed rows are
+    /// collapsed behind a disclosure VoiceOver cannot open, so the label has
+    /// to name every requirement with its state, verdict included.
+    @Test func checklistAccessibilityLabelNamesEveryRowIncludingCollapsedPassedOnes() throws {
+        let degraded = try #require(
+            DecisionChecklistPresentation(AttentionFixtures.degradedReady().item))
+
+        #expect(degraded.passedRows.count == 4)
+        #expect(
+            degraded.accessibilitySummary.hasPrefix(
+                "Readiness checklist: Degraded, 1 waived, 1 advisory, 1 note, 4 passed. "
+                    + "Verification verdict: Degraded, needs attention;"))
+        for row in degraded.rows {
+            #expect(
+                degraded.accessibilitySummary.contains(
+                    "\(row.label): \(row.value), \(row.result.accessibilityState)"))
+        }
+        for row in degraded.passedRows {
+            #expect(degraded.accessibilitySummary.contains("\(row.label): \(row.value), passed"))
+        }
     }
 
     @Test func checklistDerivesUnresolvedReviewStateFromDispositions() throws {
