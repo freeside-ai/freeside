@@ -160,6 +160,8 @@ func main() {
 	publicationTitle := flags.String("publication-title", "Publish attended fake candidate", "pull request title")
 	publicationBody := flags.String("publication-body", "", "pull request body")
 	driverMode := flags.String("driver", "fake", "stage driver: fake (1A.0 walking skeleton) or claude (production, #237)")
+	seedWalkingSkeleton := flags.Bool("seed-walking-skeleton", false,
+		"seed the 1A.0 walking-skeleton demo run under the fake driver (off by default so a production store stays empty, #1127)")
 	agentImage := flags.String("agent-image", "", "digest-pinned Claude agent image")
 	exporterImage := flags.String("exporter-image", "", "digest-pinned export helper image")
 	containerBin := flags.String("container-bin", "container", "Apple container CLI path")
@@ -253,6 +255,7 @@ func main() {
 		SchedulerInterval:                  *schedulerInterval,
 		ApprovedRecipes:                    approvedRecipes,
 		BackupEncryptionWaiverRepositoryID: backupEncryptionWaiverRepositoryID.Value(),
+		SeedWalkingSkeleton:                *seedWalkingSkeleton,
 		Logger:                             logger,
 	}
 	mode, err := parseOperatingMode(*operatingMode)
@@ -378,6 +381,11 @@ type config struct {
 	SchedulerInterval                  time.Duration
 	ApprovedRecipes                    map[domain.Digest]bool
 	BackupEncryptionWaiverRepositoryID *int64
+	// SeedWalkingSkeleton seeds the 1A.0 walking-skeleton demo run at startup
+	// under the fake driver. Off by default so a production store the installer
+	// launches never gains the demo approval item (#1127); the walking-skeleton
+	// tests and manual demos opt in.
+	SeedWalkingSkeleton bool
 	// IntakeInitiators are the configured label initiators the label-intake
 	// reconciler observes (#659). Empty leaves the loop supervised but idle; the
 	// rein resolver and workflow-definition parsing that populate it are a later
@@ -684,11 +692,16 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := workflow.StartFakeRun(parent, engine.FakeRunSpec{
-			RunID: defaultFakeRunID, ProjectID: defaultFakeProjectID,
-			SpecDigest: "sha256:walking-skeleton-spec", PolicyDigest: "sha256:walking-skeleton-policy",
-		}); err != nil {
-			return nil, fmt.Errorf("seed walking-skeleton run: %w", err)
+		// Seed the demo run only when asked. The installer launches the fake
+		// driver without this flag, so a freshly onboarded production store no
+		// longer carries the walking-skeleton approval card (#1127).
+		if cfg.SeedWalkingSkeleton {
+			if _, err := workflow.StartFakeRun(parent, engine.FakeRunSpec{
+				RunID: defaultFakeRunID, ProjectID: defaultFakeProjectID,
+				SpecDigest: "sha256:walking-skeleton-spec", PolicyDigest: "sha256:walking-skeleton-policy",
+			}); err != nil {
+				return nil, fmt.Errorf("seed walking-skeleton run: %w", err)
+			}
 		}
 	} else {
 		claudeWiring, err = composeClaudeDriver(ctx, st, blobs, *cfg.Claude, cfg.Logger)

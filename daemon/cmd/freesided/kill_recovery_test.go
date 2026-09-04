@@ -242,6 +242,7 @@ func startProcessFixture(
 		"-listen", "127.0.0.1:0",
 		"-ntfy-url", ntfyURL,
 		"-reconcile-interval", "5ms",
+		"-seed-walking-skeleton",
 	}
 	p := &processFixture{
 		cmd:  osexec.Command(binary, args...), //nolint:gosec // test-built binary with fixed arguments
