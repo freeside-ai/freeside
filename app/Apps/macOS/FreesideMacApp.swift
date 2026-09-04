@@ -63,7 +63,7 @@ struct FreesideMacApp: App {
                     guard case .ready(let coordinator) = session.phase else { return }
                     coordinator.startReachabilityMonitoring()
                     defer { coordinator.stopReachabilityMonitoring() }
-                    await coordinator.heartbeatLoop(every: .seconds(15))
+                    await coordinator.heartbeatLoop(every: SyncCoordinator.heartbeatInterval)
                 }
         }
 

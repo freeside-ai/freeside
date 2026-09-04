@@ -85,7 +85,7 @@ public struct FreesideRootView: View {
             #if os(iOS)
                 coordinator.startReachabilityMonitoring()
                 defer { coordinator.stopReachabilityMonitoring() }
-                await coordinator.heartbeatLoop(every: .seconds(15))
+                await coordinator.heartbeatLoop(every: SyncCoordinator.heartbeatInterval)
             #endif
         }
         .onChange(of: scenePhase) {

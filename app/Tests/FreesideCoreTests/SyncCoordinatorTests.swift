@@ -1331,6 +1331,14 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         #expect(!coordinator.isStale(at: updatedAt.addingTimeInterval(59)))
         #expect(coordinator.isStale(at: updatedAt.addingTimeInterval(60)))
     }
+
+    @Test func heartbeatCadenceStaysUnderTheStalenessThreshold() {
+        // The banner (and every app's heartbeat loop) trusts that a single
+        // missed beat cannot cross the staleness threshold: the cadence must
+        // divide well into it, so recovery keeps the banner clear (#1130).
+        #expect(
+            SyncCoordinator.heartbeatInterval < .seconds(SyncCoordinator.stalenessThreshold))
+    }
 }
 
 private struct MockOutage: Error {}
