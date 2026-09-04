@@ -627,6 +627,27 @@
                                     .diff, item: revised.item))))
                 }
 
+                if snapshot.item._type == .finding_adjudication {
+                    // One finding open: its proposal and daemon facts expand in
+                    // place, above the action region, while the other finding
+                    // stays a single row (#1107).
+                    let expandedDetail = DecisionDetailView(
+                        store: store,
+                        itemID: snapshot.item.id,
+                        expandedFindings: ["review-finding-17"],
+                        graphics: graphics,
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        now: screenshotNow)
+                    surfaces.append(
+                        Surface(
+                            name: "decision-finding_adjudication-expanded",
+                            view: AnyView(
+                                expandedDetail.screenshotCard(
+                                    snapshot.item,
+                                    at: dynamicTypeSize))))
+                }
+
                 if snapshot.item._type == .ready_for_final_review {
                     // The card carries this item's commit-plan fact, so the
                     // inspector beside it must not repeat a Facts section.

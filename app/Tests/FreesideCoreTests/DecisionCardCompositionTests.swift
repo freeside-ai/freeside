@@ -592,6 +592,46 @@ import Testing
                 viewportHeight: nil))
     }
 
+    /// The collapsed finding row carries what decides the route, and drops the
+    /// confidence term the daemon did not record rather than showing an empty
+    /// one (#1107).
+    @Test func aCollapsedFindingRowNamesTheFindingAndWhatDecidesItsRoute() throws {
+        let binding = try #require(
+            AttentionFixtures.fixture(type: .finding_adjudication).item
+                .finding_adjudication?.value1)
+        var proposal = try #require(binding.proposals.first)
+
+        #expect(
+            DecisionDetailView.findingSummary(proposal)
+                == "review-finding-17 · Decline · Contradictory · High")
+
+        proposal.confidence = nil
+        #expect(
+            DecisionDetailView.findingSummary(proposal)
+                == "review-finding-17 · Decline · Contradictory")
+    }
+
+    /// The row's four values are separated by "·" on screen, which reads as
+    /// four bare words, so the spoken form names the field each one answers
+    /// and drops the confidence term with the value.
+    @Test func theCollapsedFindingRowIsSpokenWithItsFieldNames() throws {
+        let binding = try #require(
+            AttentionFixtures.fixture(type: .finding_adjudication).item
+                .finding_adjudication?.value1)
+        var proposal = try #require(binding.proposals.first)
+
+        #expect(
+            DecisionDetailView.findingSummaryAccessibilityLabel(proposal)
+                == "Finding review-finding-17, recommended route Decline, "
+                + "goal relationship Contradictory, confidence High")
+
+        proposal.confidence = nil
+        #expect(
+            DecisionDetailView.findingSummaryAccessibilityLabel(proposal)
+                == "Finding review-finding-17, recommended route Decline, "
+                + "goal relationship Contradictory")
+    }
+
     /// The card's Evidence module points at the open inspector rather than
     /// drawing the same attachments beside it, and the pointer counts them in
     /// the operator's words (#1107).
