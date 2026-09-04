@@ -1071,7 +1071,9 @@ components:
         agent-authored free text; stage and attempt labels come from the Run
         aggregate and join to invocation_id in these facts (plan §9).
       additionalProperties: false
-      required: [as_of_revision, as_of, run_id, milestones, hold, invocations]
+      required:
+        [as_of_revision, as_of, run_id, milestones, hold, invocations,
+         completion, billable_cost_so_far]
       properties:
         as_of_revision:
           $ref: "#/components/schemas/AsOfRevision"
@@ -1094,6 +1096,20 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/InvocationObservation"
+        completion:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/WorkUnitCompletionFacts"
+          description: >
+            The work unit's completion facts once a work_unit_completed
+            milestone ends the timeline; null before then.
+        billable_cost_so_far:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/CostSoFar"
+          description: >
+            The run's billable spend so far, computed the same way attention
+            cards compute theirs; null before any billable observation.
       example:
         as_of_revision: 42
         as_of: "2026-01-02T03:14:06Z"
@@ -1120,6 +1136,45 @@ components:
             status: "completed"
             live: false
             observed_at: "2026-01-02T03:14:05Z"
+        completion: null
+        billable_cost_so_far:
+          currency: "USD"
+          amount: "17.5"
+          invocations: 1
+          complete: true
+
+    WorkUnitCompletionFacts:
+      type: object
+      description: >
+        The facts behind a work_unit_completed milestone, read from the
+        daemon's re-gated completion record: the PR whose merge satisfied the
+        unit's completion criterion, the merge commit, the bound issue when
+        the criterion names one, and the instant the daemon recorded the
+        completion. The milestone itself carries none of these.
+      additionalProperties: false
+      required: [pr_number, merge_commit_sha, bound_issue, recorded_at]
+      properties:
+        pr_number:
+          type: integer
+          minimum: 1
+        merge_commit_sha:
+          type: string
+          minLength: 1
+        bound_issue:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: >
+            The issue the merge closed, for the bound-issue completion
+            criterion; null for a PR-merge criterion.
+        recorded_at:
+          type: string
+          format: date-time
+      example:
+        pr_number: 105
+        merge_commit_sha: "5555555555555555555555555555555555555555"
+        bound_issue: 80
+        recorded_at: "2026-09-04T15:04:05Z"
 
     RunMilestoneKind:
       type: string
@@ -1135,6 +1190,7 @@ components:
         - terminal_recorded
         - publication_ready
         - publication_blocked
+        - work_unit_completed
 
     RunHoldReason:
       type: string
@@ -1170,8 +1226,22 @@ components:
         invocation observation) classifies as unobserved, never pending, so a
         legacy terminal run is not shown as in flight; a legacy run still
         executing across the upgrade has a nonterminal invocation observation
-        and reports pending.
-      enum: [unobserved, pending, published, blocked, failed, lost]
+        and reports pending. Completed means the work unit satisfied its
+        completion criterion after publication (a work_unit_completed
+        milestone); it outranks published and blocked and is terminal.
+      enum: [unobserved, pending, published, blocked, failed, lost, completed]
+
+    RunLifecycle:
+      type: string
+      description: >
+        Whether a run still has something pending for the daemon or the
+        operator (active) or is done with (finished), derived from
+        RunOutcome and supersession. Finished covers completed, failed, lost,
+        unobserved, and any run a later attempt superseded; active covers
+        pending, published with no completion yet, and blocked with no
+        successor. A client splits the runs list on this field instead of
+        re-deriving it.
+      enum: [active, finished]
 
     ObservedInvocationStatus:
       type: string
@@ -4255,7 +4325,8 @@ components:
       required:
         [id, project_id, display_names, created_at, last_activity_at, spec_digest,
          policy_digest, campaign_id, attempt_number, attempt_reason,
-         parent_run_id, stages, latest_milestone, outcome, hold_reason]
+         parent_run_id, stages, latest_milestone, outcome, hold_reason,
+         lifecycle, superseded_by, completion, billable_cost_so_far]
       properties:
         id:
           type: string
@@ -4321,6 +4392,29 @@ components:
           nullable: true
           allOf:
             - $ref: "#/components/schemas/RunHoldReason"
+        lifecycle:
+          $ref: "#/components/schemas/RunLifecycle"
+        superseded_by:
+          type: string
+          minLength: 1
+          nullable: true
+          description: >
+            The run id of the attempt that retried this run, or null when no
+            later attempt names it as parent.
+        completion:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/WorkUnitCompletionFacts"
+          description: >
+            The work unit's completion facts once the outcome is completed;
+            null otherwise.
+        billable_cost_so_far:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/CostSoFar"
+          description: >
+            The run's billable spend so far, computed the same way attention
+            cards compute theirs; null before any billable observation.
       example:
         id: "run-1"
         project_id: "proj-1"
@@ -4338,6 +4432,14 @@ components:
         latest_milestone: "invocation_started"
         outcome: "pending"
         hold_reason: null
+        lifecycle: "active"
+        superseded_by: null
+        completion: null
+        billable_cost_so_far:
+          currency: "USD"
+          amount: "17.5"
+          invocations: 1
+          complete: true
         stages:
           - id: "stage-1"
             run_id: "run-1"

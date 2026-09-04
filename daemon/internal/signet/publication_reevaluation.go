@@ -274,12 +274,14 @@ func PublicationReevaluationCompletionBackupPayloadDigests(entry store.QueueEntr
 	return nil, nil
 }
 
-// AuthenticatedRunConclusion classifies the one outcome that a milestone-only
-// conclusion cannot decide: an append-only publication_blocked followed by an
-// accepted reevaluation. The accepted command chain is re-read from immutable
+// AuthenticatedRunConclusion classifies the outcomes that a milestone-only
+// conclusion cannot decide on its own: an append-only publication_blocked
+// followed by an accepted reevaluation, and a work-unit completion recorded
+// over such a history. The accepted command chain is re-read from immutable
 // item history and its durable intents before a resolved block becomes either
 // live reevaluation or, with separately authenticated ready authority,
-// published. Every other outcome keeps domain.ConcludeRun's generic result.
+// published or completed. Every other outcome keeps domain.ConcludeRun's
+// generic result.
 func AuthenticatedRunConclusion(
 	ctx context.Context,
 	tx *store.ReadTx,
@@ -288,6 +290,9 @@ func AuthenticatedRunConclusion(
 	publicationReadyAuthenticated bool,
 ) (domain.RunConclusion, error) {
 	conclusion := domain.ConcludeRun(observation)
+	if conclusion.Outcome == domain.RunOutcomeCompleted {
+		return authenticatedCompletedConclusion(ctx, tx, run, observation, publicationReadyAuthenticated)
+	}
 	if conclusion.Outcome != domain.RunOutcomeBlocked {
 		return conclusion, nil
 	}
@@ -320,6 +325,87 @@ func AuthenticatedRunConclusion(
 		return domain.RunConclusion{Outcome: domain.RunOutcomePending}, nil
 	}
 	return conclusion, nil
+}
+
+// authenticatedCompletedConclusion accepts a completed conclusion only over a
+// publication history whose ready authority is authenticated: a timeline with
+// no definitive block needs only the ready authentication the observation
+// pass already required; one that records a block must have resolved it by an
+// accepted rerun with the ready after it, exactly as a published outcome over
+// the same history would. A completion over a still-live reevaluation is a
+// contradiction and fails closed. It also re-binds every completion milestone
+// to its publication invocation and to the store's re-gated completion record,
+// so every caller of AuthenticatedRunConclusion fails closed on a milestone
+// those authorities no longer support, not only the sync boundary that binds
+// it a second time.
+func authenticatedCompletedConclusion(
+	ctx context.Context,
+	tx *store.ReadTx,
+	run domain.Run,
+	observation domain.RunObservation,
+	publicationReadyAuthenticated bool,
+) (domain.RunConclusion, error) {
+	if !publicationReadyAuthenticated {
+		return domain.RunConclusion{}, fmt.Errorf(
+			"run %q completed without authenticated publication_ready authority: %w",
+			run.ID, domain.ErrParentKeyMismatch,
+		)
+	}
+	// The completion milestone is a powerless mirror, so no caller may derive
+	// a final completed outcome from it without its authorities behind it.
+	// The sync boundary binds them in authenticateRunObservation, but the
+	// direct-store observers (freesided follow and -snapshot) reach this
+	// function through AuthenticatedRunConclusion without that pass, and the
+	// completion record is re-gated on every read, so a completion the store
+	// no longer supports, or one riding another run's publication invocation,
+	// would otherwise read as final completed there while the sync reads fail
+	// closed over the same rows. Both surfaces go through the same binding.
+	attempts := runAttemptBindings(run)
+	for _, milestone := range observation.Milestones {
+		if milestone.Kind != domain.MilestoneWorkUnitCompleted {
+			continue
+		}
+		if _, err := authenticatedCompletionMilestone(ctx, tx, run, milestone, attempts); err != nil {
+			return domain.RunConclusion{}, err
+		}
+	}
+	completed := domain.RunConclusion{Outcome: domain.RunOutcomeCompleted, Final: true}
+	if !publicationBlockedMilestone(observation) {
+		return completed, nil
+	}
+	readyAfterBlock, readyBeforeLastBlock := publicationReadyOrder(observation)
+	if readyBeforeLastBlock || !readyAfterBlock {
+		return domain.RunConclusion{}, fmt.Errorf(
+			"run %q completed without publication_ready after its last publication_blocked: %w",
+			run.ID, domain.ErrParentKeyMismatch,
+		)
+	}
+	resolved, err := publicationBlockResolutionAuthenticated(ctx, tx, run, observation, readyAfterBlock)
+	if errors.Is(err, errPublicationReevaluationLive) {
+		return domain.RunConclusion{}, fmt.Errorf(
+			"run %q completed while its publication reevaluation is live: %w",
+			run.ID, domain.ErrParentKeyMismatch,
+		)
+	}
+	if err != nil {
+		return domain.RunConclusion{}, err
+	}
+	if !resolved {
+		return domain.RunConclusion{}, fmt.Errorf(
+			"run %q completed over an unresolved publication block: %w",
+			run.ID, domain.ErrParentKeyMismatch,
+		)
+	}
+	return completed, nil
+}
+
+func publicationBlockedMilestone(observation domain.RunObservation) bool {
+	for _, milestone := range observation.Milestones {
+		if milestone.Kind == domain.MilestonePublicationBlocked {
+			return true
+		}
+	}
+	return false
 }
 
 var errPublicationReevaluationLive = errors.New("publication reevaluation remains live")
@@ -593,7 +679,7 @@ func publicationHoldItemAuthenticated(
 	case domain.StatusOpen:
 		return observation.Hold != nil && observation.Hold.RunID == run.ID &&
 			observation.Hold.InvocationID != nil &&
-			*observation.Hold.InvocationID == productionPublicationInvocationID(run.ID)
+			*observation.Hold.InvocationID == domain.ProductionPublicationInvocationID(run.ID)
 	case domain.StatusSuperseded:
 		return true
 	case domain.StatusResolved, domain.StatusDismissed, domain.StatusExpired:
@@ -626,7 +712,8 @@ func publicationReadyOrder(observation domain.RunObservation) (bool, bool) {
 			lastBlock = index
 		case domain.MilestoneRunSubmitted, domain.MilestoneInvocationAdmitted,
 			domain.MilestoneInvocationStarted, domain.MilestoneExecutionExportRecorded,
-			domain.MilestoneExecutionOutcomeRecorded, domain.MilestoneTerminalRecorded:
+			domain.MilestoneExecutionOutcomeRecorded, domain.MilestoneTerminalRecorded,
+			domain.MilestoneWorkUnitCompleted:
 		}
 	}
 	if lastBlock < 0 || lastReady < 0 {

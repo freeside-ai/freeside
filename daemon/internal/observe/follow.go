@@ -499,6 +499,7 @@ const (
 	SupervisionBlocked                SupervisionState = "blocked"
 	SupervisionFailed                 SupervisionState = "failed"
 	SupervisionLost                   SupervisionState = "lost"
+	SupervisionCompleted              SupervisionState = "completed"
 )
 
 // AllSupervisionStates is the single registration point for the snapshot
@@ -514,6 +515,7 @@ var AllSupervisionStates = []SupervisionState{
 	SupervisionBlocked,
 	SupervisionFailed,
 	SupervisionLost,
+	SupervisionCompleted,
 }
 
 func (s SupervisionState) valid() bool {
@@ -527,7 +529,8 @@ func (s SupervisionState) valid() bool {
 		SupervisionPublished,
 		SupervisionBlocked,
 		SupervisionFailed,
-		SupervisionLost:
+		SupervisionLost,
+		SupervisionCompleted:
 		return true
 	default:
 		return false
@@ -540,6 +543,7 @@ const (
 	OutcomeBlocked   = domain.RunOutcomeBlocked
 	OutcomeFailed    = domain.RunOutcomeFailed
 	OutcomeLost      = domain.RunOutcomeLost
+	OutcomeCompleted = domain.RunOutcomeCompleted
 )
 
 var AllOutcomes = domain.AllRunOutcomes

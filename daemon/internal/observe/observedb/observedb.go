@@ -215,8 +215,19 @@ func (s *Store) ObserveConclusion(
 			// Observation-only timelines predate the durable Run entity and
 			// cannot contain publication reevaluation authority. Preserve their
 			// milestone-only conclusion; every current production run takes the
-			// authenticated path below.
+			// authenticated path below. A completed outcome is the exception:
+			// run_milestones carries no run foreign key, so a timeline with no
+			// run could otherwise present a work_unit_completed milestone that
+			// nothing here can authenticate, and the milestone alone is a
+			// powerless mirror of a completion record. Without a run to bind
+			// it to, the conclusion fails closed instead.
 			conclusion = domain.ConcludeRun(observation)
+			if conclusion.Outcome == domain.RunOutcomeCompleted {
+				return fmt.Errorf(
+					"run %q has a completion milestone but no run to authenticate it: %w",
+					runID, domain.ErrParentKeyMismatch,
+				)
+			}
 			return nil
 		}
 		if err != nil {

@@ -1,0 +1,9 @@
+{
+  "run_id": "run-1",
+  "kind": "work_unit_completed",
+  "invocation_id": "publish-production-run-1",
+  "terminal": null,
+  "outcome": null,
+  "reason": null,
+  "recorded_at": "2026-01-02T03:16:05Z"
+}

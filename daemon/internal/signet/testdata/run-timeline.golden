@@ -11,6 +11,24 @@
       "outcome": null,
       "reason": null,
       "recorded_at": "2026-08-10T12:34:56Z"
+    },
+    {
+      "run_id": "run-569",
+      "kind": "publication_ready",
+      "invocation_id": "publish-production-run-569",
+      "terminal": null,
+      "outcome": null,
+      "reason": null,
+      "recorded_at": "2026-08-10T14:34:56Z"
+    },
+    {
+      "run_id": "run-569",
+      "kind": "work_unit_completed",
+      "invocation_id": "publish-production-run-569",
+      "terminal": null,
+      "outcome": null,
+      "reason": null,
+      "recorded_at": "2026-08-10T15:34:56Z"
     }
   ],
   "hold": null,
@@ -18,9 +36,21 @@
     {
       "invocation_id": "inv-569",
       "run_id": "run-569",
-      "status": "running",
-      "live": true,
+      "status": "completed",
+      "live": false,
       "observed_at": "2026-08-10T12:35:56Z"
     }
-  ]
+  ],
+  "completion": {
+    "pr_number": 725,
+    "merge_commit_sha": "5555555555555555555555555555555555555555",
+    "bound_issue": 724,
+    "recorded_at": "2026-08-10T15:34:56Z"
+  },
+  "billable_cost_so_far": {
+    "currency": "USD",
+    "amount": "17.5",
+    "invocations": 1,
+    "complete": true
+  }
 }

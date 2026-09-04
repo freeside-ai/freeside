@@ -109,17 +109,43 @@ type Run struct {
 	LatestMilestone *domain.RunMilestoneKind `json:"latest_milestone"`
 	Outcome         domain.RunOutcome        `json:"outcome"`
 	HoldReason      *domain.RunHoldReason    `json:"hold_reason"`
+	// Lifecycle splits the runs list into active and finished (#1134); it
+	// is derived from Outcome and SupersededBy, never stored.
+	Lifecycle domain.RunLifecycle `json:"lifecycle"`
+	// SupersededBy names the attempt that retried this run, or null.
+	SupersededBy *domain.RunID `json:"superseded_by"`
+	// Completion carries the merge facts once the work unit is done, read
+	// from the re-gated completion row, or null.
+	Completion *WorkUnitCompletionFacts `json:"completion"`
+	// BillableCostSoFar is the run's render-only spend figure, computed the
+	// same way the attention cards compute theirs, or null before any
+	// billable observation.
+	BillableCostSoFar *domain.CostSoFar `json:"billable_cost_so_far"`
+}
+
+// WorkUnitCompletionFacts is the wire projection of the work unit's
+// completion record: the PR whose merge satisfied the criterion, the merge
+// commit, the bound issue when the criterion names one, and the instant the
+// daemon recorded it. The milestone that ends the timeline carries none of
+// these; they are read from the store's re-gated completion row.
+type WorkUnitCompletionFacts struct {
+	PRNumber       int       `json:"pr_number"`
+	MergeCommitSHA string    `json:"merge_commit_sha"`
+	BoundIssue     *int      `json:"bound_issue"`
+	RecordedAt     time.Time `json:"recorded_at"`
 }
 
 // RunTimeline is the typed daemon-observation projection read under one
 // server revision. It deliberately carries no free agent-authored text.
 type RunTimeline struct {
-	AsOfRevision int64                          `json:"as_of_revision"`
-	AsOf         time.Time                      `json:"as_of"`
-	RunID        domain.RunID                   `json:"run_id"`
-	Milestones   []domain.RunMilestone          `json:"milestones"`
-	Hold         *domain.RunHoldObservation     `json:"hold"`
-	Invocations  []domain.InvocationObservation `json:"invocations"`
+	AsOfRevision      int64                          `json:"as_of_revision"`
+	AsOf              time.Time                      `json:"as_of"`
+	RunID             domain.RunID                   `json:"run_id"`
+	Milestones        []domain.RunMilestone          `json:"milestones"`
+	Hold              *domain.RunHoldObservation     `json:"hold"`
+	Invocations       []domain.InvocationObservation `json:"invocations"`
+	Completion        *WorkUnitCompletionFacts       `json:"completion"`
+	BillableCostSoFar *domain.CostSoFar              `json:"billable_cost_so_far"`
 }
 
 // ConversationSnapshot is a whole Conversation with its store-stamped sync
@@ -585,13 +611,17 @@ func (s *Service) GetRun(ctx context.Context, id domain.RunID) (RunSnapshot, err
 		if err != nil {
 			return asRunObservationIntegrityError(err)
 		}
+		facts, err := runProjectionFactsFor(ctx, tx, id, observation)
+		if err != nil {
+			return asRunObservationIntegrityError(err)
+		}
 		displayNames, err := tx.DisplayNamesFor(ctx, value.Value.ProjectID, domain.Subject{
 			Type: domain.SubjectRun, ID: domain.SubjectID(value.Value.ID), RunID: &value.Value.ID,
 		})
 		if err != nil {
 			return err
 		}
-		out = runSnapshot(value.Value, value.Snapshot, observation, conclusion, state.Revision, displayNames)
+		out = runSnapshot(value.Value, value.Snapshot, observation, conclusion, state.Revision, displayNames, facts)
 		return nil
 	})
 	if err != nil {
@@ -632,7 +662,11 @@ func (s *Service) GetRunTimeline(ctx context.Context, id domain.RunID) (RunTimel
 			return asRunObservationIntegrityError(err)
 		}
 		observation = withAuthoritativeInvocationStatuses(observation)
-		out = runTimeline(observation, state.Revision, time.Now().UTC())
+		facts, err := runProjectionFactsFor(ctx, tx, id, observation)
+		if err != nil {
+			return asRunObservationIntegrityError(err)
+		}
+		out = runTimeline(observation, state.Revision, time.Now().UTC(), facts)
 		return nil
 	})
 	if err != nil {
@@ -764,14 +798,19 @@ func runSnapshot(
 	conclusion domain.RunConclusion,
 	asOfRevision int64,
 	displayNames *domain.DisplayNames,
+	facts runProjectionFacts,
 ) RunSnapshot {
 	normalized := normalizeRun(run)
 	projection := Run{
 		ID: normalized.ID, ProjectID: normalized.ProjectID,
 		DisplayNames: displayNames,
 		SpecDigest:   normalized.SpecDigest, PolicyDigest: normalized.PolicyDigest,
-		Stages:  normalized.Stages,
-		Outcome: conclusion.Outcome,
+		Stages:            normalized.Stages,
+		Outcome:           conclusion.Outcome,
+		Lifecycle:         domain.LifecycleOf(conclusion, facts.supersededBy != nil),
+		SupersededBy:      facts.supersededBy,
+		Completion:        facts.completion,
+		BillableCostSoFar: facts.cost,
 	}
 	if normalized.CampaignID != "" {
 		campaignID := normalized.CampaignID
@@ -806,15 +845,188 @@ func runSnapshot(
 	}
 }
 
-func runTimeline(observation domain.RunObservation, asOfRevision int64, asOf time.Time) RunTimeline {
+func runTimeline(
+	observation domain.RunObservation, asOfRevision int64, asOf time.Time, facts runProjectionFacts,
+) RunTimeline {
 	return RunTimeline{
-		AsOfRevision: asOfRevision,
-		AsOf:         asOf,
-		RunID:        observation.RunID,
-		Milestones:   nonNilSlice(observation.Milestones),
-		Hold:         observation.Hold,
-		Invocations:  nonNilSlice(observation.Invocations),
+		AsOfRevision:      asOfRevision,
+		AsOf:              asOf,
+		RunID:             observation.RunID,
+		Milestones:        nonNilSlice(observation.Milestones),
+		Hold:              observation.Hold,
+		Invocations:       nonNilSlice(observation.Invocations),
+		Completion:        facts.completion,
+		BillableCostSoFar: facts.cost,
 	}
+}
+
+// runProjectionFacts are the store-read facts the run summary and timeline
+// carry beyond the observation itself (#1134): the authenticated completion
+// record's wire facts, the superseding attempt, and the spend figure.
+type runProjectionFacts struct {
+	completion   *WorkUnitCompletionFacts
+	supersededBy *domain.RunID
+	cost         *domain.CostSoFar
+}
+
+// runProjectionFactsFor reads the projection facts inside the same
+// transaction as the observation. It runs after authenticateRunObservation,
+// so a work_unit_completed milestone has already been bound to its re-gated
+// completion row; the row is re-read here rather than threaded out of the
+// authentication pass. A missing row at this point is the same integrity
+// contradiction and fails closed the same way.
+func runProjectionFactsFor(
+	ctx context.Context, tx *store.ReadTx, runID domain.RunID, observation domain.RunObservation,
+) (runProjectionFacts, error) {
+	var facts runProjectionFacts
+	for _, milestone := range observation.Milestones {
+		if milestone.Kind != domain.MilestoneWorkUnitCompleted {
+			continue
+		}
+		completion, err := authenticatedWorkUnitCompletion(ctx, tx, runID, milestone)
+		if err != nil {
+			return runProjectionFacts{}, err
+		}
+		facts.completion = &WorkUnitCompletionFacts{
+			PRNumber: completion.PRNumber, MergeCommitSHA: completion.MergeCommitSHA,
+			BoundIssue: completion.BoundIssue, RecordedAt: completion.RecordedAt,
+		}
+		break
+	}
+	successor, ok, err := tx.RunSuccessor(ctx, runID)
+	if err != nil {
+		return runProjectionFacts{}, err
+	}
+	if ok {
+		facts.supersededBy = &successor
+	}
+	facts.cost, err = tx.BillableCostSoFar(ctx, runID)
+	if err != nil {
+		return runProjectionFacts{}, err
+	}
+	return facts, nil
+}
+
+// runAttemptBindings indexes a run's attempt invocations. The invocation
+// bindings are a pure projection of the run, so both the observation pass and
+// the conclusion can build them from the run alone.
+func runAttemptBindings(run domain.Run) map[domain.InvocationID]runAttemptBinding {
+	attempts := make(map[domain.InvocationID]runAttemptBinding)
+	for _, stage := range run.Stages {
+		for _, attempt := range stage.Attempts {
+			attempts[attempt.InvocationID] = runAttemptBinding{
+				stageID: stage.ID, attemptID: attempt.ID,
+			}
+		}
+	}
+	return attempts
+}
+
+// authenticatedCompletionMilestone binds one work_unit_completed milestone to
+// both of the authorities a completion rests on: the run's own publication
+// invocation, and the store's re-gated completion record. The observation
+// pass and the conclusion both go through it, so the sync boundary and the
+// direct-store observers cannot drift apart on which completions they accept.
+func authenticatedCompletionMilestone(
+	ctx context.Context,
+	tx *store.ReadTx,
+	run domain.Run,
+	milestone domain.RunMilestone,
+	attempts map[domain.InvocationID]runAttemptBinding,
+) (domain.WorkUnitCompletion, error) {
+	if err := authenticatePublicationInvocation(
+		run.ID, *milestone.InvocationID, domain.ProductionPublicationInvocationID(run.ID), attempts,
+	); err != nil {
+		return domain.WorkUnitCompletion{}, fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+	}
+	return authenticatedWorkUnitCompletion(ctx, tx, run.ID, milestone)
+}
+
+// authenticatedWorkUnitCompletion binds a work_unit_completed milestone to the
+// store's completion record for the run's work unit. The milestone is a
+// powerless mirror: the record is the authority, the store re-gates it
+// against the declaration, binding, and fact timelines on read, and the
+// milestone must restate the record's instant, so a milestone with no
+// supported record behind it, or one recorded at another instant, fails
+// closed as a parent-key mismatch. Every fail-closed verdict the store can
+// give about one of those rows (store.IsRowVerdict) is that per-run
+// contradiction, so one damaged row excludes its run rather than failing the
+// whole listing read; anything else is infrastructure and propagates. The
+// binding the record was derived from must also restate the run's ready
+// resource, so the completion is bound to the pull request this run
+// published rather than to any consistent set of rows.
+func authenticatedWorkUnitCompletion(
+	ctx context.Context, tx *store.ReadTx, runID domain.RunID, milestone domain.RunMilestone,
+) (domain.WorkUnitCompletion, error) {
+	declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, runID)
+	if store.IsRowVerdict(err) {
+		return domain.WorkUnitCompletion{}, fmt.Errorf("milestone %s run %q has no supported work unit: %w (%w)",
+			milestone.Kind, runID, domain.ErrParentKeyMismatch, err)
+	}
+	if err != nil {
+		return domain.WorkUnitCompletion{}, fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+	}
+	completion, err := tx.GetWorkUnitCompletion(ctx, declaration.ID)
+	if store.IsRowVerdict(err) {
+		// No done bit, a done bit the store's own evidence does not derive,
+		// or a row it cannot reconstruct: either way there is no authority
+		// for this milestone, and the contradiction belongs to this run, so
+		// the listing reads exclude it instead of failing the whole request.
+		// Any other error is infrastructure and propagates unwrapped, so a
+		// transient failure never reads as an integrity contradiction.
+		return domain.WorkUnitCompletion{}, fmt.Errorf("milestone %s has no supported completion record: %w (%w)",
+			milestone.Kind, domain.ErrParentKeyMismatch, err)
+	}
+	if err != nil {
+		return domain.WorkUnitCompletion{}, fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+	}
+	if !completion.RecordedAt.Equal(milestone.RecordedAt) {
+		return domain.WorkUnitCompletion{}, fmt.Errorf("milestone %s instant disagrees with the completion record: %w",
+			milestone.Kind, domain.ErrParentKeyMismatch)
+	}
+	if err := authenticatedCompletionPRBinding(ctx, tx, runID, declaration.ID); err != nil {
+		return domain.WorkUnitCompletion{}, fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+	}
+	return completion, nil
+}
+
+// authenticatedCompletionPRBinding requires the work-unit binding the
+// completion was derived from to restate the run's independently
+// reconstructed ready resource. The store re-derives a completion from the
+// declaration, the binding, and the merge facts, which binds those rows to
+// each other but not to the pull request this run actually published: a
+// consistently forged binding and merge fact would otherwise report a run
+// published as one PR as completed by another PR's merge. The capture pass
+// makes the same comparison before it observes anything through the binding
+// (scheduler.go, "work-unit binding disagrees with ready resource"), but a
+// write-time check is not read-time evidence, which is the whole reason the
+// store re-gates on read.
+func authenticatedCompletionPRBinding(
+	ctx context.Context, tx *store.ReadTx, runID domain.RunID, unitID domain.WorkUnitID,
+) error {
+	binding, err := tx.GetWorkUnitPRBinding(ctx, unitID)
+	if store.IsRowVerdict(err) {
+		return fmt.Errorf("work unit %s has no supported pr binding: %w (%w)",
+			unitID, domain.ErrParentKeyMismatch, err)
+	}
+	if err != nil {
+		return err
+	}
+	ready, err := tx.GetReadyItemPRBinding(ctx, domain.ProductionReadyItemID(runID))
+	if store.IsRowVerdict(err) {
+		return fmt.Errorf("run %q has no supported ready resource binding: %w (%w)",
+			runID, domain.ErrParentKeyMismatch, err)
+	}
+	if err != nil {
+		return err
+	}
+	if ready.RunID != runID || binding.Repo != ready.Repo || binding.RepositoryID != ready.RepositoryID ||
+		binding.PRNumber != ready.PRNumber || binding.BaseRef != ready.BaseRef ||
+		binding.HeadSHA != ready.HeadSHA {
+		return fmt.Errorf("work-unit binding %s disagrees with ready resource %s: %w",
+			binding.UnitID, ready.ItemID, domain.ErrParentKeyMismatch)
+	}
+	return nil
 }
 
 // projectRunSnapshot re-derives one run's authenticated observation projection
@@ -844,13 +1056,17 @@ func projectRunSnapshot(
 	if err != nil {
 		return RunSnapshot{}, fmt.Errorf("run %q conclusion: %w", run.ID, asRunObservationIntegrityError(err))
 	}
+	facts, err := runProjectionFactsFor(ctx, tx, run.ID, observation)
+	if err != nil {
+		return RunSnapshot{}, fmt.Errorf("run %q facts: %w", run.ID, asRunObservationIntegrityError(err))
+	}
 	displayNames, err := tx.DisplayNamesFor(ctx, run.ProjectID, domain.Subject{
 		Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,
 	})
 	if err != nil {
 		return RunSnapshot{}, fmt.Errorf("run %q display names: %w", run.ID, err)
 	}
-	return runSnapshot(run, snapshot, observation, conclusion, state.Revision, displayNames), nil
+	return runSnapshot(run, snapshot, observation, conclusion, state.Revision, displayNames, facts), nil
 }
 
 func publicationReadyMilestone(observation domain.RunObservation) bool {
@@ -915,14 +1131,7 @@ func authenticateRunObservation(
 	observation domain.RunObservation,
 	items []store.Snapshotted[domain.AttentionItem],
 ) error {
-	attempts := make(map[domain.InvocationID]runAttemptBinding)
-	for _, stage := range run.Stages {
-		for _, attempt := range stage.Attempts {
-			attempts[attempt.InvocationID] = runAttemptBinding{
-				stageID: stage.ID, attemptID: attempt.ID,
-			}
-		}
-	}
+	attempts := runAttemptBindings(run)
 	var readyBinding *domain.ReadyItemPRBinding
 	blockedReasons := make(map[domain.RunHoldReason]bool)
 	reevaluationCommands := make(map[string]bool)
@@ -1026,7 +1235,7 @@ func authenticateRunObservation(
 	}
 	for index, milestone := range observation.Milestones {
 		invocation := *milestone.InvocationID
-		publicationInvocation := productionPublicationInvocationID(run.ID)
+		publicationInvocation := domain.ProductionPublicationInvocationID(run.ID)
 		switch milestone.Kind {
 		case domain.MilestoneRunSubmitted:
 			if err := authenticateRunSubmission(ctx, tx, run, invocation); err != nil {
@@ -1120,6 +1329,18 @@ func authenticateRunObservation(
 				return fmt.Errorf("milestone %s reason has no matching definitive blocked item: %w",
 					milestone.Kind, domain.ErrParentKeyMismatch)
 			}
+		case domain.MilestoneWorkUnitCompleted:
+			// The completion ends a published timeline: it carries the
+			// publication invocation, follows an authenticated ready that
+			// itself follows the last definitive block, and mirrors the
+			// store's re-gated completion record.
+			if !readyMilestone || lastReadyMilestone < lastBlockedMilestone {
+				return fmt.Errorf("milestone %s has no authenticated publication_ready after the last block: %w",
+					milestone.Kind, domain.ErrParentKeyMismatch)
+			}
+			if _, err := authenticatedCompletionMilestone(ctx, tx, run, milestone, attempts); err != nil {
+				return err
+			}
 		}
 	}
 	if openDefinitiveBlocks > 1 {
@@ -1155,7 +1376,7 @@ func withAuthoritativeInvocationStatuses(observation domain.RunObservation) doma
 			terminalByInvocation[invocation] = *milestone.Terminal
 		case domain.MilestoneRunSubmitted, domain.MilestoneInvocationAdmitted,
 			domain.MilestoneInvocationStarted, domain.MilestonePublicationReady,
-			domain.MilestonePublicationBlocked:
+			domain.MilestonePublicationBlocked, domain.MilestoneWorkUnitCompleted:
 		}
 	}
 	if len(terminalByInvocation) == 0 || len(observation.Invocations) == 0 {
@@ -1480,10 +1701,6 @@ func authenticatesSpecificationDiscussionArtifact(
 		provenance.VerificationRecipeDigest == nil && provenance.SensitivityClass == domain.SensitivityNormal
 }
 
-func productionPublicationInvocationID(runID domain.RunID) domain.InvocationID {
-	return domain.InvocationID("publish-production-" + string(runID))
-}
-
 // attemptIDForInvocation mirrors the engine's deterministic attempt identity
 // (engine.attemptIDFor: "attempt-<invocation>"), which the engine enforces when
 // it records an attempt. The read boundary re-derives it to bind a conversation
@@ -1544,7 +1761,7 @@ func runObservationInvocation[T any](
 	if _, ok := attempts[invocation]; ok {
 		return true
 	}
-	return invocation == productionPublicationInvocationID(runID)
+	return invocation == domain.ProductionPublicationInvocationID(runID)
 }
 
 func authenticateAdmissionRun(

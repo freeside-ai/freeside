@@ -10,6 +10,15 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
+// ProductionPublicationInvocationID names the run's publication invocation,
+// the one the publication milestones (publication_ready, publication_blocked,
+// work_unit_completed) carry. The engine mints it and the sync boundary and
+// the completion recorders re-derive it, so it lives here rather than in
+// either package.
+func ProductionPublicationInvocationID(runID RunID) InvocationID {
+	return InvocationID("publish-production-" + string(runID))
+}
+
 // ProductionReadyItemID and ProductionBlockedItemID are the workflow-owned
 // attention-item identities that authenticate terminal publication
 // observations at read boundaries.

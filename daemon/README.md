@@ -381,8 +381,12 @@ at all.
 
 - **Milestones** are an append-only, first-observation-wins timeline of
   typed events (`run_submitted` through `publication_ready` or
-  `publication_blocked`), written inside the transactions that commit the
-  underlying workflow facts.
+  `publication_blocked`, and `work_unit_completed` once the published work
+  unit's completion criterion is satisfied), written inside the transactions
+  that commit the underlying workflow facts. `work_unit_completed` carries
+  only the publication invocation; the PR, merge commit, and bound issue are
+  read from the re-gated `work_unit_completions` row, and the sync boundary
+  fails a run closed when the milestone has no supported row behind it.
 - **Holds** carry a closed reason-code vocabulary
   (`domain.AllRunHoldReasons`). There is no free-text reason field by
   design: codes are the entire operator-facing cause, so credentials,

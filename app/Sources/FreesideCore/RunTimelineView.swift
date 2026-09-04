@@ -139,7 +139,7 @@ struct RunTimelineView: View {
     private var holdIsFailure: Bool {
         switch snapshot.run.outcome {
         case .failed, .lost: true
-        case .unobserved, .pending, .published, .blocked: false
+        case .unobserved, .pending, .published, .blocked, .completed: false
         }
     }
 

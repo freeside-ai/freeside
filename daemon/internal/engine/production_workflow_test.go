@@ -1859,7 +1859,7 @@ func validPublicationTask(
 		RunID:   runID, ProjectID: projectID,
 		ProducingInvocationID: productionInvocationID(runID),
 		VerificationID:        productionVerificationInvocationID(runID),
-		PublicationID:         productionPublicationInvocationID(runID),
+		PublicationID:         domain.ProductionPublicationInvocationID(runID),
 		HeadSHA:               head,
 		Replay: ProductionReplay{
 			InvocationID:    productionInvocationID(runID),

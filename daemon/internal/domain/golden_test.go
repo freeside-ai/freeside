@@ -1156,6 +1156,12 @@ func TestGolden(t *testing.T) {
 		InvocationID: &obsInvocationID, Reason: &blockedReason,
 		RecordedAt: ts.Add(11 * time.Minute),
 	}
+	publicationInvocationID := domain.InvocationID("publish-production-run-1")
+	completedMilestone := domain.RunMilestone{
+		RunID: "run-1", Kind: domain.MilestoneWorkUnitCompleted,
+		InvocationID: &publicationInvocationID,
+		RecordedAt:   ts.Add(12 * time.Minute),
+	}
 	invocationObservation := domain.InvocationObservation{
 		InvocationID: "inv-1", RunID: "run-1",
 		Status: domain.ObservedStatusRunning, Live: true,
@@ -1536,6 +1542,7 @@ func TestGolden(t *testing.T) {
 		{"run_milestone_terminal", terminalMilestone},
 		{"run_milestone_outcome", outcomeMilestone},
 		{"run_milestone_blocked", blockedMilestone},
+		{"run_milestone_completed", completedMilestone},
 		{"invocation_observation", invocationObservation},
 		{"run_hold_observation", holdObservation},
 		{"run_observation", runObservation},

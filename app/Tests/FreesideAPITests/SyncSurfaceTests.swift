@@ -83,13 +83,17 @@ import Testing
                     status: .running,
                     live: true,
                     observed_at: invocationAt)
-            ])
+            ],
+            completion: nil,
+            billable_cost_so_far: nil)
         let legacyTimeline = Components.Schemas.RunTimeline(
             as_of_revision: 12,
             as_of: submittedAt,
             run_id: legacyID,
             milestones: [],
-            invocations: [])
+            invocations: [],
+            completion: nil,
+            billable_cost_so_far: nil)
         let server = MockServer(
             runs: [observed, legacy],
             timelines: [observedTimeline, legacyTimeline])

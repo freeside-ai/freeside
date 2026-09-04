@@ -46,12 +46,16 @@ type corpusFixture struct {
 	store   *store.Store
 	service *signet.Service
 	at      time.Time
+	// path is the store file, so a forge that has to bypass the write
+	// boundary can reach the rows the way tampering or a damaged disk would.
+	path string
 }
 
 func newCorpusFixture(t *testing.T, opts ...signet.Option) corpusFixture {
 	t.Helper()
 	ctx := context.Background()
-	s, err := store.Open(ctx, t.TempDir()+"/corpus.db", store.Options{
+	path := t.TempDir() + "/corpus.db"
+	s, err := store.Open(ctx, path, store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
@@ -70,7 +74,7 @@ func newCorpusFixture(t *testing.T, opts ...signet.Option) corpusFixture {
 	svc := signet.NewService(s, append([]signet.Option{
 		signet.WithClock(func() time.Time { return readAt }),
 	}, opts...)...)
-	return corpusFixture{store: s, service: svc, at: at}
+	return corpusFixture{store: s, service: svc, at: at, path: path}
 }
 
 // read exercises the full authenticated projection the same way ListRuns,
@@ -153,6 +157,17 @@ func (f corpusFixture) seedAdmission(
 	t *testing.T, runID domain.RunID, stageID domain.StageID, attemptID domain.AttemptID, invocation domain.InvocationID,
 ) domain.ExecutionAdmission {
 	t.Helper()
+	return f.seedAdmissionWithPolicy(t, runID, stageID, attemptID, invocation, "sha256:policy")
+}
+
+// seedAdmissionWithPolicy records the attempt's admission under an explicit
+// policy digest, for a run whose policy digest is a stored resolved policy's
+// content digest rather than the corpus default label.
+func (f corpusFixture) seedAdmissionWithPolicy(
+	t *testing.T, runID domain.RunID, stageID domain.StageID, attemptID domain.AttemptID,
+	invocation domain.InvocationID, policyDigest domain.Digest,
+) domain.ExecutionAdmission {
+	t.Helper()
 	identityID := domain.AuthIdentityID("auth-1")
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID: invocation, RunID: runID, StageID: stageID, AttemptID: attemptID,
@@ -162,7 +177,7 @@ func (f corpusFixture) seedAdmission(
 		CredentialMode: domain.CredentialSubscriptionContained,
 		EgressProfile:  domain.EgressProviderOnly,
 		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
-		SpecDigest:     "sha256:spec", PolicyDigest: "sha256:policy", InputDigest: "sha256:input",
+		SpecDigest:     "sha256:spec", PolicyDigest: policyDigest, InputDigest: "sha256:input",
 		Base: domain.BaseRevision{
 			Repo: "owner/repo", RepositoryID: corpusRepositoryID, BaseRef: "refs/heads/main", BaseSHA: corpusBaseSHA,
 		},
