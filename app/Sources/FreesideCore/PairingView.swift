@@ -46,7 +46,7 @@ struct PairingView: View {
                 Section {
                     if let facts = model.facts {
                         ForEach(Self.detailRows(facts), id: \.label) { row in
-                            LabeledContent(row.label, value: row.value)
+                            FactRow(label: row.label, value: row.value)
                         }
                     } else {
                         Text("Enter a code to see host details")
@@ -146,24 +146,9 @@ struct PairingView: View {
                 KeywordLabel(text: "Pairing details")
                 if let facts = model.facts {
                     ForEach(Self.detailRows(facts), id: \.label) { row in
-                        if screenshotDynamicTypeSize.isAccessibilitySize {
-                            // Stacked so a timestamp never wraps mid-token.
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(row.label)
-                                    .foregroundStyle(Color.inkDim)
-                                Text(row.value)
-                            }
+                        FactRow(label: row.label, value: row.value, valueColor: .ink)
                             .font(FreesideFont.body)
-                        } else {
-                            HStack(alignment: .firstTextBaseline) {
-                                Text(row.label)
-                                    .foregroundStyle(Color.inkDim)
-                                Spacer(minLength: 12)
-                                Text(row.value)
-                                    .multilineTextAlignment(.trailing)
-                            }
-                            .font(FreesideFont.body)
-                        }
+                            .foregroundStyle(Color.inkDim)
                     }
                 } else {
                     Text("Enter a code to see host details")
@@ -186,13 +171,6 @@ struct PairingView: View {
         .padding(24)
         .frame(maxWidth: 560, alignment: .leading)
         .foregroundStyle(Color.ink)
-    }
-
-    /// The size the screenshot composition renders at: the regression
-    /// test's pinned size when one is set, since the environment is not
-    /// populated when `screenshotContent()` is called outside `body`.
-    private var screenshotDynamicTypeSize: DynamicTypeSize {
-        FreesideFont.screenshotDynamicTypeSize ?? dynamicTypeSize
     }
 
     private var pasteButton: some View {

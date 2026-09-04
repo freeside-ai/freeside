@@ -316,6 +316,24 @@ enum FreesideFont {
         return .custom(name, size: size(of: style), relativeTo: style)
     }
 
+    /// The macOS eyebrow's base size (`--fs-eyebrow-size`). macOS's own
+    /// `.caption2` is 10pt, which leaves the tracked all-caps register too
+    /// faint to read as a heading; iOS's 11pt already reads, so the lift is
+    /// macOS-only.
+    static let macOSEyebrowSize: CGFloat = 10.5
+
+    /// The eyebrow's point size: the macOS lift in production, and the
+    /// platform's `.caption2` everywhere else, including inside the
+    /// screenshot bridge, which renders iOS metrics on purpose.
+    static func eyebrowPointSize() -> CGFloat {
+        #if canImport(AppKit)
+            if screenshotDynamicTypeSize == nil {
+                return macOSEyebrowSize
+            }
+        #endif
+        return size(of: .caption2)
+    }
+
     // The platform text styles, in the language's faces.
     static var title: Font { serif(.title2) }
     static var largeTitle: Font { serif(.largeTitle) }
@@ -327,8 +345,12 @@ enum FreesideFont {
     static var caption: Font { sans(.caption) }
     static var monoCallout: Font { mono(.callout) }
     static var monoCaption: Font { mono(.caption) }
-    /// Small-caps mono keyword used by banners and section headers.
-    static var keyword: Font { mono(.caption2, weight: .medium) }
+    /// Small-caps mono keyword used by banners and section headers: the
+    /// medium mono face `mono(.caption2, weight: .medium)` builds, at the
+    /// eyebrow's own base size.
+    static var keyword: Font {
+        .custom("IBMPlexMono-Medm", size: eyebrowPointSize(), relativeTo: .caption2)
+    }
     /// Medium, not regular: the compact all-caps register stays readable
     /// without asking semantic color to compensate for a light face.
     static var chip: Font { mono(.caption2, weight: .medium) }
@@ -385,6 +407,61 @@ struct KeywordLabel: View {
             .font(FreesideFont.keyword)
             .tracking(0.8)
             .foregroundStyle(color)
+    }
+}
+
+/// One label-and-value fact: the shared rule that decides between a
+/// trailing value and a stacked one, used by the decision detail facts,
+/// the pairing details, and the operational summary.
+///
+/// Font and row-level color stay with the caller, so each surface keeps
+/// its own register.
+struct FactRow: View {
+    /// A value longer than this stacks at every type size
+    /// (`--fs-fact-row-stack-threshold`). A digest or an invocation id has
+    /// nowhere to wrap, so a trailing value either breaks mid-token or
+    /// squeezes the label out of the row. Counted in grapheme clusters,
+    /// which is what the token's character count means for the ASCII
+    /// labels, ids, and digests these rows carry.
+    static let stackThreshold = 40
+
+    /// An accessibility size stacks every row; below that, only a value
+    /// too long for the trailing column does.
+    static func stacks(_ value: String, at size: DynamicTypeSize) -> Bool {
+        size >= .accessibility1 || value.count > stackThreshold
+    }
+
+    let label: String
+    let value: String
+    /// Set where the value carries its own color. Nil leaves a trailing
+    /// value inheriting the row's foreground style.
+    var valueColor: Color? = nil
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        if Self.stacks(value, at: dynamicTypeSize) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .foregroundStyle(Color.inkDim)
+                Text(value)
+                    .foregroundStyle(valueColor ?? .ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            LabeledContent(label) {
+                valueText
+                    .multilineTextAlignment(.trailing)
+            }
+        }
+    }
+
+    @ViewBuilder private var valueText: some View {
+        let text = Text(value)
+        if let valueColor {
+            text.foregroundStyle(valueColor)
+        } else {
+            text
+        }
     }
 }
 
