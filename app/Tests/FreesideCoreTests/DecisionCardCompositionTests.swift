@@ -550,4 +550,45 @@ import Testing
             #expect(summaryIndex < composition.actionInsertionIndex)
         }
     }
+
+    /// The iOS sticky footer offers the recommended action exactly when the
+    /// button is off screen. Reordering the block to put the reason above the
+    /// button (#1107) made the block's own frame the wrong thing to measure:
+    /// a long reason leaves the block's top on screen with the button below
+    /// the fold, which has to count as not visible.
+    @Test func theRecommendedActionIsVisibleOnlyWhileItsButtonIsOnScreen() {
+        let viewport: CGFloat = 800
+
+        // Fully on screen.
+        #expect(
+            DecisionDetailView.recommendationActionVisible(
+                frame: CGRect(x: 0, y: 300, width: 560, height: 44),
+                viewportHeight: viewport))
+        // Pushed below the fold by a long reason, with the block's top still
+        // on screen: the regression this guards.
+        #expect(
+            !DecisionDetailView.recommendationActionVisible(
+                frame: CGRect(x: 0, y: 900, width: 560, height: 44),
+                viewportHeight: viewport))
+        // Scrolled off the top.
+        #expect(
+            !DecisionDetailView.recommendationActionVisible(
+                frame: CGRect(x: 0, y: -60, width: 560, height: 44),
+                viewportHeight: viewport))
+        // Straddling each edge still counts as reachable.
+        #expect(
+            DecisionDetailView.recommendationActionVisible(
+                frame: CGRect(x: 0, y: -20, width: 560, height: 44),
+                viewportHeight: viewport))
+        #expect(
+            DecisionDetailView.recommendationActionVisible(
+                frame: CGRect(x: 0, y: 780, width: 560, height: 44),
+                viewportHeight: viewport))
+        // Without the scroll space, as on the macOS inspector, the top-edge
+        // test stands alone.
+        #expect(
+            DecisionDetailView.recommendationActionVisible(
+                frame: CGRect(x: 0, y: 900, width: 560, height: 44),
+                viewportHeight: nil))
+    }
 }

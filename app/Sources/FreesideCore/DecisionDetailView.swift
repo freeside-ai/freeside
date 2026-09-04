@@ -350,8 +350,14 @@ struct DecisionDetailView: View {
     private func platformBody<Content: View>(_ content: Content) -> some View {
         #if os(iOS)
             content.safeAreaInset(edge: .bottom, spacing: 0) {
+                // The same ranking gate the card's own recommendation block
+                // uses: the served action surface decides what this client may
+                // submit, so a stored recommendation the surface no longer
+                // ranks must not reappear as a footer button once the block
+                // itself has stopped rendering (#1107 review).
                 if let item = model.snapshot?.item,
                     let recommendation = DecisionRecommendationPresentation.of(item),
+                    actionRanking(item).recommended == recommendation.action,
                     !recommendationVisible
                 {
                     actionButton(
@@ -1695,14 +1701,18 @@ struct DecisionDetailView: View {
     /// The recommendation leads its card in the register its revalidated
     /// provenance supports (plan §9): daemon policy and project policy render
     /// as card facts, agent judgment as a labeled unverified proposal. Inside
-    /// that register it leads with the act, then the reason for it: an
-    /// operator reads the recommendation to decide, not to audit it.
+    /// that register it argues before it acts: the label carries the register
+    /// and the daemon's confidence, then the reason, then the button. The
+    /// block led with the act until 2026-09-03, on the reading that an
+    /// operator decides rather than audits; the owner reversed that after the
+    /// September UI audit (#1104, #1107), so the button is the conclusion of
+    /// the argument above it rather than a control the reason trails.
     private func recommendationBlock(
         _ recommendation: DecisionRecommendationPresentation,
         item: Components.Schemas.AttentionItem
     ) -> some View {
         cardSection(
-            recommendation.title,
+            recommendation.label,
             dashed: recommendation.register.isUnverifiedClaim,
             border: .accentBorder,
             fill: .accentWash
@@ -1711,6 +1721,9 @@ struct DecisionDetailView: View {
                 Text("Written by an agent, not checked by the daemon.")
                     .foregroundStyle(Color.inkDim)
             }
+            KeywordLabel(text: "Why")
+            Text(recommendation.reason)
+                .fixedSize(horizontal: false, vertical: true)
             actionButton(
                 recommendation.action,
                 item: item,
@@ -1719,16 +1732,19 @@ struct DecisionDetailView: View {
                     for: item) == nil ? .primary : .destructive,
                 showsIcon: false
             )
-            KeywordLabel(text: "Why")
-            Text(recommendation.reason)
-                .fixedSize(horizontal: false, vertical: true)
-            if let confidence = recommendation.confidence {
-                factRow("Confidence", value: confidence)
+            // The iOS sticky footer appears when this button is off screen, so
+            // the measurement is the button's own, not the block's.
+            .onGeometryChange(for: Bool.self) { geometry in
+                Self.recommendationActionVisible(
+                    frame: geometry.frame(in: .named("decision-card-scroll")),
+                    viewportHeight: geometry.bounds(of: .named("decision-card-scroll"))?.height)
+            } action: { visible in
+                recommendationVisible = visible
             }
             // The digests, policy key, and judgment site revalidate the
             // recommendation; an operator deciding never reads them, so they
-            // stay one disclosure away instead of standing between the
-            // recommended act and the reason for it.
+            // stay one disclosure away below the act rather than inside the
+            // argument for it.
             DisclosureGroup(isExpanded: $provenanceExpanded) {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(recommendation.sourceFacts) { fact in
@@ -1740,11 +1756,30 @@ struct DecisionDetailView: View {
                 KeywordLabel(text: "Provenance")
             }
         }
-        .onGeometryChange(for: Bool.self) { geometry in
-            geometry.frame(in: .named("decision-card-scroll")).maxY > 0
-        } action: { visible in
-            recommendationVisible = visible
-        }
+    }
+
+    /// Whether the recommended action is on screen, which is what the iOS
+    /// sticky footer stands in for: the footer offers the action exactly when
+    /// this returns false.
+    ///
+    /// The measurement follows the button rather than the recommendation
+    /// block. The block's own frame was never an exact answer, since a block
+    /// sitting entirely below the fold also reports a positive `maxY`, but
+    /// while the block led with its button the two moved together. Putting
+    /// the reason above the button (#1107) created the state that matters
+    /// here: a long reason at a large Dynamic Type size leaves the block's top
+    /// on screen with its button below the fold, where measuring the block
+    /// suppresses the footer and leaves nothing to press.
+    ///
+    /// `viewportHeight` is nil when the scroll coordinate space is not an
+    /// ancestor, as on the macOS inspector, where the footer does not exist
+    /// and the old top-edge test is enough.
+    static func recommendationActionVisible(
+        frame: CGRect,
+        viewportHeight: CGFloat?
+    ) -> Bool {
+        guard let viewportHeight else { return frame.maxY > 0 }
+        return frame.maxY > 0 && frame.minY < viewportHeight
     }
 
     private func cardSection(

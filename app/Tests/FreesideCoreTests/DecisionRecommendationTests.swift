@@ -49,7 +49,8 @@ import Testing
 
         #expect(presentation.register == .daemonFact)
         #expect(!presentation.register.isUnverifiedClaim)
-        #expect(presentation.title == "Recommended (daemon policy)")
+        #expect(presentation.title == "Recommended · daemon policy")
+        #expect(presentation.label == "Recommended · daemon policy")
         #expect(
             presentation.sourceFacts.map(\.label) == ["Rule digest", "Input digest"])
         #expect(presentation.sourceFacts.allSatisfy { $0.monospaced })
@@ -67,7 +68,8 @@ import Testing
 
         #expect(presentation.register == .agentClaim)
         #expect(presentation.register.isUnverifiedClaim)
-        #expect(presentation.title == "Recommended (agent judgment, unverified)")
+        #expect(presentation.title == "Recommended · agent judgment")
+        #expect(presentation.label == "Recommended · agent judgment · High")
         #expect(
             presentation.sourceFacts.map(\.value)
                 == ["Finding adjudicator", "adjudicator-1", "sha256:artifact"])
@@ -82,9 +84,24 @@ import Testing
 
         #expect(presentation.register == .projectPolicy)
         #expect(!presentation.register.isUnverifiedClaim)
+        #expect(presentation.title == "Recommended · project policy")
         #expect(
             presentation.sourceFacts.map(\.value)
                 == ["review.adjudication.route", "sha256:policy", "sha256:application"])
+    }
+
+    /// The label is the block's one register line, so a recommendation the
+    /// daemon recorded no confidence for renders the register alone rather
+    /// than a dangling separator (#1107).
+    @Test func aRecommendationWithoutConfidenceLabelsOnlyItsRegister() throws {
+        let presentation = try #require(
+            DecisionRecommendationPresentation(
+                recommendation(
+                    source: .agent_judgment,
+                    provenance: agentJudgmentProvenance)))
+
+        #expect(presentation.confidence == nil)
+        #expect(presentation.label == "Recommended · agent judgment")
     }
 
     /// A source the provenance does not authenticate must not pick up the

@@ -54,7 +54,7 @@ struct DecisionRecommendationPresentation: Equatable {
         case .daemon_policy:
             guard let daemonPolicy else { return nil }
             register = .daemonFact
-            title = "Recommended (daemon policy)"
+            title = "Recommended · daemon policy"
             sourceFacts = [
                 .init(label: "Rule digest", value: daemonPolicy.rule_digest, monospaced: true),
                 .init(label: "Input digest", value: daemonPolicy.input_digest, monospaced: true),
@@ -62,7 +62,7 @@ struct DecisionRecommendationPresentation: Equatable {
         case .agent_judgment:
             guard let agentJudgment else { return nil }
             register = .agentClaim
-            title = "Recommended (agent judgment, unverified)"
+            title = "Recommended · agent judgment"
             sourceFacts = [
                 .init(
                     label: "Judgment site",
@@ -78,7 +78,7 @@ struct DecisionRecommendationPresentation: Equatable {
         case .project_policy:
             guard let projectPolicy else { return nil }
             register = .projectPolicy
-            title = "Recommended (project policy)"
+            title = "Recommended · project policy"
             sourceFacts = [
                 .init(label: "Policy key", value: projectPolicy.policy_key, monospaced: true),
                 .init(
@@ -93,6 +93,15 @@ struct DecisionRecommendationPresentation: Equatable {
         action = recommendation.action
         reason = recommendation.reason
         confidence = recommendation.confidence.map { AttentionDisplay.label($0.value1) }
+    }
+
+    /// The block's one label line: the register, then the daemon's confidence
+    /// when it recorded one. Confidence is a property of the recommendation
+    /// itself, so it reads with the register rather than as a fact row the
+    /// operator has to find below the reason (#1107).
+    var label: String {
+        guard let confidence else { return title }
+        return "\(title) · \(confidence)"
     }
 
     /// The recommendation an item carries, or none. Kept beside the projection
