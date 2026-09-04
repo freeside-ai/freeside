@@ -166,7 +166,7 @@
             let server = MockServer()
             let client = APIClientFactory.mock(server: server)
             let inbox = AttentionFixtures.defaultInbox()
-            let store = InboxStore(client: client)
+            let store = InboxStore(client: client, now: { screenshotNow })
             store.replaceAll(with: inbox)
             store.replaceAllConversations(with: AttentionFixtures.defaultConversations())
             for snapshot in inbox {
