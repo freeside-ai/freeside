@@ -31,6 +31,7 @@ type workflowFixture struct {
 	root   string
 	lock   *daemonlock.Lock
 	store  *store.Store
+	blobs  *signet.BlobStore
 	signet *signet.Service
 	driver *fake.StageDriver
 	engine *engine.Engine
@@ -70,7 +71,9 @@ func openWorkflowFixture(t *testing.T, root string) *workflowFixture {
 		_ = st.Close()
 		t.Fatalf("engine.New: %v", err)
 	}
-	f := &workflowFixture{root: root, store: st, signet: attention, driver: driver, engine: workflow}
+	f := &workflowFixture{
+		root: root, store: st, blobs: blobs, signet: attention, driver: driver, engine: workflow,
+	}
 	t.Cleanup(func() {
 		if f.store != nil {
 			if err := f.store.Close(); err != nil {
@@ -106,6 +109,15 @@ func (f *workflowFixture) seed(t *testing.T) {
 	if initial.Item.CreatedAt == nil {
 		t.Fatal("initial attention item created_at is nil")
 	}
+	f.seedDevices(t)
+}
+
+// seedDevices pairs the two operator devices every submitted command is
+// authenticated against. It is separate from seed because a fixture may need
+// the devices without the fake run seed builds around them.
+func (f *workflowFixture) seedDevices(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
 	pairedAt := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		for _, id := range []domain.DeviceID{deviceA, deviceB} {
