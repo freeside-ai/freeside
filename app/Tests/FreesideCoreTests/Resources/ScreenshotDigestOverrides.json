@@ -20,5 +20,26 @@
     "runs-list-large" : "b94d8179c7c439abc8ba07cdb6ec2c3b9c9cf8f161954618b5923516ade831fd",
     "runs-list-xsmall" : "1f9256329f736e168bdebfe9c74c39b6bcbf6a7735708790466e229a9346d336",
     "runs-list-xxxlarge" : "6aede3556734a354504f1a7b73818b7e12c9b445d8da4112c54e3c9aeb1bace3"
+  },
+  "macOS-26.6" : {
+    "attachment-states-xsmall" : "363b944afc817881d9941d8c2d59c6d8fc5cf654eb83986e03d85cf973c5a885",
+    "decision-execution_failure-xsmall" : "c88d930e0db72ca720376c8ecee8f93341f550dc5a97cd2139aabd9dc4fe3752",
+    "decision-feedback-xsmall" : "91abc83dac3a176f231732faf4bce1afb226e08fdf04689ceac65e665bdf1340",
+    "decision-ready_for_final_review-inspector-xsmall" : "0824cefc45dc12991f77b116e8c0a0d70f4b1e6514a31a8954a3b81331a22115",
+    "decision-spec_approval-awaiting-xsmall" : "fdf6dd2f59853fbd8caf023183746090f2fe042516a5ae5c6dda96fcbd56dde0",
+    "decision-spec_approval-diff-reader-xsmall" : "cb079d270263afae7fc00cabf6a6743097dacb6de0272756f4bf72da8e41da61",
+    "inbox-xsmall" : "8359649a0f82310e5916f215213fa147b60e8ddee7009c939eb2956d9ca77039",
+    "run-timeline-ax1" : "cf7f48869a3cf83e7aa6757e1f3ab16bac8dcca3384aaac0e4e0bb2c9377addd",
+    "run-timeline-ax3" : "22ce73a197ac81f3b7cfb72b46674d44b7a1da9be0aa71e7e8b8132073ae22b7",
+    "run-timeline-ax5" : "29946272830250e720aec7644f7d23b69bb92dde983422dbb97c7023b42fc277",
+    "run-timeline-large" : "71c04b0e183a591cfb1ed966f615bcc8719ae64300a00d628aeb04c78eaab2f8",
+    "run-timeline-xsmall" : "377e2b75b7950e26e08d5ca04ea9792b125427168495768fa8198e775c34ac40",
+    "run-timeline-xxxlarge" : "558a93fe86a7308c87eb8145248f42c993a46ae63e930b1af2de3495d36dce10",
+    "runs-list-ax1" : "c5da8c7e88f12a57b24bd775f4258fe24fc90771e9de04c98866e3148c7dedb7",
+    "runs-list-ax3" : "12f6a3c9990625ba5917649f4bb4233c5e06c7b702fa7505610e0679ddef6561",
+    "runs-list-ax5" : "08da943a6de7e0ea3fb5b37920540f75804027b79482b1026eccdc5fb90dfdb0",
+    "runs-list-large" : "b94d8179c7c439abc8ba07cdb6ec2c3b9c9cf8f161954618b5923516ade831fd",
+    "runs-list-xsmall" : "1f9256329f736e168bdebfe9c74c39b6bcbf6a7735708790466e229a9346d336",
+    "runs-list-xxxlarge" : "6aede3556734a354504f1a7b73818b7e12c9b445d8da4112c54e3c9aeb1bace3"
   }
 }
