@@ -102,6 +102,7 @@ func TestOpenStoreWithTopicKey(t *testing.T) {
 
 func TestProductionStoreOpenSitesUseTopicKeyHelper(t *testing.T) {
 	var directOpens []string
+	var productionTestImports []string
 	daemonRoot := filepath.Clean(filepath.Join("..", ".."))
 	err := filepath.WalkDir(daemonRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -124,6 +125,9 @@ func TestProductionStoreOpenSitesUseTopicKeyHelper(t *testing.T) {
 			importPath, err := strconv.Unquote(spec.Path.Value)
 			if err != nil {
 				return fmt.Errorf("parse import in %s: %w", relativePath, err)
+			}
+			if importPath == "github.com/freeside-ai/freeside/daemon/internal/store/storetest" {
+				productionTestImports = append(productionTestImports, filepath.ToSlash(relativePath))
 			}
 			if importPath != "github.com/freeside-ai/freeside/daemon/internal/store" {
 				continue
@@ -161,9 +165,15 @@ func TestProductionStoreOpenSitesUseTopicKeyHelper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scan production Go files: %v", err)
 	}
+	if len(productionTestImports) != 0 {
+		t.Fatalf("production files import test-only store fixtures: %v", productionTestImports)
+	}
 	sort.Strings(directOpens)
 	wantPrefixes := []string{
 		"cmd/freeside-signet-dev/main.go:",
+		// Shared test support needs a non-_test.go file, but production files
+		// cannot import it (checked above) and bypass topic-key setup.
+		"internal/store/storetest/storetest.go:",
 		"internal/topicstore/topicstore.go:",
 	}
 	if len(directOpens) != len(wantPrefixes) {

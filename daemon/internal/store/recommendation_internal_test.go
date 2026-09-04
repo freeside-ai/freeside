@@ -34,13 +34,9 @@ func TestRecommendationMismatchSuppressesOnlyDerivedProjection(t *testing.T) {
 		projection: domain.RecommendationProjection{Action: domain.ActionDiscuss, Reason: "Discuss the policy exception."},
 		input:      inputDigest,
 	}
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{
 		RecommendationRules: map[domain.Digest]domain.DaemonPolicyRule{ruleDigest: rule},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-recommendation-mismatch", ProjectID: "project-1",
 		Subject: domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},

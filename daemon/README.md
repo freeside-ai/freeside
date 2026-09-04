@@ -10,6 +10,15 @@ Daemon CI builds and tests on **Linux as well as macOS from day one**: the daemo
 
 ## Testing conventions
 
+**Template store.** Use `storetest.Open(t, path, opts)` from
+`internal/store/storetest` for routine file-backed fixtures. It copies a
+once-per-process migrated template to a new path, opens it with the supplied
+options, and closes it at test cleanup. Each copy seeds its own sync epoch;
+an existing path opens as-is so reopen tests preserve their state. Tests of
+migrations, `Open` behavior, or refusal of an existing file keep the raw
+`store.Open` path. Tests inside `package store` use `openTemplateStore` or
+`openTemplateStoreAt` because importing `storetest` would create a cycle.
+
 **Golden files.** Tests that assert a serialized shape compare it against a
 committed fixture rather than hand-writing the expected bytes inline. Use the
 shared helper `internal/golden` so every lane's golden tests share one shape

@@ -14,6 +14,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func testCodexReenrollmentMarkerID(id domain.AuthIdentityID) domain.ItemID {
@@ -55,11 +56,7 @@ func seedCodexReenrollmentIdentity(
 func TestBeginCodexReenrollmentAuthenticatesCurrentMarkerBeforeLease(t *testing.T) {
 	ctx := context.Background()
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	identity := seedCodexReenrollmentIdentity(t, st, at)
 
 	posture := domain.HealthPostureAdvisory
@@ -141,10 +138,7 @@ func TestCodexReenrollmentJournalRecoversAndLatestFenceWins(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "freeside.db")
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, path, store.Options{})
 	identity := seedCodexReenrollmentIdentity(t, st, at)
 	var first store.CodexReenrollmentJournal
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -161,11 +155,7 @@ func TestCodexReenrollmentJournalRecoversAndLatestFenceWins(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	st, err = store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st = storetest.Open(t, path, store.Options{})
 	var recovered store.CodexReenrollmentJournal
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var found bool
@@ -274,11 +264,7 @@ func TestLeaseLostCodexReenrollmentRequiresProvenLoss(t *testing.T) {
 		t *testing.T, holder domain.InvocationID, expiresAt time.Time,
 	) (*store.Store, domain.AuthIdentity, store.CodexReenrollmentJournal) {
 		t.Helper()
-		st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = st.Close() })
+		st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 		identity := seedCodexReenrollmentIdentity(t, st, at)
 		var rec store.CodexReenrollmentJournal
 		if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -436,6 +422,12 @@ func TestLeaseLostCodexReenrollmentRequiresProvenLoss(t *testing.T) {
 func TestPendingCodexReenrollmentSurvivesProcessKill(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "freeside.db")
+	// A reexecuted helper cannot share the parent's cached template. Prepare
+	// its file here so its readiness budget covers the write being tested.
+	prepared := storetest.Open(t, path, store.Options{})
+	if err := prepared.Close(); err != nil {
+		t.Fatal(err)
+	}
 	binary, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -483,11 +475,7 @@ func TestPendingCodexReenrollmentSurvivesProcessKill(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	reopened, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatalf("open after kill: %v", err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
+	reopened := storetest.Open(t, path, store.Options{})
 	if err := reopened.Read(ctx, func(tx *store.ReadTx) error {
 		latest, found, err := tx.LatestCodexReenrollmentJournal(ctx, "codex-primary")
 		if err != nil {
@@ -511,10 +499,7 @@ func TestCodexReenrollmentKillWriter(t *testing.T) {
 		t.Skip("helper process")
 	}
 	ctx := context.Background()
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, path, store.Options{})
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	identity := seedCodexReenrollmentIdentity(t, st, at)
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -532,11 +517,7 @@ func TestCodexReenrollmentKillWriter(t *testing.T) {
 
 func TestBeginCodexReenrollmentRefusesSameHolderConvergence(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	identity := seedCodexReenrollmentIdentity(t, st, at)
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -558,10 +539,7 @@ func TestBeginCodexReenrollmentRefusesSameHolderConvergence(t *testing.T) {
 func TestFailedCodexReenrollmentIsCredentialFreeAndDurable(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "freeside.db")
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, path, store.Options{})
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	identity := seedCodexReenrollmentIdentity(t, st, at)
 	var rec store.CodexReenrollmentJournal
@@ -581,11 +559,7 @@ func TestFailedCodexReenrollmentIsCredentialFreeAndDurable(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	st, err = store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st = storetest.Open(t, path, store.Options{})
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		latest, found, err := tx.LatestCodexReenrollmentJournal(ctx, identity.ID)
 		if err != nil {

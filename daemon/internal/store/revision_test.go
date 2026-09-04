@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // TestWriteIncrementsRevisionOnce is acceptance fixture 5: one client-visible
@@ -97,10 +98,7 @@ func TestEpochSurvivesReopen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	path := tempDBPath(t)
-	s, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := storetest.Open(t, path, store.Options{})
 	first, err := s.ServerState(ctx)
 	if err != nil {
 		t.Fatalf("ServerState: %v", err)
@@ -109,10 +107,7 @@ func TestEpochSurvivesReopen(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	s, err = store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
+	s = storetest.Open(t, path, store.Options{})
 	defer func() {
 		if err := s.Close(); err != nil {
 			t.Errorf("Close: %v", err)

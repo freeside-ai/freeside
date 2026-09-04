@@ -11,6 +11,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func shadowConfigurationDigest(char string) domain.Digest {
@@ -38,10 +39,7 @@ func TestShadowReviewConfigurationApprovalRotationReplayAndRestart(t *testing.T)
 	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "freeside.db")
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, path, store.Options{})
 	profile := trustProfileForRepo(
 		t, "example/repo", 44, shadowConfigurationDigest("1"),
 	)
@@ -95,11 +93,7 @@ func TestShadowReviewConfigurationApprovalRotationReplayAndRestart(t *testing.T)
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	st, err = store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st = storetest.Open(t, path, store.Options{})
 	assertCurrentShadowConfiguration(t, st, approvalA)
 }
 

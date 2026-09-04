@@ -18,6 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 const (
@@ -44,15 +45,11 @@ func newIntakeFixture(t *testing.T) intakeFixture {
 // test can simulate a daemon restart against the same durable store and blobs.
 func openIntakeFixture(t *testing.T, root string) intakeFixture {
 	t.Helper()
-	st, err := store.Open(t.Context(), root+"/state.db", store.Options{
+	st := storetest.Open(t, root+"/state.db", store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
 	blobs, err := signet.NewBlobStore(root + "/blobs")
 	if err != nil {
 		t.Fatal(err)

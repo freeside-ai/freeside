@@ -20,6 +20,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // convFixture is the discuss-transaction test bed (§5.14 tests 5, 6, 7, 10,
@@ -82,11 +83,7 @@ func newConversationFixture(t *testing.T) *convFixture {
 // in-process restart boundary §5.14 test 5 exercises.
 func openConversationService(t *testing.T, dbPath, blobDir string) *convFixture {
 	t.Helper()
-	ctx := context.Background()
-	s, err := store.Open(ctx, dbPath, store.Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := storetest.Open(t, dbPath, store.Options{})
 	closed := false
 	t.Cleanup(func() {
 		if closed {

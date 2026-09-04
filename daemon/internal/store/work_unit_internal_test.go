@@ -24,11 +24,7 @@ func TestWorkUnitReadsFailClosedOnTamper(t *testing.T) {
 
 	seed := func(t *testing.T) *Store {
 		t.Helper()
-		s, err := Open(ctx, t.TempDir()+"/capture.db", Options{})
-		if err != nil {
-			t.Fatalf("Open: %v", err)
-		}
-		t.Cleanup(func() { _ = s.Close() })
+		s := openTemplateStoreAt(t, t.TempDir()+"/capture.db", Options{})
 		policy, err := domain.NewResolvedPolicy("run-1", []domain.PolicyKey{{
 			Key: "driver", Value: "claude",
 			Provenance: domain.KeyProvenance{
@@ -207,11 +203,7 @@ func TestListWorkUnitCompletionsIsolatesUnsupportedRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	at := formatTime(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
-	s, err := Open(ctx, t.TempDir()+"/capture.db", Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := openTemplateStoreAt(t, t.TempDir()+"/capture.db", Options{})
 	policy, err := domain.NewResolvedPolicy("run-1", []domain.PolicyKey{{
 		Key: "driver", Value: "claude",
 		Provenance: domain.KeyProvenance{

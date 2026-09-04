@@ -9,14 +9,11 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestPreviousRemediationSummaryClaimsUsesLatestProducer(t *testing.T) {
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "store.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	runID := domain.RunID("run-summary")
 	producerID := remediationInvocationID(runID, 2)
 	summary := summaryClaimFixture(producerID, "One recurring finding remains open.")

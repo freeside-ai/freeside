@@ -62,10 +62,7 @@ func TestReadyItemReviewYieldHistorySurvivesRestartAndRejectsDivergence(t *testi
 		t.Fatal(err)
 	}
 
-	st, err := Open(ctx, path, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := openTemplateStoreAt(t, path, Options{})
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
@@ -75,11 +72,7 @@ func TestReadyItemReviewYieldHistorySurvivesRestartAndRejectsDivergence(t *testi
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	st, err = Open(ctx, path, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st = openTemplateStoreAt(t, path, Options{})
 
 	var got domain.AttentionItem
 	if err := st.Read(ctx, func(tx *ReadTx) error {
@@ -171,10 +164,7 @@ func TestDiminishingItemReviewYieldHistorySurvivesRestartAndRejectsDivergence(t 
 		t.Fatal(err)
 	}
 
-	st, err := Open(ctx, path, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := openTemplateStoreAt(t, path, Options{})
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
@@ -184,11 +174,7 @@ func TestDiminishingItemReviewYieldHistorySurvivesRestartAndRejectsDivergence(t 
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	st, err = Open(ctx, path, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st = openTemplateStoreAt(t, path, Options{})
 
 	var got domain.AttentionItem
 	if err := st.Read(ctx, func(tx *ReadTx) error {

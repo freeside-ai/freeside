@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // This file is the returned-object boundary's forge corpus: the single place
@@ -53,17 +54,13 @@ type corpusFixture struct {
 
 func newCorpusFixture(t *testing.T, opts ...signet.Option) corpusFixture {
 	t.Helper()
-	ctx := context.Background()
 	path := t.TempDir() + "/corpus.db"
-	s, err := store.Open(ctx, path, store.Options{
+	s := storetest.Open(t, path, store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
 		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
 	})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
 	t.Cleanup(func() {
 		if err := s.Close(); err != nil {
 			t.Errorf("Close: %v", err)

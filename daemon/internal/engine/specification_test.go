@@ -29,6 +29,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 type specificationRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -230,15 +231,11 @@ func newSpecificationFixture(t *testing.T, specApproval bool, maxIterations int)
 	t.Helper()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "state.db")
-	st, err := store.Open(t.Context(), dbPath, store.Options{
+	st := storetest.Open(t, dbPath, store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
 	blobs, err := signet.NewBlobStore(filepath.Join(root, "blobs"))
 	if err != nil {
 		t.Fatal(err)
@@ -436,15 +433,11 @@ func (f specificationFixture) reopen(t *testing.T) specificationFixture {
 	if err := f.store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := store.Open(t.Context(), f.dbPath, store.Options{
+	reopened := storetest.Open(t, f.dbPath, store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
 	f.store = reopened
 	f.signet = signet.NewService(reopened, signet.WithBlobStore(f.blobs),
 		signet.WithClock(func() time.Time { return *f.now }))

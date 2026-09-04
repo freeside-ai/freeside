@@ -10,6 +10,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // TestSyncProjectsEvidenceAvailability is #922 acceptance for the read-time
@@ -24,11 +25,7 @@ func TestSyncProjectsEvidenceAvailability(t *testing.T) {
 
 	recipe := domain.Digest("sha256:recipe-approved")
 	approved := map[domain.Digest]bool{recipe: true}
-	s, err := store.Open(ctx, t.TempDir()+"/signet.db", store.Options{ApprovedRecipes: approved})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := storetest.Open(t, t.TempDir()+"/signet.db", store.Options{ApprovedRecipes: approved})
 
 	blobs, err := signet.NewBlobStore(t.TempDir())
 	if err != nil {

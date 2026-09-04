@@ -7,15 +7,12 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestCapabilityManifestForRunRegatesPolicyAndComposition(t *testing.T) {
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "store.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	manifest, err := domain.NewCapabilityManifest("Provider web read", domain.EgressProviderWebRead)
 	if err != nil {
 		t.Fatal(err)

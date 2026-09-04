@@ -18,6 +18,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 type remediationReviewFixture struct {
@@ -89,11 +90,7 @@ func TestActiveRemediationStageUsesHighestDurableTransition(t *testing.T) {
 
 func TestAuthenticateProductionRunTransitionLoadsCurrentRunWithinSnapshot(t *testing.T) {
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "store.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	runID := domain.RunID("run-current-remediation-transition")
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutRun(ctx, domain.Run{
@@ -336,11 +333,7 @@ func newRemediationReviewFixtureWithBatch(
 ) remediationReviewFixture {
 	t.Helper()
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "store.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	runID := domain.RunID("run-remediation-review")
 	baseSHA := strings.Repeat("1", 40)
 	priorHead := strings.Repeat("2", 40)

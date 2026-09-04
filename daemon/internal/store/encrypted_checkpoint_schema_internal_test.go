@@ -155,10 +155,7 @@ func newSchemaCheckpointTestStore(t *testing.T) schemaCheckpointTestStore {
 	if err != nil {
 		t.Fatalf("NewCheckpointHealthSource: %v", err)
 	}
-	live, err := Open(ctx, dbPath, Options{BackupHealthSource: source})
-	if err != nil {
-		t.Fatalf("Open live store: %v", err)
-	}
+	live := openTemplateStoreAt(t, dbPath, Options{BackupHealthSource: source})
 	t.Cleanup(func() {
 		if err := live.Close(); err != nil {
 			t.Errorf("close live store: %v", err)

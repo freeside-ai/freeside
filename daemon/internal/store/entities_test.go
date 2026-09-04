@@ -10,6 +10,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // TestGoldenRoundTrip is acceptance fixture 7: every persisted domain shape
@@ -913,10 +914,7 @@ func TestDecisionInstantsSurviveReopen(t *testing.T) {
 		t.Fatalf("WithDecidedAt: %v", err)
 	}
 
-	s, err := store.Open(ctx, path, opts)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := storetest.Open(t, path, opts)
 	err = s.Write(ctx, func(tx *store.WriteTx) error {
 		// Referential order: the item's foreign keys, then the item (open,
 		// v1), its opened delivery, and the concluding transition (v2,

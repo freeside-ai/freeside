@@ -133,11 +133,7 @@ func TestAuthIdentityFieldsCrossChecked(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-			if err != nil {
-				t.Fatalf("Open: %v", err)
-			}
-			t.Cleanup(func() { _ = s.Close() })
+			s := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 			identity := domain.AuthIdentity{
 				ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
 				MaxParallelExecutions: 1,
@@ -151,7 +147,7 @@ func TestAuthIdentityFieldsCrossChecked(t *testing.T) {
 			if _, err := s.db.ExecContext(ctx, tc.stmt); err != nil {
 				t.Fatalf("tamper: %v", err)
 			}
-			err = s.Read(ctx, func(tx *ReadTx) error {
+			err := s.Read(ctx, func(tx *ReadTx) error {
 				_, err := tx.GetAuthIdentity(ctx, "auth-1")
 				return err
 			})

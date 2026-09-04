@@ -27,6 +27,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // testEvidenceTime is the fixed UTC creation time for the package's
@@ -258,10 +259,7 @@ func TestRunConvergesLegacyFakePublicationBeforeStartingScheduler(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	st, err := store.Open(context.Background(), dbPath, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, dbPath, store.Options{})
 	const key = "engine.fake_publication/legacy-invalid"
 	seedErr := st.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
 		if _, _, err := tx.EnqueueOutbox(
@@ -326,10 +324,7 @@ func TestRunStartsWithADurableRowItCannotReconstruct(t *testing.T) {
 	// extractor for.
 	h, ctx, cancel := start(t, "clean start")
 	stop(t, "clean start", h, ctx, cancel)
-	seed, err := store.Open(context.Background(), dbPath, store.Options{})
-	if err != nil {
-		t.Fatalf("open store for seeding: %v", err)
-	}
+	seed := storetest.Open(t, dbPath, store.Options{})
 	seedErr := seed.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
 		_, _, err := tx.EnqueueOutbox(
 			context.Background(), "future-1", "backup.kind-this-binary-lacks", []byte("payload"))
@@ -420,11 +415,7 @@ func TestScheduledDoctorPassRefreshesConformanceBeforeReporting(t *testing.T) {
 
 func TestStoreConformanceRecorderPersistsConfigurationBoundPass(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
 		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff,
 		Outcome: domain.ConformancePassed,

@@ -127,11 +127,8 @@ func seedBoundIntakeOccurrence(t *testing.T, ctx context.Context, tx *WriteTx) d
 func TestIntakeLatchRejectsTamperedNonPresentOpenItem(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		occurrence := seedBoundIntakeOccurrence(t, ctx, tx)
 		// Tamper: persist the occurrence as absent while its item stays open.
 		occurrence.State = domain.IntakeOccurrenceAbsent
@@ -158,11 +155,8 @@ func TestIntakeLatchRejectsTamperedNonPresentOpenItem(t *testing.T) {
 func TestIntakeReGateRejectsTamperedSubject(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		occurrence := seedBoundIntakeOccurrence(t, ctx, tx)
 		// Tamper: a foreign project the proposal's declaration does not name.
 		occurrence.Admission.Subject.ProjectID = "project-foreign"
@@ -189,11 +183,8 @@ func TestIntakeReGateRejectsTamperedSubject(t *testing.T) {
 func TestIntakeReGateRejectsFalseSupersession(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		occurrence := seedBoundIntakeOccurrence(t, ctx, tx)
 		// Tamper: leave present (item still open), then persist an absent row that
 		// falsely claims a supersession. Domain Validate accepts it (a supersession
@@ -224,11 +215,8 @@ func TestIntakeReGateRejectsFalseSupersession(t *testing.T) {
 func TestIntakeProposalItemAuthenticatesAdmittedDigest(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		occurrence := seedBoundIntakeOccurrence(t, ctx, tx)
 		instanceID := occurrence.Admission.ProposalInstanceID
 		admitted := occurrence.Admission.ProposalDigest
@@ -257,11 +245,8 @@ func TestIntakeProposalItemAuthenticatesAdmittedDigest(t *testing.T) {
 func TestIntakeReGateToleratesUnavailablePolicyArtifact(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		seedBoundIntakeOccurrence(t, ctx, tx)
 		if _, err := tx.tx.ExecContext(ctx, `DELETE FROM artifacts WHERE id = ?`, "policy-art-1"); err != nil {
 			return err
@@ -290,11 +275,8 @@ func TestIntakeReGateToleratesUnavailablePolicyArtifact(t *testing.T) {
 func TestIntakeReGateRejectsTamperedPolicyArtifactID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		occurrence := seedBoundIntakeOccurrence(t, ctx, tx)
 		// Tamper the body's artifact id only; the policy_artifact_id column keeps
 		// the admitted id. domain Validate accepts any non-empty id with matching
@@ -329,11 +311,8 @@ func TestIntakeReGateRejectsTamperedPolicyArtifactID(t *testing.T) {
 func TestIntakeReGateRejectsTamperedItemType(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		occurrence := seedBoundIntakeOccurrence(t, ctx, tx)
 		itemID := domain.ItemID(occurrence.Admission.ProposalInstanceID)
 		item, err := tx.GetAttentionItem(ctx, itemID)
@@ -372,11 +351,8 @@ func TestIntakeReGateRejectsTamperedItemType(t *testing.T) {
 func TestIntakeReGateRejectsFabricatedRefusal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		occurrence := seedBoundIntakeOccurrence(t, ctx, tx)
 		// Tamper the body only to add a refusal; the refusal_reason column stays
 		// null (no refusal was recorded), so the mirror no longer matches.
@@ -412,11 +388,8 @@ func TestIntakeReGateRejectsFabricatedRefusal(t *testing.T) {
 func TestIntakeReGateRejectsSupersessionOfDecidedProposal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		occurrence := seedBoundIntakeOccurrence(t, ctx, tx)
 		instanceID := occurrence.Admission.ProposalInstanceID
 		itemID := domain.ItemID(instanceID)
@@ -466,11 +439,8 @@ func TestIntakeReGateRejectsSupersessionOfDecidedProposal(t *testing.T) {
 func TestIntakeReGateRejectsImpossibleSupersessionReason(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		seedBoundIntakeOccurrence(t, ctx, tx)
 		// Legitimately supersede the open card as a label removal (absent).
 		occ, err := tx.SupersedeIntakeProposal(ctx, intakeIntRepoID, intakeIntIssue, intakeIntLabel, 1,
@@ -502,11 +472,8 @@ func TestIntakeReGateRejectsImpossibleSupersessionReason(t *testing.T) {
 func TestIntakeReGateRejectsTamperedSupersessionReason(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		seedBoundIntakeOccurrence(t, ctx, tx)
 		occ, err := tx.SupersedeIntakeProposal(ctx, intakeIntRepoID, intakeIntIssue, intakeIntLabel, 1,
 			domain.IntakeSupersededIssueClosed, domain.IntakeOccurrenceClosed, intakeIntTS)
@@ -548,11 +515,8 @@ func TestIntakeReGateRejectsTamperedSupersessionReason(t *testing.T) {
 func TestIntakeReGateRejectsCrossRepositoryProject(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		policy, err := domain.NewResolvedPolicy("intake-cross-run", []domain.PolicyKey{{
 			Key: "paths", Value: "daemon/", Provenance: domain.KeyProvenance{
 				Source: domain.ProvenanceOverride,
@@ -660,11 +624,8 @@ func TestIntakeReGateRejectsCrossRepositoryProject(t *testing.T) {
 func TestIntakeReGateClassifiesCorruptProjectRowAsHold(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = st.Write(ctx, func(tx *WriteTx) error {
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	err := st.Write(ctx, func(tx *WriteTx) error {
 		seedBoundIntakeOccurrence(t, ctx, tx)
 		// Tamper the authentic project's row so its repository_id column no longer
 		// matches the body; GetProject then fails the cross-check with

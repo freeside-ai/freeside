@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -387,11 +388,7 @@ func TestClaudeShadowReviewConfigurationIsExplicitAndDigestBound(t *testing.T) {
 func TestClaudeShadowReviewConfigurationUsesSeparateExactApproval(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	cfg := claudeDriverConfig{
 		OperatingMode: domain.ModeUnattended, Repo: "example/repo", RepositoryID: 44,
 		ExporterImage:   "ghcr.io/x/exporter@sha256:" + strings.Repeat("b", 64),
@@ -492,11 +489,7 @@ func TestClaudeShadowReviewConfigurationUsesSeparateExactApproval(t *testing.T) 
 func TestReviewConfigurationApprovalBindsExporterBeforeComposition(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	cfg := claudeDriverConfig{
 		OperatingMode:   domain.ModeUnattended,
 		Repo:            "example/repo",

@@ -72,11 +72,7 @@ func seedReviewConfigurationRecoveryWithOptions(
 ) (*Store, domain.ReviewConfigurationRecoveryTransition) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), opts)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), opts)
 	at := time.Date(2026, 8, 8, 1, 2, 3, 0, time.UTC)
 	run := domain.Run{
 		ID: "run-config-recovery", ProjectID: "project-1",

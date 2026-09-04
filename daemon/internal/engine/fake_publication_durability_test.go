@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestFakePublicationTerminalItemIDsUseWorkflowNamespace(t *testing.T) {
@@ -193,11 +194,7 @@ func TestFakePublicationReconciliationRevalidatesResolvedPolicy(t *testing.T) {
 
 func TestEnsureFakePublicationPolicyConvergesLegacyV1Run(t *testing.T) {
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	task := validFakePublicationTask(t)
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutRun(ctx, legacyPublicationRun(task))
@@ -224,11 +221,7 @@ func TestEnsureFakePublicationPolicyConvergesLegacyV1Run(t *testing.T) {
 // pending owner's schedule before the scheduler can fire it.
 func TestFakePublicationPendingLegacyRecoveryConvergesOwnedSchedule(t *testing.T) {
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	task := validFakePublicationTask(t)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: FakePublicationReadyItemID(task.RunID), ProjectID: task.ProjectID,
@@ -305,11 +298,7 @@ func TestFakePublicationPendingLegacyRecoveryConvergesOwnedSchedule(t *testing.T
 func TestFakePublicationDispatchedLegacyRecoveryRunsOncePerStoreEpoch(t *testing.T) {
 	ctx := t.Context()
 	tempDir := t.TempDir()
-	st, err := store.Open(ctx, filepath.Join(tempDir, "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(tempDir, "freeside.db"), store.Options{})
 	recovery := &fakePublicationPolicyRecovery{store: st}
 	engine := &Engine{fakePublicationPolicy: recovery}
 	if err := engine.ConvergeLegacyFakePublicationPolicies(ctx); err != nil {
@@ -331,12 +320,7 @@ func TestFakePublicationDispatchedLegacyRecoveryRunsOncePerStoreEpoch(t *testing
 		t.Fatalf("steady-state reconciliation rescanned dispatched history: %v", err)
 	}
 
-	checkpointSource, err := store.Open(
-		ctx, filepath.Join(tempDir, "checkpoint-source.db"), store.Options{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	checkpointSource := storetest.Open(t, filepath.Join(tempDir, "checkpoint-source.db"), store.Options{})
 	if err := checkpointSource.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		if _, _, err := tx.EnqueueOutbox(
 			ctx, key, fakePublicationTaskKind, []byte(`{}`),
@@ -755,11 +739,7 @@ func TestValidateFakePublicationCommitDateBoundaries(t *testing.T) {
 
 func TestValidateNewFakePublicationBindingsRejectsChangedEpochAndProfile(t *testing.T) {
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo: "freeside-ai/freeside", RepositoryID: 1,
@@ -815,11 +795,7 @@ func TestValidateNewFakePublicationBindingsRejectsChangedEpochAndProfile(t *test
 
 func TestPutTerminalItemAcceptsCompatibleLifecycleAdvance(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	attention := signet.NewService(st)
 	runID := domain.RunID("run-terminal")
 	createdAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)

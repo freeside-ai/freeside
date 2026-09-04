@@ -13,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
@@ -268,11 +269,7 @@ func TestPrepareFakePublicationConfigValidatesAmbientRecipeForNewRun(t *testing.
 
 func TestExistingFakePublicationResultReturnsDurableTerminalItem(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	attention := signet.NewService(st)
 	runID := domain.RunID("run-terminal")
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{

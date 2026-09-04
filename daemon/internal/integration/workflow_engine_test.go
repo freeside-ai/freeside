@@ -18,6 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 const (
@@ -50,11 +51,7 @@ func (d startRefusingDriver) Start(
 
 func openWorkflowFixture(t *testing.T, root string) *workflowFixture {
 	t.Helper()
-	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(root, "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	st := storetest.Open(t, filepath.Join(root, "freeside.db"), store.Options{})
 	blobs, err := signet.NewBlobStore(filepath.Join(root, "blobs"))
 	if err != nil {
 		_ = st.Close()

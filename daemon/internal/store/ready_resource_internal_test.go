@@ -382,11 +382,7 @@ func TestAttentionPRReferenceMigrationBackfillsLegacyFakePublication(t *testing.
 func TestReadyItemPRReferenceAnchorRegatesWithoutProductionBinding(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	runID := domain.RunID("run-fake-ready-anchor")
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "fake-ready-anchor", ProjectID: "project-1",
@@ -455,13 +451,9 @@ func TestReadyItemPRReferenceAnchorRegatesWithoutProductionBinding(t *testing.T)
 func TestReadyItemBindingRegatesEveryResourceCoordinate(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 		domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
 	runID := domain.RunID("run-ready-anchor")
 	invocationID := domain.InvocationID("inv-ready-anchor")
 	stageID := domain.StageID("stage-ready-anchor")

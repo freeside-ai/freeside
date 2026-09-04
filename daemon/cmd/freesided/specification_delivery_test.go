@@ -13,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestProductionSpecificationDeliveryValidatorRejectsPromptOverflow(t *testing.T) {
@@ -150,11 +151,7 @@ func deliveryValidatorFixture(
 ) (*store.Store, *signet.BlobStore, domain.Run, domain.Digest) {
 	t.Helper()
 	root := t.TempDir()
-	st, err := store.Open(t.Context(), root+"/state.db", store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, root+"/state.db", store.Options{})
 	blobs, err := signet.NewBlobStore(root + "/blobs")
 	if err != nil {
 		t.Fatal(err)

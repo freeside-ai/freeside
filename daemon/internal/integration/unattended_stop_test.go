@@ -12,6 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // conformantCeiling is the fresh-vm class's provable ceiling: the widest
@@ -87,7 +88,7 @@ func openUnattendedFixtureWith(
 		Caps:        exec.NewCapabilitySet(conformantCeiling(t)...),
 	}
 
-	st, err := store.Open(ctx, filepath.Join(root, "freeside.db"), store.Options{
+	st := storetest.Open(t, filepath.Join(root, "freeside.db"), store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeUnattended: domain.NewCapabilitySnapshot(floor...),
 		},
@@ -103,10 +104,6 @@ func openUnattendedFixtureWith(
 			}, nil
 		}),
 	})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		if !seed {
 			return nil

@@ -134,11 +134,7 @@ func TestCodexReenrollmentRecoveryBindingValidatesCallerConstructedJournal(t *te
 
 func TestCodexReenrollmentRecoveryCarrierValidatesCallerConstructedTransition(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, t.TempDir()+"/freeside.db", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, t.TempDir()+"/freeside.db", Options{})
 	at := time.Date(2026, 8, 11, 1, 2, 4, 0, time.UTC)
 	commandID := "command-1"
 	valid := domain.CodexReenrollmentRecoveryTransition{
@@ -568,11 +564,7 @@ func TestCodexReenrollmentReconstructionRejectsUnknownAndTrailingBody(t *testing
 	} {
 		t.Run(mutate.name, func(t *testing.T) {
 			ctx := context.Background()
-			st, err := Open(ctx, t.TempDir()+"/freeside.db", Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = st.Close() })
+			st := openTemplateStoreAt(t, t.TempDir()+"/freeside.db", Options{})
 			at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 			identity := domain.AuthIdentity{
 				ID: "codex-primary", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 1,

@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 var admissionEpoch = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -130,11 +131,7 @@ func healthyBackupHealthSource() store.BackupHealthSource {
 func openWithFixture(t *testing.T, f admissionFixture, opts store.Options) *store.Store {
 	t.Helper()
 	ctx := context.Background()
-	s, err := store.Open(ctx, tempDBPath(t), opts)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := storetest.Open(t, tempDBPath(t), opts)
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutRun(ctx, f.run); err != nil {
 			return err
@@ -227,10 +224,7 @@ func TestExecutionAdmissionRegatedAgainstCurrentFloor(t *testing.T) {
 	f := newAdmissionFixture(t, nil)
 	path := tempDBPath(t)
 
-	s, err := store.Open(ctx, path, store.Options{AdmissionFloors: attendedFloors()})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := storetest.Open(t, path, store.Options{AdmissionFloors: attendedFloors()})
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutRun(ctx, f.run); err != nil {
 			return err
@@ -248,17 +242,13 @@ func TestExecutionAdmissionRegatedAgainstCurrentFloor(t *testing.T) {
 
 	// The operator raises the floor and restarts. The recorded class is
 	// unchanged and truthful; it is simply no longer admissible.
-	raised, err := store.Open(ctx, path, store.Options{
+	raised := storetest.Open(t, path, store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapNetworklessExport),
 		},
 	})
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	t.Cleanup(func() { _ = raised.Close() })
 
-	err = raised.Read(ctx, func(tx *store.ReadTx) error {
+	err := raised.Read(ctx, func(tx *store.ReadTx) error {
 		_, err := tx.GetExecutionAdmission(ctx, "inv-1")
 		return err
 	})

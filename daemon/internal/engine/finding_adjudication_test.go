@@ -23,6 +23,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 type scriptedFindingAdjudicator struct {
@@ -103,11 +104,7 @@ func newFindingAdjudicationFixtureWithNote(
 	t.Helper()
 	ctx := t.Context()
 	dir := t.TempDir()
-	st, err := store.Open(ctx, filepath.Join(dir, "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(dir, "freeside.db"), store.Options{})
 	runID := domain.RunID("run-adjudication")
 	specification := []byte("approved work-unit specification")
 	instructions := []byte("trusted repository instructions")

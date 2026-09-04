@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 type replayInspectionDriver struct {
@@ -189,11 +190,7 @@ func TestProductionReplayDeliveryDefersToKnownDriverInvocation(t *testing.T) {
 
 func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	blobs, err := signet.NewBlobStore(filepath.Join(t.TempDir(), "blobs"))
 	if err != nil {
 		t.Fatal(err)

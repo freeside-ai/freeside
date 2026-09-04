@@ -29,10 +29,7 @@ func testProjectImage(t *testing.T) domain.ProjectImage {
 
 func openProjectImageStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(t.Context(), filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	t.Cleanup(func() {
 		if err := s.Close(); err != nil {
 			t.Errorf("Close: %v", err)

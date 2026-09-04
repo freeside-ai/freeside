@@ -12,6 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 const (
@@ -24,16 +25,12 @@ const (
 func usageEngineFixture(t *testing.T, bound bool) (*Engine, domain.Run, domain.Attempt) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "store.db"), store.Options{
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
 		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
 
 	attempt := domain.Attempt{
 		ID: "attempt-usage-1", StageID: "stage-usage-1", Number: 1, InvocationID: "inv-usage-1",

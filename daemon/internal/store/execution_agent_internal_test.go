@@ -46,17 +46,12 @@ func agentStageInputs(t *testing.T) domain.StageInputSnapshot {
 
 func openAgentAdmissionStore(t *testing.T) *Store {
 	t.Helper()
-	ctx := context.Background()
-	s, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{
+	s := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: tamperFloor(),
 		},
 		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
 	})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
 

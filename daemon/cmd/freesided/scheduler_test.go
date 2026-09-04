@@ -13,18 +13,16 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func schedTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "store.db"), store.Options{
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
 	})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
 	t.Cleanup(func() {
 		if err := st.Close(); err != nil {
 			t.Errorf("Close: %v", err)
@@ -1307,14 +1305,11 @@ func TestMergeCaptureRejectsReturnedCoordinateMismatches(t *testing.T) {
 func TestMergeCaptureRequiresReadyBindingAnchor(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "store.db")
-	st, err := store.Open(ctx, dbPath, store.Options{
+	st := storetest.Open(t, dbPath, store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(func() {
 		if err := st.Close(); err != nil {
 			t.Errorf("Close: %v", err)

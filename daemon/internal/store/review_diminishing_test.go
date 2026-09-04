@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestFinishReviewDiminishingDefersDisplayedBatchAndSurvivesRestart(t *testing.T) {
@@ -35,11 +36,7 @@ func TestFinishReviewDiminishingDefersDisplayedBatchAndSurvivesRestart(t *testin
 		t.Fatal(err)
 	}
 
-	reopened, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
+	reopened := storetest.Open(t, path, store.Options{})
 	assertDiminishingFinish(t, reopened, runID, decision)
 }
 
@@ -121,11 +118,7 @@ WHERE id = ?`, domain.ActionFinishNow, domain.ActionApplyThenFinish,
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
+	reopened := storetest.Open(t, path, store.Options{})
 	err = reopened.Read(ctx, func(tx *store.ReadTx) error {
 		_, err := tx.ReviewDiminishingDecision(ctx, decision.Item.ID)
 		return err
@@ -171,11 +164,7 @@ WHERE command_id = ?`, action, action, decision.Command.CommandID); err != nil {
 			if err := db.Close(); err != nil {
 				t.Fatal(err)
 			}
-			reopened, err := store.Open(ctx, path, store.Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = reopened.Close() })
+			reopened := storetest.Open(t, path, store.Options{})
 			err = reopened.Read(ctx, func(tx *store.ReadTx) error {
 				_, err := tx.ReviewDiminishingDecision(ctx, decision.Item.ID)
 				return err
@@ -223,11 +212,7 @@ WHERE id = ?`, otherRunID, otherRunID, otherRunID, decision.Item.ID); err != nil
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
+	reopened := storetest.Open(t, path, store.Options{})
 	err = reopened.Read(ctx, func(tx *store.ReadTx) error {
 		_, err := tx.ListReviewDiminishingDecisions(ctx, runID)
 		return err
@@ -320,10 +305,7 @@ WHERE run_id = ? AND round = ?`, decision.Binding.RunID, decision.Binding.Round)
 			if err := raw.Close(); err != nil {
 				t.Fatal(err)
 			}
-			reopened, err := store.Open(context.Background(), path, store.Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			reopened := storetest.Open(t, path, store.Options{})
 			defer func() { _ = reopened.Close() }()
 			err = reopened.Read(context.Background(), func(tx *store.ReadTx) error {
 				_, readErr := tx.ReviewDiminishingDecision(context.Background(), decision.Item.ID)
@@ -458,11 +440,7 @@ WHERE id = ?`, reason, decision.Item.ID); err != nil {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
+	reopened := storetest.Open(t, path, store.Options{})
 	err = reopened.Read(ctx, func(tx *store.ReadTx) error {
 		_, err := tx.ReviewConvergenceStateAtDecision(ctx, record)
 		return err
@@ -495,10 +473,7 @@ SET run_id = ?, round = ?, body_digest = ?, body = ?`,
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := store.Open(context.Background(), path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	reopened := storetest.Open(t, path, store.Options{})
 	return reopened
 }
 
@@ -538,10 +513,7 @@ func seedReviewDiminishingDecisionWithHardLimit(
 ) (*store.Store, store.ReviewDiminishingDecision) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, path, store.Options{})
 	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{
 		{
 			Key: "paths", Value: "daemon/**", Provenance: domain.KeyProvenance{

@@ -11,6 +11,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 var activeResourceTestTime = time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
@@ -766,21 +767,14 @@ func TestActiveResourceIdentityInvalidationAfterRestart(t *testing.T) {
 	options := store.Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 		domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 	}}
-	st, err := store.Open(ctx, dbPath, options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, dbPath, options)
 	item := activeReadyItem(t, st)
 	armActiveTestSchedules(t, st, item)
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	reopened, err := store.Open(ctx, dbPath, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
+	reopened := storetest.Open(t, dbPath, options)
 	reconciler := activeResourceReconciler{
 		store: reopened,
 		pull: func(context.Context, string, int) (publish.PullObservation, error) {

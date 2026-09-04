@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestBuildVersionPrefersStampedValue(t *testing.T) {
@@ -259,10 +260,7 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 	if err := h.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	reopened, err := store.Open(context.Background(), dbPath, store.Options{})
-	if err != nil {
-		t.Fatalf("reopen store: %v", err)
-	}
+	reopened := storetest.Open(t, dbPath, store.Options{})
 	defer func() { _ = reopened.Close() }()
 	if err := reopened.Read(context.Background(), func(tx *store.ReadTx) error {
 		return tx.RequireUnattendedOperationOpen(context.Background())

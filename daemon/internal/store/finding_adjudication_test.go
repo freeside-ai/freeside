@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func adjudicationDigest(component string) domain.Digest {
@@ -268,10 +269,7 @@ func seedReviewRoundAt(
 ) *store.Store {
 	t.Helper()
 	ctx := context.Background()
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := storetest.Open(t, path, store.Options{})
 	ids := make([]domain.FindingID, 0, len(findings))
 	for _, f := range findings {
 		ids = append(ids, f.ID)

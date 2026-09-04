@@ -23,6 +23,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 const killTestCommandID = "discuss-kill-recovery"
@@ -173,10 +174,7 @@ func seedKillRecoveryReadiness(t *testing.T, path string) {
 	t.Helper()
 	ctx := context.Background()
 	resolution, waiver, event := killRecoveryReadinessFixture(t)
-	st, err := store.Open(ctx, path, killRecoveryReadinessOptions(waiver.GrantDigest))
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, path, killRecoveryReadinessOptions(waiver.GrantDigest))
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		if err := tx.RecordRequirementResolution(ctx, resolution); err != nil {
 			return err
@@ -194,10 +192,7 @@ func assertKillRecoveryReadiness(t *testing.T, path string) {
 	t.Helper()
 	ctx := context.Background()
 	_, waiver, _ := killRecoveryReadinessFixture(t)
-	st, err := store.Open(ctx, path, killRecoveryReadinessOptions(waiver.GrantDigest))
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, path, killRecoveryReadinessOptions(waiver.GrantDigest))
 	defer st.Close() //nolint:errcheck // test cleanup; assertions already completed
 	resolution, waiver, _ := killRecoveryReadinessFixture(t)
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
@@ -488,10 +483,7 @@ func assertKillRecoveryState(t *testing.T, root string, acceptedResults int) {
 	t.Helper()
 	ctx := context.Background()
 	dbPath := filepath.Join(root, "freeside.db")
-	st, err := store.Open(ctx, dbPath, store.Options{})
-	if err != nil {
-		t.Fatalf("open recovered store: %v", err)
-	}
+	st := storetest.Open(t, dbPath, store.Options{})
 	defer func() {
 		if st != nil {
 			if err := st.Close(); err != nil {
@@ -506,7 +498,7 @@ func assertKillRecoveryState(t *testing.T, root string, acceptedResults int) {
 		conversation domain.Conversation
 		invocation   domain.AgentInvocation
 	)
-	err = st.Read(ctx, func(tx *store.ReadTx) error {
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		run, err = tx.GetRun(ctx, defaultFakeRunID)
 		if err != nil {

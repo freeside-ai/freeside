@@ -27,6 +27,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
@@ -569,7 +570,7 @@ func newPublicationHarness(t *testing.T) *publicationHarness {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(ctx, dbPath, store.Options{
+	st := storetest.Open(t, dbPath, store.Options{
 		ApprovedRecipes: map[domain.Digest]bool{recipeDigest: true},
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: {},
@@ -585,10 +586,6 @@ func newPublicationHarness(t *testing.T) *publicationHarness {
 			}, nil
 		}),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordTrustProfile(ctx, profile, fakePublicationTime)
 	}); err != nil {

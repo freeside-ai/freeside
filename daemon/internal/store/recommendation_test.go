@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 type registeredRecommendationRule struct {
@@ -360,10 +361,7 @@ func TestDaemonRecommendationAuthorityCanDisappearAndReappear(t *testing.T) {
 
 	open := func(rules map[domain.Digest]domain.DaemonPolicyRule) *store.Store {
 		t.Helper()
-		st, err := store.Open(ctx, path, store.Options{RecommendationRules: rules})
-		if err != nil {
-			t.Fatal(err)
-		}
+		st := storetest.Open(t, path, store.Options{RecommendationRules: rules})
 		return st
 	}
 	read := func(st *store.Store) *domain.Recommendation {
@@ -404,7 +402,6 @@ func TestDaemonRecommendationAuthorityCanDisappearAndReappear(t *testing.T) {
 	}
 
 	st = open(map[domain.Digest]domain.DaemonPolicyRule{ruleDigest: rule})
-	t.Cleanup(func() { _ = st.Close() })
 	if got := read(st); got == nil || got.Action != domain.ActionDiscuss {
 		t.Fatalf("restored rule recommendation = %#v", got)
 	}

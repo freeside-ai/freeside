@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // The §11 1A.2 real-run harness: one work item submitted through the complete
@@ -227,10 +228,7 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	}
 	opts.BackupHealthSource = health
 
-	st, err := store.Open(ctx, dbPath, opts)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	st := storetest.Open(t, dbPath, opts)
 	defer func() { _ = st.Close() }()
 
 	// The identity binding the ward gate compares the writable mount

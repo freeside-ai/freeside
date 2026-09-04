@@ -32,11 +32,7 @@ func TestEffectProposalMigrationAppliesFromHead(t *testing.T) {
 
 func TestProposalInstanceReconstructionRejectsTampering(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	policy, err := domain.NewResolvedPolicy("proposal-policy-run", []domain.PolicyKey{{
 		Key: "paths", Value: "daemon/", Provenance: domain.KeyProvenance{
 			Source: domain.ProvenanceOverride,
@@ -223,11 +219,7 @@ func TestProposalInstanceReconstructionRejectsTampering(t *testing.T) {
 
 func TestProposalLedgerRejectsMismatchedCommandAuthority(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	policy, err := domain.NewResolvedPolicy("proposal-policy-run", []domain.PolicyKey{{
 		Key: "paths", Value: "daemon/", Provenance: domain.KeyProvenance{
 			Source: domain.ProvenanceOverride,

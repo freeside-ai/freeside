@@ -35,6 +35,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
@@ -699,7 +700,7 @@ func (p *productionPublicationHarness) reopenStoreWithApprovedRecipes(
 	if err := p.store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := store.Open(p.ctx, p.dbPath, store.Options{
+	reopened := storetest.Open(t, p.dbPath, store.Options{
 		ApprovedRecipes: approvedRecipes,
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: {},
@@ -715,10 +716,6 @@ func (p *productionPublicationHarness) reopenStoreWithApprovedRecipes(
 			}, nil
 		}),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
 	p.store = reopened
 	// The attention service and every later engine wrap the store handle, so
 	// rebind the service to the reopened store; engines are rebuilt by callers.
@@ -4287,17 +4284,13 @@ func TestUnattendedExecutionExportUsesAtomicPathAfterAttendedRestart(t *testing.
 	if err := p.store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := store.Open(p.ctx, p.dbPath, store.Options{
+	restarted := storetest.Open(t, p.dbPath, store.Options{
 		ApprovedRecipes: map[domain.Digest]bool{p.recipeD: true},
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: {},
 		},
 		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = restarted.Close() })
 	p.store = restarted
 	if err := engine.RecordExecutionExport(p.ctx, p.store, record, p.replay); !errors.Is(err, domain.ErrImmutableTransition) {
 		t.Fatalf("attended-restart completion error = %v, want atomic task conflict", err)

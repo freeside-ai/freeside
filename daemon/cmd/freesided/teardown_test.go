@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // slowCloser stands in for a credential-bearing session teardown that is
@@ -41,10 +42,7 @@ func newSlowCloser() *slowCloser {
 
 func newTeardownDaemon(t *testing.T, closer sessionCloser) *daemon {
 	t.Helper()
-	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	return &daemon{
 		store:         st,
 		server:        &http.Server{ReadHeaderTimeout: time.Second},

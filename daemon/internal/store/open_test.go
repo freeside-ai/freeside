@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // tempDBPath returns a database path in a per-test directory. SQLite needs a
@@ -31,7 +32,13 @@ func openStore(t *testing.T, opts store.Options) *store.Store {
 // recipe set can be read back under another to exercise the reconstruction gate.
 func openStoreAt(t *testing.T, path string, opts store.Options) *store.Store {
 	t.Helper()
-	s, err := store.Open(context.Background(), path, opts)
+	return storetest.Open(t, path, opts)
+}
+
+// Open-contract and restore tests build their own databases from scratch.
+func openRawStore(t *testing.T, opts store.Options) *store.Store {
+	t.Helper()
+	s, err := store.Open(t.Context(), tempDBPath(t), opts)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -61,7 +68,7 @@ func backupHealthContext(t *testing.T, s *store.Store) store.BackupHealthContext
 // §5.2 pragma configuration.
 func TestOpenPragmas(t *testing.T) {
 	t.Parallel()
-	s := openStore(t, store.Options{BusyTimeout: 2 * time.Second})
+	s := openRawStore(t, store.Options{BusyTimeout: 2 * time.Second})
 	got, err := s.Pragmas(context.Background())
 	if err != nil {
 		t.Fatalf("Pragmas: %v", err)
@@ -89,7 +96,7 @@ func TestOpenPragmas(t *testing.T) {
 // is zero.
 func TestOpenDefaultBusyTimeout(t *testing.T) {
 	t.Parallel()
-	s := openStore(t, store.Options{})
+	s := openRawStore(t, store.Options{})
 	got, err := s.Pragmas(context.Background())
 	if err != nil {
 		t.Fatalf("Pragmas: %v", err)

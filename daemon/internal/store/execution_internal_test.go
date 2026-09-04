@@ -247,7 +247,7 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 	// The configured waiver matches the fixture's canonical repository id, so
 	// a waived fixture is admissible and a forged one is not.
 	waiverID := int64(424242)
-	s, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{
+	s := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: tamperFloor(),
 			domain.ModeUnattended:  tamperFloor(),
@@ -265,10 +265,6 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 			}, nil
 		}),
 	})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
 
 	run := domain.Run{
 		ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",

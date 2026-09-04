@@ -8,6 +8,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 var leaseEpoch = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -24,11 +25,7 @@ func testAuthIdentity() domain.AuthIdentity {
 func openWithIdentity(t *testing.T, identity domain.AuthIdentity) *store.Store {
 	t.Helper()
 	ctx := context.Background()
-	s, err := store.Open(ctx, tempDBPath(t), store.Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := storetest.Open(t, tempDBPath(t), store.Options{})
 	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, leaseEpoch)
 	}); err != nil {
@@ -551,10 +548,7 @@ func TestLeaseSurvivesReopen(t *testing.T) {
 	identity := testAuthIdentity()
 	expires := leaseEpoch.Add(time.Minute)
 
-	s, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := storetest.Open(t, path, store.Options{})
 	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		if err := tx.RecordAuthIdentity(ctx, identity, leaseEpoch); err != nil {
 			return err
@@ -568,13 +562,9 @@ func TestLeaseSurvivesReopen(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	reopened, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
+	reopened := storetest.Open(t, path, store.Options{})
 
-	err = reopened.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	err := reopened.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		_, err := tx.AcquireAuthStoreMutationLease(ctx, identity.ID, "inv-2",
 			leaseEpoch.Add(time.Second), expires)
 		return err

@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -210,10 +211,7 @@ func TestProductionPreflightDatabaseStopsAtShadowApproval(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
-	st, err := store.Open(ctx, dbPath, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, dbPath, store.Options{})
 	profile := approveShadowReviewProfile(t)
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordTrustProfile(

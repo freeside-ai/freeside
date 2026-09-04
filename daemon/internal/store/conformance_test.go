@@ -8,6 +8,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // openUnattendedNoConformance seeds everything an unattended admission needs
@@ -17,11 +18,7 @@ func openUnattendedNoConformance(t *testing.T) (*store.Store, admissionFixture) 
 	t.Helper()
 	ctx := context.Background()
 	f := unattendedAdmissionFixture(t)
-	s, err := store.Open(ctx, tempDBPath(t), unattendedOptions())
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := storetest.Open(t, tempDBPath(t), unattendedOptions())
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutRun(ctx, f.run); err != nil {
 			return err
@@ -395,11 +392,7 @@ func TestAttendedAdmissionNeedsNoConformance(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := newAdmissionFixture(t, nil)
-	s, err := store.Open(ctx, tempDBPath(t), store.Options{AdmissionFloors: attendedFloors()})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := storetest.Open(t, tempDBPath(t), store.Options{AdmissionFloors: attendedFloors()})
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutRun(ctx, f.run); err != nil {
 			return err

@@ -33,10 +33,7 @@ func TestDegradedReadyItemReadinessSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	st, err := Open(ctx, path, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := openTemplateStoreAt(t, path, Options{})
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
@@ -47,11 +44,7 @@ func TestDegradedReadyItemReadinessSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	st, err = Open(ctx, path, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st = openTemplateStoreAt(t, path, Options{})
 	var got domain.AttentionItem
 	if err := st.Read(ctx, func(tx *ReadTx) error {
 		var err error

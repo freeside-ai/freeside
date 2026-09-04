@@ -40,11 +40,7 @@ func TestReviewRecoveryMigrationAppliesFromHead(t *testing.T) {
 func seedReviewRecovery(t *testing.T) (*Store, domain.ReviewRecoveryTransition) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	at := time.Date(2026, 8, 7, 1, 2, 3, 0, time.UTC)
 	run := domain.Run{
 		ID: "run-recovery", ProjectID: "project-1",

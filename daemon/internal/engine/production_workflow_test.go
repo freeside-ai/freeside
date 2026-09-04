@@ -26,6 +26,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func productionEntry(payload string) store.QueueEntry {
@@ -80,15 +81,11 @@ func TestProductionDeliveryRefusalRecordsStandardOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "delivery-refusal.db"), store.Options{
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "delivery-refusal.db"), store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutRun(ctx, run); err != nil {
 			return err
@@ -243,11 +240,7 @@ func TestProductionBlockedItemCarriesInvocationBoundSummary(t *testing.T) {
 func TestProductionTerminalFailureWritesAdvisoryDiagnosticOnce(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	st, err := store.Open(ctx, filepath.Join(dir, "store.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(dir, "store.db"), store.Options{})
 	now := func() time.Time { return time.Unix(2, 0).UTC() }
 	advisoryStore, err := advisory.Open(
 		filepath.Join(dir, "advisory.json"), 20, 16<<10, advisory.WithClock(now),
@@ -378,11 +371,7 @@ func TestReviewConfigurationUnapprovedErrorNamesTheConfigurationMismatch(t *test
 
 func TestProductionReviewTransientSourceFailureSchedulesSameInvocationRetry(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	run := domain.Run{
 		ID: "run-review-artifact-retry", ProjectID: "project-1",
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
@@ -429,11 +418,7 @@ func TestProductionReviewTransientSourceFailureSchedulesSameInvocationRetry(t *t
 
 func TestProductionReviewTransientCleanupFailureSchedulesSameInvocationRetry(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	runID := domain.RunID("run-review-cleanup-retry")
 	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
 		Key: "review.hard_round_limit", Value: "25",
@@ -955,11 +940,7 @@ func TestProductionQuarantineSkipsUnrelatedFailures(t *testing.T) {
 func TestRemediationSourceOperationalStoreReadsRemainRetryable(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	var expired *store.ReadTx
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		expired = tx
@@ -1011,11 +992,7 @@ func TestRemediationSourceSQLiteReadFailureRemainsRetryable(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
-	st, err := store.Open(ctx, dbPath, store.Options{BusyTimeout: time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, dbPath, store.Options{BusyTimeout: time.Millisecond})
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatal(err)
@@ -1096,11 +1073,7 @@ func TestRemediationSourceDurableStoreReadFailuresRemainTerminal(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
-	st, err := store.Open(ctx, dbPath, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, dbPath, store.Options{})
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatal(err)
@@ -1174,11 +1147,7 @@ func TestRemediationSourceReadPreservesContextCancellation(t *testing.T) {
 
 func newQuarantineEngine(t *testing.T, ctx context.Context) (*Engine, *store.Store) {
 	t.Helper()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	return &Engine{store: st, signet: signet.NewService(st)}, st
 }
 
@@ -1251,13 +1220,7 @@ func requireNoQuarantineItem(
 func TestLoadProductionBindingAuthenticatesTheSpecificationInput(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := store.Open(
-		ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 
 	specification := domain.Artifact{
 		ID: "artifact-specification", Type: productionSpecificationArtifactType,
@@ -1343,11 +1306,7 @@ func TestLoadProductionBindingAuthenticatesTheSpecificationInput(t *testing.T) {
 func TestProductionAcceptanceRequiresDurableAdmission(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 
 	e := &Engine{store: st}
 	if err := e.requireProductionAdmissible(ctx, "inv-implement-run-1"); !errors.Is(err, store.ErrNotFound) {
@@ -1907,11 +1866,7 @@ func TestReconstructProductionReevaluationTaskFailsClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
 			dbPath := filepath.Join(t.TempDir(), "freeside.db")
-			st, err := store.Open(ctx, dbPath, store.Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = st.Close() })
+			st := storetest.Open(t, dbPath, store.Options{})
 			runID := domain.RunID("run-reevaluation-boundary")
 			task := validPublicationTask(t, runID, "project-reevaluation-boundary")
 			profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
@@ -2215,11 +2170,7 @@ func TestProductionPublicationCompletionAuthenticatesTaskAndTerminal(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = st.Close() })
+			st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 			if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 				if _, _, err := tx.EnqueueOutbox(
 					ctx, productionPublicationTaskKey(run.ID),
@@ -2288,11 +2239,7 @@ func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = st.Close() })
+			st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 			w := &productionPublicationWorkflow{store: st, attention: signet.NewService(st)}
 			task := productionPublicationTask{
 				RunID: "run-classifier-retry", ProjectID: "project-classifier-retry",
@@ -2321,11 +2268,7 @@ func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 	t.Run("rejects a changed candidate binding", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = st.Close() })
+		st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 		w := &productionPublicationWorkflow{store: st, attention: signet.NewService(st)}
 		task := productionPublicationTask{
 			RunID: "run-classifier-retry", ProjectID: "project-classifier-retry",
@@ -2348,11 +2291,7 @@ func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 		t.Run("legacy dispute "+string(status), func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = st.Close() })
+			st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 			attention := signet.NewService(st)
 			w := &productionPublicationWorkflow{store: st, attention: attention}
 			task := productionPublicationTask{
@@ -2426,11 +2365,7 @@ func TestQueuedCompletionToleratesAConcurrentPublicationDispatch(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = st.Close() })
+			st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 			w := &productionPublicationWorkflow{store: st, attention: signet.NewService(st)}
 
 			task := validPublicationTask(t, run.ID, run.ProjectID)

@@ -143,7 +143,9 @@ jobs:
       # RACE in any log and seconds of elapsed time on the running tests at
       # the alarm: a runtime-vs-budget margin, not a hang. Trimming the
       # suites so this ceiling can come back down is #1146.
-      - run: go test ./... -race -timeout=40m
+      # Execute every package for #1146's three post-merge measurements;
+      # restored test results would otherwise reduce cross-package contention.
+      - run: go test ./... -race -count=1 -timeout=40m
 
   macos:
     name: macos (build, test)
