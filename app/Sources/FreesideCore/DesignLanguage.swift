@@ -316,6 +316,24 @@ enum FreesideFont {
         return .custom(name, size: size(of: style), relativeTo: style)
     }
 
+    /// The macOS eyebrow's base size (`--fs-eyebrow-size`). macOS's own
+    /// `.caption2` is 10pt, which leaves the tracked all-caps register too
+    /// faint to read as a heading; iOS's 11pt already reads, so the lift is
+    /// macOS-only.
+    static let macOSEyebrowSize: CGFloat = 10.5
+
+    /// The eyebrow's point size: the macOS lift in production, and the
+    /// platform's `.caption2` everywhere else, including inside the
+    /// screenshot bridge, which renders iOS metrics on purpose.
+    static func eyebrowPointSize() -> CGFloat {
+        #if canImport(AppKit)
+            if screenshotDynamicTypeSize == nil {
+                return macOSEyebrowSize
+            }
+        #endif
+        return size(of: .caption2)
+    }
+
     // The platform text styles, in the language's faces.
     static var title: Font { serif(.title2) }
     static var largeTitle: Font { serif(.largeTitle) }
@@ -327,8 +345,12 @@ enum FreesideFont {
     static var caption: Font { sans(.caption) }
     static var monoCallout: Font { mono(.callout) }
     static var monoCaption: Font { mono(.caption) }
-    /// Small-caps mono keyword used by banners and section headers.
-    static var keyword: Font { mono(.caption2, weight: .medium) }
+    /// Small-caps mono keyword used by banners and section headers: the
+    /// medium mono face `mono(.caption2, weight: .medium)` builds, at the
+    /// eyebrow's own base size.
+    static var keyword: Font {
+        .custom("IBMPlexMono-Medm", size: eyebrowPointSize(), relativeTo: .caption2)
+    }
     /// Medium, not regular: the compact all-caps register stays readable
     /// without asking semantic color to compensate for a light face.
     static var chip: Font { mono(.caption2, weight: .medium) }
