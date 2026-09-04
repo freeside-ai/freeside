@@ -132,11 +132,18 @@ jobs:
           restore-keys: |
             go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
             go-build-${{ runner.os }}-${{ github.job }}-
-      # Per-package timeout raised from the 10m default: cmd/freesided's
-      # race-instrumented suite runs ~9m and was crossing 10m under runner
-      # load (incident #841). This is a runtime-vs-budget margin, not a hang.
-      # Trimming the suite so this ceiling can come back down is deferred.
-      - run: go test ./... -race -timeout=20m
+      # Per-package timeout raised from the 10m default (#849, incident
+      # #841) and again from 20m (incident thread #908). go test runs four
+      # packages at once on the 4-vCPU runner, so under -race the heavy
+      # suites (cmd/freesided, internal/engine, internal/integration,
+      # internal/signet, internal/store) share the cores and each package's
+      # wall time is the contended figure: the last passing run had engine
+      # at 1187s, store at 1123s, and signet at 979s of a 1200s budget, and
+      # from 2026-08-31 those three crossed it on every main push. No DATA
+      # RACE in any log and seconds of elapsed time on the running tests at
+      # the alarm: a runtime-vs-budget margin, not a hang. Trimming the
+      # suites so this ceiling can come back down is #1146.
+      - run: go test ./... -race -timeout=40m
 
   macos:
     name: macos (build, test)
