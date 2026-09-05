@@ -56,8 +56,24 @@ jobs:
           xcrun swift-format format --in-place "${files[@]}"
           git diff --exit-code
 
+  # Only this job compiles the generator toolchain. Consumer builds use the
+  # tracked output and can run without waiting for the drift check.
+  generate:
+    name: generate (API drift)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/org.swift.swiftpm
+          key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
+          restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
+      - name: Verify generated API client (scripts/check.sh)
+        run: bash scripts/check.sh app generate
+
   package:
-    name: package (schema + tests)
+    name: package (tests)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,8 +90,8 @@ jobs:
           path: ~/.cache/org.swift.swiftpm
           key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
           restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
-      - name: Verify generated API client and test the package (scripts/check.sh)
-        run: bash scripts/check.sh app generate test
+      - name: Test Swift package (scripts/check.sh)
+        run: bash scripts/check.sh app test
 
   # The macOS twin of `package`, and the only job that runs
   # FreesideCoreTests: Package.swift declares those targets only under
@@ -84,7 +100,7 @@ jobs:
   # job rather than an `apps` step, so it runs in parallel and its cost
   # reads as its own duration (#541); SwiftPM shares no build artifacts
   # with xcodebuild, so folding it in would buy nothing. No schema-drift
-  # step: `package` runs that, and the result is platform-independent.
+  # step: `generate` runs that, and the result is platform-independent.
   # FreesideConvergenceTests compiles here and skips without its harness
   # environment, so this needs no live daemon.
   core-tests:
