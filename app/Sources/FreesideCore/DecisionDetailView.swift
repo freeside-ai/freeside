@@ -1135,6 +1135,7 @@ struct DecisionDetailView: View {
             {
                 SpecificationReaderView(
                     text: text.content,
+                    mediaType: text.media_type,
                     digest: specification.digest,
                     rendersScrollableContent: rendersScrollableContent)
             } else {

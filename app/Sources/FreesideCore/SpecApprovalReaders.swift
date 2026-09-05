@@ -13,11 +13,24 @@ struct SpecificationReaderView: View {
     let preview: DecisionDetailView.NonImagePreview
     let digest: String
     let rendersScrollableContent: Bool
+    let blocks: [SpecificationBlock]
 
-    init(text: String, digest: String, rendersScrollableContent: Bool = true) {
+    init(
+        text: String, mediaType: Components.Schemas.ClaimText.media_typePayload,
+        digest: String, rendersScrollableContent: Bool = true
+    ) {
         preview = DecisionDetailView.NonImagePreview(bytes: Data(text.utf8))
         self.digest = digest
         self.rendersScrollableContent = rendersScrollableContent
+        blocks = Self.blocks(for: preview.text ?? "", mediaType: mediaType)
+    }
+
+    static func blocks(
+        for text: String, mediaType: Components.Schemas.ClaimText.media_typePayload,
+        parse: (String) -> [SpecificationBlock]? = SpecificationMarkdown.blocks(from:)
+    ) -> [SpecificationBlock] {
+        guard mediaType == .text_sol_markdown else { return [.plainText(text)] }
+        return parse(text) ?? [.plainText(text)]
     }
 
     var body: some View {
@@ -34,17 +47,27 @@ struct SpecificationReaderView: View {
                 .background(Color.waxWash, in: RoundedRectangle(cornerRadius: 8))
             }
 
-            if let text = preview.text {
-                if rendersScrollableContent {
-                    ScrollView(.vertical) {
-                        specificationText(text)
+            if preview.text != nil {
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Specification (unverified)")
+                            .font(FreesideFont.caption)
+                            .foregroundStyle(Color.inkDim)
+                        Text("Written by the agent, not checked by the daemon.")
+                            .font(FreesideFont.caption)
+                            .foregroundStyle(Color.inkDim)
                     }
-                    .frame(minHeight: 280, idealHeight: 420, maxHeight: 600)
-                    .background(Color.ground2, in: RoundedRectangle(cornerRadius: 8))
-                } else {
-                    specificationText(text)
-                        .background(Color.ground2, in: RoundedRectangle(cornerRadius: 8))
+                    if rendersScrollableContent {
+                        ScrollView(.vertical) {
+                            LazyVStack(alignment: .leading, spacing: 10) { blockContent }
+                        }
+                        .frame(minHeight: 280, idealHeight: 420, maxHeight: 600)
+                    } else {
+                        VStack(alignment: .leading, spacing: 10) { blockContent }
+                    }
                 }
+                .padding()
+                .freesideCard(dashed: true)
             } else {
                 UnavailableStateView(
                     title: "Preview unavailable",
@@ -63,14 +86,97 @@ struct SpecificationReaderView: View {
         ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .file)
     }
 
-    private func specificationText(_ text: String) -> some View {
-        Text(text)
-            .font(.system(.body, design: .monospaced))
-            .foregroundStyle(Color.ink)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
+    private var blockContent: some View {
+        ForEach(blocks.indices, id: \.self) { index in
+            blockView(blocks[index])
+                .foregroundStyle(Color.ink)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder private func blockView(_ block: SpecificationBlock) -> some View {
+        switch block {
+        case .heading(let level, let text):
+            Text(Self.inlineText(text, style: level == 1 ? .title2 : level == 2 ? .title3 : .headline)).font(
+                level == 1
+                    ? FreesideFont.title
+                    : level == 2
+                        ? FreesideFont.sectionTitle
+                        : FreesideFont.sans(.headline, weight: .semibold))
+        case .paragraph(let text):
+            Text(Self.inlineText(text)).font(FreesideFont.body)
+        case .plainText(let text):
+            Text(verbatim: text).font(.system(.body, design: .monospaced))
+        case .listItem(let ordinal, let depth, let text):
+            listLine(text, marker: ordinal.map { "\($0)." } ?? "•", depth: depth)
+        case .listContinuation(let depth, let text):
+            listLine(text, marker: "", depth: depth)
+        case .listBlock(let marker, let depth, let block):
+            HStack(alignment: .top, spacing: 8) {
+                Text(marker).font(FreesideFont.body).frame(minWidth: 24, alignment: .trailing)
+                AnyView(blockView(block)).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.leading, CGFloat(16 * depth))
+        case .codeBlock(let text), .raw(let text):
+            if rendersScrollableContent {
+                ScrollView(.horizontal) { literalText(text) }
+            } else {
+                literalText(text)
+            }
+        case .quote(let block):
+            AnyView(blockView(block))
+                .padding(.leading, 12)
+                .overlay(alignment: .leading) { Rectangle().fill(Color.inkDim).frame(width: 2) }
+        case .thematicBreak:
+            Divider()
+        }
+    }
+
+    private func listLine(_ text: AttributedString, marker: String, depth: Int) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(marker).frame(minWidth: 24, alignment: .trailing)
+            Text(Self.inlineText(text)).fixedSize(horizontal: false, vertical: true)
+        }
+        .font(FreesideFont.body)
+        .padding(.leading, CGFloat(16 * depth))
+    }
+
+    private func literalText(_ text: String) -> some View {
+        Text(verbatim: text)
+            .font(FreesideFont.mono(.callout))
+            .padding(8)
+            .background(Color.ground, in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    static func inlineText(_ text: AttributedString, style: Font.TextStyle = .body) -> AttributedString {
+        var result = text
+        for run in text.runs {
+            let intent = run.inlinePresentationIntent ?? []
+            let strong = intent.contains(.stronglyEmphasized)
+            let code = intent.contains(.code)
+            if intent.contains(.emphasized) {
+                // The bundled Plex faces have no italic variant. Use the
+                // system italic face so emphasis stays visible on both OSes.
+                var font = Font.system(
+                    style, design: code ? .monospaced : .default,
+                    weight: strong ? .semibold : .regular)
+                #if canImport(AppKit)
+                    if FreesideFont.screenshotDynamicTypeSize != nil {
+                        font = .system(
+                            size: FreesideFont.size(of: style), weight: strong ? .semibold : .regular,
+                            design: code ? .monospaced : .default)
+                    }
+                #endif
+                result[run.range].font = font.italic()
+            } else if code {
+                result[run.range].font = FreesideFont.mono(style, weight: strong ? .semibold : .regular)
+            } else if strong {
+                result[run.range].font = FreesideFont.sans(style, weight: .semibold)
+            }
+        }
+        return result
     }
 }
 
