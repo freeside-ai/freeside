@@ -119,12 +119,12 @@ import Testing
                 since: now.addingTimeInterval(-18 * 3_600),
                 item_id: "item-spec_approval",
                 pr_reference: nil))
-        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "blocked 18h")
+        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "waiting 18h")
 
         // Without the typed wait the row falls back to the item's creation.
         var untypedBlocked = blocked
         untypedBlocked.blocked_on = nil
-        #expect(AttentionDisplay.relativeRowTime(untypedBlocked, now: now) == "blocked 18h")
+        #expect(AttentionDisplay.relativeRowTime(untypedBlocked, now: now) == "waiting 18h")
 
         let actualWaitStart = now.addingTimeInterval(-2 * 86_400)
         blocked.created_at = now.addingTimeInterval(-60)
@@ -134,13 +134,13 @@ import Testing
                 since: actualWaitStart,
                 item_id: "item-spec_approval",
                 pr_reference: nil))
-        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "blocked 2d")
+        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "waiting 2d")
         #expect(
             AttentionDisplay.exactRowTimestamp(blocked, now: now)
                 == actualWaitStart.formatted(.iso8601))
 
         blocked.expires_when = now.addingTimeInterval(2 * 3_600)
-        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "due in 2h")
+        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "due 2h")
         #expect(
             AttentionDisplay.exactRowTimestamp(blocked, now: now)
                 == blocked.expires_when?.formatted(.iso8601))

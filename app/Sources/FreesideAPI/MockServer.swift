@@ -113,6 +113,7 @@ public actor MockServer {
     private let approvedRecipes: Set<String>
     private let authMode: AuthMode
     private var pairingCodes: [String: PairingCodeState] = [:]
+    private let configuredPairingFacts: Components.Schemas.PairingFacts
     private var devicesByID: [String: Components.Schemas.DeviceSnapshot] = [:]
     /// Whole-token lookup: the mock never parses the token's segments,
     /// exactly as the daemon treats it as one opaque credential whose
@@ -178,6 +179,7 @@ public actor MockServer {
         approvedRecipes: Set<String> = [AttentionFixtures.approvedRecipeDigest],
         authMode: AuthMode = .permissive,
         pairingCodes: [String: PairingCodeState] = [:],
+        pairingFacts: Components.Schemas.PairingFacts = MockServer.pairingFacts,
         pairingNtfyServerURL: String = "https://ntfy.example",
         pairingNtfyTopic: String? = nil,
         pairingDeviceToken: String? = nil,
@@ -261,6 +263,7 @@ public actor MockServer {
         self.approvedRecipes = approvedRecipes
         self.authMode = authMode
         self.pairingCodes = pairingCodes
+        self.configuredPairingFacts = pairingFacts
         self.pairingNtfyServerURL = pairingNtfyServerURL
         self.pairingNtfyTopic = pairingNtfyTopic
         self.pairingDeviceToken = pairingDeviceToken
@@ -440,7 +443,7 @@ public actor MockServer {
         guard pairingCodes[request.pairing_code] == .valid else {
             throw PairingRejectedError()
         }
-        return Self.pairingFacts
+        return configuredPairingFacts
     }
 
     func pairDevice(
@@ -496,7 +499,7 @@ public actor MockServer {
             device_token: token,
             device: snapshot,
             ntfy_subscription: subscription,
-            facts: Self.pairingFacts
+            facts: configuredPairingFacts
         )
     }
 

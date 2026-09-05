@@ -364,8 +364,9 @@ struct InboxRowView: View {
                         contextSegment(workUnit)
                     }
                     if let relativeTime = AttentionDisplay.relativeRowTime(item, now: now) {
-                        separator
+                        Spacer(minLength: 8)
                         timeText(relativeTime, now: now)
+                            .fixedSize()
                     }
                 }
             }

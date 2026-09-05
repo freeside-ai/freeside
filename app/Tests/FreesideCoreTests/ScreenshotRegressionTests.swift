@@ -108,6 +108,13 @@
                 }
             }
 
+            // Keep the mounted countdown check after the golden renders.
+            // Rendering it first changes initial text antialiasing by one
+            // channel value, making the first golden depend on test order.
+            for remaining in [30.0, 270.0, 330.0, 870.0] {
+                try mountedTimelineMatchesWallClock(remaining: remaining)
+            }
+
             if recording {
                 try writeManifest(actual)
             } else {
@@ -988,10 +995,13 @@
             )
             pairing.displayName = "Operator's iPhone"
             await pairing.refreshFacts()
+            let pairingFacts = try #require(pairing.facts)
             surfaces.append(
                 Surface(
                     name: "pairing",
-                    view: AnyView(PairingView(model: pairing) { _ in }.screenshotContent())
+                    view: AnyView(
+                        PairingView(model: pairing) { _ in }.screenshotContent(
+                            now: pairingFacts.code_expires_at.addingTimeInterval(-14 * 60)))
                 ))
             // The same surface before the daemon has described the code:
             // no facts, and Pair drawn in the disabled recipe.
@@ -1006,7 +1016,7 @@
                 Surface(
                     name: "pairing-awaiting-facts",
                     view: AnyView(
-                        PairingView(model: awaitingFacts) { _ in }.screenshotContent())
+                        PairingView(model: awaitingFacts) { _ in }.screenshotContent(now: screenshotNow))
                 ))
             let runProposalFacts = Components.Schemas.RunProposalFactsSnapshot(
                 as_of_revision: 12,
@@ -1173,6 +1183,35 @@
                     name: "freshness-banner-stale",
                     lastUpdatedAt: Date().addingTimeInterval(
                         -(SyncCoordinator.stalenessThreshold + 1))))
+
+            var due = AttentionFixtures.degradedReady().item
+            due.expires_when = screenshotNow.addingTimeInterval(2 * 3_600)
+            let waiting = AttentionFixtures.fixture(type: .blocked).item
+            let age = AttentionFixtures.fixture(type: .spec_approval).item
+            for colorScheme in [ColorScheme.light, .dark] {
+                surfaces.append(
+                    Surface(
+                        name: "inbox-time-grammar" + (colorScheme == .dark ? "-dark" : ""),
+                        width: 480,
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            VStack(spacing: 8) {
+                                InboxRowView(item: due, now: screenshotNow)
+                                InboxRowView(item: waiting, now: screenshotNow)
+                                InboxRowView(item: age, now: screenshotNow)
+                            }.padding().background(Color.ground))))
+            }
+            for surface in surfaces where ["pairing", "freshness-banner-stale"].contains(surface.name) {
+                surfaces.append(
+                    Surface(
+                        name: surface.name + "-dark",
+                        width: surface.width,
+                        colorScheme: .dark,
+                        view: AnyView(
+                            surface.view
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.ground))))
+            }
 
             return surfaces
         }
