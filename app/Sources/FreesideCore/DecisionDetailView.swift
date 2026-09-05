@@ -65,6 +65,7 @@ struct DecisionDetailView: View {
     @State private var detailWidth: CGFloat = 0
     @State private var recommendationVisible = true
     @State private var provenanceExpanded = false
+    @State private var lostResponseExpanded = false
     @State private var alternativeSelections: [String: Components.Schemas.AdjudicationRoute] = [:]
     /// The finding rows the operator opened, by finding id. Empty by default:
     /// a finding_adjudication card leads with collapsed rows so its actions
@@ -455,7 +456,7 @@ struct DecisionDetailView: View {
         let composition = DecisionCardComposition.forType(item._type)
         VStack(alignment: .leading, spacing: 16) {
             header(item, accessibilityLayout: accessibilityLayout)
-            banner
+            banner(accessibilityLayout: accessibilityLayout)
             Text(AttentionDisplay.ask(item))
                 .font(FreesideFont.sectionTitle)
                 .foregroundStyle(Color.ink)
@@ -1435,6 +1436,16 @@ struct DecisionDetailView: View {
         .padding()
     }
 
+    func screenshotRetryableReceipt(expanded: Bool, accessibilityLayout: Bool) -> some View {
+        RetryableReceipt(
+            isExpanded: .constant(expanded),
+            accessibilityLayout: accessibilityLayout,
+            failureMessage: "the daemon did not answer",
+            retry: {}
+        )
+        .padding()
+    }
+
     @ViewBuilder
     func screenshotSpecApprovalReader(
         _ reader: SpecApprovalReader,
@@ -1800,7 +1811,7 @@ struct DecisionDetailView: View {
     }
 
     @ViewBuilder
-    private var banner: some View {
+    private func banner(accessibilityLayout: Bool) -> some View {
         if model.phase == .superseded {
             bannerLabel(
                 "This item changed before your decision applied. Nothing was committed; re-review the replacement below.",
@@ -1823,16 +1834,12 @@ struct DecisionDetailView: View {
             // hold a recorded result, resending it is the actionable
             // step, whatever else failed.
             if model.canRetryLostResponse {
-                VStack(alignment: .leading, spacing: 8) {
-                    bannerLabel(
-                        "The response was lost; the decision may already be recorded.",
-                        systemImage: "arrow.clockwise",
-                        tint: .accentText, wash: .accentWash
-                    )
-                    Button("Retry") {
-                        Task { await model.retryLostResponse() }
-                    }
-                    .buttonStyle(FreesideActionButtonStyle(tone: .primary))
+                RetryableReceipt(
+                    isExpanded: $lostResponseExpanded,
+                    accessibilityLayout: accessibilityLayout,
+                    failureMessage: model.submissionError
+                ) {
+                    Task { await model.retryLostResponse() }
                 }
             } else if case .failed(let message) = model.validation {
                 bannerLabel(
@@ -2545,6 +2552,61 @@ struct DecisionDetailView: View {
 
         private func byteCount(_ count: Int) -> String {
             ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .file)
+        }
+    }
+
+    private struct RetryableReceipt: View {
+        @Binding var isExpanded: Bool
+        let accessibilityLayout: Bool
+        let failureMessage: String?
+        let retry: () -> Void
+        @ScaledMetric(relativeTo: .callout) private var glyphSize: CGFloat = screenshotMetricBase(
+            10, relativeTo: .callout)
+
+        var body: some View {
+            let layout =
+                accessibilityLayout
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
+            VStack(alignment: .leading, spacing: 8) {
+                layout {
+                    Label {
+                        Text("The response was lost.")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .textSelection(.enabled)
+                    } icon: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: glyphSize, weight: .semibold))
+                    }
+                    if !accessibilityLayout {
+                        Spacer(minLength: 0)
+                    }
+                    Button("Retry", action: retry)
+                        .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
+                        .accessibilityLabel("Retry the lost decision")
+                }
+                DisclosureGroup(isExpanded: $isExpanded) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(
+                            "The decision may already be recorded. Retry resends the same command and returns the original result."
+                        )
+                        if let failureMessage {
+                            Text(failureMessage)
+                        }
+                    }
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } label: {
+                    Text("Details")
+                        .foregroundStyle(Color.accentText)
+                }
+            }
+            .font(FreesideFont.callout)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.accentWash, in: RoundedRectangle(cornerRadius: 8))
+            .foregroundStyle(Color.accentText)
         }
     }
 
