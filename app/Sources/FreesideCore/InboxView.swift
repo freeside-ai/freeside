@@ -282,7 +282,14 @@ struct InboxView: View {
         Text(Self.orderingCaption(for: store.scope))
             .font(FreesideFont.caption)
             .foregroundStyle(Color.inkDim)
-            .fixedSize(horizontal: false, vertical: true)
+            // macOS drops the vertical fixedSize: inside a List it makes the
+            // sidebar column report its full content height as the minimum,
+            // pinning the window tall. iOS keeps it so the multiline caption
+            // takes its intrinsic height instead of truncating when the
+            // surrounding stack is vertically compressed.
+            #if os(iOS)
+                .fixedSize(horizontal: false, vertical: true)
+            #endif
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
