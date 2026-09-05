@@ -30,3 +30,4 @@ Every GraphQL connection has a finite page cap. Reaching it preserves the
 partial evidence, records an `AMBIGUOUS` truncation entry, and returns exit 2.
 Before using a snapshot for a tracker edit, follow the inventory-aware
 freshness recheck in `docs/coordination.md`.
+
