@@ -1,0 +1,44 @@
+name: vocabulary CI
+
+# Guards the specification-stage rename (#986). scripts/check-vocabulary.sh
+# checks non-test daemon Go code (except legacy_vocabulary.go), migrations
+# numbered above 0064, and tracked files under api/, app/, prompts/, and
+# scripts/. Those surfaces trigger this workflow so each change schedules
+# the check that guards it. Keeping it separate from scripts CI avoids
+# scheduling the shell suites, trackercollect, and macOS installer job on
+# every daemon or app change.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "daemon/**"
+      - "api/**"
+      - "app/**"
+      - "prompts/**"
+      - "scripts/**"
+      - ".github/workflows/vocabulary-ci.yml"
+  pull_request:
+    paths:
+      - "daemon/**"
+      - "api/**"
+      - "app/**"
+      - "prompts/**"
+      - "scripts/**"
+      - ".github/workflows/vocabulary-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vocabulary:
+    name: vocabulary (scripts/check.sh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: retired vocabulary (scripts/check.sh)
+        run: bash scripts/check.sh scripts vocabulary

@@ -9,10 +9,8 @@ name: scripts CI
 # stand-ins, no network), plus the Mac and iOS installer suites (command
 # stand-ins for the build, signing, and device boundaries, no Xcode). A
 # macOS job runs the installers' real Foundation URL validator, and the
-# Mac installer's exclusive rename path. The retired-vocabulary check
-# (scripts/check-vocabulary.sh) also runs here, so the component surfaces it
-# covers are triggers too: a change under daemon/, api/, app/, or prompts/
-# must schedule the check that guards it.
+# Mac installer's exclusive rename path. The retired-vocabulary check runs
+# from vocabulary-ci.yml because its triggers span components.
 # The suites test the script implementations only; nothing here parses
 # PR prose. Shellcheck runs as a pinned, checksum-verified prebuilt binary,
 # matching the pinned-vacuum/golangci-lint determinism convention (a
@@ -29,11 +27,6 @@ on:
       - "app/Apps/iOS/Info.plist"
       - "app/Freeside.xcodeproj/project.pbxproj"
       - ".github/workflows/scripts-ci.yml"
-      # Surfaces scripts/check-vocabulary.sh covers.
-      - "daemon/**"
-      - "api/**"
-      - "app/**"
-      - "prompts/**"
   pull_request:
     paths:
       - "scripts/**"
@@ -42,11 +35,6 @@ on:
       - "app/Apps/iOS/Info.plist"
       - "app/Freeside.xcodeproj/project.pbxproj"
       - ".github/workflows/scripts-ci.yml"
-      # Surfaces scripts/check-vocabulary.sh covers.
-      - "daemon/**"
-      - "api/**"
-      - "app/**"
-      - "prompts/**"
 
 permissions:
   contents: read
@@ -75,10 +63,10 @@ jobs:
             "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
           echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
           tar -xJf shellcheck.tar.xz "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
-      - name: shellcheck, regression suites, vocabulary (scripts/check.sh)
+      - name: shellcheck, regression suites (scripts/check.sh)
         # One step per script call: check.sh echoes each command, so a
         # failing suite is still named in the log.
-        run: SHELLCHECK=./shellcheck-v${SHELLCHECK_VERSION}/shellcheck bash scripts/check.sh scripts shellcheck suites vocabulary
+        run: SHELLCHECK=./shellcheck-v${SHELLCHECK_VERSION}/shellcheck bash scripts/check.sh scripts shellcheck suites
 
   trackercollect:
     name: trackercollect (build, test, vet)
