@@ -133,7 +133,7 @@ The mask preserves the approved mark geometry and its cutouts; the appearance ch
 ./scripts/generate-api-client.sh
 ```
 
-The command leaves the checkout clean when the mirror and generated client agree with the schema. Otherwise it refreshes them and exits with an error until their changes are committed. Schema changes commit the mirror and regenerated client in the same PR. Do not edit the mirror or generated output to work around a schema gap; file a `kind:contract` issue instead.
+The command leaves the checkout clean when the mirror and generated client agree with the schema. Otherwise it refreshes them and exits with an error until their changes are committed. Schema changes commit the mirror and regenerated client in the same PR. Do not edit the mirror or generated output to work around a schema gap; file a `kind:contract` issue instead. With `git config core.hooksPath .githooks` set, the `pre-commit` hook runs this regeneration for any commit that stages the schema, `openapi-generator-config.yaml`, or `Package.resolved`, and refuses the commit until the regenerated output is staged.
 
 ## Build and test
 

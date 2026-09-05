@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# pre-commit — regenerate the tracked API client when a commit stages one of
+# its inputs, and refuse the commit until the regenerated output is staged, so
+# drift is a local failure instead of a CI one. The `generate` CI job
+# (`scripts/check.sh app generate`) stays the authority; this hook is a
+# convenience that catches drift a round trip earlier.
+#
+# Enable once per clone (same opt-in as commit-msg):
+#   git config core.hooksPath .githooks
+#
+# Escape hatch when no Swift toolchain is available:
+#   git commit --no-verify
+#
+# The hook stages nothing; it regenerates, compares, and prints the paths to
+# `git add`. A `git commit <pathspec>` that omits the regenerated output is
+# refused for the same reason: the commit would ship a schema without its
+# client.
+set -euo pipefail
+
+# Merge commits are exempt, matching commit-msg. git runs this hook for the
+# merge's own commit, whose staged content is the merge result; regenerating
+# there would fight the merge.
+if [ -e "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+  exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Regeneration inputs: the schema, the generator config, and the resolved
+# package versions the plugin pins. Staging any of them triggers regeneration.
+inputs=(
+  api/openapi.yaml
+  app/Sources/FreesideAPI/openapi-generator-config.yaml
+  app/Package.resolved
+)
+
+# Trigger only when the commit stages a change to an input. Comparing the index
+# against HEAD (the empty tree on a root commit) keeps the toolchain off
+# unrelated commits and off an --amend that touched no input. git diff --cached
+# honours the temporary index that `git commit <pathspec>` and `git commit -a`
+# set, so it sees exactly what the commit will contain.
+if git rev-parse --verify -q HEAD >/dev/null; then
+  base=HEAD
+else
+  base=$(git hash-object -t tree /dev/null)
+fi
+if git diff --cached --quiet "$base" -- "${inputs[@]}"; then
+  exit 0
+fi
+
+# The generator reads the working tree, not the index. Refuse when an input
+# carries unstaged edits, so it cannot validate a schema the commit omits.
+if ! git diff --quiet -- "${inputs[@]}"; then
+  echo "pre-commit: unstaged edits to API client inputs; stage or stash them first:" >&2
+  git diff --name-only -- "${inputs[@]}" >&2
+  exit 1
+fi
+
+exec bash app/scripts/generate-api-client.sh --against-index
