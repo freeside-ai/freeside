@@ -494,3 +494,4 @@ Security limitations, stated for the operator surface:
   the observation contract narrows what the *observation surface* carries,
   not what raw database access could reach. Remote exposure arrives only
   with the API unit that carries these shapes over `api/`.
+
