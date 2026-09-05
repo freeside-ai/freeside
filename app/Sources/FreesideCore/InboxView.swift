@@ -95,10 +95,19 @@ struct InboxView: View {
                     .padding(.bottom, 8)
 
                     if store.rows.isEmpty {
-                        UnavailableStateView(
-                            title: "No \(store.scope.label.lowercased()) items",
-                            systemImage: "checklist",
-                            description: "Attention items in this scope will appear here.")
+                        #if os(macOS)
+                            Spacer(minLength: 0)
+                            SidebarEmptyState(
+                                title: "No \(store.scope.label.lowercased()) items",
+                                systemImage: "checklist",
+                                description: "Attention items in this scope will appear here.")
+                            Spacer(minLength: 0)
+                        #else
+                            UnavailableStateView(
+                                title: "No \(store.scope.label.lowercased()) items",
+                                systemImage: "checklist",
+                                description: "Attention items in this scope will appear here.")
+                        #endif
                     } else {
                         #if os(iOS)
                             List(store.rows, id: \.item.id) { snapshot in
