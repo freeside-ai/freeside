@@ -269,17 +269,30 @@ struct RunRowView: View {
         VStack(alignment: .leading, spacing: 7) {
             if dynamicTypeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 7) {
-                    primaryLine
-                    RunOutcomeBadge(outcome: run.outcome)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    title
+                    if showsOutcomeBadge {
+                        RunOutcomeBadge(outcome: run.outcome)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
                 }
             } else {
                 HStack(alignment: .firstTextBaseline) {
-                    primaryLine
+                    title
                     Spacer()
-                    RunOutcomeBadge(outcome: run.outcome)
+                    if showsOutcomeBadge {
+                        RunOutcomeBadge(outcome: run.outcome)
+                    }
                 }
             }
+            Text(RunDisplay.metaLine(run))
+                .font(FreesideFont.monoCaption)
+                .foregroundStyle(Color.inkDim)
+            StageRail(
+                title: nil,
+                presentation: RunDisplay.stageRail(run),
+                axis: .horizontal,
+                showsSummaryText: false,
+                labelStyle: .compact)
             if let identityLine {
                 Text(identityLine)
                     .font(FreesideFont.monoCaption)
@@ -322,10 +335,17 @@ struct RunRowView: View {
         }
     }
 
-    private var primaryLine: some View {
-        Text(RunDisplay.primaryLine(run))
+    private var title: some View {
+        Text(RunDisplay.title(run))
             .font(FreesideFont.itemTitle)
             .foregroundStyle(Color.ink)
+    }
+
+    /// In progress is the row's resting state: the current rail dot and
+    /// the hold or milestone line already say so, and a chip repeating
+    /// it would make every active row look flagged.
+    private var showsOutcomeBadge: Bool {
+        run.outcome != .pending
     }
 
     private var holdIsFailure: Bool {
@@ -414,20 +434,90 @@ enum RunDisplay {
         return "Round \(stage.attempts.count)"
     }
 
-    static func primaryLine(_ run: Components.Schemas.Run) -> String {
-        let names = run.display_names?.value1
-        let project = names?.project.text ?? ""
-        var parts = [project.isEmpty ? run.project_id : project]
-        if let workUnit = names?.work_unit.text, !workUnit.isEmpty {
-            parts.append(workUnit)
-        }
-        if let stage = run.stages.last {
-            parts.append(stage.name.capitalized)
-            if let round = round(stage) {
-                parts.append(round)
-            }
+    /// The row title: the current stage and its round. A run that has no
+    /// stage yet is titled by its project so the row is never blank.
+    static func title(_ run: Components.Schemas.Run) -> String {
+        guard let stage = run.stages.last else { return projectName(run) }
+        var parts = [stageLabel(stage.name)]
+        if let round = round(stage) {
+            parts.append(round)
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// The row's meta line: project, work unit when named, and the start
+    /// clock time when the daemon recorded one.
+    static func metaLine(_ run: Components.Schemas.Run) -> String {
+        var parts = [projectName(run)]
+        if let workUnit = run.display_names?.value1.work_unit.text, !workUnit.isEmpty {
+            parts.append(workUnit)
+        }
+        if let created = run.created_at {
+            parts.append("started \(created.formatted(date: .omitted, time: .shortened))")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The daemon's production lane records its implementation stage as
+    /// `implement` (daemon/internal/engine/production_workflow.go), so that
+    /// name reads as the implementation stage rather than a fifth one.
+    static func canonicalStageName(_ name: String) -> String {
+        name == "implement" ? Components.Schemas.StageName.implementation.rawValue : name
+    }
+
+    /// A workflow stage takes its display label; any other recorded name
+    /// is shown capitalized.
+    static func stageLabel(_ name: String) -> String {
+        Components.Schemas.StageName(rawValue: canonicalStageName(name))
+            .map(AttentionDisplay.label) ?? name.capitalized
+    }
+
+    private static func projectName(_ run: Components.Schemas.Run) -> String {
+        let project = run.display_names?.value1.project.text ?? ""
+        return project.isEmpty ? run.project_id : project
+    }
+
+    /// The four workflow stages in order, then any stage the daemon
+    /// recorded under another name. A stage that exists and is not the
+    /// last one has been left behind, so it reads completed; the last
+    /// existing stage carries the run's outcome; the rest are pending.
+    static func stageRail(_ run: Components.Schemas.Run) -> DecisionStageRailPresentation {
+        var names = Components.Schemas.StageName.allCases.map {
+            (name: $0.rawValue, label: AttentionDisplay.label($0))
+        }
+        let recorded = run.stages.map { canonicalStageName($0.name) }
+        for name in recorded where !names.contains(where: { $0.name == name }) {
+            names.append((name: name, label: stageLabel(name)))
+        }
+        let current = recorded.last
+        let entries = names.map { name, label in
+            let state: DecisionStageRailPresentation.State =
+                if name == current {
+                    currentStageState(run.outcome)
+                } else if recorded.contains(name) {
+                    .completed
+                } else {
+                    .pending
+                }
+            return DecisionStageRailPresentation.Entry(id: name, title: label, state: state)
+        }
+        return .init(
+            entries: entries,
+            summary: entries.map { "\($0.title) \($0.state.accessibilityLabel)" }
+                .joined(separator: ", "))
+    }
+
+    /// An unobserved run marks nothing current: the daemon recorded no
+    /// milestone, so the rail must not claim a stage is under way.
+    private static func currentStageState(
+        _ outcome: Components.Schemas.RunOutcome
+    ) -> DecisionStageRailPresentation.State {
+        switch outcome {
+        case .failed, .lost: .failed
+        case .completed, .published: .completed
+        case .pending, .blocked: .current
+        case .unobserved: .pending
+        }
     }
 
     static func identityLine(

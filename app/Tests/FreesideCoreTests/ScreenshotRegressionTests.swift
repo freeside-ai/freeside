@@ -975,6 +975,24 @@
             }
             surfaces.append(
                 Surface(
+                    name: "runs-row-sidebar",
+                    width: 320,
+                    view: AnyView(
+                        RunRowView(
+                            run: activeRun.run,
+                            identityLine: RunDisplay.identityLine(activeRun.run, runs: runs),
+                            secondaryLine: RunDisplay.secondaryLine(activeRun.run, runs: runs),
+                            spendLine: RunDisplay.spendLine(activeRun.run),
+                            schedules: schedules.filter {
+                                $0.schedule.run_id == activeRun.run.id
+                                    && $0.schedule.status == .armed
+                            },
+                            isSelected: true
+                        )
+                        .padding()
+                    )))
+            surfaces.append(
+                Surface(
                     name: "operational-summary",
                     width: 640,
                     view: AnyView(

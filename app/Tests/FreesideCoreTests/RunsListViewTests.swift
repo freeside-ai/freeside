@@ -52,7 +52,9 @@ import Testing
             $0.run.id == RunFixtures.legacyRunID
         }!.run
 
-        #expect(RunDisplay.primaryLine(active) == "freeside · #724 · Implementation · Round 2")
+        #expect(RunDisplay.title(active) == "Implementation · Round 2")
+        #expect(RunDisplay.metaLine(active).hasPrefix("freeside · #724 · started "))
+        #expect(RunDisplay.metaLine(legacy) == "freeside")
         #expect(RunDisplay.secondaryLine(active) == .hold("Verification Findings"))
         #expect(RunDisplay.secondaryLine(ready) == .milestone("Publication Ready"))
         #expect(RunDisplay.secondaryLine(legacy) == .milestone("No milestone recorded"))
@@ -212,15 +214,81 @@ import Testing
 
     @Test func labelsFallBackWithoutDisplayNames() {
         var run = RunFixtures.defaultRuns()[0].run
+        run.created_at = nil
         run.display_names = nil
-        #expect(RunDisplay.primaryLine(run) == "freeside · Implementation · Round 2")
+        #expect(RunDisplay.title(run) == "Implementation · Round 2")
+        #expect(RunDisplay.metaLine(run) == "freeside")
         run.display_names = .init(
             value1: .init(
                 project: .init(text: "Project name", source: .name), work_unit: .init(text: "#12", source: .name)))
-        #expect(RunDisplay.primaryLine(run) == "Project name · #12 · Implementation · Round 2")
+        #expect(RunDisplay.metaLine(run) == "Project name · #12")
         run.display_names?.value1.project.text = ""
         run.display_names?.value1.work_unit.text = ""
-        #expect(RunDisplay.primaryLine(run) == "freeside · Implementation · Round 2")
+        #expect(RunDisplay.metaLine(run) == "freeside")
+    }
+
+    @Test func metaLineCarriesTheStartClockTimeAndTitleFallsBackToTheProject() {
+        var run = RunFixtures.defaultRuns()[0].run
+        let started = Date(timeIntervalSince1970: 1_767_323_045)
+        run.created_at = started
+        let clock = started.formatted(date: .omitted, time: .shortened)
+        #expect(RunDisplay.metaLine(run) == "freeside · #724 · started \(clock)")
+
+        run.stages = []
+        #expect(RunDisplay.title(run) == "freeside")
+    }
+
+    @Test func stageRailFollowsExistingStagesAndOutcome() throws {
+        let runs = RunFixtures.defaultRuns()
+        func rail(_ id: String) throws -> [(String, DecisionStageRailPresentation.State)] {
+            let run = try #require(runs.first { $0.run.id == id }).run
+            return RunDisplay.stageRail(run).entries.map { ($0.title, $0.state) }
+        }
+        let known = ["Specification", "Implementation", "Review", "Verification"]
+
+        let active = try rail(RunFixtures.activeRunID)
+        #expect(active.map(\.0) == known)
+        #expect(active.map(\.1) == [.pending, .current, .pending, .pending])
+
+        let ready = try rail(RunFixtures.readyRunID)
+        #expect(ready.map(\.0) == known + ["Publication"])
+        #expect(ready.map(\.1) == [.pending, .pending, .pending, .pending, .completed])
+
+        let failed = try rail("run-oriole-121")
+        #expect(failed.map(\.1) == [.pending, .pending, .pending, .failed])
+
+        let completed = try rail(RunFixtures.completedRunID)
+        #expect(completed.map(\.0) == known + ["Publication"])
+        #expect(completed.map(\.1) == [.pending, .pending, .pending, .pending, .completed])
+
+        let legacy = try rail(RunFixtures.legacyRunID)
+        #expect(legacy.map(\.1) == [.pending, .pending, .pending, .pending])
+    }
+
+    @Test func daemonShapedImplementStageIsTheImplementationStage() throws {
+        var run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
+        run.stages = run.stages.map { stage in
+            var stage = stage
+            stage.name = "implement"
+            return stage
+        }
+
+        #expect(RunDisplay.title(run) == "Implementation · Round 2")
+        let rail = RunDisplay.stageRail(run)
+        #expect(rail.entries.map(\.title) == ["Specification", "Implementation", "Review", "Verification"])
+        #expect(rail.entries.map(\.state) == [.pending, .current, .pending, .pending])
+    }
+
+    @Test func stageRailMarksEarlierStagesCompletedAndSummarizesEveryDot() throws {
+        var run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
+        run.stages.insert(
+            .init(id: "stage-spec", run_id: run.id, name: "specification", attempts: []), at: 0)
+        let rail = RunDisplay.stageRail(run)
+
+        #expect(rail.entries.map(\.state) == [.completed, .current, .pending, .pending])
+        #expect(
+            rail.summary
+                == "Specification completed, Implementation current, Review pending, Verification pending")
     }
 
     @Test func attemptIdentityResolvesSuccessorAndSuppressesStaleHold() throws {
