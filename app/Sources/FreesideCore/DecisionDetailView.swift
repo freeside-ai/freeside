@@ -2055,6 +2055,7 @@ struct DecisionDetailView: View {
         @State private var nonImagePreview: NonImagePreview?
         @State private var previewRequestID: UUID?
         @State private var isDisplayingAttachment = false
+        @State private var isHoveringDigest = false
 
         var body: some View {
             VStack(alignment: .leading, spacing: 6) {
@@ -2292,8 +2293,8 @@ struct DecisionDetailView: View {
                 )
         }
 
-        private var digestCaption: some View {
-            HStack(spacing: 8) {
+        @ViewBuilder private var digestCaption: some View {
+            let caption = HStack(spacing: 8) {
                 Text("Digest \(digest)")
                     .font(FreesideFont.mono(.caption2))
                     .foregroundStyle(Color.inkDim)
@@ -2308,9 +2309,18 @@ struct DecisionDetailView: View {
                     .buttonStyle(.borderless)
                     .help("Copy digest")
                     .accessibilityLabel("Copy \(label) attachment digest")
-                } else {
-                    Image(systemName: "doc.on.doc")
+                    .opacity(isHoveringDigest ? 1 : 0)
                 }
+            }
+            if rendersInteractiveControls {
+                caption
+                    .contentShape(Rectangle())
+                    .onHover { isHoveringDigest = $0 }
+                    .contextMenu {
+                        Button("Copy digest", action: copyDigest)
+                    }
+            } else {
+                caption
             }
         }
 
@@ -2884,13 +2894,16 @@ private struct FindingListLabelStyle: LabelStyle {
 /// macOS ImageRenderer does not apply its injected Dynamic Type environment to
 /// `ScaledMetric`. Mirror the screenshot-only font bridge's iOS scale so the
 /// matrix still exercises the production metric behavior.
-private func screenshotMetricBase(
+func screenshotMetricBase(
     _ value: CGFloat,
     relativeTo style: Font.TextStyle
 ) -> CGFloat {
     #if os(macOS)
         guard FreesideFont.screenshotDynamicTypeSize != nil else { return value }
-        return value * FreesideFont.size(of: style) / 16
+        let defaultSize = FreesideFont.$screenshotDynamicTypeSize.withValue(.large) {
+            FreesideFont.size(of: style)
+        }
+        return value * FreesideFont.size(of: style) / defaultSize
     #else
         return value
     #endif
