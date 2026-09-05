@@ -41,8 +41,8 @@ struct FreshnessBanner: View {
                 banner(
                     "The last successful refresh is stale; actions revalidate before use.",
                     keyword: "Stale",
-                    tint: .waxText,
-                    wash: .waxWash)
+                    tint: .accentText,
+                    wash: .accentWash)
             }
         case .unreachable:
             banner(
@@ -96,7 +96,7 @@ struct LastUpdatedLabel: View {
 
     var body: some View {
         // Advance only on minute boundaries measured from the last update:
-        // that is when the coarse label (and the stale color) actually
+        // that is when the coarse label (and the stale accent) actually
         // change. During healthy operation `lastUpdatedAt` changes every
         // heartbeat and drives the re-render itself, so this timeline only
         // matters once refreshes stop. Anchoring the period at
@@ -108,7 +108,7 @@ struct LastUpdatedLabel: View {
                 Text(Self.text(for: lastUpdatedAt, at: context.date))
             }
             .font(FreesideFont.caption)
-            .foregroundStyle(isStale(at: context.date) ? Color.waxText : Color.inkDim)
+            .foregroundStyle(Self.tint(for: lastUpdatedAt, at: context.date))
             .accessibilityElement(children: .combine)
         }
     }
@@ -131,8 +131,9 @@ struct LastUpdatedLabel: View {
         return "Updated \(formatter.localizedString(for: lastUpdatedAt, relativeTo: now))"
     }
 
-    private func isStale(at now: Date) -> Bool {
-        guard let lastUpdatedAt else { return true }
+    static func tint(for lastUpdatedAt: Date?, at now: Date) -> Color {
+        guard let lastUpdatedAt else { return .accentText }
         return now.timeIntervalSince(lastUpdatedAt) >= SyncCoordinator.stalenessThreshold
+            ? .accentText : .inkDim
     }
 }

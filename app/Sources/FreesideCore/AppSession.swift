@@ -294,9 +294,12 @@ public final class AppSession {
     /// The pairing flow end to end against an enforcing mock; nothing
     /// persists across launches.
     public static func pairingDemo() -> AppSession {
+        var facts = MockServer.pairingFacts
+        facts.code_expires_at = Date().addingTimeInterval(600)
         let server = MockServer(
             authMode: .enforcing,
             pairingCodes: ["483911": .valid],
+            pairingFacts: facts,
             automaticallyCompletesAgentWork: true
         )
         let credentials = InMemoryCredentialStore()

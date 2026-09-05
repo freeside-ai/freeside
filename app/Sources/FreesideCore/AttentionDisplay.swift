@@ -517,14 +517,14 @@ enum AttentionDisplay {
                 return "due now"
             }
             if remaining > 0 {
-                return "due in \(relativeDuration(remaining))"
+                return "due \(relativeDuration(remaining))"
             }
             return "overdue \(relativeDuration(-remaining))"
         }
         let created = rowTimeOrigin(item)
         guard let created else { return nil }
         let duration = relativeDuration(max(0, now.timeIntervalSince(created)))
-        return item.status == .open && item._type == .blocked ? "blocked \(duration)" : duration
+        return item.status == .open && item._type == .blocked ? "waiting \(duration)" : duration
     }
 
     static func relativeRowTime(_ date: Date, now: Date) -> String {
