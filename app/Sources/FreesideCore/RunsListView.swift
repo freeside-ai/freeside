@@ -472,6 +472,12 @@ enum RunDisplay {
             .map(AttentionDisplay.label) ?? name.capitalized
     }
 
+    /// The timeline title is the run's campaign identity; a run outside a
+    /// campaign, or missing its attempt number, is titled by its id.
+    static func timelineTitle(_ run: Components.Schemas.Run) -> String {
+        campaign(run) ?? run.id
+    }
+
     private static func projectName(_ run: Components.Schemas.Run) -> String {
         let project = run.display_names?.value1.project.text ?? ""
         return project.isEmpty ? run.project_id : project
