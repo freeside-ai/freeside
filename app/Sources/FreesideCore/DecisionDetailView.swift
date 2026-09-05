@@ -2894,13 +2894,16 @@ private struct FindingListLabelStyle: LabelStyle {
 /// macOS ImageRenderer does not apply its injected Dynamic Type environment to
 /// `ScaledMetric`. Mirror the screenshot-only font bridge's iOS scale so the
 /// matrix still exercises the production metric behavior.
-private func screenshotMetricBase(
+func screenshotMetricBase(
     _ value: CGFloat,
     relativeTo style: Font.TextStyle
 ) -> CGFloat {
     #if os(macOS)
         guard FreesideFont.screenshotDynamicTypeSize != nil else { return value }
-        return value * FreesideFont.size(of: style) / 16
+        let defaultSize = FreesideFont.$screenshotDynamicTypeSize.withValue(.large) {
+            FreesideFont.size(of: style)
+        }
+        return value * FreesideFont.size(of: style) / defaultSize
     #else
         return value
     #endif

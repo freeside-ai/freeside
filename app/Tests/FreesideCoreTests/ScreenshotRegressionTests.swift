@@ -45,6 +45,17 @@
             TextSize(name: "ax5", value: .accessibility5),
         ]
 
+        @Test func screenshotMetricsUseTheirOwnTextStyleBaseline() {
+            FreesideFont.$screenshotDynamicTypeSize.withValue(.large) {
+                #expect(screenshotMetricBase(28, relativeTo: .title) == 28)
+                #expect(screenshotMetricBase(4, relativeTo: .callout) == 4)
+            }
+            FreesideFont.$screenshotDynamicTypeSize.withValue(.accessibility5) {
+                #expect(screenshotMetricBase(28, relativeTo: .title) == 58)
+                #expect(screenshotMetricBase(4, relativeTo: .callout) == 9)
+            }
+        }
+
         @Test func surfacesMatchRecordedPixels() async throws {
             _ = FreesideFont.registration
             let recording =
