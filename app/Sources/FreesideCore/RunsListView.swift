@@ -56,10 +56,21 @@ struct RunsListView: View {
             .padding(.bottom, 8)
 
             if rows.isEmpty {
-                UnavailableStateView(
-                    title: filter.scope == .all ? "No runs" : "No \(filter.scope.label.lowercased()) runs",
-                    systemImage: "point.3.connected.trianglepath.dotted",
-                    description: "Runs in this scope will appear here.")
+                #if os(macOS)
+                    Spacer(minLength: 0)
+                    SidebarEmptyState(
+                        title: filter.scope == .all
+                            ? "No runs" : "No \(filter.scope.label.lowercased()) runs",
+                        systemImage: "point.3.connected.trianglepath.dotted",
+                        description: "Runs in this scope will appear here.")
+                    Spacer(minLength: 0)
+                #else
+                    UnavailableStateView(
+                        title: filter.scope == .all
+                            ? "No runs" : "No \(filter.scope.label.lowercased()) runs",
+                        systemImage: "point.3.connected.trianglepath.dotted",
+                        description: "Runs in this scope will appear here.")
+                #endif
             } else {
                 #if os(iOS)
                     List {
