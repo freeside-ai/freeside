@@ -7,6 +7,16 @@ name: convergence CI
 # 1A.0 exit evidence, so it runs in CI rather than as a local-only
 # ritual; it spans daemon/ and app/, hence its own workflow with both
 # components' paths.
+#
+# This job also runs FreesideCoreTests, the only place they run in CI
+# (#1160). Package.swift declares FreesideCore and its tests only under
+# `#if !os(Linux)`, so the ubuntu `package` job never sees them, and on
+# macOS SwiftPM links every test target into one bundle: the whole-package
+# `swift test` here already compiles FreesideConvergenceTests, so it runs
+# FreesideCoreTests at no extra build cost and the convergence suite then
+# reuses that bundle with --skip-build. xcodebuild in the `apps` job shares
+# no artifacts with SwiftPM (#541), so folding these in there would buy
+# nothing.
 
 on:
   push:
@@ -36,7 +46,7 @@ concurrency:
 
 jobs:
   convergence:
-    name: convergence (real daemon + Swift client)
+    name: convergence + core tests (real daemon + Swift client)
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -78,5 +88,23 @@ jobs:
           path: ~/Library/Caches/org.swift.swiftpm
           key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
           restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
+      - name: Test Swift package (scripts/check.sh)
+        run: bash scripts/check.sh app test
+      # The screenshot suite dumps each mismatched render next to its digest
+      # line; publishing those PNGs is the only way to review a hosted
+      # runner's raster before it is recorded as an override (#1139).
+      - name: Resolve screenshot dump directory
+        if: failure()
+        id: screenshot-dumps
+        run: echo "dir=$TMPDIR/freeside-screenshot-regressions" >>"$GITHUB_OUTPUT"
+      - name: Upload screenshot mismatch renders
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-mismatches
+          path: ${{ steps.screenshot-dumps.outputs.dir }}
+          if-no-files-found: ignore
       - name: Run the convergence pass
+        env:
+          FREESIDE_CONVERGENCE_SKIP_BUILD: "1"
         run: bash scripts/check.sh convergence

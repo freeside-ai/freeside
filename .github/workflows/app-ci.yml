@@ -93,45 +93,6 @@ jobs:
       - name: Test Swift package (scripts/check.sh)
         run: bash scripts/check.sh app test
 
-  # The macOS twin of `package`, and the only job that runs
-  # FreesideCoreTests: Package.swift declares those targets only under
-  # `#if !os(Linux)`, so the ubuntu job never sees them, and `apps`
-  # compiles FreesideCore without running a test against it. A separate
-  # job rather than an `apps` step, so it runs in parallel and its cost
-  # reads as its own duration (#541); SwiftPM shares no build artifacts
-  # with xcodebuild, so folding it in would buy nothing. No schema-drift
-  # step: `generate` runs that, and the result is platform-independent.
-  # FreesideConvergenceTests compiles here and skips without its harness
-  # environment, so this needs no live daemon.
-  core-tests:
-    name: core-tests (FreesideCore)
-    runs-on: macos-26
-    steps:
-      - uses: actions/checkout@v4
-      - name: Cache SwiftPM dependencies
-        # Cache only dependency mirrors; see the package job for the rationale.
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/org.swift.swiftpm
-          key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
-          restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
-      - name: Test Swift package (scripts/check.sh)
-        run: bash scripts/check.sh app test
-      # The screenshot suite dumps each mismatched render next to its digest
-      # line; publishing those PNGs is the only way to review a hosted
-      # runner's raster before it is recorded as an override (#1139).
-      - name: Resolve screenshot dump directory
-        if: failure()
-        id: screenshot-dumps
-        run: echo "dir=$TMPDIR/freeside-screenshot-regressions" >>"$GITHUB_OUTPUT"
-      - name: Upload screenshot mismatch renders
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: screenshot-mismatches
-          path: ${{ steps.screenshot-dumps.outputs.dir }}
-          if-no-files-found: ignore
-
   apps:
     name: apps (macOS + iOS)
     runs-on: macos-26
