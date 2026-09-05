@@ -12,6 +12,14 @@
 # the cross-language enumeration that proves the Swift fixture matrix and
 # the daemon's per-type action policy agree over every attention type (#204).
 #
+# Environment: FREESIDE_CONVERGENCE_SKIP_BUILD=1 runs the convergence
+# suite with `swift test --skip-build`, reusing the test bundle a
+# preceding whole-package `swift test` built in app/ with the same debug
+# configuration and --only-use-versions-from-resolved-file flag. The
+# caller must run that build first; without it SwiftPM fails, which is
+# the wanted result rather than a silent rebuild. CI sets this after its
+# `swift test` step (#1160); unset, the script builds as before.
+#
 # Requires: Go (daemon toolchain), Swift (app toolchain), macOS.
 set -euo pipefail
 
@@ -77,12 +85,17 @@ echo "harness ready: api=$api_url control=$control_url" >&2
 # A filter that matches nothing, or a suite that skips (env not seen),
 # still exits 0, so demand positive evidence that the suite ran and
 # passed before this command counts as a convergence pass.
+skip_build=()
+if [[ "${FREESIDE_CONVERGENCE_SKIP_BUILD:-}" == "1" ]]; then
+  skip_build=(--skip-build)
+fi
 test_log="$workdir/swift-test.log"
 (
   cd "$repo_root/app" &&
     FREESIDE_CONVERGENCE_URL="$api_url" \
     FREESIDE_CONVERGENCE_CONTROL_URL="$control_url" \
-    swift test --only-use-versions-from-resolved-file --filter FreesideConvergenceTests
+    swift test --only-use-versions-from-resolved-file \
+      "${skip_build[@]+"${skip_build[@]}"}" --filter FreesideConvergenceTests
 ) 2>&1 | tee "$test_log"
 if ! grep -q "Suite RealDaemonConvergenceTests passed" "$test_log"; then
   echo "run-convergence: the convergence suite did not run to a pass (zero tests matched, or the suite skipped)" >&2
