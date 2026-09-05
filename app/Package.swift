@@ -17,6 +17,8 @@ var targets: [Target] = [
             .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
             .product(name: "OpenAPIURLSession", package: "swift-openapi-urlsession"),
         ],
+        // Stage the tracked client separately before switching off the build plugin.
+        exclude: ["GeneratedSources"],
         plugins: [
             .plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")
         ]

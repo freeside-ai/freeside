@@ -135,6 +135,21 @@ assert_contains 'FreesideIOS'
 assert_contains 'ARCHS=arm64'
 assert_contains 'ONLY_ACTIVE_ARCH=YES'
 
+begin_case "app format covers hand-written Swift and excludes generated sources"
+stub=$(make_stub xcrun 0)
+PATH="$TMP:$PATH" run_check app format
+assert_rc 0
+OUT=$(cat "$stub.args")
+assert_contains 'Package.swift'
+assert_contains 'Sources/FreesideAPI/MockServer.swift'
+assert_contains 'Sources/FreesideCore/AppSession.swift'
+assert_contains 'Tests/FreesideAPITests/'
+assert_contains 'Apps/macOS/'
+case $OUT in
+  *GeneratedSources*|*--recursive*) report_failure "format includes generated sources or recursive roots" ;;
+  *) pass=$((pass + 1)) ;;
+esac
+
 echo "assertions: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then
   exit 1

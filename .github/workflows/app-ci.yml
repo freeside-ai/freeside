@@ -48,7 +48,12 @@ jobs:
       - name: Check formatting drift
         working-directory: app
         run: |
-          xcrun swift-format format --in-place --recursive Sources Tests Apps Package.swift
+          files=(Package.swift)
+          while IFS= read -r -d '' file; do
+            files+=("$file")
+          done < <(find Sources Tests Apps -name '*.swift' \
+            -not -path 'Sources/FreesideAPI/GeneratedSources/*' -print0)
+          xcrun swift-format format --in-place "${files[@]}"
           git diff --exit-code
 
   package:
