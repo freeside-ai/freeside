@@ -16,11 +16,51 @@ import Testing
             freshness: .fresh)
 
         #expect(summary.openCount == 2)
+        #expect(summary.highestPriorityID == urgent.item.id)
         #expect(summary.highestPriorityTitle == AttentionDisplay.title(urgent.item))
         #expect(summary.highestPriorityLabel == "Urgent")
+        #expect(summary.waitingLongestID == older.item.id)
         #expect(summary.waitingLongestTitle == AttentionDisplay.title(older.item))
+        #expect(summary.waitingLongestItem == older.item)
         #expect(summary.activeRunCount == 3)
         #expect(summary.daemonState == .connected)
+    }
+
+    @Test func waitingLongestFollowsTheDisplayedWaitNotCreation() {
+        var older = AttentionFixtures.fixture(type: .spec_approval)
+        older.item.created_at = Date(timeIntervalSince1970: 10)
+        var blocked = AttentionFixtures.fixture(type: .blocked)
+        blocked.item.created_at = Date(timeIntervalSince1970: 100)
+        blocked.item.blocked_on = .init(
+            value1: .init(
+                kind: .spec_approval, since: Date(timeIntervalSince1970: 5),
+                item_id: older.item.id))
+        let summary = OperationalSummary(
+            openSnapshots: [older, blocked], runs: [], freshness: .fresh)
+
+        #expect(summary.waitingLongestID == blocked.item.id)
+        let now = Date(timeIntervalSince1970: 3_605)
+        #expect(
+            summary.waitingLongestValue(now: now)
+                == "\(AttentionDisplay.title(blocked.item)) · waiting 1h")
+    }
+
+    @Test func waitingLongestShowsTheInboxRowTimeDeadlineFirst() {
+        var due = AttentionFixtures.fixture(type: .spec_approval)
+        due.item.created_at = Date(timeIntervalSince1970: 10)
+        due.item.expires_when = Date(timeIntervalSince1970: 7_210)
+        let now = Date(timeIntervalSince1970: 10)
+        let summary = OperationalSummary(openSnapshots: [due], runs: [], freshness: .fresh)
+
+        #expect(summary.waitingLongestValue(now: now) == "\(AttentionDisplay.title(due.item)) · due 2h")
+    }
+
+    @Test func emptyInboxNamesNoItems() {
+        let summary = OperationalSummary(openSnapshots: [], runs: [], freshness: .fresh)
+
+        #expect(summary.highestPriorityID == nil)
+        #expect(summary.waitingLongestID == nil)
+        #expect(summary.waitingLongestValue(now: Date()) == nil)
     }
 
     @Test func activeCountUsesLifecycleIncludingPublishedAndExcludingSupersededPending() throws {

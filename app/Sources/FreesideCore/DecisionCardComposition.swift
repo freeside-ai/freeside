@@ -819,12 +819,23 @@ struct StageRail: View {
         case entries
     }
 
+    /// How much of each entry the rail draws. A run row has no room for
+    /// headline labels under four dots, so `.compact` draws the dots
+    /// alone and leaves the names to the accessibility summary and, on
+    /// the desktop, the hover tooltip.
+    enum LabelStyle {
+        case full
+        case compact
+    }
+
     @ScaledMetric(relativeTo: .body) private var connectorLength: CGFloat = 44
+    @ScaledMetric(relativeTo: .body) private var compactConnectorLength: CGFloat = 14
     let title: String?
     let presentation: DecisionStageRailPresentation
     let axis: Axis
     var showsSummaryText = true
     var accessibilityStyle: AccessibilityStyle = .summary
+    var labelStyle: LabelStyle = .full
 
     @ViewBuilder
     var body: some View {
@@ -844,10 +855,13 @@ struct StageRail: View {
                 Text(title)
                     .font(FreesideFont.title)
             }
-            if axis == .vertical {
+            switch (axis, labelStyle) {
+            case (.vertical, _):
                 verticalRail
-            } else {
+            case (.horizontal, .full):
                 horizontalRail
+            case (.horizontal, .compact):
+                compactHorizontalRail
             }
             if showsSummaryText || presentation.entries.isEmpty {
                 Text(presentation.summary)
@@ -898,6 +912,21 @@ struct StageRail: View {
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    private var compactHorizontalRail: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(presentation.entries.enumerated()), id: \.element.id) { index, entry in
+                if index > 0 {
+                    Rectangle()
+                        .fill(Color.milestoneConnector)
+                        .frame(width: compactConnectorLength, height: 2)
+                        .accessibilityHidden(true)
+                }
+                marker(entry.state)
+                    .help(entry.accessibilityLabel)
             }
         }
     }

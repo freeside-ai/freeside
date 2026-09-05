@@ -66,6 +66,17 @@ public final class NavigationModel {
         selectedTab = screen
     }
 
+    /// Open the Runs screen on its active list. A run selection kept from
+    /// an earlier visit is dropped first, because the list reveals its
+    /// selected run's scope on appear and a finished run would open the
+    /// Finished list under a link that named the active count.
+    public func showActiveRuns() {
+        operatorNavigationRevision += 1
+        selectedTab = .runs
+        runSelection = nil
+        runsPath = []
+    }
+
     public func setInboxPath(_ path: [String]) {
         guard inboxPath != path else { return }
         operatorNavigationRevision += 1

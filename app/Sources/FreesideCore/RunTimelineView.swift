@@ -85,24 +85,16 @@ struct RunTimelineView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Run timeline")
+                    eyebrow
+                    Text(RunDisplay.timelineTitle(snapshot.run))
                         .font(FreesideFont.largeTitle)
-                    Text(snapshot.run.id)
-                        .font(FreesideFont.monoCallout)
-                        .foregroundStyle(Color.inkDim)
-                        .textSelection(.enabled)
-                        .contextMenu {
-                            Button("Copy run ID") {
-                                copyRunID()
-                            }
-                        }
                 }
                 Spacer()
                 RunOutcomeBadge(outcome: snapshot.run.outcome)
             }
             HStack(spacing: 14) {
                 if let stage = snapshot.run.stages.last {
-                    Label(stage.name.capitalized, systemImage: "square.stack.3d.up")
+                    Label(RunDisplay.stageLabel(stage.name), systemImage: "square.stack.3d.up")
                     if let round = RunDisplay.round(stage) {
                         Label(round, systemImage: "arrow.triangle.2.circlepath")
                     }
@@ -113,24 +105,40 @@ struct RunTimelineView: View {
             }
             .font(FreesideFont.subheadline)
             .foregroundStyle(Color.inkDim)
-            if let campaign = RunDisplay.campaign(snapshot.run) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(campaign)
-                        .font(FreesideFont.mono(.callout, weight: .semibold))
-                    if let reason = snapshot.run.attempt_reason {
-                        Text("Reason: \(reason)")
-                            .font(FreesideFont.callout)
-                    }
-                    if let parent = snapshot.run.parent_run_id {
-                        Text("Parent run: \(parent)")
-                            .font(FreesideFont.monoCaption)
-                    }
-                    Text("\(RunDisplay.specificationLabel(snapshot.run)): \(snapshot.run.spec_digest)")
+            VStack(alignment: .leading, spacing: 4) {
+                if let reason = snapshot.run.attempt_reason {
+                    Text("Reason: \(reason)")
+                        .font(FreesideFont.callout)
+                }
+                if let parent = snapshot.run.parent_run_id {
+                    Text("Parent run: \(parent)")
                         .font(FreesideFont.monoCaption)
                 }
-                .foregroundStyle(Color.inkDim)
+                Text("\(RunDisplay.specificationLabel(snapshot.run)): \(snapshot.run.spec_digest)")
+                    .font(FreesideFont.monoCaption)
             }
+            .foregroundStyle(Color.inkDim)
             KeywordLabel(text: "Daemon observations")
+        }
+    }
+
+    /// The eyebrow names the screen and the run. The id sits beside the
+    /// keyword in the same face but outside its uppercase transform, so a
+    /// selection copies the id as the daemon spells it. The separator
+    /// travels with the id so its spacing scales with the type size.
+    private var eyebrow: some View {
+        HStack(spacing: 0) {
+            KeywordLabel(text: "Run timeline")
+            Text(" · \(snapshot.run.id)")
+                .font(FreesideFont.keyword)
+                .tracking(0.8)
+                .foregroundStyle(Color.inkDim)
+                .textSelection(.enabled)
+        }
+        .contextMenu {
+            Button("Copy run ID") {
+                copyRunID()
+            }
         }
     }
 
@@ -183,35 +191,47 @@ struct RunTimelineView: View {
     }
 
     private func invocationSection(_ timeline: Components.Schemas.RunTimeline) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let groups = RunTimelineGrouping.groups(
+            invocations: timeline.invocations, stages: snapshot.run.stages)
+        return VStack(alignment: .leading, spacing: 10) {
             Text("Latest Invocation Observations")
                 .font(FreesideFont.title)
-            ForEach(Array(timeline.invocations.enumerated()), id: \.element.invocation_id) { index, invocation in
-                if index > 0 {
-                    Divider().overlay(Color.rule)
-                }
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(attemptContext(invocationID: invocation.invocation_id) ?? invocation.invocation_id)
-                            .font(FreesideFont.sans(.headline, weight: .semibold))
-                        Text(invocation.observed_at.formatted(date: .abbreviated, time: .shortened))
-                            .font(FreesideFont.monoCaption)
-                            .foregroundStyle(Color.inkDim)
+            ForEach(groups) { group in
+                KeywordLabel(text: group.label)
+                    .padding(.top, 4)
+                ForEach(Array(group.invocations.enumerated()), id: \.element.invocation_id) { index, invocation in
+                    if index > 0 {
+                        Divider().overlay(Color.rule)
                     }
-                    Spacer()
-                    let presentation = InvocationPresentation(invocation, asOf: timeline.as_of)
-                    StateChip(label: presentation.label, color: presentation.color, glyph: presentation.glyph)
+                    invocationRow(invocation, asOf: timeline.as_of)
                 }
-                .padding(.vertical, 6)
             }
         }
+    }
+
+    private func invocationRow(
+        _ invocation: Components.Schemas.InvocationObservation, asOf: Date
+    ) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(attemptContext(invocationID: invocation.invocation_id) ?? invocation.invocation_id)
+                    .font(FreesideFont.sans(.headline, weight: .semibold))
+                Text(invocation.observed_at.formatted(date: .abbreviated, time: .shortened))
+                    .font(FreesideFont.monoCaption)
+                    .foregroundStyle(Color.inkDim)
+            }
+            Spacer()
+            let presentation = InvocationPresentation(invocation, asOf: asOf)
+            StateChip(label: presentation.label, color: presentation.color, glyph: presentation.glyph)
+        }
+        .padding(.vertical, 6)
     }
 
     private func attemptContext(invocationID: String?) -> String? {
         guard let invocationID else { return nil }
         for stage in snapshot.run.stages {
             if let attempt = stage.attempts.first(where: { $0.invocation_id == invocationID }) {
-                return "\(stage.name.capitalized) · Round \(attempt.number)"
+                return "\(RunDisplay.stageLabel(stage.name)) · Round \(attempt.number)"
             }
         }
         return nil
@@ -237,6 +257,61 @@ struct RunTimelineView: View {
             return RunDisplay.label(reason)
         }
         return nil
+    }
+}
+
+/// Invocation observations grouped under the stage whose attempt produced
+/// them, newest first at both levels, so the latest observation of the
+/// latest stage leads.
+enum RunTimelineGrouping {
+    static let unattributedLabel = "Unattributed"
+
+    struct Group: Equatable, Identifiable {
+        let id: String
+        let label: String
+        /// Newest observation first.
+        let invocations: [Components.Schemas.InvocationObservation]
+
+        var newestObservedAt: Date? { invocations.first?.observed_at }
+    }
+
+    /// Groups key on the canonical stage name, not the stage record: the
+    /// daemon appends a further `implement` stage for each remediation
+    /// round and operator-feedback pass, and those belong under one
+    /// Implementation heading. An observation whose invocation matches no
+    /// recorded attempt lands under `Unattributed`, a group ordered by its
+    /// newest observation like any other rather than pinned last.
+    static func groups(
+        invocations: [Components.Schemas.InvocationObservation],
+        stages: [Components.Schemas.Stage]
+    ) -> [Group] {
+        var membership: [String: [Components.Schemas.InvocationObservation]] = [:]
+        var order: [(id: String, label: String)] = []
+        for invocation in invocations {
+            let owner = stages.first { stage in
+                stage.attempts.contains { $0.invocation_id == invocation.invocation_id }
+            }
+            let key = owner.map { "stage:\(RunDisplay.canonicalStageName($0.name))" } ?? "unattributed"
+            if membership[key] == nil {
+                order.append(
+                    (id: key, label: owner.map { RunDisplay.stageLabel($0.name) } ?? unattributedLabel))
+            }
+            membership[key, default: []].append(invocation)
+        }
+        return order.map { entry in
+            Group(
+                id: entry.id, label: entry.label,
+                invocations: (membership[entry.id] ?? []).sorted {
+                    if $0.observed_at != $1.observed_at { return $0.observed_at > $1.observed_at }
+                    return $0.invocation_id < $1.invocation_id
+                })
+        }
+        .sorted {
+            let lhs = $0.newestObservedAt ?? .distantPast
+            let rhs = $1.newestObservedAt ?? .distantPast
+            if lhs != rhs { return lhs > rhs }
+            return $0.label < $1.label
+        }
     }
 }
 
