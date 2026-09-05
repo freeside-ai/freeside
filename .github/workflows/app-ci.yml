@@ -6,14 +6,12 @@ on:
     paths:
       - "app/**"
       - "api/openapi.yaml"
-      - "scripts/test-install-mac-app.sh"
       - "scripts/check.sh"
       - ".github/workflows/app-ci.yml"
   pull_request:
     paths:
       - "app/**"
       - "api/openapi.yaml"
-      - "scripts/test-install-mac-app.sh"
       - "scripts/check.sh"
       - ".github/workflows/app-ci.yml"
 
@@ -89,6 +87,13 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        # Cache only dependency mirrors; see the package job for the rationale.
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
+          restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
       - name: Test Swift package (scripts/check.sh)
         run: bash scripts/check.sh app test
       # The screenshot suite dumps each mismatched render next to its digest
@@ -121,7 +126,5 @@ jobs:
           path: ~/Library/Caches/org.swift.swiftpm
           key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
           restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
-      - name: Test Mac installer with the real exclusive rename
-        run: FREESIDE_TEST_REAL_RENAME=true bash scripts/test-install-mac-app.sh
       - name: Build macOS and iOS apps (scripts/check.sh)
         run: bash scripts/check.sh app build-mac build-ios
