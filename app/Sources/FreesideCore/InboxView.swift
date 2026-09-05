@@ -381,7 +381,7 @@ struct InboxRowView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(isSelected ? Color.accentBorder : .rule, lineWidth: 1)
+                .strokeBorder(isSelected ? Color.clear : .rule, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }

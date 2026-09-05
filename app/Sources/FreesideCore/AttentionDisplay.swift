@@ -552,6 +552,10 @@ enum AttentionDisplay {
         status != .open
     }
 
+    static func showsPostureBadge(_ posture: Components.Schemas.HealthPosture) -> Bool {
+        posture == .blocking
+    }
+
     static func showsDegradedBadge(_ item: Components.Schemas.AttentionItem) -> Bool {
         item.readiness?.value1._class == .ready_degraded
     }
@@ -608,6 +612,9 @@ enum AttentionDisplay {
         proposalDigest: String? = nil
     ) -> [BindingRow] {
         var rows: [BindingRow] = []
+        if let posture = item.posture?.value1 {
+            rows.append(.init(label: "Posture", value: label(posture)))
+        }
         if let created = item.created_at {
             rows.append(.init(label: "Created", value: created.formatted(.iso8601)))
         }

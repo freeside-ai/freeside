@@ -1786,11 +1786,15 @@ struct DecisionDetailView: View {
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
         layout {
-            PriorityBadge(priority: item.priority)
-            if let posture = item.posture?.value1 {
+            if AttentionDisplay.showsPriorityBadge(item.priority) {
+                PriorityBadge(priority: item.priority)
+            }
+            if let posture = item.posture?.value1, AttentionDisplay.showsPostureBadge(posture) {
                 HealthPostureBadge(posture: posture)
             }
-            StatusBadge(status: item.status)
+            if AttentionDisplay.showsLifecycleBadge(item.status) {
+                StatusBadge(status: item.status)
+            }
         }
     }
 

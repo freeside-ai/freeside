@@ -325,6 +325,9 @@ import Testing
         #expect(AttentionDisplay.showsLifecycleBadge(.dismissed))
         #expect(AttentionDisplay.showsLifecycleBadge(.expired))
 
+        #expect(AttentionDisplay.showsPostureBadge(.blocking))
+        #expect(!AttentionDisplay.showsPostureBadge(.advisory))
+
         #expect(
             !AttentionDisplay.showsDegradedBadge(
                 AttentionFixtures.fixture(type: .ready_for_final_review).item))
@@ -407,6 +410,20 @@ import Testing
         let digests = AttentionDisplay.uniqueEvidenceDigests(item)
 
         #expect(digests == item.evidence_snapshot.dropLast().map(\.digest))
+    }
+
+    @Test func detailBindingsIncludeEveryPresentPosture() {
+        var item = AttentionFixtures.fixture(type: .system_health).item
+        for (posture, label): (Components.Schemas.HealthPosture, String) in [
+            (.advisory, "Advisory"), (.blocking, "Blocking"),
+        ] {
+            item.posture = .init(value1: posture)
+            #expect(
+                AttentionDisplay.detailBindingRows(item)
+                    .filter { $0.label == "Posture" } == [.init(label: "Posture", value: label)])
+        }
+        item.posture = nil
+        #expect(!AttentionDisplay.detailBindingRows(item).contains { $0.label == "Posture" })
     }
 
     @Test func detailBindingsKeepDistinctLabelsThatShareAValue() {
