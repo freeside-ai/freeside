@@ -1103,6 +1103,31 @@
                         name: "decision-banner",
                         width: 480,
                         view: AnyView(bannerDetail.screenshotBanner())))
+                surfaces.append(
+                    Surface(
+                        name: "decision-retryable-receipt",
+                        width: 480,
+                        view: AnyView(
+                            bannerDetail.screenshotRetryableReceipt(
+                                expanded: false,
+                                accessibilityLayout: dynamicTypeSize >= .accessibility1))))
+                surfaces.append(
+                    Surface(
+                        name: "decision-retryable-receipt-open",
+                        width: 480,
+                        view: AnyView(
+                            bannerDetail.screenshotRetryableReceipt(
+                                expanded: true,
+                                accessibilityLayout: dynamicTypeSize >= .accessibility1))))
+                surfaces.append(
+                    Surface(
+                        name: "decision-retryable-receipt-phone-dark",
+                        width: 390,
+                        colorScheme: .dark,
+                        view: AnyView(
+                            bannerDetail.screenshotRetryableReceipt(
+                                expanded: false,
+                                accessibilityLayout: dynamicTypeSize >= .accessibility1))))
             }
             surfaces.append(
                 Surface(
