@@ -104,10 +104,15 @@ daemon_lint() {
 # --- app -------------------------------------------------------------------
 
 app_generate() { in_dir "$ROOT/app" ./scripts/generate-api-client.sh; }
-app_format() {
-  in_dir "$ROOT/app" xcrun swift-format lint --strict --recursive \
-    Sources Tests Apps Package.swift
-}
+app_format() (
+  cd "$ROOT/app"
+  local files=(Package.swift)
+  while IFS= read -r -d '' file; do
+    files+=("$file")
+  done < <(find Sources Tests Apps -name '*.swift' \
+    -not -path 'Sources/FreesideAPI/GeneratedSources/*' -print0)
+  run xcrun swift-format lint --strict "${files[@]}"
+)
 app_test() { in_dir "$ROOT/app" swift test --only-use-versions-from-resolved-file; }
 xcodebuild_scheme() { # <scheme> <destination> [build-setting...]
   local scheme=$1 destination=$2

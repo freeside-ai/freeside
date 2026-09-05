@@ -112,7 +112,7 @@ Repeat for `light|dark` crossed with `standard|increased` to capture all four cu
 ## Structure
 
 - `Freeside.xcodeproj` contains the two application targets. Both consume the local `FreesideCore` Swift package product.
-- `Sources/FreesideAPI` owns the generated client surface, the stateful mock server and its transport, and the per-type attention fixtures. Apple Swift OpenAPI Generator produces client and type source at build time from the schema mirror in that target.
+- `Sources/FreesideAPI` owns the generated client surface, the stateful mock server and its transport, and the per-type attention fixtures. Apple Swift OpenAPI Generator produces tracked client and type source in `GeneratedSources/` from the schema mirror in that target.
 - `Sources/FreesideCore` contains shared SwiftUI presentation code. `DesignLanguage.swift` holds the §15 tokens, faces, and shared chip, banner, and button styles; `Fonts/` carries the bundled OFL faces (see its README; `scripts/instance-serif-font.sh` regenerates the serif instance).
 - `Apps/macOS/FreesideMenuMark.png` is the menu-bar template source, rendered from the one-color key `Apps/macOS/FreesideKeyMono.svg` by `scripts/generate-menu-mark.sh` with the dot retired for the sub-24px size.
 - `SURFACES.md` tracks what the app has to show and how far along each piece is: screens, cards, the rules every card follows, behind-the-scenes state, and the open placement questions. When a PR adds or changes something the app shows, update its line there in the same PR. It holds no design decisions.
@@ -127,15 +127,17 @@ The Icon Composer document lets the system select the appearance and own the pla
 
 The mask preserves the approved mark geometry and its cutouts; the appearance change is palette-only. Xcode compiles the one document into each installed bundle's platform and appearance renditions. On macOS, keep the document a normal resource with `CFBundleIconName` authoritative and leave `ASSETCATALOG_COMPILER_APPICON_NAME` unset: asking the asset compiler to emit a standalone primary icon adds `CFBundleIconFile`, and Finder then prefers that static fallback over the appearance-aware catalog. That caution is macOS-only; FreesideIOS sets the setting deliberately (above), because SpringBoard needs the `actool`-generated icon.
 
-`Sources/FreesideAPI/openapi.yaml` is a mechanical mirror of the repository contract at `../api/openapi.yaml`. Refreshing it and rebuilding the generated client is one reproducible command:
+`Sources/FreesideAPI/openapi.yaml` is a mechanical mirror of the repository contract at `../api/openapi.yaml`. Refreshing it and regenerating the tracked client through the pinned command plugin is one reproducible command:
 
 ```sh
 ./scripts/generate-api-client.sh
 ```
 
-The command leaves the checkout clean when the mirror and generated client agree with the merged schema. Do not edit the mirror or generated output to work around a schema gap; file a `kind:contract` issue instead.
+The command leaves the checkout clean when the mirror and generated client agree with the schema. Otherwise it refreshes them and exits with an error until their changes are committed. Schema changes commit the mirror and regenerated client in the same PR. Do not edit the mirror or generated output to work around a schema gap; file a `kind:contract` issue instead.
 
 ## Build and test
+
+Package dependencies are pinned in `Package.resolved`.
 
 From `app/`:
 
@@ -162,13 +164,17 @@ From `app/`:
 
 ```sh
 # Check formatting and style (what CI runs):
-xcrun swift-format lint --strict --recursive Sources Tests Apps Package.swift
+bash ../scripts/check.sh app format
 # Rewrite in place:
-xcrun swift-format format --in-place --recursive Sources Tests Apps Package.swift
+find Sources Tests Apps -name '*.swift' \
+  -not -path 'Sources/FreesideAPI/GeneratedSources/*' -print0 \
+  | xargs -0 xcrun swift-format format --in-place
+xcrun swift-format format --in-place Package.swift
 ```
 
-Generated OpenAPI client sources are build-plugin output under `.build/` and
-never checked in, so the commands above gate only the hand-written roots.
+Generated OpenAPI client sources are tracked under `Sources/FreesideAPI/GeneratedSources/`.
+The lint and formatting commands explicitly exclude that directory; the
+generation check verifies its exact output instead of reformatting it.
 Deliberate constant-input force unwraps on mock and fixture surfaces carry
 `// swift-format-ignore: NeverForceUnwrap` annotations; the rule stays on
 everywhere else.
