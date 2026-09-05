@@ -137,6 +137,8 @@ The command leaves the checkout clean when the mirror and generated client agree
 
 ## Build and test
 
+Package dependencies are pinned in `Package.resolved`.
+
 From `app/`:
 
 ```sh
