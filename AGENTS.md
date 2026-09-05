@@ -645,7 +645,9 @@ the forbidden Conventional Commit, autosquash, WIP, and review-cleanup
 prefixes) are in the header of `scripts/check-commit-messages.sh`. CI runs the
 script over every non-merge commit in `merge-base..head`, and
 `bash scripts/check-commit-messages.sh origin/main HEAD` checks a branch
-locally.
+locally. The same `core.hooksPath` opt-in also enables the `pre-commit` hook
+that regenerates the tracked API client when a commit stages one of its
+inputs; CI's `generate` job stays the backstop.
 
 <!-- agents-md:managed:done -->
 
