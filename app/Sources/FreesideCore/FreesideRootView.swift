@@ -63,6 +63,15 @@ public struct FreesideRootView: View {
         .preferredColorScheme(launchColorScheme)
         .background(Color.ground)
         .tint(.accentText)
+        // The default titlebar renders a bright system material that reads
+        // as a hard white, square-cornered band over the warm ground.
+        // Hiding it lets each screen's own ground rise into the titlebar, so
+        // the toolbar blends into the body and the window's rounded corners
+        // carry the top edge. Applied above the phase switch so it also
+        // covers the pairing screen, which renders without platformNavigation.
+        #if os(macOS)
+            .toolbarBackground(.hidden, for: .windowToolbar)
+        #endif
     }
 
     private func synced(_ coordinator: SyncCoordinator) -> some View {
