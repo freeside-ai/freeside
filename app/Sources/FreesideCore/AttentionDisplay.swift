@@ -667,8 +667,9 @@ enum AttentionDisplay {
     }
 
     /// A blocked row counts from the daemon's recorded wait start, not the
-    /// item's creation: the wait predates the card.
-    private static func rowTimeOrigin(_ item: Components.Schemas.AttentionItem) -> Date? {
+    /// item's creation: the wait predates the card. The operational summary
+    /// picks and times its waiting-longest row by the same origin.
+    static func rowTimeOrigin(_ item: Components.Schemas.AttentionItem) -> Date? {
         guard item.status == .open, item._type == .blocked else { return item.created_at }
         return item.blocked_on?.value1.since ?? item.created_at
     }

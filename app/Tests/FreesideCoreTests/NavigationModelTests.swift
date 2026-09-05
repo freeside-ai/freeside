@@ -46,6 +46,24 @@ import Testing
         #expect(navigation.runsPath == [RunFixtures.activeRunID])
     }
 
+    @Test func showingActiveRunsDropsARetainedRunSelection() {
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(
+                colorSchemeRaw: nil,
+                selectionRaw: "item-spec_approval"))
+        navigation.route(to: .run(RunFixtures.completedRunID))
+        navigation.selectTab(.inbox)
+        let revision = navigation.operatorNavigationRevision
+
+        navigation.showActiveRuns()
+
+        #expect(navigation.selectedTab == .runs)
+        #expect(navigation.runSelection == nil)
+        #expect(navigation.runsPath.isEmpty)
+        #expect(navigation.operatorNavigationRevision == revision + 1)
+        #expect(navigation.inboxPath == ["item-spec_approval"])
+    }
+
     @Test func repairPopsOnlyAPathWhoseDestinationDisappeared() {
         let navigation = NavigationModel(
             launchInputs: LaunchInputs(

@@ -334,7 +334,9 @@ public struct FreesideRootView: View {
                         summary: OperationalSummary(
                             openSnapshots: coordinator.store.openSnapshots,
                             runs: coordinator.runs,
-                            freshness: coordinator.store.freshness))
+                            freshness: coordinator.store.freshness),
+                        onSelectItem: { navigation.route(to: .attentionItem($0)) },
+                        onShowRuns: { navigation.showActiveRuns() })
                 }
             case .runs:
                 if let runSelection,

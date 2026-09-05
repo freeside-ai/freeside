@@ -982,7 +982,10 @@
                             summary: OperationalSummary(
                                 openSnapshots: store.openSnapshots,
                                 runs: runs,
-                                freshness: .fresh)))))
+                                freshness: .fresh),
+                            onSelectItem: { _ in },
+                            onShowRuns: {},
+                            now: screenshotNow))))
             guard
                 let timeline = RunFixtures.defaultTimelines().first(where: {
                     $0.run_id == activeRun.run.id
