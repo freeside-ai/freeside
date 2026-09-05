@@ -738,3 +738,5 @@ private struct FailingCredentialStore: DeviceCredentialStore {
         #expect(persisted.isEmpty)
     }
 }
+
+// A/B baseline measurement for #1160 (throwaway, do not merge).
