@@ -145,6 +145,28 @@ func TestObservationPaceClockRollbackIsDue(t *testing.T) {
 	}
 }
 
+// TestObservationPaceReportsChangeSeparatelyFromRefresh pins the change bit the
+// hold log keys off (issue #1181): a first observation and a real state change
+// report changed, but the periodic freshness refresh of an unchanged state does
+// not, so a long-lived hold logs once per reason change rather than once every
+// observationRefreshInterval.
+func TestObservationPaceReportsChangeSeparatelyFromRefresh(t *testing.T) {
+	var p observationPace
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	if due, changed := p.dueChanged("k", "a", ts); !due || !changed {
+		t.Fatalf("first observation = (due %t, changed %t), want (true, true)", due, changed)
+	}
+	if due, changed := p.dueChanged("k", "a", ts.Add(time.Second)); due || changed {
+		t.Fatalf("unchanged inside the interval = (due %t, changed %t), want (false, false)", due, changed)
+	}
+	if due, changed := p.dueChanged("k", "a", ts.Add(observationRefreshInterval)); !due || changed {
+		t.Fatalf("stale unchanged refresh = (due %t, changed %t), want (true, false)", due, changed)
+	}
+	if due, changed := p.dueChanged("k", "b", ts.Add(observationRefreshInterval+time.Second)); !due || !changed {
+		t.Fatalf("changed state = (due %t, changed %t), want (true, true)", due, changed)
+	}
+}
+
 // TestHoldObservationsPassTheLeakAxisEnumeration is the adversarial
 // enumeration the issue requires, run once as tests: for every leak axis
 // (credentials, provider output, specifications, policies, workspace paths,

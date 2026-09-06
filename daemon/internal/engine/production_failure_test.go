@@ -1,9 +1,11 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -32,6 +34,17 @@ type failedImplementationFixture struct {
 // blocked fixture's decision, blob, artifact, or claim seeding.
 func newFailedImplementationFixture(t *testing.T, outcome execfake.Outcome, summary string) failedImplementationFixture {
 	t.Helper()
+	return newFailedImplementationFixtureScript(t, execfake.StageScript{
+		Outcome: outcome,
+		Result:  exec.StageResult{Summary: summary},
+	})
+}
+
+// newFailedImplementationFixtureScript is newFailedImplementationFixture with
+// the implementation invocation's full driver script, so a caller can add
+// RunningInspects to model the driver reporting running before the terminal.
+func newFailedImplementationFixtureScript(t *testing.T, script execfake.StageScript) failedImplementationFixture {
+	t.Helper()
 	f := newSpecificationFixture(t, false, 4)
 	driver := f.newDriver(t)
 	if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 1), 0, 0,
@@ -42,10 +55,7 @@ func newFailedImplementationFixture(t *testing.T, outcome execfake.Outcome, summ
 		t.Fatal(err)
 	}
 	implementationID := productionInvocationID("implementation-run")
-	driver.Script(implementationID, execfake.StageScript{
-		Outcome: outcome,
-		Result:  exec.StageResult{Summary: summary},
-	})
+	driver.Script(implementationID, script)
 	f.submit(t)
 	engine := f.newEngine(t, driver)
 	// Pass one accepts the auto-approved specification and submits the
@@ -277,5 +287,190 @@ func TestProductionDeliveryRefusalReplayStaysInert(t *testing.T) {
 	accepted, err := engine.acceptProductionAttempt(t.Context(), f.run, f.attempt)
 	if err != nil || accepted {
 		t.Fatalf("acceptProductionAttempt after delivery refusal = accepted %t, %v; want false, nil", accepted, err)
+	}
+}
+
+// activeExecutionCount reads the identity's active execution count.
+func (f failedImplementationFixture) activeExecutionCount(t *testing.T, id domain.AuthIdentityID) int {
+	t.Helper()
+	var got int
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		got, err = tx.ActiveIdentityExecutionCount(t.Context(), id)
+		return err
+	}); err != nil {
+		t.Fatalf("ActiveIdentityExecutionCount: %v", err)
+	}
+	return got
+}
+
+// invocationObservation reads the current mirrored observation for the run's
+// implementation invocation. The mirror is upsert-per-invocation, so it holds
+// the latest state, which is what the sequential timeline checks compare.
+func (f failedImplementationFixture) invocationObservation(t *testing.T) domain.ObservedInvocationStatus {
+	t.Helper()
+	var status domain.ObservedInvocationStatus
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		observations, err := tx.ListInvocationObservations(t.Context(), f.run.ID)
+		if err != nil {
+			return err
+		}
+		for _, o := range observations {
+			if o.InvocationID == f.attempt.InvocationID {
+				status = o.Status
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("ListInvocationObservations: %v", err)
+	}
+	return status
+}
+
+// outboxDispatched reports whether the implementation invocation's outbox row
+// is still dispatched.
+func (f failedImplementationFixture) outboxDispatched(t *testing.T) bool {
+	t.Helper()
+	var dispatched bool
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		entry, err := tx.GetOutbox(t.Context(), string(f.attempt.InvocationID))
+		if err != nil {
+			return err
+		}
+		dispatched = entry.Dispatched()
+		return nil
+	}); err != nil {
+		t.Fatalf("GetOutbox: %v", err)
+	}
+	return dispatched
+}
+
+// TestStrandedFailureConvergesWithVisibleTimeline is the engine half of the
+// stranded-dispatch fix (issue #1181): once the driver reports running and then
+// a failed terminal (what the stage driver's bounded recovery grace produces),
+// the engine raises the execution_failure card offering discuss and stop,
+// frees the identity's execution slot, and leaves a coherent timeline. The
+// observation mirror is upsert-per-invocation, so the running-then-failed
+// timeline is proved by reading it between passes rather than as a stored list.
+func TestStrandedFailureConvergesWithVisibleTimeline(t *testing.T) {
+	f := newFailedImplementationFixtureScript(t, execfake.StageScript{
+		RunningInspects: 1,
+		Outcome:         execfake.OutcomeFail,
+		Result:          exec.StageResult{Summary: "recovery of the released export failed after grace"},
+	})
+	identity := domain.AuthIdentityID("auth-1")
+
+	// While the driver still reports running the slot is held and no card exists.
+	if _, err := f.engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("running-pass reconcile: %v", err)
+	}
+	if got := f.invocationObservation(t); got != domain.ObservedStatusRunning {
+		t.Fatalf("observation during running pass = %q, want running", got)
+	}
+	runningCount := f.activeExecutionCount(t, identity)
+	if runningCount < 1 {
+		t.Fatalf("active execution count while running = %d, want the attempt counted", runningCount)
+	}
+	if !f.outboxDispatched(t) {
+		t.Fatal("outbox row is not dispatched during the running pass")
+	}
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		if _, err := tx.GetAttentionItem(t.Context(), f.failureItemID()); !errors.Is(err, store.ErrNotFound) {
+			return errors.New("execution_failure card raised before the terminal")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The failed terminal converges: the card is raised, the slot is freed, the
+	// outbox row is untouched, and the observation mirror shows the failure.
+	if _, err := f.engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("terminal-pass reconcile: %v", err)
+	}
+	item, _ := f.item(t, f.failureItemID())
+	if item.Type != domain.AttentionExecutionFailure || item.Status != domain.StatusOpen {
+		t.Fatalf("execution_failure item = %#v", item)
+	}
+	if !slices.Contains(item.RequestedDecision, domain.ActionDiscuss) ||
+		!slices.Contains(item.RequestedDecision, domain.ActionStop) {
+		t.Fatalf("requested decision = %v, want discuss and stop", item.RequestedDecision)
+	}
+	// The failed outcome frees exactly this attempt's slot. The count is a
+	// delta because the specification invocation on the same identity holds a
+	// slot of its own; the store test pins the absolute 1-to-0 transition.
+	if got := f.activeExecutionCount(t, identity); got != runningCount-1 {
+		t.Fatalf("active execution count after failure = %d, want %d (one slot freed)", got, runningCount-1)
+	}
+	if got := f.invocationObservation(t); got != domain.ObservedStatusFailed {
+		t.Fatalf("observation after failure = %q, want failed", got)
+	}
+	if !f.outboxDispatched(t) {
+		t.Fatal("failure convergence changed the outbox row away from dispatched")
+	}
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		milestones, err := tx.ListRunMilestones(t.Context(), f.run.ID)
+		if err != nil {
+			return err
+		}
+		// invocation_admitted is a defined-but-unrecorded milestone kind in the
+		// current engine, so the timeline's recorded start marker is
+		// invocation_started (the issue contract's admitted marker has no writer
+		// yet; recorded here as the mismatch surfaced in the PR).
+		started := false
+		for _, m := range milestones {
+			if m.Kind == domain.MilestoneInvocationStarted && m.InvocationID != nil &&
+				*m.InvocationID == f.attempt.InvocationID {
+				started = true
+			}
+		}
+		if !started {
+			return fmt.Errorf("milestones %+v lack invocation_started for the attempt", milestones)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// inspectErrorDriver is a StageDriver whose Inspect always fails; only Inspect
+// is exercised on the acceptProductionAttempt refusal path.
+type inspectErrorDriver struct {
+	exec.StageDriver
+	err error
+}
+
+func (d inspectErrorDriver) Inspect(context.Context, domain.InvocationID) (exec.Inspection, error) {
+	return exec.Inspection{}, d.err
+}
+
+// TestPolicyRefusalRecordsRunHold covers the second silent path the fix closes
+// (issue #1181): when acceptProductionAttempt skips an attempt on a mutable
+// admission-policy refusal, it now records a run hold with the classified
+// reason instead of skipping silently.
+func TestPolicyRefusalRecordsRunHold(t *testing.T) {
+	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
+	driver := inspectErrorDriver{
+		err: fmt.Errorf("inspect: %w", store.ErrBackendNotConformant),
+	}
+	engine := f.newEngine(t, driver)
+
+	accepted, err := engine.acceptProductionAttempt(t.Context(), f.run, f.attempt)
+	if err != nil || accepted {
+		t.Fatalf("acceptProductionAttempt on a policy refusal = accepted %t, %v; want false, nil", accepted, err)
+	}
+	var (
+		hold  domain.RunHoldObservation
+		found bool
+	)
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		hold, found, err = tx.GetRunHold(t.Context(), f.run.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("GetRunHold: %v", err)
+	}
+	if !found || hold.Reason != domain.HoldBackendNotConformant {
+		t.Fatalf("run hold = (%+v, found %t), want HoldBackendNotConformant", hold, found)
 	}
 }
