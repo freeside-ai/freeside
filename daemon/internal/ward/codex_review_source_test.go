@@ -3875,3 +3875,58 @@ func TestCodexReviewOutcomeEvidenceGate(t *testing.T) {
 		}
 	})
 }
+
+// TestCodexReviewProviderUsageMeasurements covers Acceptance 2: the Codex
+// provider parses turn.completed usage, and its absence (no event, or malformed
+// counts) reads as nil, matching exec.ExtractClaudeUsage.
+func TestCodexReviewProviderUsageMeasurements(t *testing.T) {
+	observedAt := codexReviewEpoch
+	provider := codexReviewProvider{}
+	reported := func(metric string, quantity int64) exec.UsageMeasurement {
+		return exec.UsageMeasurement{
+			Source: domain.UsageSourceReviewSource, Kind: domain.UsageMeasurementReportedUsage,
+			Metric: metric, Unit: "tokens", Quantity: quantity, Sequence: 1, ObservedAt: observedAt,
+		}
+	}
+
+	t.Run("turn.completed usage yields measurements", func(t *testing.T) {
+		events := []byte(`{"type":"item.started"}` + "\n" +
+			`{"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens":300,"output_tokens":450}}` + "\n")
+		got := provider.usageMeasurements(events, observedAt)
+		want := []exec.UsageMeasurement{
+			reported("input_tokens", 1200),
+			reported("cached_input_tokens", 300),
+			reported("output_tokens", 450),
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("usage = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("last turn.completed wins", func(t *testing.T) {
+		events := []byte(`{"type":"turn.completed","usage":{"input_tokens":1}}` + "\n" +
+			`{"type":"turn.completed","usage":{"input_tokens":9}}` + "\n")
+		got := provider.usageMeasurements(events, observedAt)
+		if !reflect.DeepEqual(got, []exec.UsageMeasurement{reported("input_tokens", 9)}) {
+			t.Fatalf("usage = %#v, want single input_tokens=9", got)
+		}
+	})
+
+	t.Run("no turn.completed yields nil", func(t *testing.T) {
+		if got := provider.usageMeasurements([]byte(`{"type":"item.completed"}`+"\n"), observedAt); got != nil {
+			t.Fatalf("usage = %#v, want nil", got)
+		}
+	})
+
+	t.Run("malformed usage is absence", func(t *testing.T) {
+		for _, line := range []string{
+			`{"type":"turn.completed","usage":{"input_tokens":-1}}`,
+			`{"type":"turn.completed","usage":{"input_tokens":1.5}}`,
+			`{"type":"turn.completed","usage":{"input_tokens":1,"input_tokens":2}}`,
+		} {
+			if got := provider.usageMeasurements([]byte(line+"\n"), observedAt); got != nil {
+				t.Fatalf("usage for %q = %#v, want nil", line, got)
+			}
+		}
+	})
+}
