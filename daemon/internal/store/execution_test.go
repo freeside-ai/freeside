@@ -1593,3 +1593,62 @@ func TestExportRejectionAbsent(t *testing.T) {
 		t.Fatalf("GetExportRejection for an absent row = %v, want %v", err, store.ErrNotFound)
 	}
 }
+
+// TestFailedOutcomeFreesDispatchedExecutionSlot pins the slot-release mechanism
+// the stranded-dispatch grace relies on (issue #1181): an admission with a
+// dispatched outbox row, no export, and no outcome counts as one active
+// execution, and recording a failed execution outcome makes it count as zero.
+func TestFailedOutcomeFreesDispatchedExecutionSlot(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newAdmissionFixture(t, nil)
+	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
+	if err := recordAdmission(t, s, f.admission); err != nil {
+		t.Fatalf("record admission: %v", err)
+	}
+
+	// A dispatched outbox row keyed by the invocation is what the capacity SQL
+	// joins on; the driver died between export and record-commit, so no export
+	// and no outcome row exists yet.
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if _, _, err := tx.EnqueueOutbox(
+			ctx, "inv-1", string(domain.AgentInvocationRequestedKind), []byte("{}"),
+		); err != nil {
+			return err
+		}
+		return tx.MarkOutboxDispatched(ctx, "inv-1")
+	}); err != nil {
+		t.Fatalf("dispatch outbox: %v", err)
+	}
+
+	count := func() int {
+		t.Helper()
+		var got int
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			got, err = tx.ActiveIdentityExecutionCount(ctx, "auth-1")
+			return err
+		}); err != nil {
+			t.Fatalf("ActiveIdentityExecutionCount: %v", err)
+		}
+		return got
+	}
+
+	if got := count(); got != 1 {
+		t.Fatalf("dispatched execution count = %d, want 1", got)
+	}
+
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
+			InvocationID: "inv-1", AdmissionID: f.admission.ID,
+			Status: domain.ExecutionOutcomeFailed, Summary: "recovery abandoned after grace",
+			RecordedAt: admissionEpoch.Add(time.Hour),
+		})
+	}); err != nil {
+		t.Fatalf("record failed outcome: %v", err)
+	}
+
+	if got := count(); got != 0 {
+		t.Fatalf("execution count after failed outcome = %d, want 0", got)
+	}
+}

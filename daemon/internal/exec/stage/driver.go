@@ -81,6 +81,12 @@ type Config struct {
 	Preparation []string
 	// Now supplies the pinned instants a replayed pipeline reuses.
 	Now func() time.Time
+	// RecoveryGrace bounds how long the driver retries recovery of a released
+	// export (phaseExported/phaseImportPending) whose import keeps failing
+	// retryably before it commits a failed outcome and frees the identity's
+	// execution slot (issue #1181). Zero selects defaultRecoveryGrace; the
+	// freesided composition leaves it zero.
+	RecoveryGrace time.Duration
 	// Logger reports what the asynchronous pipeline does. The pipeline has
 	// no caller to return an error to once a handoff is running, so without
 	// it a retained terminal-write failure stays invisible until the next
@@ -123,6 +129,10 @@ type Driver struct {
 	now               func() time.Time
 	lifetime          context.Context
 	logger            *slog.Logger
+	// recoveryGrace bounds retryable recovery of a released export before it is
+	// abandoned as failed (issue #1181); resolved from Config.RecoveryGrace or
+	// defaultRecoveryGrace.
+	recoveryGrace time.Duration
 
 	// mu serializes state transitions per invocation. StartWithInputs owns
 	// duplicate arbitration (exec.MaterializedStageDriver), and the pipeline
@@ -131,8 +141,34 @@ type Driver struct {
 	mu         sync.Mutex
 	running    map[domain.InvocationID]*session
 	recovering map[domain.InvocationID]struct{}
-	closed     bool
+	// deferred tracks, per invocation, how long recovery of a released export
+	// has been failing retryably, so the driver can abandon a permanently
+	// stranded invocation once the grace elapses rather than retry it forever
+	// (issue #1181). Guarded by mu. In memory only: a restart restarts the
+	// clock, and a persistent fault re-accumulates within one more grace.
+	deferred map[domain.InvocationID]recoveryDeferral
+	closed   bool
 }
+
+// recoveryDeferral records the running state of one released export's bounded
+// recovery retry (issue #1181): when it first started failing, the durable
+// phase it was in, the last error text so a changed cause re-logs, and the
+// usage a recovery pass authenticated from the export. The usage is carried
+// forward from the authenticated import path (never re-extracted from the
+// decoded export at abandonment), so an abandoned outcome reports the cost the
+// invocation incurred without trusting unauthenticated evidence.
+type recoveryDeferral struct {
+	first     time.Time
+	phase     phase
+	lastError string
+	usage     []exec.UsageMeasurement
+}
+
+// defaultRecoveryGrace bounds retryable recovery of a released export before
+// the driver abandons it as failed. Long enough to outlast a transient git,
+// disk, or network fault across many reconcile passes; short enough that an
+// identity's only execution slot is not lost for a working day (issue #1181).
+const defaultRecoveryGrace = 30 * time.Minute
 
 // session is one in-flight handoff in this process.
 type session struct {
@@ -355,6 +391,10 @@ func New(cfg Config) (*Driver, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new %s: open seed root: %w", cfg.ErrorPrefix, err)
 	}
+	recoveryGrace := cfg.RecoveryGrace
+	if recoveryGrace <= 0 {
+		recoveryGrace = defaultRecoveryGrace
+	}
 	return &Driver{
 		errorPrefix: cfg.ErrorPrefix, displayName: cfg.DisplayName,
 		dir: cfg.Dir, seedRoot: cfg.SeedRoot, exportRoot: cfg.ExportRoot,
@@ -370,8 +410,10 @@ func New(cfg Config) (*Driver, error) {
 		logger: pipelineLogger(
 			cfg.Logger, strings.ReplaceAll(cfg.ErrorPrefix, " ", "-"),
 		),
+		recoveryGrace:     recoveryGrace,
 		running:           map[domain.InvocationID]*session{},
 		recovering:        map[domain.InvocationID]struct{}{},
+		deferred:          map[domain.InvocationID]recoveryDeferral{},
 		seedCleanupWarned: map[domain.InvocationID]string{},
 	}, nil
 }
@@ -579,6 +621,8 @@ func (d *Driver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Insp
 	in, live, err := d.inspectIntent(ctx, id)
 	if err != nil {
 		if errors.Is(err, ErrRecoveryRetryable) {
+			d.logger.Debug("inspect maps retryable recovery to running",
+				"invocation", string(id), "error", err.Error())
 			return exec.Inspection{Status: exec.StatusRunning}, nil
 		}
 		return exec.Inspection{}, err
@@ -601,6 +645,8 @@ func (d *Driver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Insp
 	// here so every later reconcile pass can retry recovery safely.
 	if err := d.reconcileIntent(ctx, in); err != nil {
 		if errors.Is(err, ErrRecoveryRetryable) {
+			d.logger.Debug("inspect maps retryable reconcile to running",
+				"invocation", string(id), "error", err.Error())
 			return exec.Inspection{Status: exec.StatusRunning}, nil
 		}
 		return exec.Inspection{}, fmt.Errorf("reconcile invocation %s: %w", id, err)
@@ -641,6 +687,12 @@ func (d *Driver) inspectIntent(
 		return intent{}, false, err
 	}
 	if in.Phase == phaseCommitted || in.Phase == phaseLost {
+		// A terminal reconstructed here from a durable outcome (for example when
+		// an abandoned recovery's outcome write landed but its intent-file write
+		// failed) never re-enters reconcileIntent, so drop any lingering recovery
+		// deferral at the same terminal-cleanup point rather than leaking the map
+		// entry for the daemon's lifetime.
+		delete(d.deferred, in.InvocationID)
 		d.reportTerminalSeedCleanup(in)
 	}
 	_, live := d.running[id]
