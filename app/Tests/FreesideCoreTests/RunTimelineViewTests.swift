@@ -141,4 +141,30 @@ import Testing
         #expect(RunDisplay.specificationLabel(active) == "Approved specification")
         #expect(RunDisplay.specificationLabel(ready) == "Approved specification")
     }
+
+    @Test func timelineRequestKeyChangesOnBootstrapAndEpochRotation() throws {
+        let snapshot = try #require(
+            RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID })
+        let cursors = SyncCursors(
+            syncEpoch: "epoch-1", lastFullSnapshotRevision: 10,
+            highestObservedServerRevision: 10)
+        let key = RunTimelineView.TimelineRequestKey(snapshot: snapshot, cursors: cursors)
+
+        // Same cursors and snapshot: an adopted-nothing heartbeat leaves the
+        // key unchanged, so the view does not refetch on every beat.
+        #expect(key == RunTimelineView.TimelineRequestKey(snapshot: snapshot, cursors: cursors))
+
+        // A same-epoch bootstrap advances the full-snapshot revision.
+        let afterBootstrap = SyncCursors(
+            syncEpoch: "epoch-1", lastFullSnapshotRevision: 11,
+            highestObservedServerRevision: 11)
+        #expect(
+            key != RunTimelineView.TimelineRequestKey(snapshot: snapshot, cursors: afterBootstrap))
+
+        // An epoch rotation changes the key even at an equal revision.
+        let afterEpoch = SyncCursors(
+            syncEpoch: "epoch-2", lastFullSnapshotRevision: 10,
+            highestObservedServerRevision: 10)
+        #expect(key != RunTimelineView.TimelineRequestKey(snapshot: snapshot, cursors: afterEpoch))
+    }
 }
