@@ -342,6 +342,26 @@ public actor MockServer {
         }
     }
 
+    /// Appends one milestone to a run's computed timeline and advances both
+    /// the run projection and the timeline under the next revision, modeling a
+    /// daemon observation write that records a new event. `advanceRun` only
+    /// bumps the revision cursors, which cannot model a live run emitting
+    /// timeline events; this can.
+    public func recordMilestone(runID: String, kind: Components.Schemas.RunMilestoneKind) {
+        guard var timeline = timelinesByRunID[runID], var snapshot = runsByID[runID] else { return }
+        revision += 1
+        timeline.milestones.append(
+            .init(
+                run_id: runID,
+                kind: kind,
+                invocation_id: "inv-\(runID)-recorded-\(revision)",
+                recorded_at: currentTime))
+        timeline.as_of_revision = revision
+        timelinesByRunID[runID] = timeline
+        snapshot.as_of_revision = revision
+        runsByID[runID] = snapshot
+    }
+
     public func advanceTime(to instant: Date) {
         currentTime = instant
         convergeProposalSnoozes()

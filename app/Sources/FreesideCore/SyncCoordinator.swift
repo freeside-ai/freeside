@@ -427,9 +427,18 @@ public final class SyncCoordinator {
         do {
             let output = try await store.client.getRunTimeline(
                 path: .init(run_id: runID))
-            guard timelineGenerations[runID] == requestGeneration,
-                requestCacheGeneration == cacheGeneration
-            else { return }
+            guard timelineGenerations[runID] == requestGeneration else { return }
+            guard requestCacheGeneration == cacheGeneration else {
+                // A bootstrap replaced the cache while this read was in
+                // flight, so its result is stale and must be dropped. This is
+                // still the newest request for the run, so nothing else will
+                // clear the `.loading` set on entry; return to `.idle` and let
+                // the view's refetch (keyed on the new full-snapshot revision)
+                // issue a fresh request. Leaving it `.loading` with no request
+                // in flight is what let the spinner stick after a bootstrap.
+                timelineLoadStates[runID] = .idle
+                return
+            }
             switch output {
             case .ok(let ok):
                 let timeline = try ok.body.json
@@ -451,9 +460,14 @@ public final class SyncCoordinator {
                 mark(failureStatus: statusCode)
             }
         } catch {
-            guard timelineGenerations[runID] == requestGeneration,
-                requestCacheGeneration == cacheGeneration
-            else { return }
+            guard timelineGenerations[runID] == requestGeneration else { return }
+            guard requestCacheGeneration == cacheGeneration else {
+                // Same as the success path: a mid-flight bootstrap dropped
+                // this result, and this is still the newest request, so
+                // return to `.idle` rather than leaving a stuck spinner.
+                timelineLoadStates[runID] = .idle
+                return
+            }
             if error is CancellationError || Task.isCancelled {
                 timelineLoadStates[runID] = .idle
                 return
@@ -485,8 +499,21 @@ public final class SyncCoordinator {
         store.replaceAllConversations(with: snapshot.conversations)
         runs = snapshot.runs
         schedules = snapshot.schedules
-        timelinesByRunID = [:]
-        timelineLoadStates = [:]
+        // Timelines are not in the bootstrap payload, so a same-epoch
+        // bootstrap can neither replace nor invalidate a cached one: keep
+        // every timeline whose run the snapshot still lists and drop the
+        // rest. The view refetches after each replacement (its request key
+        // folds in `lastFullSnapshotRevision`), so holding the prior
+        // projection until then is the same trust the relaunch path already
+        // extends to cached timelines. A live run advances the observed
+        // revision every round and so bootstraps every round; discarding the
+        // timeline here is what made the detail pane flap to a spinner. The
+        // epoch-change path above already cleared both through
+        // `discardCache()`, and revisions never compare across epochs, so a
+        // cross-epoch timeline is never retained.
+        let listedRunIDs = Set(snapshot.runs.map(\.run.id))
+        timelinesByRunID = timelinesByRunID.filter { listedRunIDs.contains($0.key) }
+        timelineLoadStates = timelineLoadStates.filter { listedRunIDs.contains($0.key) }
         cursors = SyncCursors(
             syncEpoch: snapshot.sync_epoch,
             lastFullSnapshotRevision: snapshot.revision,

@@ -393,6 +393,91 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         #expect(coordinator.timelineLoadStates[RunFixtures.activeRunID] == .idle)
     }
 
+    @Test func sameEpochBootstrapKeepsALoadedTimeline() async throws {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        await coordinator.refreshTimeline(for: RunFixtures.activeRunID)
+        #expect(coordinator.timelinesByRunID[RunFixtures.activeRunID] != nil)
+        let before = try #require(coordinator.cursors)
+
+        // An unrelated advance makes the next heartbeat bootstrap; the
+        // bootstrap no longer discards the timeline it did not carry.
+        await server.advance(itemID: AttentionFixtures.defaultInbox()[0].item.id)
+        await coordinator.heartbeat()
+
+        let after = try #require(coordinator.cursors)
+        #expect(after.lastFullSnapshotRevision > before.lastFullSnapshotRevision)
+        #expect(coordinator.timelinesByRunID[RunFixtures.activeRunID] != nil)
+    }
+
+    @Test func steadyRunActivityNeverDropsTheTimeline() async throws {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        await coordinator.refreshTimeline(for: RunFixtures.activeRunID)
+        let baseCount = try #require(
+            coordinator.timelinesByRunID[RunFixtures.activeRunID]
+        ).milestones.count
+
+        for round in 1...3 {
+            await server.recordMilestone(runID: RunFixtures.activeRunID, kind: .invocation_started)
+            // The recorded event advances the revision, so `refresh` bootstraps
+            // every round; the retained timeline must survive each one.
+            await coordinator.refresh()
+            #expect(coordinator.timelinesByRunID[RunFixtures.activeRunID] != nil)
+            await coordinator.refreshTimeline(for: RunFixtures.activeRunID)
+            let count = try #require(
+                coordinator.timelinesByRunID[RunFixtures.activeRunID]
+            ).milestones.count
+            #expect(count == baseCount + round)
+        }
+    }
+
+    @Test func bootstrapDropsTimelinesOfRunsNoLongerListed() async {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        await coordinator.refreshTimeline(for: RunFixtures.activeRunID)
+        #expect(coordinator.timelinesByRunID[RunFixtures.activeRunID] != nil)
+
+        await server.setBootstrapTransform { snapshot in
+            var snapshot = snapshot
+            snapshot.runs = snapshot.runs.filter { $0.run.id != RunFixtures.activeRunID }
+            return snapshot
+        }
+        await server.advance(itemID: AttentionFixtures.defaultInbox()[0].item.id)
+        await coordinator.heartbeat()
+
+        #expect(coordinator.timelinesByRunID[RunFixtures.activeRunID] == nil)
+    }
+
+    @Test func aTimelineResponseDroppedByABootstrapIsNotLeftLoading() async {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        await server.setBeforeRespond { operationID in
+            if operationID == "getRunTimeline" {
+                await reached.open()
+                await release.wait()
+            }
+        }
+
+        let refresh = Task { await coordinator.refreshTimeline(for: RunFixtures.activeRunID) }
+        await reached.wait()
+        // A same-epoch bootstrap replaces the cache while the read is in
+        // flight, so its response is dropped. It is still the newest request,
+        // so nothing else clears the `.loading` set on entry.
+        await server.advanceRun(id: RunFixtures.activeRunID)
+        await coordinator.heartbeat()
+        await release.open()
+        await refresh.value
+
+        #expect(coordinator.timelineLoadStates[RunFixtures.activeRunID] == .idle)
+    }
+
     @Test func partialRefetchAdvancesOnlyTheObservedCursor() async throws {
         // Test 11, client half: a concurrent write refetched item-by-item
         // must not mark the whole cache current; the heartbeat then finds
