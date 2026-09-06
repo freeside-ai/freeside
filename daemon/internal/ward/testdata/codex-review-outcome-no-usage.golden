@@ -1,0 +1,38 @@
+{
+  "invocation_id": "review-golden-1",
+  "result": {
+    "invocation_id": "review-golden-1",
+    "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "provider": "openai",
+    "model_configuration": "gpt-codex/high",
+    "configuration_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "instruction_digest": "sha256:0be72fc9d7967e681492f7dbbb6ef4fc66e1f7fc8e4d1a887fb766fc38282a35",
+    "cost_owner": "subscription:owner",
+    "completed_at": "2026-08-03T12:00:00Z",
+    "completion_evidence": "sha256:0dcfbbd6a966b036accec28e2269e87e9e8c28bd779ec5bd493dbde44f4222ad",
+    "findings": [
+      {
+        "id": "review-99ed897149dddfe622171aac",
+        "run_id": "run-golden",
+        "source": "codex_local",
+        "severity": "P2",
+        "location": {
+          "path": "main.go",
+          "start_line": 10,
+          "end_line": 12
+        },
+        "message": "re-derive the approval instead of trusting the stored bit",
+        "raw_text": "re-derive the approval instead of trusting the stored bit",
+        "created_at": "2026-08-03T12:00:00Z"
+      }
+    ],
+    "usage": null
+  },
+  "collection_evidence": "sha256:7a39f5678d91b839d4f6473d6285b7f855c13daa04051a5366074ebcec9ba380",
+  "collection": {
+    "exit_status": 0,
+    "result": "eyJmaW5kaW5ncyI6W3sic2V2ZXJpdHkiOiJQMiIsImxvY2F0aW9uIjp7InBhdGgiOiJtYWluLmdvIiwic3RhcnRfbGluZSI6MTAsImVuZF9saW5lIjoxMn0sImV4cGxhbmF0aW9uIjoicmUtZGVyaXZlIHRoZSBhcHByb3ZhbCBpbnN0ZWFkIG9mIHRydXN0aW5nIHRoZSBzdG9yZWQgYml0In1dfQ==",
+    "events": "eyJ0eXBlIjoidHVybi5jb21wbGV0ZWQifQo="
+  }
+}

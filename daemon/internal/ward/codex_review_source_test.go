@@ -3930,3 +3930,96 @@ func TestCodexReviewProviderUsageMeasurements(t *testing.T) {
 		}
 	})
 }
+
+// TestCodexReviewOutcomeGolden pins the persisted result-outcome shape, including
+// the retained collection and both completion-evidence digests, in the
+// usage-present and usage-absent states so the two are visibly distinguishable
+// (Acceptance 4). Both fixtures are self-consistent under the read gates.
+func TestCodexReviewOutcomeGolden(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		golden string
+		events string
+	}{
+		{
+			"with usage", "codex-review-outcome-result",
+			`{"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens":300,"output_tokens":450}}`,
+		},
+		{"without usage", "codex-review-outcome-no-usage", `{"type":"turn.completed"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outcome := codexGoldenReviewOutcome(tc.events)
+			if err := errors.Join(
+				outcome.Validate(), outcome.verifyCompletionEvidence(codexReviewProvider{}),
+			); err != nil {
+				t.Fatalf("golden outcome is not self-consistent: %v", err)
+			}
+			body, err := json.MarshalIndent(outcome, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			golden.Assert(t, tc.golden, append(body, '\n'))
+		})
+	}
+}
+
+// TestCodexReviewWorkspaceBindingSurvivesCleanupThenReconcileRemovesIt covers
+// Acceptance 3: normal cleanup after a completed review leaves the
+// workspace-ownership row, and the next reconcile's orphan sweep removes it once
+// the launch intent is closed.
+func TestCodexReviewWorkspaceBindingSurvivesCleanupThenReconcileRemovesIt(t *testing.T) {
+	ctx := context.Background()
+	fx := newHandoffFixture(t)
+	seedSpec := fx.seed(t)
+	backend := fx.codexReviewLifecycle(t)
+	cfg, requestSpec := testCodexReview(t)
+	journal := &fakeCodexReviewJournal{}
+	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
+	source, err := NewCodexReviewSource(sourceConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := domain.InvocationID("review-workspace-lifetime-1")
+	request := exec.ReviewRequest{
+		RunID: "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch.Add(-time.Minute),
+	}
+	if err := source.RequestReview(ctx, id, request); err != nil {
+		t.Fatal(err)
+	}
+	fx.rt.exportTarPath = buildTar(t, []tarEntry{
+		{name: strings.TrimPrefix(codexReviewStatusPath, "/"), body: []byte("0\n")},
+		{name: strings.TrimPrefix(codexReviewEventsPath, "/"), body: []byte(`{"type":"turn.completed","usage":{"input_tokens":11}}` + "\n")},
+		{name: strings.TrimPrefix(codexReviewResultPath, "/"), body: []byte(`{"findings":[]}`)},
+	})
+	var status exec.Status
+	for i := 0; i < 6 && status != exec.StatusCompleted; i++ {
+		status, err = source.Inspect(ctx, id)
+		if err != nil {
+			t.Fatalf("inspect: %v", err)
+		}
+	}
+	if status != exec.StatusCompleted {
+		t.Fatalf("review did not complete: status %q", status)
+	}
+	if _, err := journal.GetCodexReviewWorkspaceBinding(ctx, string(id)); err != nil {
+		t.Fatalf("normal cleanup removed the workspace binding: %v", err)
+	}
+	leaser, err := NewRuntimeCodexReviewVolumeLeaser(fx.rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := NewCodexReviewRecovery(backend, journal, leaser, cfg.InputRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recovery.Reconcile(ctx); err != nil {
+		t.Fatalf("reconcile after completed review: %v", err)
+	}
+	if _, err := journal.GetCodexReviewWorkspaceBinding(ctx, string(id)); !errors.Is(err, ErrCodexReviewWorkspaceNotFound) {
+		t.Fatalf("reconcile left the workspace binding: %v", err)
+	}
+}
