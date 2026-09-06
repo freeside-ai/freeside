@@ -128,7 +128,10 @@ struct RunsListView: View {
         }
     }
 
-    private func row(_ snapshot: Components.Schemas.RunSnapshot) -> some View {
+    private func row(
+        _ snapshot: Components.Schemas.RunSnapshot,
+        now: Date? = nil
+    ) -> some View {
         RunRowView(
             run: snapshot.run,
             identityLine: RunDisplay.identityLine(snapshot.run, runs: runs),
@@ -137,7 +140,8 @@ struct RunsListView: View {
             schedules: schedules.filter {
                 $0.schedule.run_id == snapshot.run.id && $0.schedule.status == .armed
             },
-            isSelected: selection == snapshot.run.id)
+            isSelected: selection == snapshot.run.id,
+            now: now)
     }
 
     private func repairFilterAndSelection() {
@@ -175,10 +179,10 @@ struct RunsListView: View {
     /// The project-owned row composition without List and Picker, whose
     /// AppKit-backed controls ImageRenderer cannot draw off-screen.
     @ViewBuilder
-    func screenshotContent() -> some View {
+    func screenshotContent(now: Date) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(visibleRuns.prefix(5)), id: \.run.id) { snapshot in
-                row(snapshot)
+                row(snapshot, now: now)
             }
         }
         .padding()
@@ -244,9 +248,23 @@ struct RunRowView: View {
     let spendLine: String?
     let schedules: [Components.Schemas.ScheduleSnapshot]
     var isSelected = false
+    /// A fixed clock for tests and screenshots. A live row leaves it nil and
+    /// ticks its own, so the relative last-active text ages without a data
+    /// change, as `InboxRowView` does.
+    var now: Date?
     var differentiateWithoutColorOverride: Bool?
 
     var body: some View {
+        if let now {
+            card(at: now)
+        } else {
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                card(at: context.date)
+            }
+        }
+    }
+
+    private func card(at now: Date) -> some View {
         HStack(spacing: 0) {
             if isSelected {
                 Rectangle()
@@ -254,7 +272,7 @@ struct RunRowView: View {
                     .frame(width: 4)
                     .accessibilityHidden(true)
             }
-            content
+            content(at: now)
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -276,7 +294,25 @@ struct RunRowView: View {
         differentiateWithoutColorOverride ?? differentiateWithoutColor
     }
 
-    private var content: some View {
+    /// The meta line, whose last-active segment is coarse; macOS hover
+    /// carries the exact instant, as inbox rows do.
+    @ViewBuilder
+    private func metaText(at now: Date) -> some View {
+        let text = Text(RunDisplay.metaLine(run, now: now))
+            .font(FreesideFont.monoCaption)
+            .foregroundStyle(Color.inkDim)
+        #if os(macOS)
+            if let exact = RunDisplay.exactActivityTimestamp(run) {
+                text.help(exact)
+            } else {
+                text
+            }
+        #else
+            text
+        #endif
+    }
+
+    private func content(at now: Date) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             if dynamicTypeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 7) {
@@ -295,9 +331,7 @@ struct RunRowView: View {
                     }
                 }
             }
-            Text(RunDisplay.metaLine(run))
-                .font(FreesideFont.monoCaption)
-                .foregroundStyle(Color.inkDim)
+            metaText(at: now)
             StageRail(
                 title: nil,
                 presentation: RunDisplay.stageRail(run),
@@ -421,6 +455,12 @@ enum RunDisplay {
         case completion(String)
     }
 
+    /// Newest activity first, falling back to submission, with undated runs
+    /// last and the id as the tie-breaker. Ordering by last activity lets an
+    /// operator find a run relative to the last thing that happened to it,
+    /// which is what the list is scanned for; the cost is that a late
+    /// observation can lift a finished run above later-started ones, so the
+    /// row shows the instant that decided its place.
     static func sortedRuns(
         _ runs: [Components.Schemas.RunSnapshot]
     ) -> [Components.Schemas.RunSnapshot] {
@@ -456,17 +496,34 @@ enum RunDisplay {
         return parts.joined(separator: " · ")
     }
 
-    /// The row's meta line: project, work unit when named, and the start
-    /// clock time when the daemon recorded one.
-    static func metaLine(_ run: Components.Schemas.Run) -> String {
+    /// The row's meta line: project, work unit when named, and when the run
+    /// was last active. The activity instant is the one `sortedRuns` orders
+    /// by, so the list's order can be read off the cards. Under a day it
+    /// reads as the inbox's coarse relative time; from a day on it carries
+    /// the date, so two runs at the same clock time on different days never
+    /// read alike. The submission instant stays on the run timeline.
+    static func metaLine(_ run: Components.Schemas.Run, now: Date) -> String {
         var parts = [projectName(run)]
         if let workUnit = run.display_names?.value1.work_unit.text, !workUnit.isEmpty {
             parts.append(workUnit)
         }
-        if let created = run.created_at {
-            parts.append("started \(created.formatted(date: .omitted, time: .shortened))")
+        if let activity = run.last_activity_at {
+            parts.append(lastActiveSegment(activity, now: now))
         }
         return parts.joined(separator: " · ")
+    }
+
+    private static func lastActiveSegment(_ activity: Date, now: Date) -> String {
+        guard now.timeIntervalSince(activity) < 86_400 else {
+            return "last active \(activity.formatted(date: .abbreviated, time: .shortened))"
+        }
+        return "last active \(AttentionDisplay.relativeRowTime(activity, now: now)) ago"
+    }
+
+    /// The exact last-activity instant behind the row's coarse segment,
+    /// for the macOS hover help.
+    static func exactActivityTimestamp(_ run: Components.Schemas.Run) -> String? {
+        run.last_activity_at?.formatted(.iso8601)
     }
 
     /// The daemon's production lane records its implementation stage as
