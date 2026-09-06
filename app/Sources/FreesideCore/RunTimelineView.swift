@@ -8,10 +8,25 @@ import SwiftUI
 #endif
 
 struct RunTimelineView: View {
-    private struct RequestID: Hashable {
+    /// Keys the timeline refetch task. It changes on the run's own revision
+    /// and, through `lastFullSnapshotRevision`, on every same-epoch bootstrap:
+    /// a live run bootstraps each round without its own row changing, and the
+    /// detail must refetch then to keep the observations current. The epoch
+    /// participates because restored revisions are incomparable and may equal
+    /// an old value. Internal, not private, so a test can build it without a
+    /// view.
+    struct TimelineRequestKey: Hashable {
         let runID: String
         let syncEpoch: String?
+        let lastFullSnapshotRevision: Int64?
         let revision: Int64
+
+        init(snapshot: Components.Schemas.RunSnapshot, cursors: SyncCursors?) {
+            runID = snapshot.run.id
+            syncEpoch = cursors?.syncEpoch
+            lastFullSnapshotRevision = cursors?.lastFullSnapshotRevision
+            revision = snapshot.as_of_revision
+        }
     }
 
     let coordinator: SyncCoordinator
@@ -51,15 +66,12 @@ struct RunTimelineView: View {
             .foregroundStyle(Color.ink)
         }
         .navigationTitle(snapshot.run.project_id)
-        // Every canonical replacement clears cached timelines because they
-        // are not part of bootstrap. Epoch and revision both participate:
-        // restored revisions are incomparable and may equal the old value.
-        .task(
-            id: RequestID(
-                runID: snapshot.run.id,
-                syncEpoch: coordinator.cursors?.syncEpoch,
-                revision: snapshot.as_of_revision)
-        ) {
+        // A bootstrap now keeps the cached timeline (SyncCoordinator.adopt);
+        // this key still changes on every same-epoch bootstrap, so the view
+        // refetches to replace the retained projection while cached content
+        // stays on screen. The three body branches keep their order, so
+        // cached content wins over a `.loading` spinner between rounds.
+        .task(id: TimelineRequestKey(snapshot: snapshot, cursors: coordinator.cursors)) {
             await coordinator.refreshTimeline(for: snapshot.run.id)
         }
     }
