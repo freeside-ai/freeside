@@ -33,6 +33,10 @@ count=$((count + 1))
 printf '%s\n' "$count" >"$count_file"
 line=$(sed -n "${count}p" "$sequence")
 [[ -n "$line" ]] || line=$(tail -1 "$sequence")
+if [[ "$line" == "__UNREADABLE__" ]]; then
+	echo 'freesided follow: observe snapshot: begin: database is locked (5) (SQLITE_BUSY)' >&2
+	exit 1
+fi
 printf '%s\n' "$line"
 STUB
 chmod +x "$stub"
@@ -156,5 +160,70 @@ write_sequence run-impl "$(snapshot pending pending)"
 run_case timeout "" 1 124
 assert_contains "$fixture_root/timeout/stderr" 'timed out supervising implementation run=run-impl'
 assert_contains "$fixture_root/timeout/snapshot.json" '"state":"pending"'
+
+# A lock collision against the live database is a transient, not a run
+# failure: the supervisor retries and the run still reaches publication.
+write_sequence run-impl \
+	"__UNREADABLE__" \
+	"__UNREADABLE__" \
+	"$(snapshot publication_ready published)" \
+	"$(snapshot published published)"
+run_case transient-observation "" 3 0
+assert_contains "$fixture_root/transient-observation/stderr" 'transient observation failure 1/10'
+assert_contains "$fixture_root/transient-observation/stderr" 'transient observation failure 2/10'
+assert_contains "$fixture_root/transient-observation/stderr" 'implementation run=run-impl state=published'
+
+# Observation that never gets through is still terminal, bounded by the
+# consecutive-failure budget rather than retried until the global timeout.
+write_sequence run-impl "__UNREADABLE__"
+unreadable_dir=$fixture_root/unreadable
+mkdir -p "$unreadable_dir"
+set +e
+FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES=3 \
+	real_work_supervise "$stub" /state/freeside.db "" run-impl "" \
+	30 "$unreadable_dir/snapshot.json" 0.01 2>"$unreadable_dir/stderr"
+unreadable_status=$?
+set -e
+if [[ "$unreadable_status" -ne 1 ]]; then
+	echo "unreadable: status=$unreadable_status, want 1" >&2
+	cat "$unreadable_dir/stderr" >&2
+	exit 1
+fi
+assert_contains "$unreadable_dir/stderr" 'could not observe implementation run=run-impl after 3 consecutive attempts'
+
+# A malformed or zero-padded numeric override is rejected before supervision
+# rather than aborting under nounset or erroring on octal every observation.
+assert_invalid_config() {
+	local name=$1 max_override=$2 timeout=$3 want=$4
+	local case_dir=$fixture_root/$name status
+	mkdir -p "$case_dir"
+	write_sequence run-impl "$(snapshot published published)"
+	set +e
+	if [[ -n "$max_override" ]]; then
+		FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES=$max_override \
+			real_work_supervise "$stub" /state/freeside.db "" run-impl "" \
+			"$timeout" "$case_dir/snapshot.json" 0.01 2>"$case_dir/stderr"
+	else
+		real_work_supervise "$stub" /state/freeside.db "" run-impl "" \
+			"$timeout" "$case_dir/snapshot.json" 0.01 2>"$case_dir/stderr"
+	fi
+	status=$?
+	set -e
+	if [[ "$status" -ne 2 ]]; then
+		echo "$name: status=$status, want 2" >&2
+		cat "$case_dir/stderr" >&2
+		exit 1
+	fi
+	assert_contains "$case_dir/stderr" "$want"
+}
+
+assert_invalid_config max-observation-nonnumeric abc 3 \
+	'FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES must be a positive integer, got: abc'
+assert_invalid_config max-observation-octal 09 3 \
+	'FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES must be a positive integer, got: 09'
+assert_invalid_config timeout-nonnumeric "" abc \
+	'supervision timeout must be a positive integer, got: abc'
+assert_invalid_config timeout-octal "" 09 \
+	'supervision timeout must be a positive integer, got: 09'
 
 echo "run-real-work supervision fixtures passed"

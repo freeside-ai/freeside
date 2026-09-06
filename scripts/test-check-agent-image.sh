@@ -161,6 +161,7 @@ begin_case() {
   unset FREESIDE_CHECK_AGENT_IMAGE_RUNTIME_BOUND_SECONDS
   unset FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS
   unset FREESIDE_REAL_RUN_TIMEOUT_SECONDS
+  unset FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES
   printf 'ok' >"$CASE_DIR/create_mode"
   echo "case: $CASE"
 }
@@ -1264,6 +1265,24 @@ run_real_work lifecycle current ok orphan
 assert_rc 1
 assert_contains "exact-resource cleanup failed; preserving the stale rig manifest"
 assert_helper_stopped
+
+begin_case "58a an invalid supervision timeout refuses before the rig and submit"
+export FREESIDE_REAL_RUN_TIMEOUT_SECONDS=abc
+run_real_work lifecycle
+assert_rc 2
+assert_contains "FREESIDE_REAL_RUN_TIMEOUT_SECONDS must be a positive integer"
+assert_not_exists "$CASE_DIR/rig-hold.args"
+assert_not_exists "$CASE_DIR/submit.called"
+assert_not_exists "$CASE_DIR/daemon.args"
+
+begin_case "58b an invalid observation-failure budget refuses before the rig and submit"
+export FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES=09
+run_real_work lifecycle
+assert_rc 2
+assert_contains "FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES must be a positive integer"
+assert_not_exists "$CASE_DIR/rig-hold.args"
+assert_not_exists "$CASE_DIR/submit.called"
+assert_not_exists "$CASE_DIR/daemon.args"
 
 # --------------------- detector battery: adversarial input-space fixtures
 # Each document stands in for the whole inspect report. Duplicates of every

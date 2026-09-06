@@ -25,11 +25,29 @@ real_work_report_failure() {
 # implementation run, then follows that run to publication or actionable
 # attention. It keeps reconciliation live through actionable attention, and
 # returns 0 once publication is durably accepted, 124 for the global timeout,
-# and 1 for terminal or observation failure.
+# 1 for a terminal state or for observation that stays unreadable across
+# FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES consecutive attempts (default 10),
+# and 2 for an invalid numeric configuration.
 real_work_supervise() {
 	local freesided=$1 db_path=$2 specification_run_id=$3 implementation_run_id=$4
 	local daemon_pid=$5 timeout_seconds=$6 snapshot_path=$7 interval_seconds=${8:-1}
 	local lane run_id state previous_state="" state_changed deadline
+	local observation_failures=0
+	local max_observation_failures=${FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES:-10}
+	# Both counters drive Bash arithmetic below. A malformed value aborts under
+	# nounset and a zero-padded one parses as invalid octal, so an unchecked
+	# operator override would either kill supervision or error on every
+	# observation until the global timeout. Reject anything but a positive
+	# base-10 integer up front, matching run-real-work.sh's sibling rig-timeout
+	# guard, so the operator sees the mistake immediately.
+	if [[ ! "$timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
+		echo "run-real-work: supervision timeout must be a positive integer, got: $timeout_seconds" >&2
+		return 2
+	fi
+	if [[ ! "$max_observation_failures" =~ ^[1-9][0-9]*$ ]]; then
+		echo "run-real-work: FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES must be a positive integer, got: $max_observation_failures" >&2
+		return 2
+	fi
 	deadline=$((SECONDS + timeout_seconds))
 	if [[ -n "$specification_run_id" ]]; then
 		lane=specification
@@ -52,9 +70,20 @@ real_work_supervise() {
 			snapshot_args+=(-approved-recipe "$FREESIDE_REAL_RUN_APPROVED_RECIPE")
 		fi
 		if ! "$freesided" "${snapshot_args[@]}" >"$snapshot_path"; then
-			echo "run-real-work: could not observe $lane run=$run_id" >&2
-			return 1
+			# An observation runs against the same SQLite file the daemon is
+			# writing, so a lock collision (SQLITE_BUSY) is an expected
+			# transient, not a run failure. Retry on the observation cadence
+			# and fail only when the reader cannot get through at all.
+			observation_failures=$((observation_failures + 1))
+			if ((observation_failures >= max_observation_failures)); then
+				echo "run-real-work: could not observe $lane run=$run_id after $observation_failures consecutive attempts" >&2
+				return 1
+			fi
+			echo "run-real-work: transient observation failure $observation_failures/$max_observation_failures for $lane run=$run_id; retrying" >&2
+			sleep "$interval_seconds"
+			continue
 		fi
+		observation_failures=0
 		state=$(real_work_snapshot_field "$snapshot_path" state)
 		if [[ -z "$state" ]]; then
 			echo "run-real-work: snapshot for $lane run=$run_id has no state" >&2
