@@ -58,6 +58,12 @@
 #                                    agent may rewrite (no match-everything
 #                                    default: it is a containment control)
 # Optional environment:
+#   FREESIDE_REAL_RUN_TIMEOUT_SECONDS global supervision deadline in seconds;
+#                                    a positive integer (default 2400)
+#   FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES consecutive transient
+#                                    observation-failure budget before the run
+#                                    is abandoned; a positive integer
+#                                    (default 10)
 #   FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS clean rig-holder shutdown
 #                                    bound (default 30)
 #   FREESIDE_REAL_RUN_DIAGNOSTIC_DIR operator-visible diagnostic destination
@@ -169,9 +175,23 @@ db_path="$FREESIDE_REAL_RUN_STATE_ROOT/freeside.db"
 listen_address="$FREESIDE_REAL_RUN_LISTEN"
 rig_release_timeout=${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}
 diagnostic_dir=${FREESIDE_REAL_RUN_DIAGNOSTIC_DIR:-$PWD}
+supervision_timeout=${FREESIDE_REAL_RUN_TIMEOUT_SECONDS:-2400}
 
 if [[ ! "$rig_release_timeout" =~ ^[1-9][0-9]*$ ]]; then
 	echo "run-real-work: FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS must be a positive integer" >&2
+	exit 2
+fi
+# Validate the supervision numeric overrides here, before the rig lease, submit,
+# and daemon start, not only where real_work_supervise consumes them. A value
+# rejected after submit would tear down a healthy daemon over an already
+# dispatched invocation, the exact slot-consuming stranding this harness exists
+# to avoid. real_work_supervise keeps its own defensive check for other callers.
+if [[ ! "$supervision_timeout" =~ ^[1-9][0-9]*$ ]]; then
+	echo "run-real-work: FREESIDE_REAL_RUN_TIMEOUT_SECONDS must be a positive integer" >&2
+	exit 2
+fi
+if [[ ! "${FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES:-10}" =~ ^[1-9][0-9]*$ ]]; then
+	echo "run-real-work: FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES must be a positive integer" >&2
 	exit 2
 fi
 if [[ ! -d "$diagnostic_dir" ]]; then
@@ -599,7 +619,7 @@ fi
 set +e
 real_work_supervise "$workdir/freesided" "$db_path" "$specification_run_id" \
 	"$implementation_run_id" "$daemon_pid" \
-	"${FREESIDE_REAL_RUN_TIMEOUT_SECONDS:-2400}" "$last_supervision_snapshot"
+	"$supervision_timeout" "$last_supervision_snapshot"
 supervision_status=$?
 set -e
 if [[ "$supervision_status" -ne 0 ]]; then
