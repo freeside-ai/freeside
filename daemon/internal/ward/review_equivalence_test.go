@@ -184,6 +184,12 @@ func oldNormalizeCollection(
 	result.CompletionEvidence, _ = oldReviewResultEvidence(result, collectionEvidence)
 	return CodexReviewSourceOutcome{
 		InvocationID: id, Result: &result, CollectionEvidence: collectionEvidence,
+		// #1182 retains the raw collection alongside the digest so the evidence
+		// resolves; the equivalence property covers the finding-normalization
+		// decisions, so the reference mirrors the retained collection too.
+		Collection: &CodexReviewRetainedCollection{
+			ExitStatus: collection.ExitStatus, Result: collection.Result, Events: collection.Events,
+		},
 	}
 }
 

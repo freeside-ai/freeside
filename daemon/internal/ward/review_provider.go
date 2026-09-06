@@ -189,8 +189,10 @@ func (codexReviewProvider) terminalFailureMessage(events []byte) string {
 	return codexTerminalFailureMessage(events)
 }
 
-func (codexReviewProvider) usageMeasurements([]byte, time.Time) []exec.UsageMeasurement {
-	return nil
+func (codexReviewProvider) usageMeasurements(
+	events []byte, observedAt time.Time,
+) []exec.UsageMeasurement {
+	return codexUsageMeasurements(events, observedAt)
 }
 
 func (codexReviewProvider) reviewContainerSuffix() string { return "-codex" }

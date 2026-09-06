@@ -38,13 +38,24 @@ type CodexReviewJournal interface {
 	ListCodexReviewOutcomeIDs(context.Context) ([]string, error)
 	MarkCodexReviewOutcomeReady(context.Context, string) error
 	// PutCodexReviewWorkspaceBinding records the ward-created candidate volume
-	// before any review topology may attach it.
+	// before any review topology may attach it. The row is live
+	// volume-ownership provenance, not review history: it exists while ward may
+	// still own the candidate volume. Normal review cleanup deletes the volume
+	// and closes the launch intent but deliberately leaves this row; the next
+	// CodexReviewRecovery.Reconcile orphan sweep removes it once the intent is
+	// closed or gone. So the table is expected to be empty after a completed
+	// review's cleanup plus one reconcile pass, even though reviews ran.
 	PutCodexReviewWorkspaceBinding(context.Context, CodexReviewWorkspaceBinding) error
+	// DeleteCodexReviewWorkspaceBinding removes the provenance row. It is called
+	// by the orphan sweep (see PutCodexReviewWorkspaceBinding), not by normal
+	// review cleanup, so the row outlives a single review and drains at the next
+	// reconcile once its launch intent is closed.
 	DeleteCodexReviewWorkspaceBinding(context.Context, CodexReviewWorkspaceBinding) error
 	ListCodexReviewWorkspaceIDs(context.Context) ([]string, error)
 	// GetCodexReviewWorkspaceBinding returns provenance durably written by
 	// the ward lifecycle that created the candidate volume. CodexReview treats
 	// every returned field as a claim and re-matches it to the live runtime.
+	// The row's lifetime is documented on PutCodexReviewWorkspaceBinding.
 	GetCodexReviewWorkspaceBinding(context.Context, string) (CodexReviewWorkspaceBinding, error)
 	// BeginCodexReviewIntent durably records the owner and every deterministic
 	// object name before a lease or runtime call can create an object.
@@ -160,6 +171,11 @@ func codexReviewLeaseVolumes(workspaceVolume, shadowVolume, snapshotVolume strin
 
 // CodexReviewWorkspaceBinding is the minimum prior ward provenance needed to
 // authenticate a candidate volume without adopting its self-reported labels.
+// The row lives while ward may own the candidate volume: PrepareCodexReviewWorkspace
+// writes it before creating the volume, normal cleanup leaves it, and the next
+// CodexReviewRecovery.Reconcile orphan sweep deletes it once the launch intent
+// is closed or missing. An empty workspace table after completed reviews is
+// therefore expected, not lost history.
 type CodexReviewWorkspaceBinding struct {
 	SourceRunID         string
 	Volume              string

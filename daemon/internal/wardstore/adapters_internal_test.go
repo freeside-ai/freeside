@@ -339,6 +339,10 @@ func TestCodexReviewJournalRejectsRewrittenOutcomeAuthority(t *testing.T) {
 		}
 		outcome := ward.CodexReviewSourceOutcome{
 			InvocationID: domain.InvocationID(id), Result: &result, CollectionEvidence: collectionEvidence,
+			// #1182: a result outcome retains the raw collection; wardstore's shape
+			// gate accepts any bounds-valid collection (the provider-aware evidence
+			// recompute lives in the ward domain layer).
+			Collection: &ward.CodexReviewRetainedCollection{Result: []byte("{}"), Events: []byte("ev\n")},
 		}
 		if err := adapters.Journal.PutCodexReviewOutcome(ctx, id, outcome); err != nil {
 			t.Fatal(err)
@@ -374,6 +378,7 @@ func TestCodexReviewJournalRejectsRewrittenOutcomeAuthority(t *testing.T) {
 		}
 		body, err := marshalCodexReview(ward.CodexReviewSourceOutcome{
 			InvocationID: domain.InvocationID(id), Result: &result, CollectionEvidence: collectionEvidence,
+			Collection: &ward.CodexReviewRetainedCollection{Result: []byte("{}"), Events: []byte("ev\n")},
 		})
 		if err != nil {
 			t.Fatal(err)

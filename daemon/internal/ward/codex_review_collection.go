@@ -26,6 +26,22 @@ type CodexReviewCollection struct {
 	Events     []byte
 }
 
+// CodexReviewRetainedCollection is the raw collection an outcome retains so its
+// completion_evidence can be resolved after the fact. collection_evidence hashes
+// exactly these three fields, so keeping them lets verifyCompletionEvidence
+// recompute the digest instead of trusting a stored hash that resolves to
+// nothing (the #1182 defect). The bytes carry the reviewer's raw JSONL
+// transcript and structured result verbatim; both may hold invalid UTF-8
+// (decodeCodexReview already tolerates it), so they are []byte, not string: a
+// string round-trip through json.Marshal would replace those bytes and break the
+// digest. The row pays base64 for that fidelity. The retained collection is
+// present on an outcome exactly when CollectionEvidence is set.
+type CodexReviewRetainedCollection struct {
+	ExitStatus int    `json:"exit_status"`
+	Result     []byte `json:"result"`
+	Events     []byte `json:"events"`
+}
+
 func (b *CodexReviewLifecycle) InspectCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, runID string,
 ) (ContainerState, error) {
