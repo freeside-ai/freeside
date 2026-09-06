@@ -3,6 +3,7 @@ package ward
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 type testReviewInstructionArtifacts map[domain.Digest][]byte
@@ -3245,12 +3247,16 @@ func TestCodexReviewSourceVerifyRejectsSwappedInvocation(t *testing.T) {
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		CostOwner:           "owner", CompletedAt: codexReviewEpoch,
 	}
-	collectionEvidence := domain.Digest("sha256:" + strings.Repeat("e", 64))
+	retained := CodexReviewRetainedCollection{Result: []byte(`{"findings":[]}`), Events: []byte("ev\n")}
+	collectionEvidence := collectionEvidence(codexReviewProvider{}, retained)
 	result.CompletionEvidence, _ = CodexReviewResultEvidence(result, collectionEvidence)
 	journal := &fakeCodexReviewJournal{
 		requests: map[string]exec.ReviewRequest{string(id): request},
 		outcomes: map[string]CodexReviewSourceOutcome{
-			string(id): {InvocationID: id, Result: &result, CollectionEvidence: collectionEvidence},
+			string(id): {
+				InvocationID: id, Result: &result,
+				CollectionEvidence: collectionEvidence, Collection: &retained,
+			},
 		},
 		ready: map[string]bool{string(id): true},
 	}
@@ -3789,4 +3795,83 @@ func TestReconcileRejectedRequestDispatchEquivalence(t *testing.T) {
 			t.Errorf("unreachable state %q: new dispatch = %d, want fail-closed", s, newDispatch(s))
 		}
 	}
+}
+
+// codexGoldenReviewCollection is the fixed, valid raw collection the outcome
+// goldens and the evidence tests share. The events line carries the
+// caller-chosen usage shape; every other input is stable so the digests pin.
+func codexGoldenReviewCollection(events string) CodexReviewCollection {
+	return CodexReviewCollection{
+		ExitStatus: 0,
+		Result: []byte(`{"findings":[{"severity":"P2","location":` +
+			`{"path":"main.go","start_line":10,"end_line":12},` +
+			`"explanation":"re-derive the approval instead of trusting the stored bit"}]}`),
+		Events: []byte(events + "\n"),
+	}
+}
+
+// codexGoldenReviewOutcome normalizes the fixed collection into a result outcome
+// through the real write path, so its retained collection and both evidence
+// digests are self-consistent.
+func codexGoldenReviewOutcome(events string) CodexReviewSourceOutcome {
+	source := newEquivalenceReviewSource()
+	req := exec.ReviewRequest{
+		RunID:        "run-golden",
+		BaseSHA:      strings.Repeat("a", 40),
+		HeadSHA:      strings.Repeat("b", 40),
+		Instructions: testReviewInstructionBinding(),
+	}
+	return source.normalizeCollection(
+		domain.InvocationID("review-golden-1"), req, codexGoldenReviewCollection(events),
+	)
+}
+
+// TestCodexReviewOutcomeEvidenceGate covers Acceptance 1: a digest with no
+// retained collection is refused, a tampered transcript no longer resolves, and
+// a well-formed outcome survives the persistence codec and still resolves.
+func TestCodexReviewOutcomeEvidenceGate(t *testing.T) {
+	t.Run("missing retained collection is refused", func(t *testing.T) {
+		outcome := codexGoldenReviewOutcome(`{"type":"turn.completed"}`)
+		outcome.Collection = nil
+		if err := outcome.Validate(); !errors.Is(err, domain.ErrInvalidReviewCompletionEvidence) {
+			t.Fatalf("validate without retained collection = %v, want ErrInvalidReviewCompletionEvidence", err)
+		}
+	})
+
+	t.Run("tampered transcript fails verify", func(t *testing.T) {
+		outcome := codexGoldenReviewOutcome(`{"type":"turn.completed","usage":{"input_tokens":7}}`)
+		if err := outcome.verifyCompletionEvidence(codexReviewProvider{}); err != nil {
+			t.Fatalf("baseline verify = %v", err)
+		}
+		tampered := *outcome.Collection
+		tampered.Events = bytes.Clone(tampered.Events)
+		tampered.Events[0]++ // one-byte edit; the retained bytes no longer hash to the stored digest
+		outcome.Collection = &tampered
+		if err := outcome.verifyCompletionEvidence(codexReviewProvider{}); !errors.Is(err, domain.ErrInvalidReviewCompletionEvidence) {
+			t.Fatalf("verify after one-byte edit = %v, want ErrInvalidReviewCompletionEvidence", err)
+		}
+	})
+
+	// wardstore persists the outcome with json.Marshal and reads it back with
+	// strictjson.Decode (adapters.go marshalCodexReview / decodeCodexReview). ward
+	// cannot import wardstore, so this exercises that exact codec directly; the
+	// journal Put/Get path itself is covered in the wardstore package.
+	t.Run("round-trips through the persistence codec", func(t *testing.T) {
+		outcome := codexGoldenReviewOutcome(`{"type":"turn.completed","usage":{"input_tokens":7}}`)
+		body, err := json.Marshal(outcome)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded CodexReviewSourceOutcome
+		if err := strictjson.Decode(
+			body, &decoded, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
+		); err != nil {
+			t.Fatalf("decode persisted outcome: %v", err)
+		}
+		if err := errors.Join(
+			decoded.Validate(), decoded.verifyCompletionEvidence(codexReviewProvider{}),
+		); err != nil {
+			t.Fatalf("decoded outcome failed to resolve its evidence: %v", err)
+		}
+	})
 }

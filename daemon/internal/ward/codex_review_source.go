@@ -69,14 +69,23 @@ type CodexReviewInstructionArtifacts interface {
 // CodexReviewSourceOutcome is durably collected before topology cleanup. The
 // journal's separate ready bit proves cleanup finished before Poll can expose
 // either a pass or a failure to the workflow.
+//
+// To resolve a persisted row's evidence: decode Collection, rehash it with the
+// provider's completionEvidenceVersion (collectionEvidence), and compare the
+// result with CollectionEvidence; then recompute CompletionEvidence with
+// reviewResultEvidence from that digest. Collection is the retained raw account
+// (exit status, structured result, JSONL transcript) that makes this possible;
+// it is present exactly when CollectionEvidence is set. Before #1182 the row
+// kept only the digests, so completion_evidence resolved to nothing.
 type CodexReviewSourceOutcome struct {
-	InvocationID       domain.InvocationID       `json:"invocation_id"`
-	Result             *exec.ReviewResult        `json:"result"`
-	Usage              []exec.UsageMeasurement   `json:"usage,omitempty"`
-	CollectionEvidence domain.Digest             `json:"collection_evidence,omitempty"`
-	FailureClass       domain.ReviewFailureClass `json:"failure_class,omitempty"`
-	Failure            string                    `json:"failure,omitempty"`
-	AbortRequired      bool                      `json:"abort_required,omitempty"`
+	InvocationID       domain.InvocationID            `json:"invocation_id"`
+	Result             *exec.ReviewResult             `json:"result"`
+	Usage              []exec.UsageMeasurement        `json:"usage,omitempty"`
+	CollectionEvidence domain.Digest                  `json:"collection_evidence,omitempty"`
+	Collection         *CodexReviewRetainedCollection `json:"collection,omitempty"`
+	FailureClass       domain.ReviewFailureClass      `json:"failure_class,omitempty"`
+	Failure            string                         `json:"failure,omitempty"`
+	AbortRequired      bool                           `json:"abort_required,omitempty"`
 }
 
 // Validate rejects an outcome whose result and failure representations overlap
@@ -88,6 +97,20 @@ type CodexReviewSourceOutcome struct {
 func (o CodexReviewSourceOutcome) Validate() error {
 	if o.InvocationID == "" {
 		return domain.ErrEmptyID
+	}
+	// The retained collection is present exactly when collection_evidence is set,
+	// so a digest can never be persisted without the bytes that resolve it. This
+	// is shape-only: Validate cannot recompute the provider-namespaced digest from
+	// the bytes (that needs the trusted provider), so verifyCompletionEvidence does
+	// the recompute. But by refusing a digest with no retained collection at the
+	// wardstore write and read gate, nothing unresolvable reaches collected/ready.
+	if (o.Collection != nil) != (o.CollectionEvidence != "") {
+		return domain.ErrInvalidReviewCompletionEvidence
+	}
+	if o.Collection != nil {
+		if err := o.Collection.validate(); err != nil {
+			return err
+		}
 	}
 	if o.Result != nil {
 		if o.Result.InvocationID != o.InvocationID {
@@ -126,8 +149,22 @@ func (o CodexReviewSourceOutcome) Validate() error {
 // unkeyed evidence cannot self-validate against a different validator), and the
 // evidence must then recompute. Making it provider-aware fixes the #875 handoff
 // (a Codex-only recomputation turned every Claude result into a durable
-// contradiction). A failure/fence outcome carries no result evidence and passes.
+// contradiction). A failure/fence outcome carries no result evidence, so it
+// skips the result-evidence recompute; when it carries collection evidence (the
+// collected-contradiction rewrap), that is still resolved against the retained
+// collection below.
 func (o CodexReviewSourceOutcome) verifyCompletionEvidence(provider reviewProvider) error {
+	// Resolve collection_evidence against the retained bytes with the trusted
+	// provider first: this is the check the pre-#1182 row could never satisfy,
+	// because the raw transcript was dropped after normalization. It runs for a
+	// failure/fence outcome too when that outcome carries evidence (the collected
+	// contradiction rewrap keeps both), not only for a result.
+	if o.CollectionEvidence != "" {
+		if o.Collection == nil ||
+			collectionEvidence(provider, *o.Collection) != o.CollectionEvidence {
+			return domain.ErrInvalidReviewCompletionEvidence
+		}
+	}
 	if o.Result == nil {
 		return nil
 	}
@@ -137,6 +174,30 @@ func (o CodexReviewSourceOutcome) verifyCompletionEvidence(provider reviewProvid
 	evidence, err := reviewResultEvidence(provider, *o.Result, o.CollectionEvidence)
 	if err != nil || evidence != o.Result.CompletionEvidence {
 		return errors.Join(err, domain.ErrInvalidReviewCompletionEvidence)
+	}
+	return nil
+}
+
+// collectionEvidence hashes the provider-namespaced raw collection account
+// (transcript, structured result, exit status). It is the single definition the
+// write path (normalizeCollection) and the read gate (verifyCompletionEvidence)
+// share, so a retained collection recomputes to the exact stored digest.
+func collectionEvidence(provider reviewProvider, c CodexReviewRetainedCollection) domain.Digest {
+	evidenceBytes := fmt.Appendf(nil, "%s:%d:", provider.completionEvidenceVersion(), len(c.Events))
+	evidenceBytes = append(evidenceBytes, c.Events...)
+	evidenceBytes = fmt.Appendf(evidenceBytes, ":%d:", len(c.Result))
+	evidenceBytes = append(evidenceBytes, c.Result...)
+	evidenceBytes = fmt.Appendf(evidenceBytes, ":%d", c.ExitStatus)
+	return domain.Digest(contentaddr.Sum(evidenceBytes))
+}
+
+// validate is the provider-agnostic shape gate on a retained collection: the
+// exit status stays in the byte range CollectCodexReview admits and the bytes
+// stay under the same caps the export enforced.
+func (c CodexReviewRetainedCollection) validate() error {
+	if c.ExitStatus < 0 || c.ExitStatus > 255 ||
+		len(c.Events) > maxCodexReviewEventsBytes || len(c.Result) > maxCodexReviewResultBytes {
+		return domain.ErrInvalidReviewCompletionEvidence
 	}
 	return nil
 }
@@ -714,6 +775,7 @@ func (s *CodexReviewSource) Inspect(
 				FailureClass:       domain.ReviewFailureContradiction,
 				Failure:            fmt.Sprintf("Codex review returned an invalid collected result: %v", err),
 				CollectionEvidence: outcome.CollectionEvidence,
+				Collection:         outcome.Collection,
 				Usage:              usage,
 			}
 		}
@@ -781,12 +843,11 @@ func (s *CodexReviewSource) normalizeCollection(
 	id domain.InvocationID, req exec.ReviewRequest, collection CodexReviewCollection,
 ) CodexReviewSourceOutcome {
 	provider := s.reviewProvider()
-	evidenceBytes := fmt.Appendf(nil, "%s:%d:", provider.completionEvidenceVersion(), len(collection.Events))
-	evidenceBytes = append(evidenceBytes, collection.Events...)
-	evidenceBytes = fmt.Appendf(evidenceBytes, ":%d:", len(collection.Result))
-	evidenceBytes = append(evidenceBytes, collection.Result...)
-	evidenceBytes = fmt.Appendf(evidenceBytes, ":%d", collection.ExitStatus)
-	collectionEvidence := domain.Digest(contentaddr.Sum(evidenceBytes))
+	// The two collection types share field names and types (they differ only in
+	// JSON tags, which conversion ignores), so a conversion retains the raw
+	// account without a field-by-field copy.
+	retained := CodexReviewRetainedCollection(collection)
+	collEvidence := collectionEvidence(provider, retained)
 	completedAt, usage := s.reviewUsageMeasurementsAt(collection.Events)
 	failure := func(class domain.ReviewFailureClass, message string) CodexReviewSourceOutcome {
 		return CodexReviewSourceOutcome{
@@ -900,9 +961,9 @@ func (s *CodexReviewSource) normalizeCollection(
 		CostOwner:           s.cfg.CostOwner, CompletedAt: completedAt,
 		Findings: findings, Usage: usage,
 	}
-	result.CompletionEvidence, _ = reviewResultEvidence(provider, result, collectionEvidence)
+	result.CompletionEvidence, _ = reviewResultEvidence(provider, result, collEvidence)
 	return CodexReviewSourceOutcome{
-		InvocationID: id, Result: &result, CollectionEvidence: collectionEvidence,
+		InvocationID: id, Result: &result, CollectionEvidence: collEvidence, Collection: &retained,
 	}
 }
 

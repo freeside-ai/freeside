@@ -333,6 +333,11 @@ func TestCodexReviewJournalRoundTripsLifecycleAcrossStoreReopen(t *testing.T) {
 	}
 	outcome := ward.CodexReviewSourceOutcome{
 		InvocationID: domain.InvocationID(runID), Result: &result, CollectionEvidence: collectionEvidence,
+		// #1182: a result outcome must retain the raw collection alongside its
+		// digest, or the stricter Validate refuses the write. wardstore runs the
+		// shape gate, not the provider-aware evidence recompute, so any
+		// bounds-valid collection satisfies the write here.
+		Collection: &ward.CodexReviewRetainedCollection{Result: []byte("{}"), Events: []byte("ev\n")},
 	}
 	if err := adapters.Journal.PutCodexReviewOutcome(ctx, runID, outcome); err != nil {
 		t.Fatal(err)
@@ -385,6 +390,46 @@ func TestCodexReviewJournalRoundTripsLifecycleAcrossStoreReopen(t *testing.T) {
 	}
 	if _, err := adapters.Journal.GetCodexReviewBinding(ctx, runID); !errors.Is(err, ward.ErrCodexReviewBindingNotFound) {
 		t.Fatalf("restarted intent retained old binding: %v", err)
+	}
+}
+
+// TestPutCodexReviewOutcomeRefusesUnresolvableEvidence pins the #1182 write gate:
+// a result outcome that carries a collection_evidence digest but no retained
+// collection cannot be resolved, so PutCodexReviewOutcome (which runs the shape
+// gate) refuses it and nothing unresolvable reaches the durable store.
+func TestPutCodexReviewOutcomeRefusesUnresolvableEvidence(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := "review-unresolvable-1"
+	collectionEvidence := domain.Digest("sha256:" + strings.Repeat("c", 64))
+	result := exec.ReviewResult{
+		InvocationID: domain.InvocationID(runID), BaseSHA: strings.Repeat("a", 40),
+		HeadSHA:  strings.Repeat("b", 40),
+		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		CostOwner:           "owner", CompletedAt: time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+	}
+	result.CompletionEvidence, err = ward.CodexReviewResultEvidence(result, collectionEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := ward.CodexReviewSourceOutcome{
+		InvocationID: domain.InvocationID(runID), Result: &result, CollectionEvidence: collectionEvidence,
+		// Collection deliberately omitted: the digest resolves to nothing.
+	}
+	if err := adapters.Journal.PutCodexReviewOutcome(ctx, runID, outcome); !errors.Is(err, domain.ErrInvalidReviewCompletionEvidence) {
+		t.Fatalf("put outcome without retained collection = %v, want ErrInvalidReviewCompletionEvidence", err)
+	}
+	if _, _, err := adapters.Journal.GetCodexReviewOutcome(ctx, runID); !errors.Is(err, ward.ErrCodexReviewOutcomeNotFound) {
+		t.Fatalf("refused outcome reached the store: %v", err)
 	}
 }
 
