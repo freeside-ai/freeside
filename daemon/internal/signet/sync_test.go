@@ -113,32 +113,43 @@ func TestBootstrapProjectsOneTransactionalSnapshot(t *testing.T) {
 	}
 }
 
-func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
-	ctx := context.Background()
-	f := newFixture(t)
-	campaignID, err := engine.ProductionCampaignIDForImplementation("run-1")
+// seedSpecificationCampaign seeds one production campaign through its resolved
+// spec-approval item: the specification run, its unapproved initial production
+// attempt, the spec artifact, and the resolved approval command. It leaves the
+// attempt unapproved and the implementation run unpersisted, returning the
+// campaign id, the specification run id, and the implementation run value the
+// caller persists after approving the attempt. Every seeded identifier derives
+// from implRunID so several campaigns can share one store. Both the
+// summary/timeline projection test and the specification hand-off tests
+// (#1183) build on this one scenario.
+func seedSpecificationCampaign(
+	t *testing.T, ctx context.Context, f fixture, implRunID domain.RunID,
+) (domain.CampaignID, domain.RunID, domain.Run) {
+	t.Helper()
+	campaignID, err := engine.ProductionCampaignIDForImplementation(implRunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	specificationRunID, err := engine.SpecificationRunIDForImplementation("run-1")
+	specificationRunID, err := engine.SpecificationRunIDForImplementation(implRunID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	stageID := domain.StageID("stage-" + string(implRunID))
 	run := domain.Run{
-		ID: "run-1", ProjectID: "proj-1",
+		ID: implRunID, ProjectID: "proj-1",
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
 		CampaignID: campaignID, AttemptNumber: 1,
 		Stages: []domain.Stage{{
-			ID: "stage-1", RunID: "run-1", Name: "implementation",
+			ID: stageID, RunID: implRunID, Name: "implementation",
 			Attempts: []domain.Attempt{{
-				ID: "attempt-1", StageID: "stage-1", Number: 1,
-				InvocationID: "inv-1",
+				ID: domain.AttemptID("attempt-" + string(implRunID)), StageID: stageID, Number: 1,
+				InvocationID: domain.InvocationID("inv-" + string(implRunID)),
 			}},
 		}},
 	}
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		specificationInvocationID := domain.InvocationID("inv-specify-" + string(specificationRunID) + "-1")
-		source, err := domain.NewArtifact(domain.ArtifactInput{ID: "artifact-source", Type: domain.ArtifactKindSpecification, Digest: "sha256:source", Provenance: domain.Provenance{ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-specify", HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal}, Metadata: domain.EvidenceMetadata{MediaType: domain.EvidenceMediaTextMarkdown, SizeBytes: 1, CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable}}, map[domain.Digest]bool{})
+		source, err := domain.NewArtifact(domain.ArtifactInput{ID: domain.ArtifactID("artifact-source-" + string(implRunID)), Type: domain.ArtifactKindSpecification, Digest: "sha256:source", Provenance: domain.Provenance{ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-specify", HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal}, Metadata: domain.EvidenceMetadata{MediaType: domain.EvidenceMediaTextMarkdown, SizeBytes: 1, CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable}}, map[domain.Digest]bool{})
 		if err != nil {
 			return err
 		}
@@ -195,8 +206,18 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 		if err := tx.MarkOutboxDispatched(ctx, string(specificationInvocationID)); err != nil {
 			return err
 		}
+		// The specification run's own run_submitted milestone; without it the run
+		// concludes unobserved, which is already finished, and would mask the
+		// active-to-finished transition the hand-off rule drives.
+		if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: specificationRunID, Kind: domain.MilestoneRunSubmitted,
+			InvocationID: &specificationInvocationID,
+			RecordedAt:   time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC),
+		}); err != nil {
+			return err
+		}
 		specification, err := domain.NewArtifact(domain.ArtifactInput{
-			ID: "spec-run-1-1", Type: domain.ArtifactKindSpecification, Digest: run.SpecDigest,
+			ID: domain.ArtifactID("spec-" + string(implRunID) + "-1"), Type: domain.ArtifactKindSpecification, Digest: run.SpecDigest,
 			Provenance: domain.Provenance{
 				ProducerClass:        domain.ProducerAgent,
 				ProducerInvocationID: specificationInvocationID, HeadBinding: domain.HeadIndependent,
@@ -214,7 +235,7 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 		if err := tx.PutArtifact(ctx, specification); err != nil {
 			return err
 		}
-		approvalID := domain.ItemID("spec-approval-run-1-1")
+		approvalID := domain.ItemID("spec-approval-" + string(implRunID) + "-1")
 		terminal, err := json.Marshal(struct {
 			InvocationID        domain.InvocationID `json:"invocation_id"`
 			Iteration           int                 `json:"iteration"`
@@ -259,7 +280,7 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 			return err
 		}
 		command, err := domain.NewCommand(domain.CommandInput{
-			CommandID: "approve-run-1", DeviceID: "device-1", ItemID: approval.ID,
+			CommandID: "approve-" + string(implRunID), DeviceID: "device-1", ItemID: approval.ID,
 			ItemVersion: approval.ItemVersion, ArtifactDigests: approval.ArtifactDigests,
 			Action: domain.ActionApprove,
 		})
@@ -275,25 +296,49 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if err := tx.PutAttentionItem(ctx, approval); err != nil {
-			return err
-		}
+		return tx.PutAttentionItem(ctx, approval)
+	}); err != nil {
+		t.Fatalf("seed specification campaign %q: %v", implRunID, err)
+	}
+	return campaignID, specificationRunID, run
+}
+
+// approveAndPersistImplementationRun approves run's initial production attempt
+// with its spec digest and persists the implementation run, the two writes the
+// engine commits when a specification is approved and its implementation
+// submitted.
+func approveAndPersistImplementationRun(t *testing.T, ctx context.Context, f fixture, campaignID domain.CampaignID, run domain.Run) {
+	t.Helper()
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		if _, err := tx.ApproveProductionAttempt(ctx, campaignID, 1, run.SpecDigest); err != nil {
 			return err
 		}
 		return tx.PutRun(ctx, run)
 	}); err != nil {
-		t.Fatalf("PutRun: %v", err)
+		t.Fatalf("approve and persist implementation run %q: %v", run.ID, err)
 	}
+}
+
+func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	campaignID, _, run := seedSpecificationCampaign(t, ctx, f, "run-1")
+	approveAndPersistImplementationRun(t, ctx, f, campaignID, run)
 	beforeObservation, err := f.service.Revision(ctx)
 	if err != nil {
 		t.Fatalf("Revision before observation: %v", err)
 	}
-	invocationID := domain.InvocationID("inv-1")
+	invocationID := run.Stages[0].Attempts[0].InvocationID
 	recordedAt := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	productionRequest, err := json.Marshal(map[string]any{
+		"invocation_id": invocationID, "run_id": run.ID, "stage_id": run.Stages[0].ID,
+	})
+	if err != nil {
+		t.Fatalf("marshal production request: %v", err)
+	}
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		if _, _, err := tx.EnqueueOutbox(ctx, string(invocationID), string(domain.ProductionInvocationRequestedKind),
-			[]byte(`{"invocation_id":"inv-1","run_id":"run-1","stage_id":"stage-1"}`)); err != nil {
+			productionRequest); err != nil {
 			return err
 		}
 		if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
@@ -358,6 +403,139 @@ func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 	}
 	if _, err := f.service.GetRunTimeline(ctx, "missing"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("GetRunTimeline(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+// seedProductionSubmission records an implementation run's production-invocation
+// outbox and its run_submitted milestone, so the run projects the pending
+// (active) outcome a bound specification run has left behind.
+func seedProductionSubmission(t *testing.T, ctx context.Context, f fixture, run domain.Run, recordedAt time.Time) {
+	t.Helper()
+	invocationID := run.Stages[0].Attempts[0].InvocationID
+	request, err := json.Marshal(map[string]any{
+		"invocation_id": invocationID, "run_id": run.ID, "stage_id": run.Stages[0].ID,
+	})
+	if err != nil {
+		t.Fatalf("marshal production request: %v", err)
+	}
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		if _, _, err := tx.EnqueueOutbox(ctx, string(invocationID),
+			string(domain.ProductionInvocationRequestedKind), request); err != nil {
+			return err
+		}
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: run.ID, Kind: domain.MilestoneRunSubmitted,
+			InvocationID: &invocationID, RecordedAt: recordedAt,
+		})
+	}); err != nil {
+		t.Fatalf("seed production submission %q: %v", run.ID, err)
+	}
+}
+
+// TestSpecificationRunFinishesWhenImplementationBound is the #1183 acceptance:
+// a specification run leaves the active list once its production attempt is
+// approved and its implementation run bound, superseded by that implementation
+// run with its own outcome still pending. Before approval it is active and
+// unsuperseded, and the implementation run is never superseded by the
+// specification run.
+func TestSpecificationRunFinishesWhenImplementationBound(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	campaignID, specificationRunID, run := seedSpecificationCampaign(t, ctx, f, "run-1")
+
+	before, err := f.service.GetRun(ctx, specificationRunID)
+	if err != nil {
+		t.Fatalf("GetRun(specification) before approval: %v", err)
+	}
+	if before.Run.Lifecycle != domain.RunLifecycleActive || before.Run.SupersededBy != nil ||
+		before.Run.Outcome != domain.RunOutcomePending {
+		t.Fatalf("specification run before approval = lifecycle %s outcome %s superseded_by %v, want active/pending/nil",
+			before.Run.Lifecycle, before.Run.Outcome, before.Run.SupersededBy)
+	}
+
+	approveAndPersistImplementationRun(t, ctx, f, campaignID, run)
+
+	assertFinishedBoundToImplementation := func(source string, lifecycle domain.RunLifecycle, outcome domain.RunOutcome, superseded *domain.RunID) {
+		t.Helper()
+		if lifecycle != domain.RunLifecycleFinished || outcome != domain.RunOutcomePending ||
+			superseded == nil || *superseded != run.ID {
+			t.Errorf("%s: specification run = lifecycle %s outcome %s superseded_by %v, want finished/pending superseded by %s",
+				source, lifecycle, outcome, superseded, run.ID)
+		}
+	}
+
+	got, err := f.service.GetRun(ctx, specificationRunID)
+	if err != nil {
+		t.Fatalf("GetRun(specification) after approval: %v", err)
+	}
+	assertFinishedBoundToImplementation("GetRun", got.Run.Lifecycle, got.Run.Outcome, got.Run.SupersededBy)
+
+	runs, err := f.service.ListRuns(ctx)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	var sawSpecification, sawImplementation bool
+	for _, snapshot := range runs {
+		switch snapshot.Run.ID {
+		case specificationRunID:
+			sawSpecification = true
+			assertFinishedBoundToImplementation("ListRuns", snapshot.Run.Lifecycle, snapshot.Run.Outcome, snapshot.Run.SupersededBy)
+		case run.ID:
+			sawImplementation = true
+			if snapshot.Run.SupersededBy != nil {
+				t.Errorf("implementation run superseded_by = %v, want nil", snapshot.Run.SupersededBy)
+			}
+		}
+	}
+	if !sawSpecification || !sawImplementation {
+		t.Fatalf("ListRuns missing runs: specification %v implementation %v", sawSpecification, sawImplementation)
+	}
+
+	// GetRunTimeline runs the same projection read; it must not fail closed on
+	// the new attempt read even though its wire shape carries no lifecycle.
+	timeline, err := f.service.GetRunTimeline(ctx, specificationRunID)
+	if err != nil {
+		t.Fatalf("GetRunTimeline(specification): %v", err)
+	}
+	if timeline.RunID != specificationRunID {
+		t.Fatalf("GetRunTimeline run id = %q, want %q", timeline.RunID, specificationRunID)
+	}
+}
+
+// TestBoundSpecificationRunsLeaveActiveList is the #1183 list-level acceptance:
+// over several campaigns, each with an approved attempt and an active
+// implementation run, no run left on the active list is a specification run.
+func TestBoundSpecificationRunsLeaveActiveList(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	implRunIDs := []domain.RunID{"run-1", "run-2", "run-3"}
+	specificationRuns := map[domain.RunID]bool{}
+	for index, implRunID := range implRunIDs {
+		campaignID, specificationRunID, run := seedSpecificationCampaign(t, ctx, f, implRunID)
+		specificationRuns[specificationRunID] = true
+		approveAndPersistImplementationRun(t, ctx, f, campaignID, run)
+		seedProductionSubmission(t, ctx, f, run, time.Date(2026, 8, 12, 12, index, 0, 0, time.UTC))
+	}
+
+	runs, err := f.service.ListRuns(ctx)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	activeImplementationRuns := 0
+	for _, snapshot := range runs {
+		if specificationRuns[snapshot.Run.ID] {
+			if snapshot.Run.Lifecycle != domain.RunLifecycleFinished || snapshot.Run.SupersededBy == nil {
+				t.Errorf("specification run %s = lifecycle %s superseded_by %v, want finished and superseded",
+					snapshot.Run.ID, snapshot.Run.Lifecycle, snapshot.Run.SupersededBy)
+			}
+			continue
+		}
+		if snapshot.Run.Lifecycle == domain.RunLifecycleActive {
+			activeImplementationRuns++
+		}
+	}
+	if activeImplementationRuns != len(implRunIDs) {
+		t.Fatalf("active implementation runs = %d, want %d", activeImplementationRuns, len(implRunIDs))
 	}
 }
 
