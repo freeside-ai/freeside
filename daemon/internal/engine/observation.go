@@ -48,6 +48,16 @@ type observationPace struct {
 const observationPaceSweepSize = 256
 
 func (p *observationPace) due(key, state string, now time.Time) bool {
+	due, _ := p.dueChanged(key, state, now)
+	return due
+}
+
+// dueChanged reports whether a changed-or-stale write is due and, when it is,
+// whether the state changed since the last written stamp (a first observation
+// counts as a change). The change bit lets a caller log once per real
+// transition while the periodic freshness refresh (a due write with the same
+// state) stays silent.
+func (p *observationPace) dueChanged(key, state string, now time.Time) (due, changed bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.stamp == nil {
@@ -60,7 +70,7 @@ func (p *observationPace) due(key, state string, now time.Time) bool {
 	last, ok := p.stamp[key]
 	if ok && last.state == state {
 		if age := now.Sub(last.at); age >= 0 && age < observationRefreshInterval {
-			return false
+			return false, false
 		}
 	}
 	if len(p.stamp) >= observationPaceSweepSize {
@@ -71,7 +81,7 @@ func (p *observationPace) due(key, state string, now time.Time) bool {
 		}
 	}
 	p.stamp[key] = observationStamp{state: state, at: now}
-	return true
+	return true, !ok || last.state != state
 }
 
 // forget drops one stamp so a write that failed after due() said yes is not
@@ -204,7 +214,8 @@ func (e *Engine) observeRunHold(
 ) error {
 	now := time.Now().UTC()
 	key := "hold:" + string(runID)
-	if !e.pace.due(key, string(reason), now) {
+	due, changed := e.pace.dueChanged(key, string(reason), now)
+	if !due {
 		return nil
 	}
 	if err := e.store.Write(ctx, func(tx *store.WriteTx) error {
@@ -212,6 +223,14 @@ func (e *Engine) observeRunHold(
 	}); err != nil {
 		e.pace.forget(key)
 		return err
+	}
+	// Log only on a reason change, not on the periodic freshness refresh the
+	// pace gate also lets through: a long-lived hold otherwise emits an Info
+	// record every observationRefreshInterval, which buries the operational
+	// signal this line adds.
+	if changed {
+		e.logger.Info("run hold recorded",
+			"run", string(runID), "invocation", string(invocationID), "reason", string(reason))
 	}
 	return nil
 }

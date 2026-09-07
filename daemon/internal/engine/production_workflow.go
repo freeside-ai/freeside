@@ -1123,6 +1123,21 @@ func decodeProductionTerminal(
 	return terminal, nil
 }
 
+// observeRefusalHold records a paced hold observation for a production attempt
+// that acceptProductionAttempt skips on a mutable admission-policy refusal, so
+// the operator sees why work stopped instead of a silent skip (issue #1181). A
+// refusal that classifies onto no hold reason records nothing and keeps its
+// ordinary skip.
+func (e *Engine) observeRefusalHold(
+	ctx context.Context, run domain.Run, attempt domain.Attempt, err error,
+) error {
+	reason, ok := dispatchHoldReason(err)
+	if !ok {
+		return nil
+	}
+	return e.observeRunHold(ctx, run.ID, attempt.InvocationID, reason)
+}
+
 // acceptProductionAttempt closes one production attempt: a completed result
 // is re-gated before its first acceptance, while a failed, canceled, or lost
 // one is recorded and surfaced as an execution_failure item instead of
@@ -1256,6 +1271,9 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 	case errors.Is(err, ErrInvocationLost):
 		lost = true
 	case MutableAdmissionPolicyRefusal(err):
+		if obsErr := e.observeRefusalHold(ctx, run, attempt, err); obsErr != nil {
+			return false, obsErr
+		}
 		return false, nil
 	case err != nil:
 		return false, err
@@ -1281,6 +1299,9 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		admission, err := e.productionAdmission(ctx, attempt.InvocationID)
 		if err != nil {
 			if MutableAdmissionPolicyRefusal(err) {
+				if obsErr := e.observeRefusalHold(ctx, run, attempt, err); obsErr != nil {
+					return false, obsErr
+				}
 				return false, nil
 			}
 			return false, err
@@ -1288,6 +1309,9 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		if legacy {
 			accepted, err := e.recordProductionTerminal(ctx, run, terminal)
 			if MutableAdmissionPolicyRefusal(err) {
+				if obsErr := e.observeRefusalHold(ctx, run, attempt, err); obsErr != nil {
+					return false, obsErr
+				}
 				return false, nil
 			}
 			return accepted, err
@@ -1295,6 +1319,9 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		if operatorFeedback {
 			accepted, err := e.recordProductionTerminal(ctx, run, terminal)
 			if MutableAdmissionPolicyRefusal(err) {
+				if obsErr := e.observeRefusalHold(ctx, run, attempt, err); obsErr != nil {
+					return false, obsErr
+				}
 				return false, nil
 			}
 			return accepted, err
@@ -1306,6 +1333,9 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 			// admission into an automatic publication candidate.
 			accepted, err := e.recordProductionTerminal(ctx, run, terminal)
 			if MutableAdmissionPolicyRefusal(err) {
+				if obsErr := e.observeRefusalHold(ctx, run, attempt, err); obsErr != nil {
+					return false, obsErr
+				}
 				return false, nil
 			}
 			return accepted, err
@@ -1323,6 +1353,9 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 	}
 	accepted, err := e.recordProductionTerminal(ctx, run, terminal)
 	if MutableAdmissionPolicyRefusal(err) {
+		if obsErr := e.observeRefusalHold(ctx, run, attempt, err); obsErr != nil {
+			return false, obsErr
+		}
 		return false, nil
 	}
 	return accepted, err

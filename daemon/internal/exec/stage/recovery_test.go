@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -1546,5 +1547,495 @@ func TestManifestDigestMismatchFailsTheStage(t *testing.T) {
 	}
 	if err := d.persistManifests(context.Background(), exportOutcome{dir: dir}, record); err == nil {
 		t.Fatal("a manifest that does not match its recorded digest was stored")
+	}
+}
+
+// survivingExportDir writes a valid empty-manifest export directory the driver
+// can authenticate, so recovery fails on the import rather than on the export
+// shape. The directory is cleaned up with the test.
+func survivingExportDir(t *testing.T) string {
+	t.Helper()
+	manifest := export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}}
+	body, err := manifest.Encode()
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+	dir, err := os.MkdirTemp("", "freeside-handoff-"+testRunIDFor(testInvoke)+"-out-")
+	if err != nil {
+		t.Fatalf("create released export: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	if err := os.WriteFile(filepath.Join(dir, export.ManifestFilename), body, 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	return dir
+}
+
+// TestStrandedExportRecoveryAbandonsAfterGrace is the regression for the
+// wave-7 deadlock (issue #1181): a released export whose import keeps failing
+// retryably was retried forever, permanently holding the identity's only
+// execution slot with nothing logged. The driver now reports running while the
+// grace has not elapsed, then commits a failed outcome once it has, which frees
+// the slot and raises the operator's execution_failure card through the
+// ordinary collection path. The export directory is retained either way.
+func TestStrandedExportRecoveryAbandonsAfterGrace(t *testing.T) {
+	for _, ph := range []phase{phaseExported, phaseImportPending} {
+		t.Run(string(ph), func(t *testing.T) {
+			ctx := context.Background()
+			importErr := errors.New("fetch import base: network down")
+			exports := newStubExports()
+			d := newTestDriver(t, &stubGate{}, exports)
+			d.seeder = stubSeeder{err: importErr}
+			handler := &captureHandler{}
+			d.logger = slog.New(handler)
+			now := fixedNow
+			d.now = func() time.Time { return now }
+
+			dir := survivingExportDir(t)
+			in := orphan(t, d, ph, &releasedExport{
+				Dir: dir, Manifest: export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}},
+				ObservedBaseSHA: testBase.BaseSHA,
+			})
+
+			// Before the grace elapses the invocation is still running and no
+			// terminal outcome is recorded.
+			for i := 0; i < 3; i++ {
+				insp, err := d.Inspect(ctx, in.InvocationID)
+				if err != nil {
+					t.Fatalf("Inspect before grace: %v", err)
+				}
+				if insp.Status != exec.StatusRunning {
+					t.Fatalf("status before grace = %v, want running", insp.Status)
+				}
+			}
+			if len(exports.outcomes) != 0 {
+				t.Fatalf("terminal outcome recorded before grace: %d", len(exports.outcomes))
+			}
+
+			// Past the grace the driver commits a failed outcome.
+			now = now.Add(defaultRecoveryGrace + time.Minute)
+			insp, err := d.Inspect(ctx, in.InvocationID)
+			if err != nil {
+				t.Fatalf("Inspect after grace: %v", err)
+			}
+			if insp.Status != exec.StatusFailed {
+				t.Fatalf("status after grace = %v, want failed", insp.Status)
+			}
+
+			outcome, found, err := exports.LookupExecutionOutcome(ctx, in.InvocationID)
+			if err != nil || !found {
+				t.Fatalf("LookupExecutionOutcome = (%+v, %v, %v)", outcome, found, err)
+			}
+			if outcome.Status != domain.ExecutionOutcomeFailed {
+				t.Fatalf("outcome = %+v, want failed", outcome)
+			}
+
+			result, err := d.Collect(ctx, in.InvocationID)
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			if result.Status != exec.StatusFailed {
+				t.Fatalf("result = %+v, want failed", result)
+			}
+			if !strings.Contains(result.Summary, importErr.Error()) ||
+				!strings.Contains(result.Summary, dir) {
+				t.Fatalf("summary %q must name the last error and the retained directory %q",
+					result.Summary, dir)
+			}
+
+			// The agent's work survives on disk.
+			if _, err := os.Stat(filepath.Join(dir, export.ManifestFilename)); err != nil {
+				t.Fatalf("export directory was not retained: %v", err)
+			}
+
+			var sawWarn, sawError bool
+			for _, rec := range handler.snapshot() {
+				if rec.level == slog.LevelWarn && rec.msg == "stage recovery deferred" {
+					sawWarn = true
+				}
+				if rec.level == slog.LevelError && rec.msg == "stage recovery abandoned after grace" {
+					sawError = true
+					if rec.attrs["invocation"] != string(in.InvocationID) ||
+						rec.attrs["phase"] != string(ph) {
+						t.Errorf("abandonment attrs = %#v, want invocation %q phase %q",
+							rec.attrs, in.InvocationID, ph)
+					}
+				}
+			}
+			if !sawWarn {
+				t.Error("no deferral warning was logged")
+			}
+			if !sawError {
+				t.Error("no abandonment error was logged")
+			}
+		})
+	}
+}
+
+// evidenceExportDir writes a valid export directory whose evidence manifest is
+// present on disk, so the released export authenticates and validates and its
+// usage is extracted from authenticated evidence.
+func evidenceExportDir(t *testing.T, evidence export.EvidenceManifest) string {
+	t.Helper()
+	dir := survivingExportDir(t)
+	body, err := evidence.Encode()
+	if err != nil {
+		t.Fatalf("encode evidence manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, export.EvidenceFilename), body, 0o600); err != nil {
+		t.Fatalf("write evidence manifest: %v", err)
+	}
+	return dir
+}
+
+// TestStrandedExportRecoveryPreservesAuthenticatedUsage is the regression for
+// the abandoned-recovery telemetry gap (issue #1181), done safely: the usage is
+// extracted from the authenticated, validated export on the import-failure pass
+// and carried into the deferral, so the failed outcome the grace commits
+// reports the cost the invocation incurred. The whole path runs through Inspect.
+func TestStrandedExportRecoveryPreservesAuthenticatedUsage(t *testing.T) {
+	ctx := context.Background()
+	want := []exec.UsageMeasurement{{
+		Source:     domain.UsageSourceAdapterTranscript,
+		Kind:       domain.UsageMeasurementReportedUsage,
+		Metric:     "input_tokens",
+		Unit:       "tokens",
+		Quantity:   42,
+		Sequence:   1,
+		ObservedAt: fixedNow,
+	}}
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	d.seeder = stubSeeder{err: errors.New("fetch import base: network down")}
+	d.provider = testProvider{usageExtractor: func(
+		string, export.EvidenceManifest, time.Time,
+	) ([]exec.UsageMeasurement, error) {
+		return want, nil
+	}}
+	now := fixedNow
+	d.now = func() time.Time { return now }
+
+	evidence := export.EvidenceManifest{Version: export.EvidenceManifestVersion, Entries: []export.EvidenceEntry{}}
+	in := orphan(t, d, phaseExported, &releasedExport{
+		Dir:             evidenceExportDir(t, evidence),
+		Manifest:        export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}},
+		Evidence:        evidence,
+		EvidencePresent: true,
+		ObservedBaseSHA: testBase.BaseSHA,
+	})
+
+	// Under the grace the import keeps failing and the invocation stays running,
+	// but the authenticated usage is recorded into the deferral.
+	if insp, err := d.Inspect(ctx, in.InvocationID); err != nil || insp.Status != exec.StatusRunning {
+		t.Fatalf("Inspect before grace = %#v, %v; want running", insp, err)
+	}
+	// Past the grace the driver abandons the recovery as failed, carrying the
+	// authenticated usage onto the terminal.
+	now = now.Add(defaultRecoveryGrace + time.Minute)
+	if insp, err := d.Inspect(ctx, in.InvocationID); err != nil || insp.Status != exec.StatusFailed {
+		t.Fatalf("Inspect after grace = %#v, %v; want failed", insp, err)
+	}
+
+	result, err := d.Collect(ctx, in.InvocationID)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if result.Status != exec.StatusFailed {
+		t.Fatalf("result = %+v, want failed", result)
+	}
+	if !reflect.DeepEqual(result.Usage, want) {
+		t.Fatalf("abandoned recovery usage = %#v, want %#v", result.Usage, want)
+	}
+}
+
+// TestStrandedExportRecoveryDoesNotExtractUnauthenticatedUsage is the trust-
+// boundary regression (issue #1181): the abandonment path must never extract
+// usage from the decoded export itself. When no recovery pass authenticated the
+// export (for example the retryable failure was the release authentication), no
+// usage was recorded into the deferral, so the abandoned outcome carries none,
+// even though the export advertises evidence and the provider would yield
+// measurements if the path ever read it. A corrupted intent could otherwise
+// point at an attacker-chosen transcript and inject measurements.
+func TestStrandedExportRecoveryDoesNotExtractUnauthenticatedUsage(t *testing.T) {
+	ctx := context.Background()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	// A provider that would yield usage if the abandonment path ever extracted
+	// from the decoded export.
+	d.provider = testProvider{usageExtractor: func(
+		string, export.EvidenceManifest, time.Time,
+	) ([]exec.UsageMeasurement, error) {
+		return []exec.UsageMeasurement{{
+			Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
+			Metric: "input_tokens", Unit: "tokens", Quantity: 99, Sequence: 1, ObservedAt: fixedNow,
+		}}, nil
+	}}
+	now := fixedNow
+	d.now = func() time.Time { return now }
+
+	evidence := export.EvidenceManifest{Version: export.EvidenceManifestVersion, Entries: []export.EvidenceEntry{}}
+	in := orphan(t, d, phaseExported, &releasedExport{
+		Dir:             evidenceExportDir(t, evidence),
+		Manifest:        export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}},
+		Evidence:        evidence,
+		EvidencePresent: true,
+		ObservedBaseSHA: testBase.BaseSHA,
+	})
+
+	// No recordDeferredUsage call precedes this: it stands for a recovery whose
+	// passes never authenticated the export (the cause is a release-authentication
+	// failure), so no authenticated usage exists to carry forward.
+	cause := fmt.Errorf("%w: authenticate released export: journal read error", ErrRecoveryRetryable)
+	if err := d.deferExportRecovery(in, cause); !errors.Is(err, cause) {
+		t.Fatalf("deferExportRecovery before grace = %v, want the retryable cause", err)
+	}
+	now = now.Add(defaultRecoveryGrace + time.Minute)
+	if err := d.deferExportRecovery(in, cause); err != nil {
+		t.Fatalf("deferExportRecovery after grace = %v, want nil", err)
+	}
+
+	result, err := d.Collect(ctx, in.InvocationID)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if result.Status != exec.StatusFailed {
+		t.Fatalf("result = %+v, want failed", result)
+	}
+	if len(result.Usage) != 0 {
+		t.Fatalf("abandoned outcome carried unauthenticated usage: %#v", result.Usage)
+	}
+}
+
+// TestStrandedExportRecoveryRetriesTerminalCommitWithoutResettingGrace is the
+// regression for a residual indefinite-slot-hold path (issue #1181): when the
+// post-grace terminal commit fails transiently (a read-only state directory
+// stands in for a brief SQLite or intent-file write error), the deferral and
+// its original first-seen timestamp must survive so the next pass retries the
+// commit immediately. Resetting the grace on every such failure would keep the
+// slot held for another full recoveryGrace and, on recurring failures, forever.
+func TestStrandedExportRecoveryRetriesTerminalCommitWithoutResettingGrace(t *testing.T) {
+	ctx := context.Background()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	handler := &captureHandler{}
+	d.logger = slog.New(handler)
+	abandonmentLogs := func() int {
+		n := 0
+		for _, rec := range handler.snapshot() {
+			if rec.level == slog.LevelError && rec.msg == "stage recovery abandoned after grace" {
+				n++
+			}
+		}
+		return n
+	}
+	t0 := fixedNow
+	now := t0
+	d.now = func() time.Time { return now }
+
+	in := orphan(t, d, phaseExported, &releasedExport{
+		Dir:             survivingExportDir(t),
+		Manifest:        export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}},
+		ObservedBaseSHA: testBase.BaseSHA,
+	})
+	cause := fmt.Errorf("%w: fetch import base: network down", ErrRecoveryRetryable)
+
+	// A first pass under the grace records the deferral at t0.
+	if err := d.deferExportRecovery(in, cause); !errors.Is(err, cause) {
+		t.Fatalf("deferExportRecovery before grace = %v, want the retryable cause", err)
+	}
+
+	// Past the grace, a transient terminal-commit failure must retain the
+	// deferral without moving its first-seen timestamp.
+	now = t0.Add(defaultRecoveryGrace + time.Minute)
+	if err := os.Chmod(d.dir, 0o500); err != nil { //nolint:gosec // adversarial fixture makes the private state directory read-only
+		t.Fatal(err)
+	}
+	commitErr := d.deferExportRecovery(in, cause)
+	if err := os.Chmod(d.dir, 0o700); err != nil { //nolint:gosec // restore the private state directory
+		t.Fatal(err)
+	}
+	if !errors.Is(commitErr, ErrRecoveryRetryable) {
+		t.Fatalf("transient commit failure = %v, want a retryable error", commitErr)
+	}
+	d.mu.Lock()
+	entry, retained := d.deferred[in.InvocationID]
+	d.mu.Unlock()
+	if !retained || !entry.first.Equal(t0) {
+		t.Fatalf("deferral after failed commit = (%+v, retained %t), want first %v retained",
+			entry, retained, t0)
+	}
+	// The invocation is not abandoned until the commit lands, so a failed retry
+	// must not emit the terminal-sounding abandonment error (which the ~10 Hz
+	// reconcile loop would otherwise spam during a persistence outage).
+	if n := abandonmentLogs(); n != 0 {
+		t.Fatalf("abandonment errors after failed commit = %d, want 0", n)
+	}
+
+	// The next pass, at the same instant, must commit immediately rather than
+	// deferring afresh: the grace was never reset.
+	if err := d.deferExportRecovery(in, cause); err != nil {
+		t.Fatalf("deferExportRecovery retry = %v, want nil (committed)", err)
+	}
+	if n := abandonmentLogs(); n != 1 {
+		t.Fatalf("abandonment errors after successful commit = %d, want exactly 1", n)
+	}
+	d.mu.Lock()
+	_, stillDeferred := d.deferred[in.InvocationID]
+	d.mu.Unlock()
+	if stillDeferred {
+		t.Fatal("deferral survived a successful terminal commit")
+	}
+	result, err := d.Collect(ctx, in.InvocationID)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if result.Status != exec.StatusFailed {
+		t.Fatalf("result = %+v, want failed", result)
+	}
+}
+
+// TestInspectClearsLeakedDeferralOnReconstructedTerminal covers the partial-
+// failure window in the abandonment path (issue #1181): when the outcome write
+// lands but the intent-file write fails, the deferral is retained, and the next
+// Inspect reconstructs the terminal from the durable outcome without re-entering
+// reconcileIntent. That reconstruction must still drop the lingering deferral so
+// the map does not leak an entry for the daemon's lifetime.
+func TestInspectClearsLeakedDeferralOnReconstructedTerminal(t *testing.T) {
+	ctx := context.Background()
+	outcomes := newStubExports()
+	d := newTestDriver(t, &stubGate{}, outcomes)
+	in := orphan(t, d, phaseExported, &releasedExport{
+		Dir:             survivingExportDir(t),
+		Manifest:        export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}},
+		ObservedBaseSHA: testBase.BaseSHA,
+	})
+
+	// The abandonment's outcome write landed (the slot is freed) even though its
+	// intent-file write failed, so a deferral still lingers.
+	if err := outcomes.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
+		InvocationID: in.InvocationID,
+		AdmissionID:  testStartSpec().AdmissionID,
+		Status:       domain.ExecutionOutcomeFailed,
+		Summary:      "recovery of the released export failed",
+		RecordedAt:   fixedNow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d.mu.Lock()
+	d.deferred[in.InvocationID] = recoveryDeferral{first: fixedNow, phase: phaseExported, lastError: "boom"}
+	d.mu.Unlock()
+
+	insp, err := d.Inspect(ctx, in.InvocationID)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if insp.Status != exec.StatusFailed {
+		t.Fatalf("status = %v, want failed", insp.Status)
+	}
+	d.mu.Lock()
+	_, leaked := d.deferred[in.InvocationID]
+	d.mu.Unlock()
+	if leaked {
+		t.Fatal("Inspect left a deferral for a reconstructed terminal invocation")
+	}
+}
+
+// TestTransientExportRecoveryClearsBeforeGrace proves the grace only abandons a
+// persistent fault: a retryable import failure that clears before the grace
+// elapses completes normally with no failed outcome.
+func TestTransientExportRecoveryClearsBeforeGrace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := t.TempDir()
+	if err := runRecoveryGit(ctx, repo, "init", "-q"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runRecoveryGit(ctx, repo, "commit", "-q", "--allow-empty", "-m", "base"); err != nil {
+		t.Fatal(err)
+	}
+	baseSHA, err := runRecoveryGitOutput(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("read fixture head: %v", err)
+	}
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "candidate.txt"), []byte("recovered\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outDir, err := os.MkdirTemp("", "freeside-handoff-"+testRunIDFor(testInvoke)+"-out-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(outDir) })
+	manifest, err := export.Export(os.DirFS(workspace), outDir, export.Options{})
+	if err != nil {
+		t.Fatalf("export fixture workspace: %v", err)
+	}
+
+	exports := newStubExports()
+	d := newTestDriver(t, &stubGate{}, exports)
+	d.seeder = stubSeeder{err: errors.New("temporary import-base fetch failure")}
+	now := fixedNow
+	d.now = func() time.Time { return now }
+	spec := testStartSpec()
+	spec.Base.BaseSHA = baseSHA
+	in := orphanWithSpec(t, d, phaseExported, &releasedExport{
+		Dir: outDir, Manifest: manifest, ObservedBaseSHA: spec.Base.BaseSHA,
+	}, spec)
+
+	// A first pass under the grace records the deferral and keeps running.
+	if insp, err := d.Inspect(ctx, in.InvocationID); err != nil || insp.Status != exec.StatusRunning {
+		t.Fatalf("Inspect during transient failure = %#v, %v; want running", insp, err)
+	}
+
+	// The fault clears while still under the grace; recovery now completes.
+	now = now.Add(defaultRecoveryGrace / 2)
+	d.seeder = recoveryGitSeeder{repo: repo}
+	if insp, err := d.Inspect(ctx, in.InvocationID); err != nil {
+		t.Fatalf("Inspect after fault cleared: %v", err)
+	} else if insp.Status != exec.StatusCompleted {
+		t.Fatalf("status after fault cleared = %v, want completed", insp.Status)
+	}
+	result, err := d.Collect(ctx, in.InvocationID)
+	if err != nil {
+		t.Fatalf("Collect after fault cleared: %v", err)
+	}
+	if result.Status != exec.StatusCompleted || result.HeadSHA == "" {
+		t.Fatalf("recovered result = %#v, want completed candidate", result)
+	}
+	if len(exports.outcomes) != 0 {
+		t.Fatalf("a cleared transient failure recorded %d failed outcomes", len(exports.outcomes))
+	}
+}
+
+// TestRunningRecoveryIsNeverTerminalizedByGrace keeps the grace out of the
+// running window: ward owns teardown recovery there (#385), so a phaseRunning
+// intent whose ward recovery keeps failing retryably is never turned into a
+// failed outcome by the grace, no matter how much time passes.
+func TestRunningRecoveryIsNeverTerminalizedByGrace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	recoveryErr := errors.New("temporary journal read failure")
+	gate := &stubGate{
+		recoverFn: func(string, ward.HandoffSpec) (*ward.RecoveryResult, error) {
+			return nil, recoveryErr
+		},
+	}
+	exports := newStubExports()
+	d := newTestDriver(t, gate, exports)
+	now := fixedNow
+	d.now = func() time.Time { return now }
+	orphan(t, d, phaseRunning, nil)
+
+	now = now.Add(defaultRecoveryGrace * 4)
+	if insp, err := d.Inspect(ctx, testInvoke); err != nil || insp.Status != exec.StatusRunning {
+		t.Fatalf("Inspect of running intent after grace = %#v, %v; want running", insp, err)
+	}
+	reconstructed, err := d.loadIntent(ctx, testInvoke)
+	if err != nil {
+		t.Fatalf("load running intent: %v", err)
+	}
+	if reconstructed.Phase != phaseRunning || reconstructed.Result != nil {
+		t.Fatalf("intent after grace = %#v, want uncommitted running phase", reconstructed)
+	}
+	if len(exports.outcomes) != 0 {
+		t.Fatalf("grace terminalized a running intent: %d outcomes", len(exports.outcomes))
 	}
 }

@@ -1399,6 +1399,7 @@ func (d *Driver) commitResultLocked(
 		return false, err
 	}
 	if in.Phase == phaseCommitted || in.Phase == phaseLost {
+		delete(d.deferred, id)
 		d.reportTerminalSeedCleanup(in)
 		return true, nil
 	}
@@ -1422,9 +1423,15 @@ func (d *Driver) commitResultLocked(
 	in.Phase = phaseCommitted
 	in.Result = &result
 	in.PendingUsage = nil
+	// A failed result committed from phaseExported/phaseImportPending keeps its
+	// Export set: intent.validate accepts a committed intent that still carries
+	// the released facts, and restoreDurableOutcome only clears Export on the
+	// preterminal reload path, so the retained directory named in an abandoned-
+	// recovery summary (issue #1181) stays consistent with the record.
 	if err := d.saveIntent(in); err != nil {
 		return false, err
 	}
+	delete(d.deferred, id)
 	d.reportTerminalSeedCleanup(in)
 	return true, nil
 }
@@ -1473,6 +1480,7 @@ func (d *Driver) commitLost(ctx context.Context, id domain.InvocationID) error {
 	}
 	switch in.Phase {
 	case phaseCommitted, phaseLost:
+		delete(d.deferred, id)
 		d.reportTerminalSeedCleanup(in)
 		return nil
 	case phaseRunning, phaseExported, phaseImportPending:
@@ -1483,6 +1491,7 @@ func (d *Driver) commitLost(ctx context.Context, id domain.InvocationID) error {
 	if err := d.recordLost(ctx, in); err != nil {
 		return err
 	}
+	delete(d.deferred, id)
 	in.Phase = phaseLost
 	if err := d.saveIntent(in); err != nil {
 		return err
@@ -1663,6 +1672,15 @@ func (d *Driver) reconcileIntent(ctx context.Context, in intent) error {
 			return err
 		}
 		if errors.Is(err, ErrRecoveryRetryable) {
+			// A released export whose import keeps failing retryably would
+			// otherwise be retried forever, permanently consuming its identity's
+			// execution slot with nothing logged (issue #1181). Bound that retry:
+			// abandon it as failed once recovery has failed for longer than the
+			// grace. phaseSeeding and phaseRunning keep the existing unbounded
+			// retry (ward owns the running window; #385).
+			if in.Phase == phaseExported || in.Phase == phaseImportPending {
+				return d.deferExportRecovery(in, err)
+			}
 			return err
 		}
 		// One unrecoverable invocation must not wedge the daemon: an error here
@@ -1676,8 +1694,114 @@ func (d *Driver) reconcileIntent(ctx context.Context, in intent) error {
 			return fmt.Errorf("%w: commit recovery failure: %w",
 				ErrRecoveryRetryable, commitErr)
 		}
+		return nil
 	}
+	// Recovery made progress (a terminal commit or a restarted pipeline), so
+	// any earlier deferral for this invocation no longer applies.
+	d.clearDeferral(in.InvocationID)
 	return nil
+}
+
+// deferExportRecovery bounds the retryable recovery of a released export
+// (issue #1181). Until the grace elapses it records the deferral, logs a
+// warning when the deferral is new or its cause changed, and returns the
+// original retryable error so Inspect keeps reporting the invocation running.
+// Once recovery has failed for longer than the grace it commits a failed
+// outcome that names the last error and the retained export directory: the
+// execution_outcomes row frees the identity's execution slot, and the ordinary
+// collection path raises the operator's execution_failure card. The export
+// directory is never removed; the agent's work survives on disk for a later
+// retry or manual inspection.
+func (d *Driver) deferExportRecovery(in intent, cause error) error {
+	now := d.now()
+	d.mu.Lock()
+	entry, existed := d.deferred[in.InvocationID]
+	// A recordDeferredUsage call earlier this pass can create the entry before
+	// deferExportRecovery, so seed the first-seen timestamp whenever it is unset,
+	// not only when the entry is new.
+	if !existed || entry.first.IsZero() {
+		entry.first = now
+	}
+	changed := !existed || entry.lastError != cause.Error()
+	entry.phase = in.Phase
+	entry.lastError = cause.Error()
+	d.deferred[in.InvocationID] = entry
+	first := entry.first
+	usage := entry.usage
+	d.mu.Unlock()
+
+	elapsed := now.Sub(first)
+	if elapsed < d.recoveryGrace {
+		if changed {
+			d.logger.Warn("stage recovery deferred",
+				"invocation", string(in.InvocationID), "run", in.RunID,
+				"phase", string(in.Phase), "elapsed", elapsed.String(),
+				"error", cause.Error())
+		}
+		return cause
+	}
+	// Commit the usage a recovery pass authenticated from the export (carried in
+	// the deferral by recordDeferredUsage), never a fresh extraction from the
+	// decoded export here: the intent is a reconstruction boundary, and a
+	// retryable authentication failure reaches this path with the export
+	// unverified, so re-reading its evidence could inject attacker-chosen
+	// measurements. Absent authenticated usage the abandoned outcome carries
+	// none; the freed slot and failure card do not depend on it.
+	dir := in.Export.outcome().dir
+	summary := truncateSummary(fmt.Sprintf(
+		"recovery of the released export failed for %s: %s; export retained at %s",
+		elapsed, cause.Error(), dir,
+	))
+	if commitErr := d.commitResult(in.InvocationID, exec.StageResult{
+		InvocationID: in.InvocationID, Status: exec.StatusFailed,
+		Summary: summary, Usage: usage,
+	}); commitErr != nil {
+		// Keep the deferral, and its original first-seen timestamp, so a
+		// transient terminal-commit failure retries the commit on the next pass
+		// instead of resetting the grace clock and holding the slot for another
+		// full recoveryGrace. The grace stays elapsed, so the next pass abandons
+		// again immediately rather than deferring afresh. The abandonment is not
+		// logged here: the invocation is not abandoned until the commit lands, so
+		// the terminal record below fires once rather than once per failed retry
+		// (~10/s under a persistence outage against the engine's reconcile loop).
+		return fmt.Errorf("%w: commit abandoned export recovery: %w",
+			ErrRecoveryRetryable, commitErr)
+	}
+	// Clear the deferral only after the terminal outcome is durably committed,
+	// and log the abandonment once, now that it has actually happened.
+	d.clearDeferral(in.InvocationID)
+	d.logger.Error("stage recovery abandoned after grace",
+		"invocation", string(in.InvocationID), "run", in.RunID,
+		"phase", string(in.Phase), "elapsed", elapsed.String(),
+		"error", cause.Error())
+	// Return nil so Inspect re-reads the now-committed intent and reports failed.
+	return nil
+}
+
+// clearDeferral drops any recorded recovery deferral for an invocation. Safe
+// to call when none exists.
+func (d *Driver) clearDeferral(id domain.InvocationID) {
+	d.mu.Lock()
+	delete(d.deferred, id)
+	d.mu.Unlock()
+}
+
+// recordDeferredUsage stashes the usage a recovery pass authenticated from the
+// released export, so a later abandonment commits the cost the invocation
+// incurred without re-reading the decoded export at that trust boundary. Only
+// the import path, which authenticates and validates the export before
+// extraction, calls this; a bare authentication failure never does, so
+// unauthenticated evidence never becomes durable telemetry. It never seeds the
+// first-seen timestamp; deferExportRecovery owns the grace clock.
+func (d *Driver) recordDeferredUsage(id domain.InvocationID, usage []exec.UsageMeasurement) {
+	if len(usage) == 0 {
+		return
+	}
+	d.mu.Lock()
+	entry := d.deferred[id]
+	entry.usage = slices.Clone(usage)
+	d.deferred[id] = entry
+	d.mu.Unlock()
 }
 
 // recoverIntent asks the gate what became of one orphaned handoff and
@@ -1982,6 +2106,13 @@ func (d *Driver) recoverExported(ctx context.Context, in intent) error {
 						ErrRecoveryRetryable, commitErr)
 				}
 				return nil
+			}
+			// The import failed retryably, so this invocation will defer. The
+			// usage was extracted from the already authenticated and validated
+			// export, so carry it into the deferral for an eventual abandonment
+			// rather than re-reading the decoded export at that trust boundary.
+			if errors.Is(err, ErrRecoveryRetryable) {
+				d.recordDeferredUsage(in.InvocationID, result.Usage)
 			}
 			return err
 		}
