@@ -48,4 +48,6 @@
 //   - A validity switch uses default; a switch that dispatches behaviour on an
 //     enum omits default so the exhaustive linter forces new members to be
 //     handled (see artifact.go).
+//
+// ci build-cache measurement push 1 (#1161); dropped, not part of any merge.
 package domain
