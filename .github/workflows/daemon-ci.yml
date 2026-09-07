@@ -65,7 +65,8 @@ jobs:
           key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
           restore-keys: go-mod-${{ runner.os }}-
       - name: Cache Go build output
-        uses: actions/cache@v4
+        id: go-build-cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ steps.go-cache.outputs.build }}
           # Rolling key: setup-go's cache keys on go.sum alone, so once
@@ -78,6 +79,14 @@ jobs:
           # newest sibling entry. The job segment keeps the three Go jobs
           # across the two workflows from racing to save one key on a
           # single commit.
+          #
+          # Split into restore here and a push-only "Save Go build
+          # output" step at the end of the job (#1161): a PR run restores
+          # main's newest entry through the restore-keys prefix and skips
+          # the upload, which took 15 to 32s on macOS and 5 to 11s on
+          # Linux per PR push. A PR's later pushes then recompile only
+          # what the PR changed since main. Only pushes to main refresh
+          # the per-commit entry.
           key: go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
           restore-keys: |
             go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
@@ -100,6 +109,16 @@ jobs:
           # runs the same `golangci-lint run` in daemon/.
           version: v2.12.2
           working-directory: daemon
+      # Last step so a job that fails anywhere above saves nothing, and
+      # push-only so PR runs skip the upload (restore-only; see the
+      # build-cache step above). The key is the restore's resolved
+      # primary key, so main's push saves the per-commit entry.
+      - name: Save Go build output
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
 
   race:
     name: linux (race test)
@@ -125,7 +144,8 @@ jobs:
           key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
           restore-keys: go-mod-${{ runner.os }}-
       - name: Cache Go build output
-        uses: actions/cache@v4
+        id: go-build-cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ steps.go-cache.outputs.build }}
           key: go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
@@ -146,6 +166,15 @@ jobs:
       # Execute every package for #1146's three post-merge measurements;
       # restored test results would otherwise reduce cross-package contention.
       - run: go test ./... -race -count=1 -timeout=40m
+      # Same restore/save split as the linux job. This job already runs
+      # only on push, so the push guard changes nothing here; it is kept
+      # for uniformity across the four Go jobs.
+      - name: Save Go build output
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
 
   macos:
     name: macos (build, test)
@@ -169,7 +198,8 @@ jobs:
           key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
           restore-keys: go-mod-${{ runner.os }}-
       - name: Cache Go build output
-        uses: actions/cache@v4
+        id: go-build-cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ steps.go-cache.outputs.build }}
           key: go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
@@ -179,3 +209,11 @@ jobs:
       - name: build, test (scripts/check.sh)
         working-directory: .
         run: bash scripts/check.sh daemon build test
+      # Last step so a failed job saves nothing; push-only so PR runs are
+      # restore-only. See the linux job for the full rationale.
+      - name: Save Go build output
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
