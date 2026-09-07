@@ -382,6 +382,7 @@ enum AttentionDisplay {
 
     static func label(_ reason: Components.Schemas.RunHoldReason) -> String {
         switch reason {
+        case .scope_conflict: return "Required work outside scope"
         case .operation_stopped: return "Unattended operation stopped"
         case .blocking_system_health: return "Blocking system-health item"
         case .input_unavailable: return "Input unavailable"

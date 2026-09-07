@@ -1116,6 +1116,9 @@ func (w *productionPublicationWorkflow) prepareRemediationIntent(
 	if err != nil {
 		return nil, err
 	}
+	// Compare only persisted task authority when committing the intent. The
+	// scope decision is reconstructed from its command on each reconciliation.
+	task.scopeDecision = nil
 	return &preparedRemediationIntent{
 		request: request, payload: payload,
 		artifact: inputArtifact, invocation: invocation,

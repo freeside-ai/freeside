@@ -2228,6 +2228,7 @@ public enum Components {
         ///
         /// - Remark: Generated from `#/components/schemas/RunHoldReason`.
         @frozen public enum RunHoldReason: String, Codable, Hashable, Sendable, CaseIterable {
+            case scope_conflict = "scope_conflict"
             case operation_stopped = "operation_stopped"
             case blocking_system_health = "blocking_system_health"
             case input_unavailable = "input_unavailable"
@@ -5756,11 +5757,166 @@ public enum Components {
                 ])
             }
         }
+        /// Untouched required paths outside the run's immutable approved scope, bound to its imported candidate.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ScopeConflictFacts`.
+        public struct ScopeConflictFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ScopeConflictFacts/paths`.
+            public var paths: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/ScopeConflictFacts/declared_paths`.
+            public var declared_paths: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/ScopeConflictFacts/head_sha`.
+            public var head_sha: Swift.String
+            /// Creates a new `ScopeConflictFacts`.
+            ///
+            /// - Parameters:
+            ///   - paths:
+            ///   - declared_paths:
+            ///   - head_sha:
+            public init(
+                paths: [Swift.String],
+                declared_paths: [Swift.String],
+                head_sha: Swift.String
+            ) {
+                self.paths = paths
+                self.declared_paths = declared_paths
+                self.head_sha = head_sha
+            }
+            public enum CodingKeys: String, CodingKey {
+                case paths
+                case declared_paths
+                case head_sha
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.paths = try container.decode(
+                    [Swift.String].self,
+                    forKey: .paths
+                )
+                self.declared_paths = try container.decode(
+                    [Swift.String].self,
+                    forKey: .declared_paths
+                )
+                self.head_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .head_sha
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "paths",
+                    "declared_paths",
+                    "head_sha"
+                ])
+            }
+        }
+        /// The durable operator decision to keep approved paths, with the required out-of-scope work still unmet.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ScopeDecisionFacts`.
+        public struct ScopeDecisionFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ScopeDecisionFacts/paths`.
+            public var paths: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/ScopeDecisionFacts/declared_paths`.
+            public var declared_paths: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/ScopeDecisionFacts/head_sha`.
+            public var head_sha: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ScopeDecisionFacts/command_id`.
+            public var command_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ScopeDecisionFacts/answer`.
+            public var answer: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ScopeDecisionFacts/decided_at`.
+            public var decided_at: Foundation.Date
+            /// Creates a new `ScopeDecisionFacts`.
+            ///
+            /// - Parameters:
+            ///   - paths:
+            ///   - declared_paths:
+            ///   - head_sha:
+            ///   - command_id:
+            ///   - answer:
+            ///   - decided_at:
+            public init(
+                paths: [Swift.String],
+                declared_paths: [Swift.String],
+                head_sha: Swift.String,
+                command_id: Swift.String,
+                answer: Swift.String,
+                decided_at: Foundation.Date
+            ) {
+                self.paths = paths
+                self.declared_paths = declared_paths
+                self.head_sha = head_sha
+                self.command_id = command_id
+                self.answer = answer
+                self.decided_at = decided_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case paths
+                case declared_paths
+                case head_sha
+                case command_id
+                case answer
+                case decided_at
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.paths = try container.decode(
+                    [Swift.String].self,
+                    forKey: .paths
+                )
+                self.declared_paths = try container.decode(
+                    [Swift.String].self,
+                    forKey: .declared_paths
+                )
+                self.head_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .head_sha
+                )
+                self.command_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .command_id
+                )
+                self.answer = try container.decode(
+                    Swift.String.self,
+                    forKey: .answer
+                )
+                self.decided_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .decided_at
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "paths",
+                    "declared_paths",
+                    "head_sha",
+                    "command_id",
+                    "answer",
+                    "decided_at"
+                ])
+            }
+        }
         /// Typed facts on an agent_question item: the stage and invocation that stopped to ask, the blocker kind on the implementation stage (null on the specification stage), and the one to eight decisions the human is asked to make. The item's Question claim carries the same decisions as a content-addressed artifact from the asking invocation.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/AgentQuestionFacts`.
         public struct AgentQuestionFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AgentQuestionFacts/scope_conflict`.
+            public struct scope_conflictPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AgentQuestionFacts/scope_conflict/value1`.
+                public var value1: Components.Schemas.ScopeConflictFacts
+                /// Creates a new `scope_conflictPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ScopeConflictFacts) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/AgentQuestionFacts/scope_conflict`.
+            public var scope_conflict: Components.Schemas.AgentQuestionFacts.scope_conflictPayload?
             /// - Remark: Generated from `#/components/schemas/AgentQuestionFacts/stage`.
             public var stage: Components.Schemas.StageName
             /// - Remark: Generated from `#/components/schemas/AgentQuestionFacts/invocation_id`.
@@ -5790,22 +5946,26 @@ public enum Components {
             /// Creates a new `AgentQuestionFacts`.
             ///
             /// - Parameters:
+            ///   - scope_conflict:
             ///   - stage:
             ///   - invocation_id:
             ///   - kind:
             ///   - decisions:
             public init(
+                scope_conflict: Components.Schemas.AgentQuestionFacts.scope_conflictPayload? = nil,
                 stage: Components.Schemas.StageName,
                 invocation_id: Swift.String,
                 kind: Components.Schemas.AgentQuestionFacts.kindPayload? = nil,
                 decisions: [Components.Schemas.Decision]
             ) {
+                self.scope_conflict = scope_conflict
                 self.stage = stage
                 self.invocation_id = invocation_id
                 self.kind = kind
                 self.decisions = decisions
             }
             public enum CodingKeys: String, CodingKey {
+                case scope_conflict
                 case stage
                 case invocation_id
                 case kind
@@ -5813,6 +5973,10 @@ public enum Components {
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.scope_conflict = try container.decodeIfPresent(
+                    Components.Schemas.AgentQuestionFacts.scope_conflictPayload.self,
+                    forKey: .scope_conflict
+                )
                 self.stage = try container.decode(
                     Components.Schemas.StageName.self,
                     forKey: .stage
@@ -5830,6 +5994,7 @@ public enum Components {
                     forKey: .decisions
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "scope_conflict",
                     "stage",
                     "invocation_id",
                     "kind",
@@ -6797,6 +6962,30 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/commit_plan_notice`.
             public var commit_plan_notice: Components.Schemas.AttentionItem.commit_plan_noticePayload?
+            /// Present on ready items after the operator kept the scope; the named obligation remains unmet.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/scope_decision`.
+            public struct scope_decisionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AttentionItem/scope_decision/value1`.
+                public var value1: Components.Schemas.ScopeDecisionFacts
+                /// Creates a new `scope_decisionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ScopeDecisionFacts) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// Present on ready items after the operator kept the scope; the named obligation remains unmet.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/scope_decision`.
+            public var scope_decision: Components.Schemas.AttentionItem.scope_decisionPayload?
             /// The base-advance staleness watch's maintained fact (plan §5.16; mirrors domain.AttentionItem.BaseFreshness): the daemon's last observation of the item's target base against the admitted base. Present only on ready_for_final_review items once the watch has observed the base; updated on material change only, with the version bump that a real base advance implies. Never client-set.
             ///
             ///
@@ -7268,6 +7457,7 @@ public enum Components {
             ///   - readiness_detail: The evaluation behind readiness for this ready_for_final_review item (plan §6; mirrors domain.AttentionItem.ReadinessDetail): the bound head and base and every requirement's state, proof recipe, or waiver identity and granting authority. Production-created ready items always carry it beside readiness; null is tolerated for legacy persisted items and fake-mode items, and it never appears without readiness. It is fixed at creation and never client-set.
             ///   - yield_history: The daemon-derived per-round review yield for this ready_for_final_review or review_diminishing_returns item (mirrors domain.AttentionItem.YieldHistory). Production-created ready items always carry it; null is tolerated for legacy persisted items, fake-mode items, and diminishing items created before their producer lands. It is fixed at creation and never client-set.
             ///   - commit_plan_notice: The daemon-derived commit-plan notice (plan §5.6; mirrors domain.AttentionItem.CommitPlanNotice): set when the reserved plan channel was consumed without a plan structuring the import, null otherwise. Classified by the daemon, never client-set; null until emission lands (#212).
+            ///   - scope_decision: Present on ready items after the operator kept the scope; the named obligation remains unmet.
             ///   - base_freshness: The base-advance staleness watch's maintained fact (plan §5.16; mirrors domain.AttentionItem.BaseFreshness): the daemon's last observation of the item's target base against the admitted base. Present only on ready_for_final_review items once the watch has observed the base; updated on material change only, with the version bump that a real base advance implies. Never client-set.
             ///   - readiness_invalidation: The daemon-recorded fact that this ready_for_final_review item's clean-pass claim was invalidated by a base/head/identity change the review was not run against (plan §7; mirrors domain.AttentionItem.ReadinessInvalidation). Written in the same transaction that supersedes the item, so the staleness is item-visible and the version bump stales any command prepared against the old ready claim. Present only on a superseded ready item; null otherwise. Never client-set.
             ///   - review_recovery_binding: The exact persisted contradiction this review_contradiction item offers to recover (issue #580; mirrors domain.AttentionItem.ReviewRecoveryBinding). It binds the run, invocation, round, base, head, and immutable failure-row body digest displayed to the operator; null on every other item.
@@ -7313,6 +7503,7 @@ public enum Components {
                 readiness_detail: Components.Schemas.AttentionItem.readiness_detailPayload? = nil,
                 yield_history: Components.Schemas.AttentionItem.yield_historyPayload? = nil,
                 commit_plan_notice: Components.Schemas.AttentionItem.commit_plan_noticePayload? = nil,
+                scope_decision: Components.Schemas.AttentionItem.scope_decisionPayload? = nil,
                 base_freshness: Components.Schemas.AttentionItem.base_freshnessPayload? = nil,
                 readiness_invalidation: Components.Schemas.AttentionItem.readiness_invalidationPayload? = nil,
                 review_recovery_binding: Components.Schemas.AttentionItem.review_recovery_bindingPayload? = nil,
@@ -7358,6 +7549,7 @@ public enum Components {
                 self.readiness_detail = readiness_detail
                 self.yield_history = yield_history
                 self.commit_plan_notice = commit_plan_notice
+                self.scope_decision = scope_decision
                 self.base_freshness = base_freshness
                 self.readiness_invalidation = readiness_invalidation
                 self.review_recovery_binding = review_recovery_binding
@@ -7404,6 +7596,7 @@ public enum Components {
                 case readiness_detail
                 case yield_history
                 case commit_plan_notice
+                case scope_decision
                 case base_freshness
                 case readiness_invalidation
                 case review_recovery_binding

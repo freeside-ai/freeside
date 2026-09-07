@@ -9,12 +9,16 @@ import (
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // Candidate is one publication's input: the verified candidate
 // revision, the evidence artifacts backing it, and the invocation
 // publishing it.
 type Candidate struct {
+	// ScopeDecision is the accepted command's candidate-bound account of
+	// required work left outside the approved paths. The store re-gates it.
+	ScopeDecision *domain.ScopeDecisionFacts
 	// Repo is the target repository ("owner/name").
 	Repo string
 	// BaseRef is the base branch the publication PR targets.
@@ -290,6 +294,13 @@ func (p *Publisher) gateOutcomeRepair(
 	}
 	if currentIdentity != identity {
 		return fmt.Errorf("candidate identity changed before repair: %w", ErrPublicationConflict)
+	}
+	if p.storeDecision != nil {
+		if err := p.storeDecision.store.Read(ctx, func(tx *store.ReadTx) error {
+			return validateRepairIntent(ctx, tx, c, identity)
+		}); err != nil {
+			return fmt.Errorf("repair publication intent: %w", err)
+		}
 	}
 	if p.auditor == nil {
 		return errors.New("repair publication outcome: no workflow auditor")
@@ -784,6 +795,13 @@ func profileSatisfiesCandidateBinding(
 }
 
 func (p *Publisher) gateAuthorization(ctx context.Context, c Candidate) error {
+	if p.storeDecision != nil {
+		if err := p.storeDecision.store.Read(ctx, func(tx *store.ReadTx) error { return validateCurrentScopeDecision(ctx, tx, c) }); err != nil {
+			return err
+		}
+	} else if c.ScopeDecision != nil {
+		return ErrUnauthorizedPublication
+	}
 	if c.AuthorizationID == nil {
 		return fmt.Errorf("candidate carries no authorization binding: %w", ErrUnauthorizedPublication)
 	}
@@ -857,6 +875,9 @@ func (p *Publisher) preparePublication(
 	if producingInvocationID != nil {
 		sourceInvocationID = *producingInvocationID
 	}
+	if c.ScopeDecision != nil && sourceInvocationID == "" {
+		return fmt.Errorf("scope decision requires an execution-bound publication intent: %w", ErrUnauthorizedPublication)
+	}
 	intent, err := intentForCandidate(c, identity, sourceInvocationID)
 	if err != nil {
 		return fmt.Errorf("publish: %w", err)
@@ -877,7 +898,7 @@ func (p *Publisher) preparePublication(
 	var recorded bool
 	if p.storeDecision != nil {
 		prior, recorded, err = p.storeDecision.prepare(
-			ctx, c, audit, key, payload, claim, producingInvocationID,
+			ctx, c, identity, audit, key, payload, claim, producingInvocationID,
 		)
 	} else {
 		if claim != nil {
@@ -1059,18 +1080,25 @@ func prMatchesPublicationCoordinates(
 }
 
 // desiredPRContent is the deterministic PR content for a candidate: operator
-// prose, fixed-bounded advisories, disposition history fitted to the remaining
-// reserved space with digest-bound truncation, and the identity marker as the
+// prose, fixed-bounded advisories and scope decision, disposition history fitted
+// to the remaining reserved space with digest-bound truncation, and the identity marker as the
 // final line (plan §5.15 rule 4). Operator prose is never truncated. The final
 // ceiling check remains a fail-closed guard over the complete composition.
 func desiredPRContent(identity Identity, c Candidate) (title, body string, err error) {
 	prose := strings.TrimRight(c.Body, "\n")
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 5)
 	if prose != "" {
 		parts = append(parts, prose)
 	}
 	if len(c.Advisories) > 0 {
 		parts = append(parts, renderAdvisories(c.Advisories))
+	}
+	if c.ScopeDecision != nil {
+		section, err := renderScopeDecision(*c.ScopeDecision)
+		if err != nil {
+			return "", "", err
+		}
+		parts = append(parts, section)
 	}
 	if c.DispositionHistory != nil {
 		historyLimit := maxPullRequestBodyBytes - len(identity.Marker()) -

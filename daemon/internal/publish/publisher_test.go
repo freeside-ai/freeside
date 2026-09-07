@@ -1645,6 +1645,7 @@ func TestConvergeOutcomeRepairsExactDispositionHistoryWithoutCreating(t *testing
 	candidate := testCandidate(t)
 	candidate.RunID = "run-converge-history"
 	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	seedRepairIntent(t, st, candidate)
 	identity := testCandidateIdentity(t)
 	outcome := fixtureOutcome()
 	gh := newFakeGitHub(t)
@@ -1707,6 +1708,7 @@ func TestConvergeOutcomeRefusesTrustDriftBeforeRepair(t *testing.T) {
 	candidate := testCandidate(t)
 	candidate.RunID = "run-converge-trust-drift"
 	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	seedRepairIntent(t, st, candidate)
 	identity := testCandidateIdentity(t)
 	outcome := fixtureOutcome()
 	gh := newFakeGitHub(t)
@@ -1785,6 +1787,7 @@ func TestConvergeOutcomeRevalidatesDispositionHistoryBeforeRepair(t *testing.T) 
 	candidate := testCandidate(t)
 	candidate.RunID = "run-converge-late-review"
 	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	seedRepairIntent(t, st, candidate)
 	identity := testCandidateIdentity(t)
 	outcome := fixtureOutcome()
 	gh := newFakeGitHub(t)
@@ -1832,6 +1835,7 @@ func TestConvergeOutcomeRevalidatesPersistedReadinessProofsBeforeRepair(t *testi
 	candidate := testCandidate(t)
 	candidate.RunID = "run-converge-missing-proof"
 	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	seedRepairIntent(t, st, candidate)
 	identity := testCandidateIdentity(t)
 	outcome := fixtureOutcome()
 	gh := newFakeGitHub(t)
@@ -2380,5 +2384,34 @@ func TestPublishRefusesReservationClaimWithoutAStoreLedger(t *testing.T) {
 	}
 	if writes := gh.writeRequests(); len(writes) != 0 {
 		t.Fatalf("refused publication issued forge writes: %v", writes)
+	}
+}
+
+func seedRepairIntent(t *testing.T, st *store.Store, candidate publish.Candidate) {
+	t.Helper()
+	rendered, err := publish.RenderDispositionHistory(*candidate.DispositionHistory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := publish.Intent{
+		FormatVersion: publish.IntentFormatCurrent,
+		Identity:      testCandidateIdentity(t).Digest(), InvocationID: candidate.InvocationID,
+		Repo: candidate.Repo, BaseRef: candidate.BaseRef, SourceHeadSHA: candidate.HeadSHA,
+		AuthorizationID: *candidate.AuthorizationID, DispositionHistoryDigest: domain.Digest(contentaddr.Sum([]byte(rendered))),
+	}
+	payload, err := intent.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := publish.IntentKey(candidate.InvocationID, publish.IntentKindPublication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := publish.NewStoreLedger(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ledger.Record(t.Context(), key, publish.IntentKindPublication, payload, nil); err != nil {
+		t.Fatal(err)
 	}
 }

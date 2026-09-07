@@ -171,6 +171,10 @@ func (f AgentQuestionFacts) ComputeDigest() (Digest, error) {
 	var err error
 	if f.Stage == StageNameSpecification {
 		body, err = json.Marshal(f.Decisions)
+	} else if f.ScopeConflict != nil {
+		body, err = EncodeScopeConflict(ScopeConflict{
+			Version: ScopeConflictEncodingVersion, Paths: f.ScopeConflict.Paths, Decision: f.Decisions[0],
+		})
 	} else {
 		body, err = EncodeBlockedOutcome(BlockedOutcome{
 			Version: BlockedOutcomeEncodingVersion, Kind: *f.Kind, Decisions: f.Decisions,

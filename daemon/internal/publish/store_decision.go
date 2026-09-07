@@ -25,6 +25,9 @@ func (d *storePublicationDecision) revalidateOutcomeRepair(
 		return nil
 	}
 	return d.store.Read(ctx, func(tx *store.ReadTx) error {
+		if err := validateCurrentScopeDecision(ctx, tx, c); err != nil {
+			return err
+		}
 		profile, err := tx.LatestTrustProfile(ctx, c.Repo)
 		if errors.Is(err, store.ErrNotFound) {
 			return fmt.Errorf("no current trust profile for %s: %w", c.Repo, ErrTrustProfileDrift)
@@ -80,6 +83,7 @@ func (d *storePublicationDecision) revalidateOutcomeRepair(
 func (d *storePublicationDecision) prepare(
 	ctx context.Context,
 	c Candidate,
+	identity Identity,
 	audit domain.WorkflowAudit,
 	key string,
 	payload []byte,
@@ -92,6 +96,12 @@ func (d *storePublicationDecision) prepare(
 		decisionErr error
 	)
 	err := d.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := validateCurrentScopeDecision(ctx, &tx.ReadTx, c); err != nil {
+			return err
+		}
+		if err := validatePublicationScopeHistory(ctx, &tx.ReadTx, c, identity); err != nil {
+			return err
+		}
 		if _, err := tx.RecordWorkflowAudit(ctx, audit); err != nil {
 			return fmt.Errorf("record fresh workflow audit: %w", err)
 		}

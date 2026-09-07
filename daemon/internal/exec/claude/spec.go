@@ -176,6 +176,12 @@ func agentCommand(prompt, sessionID string, invocationID domain.InvocationID, pr
 		ProducerInvocationID: string(invocationID),
 	}
 	descriptorPrefix := evidenceDescriptorPrefix()
+	scopeConflictSource := export.EvidenceSource{
+		Label: export.ScopeConflictEvidenceLabel, MediaType: "application/json",
+		Path: export.ScopeConflictEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+		SensitivityClass:     export.EvidenceSensitivityNormal,
+		ProducerInvocationID: string(invocationID),
+	}
 	sourceFragment := evidenceSourceFragment
 	fileExists := func(p string) string {
 		return "[ -f " + shellQuote(p) + " ] && [ ! -L " + shellQuote(p) + " ]"
@@ -190,6 +196,8 @@ func agentCommand(prompt, sessionID string, invocationID domain.InvocationID, pr
 		"sources=\"$sources\"," + shellQuote(sourceFragment("summary", summarySource)) + "; declare=1; fi; " +
 		"if " + fileExists(export.BlockedEvidencePath) + "; then " +
 		"sources=\"$sources\"," + shellQuote(sourceFragment("blocked", blockedSource)) + "; declare=1; fi; " +
+		"if " + fileExists(export.ScopeConflictEvidencePath) + "; then " +
+		"sources=\"$sources\"," + shellQuote(sourceFragment("scope-conflict", scopeConflictSource)) + "; declare=1; fi; " +
 		"if [ \"$declare\" = 1 ]; then printf '%s\\n' " + shellQuote(descriptorPrefix) + "\"$sources\"']}' > " +
 		shellQuote(transcriptDescriptorPath) + "; fi; "
 	// hydrate runs before the chown sweep; guardPrefix turns the token check

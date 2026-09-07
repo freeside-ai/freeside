@@ -1,0 +1,13 @@
+{
+  "paths": [
+    "AGENTS.md"
+  ],
+  "declared_paths": [
+    "devlog/*.md",
+    "src/*.ts"
+  ],
+  "head_sha": "cafebabe",
+  "command_id": "scope-1",
+  "answer": "Keep scope; document the remaining obligation.",
+  "decided_at": "2026-01-02T03:04:05Z"
+}

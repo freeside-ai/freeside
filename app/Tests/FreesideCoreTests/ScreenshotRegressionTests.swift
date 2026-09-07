@@ -461,6 +461,20 @@
                             .padding()
                     )))
 
+            for snapshot in [AttentionFixtures.scopeConflictQuestion(), AttentionFixtures.scopeKeptReady()] {
+                let detail = DecisionDetailView(
+                    store: store, itemID: snapshot.item.id,
+                    loadsAttachments: false, showsValidationProgress: false, now: screenshotNow)
+                for (device, width) in [("mac", CGFloat(960)), ("iphone", CGFloat(390))] {
+                    for (theme, scheme) in [("light", ColorScheme.light), ("dark", ColorScheme.dark)] {
+                        surfaces.append(
+                            Surface(
+                                name: "\(snapshot.item.id)-\(device)-\(theme)", width: width, colorScheme: scheme,
+                                view: AnyView(detail.screenshotCard(snapshot.item, at: dynamicTypeSize))))
+                    }
+                }
+            }
+
             for snapshot in inbox {
                 let graphics = graphicPresentations(for: snapshot.item)
                 let detail = DecisionDetailView(

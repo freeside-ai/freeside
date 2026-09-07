@@ -23,6 +23,7 @@ public struct AgentQuestionPresentation: Equatable, Sendable {
     public let stage: Components.Schemas.StageName
     public let kind: Components.Schemas.BlockedKind?
     public let decisions: [Decision]
+    public let scopeConflict: Components.Schemas.ScopeConflictFacts?
 
     public init?(_ item: Components.Schemas.AttentionItem) {
         guard item._type == .agent_question, let facts = item.agent_question?.value1 else {
@@ -30,6 +31,7 @@ public struct AgentQuestionPresentation: Equatable, Sendable {
         }
         stage = facts.stage
         kind = facts.kind?.value1
+        scopeConflict = facts.scope_conflict?.value1
         decisions = facts.decisions.map { decision in
             Decision(
                 question: decision.question,
@@ -68,7 +70,7 @@ public struct AgentQuestionPresentation: Equatable, Sendable {
         for item: Components.Schemas.AttentionItem?
     ) -> Components.Schemas.AnswerRoute? {
         guard let item, let presentation = AgentQuestionPresentation(item),
-            presentation.stage == .implementation
+            presentation.stage == .implementation, presentation.scopeConflict == nil
         else { return nil }
         return .retry_implementation
     }

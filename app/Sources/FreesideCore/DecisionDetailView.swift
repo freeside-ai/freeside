@@ -911,6 +911,23 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func agentQuestionLead(_ item: Components.Schemas.AttentionItem) -> some View {
         if let presentation = AgentQuestionPresentation(item) {
+            if let scope = presentation.scopeConflict {
+                VStack(alignment: .leading, spacing: 8) {
+                    KeywordLabel(text: "Required work outside scope")
+                    Text(scope.paths.joined(separator: ", "))
+                        .font(FreesideFont.itemTitle)
+                    Text("Allowed paths: \(scope.declared_paths.joined(separator: ", "))")
+                    Text("Candidate: \(AttentionDisplay.shortRevision(scope.head_sha))")
+                    Text(
+                        "Answer to keep scope and record the unmet work. To widen scope, stop and start a new run with a newly approved path policy."
+                    )
+                }
+                .font(FreesideFont.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .freesideCard()
+            }
             ForEach(Array(presentation.decisions.enumerated()), id: \.offset) { _, decision in
                 VStack(alignment: .leading, spacing: 8) {
                     KeywordLabel(text: "Agent question (unverified)")

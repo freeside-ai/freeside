@@ -4,6 +4,15 @@ import Testing
 @testable import FreesideCore
 
 struct AgentQuestionPresentationTests {
+    @Test func scopeConflictKeepsFactsAndOmitsRetryRoute() throws {
+        let item = AttentionFixtures.scopeConflictQuestion().item
+        let presentation = try #require(AgentQuestionPresentation(item))
+        #expect(presentation.scopeConflict?.paths == ["AGENTS.md"])
+        #expect(presentation.scopeConflict?.declared_paths == ["devlog/*.md", "src/*.ts"])
+        #expect(AgentQuestionPresentation.answerRoute(for: item) == nil)
+        #expect(item.requested_decision == [.answer_without_retry, .stop])
+        #expect(AttentionFixtures.scopeKeptReady().item.scope_decision?.value1.paths == ["AGENTS.md"])
+    }
     @Test func presentsTypedDecisionsWithTheRecommendationMarked() throws {
         let item = AttentionFixtures.fixture(type: .agent_question).item
         let presentation = try #require(AgentQuestionPresentation(item))

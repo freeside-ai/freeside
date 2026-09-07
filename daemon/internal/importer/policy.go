@@ -198,3 +198,8 @@ func applyPolicy(changes []plannedChange, pol Policy) []Finding {
 func matchAny(patterns []string, p string, foldCase bool) bool {
 	return pathfold.MatchAny(patterns, p, foldCase)
 }
+
+// MatchesAllowlist applies the same case-sensitive path policy as import.
+func MatchesAllowlist(patterns []string, p string) bool {
+	return matchAny(patterns, p, false)
+}

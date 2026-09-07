@@ -50,6 +50,7 @@
   "readiness_detail": null,
   "yield_history": null,
   "commit_plan_notice": null,
+  "scope_decision": null,
   "base_freshness": null,
   "readiness_invalidation": null,
   "review_recovery_binding": null,
@@ -75,6 +76,7 @@
   "review_dispute": null,
   "spec_revision": null,
   "agent_question": {
+    "scope_conflict": null,
     "stage": "specification",
     "invocation_id": "inv-specify-run-1-99",
     "kind": null,

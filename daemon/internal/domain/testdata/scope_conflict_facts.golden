@@ -1,0 +1,10 @@
+{
+  "paths": [
+    "AGENTS.md"
+  ],
+  "declared_paths": [
+    "devlog/*.md",
+    "src/*.ts"
+  ],
+  "head_sha": "cafebabe"
+}

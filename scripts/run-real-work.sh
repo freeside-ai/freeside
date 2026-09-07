@@ -14,6 +14,11 @@
 # daemon alive for a walkthrough until `real-work-session.sh complete` is used.
 # See docs/production-walkthrough.md for completion, recovery and restoration.
 #
+# A scope-conflict question keeps the current policy immutable. To widen scope,
+# choose stop, then submit a new run with a new FREESIDE_REAL_RUN_ALLOWED_PATHS
+# and the matching resolved-policy paths key. Restart the daemon with that
+# matching -allowed-paths value; the script supplies it from the environment.
+#
 # It never mints its own preconditions. Every binding below is the
 # operator's, supplied through the environment, because each one lands in
 # a durable admission record and a script-invented default would make that
