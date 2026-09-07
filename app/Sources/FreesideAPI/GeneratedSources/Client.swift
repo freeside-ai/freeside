@@ -979,6 +979,94 @@ public struct Client: APIProtocol {
             }
         )
     }
+    /// Read retained reviewer output for one round
+    ///
+    /// Re-authenticates private retained output against the originating run and exact reviewed base/head. Integrity errors return no partial content.
+    ///
+    ///
+    /// - Remark: HTTP `GET /runs/{run_id}/review/{round}/evidence`.
+    /// - Remark: Generated from `#/paths//runs/{run_id}/review/{round}/evidence/get(getReviewEvidence)`.
+    public func getReviewEvidence(_ input: Operations.getReviewEvidence.Input) async throws -> Operations.getReviewEvidence.Output {
+        try await client.send(
+            input: input,
+            forOperation: Operations.getReviewEvidence.id,
+            serializer: { input in
+                let path = try converter.renderedPath(
+                    template: "/runs/{}/review/{}/evidence",
+                    parameters: [
+                        input.path.run_id,
+                        input.path.round
+                    ]
+                )
+                var request: HTTPTypes.HTTPRequest = .init(
+                    soar_path: path,
+                    method: .get
+                )
+                suppressMutabilityWarning(&request)
+                converter.setAcceptHeader(
+                    in: &request.headerFields,
+                    contentTypes: input.headers.accept
+                )
+                return (request, nil)
+            },
+            deserializer: { response, responseBody in
+                switch response.status.code {
+                case 200:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.getReviewEvidence.Output.Ok.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.ReviewEvidence.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .ok(.init(body: body))
+                case 404:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Components.Responses.NotFound.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .notFound(.init(body: body))
+                default:
+                    return .undocumented(
+                        statusCode: response.status.code,
+                        .init(
+                            headerFields: response.headerFields,
+                            body: responseBody
+                        )
+                    )
+                }
+            }
+        )
+    }
     /// List durable schedules
     ///
     /// Lists the durable scheduler's synchronized schedule aggregates (plan §5.16). A partial fetch; it never marks the whole cache current (plan §5.14).

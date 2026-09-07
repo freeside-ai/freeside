@@ -211,6 +211,18 @@ public struct MockServerTransport: ClientTransport {
                         message: "no entity exists under the identifier"))
             }
             return try Self.json(status: .ok, body: timeline)
+        case "getReviewEvidence":
+            let parts = (request.path ?? "").split(separator: "/")
+            guard parts.count == 5, parts[0] == "runs", parts[2] == "review", parts[4] == "evidence",
+                let runID = String(parts[1]).removingPercentEncoding,
+                let roundNumber = Int(parts[3]),
+                let timeline = await server.runTimeline(id: runID),
+                let round = timeline.review?.value1.rounds.first(where: { $0.round == roundNumber })
+            else {
+                return try Self.json(
+                    status: .notFound, body: Components.Schemas._Error(message: "review round unavailable"))
+            }
+            return try Self.json(status: .ok, body: RunFixtures.reviewEvidence(runID: runID, round: round))
         case "listSchedules":
             return try Self.json(status: .ok, body: await server.listSchedules())
         case "pairDevice":

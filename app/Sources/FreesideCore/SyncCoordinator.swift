@@ -416,6 +416,29 @@ public final class SyncCoordinator {
         }
     }
 
+    enum ReviewEvidenceReadError: Error { case unavailable, bindingMismatch }
+
+    public func reviewEvidence(
+        for runID: String, round: Components.Schemas.RunReviewRound
+    ) async throws -> Components.Schemas.ReviewEvidence {
+        let generation = cacheGeneration
+        let output = try await store.client.getReviewEvidence(path: .init(run_id: runID, round: round.round))
+        try Task.checkCancellation()
+        guard generation == cacheGeneration else { throw CancellationError() }
+        switch output {
+        case .ok(let ok):
+            let evidence = try ok.body.json
+            guard evidence.run_id == runID, evidence.round == round.round,
+                evidence.invocation_id == round.invocation_id,
+                evidence.source_head_sha == round.head_sha,
+                evidence.source == round.source, !evidence.publish_eligible
+            else { throw ReviewEvidenceReadError.bindingMismatch }
+            return evidence
+        case .notFound, .undocumented:
+            throw ReviewEvidenceReadError.unavailable
+        }
+    }
+
     /// Fetches one computed timeline on navigation. A cached same-epoch value
     /// remains available while unreachable; a successful partial read replaces
     /// it and advances only the observed cursor.

@@ -5,6 +5,30 @@ import Testing
 @testable import FreesideCore
 
 @Suite struct RunTimelineViewTests {
+    @Test func invalidReviewTextIsLabeledWithoutChangingRetainedBytes() {
+        let bytes: [UInt8] = [0x61, 0xff, 0x62]
+        let output = ReviewOutputText(bytes: bytes)
+        #expect(output.hasReplacementCharacters)
+        #expect(output.bytes == bytes)
+        #expect(!ReviewOutputText(bytes: Array("valid text".utf8)).hasReplacementCharacters)
+    }
+
+    @Test func reviewFactsKeepUnknownDistinctFromClean() {
+        for state in [Components.Schemas.ReviewProgressState.pending, .running, .failed] {
+            let round = RunFixtures.reviewRound(state)
+            #expect(round.outcome == nil)
+            #expect(round.findings_count == nil)
+            #expect(RunDisplay.reviewIdentity(round) == "Reviewer unknown · Model unknown")
+            #expect(!RunDisplay.label(state).isEmpty)
+        }
+        let clean = RunFixtures.reviewRound(.completed)
+        #expect(clean.outcome?.value1 == .clean)
+        #expect(clean.findings_count == 0)
+        #expect(RunDisplay.reviewIdentity(clean) == "openai · codex/high")
+        let findings = RunFixtures.reviewRound(.completed, findings: true)
+        #expect(findings.dispositions?.value1.open == 1)
+    }
+
     @Test func roundIsOmittedUntilAStageHasAnAttempt() {
         var stage = RunFixtures.defaultRuns()[0].run.stages[0]
         stage.attempts = []

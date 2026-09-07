@@ -13,6 +13,7 @@
             let width: CGFloat?
             let colorScheme: ColorScheme
             let contrast: LaunchInputs.Contrast?
+            let nativeAppearance: Bool
             let view: AnyView
 
             init(
@@ -20,12 +21,14 @@
                 width: CGFloat? = nil,
                 colorScheme: ColorScheme = .light,
                 contrast: LaunchInputs.Contrast? = nil,
+                nativeAppearance: Bool = false,
                 view: AnyView
             ) {
                 self.name = name
                 self.width = width
                 self.colorScheme = colorScheme
                 self.contrast = contrast
+                self.nativeAppearance = nativeAppearance
                 self.view = view
             }
         }
@@ -81,7 +84,8 @@
                             at: size.value,
                             width: surface.width ?? canvasWidth,
                             colorScheme: surface.colorScheme,
-                            contrast: surface.contrast)
+                            contrast: surface.contrast,
+                            nativeAppearance: surface.nativeAppearance)
                         actual[key] = try digest(image)
                         if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
                             _ = try dump(image, named: key)
@@ -1053,6 +1057,41 @@
                             .screenshotContent(timeline)
                     )))
 
+            for colorScheme in [ColorScheme.light, .dark] {
+                for width in [CGFloat(820), 390] {
+                    surfaces.append(
+                        Surface(
+                            name: "review-output-invalid-utf8-\(Int(width))-\(colorScheme == .dark ? "dark" : "light")",
+                            width: width, colorScheme: colorScheme, nativeAppearance: true,
+                            view: AnyView(
+                                ReviewOutputText(bytes: Array("Retained reviewer output: ".utf8) + [0xff, 0xfe])
+                                    .font(FreesideFont.monoCaption)
+                                    .foregroundStyle(Color.ink)
+                                    .padding(24))))
+                    for (name, rounds) in [
+                        ("running", [RunFixtures.reviewRound(.running)]),
+                        ("findings", [RunFixtures.reviewRound(.completed, findings: true, availability: .available)]),
+                        (
+                            "rereview",
+                            [
+                                RunFixtures.reviewRound(.completed, findings: true),
+                                RunFixtures.reviewRound(.running, round: 2),
+                            ]
+                        ),
+                        ("failed", [RunFixtures.reviewRound(.failed)]),
+                    ] {
+                        surfaces.append(
+                            Surface(
+                                name: "run-review-\(name)-\(Int(width))-\(colorScheme == .dark ? "dark" : "light")",
+                                width: width, colorScheme: colorScheme, nativeAppearance: true,
+                                view: AnyView(
+                                    RunReviewSection(
+                                        coordinator: coordinator, runID: activeRun.run.id, facts: .init(rounds: rounds)
+                                    ).padding(24))))
+                    }
+                }
+            }
+
             await server.seedPairingCode("483911")
             let pairing = PairingModel(
                 client: client,
@@ -1459,7 +1498,8 @@
             at size: DynamicTypeSize,
             width: CGFloat,
             colorScheme: ColorScheme,
-            contrast: LaunchInputs.Contrast? = nil
+            contrast: LaunchInputs.Contrast? = nil,
+            nativeAppearance: Bool = false
         ) async throws -> CGImage {
             guard let timeZone = TimeZone(secondsFromGMT: 0) else {
                 throw ScreenshotError.missingGMT
@@ -1474,6 +1514,7 @@
                 .frame(width: width, alignment: .topLeading)
                 .fixedSize(horizontal: false, vertical: true)
                 .background(Color.ground)
+                .transformEnvironment(\.colorScheme) { if nativeAppearance { $0 = colorScheme } }
             // ImageRenderer can transiently return an incomplete glyph raster
             // under CI load. Baselines must come from a settled frame, and an
             // unstable surface fails closed instead of blessing random pixels.
@@ -1485,6 +1526,12 @@
                 // Use the same contrast override as deterministic app launches.
                 // Restore it before yielding so other tests keep their defaults.
                 let image: CGImage? = {
+                    if nativeAppearance {
+                        var image: CGImage?
+                        NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)?
+                            .performAsCurrentDrawingAppearance { image = renderer.cgImage }
+                        return image
+                    }
                     guard let contrast else { return renderer.cgImage }
                     let defaults = UserDefaults.standard
                     let prior = defaults.object(forKey: "FreesideContrast")

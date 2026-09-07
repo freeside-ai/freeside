@@ -58,6 +58,7 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 	mux.Handle("GET /schedules", h.authenticated(h.listSchedules))
 	mux.Handle("GET /runs/{run_id}", h.authenticated(h.getRun))
 	mux.Handle("GET /runs/{run_id}/timeline", h.authenticated(h.getRunTimeline))
+	mux.Handle("GET /runs/{run_id}/review/{round}/evidence", h.authenticated(h.getReviewEvidence))
 	mux.Handle("GET /conversations/{conversation_id}", h.authenticated(h.getConversation))
 	mux.Handle("POST /commands", h.authenticated(h.submitCommand))
 	mux.Handle("PUT /attachments/{digest}", h.authenticated(h.putAttachment))

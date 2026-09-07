@@ -44,6 +44,7 @@ struct RunTimelineView: View {
                     if let hold = timeline.hold?.value1 {
                         holdCard(hold)
                     }
+                    RunReviewSection(coordinator: coordinator, runID: snapshot.run.id, facts: timeline.review?.value1)
                     timelineSection(timeline)
                     invocationSection(timeline)
                 } else if coordinator.timelineLoadStates[snapshot.run.id] == .unavailable {
@@ -85,6 +86,7 @@ struct RunTimelineView: View {
             if let hold = timeline.hold?.value1 {
                 holdCard(hold)
             }
+            RunReviewSection(coordinator: coordinator, runID: snapshot.run.id, facts: timeline.review?.value1)
             timelineSection(timeline)
             invocationSection(timeline)
         }
@@ -204,7 +206,8 @@ struct RunTimelineView: View {
 
     private func invocationSection(_ timeline: Components.Schemas.RunTimeline) -> some View {
         let groups = RunTimelineGrouping.groups(
-            invocations: timeline.invocations, stages: snapshot.run.stages)
+            invocations: timeline.invocations, stages: snapshot.run.stages,
+            reviewRounds: timeline.review?.value1.rounds ?? [])
         return VStack(alignment: .leading, spacing: 10) {
             Text("Latest Invocation Observations")
                 .font(FreesideFont.title)
@@ -241,6 +244,9 @@ struct RunTimelineView: View {
 
     private func attemptContext(invocationID: String?) -> String? {
         guard let invocationID else { return nil }
+        if let round = timeline?.review?.value1.rounds.first(where: { $0.invocation_id == invocationID }) {
+            return "Review · Round \(round.round)"
+        }
         for stage in snapshot.run.stages {
             if let attempt = stage.attempts.first(where: { $0.invocation_id == invocationID }) {
                 return "\(RunDisplay.stageLabel(stage.name)) · Round \(attempt.number)"
@@ -295,7 +301,8 @@ enum RunTimelineGrouping {
     /// newest observation like any other rather than pinned last.
     static func groups(
         invocations: [Components.Schemas.InvocationObservation],
-        stages: [Components.Schemas.Stage]
+        stages: [Components.Schemas.Stage],
+        reviewRounds: [Components.Schemas.RunReviewRound] = []
     ) -> [Group] {
         var membership: [String: [Components.Schemas.InvocationObservation]] = [:]
         var order: [(id: String, label: String)] = []
@@ -303,10 +310,16 @@ enum RunTimelineGrouping {
             let owner = stages.first { stage in
                 stage.attempts.contains { $0.invocation_id == invocation.invocation_id }
             }
-            let key = owner.map { "stage:\(RunDisplay.canonicalStageName($0.name))" } ?? "unattributed"
+            let isReview = reviewRounds.contains { $0.invocation_id == invocation.invocation_id }
+            let key =
+                isReview
+                ? "review" : (owner.map { "stage:\(RunDisplay.canonicalStageName($0.name))" } ?? "unattributed")
             if membership[key] == nil {
                 order.append(
-                    (id: key, label: owner.map { RunDisplay.stageLabel($0.name) } ?? unattributedLabel))
+                    (
+                        id: key,
+                        label: isReview ? "Review" : (owner.map { RunDisplay.stageLabel($0.name) } ?? unattributedLabel)
+                    ))
             }
             membership[key, default: []].append(invocation)
         }
