@@ -719,6 +719,7 @@ func testCodexReview(t *testing.T) (CodexReviewConfig, CodexReviewSpec) {
 		t, cfg, "review-1", namesFor("review-1").Workspace, "2026-08-03T12:00:03Z",
 	)
 	req := CodexReviewSpec{
+		BaseSHA:              strings.Repeat("a", 40),
 		RunID:                "review-1",
 		Image:                "example.test/codex@sha256:" + strings.Repeat("a", 64),
 		WorkspaceSourceRunID: "review-1",
@@ -764,7 +765,8 @@ func testReviewLifecycle(
 	cfg.AuthRefresher = &fakeCodexAuthRefresher{}
 	cfg.AuthState = &fakeCodexAuthState{}
 	launch := CodexReviewLaunchSpec{
-		RunID: req.RunID, WorkflowRunID: domain.RunID(req.RunID),
+		ExpectedBase: req.BaseSHA,
+		RunID:        req.RunID, WorkflowRunID: domain.RunID(req.RunID),
 		Image: req.Image, WorkspaceVolume: req.WorkspaceVolume,
 		WorkspaceSourceRunID: req.RunID,
 		ExpectedHead:         testCodexReviewHead, Prompt: req.Prompt, Boundary: req.Boundary,

@@ -193,6 +193,7 @@ type CodexReviewLaunchSpec struct {
 	WorkspaceSourceRunID string
 	WorkspaceVolume      string
 	ExpectedHead         string
+	ExpectedBase         string
 	Prompt               string
 	Boundary             CodexReviewBoundary
 	AuthMode             CodexAuthMode
@@ -581,6 +582,7 @@ func (b *CodexReviewLifecycle) codexReview(
 		RunID: launch.RunID, Image: launch.Image,
 		WorkspaceSourceRunID: launch.WorkspaceSourceRunID, WorkspaceVolume: launch.WorkspaceVolume,
 		Workspace: workspace, Network: network, Prompt: launch.Prompt, Boundary: launch.Boundary,
+		BaseSHA:  launch.ExpectedBase,
 		AuthMode: launch.AuthMode, AuthIdentityID: launch.AuthIdentityID,
 		AuthSnapshot: launch.AuthSnapshot, Instructions: launch.Instructions,
 		InstructionFile: launch.InstructionFile, InstructionBinding: launch.InstructionBinding,
@@ -823,6 +825,8 @@ func validateCodexReviewLaunchShape(provider reviewProvider, cfg CodexReviewConf
 		return fmt.Errorf("%w: WorkspaceVolume is invalid", ErrInvalidCodexReviewSpec)
 	case !commitSHAPattern.MatchString(launch.ExpectedHead):
 		return fmt.Errorf("%w: ExpectedHead is invalid", ErrInvalidCodexReviewSpec)
+	case provider.sourceLabel() == (codexReviewProvider{}).sourceLabel() && !commitSHAPattern.MatchString(launch.ExpectedBase):
+		return fmt.Errorf("%w: ExpectedBase is invalid", ErrInvalidCodexReviewSpec)
 	case !cleanAbs(cfg.WorkspaceTarget) || !cliSafe(cfg.WorkspaceTarget) ||
 		codexReviewWorkspaceOverlapsControlPath(provider, cfg.WorkspaceTarget):
 		return fmt.Errorf("%w: WorkspaceTarget is invalid", ErrInvalidCodexReviewSpec)
@@ -931,6 +935,7 @@ func validateCodexReviewLaunch(provider reviewProvider, cfg CodexReviewConfig, l
 // runtime topology, so excluding it preserves compatibility with open intents.
 func codexReviewIntentDigest(cfg CodexReviewConfig, launch CodexReviewLaunchSpec) (string, error) {
 	shape := struct {
+		ExpectedBase                                                          string `json:"ExpectedBase,omitempty"`
 		RunID, Image, WorkspaceSourceRunID, WorkspaceVolume, ExpectedHead     string
 		Boundary                                                              CodexReviewBoundary
 		AuthMode                                                              CodexAuthMode
@@ -939,7 +944,8 @@ func codexReviewIntentDigest(cfg CodexReviewConfig, launch CodexReviewLaunchSpec
 		ApprovedImage, ObserverImage, WorkspaceTarget, Model, ReasoningEffort string
 		ProviderEndpoints                                                     []string
 	}{
-		RunID: launch.RunID, Image: launch.Image, WorkspaceSourceRunID: launch.WorkspaceSourceRunID,
+		ExpectedBase: launch.ExpectedBase,
+		RunID:        launch.RunID, Image: launch.Image, WorkspaceSourceRunID: launch.WorkspaceSourceRunID,
 		WorkspaceVolume: launch.WorkspaceVolume, ExpectedHead: launch.ExpectedHead,
 		Boundary: launch.Boundary, AuthMode: launch.AuthMode, AuthIdentityID: launch.AuthIdentityID,
 		InstructionBinding: launch.InstructionBinding,

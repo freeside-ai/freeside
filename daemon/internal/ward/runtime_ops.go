@@ -108,6 +108,7 @@ func (h runtimeTeardownHooks) reapUnlisted(
 type runtimeSeedHooks struct {
 	copyIntoSeeder func(context.Context, string, string, string) error
 	readBaseProof  func(context.Context, string, string, *runState) (string, error)
+	seederCommand  func(Config) []string
 }
 
 // Backend delegates the shared primitives through runtimeOps so its existing

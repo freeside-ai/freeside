@@ -329,7 +329,7 @@ func TestClaudeReviewCommandShape(t *testing.T) {
 	}
 	// The findings schema is the shared provider-neutral literal, identical to the
 	// Codex command's.
-	if !strings.Contains(codexReviewCommand("/w", "m", "e", "p")[2], reviewFindingsJSONSchema) {
+	if !strings.Contains(codexReviewCommand("/w", "m", "e", "p", "base", "head")[2], reviewFindingsJSONSchema) {
 		t.Error("Codex and Claude do not share the findings schema literal")
 	}
 }
@@ -405,6 +405,19 @@ func TestCodexReviewRecoveryDispatchesStartedClaudeIntent(t *testing.T) {
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
 		t.Fatal(err)
+	}
+	// Claude does not use Codex's access protocol. Its existing preparing
+	// intent must retain the pre-upgrade digest, with no ExpectedBase field.
+	legacyLaunch := CodexReviewLaunchSpec{
+		RunID: string(id), Image: sourceConfig.Review.ApprovedImage,
+		WorkspaceSourceRunID: string(id), WorkspaceVolume: namesFor(string(id)).Workspace,
+		ExpectedHead: request.HeadSHA, Boundary: CodexReviewFreshStart,
+		AuthMode: sourceConfig.AuthMode, AuthIdentityID: sourceConfig.AuthIdentityID,
+		InstructionBinding: request.Instructions,
+	}
+	legacyDigest, err := codexReviewIntentDigest(sourceConfig.Review, legacyLaunch)
+	if err != nil || journal.intent.SpecDigest != legacyDigest {
+		t.Fatalf("Claude launch changed its pre-upgrade intent digest: %v", err)
 	}
 	source.mu.Lock()
 	if err := source.launches[id].Close(); err != nil {

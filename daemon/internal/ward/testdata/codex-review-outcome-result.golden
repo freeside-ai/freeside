@@ -10,7 +10,7 @@
     "instruction_digest": "sha256:0be72fc9d7967e681492f7dbbb6ef4fc66e1f7fc8e4d1a887fb766fc38282a35",
     "cost_owner": "subscription:owner",
     "completed_at": "2026-08-03T12:00:00Z",
-    "completion_evidence": "sha256:769a42c34f2aaa79d444a083050d399412259def638b954d2f290a685faca4d1",
+    "completion_evidence": "sha256:e74d299cd44606dd3f3a09fa992e0cc59247699ba8cb9f3decbea030a37a9e85",
     "findings": [
       {
         "id": "review-99ed897149dddfe622171aac",

@@ -23,29 +23,27 @@ import (
 // vendor-varying decisions through reviewProvider / credentialStrategy; this
 // harness reconstructs the pre-#872 pure implementations from base commit
 // 6bf2c8b854d6470e77ae5b93e6113530e35c3d90 and measures, over a fuzzed corpus,
-// that the Codex provider path is decision-for-decision identical. It covers
+// that the Codex provider path preserves decisions apart from documented
+// post-extraction protocol changes below. It covers
 // the two trust-boundary surfaces the acceptance criteria name: (a) collection
 // normalization / strict-JSON decode, and (b) launch-spec mount + command + env
 // derivation. A diff-read asserts equivalence; this harness measures it.
 
-// These literals are the exact hardcoded constants the base commit used at the
-// points the refactor replaced with provider calls. codexReviewProvider must
-// reproduce each one, or a production review's evidence/labels/topology would
-// silently change.
+// Pin historical constants and the explicitly revised #1212 protocol versions
+// so evidence, labels, and topology cannot silently change.
 const (
 	baseSourceLabel               = "codex_local"
 	baseProviderLabel             = "openai"
 	baseTopologyVersion           = "codex_review_read_only_v3"
 	baseCompletionEvidenceVersion = "codex-review-completion-v1"
-	baseResultEvidenceVersion     = "codex-review-result-v3"
-	baseConfigurationVersion      = "codex-review-configuration-v3"
-	basePromptProtocol            = "codex-production-review-prompt-v3"
+	// #1212 deliberately invalidates old configuration and completion approvals.
+	currentResultEvidenceVersion = "codex-review-result-v4"
+	currentConfigurationVersion  = "codex-review-configuration-v4"
+	basePromptProtocol           = "codex-production-review-prompt-v3"
 )
 
 // TestReviewProviderConstantsMatchBase pins the Codex provider's value seam to
-// the base commit's hardcoded constants. This is the pure-value half of the
-// equivalence proof: the label, version-tag, and prompt-protocol substitutions
-// are behavior-preserving iff each returns exactly the pre-#872 literal.
+// the historical constants, except the deliberate #1212 version changes.
 func TestReviewProviderConstantsMatchBase(t *testing.T) {
 	p := codexReviewProvider{}
 	cases := []struct {
@@ -57,13 +55,13 @@ func TestReviewProviderConstantsMatchBase(t *testing.T) {
 		{"providerLabel", p.providerLabel(), baseProviderLabel},
 		{"topologyVersion", p.topologyVersion(), baseTopologyVersion},
 		{"completionEvidenceVersion", p.completionEvidenceVersion(), baseCompletionEvidenceVersion},
-		{"resultEvidenceVersion", p.resultEvidenceVersion(), baseResultEvidenceVersion},
-		{"configurationVersion", p.configurationVersion(), baseConfigurationVersion},
+		{"resultEvidenceVersion", p.resultEvidenceVersion(), currentResultEvidenceVersion},
+		{"configurationVersion", p.configurationVersion(), currentConfigurationVersion},
 		{"promptProtocol", p.promptProtocol(), basePromptProtocol},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {
-			t.Errorf("%s = %q, base commit had %q", tc.name, tc.got, tc.want)
+			t.Errorf("%s = %q, protocol expects %q", tc.name, tc.got, tc.want)
 		}
 	}
 	// The topology-version constant the provider returns must also equal the
@@ -77,20 +75,37 @@ func TestReviewProviderConstantsMatchBase(t *testing.T) {
 // oldNormalizeCollection is the base-commit (6bf2c8b8) body of
 // CodexReviewSource.normalizeCollection, reconstructed verbatim with its inline
 // literals, as the independent reference for the equivalence comparison. It
-// calls the unchanged package helpers.
+// calls the unchanged package helpers. The explicit #1212 deltas below retain
+// failure evidence, reject terminal failure at exit zero, and use v4 evidence;
+// the historical finding decoder remains an independent comparison oracle.
 func oldNormalizeCollection(
 	s *CodexReviewSource,
 	id domain.InvocationID, req exec.ReviewRequest, collection CodexReviewCollection,
-) CodexReviewSourceOutcome {
+) (outcome CodexReviewSourceOutcome) {
 	evidenceBytes := fmt.Appendf(nil, "codex-review-completion-v1:%d:", len(collection.Events))
 	evidenceBytes = append(evidenceBytes, collection.Events...)
 	evidenceBytes = fmt.Appendf(evidenceBytes, ":%d:", len(collection.Result))
 	evidenceBytes = append(evidenceBytes, collection.Result...)
 	evidenceBytes = fmt.Appendf(evidenceBytes, ":%d", collection.ExitStatus)
 	collectionEvidence := domain.Digest(contentaddr.Sum(evidenceBytes))
-	if collection.ExitStatus != 0 {
+	// #1212 retains authenticated bytes for every normalization disposition.
+	defer func() {
+		outcome.CollectionEvidence = collectionEvidence
+		outcome.Collection = &CodexReviewRetainedCollection{
+			ExitStatus: collection.ExitStatus, Result: collection.Result, Events: collection.Events,
+		}
+	}()
+	_, terminalFailed := codexTerminalFailure(collection.Events)
+	if collection.ExitStatus != 0 || terminalFailed {
 		class, terminalMessage := classifyCodexTerminalFailure(collection.Events)
 		failure := fmt.Sprintf("Codex review exited with status %d", collection.ExitStatus)
+		switch collection.ExitStatus {
+		case 78:
+			class = domain.ReviewFailureConfiguration
+			failure = "Codex review cannot inspect its bound workspace and commits in the read-only sandbox"
+		case 0:
+			failure = "Codex review reported a terminal failure despite exit status 0"
+		}
 		if codexRefreshAttemptFailure([]byte(terminalMessage)) {
 			failure = "Codex review attempted an in-container credential refresh"
 		}
@@ -180,7 +195,7 @@ func oldNormalizeCollection(
 		CostOwner:           s.cfg.CostOwner, CompletedAt: completedAt,
 		Findings: findings,
 	}
-	// Base-commit inline result-evidence envelope (version "codex-review-result-v3").
+	// #1212 changes the envelope version, preserving the historical result shape.
 	result.CompletionEvidence, _ = oldReviewResultEvidence(result, collectionEvidence)
 	return CodexReviewSourceOutcome{
 		InvocationID: id, Result: &result, CollectionEvidence: collectionEvidence,
@@ -194,7 +209,7 @@ func oldNormalizeCollection(
 }
 
 // oldReviewResultEvidence reconstructs the base-commit CodexReviewResultEvidence
-// with its inline "codex-review-result-v3" literal.
+// with the explicit #1212 evidence-version change.
 func oldReviewResultEvidence(
 	result exec.ReviewResult, collectionEvidence domain.Digest,
 ) (domain.Digest, error) {
@@ -203,7 +218,7 @@ func oldReviewResultEvidence(
 		Version            string            `json:"version"`
 		CollectionEvidence domain.Digest     `json:"collection_evidence"`
 		Result             exec.ReviewResult `json:"result"`
-	}{"codex-review-result-v3", collectionEvidence, result})
+	}{"codex-review-result-v4", collectionEvidence, result})
 	if err != nil {
 		return "", err
 	}
@@ -228,7 +243,8 @@ func newEquivalenceReviewSource() *CodexReviewSource {
 // output shapes (valid, malformed, trailing, duplicate-key, missing, out-of-domain
 // severity, unmarked (0,0), and inverted line ranges), and request identity fields.
 //
-// The one surface where the two intentionally diverge is the #855 whole_file
+// The #1212 deltas are explicit in the reference and remain compared for every
+// input. The pre-existing excluded surface is the #855 whole_file
 // location marker: the pre-#872 base struct has no such field, so its strict
 // decode rejects the key as unknown, while the current path admits
 // {whole_file:true} and gives marker-specific rejections for the other tokens.
@@ -265,6 +281,9 @@ func FuzzReviewNormalizeCollectionEquivalence(f *testing.F) {
 		{1, `{"findings":[]}`, "some terminal output\n", strings.Repeat("a", 40), strings.Repeat("b", 40), "run-1"},
 		{7, ``, "boom\n", "", "", "r"},
 		{255, ``, "credential refresh attempted\n", "", "", "r"},
+		{78, `{"findings":[]}`, "fatal: not a git repository\n", "", "", "r"},
+		{0, `{"findings":[]}`, `{"type":"turn.failed","error":{"message":"failed"}}`, "", "", "r"},
+		{0, `{"findings":[]}`, `{"type":"turn.started"}`, "", "", "r"},
 	}
 	for _, s := range seeds {
 		f.Add(s.exit, s.result, s.events, s.baseSHA, s.headSHA, s.runID)
@@ -376,7 +395,7 @@ func oldBuildReviewAgentSpec(
 		"HOME=" + CodexContainerHomeTarget,
 		"CODEX_HOME=" + CodexHomeTarget,
 	}, proxyEnvironment(cfg.ProxyURL)...)
-	command := codexReviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt)
+	command := codexReviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt, req.BaseSHA, req.Workspace.head)
 	mounts := []Mount{
 		{Type: MountVolume, Source: req.WorkspaceVolume, Target: cfg.WorkspaceTarget, ReadOnly: true},
 		{Type: MountVolume, Source: req.Snapshot.volume, Target: codexReviewSnapshotTarget, ReadOnly: true},
@@ -515,8 +534,8 @@ func FuzzReviewCommandEquivalence(f *testing.F) {
 	f.Add("", "", "", "")
 	f.Add("/w", "m$o'd\"e l", "hi;gh", "Review \"$1\" & `echo x`")
 	f.Fuzz(func(t *testing.T, workspace, model, effort, prompt string) {
-		got := codexReviewProvider{}.reviewCommand(workspace, model, effort, prompt)
-		want := codexReviewCommand(workspace, model, effort, prompt)
+		got := codexReviewProvider{}.reviewCommand(workspace, model, effort, prompt, "base", "head")
+		want := codexReviewCommand(workspace, model, effort, prompt, "base", "head")
 		if !slices.Equal(got, want) {
 			t.Fatalf("provider review command diverged from base\n new: %q\n base: %q", got, want)
 		}

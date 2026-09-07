@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -367,6 +368,7 @@ func (o CodexReviewSnapshotObservation) verifyFresh(fresh CodexReviewSnapshotObs
 // It carries paths only to daemon-prepared, single-file snapshots under
 // Config.InputRoot; BuildCodexReviewAgentSpec re-opens and validates them.
 type CodexReviewSpec struct {
+	BaseSHA              string
 	RunID                string
 	Image                string
 	WorkspaceSourceRunID string
@@ -1046,7 +1048,7 @@ func buildReviewAgentSpec(
 
 	shadowTargets := codexAgentsShadowTargets(cfg.WorkspaceTarget, req.Workspace.agentsEntry)
 	env := append(provider.containerEnv(), proxyEnvironment(cfg.ProxyURL)...)
-	command := provider.reviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt)
+	command := provider.reviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt, req.BaseSHA, req.Workspace.head)
 	mounts := []Mount{
 		{Type: MountVolume, Source: req.WorkspaceVolume, Target: cfg.WorkspaceTarget, ReadOnly: true},
 		{Type: MountVolume, Source: req.Snapshot.volume, Target: codexReviewSnapshotTarget, ReadOnly: true},
@@ -1271,6 +1273,8 @@ func validateCodexReviewRequest(provider reviewProvider, cfg CodexReviewConfig, 
 	case !req.Workspace.valid() || req.Workspace.volume != req.WorkspaceVolume ||
 		req.Workspace.observerImage != cfg.ObserverImage:
 		return fmt.Errorf("%w: runtime-backed workspace observation is required", ErrInvalidCodexReviewSpec)
+	case provider.sourceLabel() == (codexReviewProvider{}).sourceLabel() && !commitSHAPattern.MatchString(req.BaseSHA):
+		return fmt.Errorf("%w: BaseSHA is invalid", ErrInvalidCodexReviewSpec)
 	case !req.Network.valid() || req.Network.name != codexReviewNetworkName(req.RunID):
 		return fmt.Errorf("%w: runtime-backed provider network observation is required", ErrInvalidCodexReviewSpec)
 	case req.Prompt == "" || strings.IndexByte(req.Prompt, 0) >= 0 ||
@@ -1618,7 +1622,7 @@ func jwtExpiry(token string) (time.Time, error) {
 	return time.Unix(seconds, 0).UTC(), nil
 }
 
-func codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt string) []string {
+func codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt, baseSHA, headSHA string) []string {
 	schema := reviewFindingsJSONSchema
 	// CODEX_HOME lives on the fresh, writable container rootfs; auth.json and
 	// AGENTS.md are symlinks into the read-only snapshot volume, so the credential
@@ -1637,12 +1641,14 @@ func codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt string) 
 		"ln -s " + shellQuote(codexReviewSnapshotInstrSource) + " " + shellQuote(CodexInstructionTarget) + "; " +
 		"mkdir -p " + shellQuote(codexReviewOutputDir) + "; " +
 		"printf '%s' " + shellQuote(schema) + " > " + shellQuote(codexReviewSchemaPath) + "; " +
-		"set +e; codex exec --json --ephemeral --skip-git-repo-check -s read-only -C " + shellQuote(workspaceTarget) +
+		"set +e; ( " + codexReviewAccessCommand(workspaceTarget, baseSHA, headSHA) +
+		" || exit " + strconv.Itoa(codexReviewAccessFailureExitStatus) + "; " +
+		"codex exec --json --ephemeral --skip-git-repo-check -s read-only -C " + shellQuote(workspaceTarget) +
 		" -m " + shellQuote(model) + " -c " + shellQuote("model_reasoning_effort=\""+reasoningEffort+"\"") +
 		" -c project_doc_max_bytes=0 --ignore-user-config --ignore-rules" +
 		" --output-schema " + shellQuote(codexReviewSchemaPath) +
 		" --output-last-message " + shellQuote(codexReviewResultPath) +
-		" -- \"$1\" > " + shellQuote(codexReviewEventsPath) + " 2>&1; " +
+		" -- \"$1\" ) > " + shellQuote(codexReviewEventsPath) + " 2>&1; " +
 		"review_status=$?; printf '%s\\n' \"$review_status\" > " + shellQuote(codexReviewStatusPath) +
 		"; exit \"$review_status\""
 	return []string{"sh", "-c", command, "freeside-codex-review", prompt}
@@ -2041,7 +2047,7 @@ func validateReviewAgentSpec(
 	if req.Snapshot.authDigest != wantAuthDigest || req.Snapshot.instructionDigest != wantInstructionDigest {
 		return failf(CheckCredentialSeparation, "Codex review snapshot volume diverged from the admitted bytes")
 	}
-	wantCommand := provider.reviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt)
+	wantCommand := provider.reviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt, req.BaseSHA, req.Workspace.head)
 	wantEnv := append(provider.containerEnv(), proxyEnvironment(cfg.ProxyURL)...)
 	if spec.Name != reviewContainerName(provider, req.RunID) || spec.Image != req.Image ||
 		spec.NetworkDisabled || spec.Network != codexReviewNetworkName(req.RunID) ||

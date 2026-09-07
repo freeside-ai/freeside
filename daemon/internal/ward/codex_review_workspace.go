@@ -10,6 +10,15 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
+// The host snapshot arrives with host numeric ownership. Codex's user
+// namespace maps only container uid 0, so host uid 501 becomes unmapped and
+// cannot be traversed at mode 0700. Align this private review copy with the
+// image's root identity before the separate read-only observer runs. Content
+// and permission bits are unchanged; other stage seeders keep their behavior.
+func codexReviewSeederCommand(cfg Config) []string {
+	return []string{"sh", "-c", seederScript(cfg) + "; chown -R 0:0 " + shellQuote(cfg.WorkspaceTarget) + "; sync"}
+}
+
 // PrepareCodexReviewWorkspace snapshots one exact candidate checkout into a
 // ward-owned volume, proves its HEAD and tree from a separate read-only VM,
 // and durably binds the resulting runtime identity before returning it.

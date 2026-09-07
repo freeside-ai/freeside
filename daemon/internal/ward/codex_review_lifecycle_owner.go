@@ -128,7 +128,11 @@ func (l *CodexReviewLifecycle) teardown(
 func (l *CodexReviewLifecycle) seedWorkspace(
 	ctx context.Context, hs HandoffSpec, names handoffNames, st *runState,
 ) error {
-	return l.runtimeOps.seedWorkspace(ctx, hs, names, st, runtimeSeedHooks{})
+	hooks := runtimeSeedHooks{}
+	if l.reviewProvider().sourceLabel() == (codexReviewProvider{}).sourceLabel() {
+		hooks.seederCommand = codexReviewSeederCommand
+	}
+	return l.runtimeOps.seedWorkspace(ctx, hs, names, st, hooks)
 }
 
 func (l *CodexReviewLifecycle) observeSeededBase(

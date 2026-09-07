@@ -931,6 +931,9 @@ func (b runtimeOps) seedWorkspace(
 	}
 
 	spec := buildSeederSpec(seedCfg, hs, names, st.ownershipLabel)
+	if hooks.seederCommand != nil {
+		spec.Command = hooks.seederCommand(seedCfg)
+	}
 	st.seeder.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
 		return failf(CheckWorkspaceSeeding, "create seeder container: %v", err)
