@@ -1127,7 +1127,9 @@ func decodeProductionTerminal(
 // that acceptProductionAttempt skips on a mutable admission-policy refusal, so
 // the operator sees why work stopped instead of a silent skip (issue #1181). A
 // refusal that classifies onto no hold reason records nothing and keeps its
-// ordinary skip.
+// ordinary skip. The other half of the lifecycle is clearRefusalHold, which
+// removes the hold on the next acceptance pass that ends without a refusal
+// (issue #1194).
 func (e *Engine) observeRefusalHold(
 	ctx context.Context, run domain.Run, attempt domain.Attempt, err error,
 ) error {
@@ -1265,20 +1267,60 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		}
 	}
 
-	result, ready, err := e.collectTerminal(ctx, run.ID, attempt)
-	lost := false
+	accepted, recordedTerminal, err := e.settleProductionAttempt(ctx, run, attempt, legacy, operatorFeedback)
 	switch {
-	case errors.Is(err, ErrInvocationLost):
-		lost = true
 	case MutableAdmissionPolicyRefusal(err):
+		// A transient current-policy refusal holds this attempt for a later
+		// pass; record why so the operator sees the cause instead of a silent
+		// skip (issue #1181).
 		if obsErr := e.observeRefusalHold(ctx, run, attempt, err); obsErr != nil {
 			return false, obsErr
 		}
 		return false, nil
 	case err != nil:
 		return false, err
+	}
+	// Clear a stale refusal hold only on the still-running inspection: the
+	// policy passed this pass without committing a terminal, so an earlier
+	// refusal on this path has recovered and its hold must go (issue #1194). A
+	// pass that committed a terminal is deliberately excluded: its milestone
+	// already cleared the run hold inside the recording transaction, so a
+	// second clear here would be redundant and, worse, its independent failure
+	// would surface as an error that halts the reconcile loop and strands a
+	// completion that is already durable. The early returns above
+	// (already-recorded outcome, an authenticated terminal, a queued
+	// completion) evaluate no policy and never reach here.
+	if !recordedTerminal {
+		if err := e.clearRefusalHold(ctx, run.ID); err != nil {
+			return false, err
+		}
+	}
+	return accepted, nil
+}
+
+// settleProductionAttempt closes a production attempt once acceptProductionAttempt
+// has ruled out an already-recorded, authenticated, or queued disposition: it
+// inspects the driver, records the terminal, and re-gates a completed result at
+// the last point the engine controls. It returns a mutable admission-policy
+// refusal unwrapped rather than observing it, so its one caller records the
+// hold on a refusal. The recordedTerminal result tells that caller whether this
+// pass committed a terminal: a still-running inspection commits none, so the
+// caller clears a stale refusal hold there (issue #1194); a committed terminal
+// already cleared the hold through its milestone in the recording transaction,
+// so the caller must not issue a second, redundant clear whose failure would
+// strand the just-committed completion.
+func (e *Engine) settleProductionAttempt(
+	ctx context.Context, run domain.Run, attempt domain.Attempt, legacy, operatorFeedback bool,
+) (accepted bool, recordedTerminal bool, err error) {
+	result, ready, err := e.collectTerminal(ctx, run.ID, attempt)
+	lost := false
+	switch {
+	case errors.Is(err, ErrInvocationLost):
+		lost = true
+	case err != nil:
+		return false, false, err
 	case !ready:
-		return false, nil
+		return false, false, nil
 	}
 
 	terminal := productionTerminalRecord{
@@ -1298,67 +1340,37 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		// driver call is in flight.
 		admission, err := e.productionAdmission(ctx, attempt.InvocationID)
 		if err != nil {
-			if MutableAdmissionPolicyRefusal(err) {
-				if obsErr := e.observeRefusalHold(ctx, run, attempt, err); obsErr != nil {
-					return false, obsErr
-				}
-				return false, nil
-			}
-			return false, err
+			return false, false, err
 		}
 		if legacy {
-			accepted, err := e.recordProductionTerminal(ctx, run, terminal)
-			if MutableAdmissionPolicyRefusal(err) {
-				if obsErr := e.observeRefusalHold(ctx, run, attempt, err); obsErr != nil {
-					return false, obsErr
-				}
-				return false, nil
-			}
-			return accepted, err
+			accepted, err = e.recordProductionTerminal(ctx, run, terminal)
+			return accepted, true, err
 		}
 		if operatorFeedback {
-			accepted, err := e.recordProductionTerminal(ctx, run, terminal)
-			if MutableAdmissionPolicyRefusal(err) {
-				if obsErr := e.observeRefusalHold(ctx, run, attempt, err); obsErr != nil {
-					return false, obsErr
-				}
-				return false, nil
-			}
-			return accepted, err
+			accepted, err = e.recordProductionTerminal(ctx, run, terminal)
+			return accepted, true, err
 		}
 		switch admission.OperatingMode {
 		case domain.ModeAttendedDev:
 			// A prior build could start production work while attended. Preserve
 			// its authentic terminal result, but never turn that attended
 			// admission into an automatic publication candidate.
-			accepted, err := e.recordProductionTerminal(ctx, run, terminal)
-			if MutableAdmissionPolicyRefusal(err) {
-				if obsErr := e.observeRefusalHold(ctx, run, attempt, err); obsErr != nil {
-					return false, obsErr
-				}
-				return false, nil
-			}
-			return accepted, err
+			accepted, err = e.recordProductionTerminal(ctx, run, terminal)
+			return accepted, true, err
 		case domain.ModeUnattended:
 			if e.productionPublication == nil {
-				return false, errors.New("production publication workflow is not configured")
+				return false, false, errors.New("production publication workflow is not configured")
 			}
-			return false, fmt.Errorf(
+			return false, false, fmt.Errorf(
 				"completed production invocation %q has no atomic publication task: %w",
 				attempt.InvocationID, domain.ErrParentKeyMismatch,
 			)
 		}
-		return false, fmt.Errorf("production invocation %q has invalid operating mode %q: %w",
+		return false, false, fmt.Errorf("production invocation %q has invalid operating mode %q: %w",
 			attempt.InvocationID, admission.OperatingMode, domain.ErrInvalidOperatingMode)
 	}
-	accepted, err := e.recordProductionTerminal(ctx, run, terminal)
-	if MutableAdmissionPolicyRefusal(err) {
-		if obsErr := e.observeRefusalHold(ctx, run, attempt, err); obsErr != nil {
-			return false, obsErr
-		}
-		return false, nil
-	}
-	return accepted, err
+	accepted, err = e.recordProductionTerminal(ctx, run, terminal)
+	return accepted, true, err
 }
 
 func (e *Engine) authenticatesLegacyCompletedTerminal(

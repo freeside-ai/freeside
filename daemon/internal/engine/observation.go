@@ -250,3 +250,53 @@ func recordRunHold(
 	}
 	return tx.RecordRunHold(ctx, hold)
 }
+
+// productionRefusalHoldReasons is the closed set of hold reasons the production
+// acceptance path (acceptProductionAttempt) can record: exactly the image of
+// MutableAdmissionPolicyRefusal (invocation.go) under dispatchHoldReason. A
+// healthy acceptance pass clears every one, so a transient refusal that has
+// recovered (for example backend conformance that briefly lapsed) stops being
+// displayed as the run's hold. TestProductionRefusalHoldReasonsPinned keeps
+// this set in lockstep with those two functions; a member added to one without
+// the other fails that test.
+var productionRefusalHoldReasons = []domain.RunHoldReason{
+	domain.HoldBackendNotConformant,
+	domain.HoldAdmissionPolicyRefused,
+	domain.HoldBackupProtectionUnready,
+	domain.HoldRepositoryUntrusted,
+	domain.HoldProviderAuthorityUnavailable,
+}
+
+// refusalRecoveredPaceState paces clearRefusalHold on the run's hold key
+// without ever naming a hold reason, mirroring publicationAttemptPaceState: it
+// is the pacer's record that this run's refusal holds were already cleared,
+// not an observation of a hold. A later real refusal stamps its reason on the
+// same key, which makes the next clear immediately due again.
+const refusalRecoveredPaceState = "refusal-recovered"
+
+// clearRefusalHold removes any hold an earlier mutable admission-policy refusal
+// recorded for the run, once an acceptance pass ends without a refusal. The
+// clear is cause-scoped over the refusal class (a delete predicate per reason),
+// so a hold naming any other cause (a dispatch capacity hold, an operator stop)
+// keeps its row and its span; and it is paced on the run's hold key like the
+// hold writes, so a run whose holds are already cleared does not issue a delete
+// per reconcile. The hold is observability-only: no engine, recovery, or
+// publication decision reads it back.
+func (e *Engine) clearRefusalHold(ctx context.Context, runID domain.RunID) error {
+	key := "hold:" + string(runID)
+	if !e.pace.due(key, refusalRecoveredPaceState, time.Now().UTC()) {
+		return nil
+	}
+	if err := e.store.Write(ctx, func(tx *store.WriteTx) error {
+		for _, reason := range productionRefusalHoldReasons {
+			if err := tx.ClearRunHoldCause(ctx, runID, reason); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		e.pace.forget(key)
+		return err
+	}
+	return nil
+}

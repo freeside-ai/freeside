@@ -12,6 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -472,5 +473,233 @@ func TestPolicyRefusalRecordsRunHold(t *testing.T) {
 	}
 	if !found || hold.Reason != domain.HoldBackendNotConformant {
 		t.Fatalf("run hold = (%+v, found %t), want HoldBackendNotConformant", hold, found)
+	}
+}
+
+// switchableInspectDriver is an inspectErrorDriver whose Inspect error can be
+// switched off between passes on one engine: with an error set it refuses the
+// way a mutable-policy refusal surfaces from collectTerminal; once cleared it
+// reports the attempt still running, the healthy inspection acceptProductionAttempt
+// clears a stale refusal hold on. The tests drive it single-threaded, so it
+// needs no lock.
+type switchableInspectDriver struct {
+	exec.StageDriver
+	err error
+}
+
+func (d *switchableInspectDriver) Inspect(context.Context, domain.InvocationID) (exec.Inspection, error) {
+	if d.err != nil {
+		return exec.Inspection{}, d.err
+	}
+	return exec.Inspection{Status: exec.StatusRunning, Live: true}, nil
+}
+
+// runHold reads the run's current hold observation.
+func (f failedImplementationFixture) runHold(t *testing.T) (domain.RunHoldObservation, bool) {
+	t.Helper()
+	var (
+		hold  domain.RunHoldObservation
+		found bool
+	)
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		hold, found, err = tx.GetRunHold(t.Context(), f.run.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("GetRunHold: %v", err)
+	}
+	return hold, found
+}
+
+// TestPolicyRefusalRecoveryClearsRunHold: a transient mutable-policy refusal
+// records a hold; the next acceptance pass that inspects a still-running
+// attempt (the policy having recovered) clears it, so the operator sees no hold
+// instead of the stale reason (issue #1194). One engine sees both passes, so
+// the healthy pass really clears what the refusing pass recorded.
+func TestPolicyRefusalRecoveryClearsRunHold(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		reason domain.RunHoldReason
+	}{
+		{"backend not conformant", store.ErrBackendNotConformant, domain.HoldBackendNotConformant},
+		{"admission policy refused", domain.ErrCapabilityBelowFloor, domain.HoldAdmissionPolicyRefused},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
+			driver := &switchableInspectDriver{err: fmt.Errorf("inspect: %w", tc.err)}
+			engine := f.newEngine(t, driver)
+
+			// Pass one refuses and records the classified hold.
+			accepted, err := engine.acceptProductionAttempt(t.Context(), f.run, f.attempt)
+			if err != nil || accepted {
+				t.Fatalf("refusing pass = accepted %t, %v; want false, nil", accepted, err)
+			}
+			if hold, found := f.runHold(t); !found || hold.Reason != tc.reason {
+				t.Fatalf("hold after refusal = (%+v, found %t), want %s", hold, found, tc.reason)
+			}
+
+			// Pass two inspects a still-running attempt (the policy recovered)
+			// and clears the hold.
+			driver.err = nil
+			accepted, err = engine.acceptProductionAttempt(t.Context(), f.run, f.attempt)
+			if err != nil || accepted {
+				t.Fatalf("healthy pass = accepted %t, %v; want false, nil", accepted, err)
+			}
+			if hold, found := f.runHold(t); found {
+				t.Fatalf("hold after recovery = %+v, want no hold", hold)
+			}
+		})
+	}
+}
+
+// TestPolicyRefusalRecoveryPreservesOtherHold: the class-scoped clear leaves a
+// hold outside the refusal class untouched, keeping its reason and its span. A
+// dispatch capacity hold recorded between the refusal and the healthy pass
+// survives with its first-observed instant.
+func TestPolicyRefusalRecoveryPreservesOtherHold(t *testing.T) {
+	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
+	driver := &switchableInspectDriver{err: fmt.Errorf("inspect: %w", store.ErrBackendNotConformant)}
+	engine := f.newEngine(t, driver)
+
+	if accepted, err := engine.acceptProductionAttempt(t.Context(), f.run, f.attempt); err != nil || accepted {
+		t.Fatalf("refusing pass = accepted %t, %v; want false, nil", accepted, err)
+	}
+
+	// A different lane replaces the hold with a capacity hold outside the
+	// refusal class. Record it directly with a distinct first-observed instant.
+	otherFirst := f.now.Add(2 * time.Minute).UTC()
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.RecordRunHold(t.Context(), domain.RunHoldObservation{
+			RunID: f.run.ID, Reason: domain.HoldIdentityParallelism,
+			FirstObservedAt: otherFirst, LastObservedAt: otherFirst,
+		})
+	}); err != nil {
+		t.Fatalf("record other hold: %v", err)
+	}
+
+	driver.err = nil
+	if accepted, err := engine.acceptProductionAttempt(t.Context(), f.run, f.attempt); err != nil || accepted {
+		t.Fatalf("healthy pass = accepted %t, %v; want false, nil", accepted, err)
+	}
+
+	hold, found := f.runHold(t)
+	if !found || hold.Reason != domain.HoldIdentityParallelism || !hold.FirstObservedAt.Equal(otherFirst) {
+		t.Fatalf("hold after recovery = (%+v, found %t), want HoldIdentityParallelism first-observed %s",
+			hold, found, otherFirst)
+	}
+}
+
+// TestPolicyRefusalAfterRecoveryIsRecorded: a refusal that returns right after
+// a recovery is re-recorded on the same engine. The sentinel pace state the
+// clear stamps on the hold key must not suppress the next real reason.
+func TestPolicyRefusalAfterRecoveryIsRecorded(t *testing.T) {
+	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
+	driver := &switchableInspectDriver{err: fmt.Errorf("inspect: %w", store.ErrBackendNotConformant)}
+	engine := f.newEngine(t, driver)
+
+	// Refuse, recover, refuse again.
+	if _, err := engine.acceptProductionAttempt(t.Context(), f.run, f.attempt); err != nil {
+		t.Fatalf("refusing pass: %v", err)
+	}
+	driver.err = nil
+	if _, err := engine.acceptProductionAttempt(t.Context(), f.run, f.attempt); err != nil {
+		t.Fatalf("healthy pass: %v", err)
+	}
+	if _, found := f.runHold(t); found {
+		t.Fatal("hold not cleared on the healthy pass")
+	}
+	driver.err = fmt.Errorf("inspect: %w", store.ErrBackendNotConformant)
+	if _, err := engine.acceptProductionAttempt(t.Context(), f.run, f.attempt); err != nil {
+		t.Fatalf("second refusing pass: %v", err)
+	}
+	if hold, found := f.runHold(t); !found || hold.Reason != domain.HoldBackendNotConformant {
+		t.Fatalf("hold after second refusal = (%+v, found %t), want HoldBackendNotConformant", hold, found)
+	}
+}
+
+// TestPolicyRefusalRecoveryClearsRunHoldOnTerminal: a stale refusal hold is
+// cleared when the recovering attempt reaches a terminal, not only when it is
+// still running. The terminal's milestone clears the run hold inside the
+// recording transaction, so acceptProductionAttempt deliberately skips its own
+// clearRefusalHold write on this path; recording the terminal must still leave
+// the run with no hold (issue #1194). Skipping that redundant write is what
+// keeps a transient clear failure from surfacing as an error that would strand
+// a completion the recording transaction already committed.
+func TestPolicyRefusalRecoveryClearsRunHoldOnTerminal(t *testing.T) {
+	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "the implementation could not be produced")
+
+	// An earlier transient refusal left a classified hold on the run.
+	first := f.now.Add(time.Minute).UTC()
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.RecordRunHold(t.Context(), domain.RunHoldObservation{
+			RunID: f.run.ID, Reason: domain.HoldBackendNotConformant,
+			FirstObservedAt: first, LastObservedAt: first,
+		})
+	}); err != nil {
+		t.Fatalf("seed refusal hold: %v", err)
+	}
+
+	// The attempt recovers and reaches a failed terminal; recording it clears
+	// the hold through the terminal milestone.
+	f.preRecordOutcome(t, domain.ExecutionOutcomeFailed, "driver-recorded failure")
+	if _, err := f.engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if hold, found := f.runHold(t); found {
+		t.Fatalf("hold after terminal = %+v, want no hold", hold)
+	}
+}
+
+// TestProductionRefusalHoldReasonsPinned pins productionRefusalHoldReasons to
+// the two functions it summarizes: for every sentinel MutableAdmissionPolicyRefusal
+// accepts, dispatchHoldReason maps it to a reason in the set, and every reason
+// in the set is reached by at least one sentinel. It fails when either function
+// gains a member the other, or this list, does not know.
+func TestProductionRefusalHoldReasonsPinned(t *testing.T) {
+	// Every sentinel MutableAdmissionPolicyRefusal accepts (invocation.go).
+	sentinels := []error{
+		store.ErrBackendNotConformant,
+		domain.ErrConformanceConfigurationUnbound,
+		domain.ErrAdmissionConfigurationMismatch,
+		domain.ErrAdmissionExceedsConformance,
+		domain.ErrUnknownAdmissionFloor,
+		domain.ErrCapabilityBelowFloor,
+		domain.ErrCredentialModeNotApproved,
+		domain.ErrWaiverNotConfigured,
+		domain.ErrBackupHealthUnavailable,
+		domain.ErrCheckpointNotEncrypted,
+		domain.ErrCheckpointNotCurrent,
+		domain.ErrArtifactClosureIncomplete,
+		domain.ErrRestoreTestStale,
+		domain.ErrInvalidBackupHealthStatus,
+		store.ErrRepositoryUntrusted,
+		publish.ErrJanitorInactive,
+		domain.ErrRepositoryIdentityMismatch,
+		domain.ErrPathBoundaryMismatch,
+		domain.ErrTrustProfileSuperseded,
+		domain.ErrReviewConfigurationUnapproved,
+	}
+	reached := make(map[domain.RunHoldReason]bool)
+	for _, sentinel := range sentinels {
+		if !MutableAdmissionPolicyRefusal(sentinel) {
+			t.Errorf("sentinel %v is no longer a mutable admission-policy refusal", sentinel)
+			continue
+		}
+		reason, ok := dispatchHoldReason(sentinel)
+		if !ok {
+			t.Errorf("sentinel %v classifies onto no hold reason", sentinel)
+			continue
+		}
+		if !slices.Contains(productionRefusalHoldReasons, reason) {
+			t.Errorf("sentinel %v maps to %s, outside productionRefusalHoldReasons", sentinel, reason)
+		}
+		reached[reason] = true
+	}
+	for _, reason := range productionRefusalHoldReasons {
+		if !reached[reason] {
+			t.Errorf("productionRefusalHoldReasons has %s, which no listed sentinel reaches", reason)
+		}
 	}
 }
