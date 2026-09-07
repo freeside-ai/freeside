@@ -1512,3 +1512,39 @@ Revision 45 ("Review drift audit"):
    Rejected: park-by-default, which turns every verdict into an
    interruption.
    (User; devlog 2026-09-01-1246-review-drift-audit.md; #1054.)
+
+## Revision 46
+
+Revision 46 ("Portable mode and routed-dispute placement"):
+
+1. **Portable mode and host enrollment are Phase 2 work** (Sections 5.9,
+   5.10, 10, and 11): Sections 5.9 and 5.10 stated the replica, epoch, and
+   host-identity model as current architecture while Section 11 placed the
+   movable control plane (#266; its domain contract #265) in no wave or
+   phase. Nothing in the 1B exit criteria needs a second host: the claims
+   concern attention, unattended operation, and phone-decidable approvals on
+   one reference machine, and daemon death is covered by the wave-8 external
+   probe, never by takeover. The retrofit Section 5.9 guards against is
+   contained, because host identity is recorded there as a forward
+   requirement and one host exists. Section 10's Phase 1 reference
+   deployment therefore runs standalone, with the conforming replica
+   backend arriving beside portable mode. Phase 2's failure-injection and
+   restore drills are its natural neighbours. Rejected: #265 in wave 9's
+   contract chain, warranted only if a second host must run during 1B.
+   (User; devlog 2026-09-01-2231-portable-mode-and-dispute-placement.md;
+   #266; #265.)
+2. **Routed `review_dispute` execution binds to a trigger, not a wave row**
+   (Sections 4, 7, and 11): #1016's route fires only when the adjudicator
+   marks a critical or high finding as contradicting the approved
+   specification. None has fired, so building the transaction now spends
+   contract-chain bandwidth, the binding constraint on every wave, on a route
+   with a zero measured rate, against the revision-45 rule of measuring a
+   firing rate before paying for a mechanism. The trigger is the first routed
+   `review_dispute` that parks a run on the real backlog; it authorizes
+   nothing by itself, and on it the spine gives #1016 a contract-chain
+   position and schedules it into the open wave, or into the next wave at
+   planning. Until then the item offers discuss or stop, and the 1B exit
+   records the carve-out.
+   Rejected: wave 8's chain directly after #1048, which buys a clean exit
+   claim at the cost of the binding constraint.
+   (User; devlog 2026-09-01-2231-portable-mode-and-dispute-placement.md; #1016.)

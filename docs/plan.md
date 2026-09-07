@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 46
+revision: 47
 status: active
-updated: 2026-09-01
+updated: 2026-09-07
 ---
 
 # Freeside
@@ -28,6 +28,7 @@ why.
 ## Contents
 
 - [1. What Freeside Is](#1-what-freeside-is)
+  - [Vocabulary](#vocabulary)
   - [The End-to-End Workflow](#the-end-to-end-workflow)
 - [2. Goals and Non-Goals](#2-goals-and-non-goals)
   - [Goals](#goals)
@@ -128,7 +129,7 @@ why.
 
 ## 1. What Freeside Is
 
-**Freeside is a local, durable workflow controller that grants agents the autonomy to turn work items into evidence-backed pull requests and interrupts me only when judgment is required.**
+**Freeside is a local, durable workflow controller that grants agents the autonomy to turn tasks into evidence-backed pull requests and interrupts me only when judgment is required.**
 
 **Freeside is an agent control plane.** Harnesses such as Claude Code and Codex
 run the agent's inner loop. Freeside runs the outer loop. It controls:
@@ -146,9 +147,35 @@ you hold the reins.*
 The supported reference deployment is a Mac Studio. The daemon core remains
 Linux-portable under Section [3.3](#33-portability).
 
+### Vocabulary
+
+A **task** is a requested piece of work tracked from intake through
+specification, execution, review, and completion. Its identity persists
+across specification revisions and retries. Three terms cover the work model,
+and every document, command, screen, and contract uses them the same way:
+
+- **Task:** the named undertaking, with its source, project, and lifecycle.
+  The task carries the human-readable name the clients lead with; the project
+  and the bound issue are its metadata, never its name.
+- **Run:** an execution belonging to that task. A specification run and each
+  implementation attempt are runs of one task. Remediation stays inside the
+  run whose review loop drove it, as stage attempts under Section [7](#7-review-policy), never a
+  run of its own. A campaign (Section [5.12](#512-workflow-definition-initiators-and-artifacts)) groups implementation attempts
+  against one unchanged approved specification and links them to the
+  specification run. A task can span several campaigns as its approved
+  specification changes. A campaign is execution history, not a fourth
+  concept the clients lead with; Section [10](#10-operations-and-onboarding)'s
+  `freesided reattempt --campaign` selector is where an operator names one.
+- **Attention item:** a decision or intervention needed from the operator,
+  optionally associated with a task. A system-health or project-scoped item
+  has no task.
+
+The app's navigation lists tasks; a task's runs appear within it. The domain
+and API name the entity `Task` and reference it by `task_id`.
+
 ### The End-to-End Workflow
 
-1. A manual submission, labeled issue, or scanner proposal creates a work item.
+1. A manual submission, labeled issue, or scanner proposal creates a task.
 2. A specifier turns it into a specification using research artifacts fetched
    by the daemon.
 3. I approve the specification in the attention inbox.
@@ -333,7 +360,7 @@ telemetry and sampled decision audits.
 
 `id`, `project_id`, immutable `created_at` (nullable only for legacy records),
 `subject {subject_type: run | proposal_batch | project | system, subject_id,
-run_id?}`, `type`, `priority`, `reason`,
+run_id?, task_id?}`, `type`, `priority`, `reason`,
 `requested_decision`, `recommendation?`, `evidence_snapshot`, `agent_claims`,
 `artifact_digests`, `decision_surface {epoch, digest}` (the daemon-owned
 identity defined under Recommendation sources below; #917 carries it through
@@ -2047,7 +2074,7 @@ waiting.
 ```yaml
 project:        {repository: freeasinbird/gh-imgup, rein: tight}
 initiators:
-  - {type: manual}                      # freesided submit --work-item
+  - {type: manual}                      # freesided submit --task
   - {type: label, label: "freeside",
      mode: auto_start}                  # explicit, recorded preset override
   - {type: scan, query: stale_prs, schedule: daily, mode: propose}   # Phase 2
@@ -2082,14 +2109,14 @@ telemetry:      {shadow_review_rate: 0.2}
 Additional rules:
 
 - `rein` resolves into digested per-run policy with per-key provenance.
-- **Manual initiation uses `freesided submit`.** It registers the source work
-  item as a digest-addressed artifact, creates the specification run, and
-  reserves the deterministic implementation identity. The implementation run
-  starts only after the specification stage accepts its specification and,
-  when configured, the operator approves that specification's digest. Its
-  result names the
-  source digest and artifact, the specification identity and policy, and the
-  reserved implementation identity as separate lanes. The approval claim, and
+- **Manual initiation uses `freesided submit`.** It registers the task's
+  source as a digest-addressed artifact, creates the task and its
+  specification run, and reserves the deterministic implementation identity.
+  The implementation run starts only after the specification stage accepts
+  its specification and, when configured, the operator approves that
+  specification's digest. Its result names the source digest and artifact,
+  the specification identity and policy, and the reserved implementation
+  identity as separate lanes. The approval claim, and
   then the created run, carries the approved implementation specification
   digest.
 - **Production acceptance identity is explicit.** The first manual submission
@@ -2100,7 +2127,10 @@ Additional rules:
   terminal parent, the operator's reason, the original source digest, the
   approving specification run, and the unchanged approved specification digest.
   Retrying for operational reasons never requires changing the specification
-  bytes. `freesided resume` is different: it targets one exact live run and
+  bytes. Every attempt, and the specification run that approved it, is a run
+  of the one task; the task's identity and name survive the retry, and a
+  revised approved specification starts a new campaign under the same task.
+  `freesided resume` is different: it targets one exact live run and
   mints no identity, and a terminal run can only continue as a deliberate new
   attempt. This command-level resume is distinct from provider-session resume
   in Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes) and from AttentionItem actions in Section [4](#4-the-attention-model).
@@ -3543,7 +3573,7 @@ Build the installer only after the underlying interfaces survive real use. The
 | `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If the installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls. A callback or `--resume` reopens the same review after approval. |
 | `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe); the probe rules follow the table. |
 | `freesided auth add`, `auth adopt`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided identity and enrollment lifecycle (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); each subcommand's rules follow the table. |
-| `freesided submit` | Registers a manually initiated source work item, starts specification, and reserves its future implementation run. |
+| `freesided submit` | Registers a manually initiated task from its source, starts specification, and reserves its future implementation run. |
 | `freesided reattempt --parent-run <run>` or `--campaign <campaign>` | Requires an operator reason and allocates the campaign's next attempt from an already approved specification. It refuses a live parent. |
 | `freesided resume --run <run>` | Reattaches observation to one exact non-terminal run without creating a replacement. It refuses terminal runs and points to `reattempt`. |
 
@@ -3864,7 +3894,7 @@ Exit requires:
 - The reusable project-image builder proven by hand against the selected
   repository at an exact commit and recipe, with its digest-pinned result
   available to an admitted run;
-- Several real work items completed without terminal intervention; and
+- Several real tasks completed without terminal intervention; and
 - `setup`, `onboard`, and `doctor` packaging the proven manual operations,
   including that same project-image builder, and meeting the Section [10](#10-operations-and-onboarding)
   targets (the clean-machine proof of those targets was owner-deferred to #428
@@ -3880,7 +3910,7 @@ Exit requires:
 5. ward and its handoff gate, then the Claude agent base.
 6. The reusable project-image builder (#334), manually proven against the
    selected repository.
-7. The Claude driver and real work items (#237), consuming that project image.
+7. The Claude driver and real tasks (#237), consuming that project image.
 8. `setup`, `onboard`, and `doctor` (#238), packaging the same builder.
 9. Phase exit.
 
@@ -4194,40 +4224,29 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 46 ("Portable mode and routed-dispute placement"):
+Revision 47 ("Task vocabulary"):
 
-1. **Portable mode and host enrollment are Phase 2 work** (Sections [5.9](#59-durability-effectively-once),
-   [5.10](#510-coherent-backup-encrypted-checkpoints), [10](#10-operations-and-onboarding), and [11](#11-roadmap-build-order-and-coordination)): Sections [5.9](#59-durability-effectively-once) and [5.10](#510-coherent-backup-encrypted-checkpoints) stated the replica, epoch, and
-   host-identity model as current architecture while Section [11](#11-roadmap-build-order-and-coordination) placed the
-   movable control plane (#266; its domain contract #265) in no wave or
-   phase. Nothing in the 1B exit criteria needs a second host: the claims
-   concern attention, unattended operation, and phone-decidable approvals on
-   one reference machine, and daemon death is covered by the wave-8 external
-   probe, never by takeover. The retrofit Section [5.9](#59-durability-effectively-once) guards against is
-   contained, because host identity is recorded there as a forward
-   requirement and one host exists. Section [10](#10-operations-and-onboarding)'s Phase 1 reference
-   deployment therefore runs standalone, with the conforming replica
-   backend arriving beside portable mode. Phase 2's failure-injection and
-   restore drills are its natural neighbours. Rejected: #265 in wave 9's
-   contract chain, warranted only if a second host must run during 1B.
-   (User; devlog 2026-09-01-2231-portable-mode-and-dispute-placement.md;
-   #266; #265.)
-2. **Routed `review_dispute` execution binds to a trigger, not a wave row**
-   (Sections [4](#4-the-attention-model), [7](#7-review-policy), and [11](#11-roadmap-build-order-and-coordination)): #1016's route fires only when the adjudicator
-   marks a critical or high finding as contradicting the approved
-   specification. None has fired, so building the transaction now spends
-   contract-chain bandwidth, the binding constraint on every wave, on a route
-   with a zero measured rate, against the revision-45 rule of measuring a
-   firing rate before paying for a mechanism. The trigger is the first routed
-   `review_dispute` that parks a run on the real backlog; it authorizes
-   nothing by itself, and on it the spine gives #1016 a contract-chain
-   position and schedules it into the open wave, or into the next wave at
-   planning. Until then the item offers discuss or stop, and the 1B exit
-   records the carve-out.
-   Rejected: wave 8's chain directly after #1048, which buys a clean exit
-   claim at the cost of the binding constraint.
-   (User; devlog 2026-09-01-2231-portable-mode-and-dispute-placement.md; #1016.)
-
+1. **A task is the unit of requested work, and runs belong to it**
+   (Sections [1](#1-what-freeside-is), [4](#4-the-attention-model), [5.12](#512-workflow-definition-initiators-and-artifacts), and [10](#10-operations-and-onboarding)): the clients showed every
+   execution as a run named by its stage, project, and issue number or
+   content hash, so two pieces of work in one project read alike and a
+   specification run, its implementation, and each retry appeared as
+   unrelated rows. Section [1](#1-what-freeside-is) now defines the task once: a requested piece
+   of work tracked from intake through specification, execution, review, and
+   completion, whose identity persists across specification revisions and
+   retries. A run is an execution belonging to a task; a campaign groups
+   implementation attempts against one unchanged approved specification, a
+   task spans campaigns as that specification changes, and a campaign stays
+   execution history rather than a concept the clients lead with, named by
+   the Section [10](#10-operations-and-onboarding) retry selector; an attention
+   item optionally references its task through `task_id`. The same word is
+   used in navigation, documentation, the CLI, the domain, and the API.
+   Rejected:
+   "work item", the plan's prior term, accurate but clunky as a navigation
+   label and already overloaded by the per-run work-unit declaration; and
+   merging a task's runs into one run, which would break the
+   content-addressed run identity that approvals bind to.
+   (User; devlog 2026-09-07-0921-task-vocabulary.md.)
 ## 14. Risks
 
 | Risk | Current response |
