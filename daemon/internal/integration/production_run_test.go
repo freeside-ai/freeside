@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -22,6 +23,115 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
+
+func TestRealRunFinalVerificationBesideWriter(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	writer := storetest.Open(t, path, store.Options{})
+	identity := domain.AuthIdentity{
+		ID: "real-run-writer", Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "writer-volume", RefreshStrategy: domain.RefreshOnDemand},
+	}
+	if err := realRunIdentities(ctx, writer, false, identity); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := realRunOpenStore(ctx, path, store.Options{}, true)
+	if err != nil {
+		t.Fatalf("open verifier beside the live writer: %v", err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	if err := realRunIdentities(ctx, reader, true, identity); err != nil {
+		t.Fatalf("verify seeded identity: %v", err)
+	}
+	changed := identity
+	changed.Interim.AuthStoreVolume = "different-volume"
+	if err := realRunIdentities(ctx, reader, true, changed); err == nil {
+		t.Fatal("verification accepted or repaired a changed identity")
+	}
+	missing := identity
+	missing.ID = "missing-identity"
+	if err := realRunIdentities(ctx, reader, true, missing); err == nil {
+		t.Fatal("verification manufactured a missing identity")
+	}
+	if err := realRunIdentities(ctx, reader, false, missing); err == nil {
+		t.Fatal("final verifier accepted a write")
+	}
+	if err := realRunIdentities(ctx, writer, false, missing); err != nil {
+		t.Fatalf("writer lost ownership while final verifier was open: %v", err)
+	}
+	if err := realRunIdentities(ctx, reader, true, missing); err != nil {
+		t.Fatalf("verifier did not observe new writer state: %v", err)
+	}
+}
+
+func TestRealRunFinalVerificationRequiresExistingDatabase(t *testing.T) {
+	t.Parallel()
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprint(existing), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "freeside.db")
+			if existing {
+				if err := os.WriteFile(path, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			st, err := realRunOpenStore(t.Context(), path, store.Options{}, true)
+			if err == nil {
+				_ = st.Close()
+				t.Fatal("final verifier created or migrated an uninitialized database")
+			}
+			info, statErr := os.Stat(path)
+			if !existing && !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatal("missing database was created")
+			}
+			if existing && (statErr != nil || info.Size() != 0) {
+				t.Fatal("uninitialized database was changed")
+			}
+		})
+	}
+}
+
+func TestRealRunBackupVerificationDoesNotInitialize(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	if _, err := realRunBackupFiles(path, true); err == nil {
+		t.Fatal("missing backup key accepted")
+	}
+	if _, err := os.Stat(path + ".backup-encryption.key"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("final verifier manufactured a backup key")
+	}
+	if _, err := realRunBackupFiles(path, false); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path + ".backup-encryption.key") // #nosec G304 -- test-owned temporary key.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := realRunBackupFiles(path, true); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path + ".backup-encryption.key") // #nosec G304 -- test-owned temporary key.
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatal("verification changed the setup key")
+	}
+}
+
+func TestRealRunBlobVerificationDoesNotInitialize(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	if _, err := realRunBlobStore(path, true); err == nil {
+		t.Fatal("missing blob directory accepted")
+	}
+	if _, err := os.Stat(path + ".blobs"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("final verifier created the missing blob directory")
+	}
+	if _, err := realRunBlobStore(path, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := realRunBlobStore(path, true); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func productionPublicationMetadata() engine.ProductionPublication {
 	return engine.ProductionPublication{

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,8 +18,75 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
-	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
+
+func realRunOpenStore(ctx context.Context, path string, opts store.Options, final bool) (*store.Store, error) {
+	if final {
+		return store.OpenReadOnly(ctx, path, opts)
+	}
+	return store.Open(ctx, path, opts)
+}
+
+func realRunBlobStore(dbPath string, final bool) (*signet.BlobStore, error) {
+	// NewBlobStore only syncs an existing directory. Require it first so the
+	// final pass cannot manufacture a missing artifact store.
+	if final {
+		info, err := os.Stat(dbPath + ".blobs")
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("existing blob directory required")
+		}
+	}
+	return signet.NewBlobStore(dbPath + ".blobs")
+}
+
+// Final verification must neither initialize prerequisites nor compete for the
+// daemon's writer lock. These paths are the existing local-backup layout.
+func realRunBackupFiles(dbPath string, final bool) (*store.LocalBackupFiles, error) {
+	if !final {
+		return store.NewDefaultLocalBackupFiles(dbPath)
+	}
+	keyPath := dbPath + ".backup-encryption.key"
+	info, err := os.Lstat(keyPath)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return nil, fmt.Errorf("backup key must be an owner-only regular file")
+	}
+	key, err := os.ReadFile(keyPath) // #nosec G304 -- fixed backup-key sibling in the operator-supplied state root.
+	if err != nil {
+		return nil, err
+	}
+	return store.NewEncryptedLocalBackupFiles(filepath.Join(dbPath+".checkpoints", "latest.backup"), key)
+}
+
+func realRunIdentities(ctx context.Context, st *store.Store, final bool, identities ...domain.AuthIdentity) error {
+	if !final {
+		return st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			for _, identity := range identities {
+				if err := tx.RecordAuthIdentity(ctx, identity, time.Now().UTC()); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	return st.Read(ctx, func(tx *store.ReadTx) error {
+		for _, expected := range identities {
+			actual, err := tx.GetAuthIdentity(ctx, expected.ID)
+			if err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(actual, expected) {
+				return fmt.Errorf("recorded auth identity %s differs from the run inputs", expected.ID)
+			}
+		}
+		return nil
+	})
+}
 
 // The §11 1A.2 real-run harness: one work item submitted through the complete
 // production path, against the real Apple container runtime, the admitted
@@ -212,11 +280,11 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
 		ApprovedRecipes:         map[domain.Digest]bool{env.approvedRecipe: true},
 	}
-	backupFiles, err := store.NewDefaultLocalBackupFiles(dbPath)
+	backupFiles, err := realRunBackupFiles(dbPath, bindingSet)
 	if err != nil {
 		t.Fatalf("open local backup files: %v", err)
 	}
-	blobs, err := signet.NewBlobStore(dbPath + ".blobs")
+	blobs, err := realRunBlobStore(dbPath, bindingSet)
 	if err != nil {
 		t.Fatalf("open blob store: %v", err)
 	}
@@ -228,8 +296,11 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	}
 	opts.BackupHealthSource = health
 
-	st := storetest.Open(t, dbPath, opts)
-	defer func() { _ = st.Close() }()
+	st, err := realRunOpenStore(ctx, dbPath, opts, bindingSet)
+	if err != nil {
+		t.Fatalf("open real-run store (final=%t): %v", bindingSet, err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
 
 	// The identity binding the ward gate compares the writable mount
 	// against. It is an operator precondition in production; the harness
@@ -245,14 +316,8 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	if reviewIdentity.ID == identity.ID {
 		t.Fatal("writer and Codex reviewer auth identities must be distinct")
 	}
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		at := time.Now().UTC()
-		if err := tx.RecordAuthIdentity(ctx, identity, at); err != nil {
-			return err
-		}
-		return tx.RecordAuthIdentity(ctx, reviewIdentity, at)
-	}); err != nil {
-		t.Fatalf("record auth identity: %v", err)
+	if err := realRunIdentities(ctx, st, bindingSet, identity, reviewIdentity); err != nil {
+		t.Fatalf("prepare or verify auth identities: %v", err)
 	}
 
 	// The operator-approved trust profile is deliberately not recorded here.
@@ -298,9 +363,6 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 			env.repo, err)
 	}
 
-	t.Log("preconditions recorded; submit the work item with `freesided submit` " +
-		"and run the daemon with -driver=claude against this state root")
-
 	// The harness asserts the durable outcome rather than driving the daemon
 	// in-process: the production composition lives in package main, and a
 	// second in-process wiring of it here would be a different composition
@@ -308,6 +370,7 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	// scripts/run-real-work.sh performs the run; this test is its verifier
 	// and can also be pointed at a state root a manual run produced.
 	if !bindingSet {
+		t.Log("real run preconditions recorded")
 		t.Skip("set " + realRunImplementationRunIDEnv + " and " +
 			realRunImplementationInvocationEnv + " to the submitted implementation run " +
 			"to verify a completed run; scripts/run-real-work.sh sets them")

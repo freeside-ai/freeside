@@ -152,6 +152,16 @@ xcodebuild -project Freeside.xcodeproj -scheme FreesideIOS \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
+## Restore After A Production Rig
+
+After a production rig, restore the bundled daemon through the installed app's
+**Stop**/**Start** controls. `scripts/restore-supervised-daemon.sh` clears the
+launchd disable override, prints the needed app actions and waits for both service
+registration and `http://127.0.0.1:7331/health`. Login Items approval or a timeout
+leaves restoration incomplete. See the
+[production walkthrough runbook](../docs/production-walkthrough.md) for the exact
+sequence and retained-session recovery command.
+
 ## Style
 
 Swift formatting and style analysis both come from the toolchain's

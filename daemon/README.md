@@ -289,6 +289,12 @@ same effective review image, model, auth, instruction, and workspace inputs
 that unattended admission enforces. The default mode is `attended_dev`, where
 the review-configuration flag is not required.
 
+The [production walkthrough runbook](../docs/production-walkthrough.md) covers
+the harness's retained endpoint, explicit completion, interrupted-holder
+recovery and verified restoration of the supervised daemon. Final verification
+reads the existing database beside the running daemon; it never seeds identities
+or migrates state. Keep the foreground harness open through the client walkthrough.
+
 `freesided preflight` is the production-composition gate used by
 `scripts/run-real-work.sh` before it submits work. Its deterministic JSON
 manifest binds the exact database schema, daemon build, listener, repository

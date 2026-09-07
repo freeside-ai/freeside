@@ -10,7 +10,9 @@
 # the durable export, networkless verification evidence, publication outcome,
 # and exact published head with the real-run harness test. A durable
 # specification failure exits promptly with its recorded diagnostic instead of
-# waiting for the global deadline.
+# waiting for the production deadline. Successful verification keeps this same
+# daemon alive for a walkthrough until `real-work-session.sh complete` is used.
+# See docs/production-walkthrough.md for completion, recovery and restoration.
 #
 # It never mints its own preconditions. Every binding below is the
 # operator's, supplied through the environment, because each one lands in
@@ -66,8 +68,10 @@
 #                                    (default 10)
 #   FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS clean rig-holder shutdown
 #                                    bound (default 30)
+#   FREESIDE_REAL_RUN_RESTORE_TIMEOUT_SECONDS supervised registration/health
+#                                    wait after rig release (default 120)
 #   FREESIDE_REAL_RUN_DIAGNOSTIC_DIR operator-visible diagnostic destination
-#                                    (default current directory)
+#                                    (default ~/Library/Logs/Freeside)
 #   FREESIDE_REAL_RUN_BUILD_PROXY   supported unauthenticated HTTP proxy used
 #                                    when building the already-pinned images;
 #                                    live reachability is recorded not_run
@@ -161,9 +165,22 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/run-real-work-supervision.sh
 source "$repo_root/scripts/run-real-work-supervision.sh"
-workdir="$(mktemp -d)"
+# shellcheck source=scripts/real-work-lifecycle.sh
+source "$repo_root/scripts/real-work-lifecycle.sh"
+diagnostic_dir=${FREESIDE_REAL_RUN_DIAGNOSTIC_DIR:-$HOME/Library/Logs/Freeside}
+if [[ -z "${FREESIDE_REAL_RUN_DIAGNOSTIC_DIR:-}" ]]; then
+	mkdir -p "$diagnostic_dir"
+fi
+[[ -d "$diagnostic_dir" ]] || { echo 'run-real-work: diagnostic directory is not a directory' >&2; exit 2; }
+diagnostic_dir=$(cd "$diagnostic_dir" && pwd)
+workdir="$(mktemp -d "$diagnostic_dir/real-work-session.XXXXXX")"
+cp "$repo_root/scripts/real-work-session.sh" "$repo_root/scripts/real-work-lifecycle.sh" \
+	"$repo_root/app/scripts/restore-supervised-daemon.sh" "$workdir/"
+printf 'starting\n' >"$workdir/status"
+echo "run-real-work: retained session: $workdir" >&2
 daemon_pid=""
 rig_pid=""
+rig_acquired=false
 specification_run_id=""
 implementation_run_id=""
 last_supervision_snapshot="$workdir/supervision.json"
@@ -174,7 +191,6 @@ composition_evidence_tmp=""
 db_path="$FREESIDE_REAL_RUN_STATE_ROOT/freeside.db"
 listen_address="$FREESIDE_REAL_RUN_LISTEN"
 rig_release_timeout=${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}
-diagnostic_dir=${FREESIDE_REAL_RUN_DIAGNOSTIC_DIR:-$PWD}
 supervision_timeout=${FREESIDE_REAL_RUN_TIMEOUT_SECONDS:-2400}
 
 if [[ ! "$rig_release_timeout" =~ ^[1-9][0-9]*$ ]]; then
@@ -198,6 +214,10 @@ if [[ ! -d "$diagnostic_dir" ]]; then
 	echo "run-real-work: diagnostic directory is not a directory: $diagnostic_dir" >&2
 	exit 2
 fi
+recovery_state_root=$FREESIDE_REAL_RUN_STATE_ROOT
+[[ "$recovery_state_root" == /* ]] || recovery_state_root="$PWD/$recovery_state_root"
+printf '%s\n' "$recovery_state_root" >"$workdir/state-root"
+printf '%s\n' "$rig_release_timeout" >"$workdir/rig-timeout"
 
 write_diagnostic() {
 	local selected_run="" candidate
@@ -228,11 +248,11 @@ rig_child_active() {
 }
 
 child_job_exists() {
-	local child_pid=$1
-	case " $(jobs -pr) $(jobs -ps) " in
-	*" $child_pid "*) return 0 ;;
-	*) return 1 ;;
-	esac
+	local child_pid=$1 children
+	# Capture each builtin directly: grouping jobs on a pipeline's left side
+	# creates a subshell with an empty job table in macOS Bash.
+	children="$(jobs -pr)"$'\n'"$(jobs -ps)"
+	grep -qx -- "$child_pid" <<<"$children"
 }
 
 rig_child_exists() {
@@ -240,50 +260,8 @@ rig_child_exists() {
 }
 
 run_rig_cleanup() {
-	local cleanup_pid cleanup_status cleanup_status_file
-	cleanup_status_file=$workdir/rig-cleanup-status
-	set -m
-	(
-		set +m
-		set +e
-		"$workdir/freesided" rig cleanup \
-			-state-root "$FREESIDE_REAL_RUN_STATE_ROOT" \
-			-token-file "$rig_acquisition" >/dev/null &
-		cleanup_command_pid=$!
-		# The command keeps the default TERM disposition. The supervisor ignores
-		# TERM only after spawn, so a group cancellation reaches freesided and
-		# lets its context terminate procbound runtime subprocess groups.
-		trap '' TERM
-		wait "$cleanup_command_pid"
-		printf '%s\n' "$?" >"$cleanup_status_file"
-		# Remain the process-group leader until the parent kills the whole
-		# group. This reserves the PGID and keeps a failed cleanup's orphaned
-		# runtime child inside the authority boundary until it is terminated.
-		while :; do sleep 3600; done
-	) &
-	cleanup_pid=$!
-	for _ in $(seq 1 $((rig_release_timeout * 10))); do
-		[[ ! -s "$cleanup_status_file" ]] || break
-		sleep 0.1
-	done
-	if [[ -s "$cleanup_status_file" ]]; then
-		read -r cleanup_status <"$cleanup_status_file" || cleanup_status=1
-	else
-		echo "run-real-work: exact-resource cleanup exceeded ${rig_release_timeout}s; cancelling it" >&2
-		cleanup_status=124
-		kill -TERM -- "-$cleanup_pid" 2>/dev/null || true
-		for _ in $(seq 1 $((rig_release_timeout * 10))); do
-			[[ ! -s "$cleanup_status_file" ]] || break
-			sleep 0.1
-		done
-	fi
-	# The supervisor never exits by itself, so it keeps this PGID reserved until
-	# this signal and prevents the number from naming an unrelated process group.
-	kill -KILL -- "-$cleanup_pid" 2>/dev/null || true
-	wait "$cleanup_pid" 2>/dev/null || true
-	set +m
-	rm -f "$cleanup_status_file"
-	return "$cleanup_status"
+	real_work_bounded_rig "$workdir" "$rig_release_timeout" cleanup \
+		-state-root "$FREESIDE_REAL_RUN_STATE_ROOT" -token-file "$rig_acquisition"
 }
 
 require_live_rig() {
@@ -298,21 +276,28 @@ require_live_rig() {
 cleanup() {
 	status=$?
 	trap - EXIT
+	# Defer exit without exporting an ignored signal disposition to cleanup
+	# commands. Their handlers must still receive group cancellation.
+	trap 'status=130' INT
+	trap 'status=143' TERM
+	local previous_status
+	previous_status=$(cat "$workdir/status")
+	printf 'stopping\n' >"$workdir/status"
 	cleanup_failed=false
-	if ! write_diagnostic; then
-		cleanup_failed=true
-	fi
-  if [[ -n "$daemon_pid" ]] && kill -0 "$daemon_pid" 2>/dev/null; then
+	[[ "$previous_status" != recovery-required ]] || cleanup_failed=true
+	diagnostic_failed=false
+	if ! write_diagnostic; then diagnostic_failed=true; fi
+  if [[ -n "$daemon_pid" ]] && child_job_exists "$daemon_pid"; then
     kill "$daemon_pid" 2>/dev/null || true
     # A wedged writer container can block the daemon's own shutdown, and this
     # trap is the last thing the operator is waiting on: bound the graceful
     # wait, then stop asking. Leftover runtime objects carry the run labels,
     # so they stay reapable by hand rather than being lost.
     for _ in $(seq 1 30); do
-      kill -0 "$daemon_pid" 2>/dev/null || break
+      child_job_exists "$daemon_pid" || break
       sleep 1
     done
-    if kill -0 "$daemon_pid" 2>/dev/null; then
+    if child_job_exists "$daemon_pid"; then
       echo "run-real-work: daemon did not exit within 30s; sending SIGKILL." \
         "Check for leftover \`container\` instances labelled with this run" >&2
       kill -9 "$daemon_pid" 2>/dev/null || true
@@ -342,22 +327,44 @@ cleanup() {
 				cleanup_failed=true
 			fi
 		else
-			echo "run-real-work: rig holder exited; preserving the stale rig manifest" >&2
-			cleanup_failed=true
+			echo "run-real-work: rig holder exited; checking stale recovery" >&2
+			if ! real_work_bounded_rig "$workdir" "$rig_release_timeout" recover \
+				-state-root "$FREESIDE_REAL_RUN_STATE_ROOT" -confirm; then
+				cleanup_failed=true
+			fi
+			# A dead holder's exit status is not a clean-release signal. The
+			# recovery command above is the sole authority for this path.
+			wait "$rig_pid" 2>/dev/null || true
+			rig_pid=""
 		fi
-		if ! wait "$rig_pid" 2>/dev/null && [[ "$cleanup_failed" == false ]]; then
+		if [[ -n "$rig_pid" ]] && ! wait "$rig_pid" 2>/dev/null && [[ "$cleanup_failed" == false ]]; then
 			echo "run-real-work: rig holder failed during release; preserving its diagnostics" >&2
 			cleanup_failed=true
 		fi
 	fi
 	[[ -z "$composition_evidence_tmp" ]] || rm -f "$composition_evidence_tmp"
-	rm -rf "$workdir"
-	if [[ "$cleanup_failed" == true && "$status" -eq 0 ]]; then
+	if [[ "$cleanup_failed" == false && "$rig_acquired" == true ]]; then
+		printf 'rig-released\n' >"$workdir/status"
+		if bash "$workdir/restore-supervised-daemon.sh" 2>&1 | tee -a "$workdir/restore.log"; then
+			printf 'completed\n' >"$workdir/status"
+		else
+			cleanup_failed=true
+		fi
+	elif [[ "$cleanup_failed" == true ]]; then
+		printf 'recovery-required\n' >"$workdir/status"
+	fi
+	echo "run-real-work: logs and recovery inputs retained: $workdir" >&2
+	if [[ "$cleanup_failed" == true ]]; then
+		printf 'Recovery: bash %q recover %q\n' "$workdir/real-work-session.sh" "$workdir" >&2
+	fi
+	if [[ "$status" -eq 0 && ( "$cleanup_failed" == true || "$diagnostic_failed" == true ) ]]; then
 		exit 1
 	fi
 	exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Stage the operator's submission inputs once, so the composition preflight
 # and the durable submit consume the same bytes even if the original files
@@ -392,13 +399,14 @@ echo "acquiring the production rig lease" >&2
 	-db "$db_path" \
 	-listen "$listen_address" \
 	-seed-root "$FREESIDE_REAL_RUN_SEED_ROOT" \
-	>"$rig_acquisition" 2>"$rig_log" &
+	>"$rig_acquisition" 2>>"$rig_log" &
 rig_pid=$!
 for _ in $(seq 1 100); do
 	[[ ! -s "$rig_acquisition" ]] || break
 	if ! rig_child_active; then
 		wait "$rig_pid" 2>/dev/null || true
 		rig_pid=""
+		printf 'recovery-required\n' >"$workdir/status"
 		cat "$rig_log" >&2
 		exit 1
 	fi
@@ -411,8 +419,10 @@ if [[ ! -s "$rig_acquisition" ]]; then
 	fi
 	wait "$rig_pid" 2>/dev/null || true
 	rig_pid=""
+	printf 'recovery-required\n' >"$workdir/status"
 	exit 1
 fi
+rig_acquired=true
 FREESIDE_REAL_RUN_STATE_ROOT="$("$workdir/freesided" rig resource \
 	-token-file "$rig_acquisition" -name state-root)"
 db_path="$("$workdir/freesided" rig resource \
@@ -422,6 +432,9 @@ listen_address="$("$workdir/freesided" rig resource \
 FREESIDE_REAL_RUN_SEED_ROOT="$("$workdir/freesided" rig resource \
 	-token-file "$rig_acquisition" -name seed-root)"
 export FREESIDE_REAL_RUN_STATE_ROOT FREESIDE_REAL_RUN_SEED_ROOT
+printf '%s\n' "$FREESIDE_REAL_RUN_STATE_ROOT" >"$workdir/state-root"
+printf '%s\n' "$rig_release_timeout" >"$workdir/rig-timeout"
+printf '%s\n' "$listen_address" >"$workdir/listener"
 require_live_rig
 
 # Provision the durable auth-identity binding before the composition
@@ -605,7 +618,7 @@ require_live_rig
   -allowed-paths "$FREESIDE_REAL_RUN_ALLOWED_PATHS" \
   -publication-state-dir "$FREESIDE_REAL_RUN_APP_STATE" \
   -publication-credentials-dir "$FREESIDE_REAL_RUN_APP_CREDS" \
-  > "$workdir/daemon.log" 2>&1 &
+  >> "$workdir/daemon.log" 2>&1 &
 daemon_pid=$!
 
 if [[ -n "$specification_run_id" ]]; then
@@ -630,10 +643,6 @@ if [[ "$supervision_status" -ne 0 ]]; then
 	exit "$supervision_status"
 fi
 
-kill "$daemon_pid" 2>/dev/null || true
-wait "$daemon_pid" 2>/dev/null || true
-daemon_pid=""
-
 # Positive evidence, not the absence of an error: a Go test binary exits 0
 # for a skipped test too, so require the harness's own success line.
 verify_log="$workdir/verify-final.log"
@@ -644,7 +653,7 @@ env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
   FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID="$implementation_run_id" \
   FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION="$implementation_invocation_id" \
   go test -C "$repo_root/daemon" ./internal/integration/ \
-    -run TestRealWorkItemCompletesProductionPipeline -count=1 -v 2>&1 | tee "$verify_log"
+    -run TestRealWorkItemCompletesProductionPipeline -count=1 -v 2>&1 | tee -a "$verify_log"
 verify_status=${PIPESTATUS[0]}
 set -e
 if grep -q "real run specification failed:" "$verify_log"; then
@@ -661,3 +670,8 @@ if [[ "$verify_status" -ne 0 ]] ||
   exit 1
 fi
 echo "run-real-work: verified ready publication for implementation run=$implementation_run_id invocation=$implementation_invocation_id" >&2
+printf '%s\n' "$implementation_run_id" >"$workdir/implementation-run"
+printf '%s\n' "$implementation_invocation_id" >"$workdir/implementation-invocation"
+echo "Walkthrough: run=$implementation_run_id invocation=$implementation_invocation_id endpoint=$listen_address session=$workdir" >&2
+printf 'Complete explicitly: bash %q complete %q\n' "$workdir/real-work-session.sh" "$workdir" >&2
+real_work_walkthrough "$workdir" "$daemon_pid"
