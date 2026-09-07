@@ -31,8 +31,10 @@ const EvidenceDescriptorPath = EvidenceWorkspaceDir + "/evidence.json"
 // launcher, not the agent, fixes the label, path, media type, provenance, and
 // sensitivity; the agent controls only whether the file exists and its prose.
 const (
-	SummaryEvidenceLabel = "freeside.summary"
-	SummaryEvidencePath  = EvidenceWorkspaceDir + "/summary.md"
+	ScopeConflictEvidenceLabel = "freeside.scope-conflict"
+	ScopeConflictEvidencePath  = EvidenceWorkspaceDir + "/scope-conflict.json"
+	SummaryEvidenceLabel       = "freeside.summary"
+	SummaryEvidencePath        = EvidenceWorkspaceDir + "/summary.md"
 )
 
 // BlockedEvidenceLabel and BlockedEvidencePath reserve the second

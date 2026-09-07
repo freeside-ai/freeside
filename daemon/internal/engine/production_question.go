@@ -127,7 +127,11 @@ func ensureBlockedOutcomeRecord(
 // readArtifactBlob reads one persisted evidence blob within a byte bound and
 // re-verifies its content address before the bytes are interpreted.
 func (e *Engine) readArtifactBlob(digest domain.Digest, limit int64) ([]byte, error) {
-	reader, err := e.artifacts.Open(digest)
+	return readBoundedArtifactBlob(e.artifacts, digest, limit)
+}
+
+func readBoundedArtifactBlob(artifacts ArtifactStore, digest domain.Digest, limit int64) ([]byte, error) {
+	reader, err := artifacts.Open(digest)
 	if err != nil {
 		return nil, err
 	}

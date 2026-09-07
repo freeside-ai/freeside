@@ -324,6 +324,13 @@ func (d *Driver) finish(
 		return exec.StageResult{}, fmt.Errorf("%w: %w", errDefinitiveExportRejection, err)
 	}
 	opts.ExpectNoChanges = blockedPresent
+	conflict, conflictPresent, err := releasedScopeConflict(out)
+	if err != nil {
+		return exec.StageResult{}, fmt.Errorf("%w: %w", errDefinitiveExportRejection, err)
+	}
+	if conflictPresent && (blockedPresent || !persistsRepositoryChannel(opts.Policy.FindingProfile)) {
+		return exec.StageResult{}, fmt.Errorf("%w: scope conflict requires a completed implementation candidate", errDefinitiveExportRejection)
+	}
 	imported, err := importer.Import(ctx, out.dir, checkoutDir, opts)
 	if err != nil {
 		err = fmt.Errorf("gauntlet import: %w", err)
@@ -338,6 +345,18 @@ func (d *Driver) finish(
 	}
 	if blockedPresent {
 		return d.finishBlocked(ctx, in, out, imported, blocked, usage)
+	}
+	if conflictPresent {
+		for _, p := range conflict.Paths {
+			if importer.MatchesAllowlist(opts.Policy.Allowlist, p) {
+				return exec.StageResult{}, fmt.Errorf("%w: scope conflict names an allowed path", errDefinitiveExportRejection)
+			}
+			for _, change := range imported.Changes {
+				if change.Path == p {
+					return exec.StageResult{}, fmt.Errorf("%w: scope conflict path was changed", errDefinitiveExportRejection)
+				}
+			}
+		}
 	}
 	manifestDigest, err := fileDigest(filepath.Join(out.dir, export.ManifestFilename))
 	if err != nil {
@@ -807,9 +826,45 @@ func (d *Driver) persistReleasedMaterial(
 	// Evidence lands before the export record: the released blobs live only
 	// under this directory, and a durable row is an assertion that every
 	// object it implies can already be resolved.
-	artifacts, err := d.persistEvidence(ctx, in, out, claims, nil)
+	var normalized *evidenceNormalization
+	conflict, present, err := releasedScopeConflict(out)
 	if err != nil {
 		return nil, executionReplay{}, err
+	}
+	if present {
+		body, err := domain.EncodeScopeConflict(conflict)
+		if err != nil {
+			return nil, executionReplay{}, err
+		}
+		normalized = &evidenceNormalization{label: export.ScopeConflictEvidenceLabel, digest: domain.Digest(contentaddr.Sum(body)), body: body}
+		// Replay and terminal identities retain the released bytes. Only the
+		// question claim uses canonical bytes; give that artifact its own ID.
+		claims = append([]domain.AgentClaim(nil), claims...)
+		for index := range claims {
+			if claims[index].Label == export.ScopeConflictEvidenceLabel {
+				claims[index].Artifact += "-canonical"
+			}
+		}
+	}
+	artifacts, err := d.persistEvidence(ctx, in, out, claims, normalized)
+	if err != nil {
+		return nil, executionReplay{}, err
+	}
+	if normalized != nil {
+		for index, entry := range out.evidence.Entries {
+			if entry.Label != normalized.label {
+				continue
+			}
+			rawDigest := domain.Digest(entry.Digest)
+			raw, err := readEvidenceBlob(out.dir, rawDigest)
+			if err != nil {
+				return nil, executionReplay{}, err
+			}
+			if err := d.artifacts.PutBlob(ctx, rawDigest, raw); err != nil {
+				return nil, executionReplay{}, err
+			}
+			artifacts[index] = rawDigest
+		}
 	}
 	planDigest, err := d.persistCommitPlan(ctx, out)
 	if err != nil {

@@ -513,6 +513,7 @@ type AttentionItem struct {
 	// workspace; emission is #212's, so nothing sets it until that unit
 	// lands.
 	CommitPlanNotice *CommitPlanNoticeReason `json:"commit_plan_notice"`
+	ScopeDecision    *ScopeDecisionFacts     `json:"scope_decision"`
 	// BaseFreshness is the base-advance staleness watch's maintained fact,
 	// present only on ready_for_final_review items once the watch has
 	// observed the base (plan §5.16); nil renders explicit null. Daemon-set
@@ -614,6 +615,7 @@ type AttentionItemInput struct {
 	ReadinessDetail                  *ReadinessDetail
 	YieldHistory                     *ReviewYieldHistory
 	CommitPlanNotice                 *CommitPlanNoticeReason
+	ScopeDecision                    *ScopeDecisionFacts
 	ReviewRecoveryBinding            *ReviewRecoveryBinding
 	CodexReenrollmentRecoveryBinding *CodexReenrollmentRecoveryBinding
 	ReviewConfigurationRecovery      *ReviewConfigurationRecoveryBinding
@@ -671,6 +673,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		ReadinessDetail:                  cloneReadinessDetail(in.ReadinessDetail),
 		YieldHistory:                     cloneReviewYieldHistory(in.YieldHistory),
 		CommitPlanNotice:                 clonePtr(in.CommitPlanNotice),
+		ScopeDecision:                    cloneScopeDecisionFacts(in.ScopeDecision),
 		ReviewRecoveryBinding:            clonePtr(in.ReviewRecoveryBinding),
 		CodexReenrollmentRecoveryBinding: clonePtr(in.CodexReenrollmentRecoveryBinding),
 		ReviewConfigurationRecovery:      clonePtr(in.ReviewConfigurationRecovery),
@@ -766,6 +769,14 @@ func cloneExecutionFailureFacts(facts *ExecutionFailureFacts) *ExecutionFailureF
 // cannot, since it holds no policy, and so does not admit an unapproved-recipe
 // artifact by omission.
 func (i AttentionItem) Validate() error {
+	if i.ScopeDecision != nil {
+		if i.Type != AttentionReadyForFinalReview || i.ScopeDecision.HeadSHA != i.PRHeadSHA {
+			return ErrCardFactInconsistent
+		}
+		if err := i.ScopeDecision.Validate(); err != nil {
+			return err
+		}
+	}
 	if i.ID == "" {
 		return fmt.Errorf("item id: %w", ErrEmptyID)
 	}
@@ -1060,6 +1071,9 @@ func (i AttentionItem) Validate() error {
 		}
 	}
 	if i.AgentQuestion != nil {
+		if i.AgentQuestion.ScopeConflict != nil && i.PRHeadSHA != i.AgentQuestion.ScopeConflict.HeadSHA {
+			return ErrCardFactInconsistent
+		}
 		if i.Type != AttentionAgentQuestion {
 			return fmt.Errorf("item %s type %q carries agent question facts: %w",
 				i.ID, i.Type, ErrCardFactOutsideItem)

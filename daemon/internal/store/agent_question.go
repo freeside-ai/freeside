@@ -46,8 +46,20 @@ type agentQuestionProductionTerminal struct {
 // must not be able to authorize another invocation by agreeing only with each
 // other.
 func (tx *ReadTx) gateAgentQuestionItem(ctx context.Context, item domain.AttentionItem) error {
+	if item.Type == domain.AttentionReadyForFinalReview && item.Subject.RunID != nil {
+		expected, err := tx.ScopeDecisionForCandidate(ctx, *item.Subject.RunID, item.PRHeadSHA)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(expected, item.ScopeDecision) {
+			return domain.ErrParentKeyMismatch
+		}
+	}
 	if item.AgentQuestion == nil {
 		return nil
+	}
+	if item.AgentQuestion.ScopeConflict != nil {
+		return tx.gateScopeConflictQuestion(ctx, item)
 	}
 	facts := item.AgentQuestion
 	if item.Type != domain.AttentionAgentQuestion || item.Subject.RunID == nil ||

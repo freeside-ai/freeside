@@ -335,6 +335,9 @@ func (e *Engine) reconcileOperatorFeedbackActions(
 				"operator feedback command %q: %w", selectedCommand.CommandID, err))
 			continue
 		}
+		if item.AgentQuestion != nil && item.AgentQuestion.ScopeConflict != nil {
+			continue
+		}
 		if item.Status != domain.StatusSuperseded || item.Subject.RunID == nil {
 			continue
 		}

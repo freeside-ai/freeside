@@ -6770,6 +6770,12 @@ func prepareRemediationPublicationLifecycle(
 	t *testing.T,
 	exportRemediation bool,
 ) (*productionPublicationHarness, domain.InvocationID) {
+	return prepareRemediationPublicationLifecycleWithScope(t, exportRemediation, false)
+}
+
+func prepareRemediationPublicationLifecycleWithScope(
+	t *testing.T, exportRemediation, scopeConflict bool,
+) (*productionPublicationHarness, domain.InvocationID) {
 	t.Helper()
 	p := newProductionPublicationHarness(t, "")
 	classifier := inferencefake.New()
@@ -6818,7 +6824,18 @@ func prepareRemediationPublicationLifecycle(
 			Findings: []domain.Finding{finding},
 		},
 	})
-	p.startAndRecordExport(t)
+	if scopeConflict {
+		p.startScopeConflict(t)
+		if _, err := p.reconcileLanes(); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.answerScopeConflict(t, domain.ActionAnswerWithoutRetry); err != nil {
+			t.Fatal(err)
+		}
+		p.now = p.now.Add(2 * time.Minute)
+	} else {
+		p.startAndRecordExport(t)
+	}
 	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
 		t.Fatalf("adjudicated review = %#v, %v", result, err)
 	}

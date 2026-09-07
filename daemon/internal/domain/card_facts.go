@@ -112,13 +112,22 @@ func (f ExecutionFailureFacts) Validate() error {
 // is asked to make. Kind is set exactly when Stage is implementation: the
 // specifier's needs_decision output has no blocker taxonomy.
 type AgentQuestionFacts struct {
-	Stage        StageName    `json:"stage"`
-	InvocationID InvocationID `json:"invocation_id"`
-	Kind         *BlockedKind `json:"kind"`
-	Decisions    []Decision   `json:"decisions"`
+	ScopeConflict *ScopeConflictFacts `json:"scope_conflict"`
+	Stage         StageName           `json:"stage"`
+	InvocationID  InvocationID        `json:"invocation_id"`
+	Kind          *BlockedKind        `json:"kind"`
+	Decisions     []Decision          `json:"decisions"`
 }
 
 func (f AgentQuestionFacts) Validate() error {
+	if f.ScopeConflict != nil {
+		if f.Stage != StageNameImplementation || f.Kind == nil || *f.Kind != BlockedKindScopeExpansion || len(f.Decisions) != 1 {
+			return ErrCardFactInconsistent
+		}
+		if err := f.ScopeConflict.Validate(); err != nil {
+			return err
+		}
+	}
 	if f.InvocationID == "" {
 		return fmt.Errorf("agent question invocation: %w", ErrCardFactInconsistent)
 	}
@@ -147,6 +156,7 @@ func cloneAgentQuestionFacts(in *AgentQuestionFacts) *AgentQuestionFacts {
 	}
 	out := *in
 	out.Kind = clonePtr(in.Kind)
+	out.ScopeConflict = cloneScopeConflictFacts(in.ScopeConflict)
 	out.Decisions = cloneDecisions(in.Decisions)
 	return &out
 }

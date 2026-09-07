@@ -34,8 +34,8 @@ const (
 	// and the disposition-history floor. Any prose accepted here therefore
 	// composes within GitHub's body ceiling without truncating that prose;
 	// disposition history may shrink from its 48 KiB ceiling to this floor.
-	maxCandidateBodyBytes = maxPullRequestBodyBytes - 3*len("\n\n") -
-		identityMarkerBytes - maxRenderedAdvisoriesBytes - minRenderedDispositionHistoryBytes
+	maxCandidateBodyBytes = maxPullRequestBodyBytes - 4*len("\n\n") -
+		identityMarkerBytes - maxRenderedAdvisoriesBytes - maxRenderedScopeDecisionBytes - minRenderedDispositionHistoryBytes
 )
 
 // IdentityInput is the candidate material a publication identity is
@@ -207,6 +207,9 @@ func ValidateCandidateBody(body string) error {
 	}
 	if containsAdvisoriesMarker(body) {
 		return errors.New("candidate body contains a control-plane advisories marker or heading")
+	}
+	if containsScopeDecisionMarker(body) {
+		return errors.New("candidate body contains a scope decision marker or heading")
 	}
 	return nil
 }

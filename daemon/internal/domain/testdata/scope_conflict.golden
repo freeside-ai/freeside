@@ -1,0 +1,21 @@
+{
+  "version": "freeside.scope-conflict/v1",
+  "paths": [
+    "AGENTS.md"
+  ],
+  "decision": {
+    "question": "Keep scope?",
+    "why_blocking": "Required helper documentation is outside scope.",
+    "options": [
+      {
+        "label": "Keep",
+        "tradeoffs": "Documentation remains stale."
+      },
+      {
+        "label": "Stop",
+        "tradeoffs": "Start a new run."
+      }
+    ],
+    "recommendation": "Stop"
+  }
+}

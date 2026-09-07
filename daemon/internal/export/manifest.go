@@ -128,6 +128,11 @@ func (e Entry) sortKey() []byte {
 // canonical-path gate for hostile manifests, so it fails here rather than
 // reaching the importer looking canonical).
 func validCanonicalPath(p string) bool {
+	return ValidCanonicalPath(p)
+}
+
+// ValidCanonicalPath exposes the manifest's repository-relative path gate.
+func ValidCanonicalPath(p string) bool {
 	return p != "." && fs.ValidPath(p) && utf8.ValidString(p) &&
 		!strings.ContainsRune(p, 0)
 }

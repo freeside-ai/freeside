@@ -171,6 +171,8 @@ type productionPublicationTask struct {
 	// reevaluation is reconstructed from a signet intent. It is never part of
 	// the original publication task row, whose bytes remain immutable.
 	reevaluation *productionReevaluation `json:"-"`
+	// scopeDecision is re-derived from the accepted command on each replay.
+	scopeDecision *domain.ScopeDecisionFacts `json:"-"`
 }
 
 type productionReevaluation struct {
@@ -2004,6 +2006,22 @@ func (w *productionPublicationWorkflow) reconcileTask(
 ) (productionTaskOutcome, error) {
 	binding, err := w.loadBinding(ctx, task)
 	if err != nil {
+		return productionTaskOutcome{}, err
+	}
+	if outcome, err := w.recoverScopeConflictTask(ctx, &task, binding); err != nil {
+		if errors.Is(err, domain.ErrParentKeyMismatch) || errors.Is(err, domain.ErrCardFactInconsistent) {
+			w.deferHeldTask(task)
+			return productionTaskOutcome{}, recordProductionQuarantine(ctx, w.store, w.attention,
+				productionScopeQuarantinePrefix, task.RunID, task.ProjectID, productionQuarantineScopeConflict)
+		}
+		return productionTaskOutcome{}, err
+	} else if outcome != nil {
+		if err := releaseProductionQuarantine(ctx, w.store, w.attention, productionScopeQuarantinePrefix, task.RunID); err != nil {
+			return productionTaskOutcome{}, err
+		}
+		return *outcome, nil
+	}
+	if err := releaseProductionQuarantine(ctx, w.store, w.attention, productionScopeQuarantinePrefix, task.RunID); err != nil {
 		return productionTaskOutcome{}, err
 	}
 	scratch, err := os.MkdirTemp(w.workDir, ".production-publication-")
@@ -5620,8 +5638,9 @@ func productionCandidate(
 		Repo: binding.admission.Base.Repo, BaseRef: binding.admission.Base.BaseRef,
 		HeadSHA: task.HeadSHA, Title: task.Publication.Title,
 		Body: task.Publication.Body, DispositionHistory: dispositionHistory,
-		Advisories: publish.AdvisoryFindings(checkpoint.Authorization.Findings),
-		Artifacts:  checkpoint.Artifacts, RecipeDigest: &recipe,
+		ScopeDecision: task.scopeDecision,
+		Advisories:    publish.AdvisoryFindings(checkpoint.Authorization.Findings),
+		Artifacts:     checkpoint.Artifacts, RecipeDigest: &recipe,
 		InvocationID: task.PublicationID, RunID: task.RunID,
 		AuthorizationID: &authorization, TrustProfileDigest: &profile,
 		AdoptedTrustProfileDigest: adoptedProfile,
@@ -5697,6 +5716,7 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 		DiffStats:        checkpoint.DiffStats,
 		DisplayNames:     names,
 		CommitPlanNotice: checkpoint.Imported.CommitPlanNotice,
+		ScopeDecision:    task.scopeDecision,
 		ItemVersion:      1, InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt: &createdAt,
 		Status:    domain.StatusOpen,

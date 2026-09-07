@@ -85,6 +85,44 @@ public enum AttentionFixtures {
         phase1Types.map { fixture(type: $0) }
     }
 
+    public static func scopeConflictQuestion() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .agent_question)
+        snapshot.item.id = "item-scope-conflict"
+        snapshot.item.pr_head_sha = "cafebabe"
+        snapshot.item.requested_decision = [.answer_without_retry, .stop]
+        snapshot.item.reason = "Required documentation falls outside the approved paths."
+        snapshot.item.agent_question = .init(
+            value1: .init(
+                scope_conflict: .init(
+                    value1: .init(
+                        paths: ["AGENTS.md"], declared_paths: ["devlog/*.md", "src/*.ts"], head_sha: "cafebabe")),
+                stage: .implementation, invocation_id: "inv-scope-conflict", kind: .init(value1: .scope_expansion),
+                decisions: [
+                    .init(
+                        question: "Keep the approved scope?",
+                        why_blocking:
+                            "The refactor renamed the security helper. AGENTS.md still names the old helper and will mislead future work.",
+                        options: [
+                            .init(
+                                label: "Keep scope",
+                                tradeoffs: "Publish the in-scope change and record the documentation as unmet."),
+                            .init(label: "Stop", tradeoffs: "Start a new run with a wider approved path policy."),
+                        ], recommendation: "Stop")
+                ]))
+        return snapshot
+    }
+
+    public static func scopeKeptReady() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .ready_for_final_review)
+        snapshot.item.id = "item-scope-kept-ready"
+        snapshot.item.scope_decision = .init(
+            value1: .init(
+                paths: ["AGENTS.md"], declared_paths: ["devlog/*.md", "src/*.ts"], head_sha: snapshot.item.pr_head_sha,
+                command_id: "scope-decision-1", answer: "Keep scope; update AGENTS.md in a follow-up.",
+                decided_at: createdInstant))
+        return snapshot
+    }
+
     /// A revised approval card beside the initial `spec_revision: null`
     /// fixture. Tests and screenshot surfaces use this to exercise the typed
     /// revision projection without changing the default inbox's stable ids.

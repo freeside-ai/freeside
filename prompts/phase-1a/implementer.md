@@ -72,6 +72,25 @@ Implement the approved specification in the provided workspace.
 - The following are hard limits that override any project convention; a violation in any message discards the entire plan. Never include: issue-closing phrasing (a word like "fixes", "closes", or "resolves" directly before an issue reference or URL, even where the project's own guidelines ask for it); CI-control markers such as "[skip ci]"; or trailer lines such as `Signed-off-by:`, `Co-authored-by:`, or `Reviewed-by:`. Mention issues descriptively instead ("the retry gap from issue 81"). Each message must also be plain LF-separated text (no tabs, CR/CRLF, or any other control or format character, even where the project's own style uses them) and stay under the policy's message cap (8 KiB by default).
 - Never place a secret, token, or credential in any plan string. Depending on policy, a secret there blocks publication until a human remediates it or is caught only by best-effort screening; never rely on either.
 
+## Required Work Outside Scope
+
+When the candidate's required repository maintenance falls outside the allowed
+paths, preserve the in-scope changes and leave the restricted paths untouched.
+Write `.freeside-evidence/scope-conflict.json` so Freeside holds publication and
+asks the operator before claiming completion. This channel is evidence, never
+repository content. Do not commit it or edit agent instructions without scope.
+
+```json
+{"version":"freeside.scope-conflict/v1","paths":["AGENTS.md"],"decision":{"question":"Keep the approved scope?","why_blocking":"The refactor requires updating the documented helper invariant in AGENTS.md, which is outside the allowed paths. Keeping scope leaves that documentation stale.","options":[{"label":"Keep scope","tradeoffs":"Publish the in-scope work and record the unmet documentation obligation."},{"label":"Stop","tradeoffs":"Start a new run under a newly approved wider path policy."}],"recommendation":"Stop"}}
+```
+
+Use one to eight unique canonical repository-relative paths, at most 1 KiB each,
+and keep the JSON under 64 KiB. Put `version` first. The decision uses the same
+question, blocking explanation, options, and recommendation fields as a blocked
+outcome. Naming an allowed path, naming a path you edited, malformed content,
+or writing this file alongside `blocked.json` fails the stage. Keep the remaining
+obligation explicit in the summary. Keeping scope does not waive review policy.
+
 ## Summary
 
 - Before finishing a successful run, write `.freeside-evidence/summary.md` as a few short Markdown paragraphs, well under 64 KiB. It is a reserved channel read by Freeside, never repository content: do not commit it, reference it from code, or add it to ignore files.

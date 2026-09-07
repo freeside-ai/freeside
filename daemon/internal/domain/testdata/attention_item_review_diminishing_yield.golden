@@ -61,6 +61,7 @@
     "terminal_outcome": "clean"
   },
   "commit_plan_notice": null,
+  "scope_decision": null,
   "base_freshness": null,
   "readiness_invalidation": null,
   "review_recovery_binding": null,

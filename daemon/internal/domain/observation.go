@@ -149,6 +149,9 @@ func (s ObservedInvocationStatus) Concluded() bool {
 // contract change. The zero value "" is invalid by design.
 type RunHoldReason string
 
+// HoldScopeConflict waits for an operator decision on required out-of-scope work.
+const HoldScopeConflict RunHoldReason = "scope_conflict"
+
 // Definitive production publication reasons are shared by the workflow that
 // authors a terminal blocked item and the read boundary that authenticates
 // its typed observation. Keeping the prose-to-code map here prevents either
@@ -214,6 +217,7 @@ const (
 
 // AllRunHoldReasons is the single registration point for hold reasons.
 var AllRunHoldReasons = []RunHoldReason{
+	HoldScopeConflict,
 	HoldOperationStopped,
 	HoldBlockingSystemHealth,
 	HoldInputUnavailable,
@@ -234,7 +238,7 @@ var AllRunHoldReasons = []RunHoldReason{
 
 func (r RunHoldReason) valid() bool {
 	switch r {
-	case HoldOperationStopped, HoldBlockingSystemHealth, HoldInputUnavailable,
+	case HoldScopeConflict, HoldOperationStopped, HoldBlockingSystemHealth, HoldInputUnavailable,
 		HoldBackendNotConformant, HoldAdmissionPolicyRefused,
 		HoldBackupProtectionUnready, HoldRepositoryUntrusted,
 		HoldProviderAuthorityUnavailable, HoldAttendedModeActive,

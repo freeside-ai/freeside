@@ -140,6 +140,7 @@
     "terminal_outcome": "clean"
   },
   "commit_plan_notice": "present_but_not_honored",
+  "scope_decision": null,
   "base_freshness": {
     "base_ref": "main",
     "admitted_base_sha": "cafebabe",

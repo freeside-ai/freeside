@@ -345,6 +345,14 @@ struct DecisionChecklistPresentation: Equatable {
         for requirement in detail?.requirements ?? [] {
             rows.append(Self.requirementRow(requirement))
         }
+        if let scope = item.scope_decision?.value1 {
+            rows.append(
+                .init(
+                    label: "Scope kept",
+                    value:
+                        "\(scope.paths.joined(separator: ", ")) left unchanged by operator decision; required work remains unmet",
+                    result: .note))
+        }
         if let notice = item.commit_plan_notice?.value1 {
             rows.append(
                 .init(

@@ -1,14 +1,17 @@
 package domain
 
 import (
+	"fmt"
 	"go/ast"
 	"go/build"
 	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
+	"io"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"slices"
@@ -98,11 +101,31 @@ func currentBuildContext() build.Context {
 }
 
 func newDomainSourceImporter(buildContext build.Context, fset *token.FileSet) *domainSourceImporter {
+	// Resolve dependency export data once through Go's module-aware loader.
+	// The shared path gates reach x/text and x/sys through leaf packages.
+	output, listErr := exec.Command("go", "list", "-export", "-f", "{{.ImportPath}} {{.Export}}", "-deps", "-test", ".").Output()
+	exports := make(map[string]string)
+	if listErr == nil {
+		for line := range strings.SplitSeq(string(output), "\n") {
+			name, path, found := strings.Cut(line, " ")
+			if found {
+				exports[name] = path
+			}
+		}
+	}
 	return &domainSourceImporter{
 		buildContext: buildContext,
 		fset:         fset,
 		packages:     map[string]*types.Package{},
-		standard:     importer.Default(),
+		standard: importer.ForCompiler(fset, "gc", func(importPath string) (io.ReadCloser, error) {
+			if listErr != nil {
+				return nil, listErr
+			}
+			if path, found := exports[importPath]; found {
+				return os.Open(path) //nolint:gosec // compiler export path from the fixed go list command, not external input
+			}
+			return nil, fmt.Errorf("no compiled export for dependency %q", importPath)
+		}),
 	}
 }
 
