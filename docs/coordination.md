@@ -76,7 +76,7 @@ remains independent).
 A claim records occupancy only; authorization comes from scheduling or
 fiat (see Pickup), never from the claim itself. Issue-backed implementation
 work is claimed with an issue-comment lease that hands off to a real PR. The
-planning stage never claims its issue: its guarded-write reservation under
+planning stage never claims its issue: its planning reservation under
 Stages blocks implementation of that issue while planning is active, but does
 not authorize planning or implementation. Direct no-issue work needs no claim:
 it is not eligible for concurrent or multi-session execution, and gets promoted
@@ -233,9 +233,14 @@ invalidate a plan assumption. Implementation executes the plan rather than
 replanning it, but surfaces any such conflict and follows the authoritative
 source.
 
+Apply AGENTS.md's Forge Edits policy throughout planning and recovery. The
+existing reservation coordinates cooperating sessions; it is not a forge lock.
+
 Planning reserves its assigned issue before it can change the authoritative
-contract. Inside the conflict guard, the planner verifies that the issue has no
-active work claim and writes one comment with this marker and visible line:
+contract. The planner reads the issue and its direct conflict set using the
+paginated claim, reservation, and forward/reverse relationship queries under
+Claiming. If no member has an active work claim or planning reservation, write
+one comment on the assigned issue with this marker and visible line:
 
 ```text
 <!-- freeside-planning-reservation:v1 -->
@@ -244,10 +249,11 @@ Plan: #N
 
 The reservation blocks any implementation claim or scheduled pickup for that
 issue and every direct `exclusive-with` partner. It does not authorize either
-stage and is not a work claim. Inside the same guard, the planner verifies no
-member of that direct conflict set has an active work claim or reservation
-before posting it. On a completed plan, revise the reservation in place into
-the single current implementation-plan comment; on a blocked attempt, revise
+stage and is not a work claim. Verify the saved reservation and recheck the
+conflict set before editing the contract. If a competing claim or reservation
+appears, release this reservation and coordinate before continuing. On a
+completed plan, revise the reservation in place into the single current
+implementation-plan comment; on a blocked attempt, revise
 it in place with an explicit release marker. An implementation session pages
 the comments of its entire direct conflict set and stops on an active
 reservation before claiming or starting, even when its scheduling or fiat
@@ -255,9 +261,9 @@ authorization is otherwise valid.
 
 A reservation is active only while unreleased and less than 48 hours past its
 forge-issued `created_at`. Expiry ends the holder's planning-write authority.
-The holder's own reservation deadline is a guarded input, reread immediately
-before every planning write. A write may be issued only when enough reservation
-margin remains to complete that write and its post-write verification before
+Read the holder's reservation and check its deadline immediately before each
+planning write. A write may be issued only when enough reservation margin
+remains to complete that write and its post-write verification before
 the deadline. At or after the deadline the session makes no further planning
 mutation; when the remaining margin is insufficient, it first obtains a fresh
 reservation through the procedure below.
@@ -267,49 +273,45 @@ verification nevertheless completes after expiry, the mutation remains visible
 but unverified. The session makes no further planning mutation and does not
 claim the planning finish line. Its sole post-expiry write is one recovery-only
 comment on the assigned issue reporting the exact partial state; that comment
-is not planning output or authority to continue planning. A successor includes
-the report and every authoritative affected resource in the complete guarded
-reread and recovery before writing.
+is not planning output or authority to continue planning. A successor reads
+the report and the affected authoritative records during recovery before
+writing.
 
 Any owner-authorized `Plan #N` session, whether the original planner resuming
-or a successor, may recover an expired reservation only inside the complete
-guard. The original planner may use the same guard to replace its own
+or a successor, may recover an expired reservation using the same conflict
+checks as a new reservation. The original planner may also replace its own
 unexpired reservation when too little margin remains. In either case: re-read
 the conflict set; stop if a successor claim or reservation is present; revise
 the old reservation comment with an explicit release marker; then create a
-fresh reservation. Existing claim and reservation arbitration decides recovery
-races. Replacing one's own reservation is not a takeover; no session takes over
-another holder's unexpired reservation, and it stops for the active planner or
-owner to release it.
+fresh reservation and verify it as above. Replacing one's own reservation is
+not a takeover; no session takes over another holder's unexpired reservation,
+and it stops for the active planner or owner to release it.
 
-Before any planning write, derive the complete transaction. A Dependencies
-change first discovers every open tracker that lists the unit and every input
-needed to refresh each projection: tracker membership and Implementation order,
-each listed unit's contract and Dependencies, prerequisite merge state, the
-relevant open-PR set, and stacked base/child lifecycle and target state. The
-conflict guard spans that discovery as well as the moving authoritative branch
-reference, issue body, comment collection, current-plan set, the planner's own
-reservation deadline, active planning reservations, and active work-claim
-state. An `exclusive-with` change includes the active claims and planning
-reservations of both proposed endpoints; the planner's own unexpired
-reservation with sufficient write-and-verification margin on its assigned
-issue is the only permitted active endpoint record.
+Before changing Dependencies, discover every open tracker that lists the unit
+and the inputs needed to refresh its projections: tracker membership and
+Implementation order, each listed unit's contract and Dependencies,
+prerequisite merge state, relevant open PRs, and stacked base/child lifecycle
+and target state. An `exclusive-with` change still checks both proposed
+endpoints under Relationship Types. If a required input cannot be verified,
+stop the dependent writes and report the missing evidence. Do not require
+exclusive control of those inputs or an atomic multi-record update.
 
-Acquire and validate the complete guard before the first Dependencies write;
-hold it through the issue-body change, every tracker repair, and post-write
-verification. The guard must provide verified exclusive mutation ownership or
-atomically reject the entire transaction when any guarded input changes. A
-per-resource rejection after the issue change is unsafe because it can leave
-the authoritative Dependencies ahead of its tracker projections. A fresh
-reread alone does not close the cross-resource race. When the complete set
-cannot be discovered or guarded, prepare ready-to-post artifacts from freshly
-reread state but make no planning mutation and report the stage blocked.
+Ground source claims in one immutable default-branch commit and name it in the
+plan. At handoff, check whether the branch advanced and report any advance as
+a freshness gap for the implementing session to assess. A known change to a
+plan assumption requires revalidation; unrelated branch movement does not
+require restarting planning.
 
-Inside an available guard, freshly reread every guarded input immediately
-before writing. Afterward, reread the authoritative representation of every
-intended write while the guard still holds. Any intervening change, incomplete
-result, or mismatch rejects the entire mutation set; report it instead of
-claiming the planning finish line.
+Retire and verify any invalidated current plan before changing its contract.
+Read each target's current text before editing, preserve unrelated content,
+and verify the saved result. Update the authoritative issue first, refresh
+every affected tracker, then publish the single current plan by replacing the
+reservation. These writes are separate and may temporarily disagree. If a
+write fails or conflicts with another edit, reconcile from current records
+within the active reservation and authorized scope. If the work remains
+incomplete, put the successful writes and remaining repairs in the
+reservation's release edit, and do not claim planning complete.
+The expiry rules above govern recovery-only reporting after the deadline.
 
 After implementation, the human merge gate remains unchanged. A session that
 records a verified merge applies the tracker transition and projection refresh
@@ -381,11 +383,14 @@ mutated. No open containing tracker is a valid zero-work result, not an error.
 
 For post-merge reconciliation, `scripts/trackercollect` may collect the merged
 unit's advisory forge evidence into a stamped `snapshot.json` and compact
-`report.md` before judgment begins. The artifacts replace no live gate or
-freshness check. Before any tracker edit, re-enumerate the open-issue, open-PR,
-and claim identities, then compare every retained object's forge identity and
-`updatedAt` stamp with the snapshot; any inventory or retained-object stamp
-change invalidates the snapshot and requires a fresh collection.
+`report.md` before judgment begins. Apply AGENTS.md's Forge Edits policy before
+using them to edit a tracker. Recheck containing-tracker membership, the target
+text, and the unit, dependency, and PR facts that determine the projection.
+Inventory or `updatedAt` changes are reasons to inspect the affected evidence,
+not automatic reasons to repeat the whole collection. Refresh that evidence
+and recompute when contributing facts changed; use a fresh collection when
+needed to recover a reliable baseline. The artifacts replace no required
+claim, relationship, or integration check.
 
 Before final handoff and again immediately before integration, verify every
 `merges-after` prerequisite is merged. A stacked child also remains
@@ -463,7 +468,7 @@ never creates a relationship or authorizes work.
   the current unit's declarations and reverse declarations in every open
   work-unit issue, then rechecks all directly conflicting claims after posting
   its own. Before adding a declaration, the editor fully queries active claims
-  and planning reservations on both endpoints. A planning transaction may keep
+  and planning reservations on both endpoints. A planner may keep
   its own unexpired reservation on its assigned issue; every claim and every
   other active reservation blocks the declaration, and its own reservation
   must have sufficient write-and-verification margin. The editor coordinates
@@ -532,7 +537,10 @@ answer it at a glance. Wave 5's tracker (#651) is the reference example.
   unit's Dependencies field (a rescope, a spine repair, a new unit)
   updates the digest and diagram of every open tracker listing the unit
   in the same operation, mirroring the milestone-plus-listing rule under
-  Work units in AGENTS.md.
+  Work units in AGENTS.md. Apply Forge Edits to these updates: "one operation"
+  means completing the related repairs in this work unit, not an atomic forge
+  transaction. Coordinate with known writers to the same tracker, verify each
+  saved result, and report any repairs that remain incomplete.
   A session that opens, reopens, closes unmerged, or manually retargets a
   tracked unit's PR refreshes every affected projection in the same operation.
   When a merge should retarget stacked children automatically, the session

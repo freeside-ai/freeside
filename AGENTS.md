@@ -106,7 +106,9 @@ gates in this file.
   implementation change is allowed.
 - **Required input:** The assigned issue and freshly resolved default-branch
   state; when changing Dependencies, the complete containing-tracker discovery
-  and guarded projection-input set that `docs/coordination.md` requires.
+  and current projection inputs that `docs/coordination.md` requires. Apply
+  Forge Edits below; an enforced writer lock or atomic transaction is not a
+  planning precondition.
 - **Durable output:** The completed issue-body contract and one current
   implementation-plan comment.
 - **Finish line:** Both outputs verified on the forge, with no claim or
@@ -726,6 +728,33 @@ identifiers, package names, or API vocabulary, which stay functional (the
 attention type is AttentionItem, not SignetItem). The canonical lane table,
 with each lane's owned paths, is in docs/coordination.md.
 
+### Forge Edits
+
+For routine issue, comment, plan, and tracker edits, accept a small risk of
+recoverable concurrent-update errors. Ordinary care is sufficient:
+
+- **Honor existing claims and reservations.** Coordinate with known
+  overlapping writers, including writers to a shared tracker.
+- **Read before editing and verify afterward.** Read the target and relevant
+  baseline, preserve unrelated text, then verify the saved result. Read-back
+  confirms the observed content; it cannot prove no concurrent edit was lost.
+- **Recheck for a reason.** Refresh evidence when a change could affect the
+  result. Don't repeatedly check unchanged state or restart planning for
+  unrelated default-branch movement. This does not relax implementation's
+  base-freshness and integration checks.
+- **Repair from current records.** Reconcile observed conflicts and partial
+  updates within authorized scope. Complete straightforward repairs; ask only
+  when the resolution needs judgment. Report anything still incomplete, and
+  never restore an old whole-body snapshot over someone else's edits.
+- **Do not require unavailable forge guarantees.** Missing writer locks or
+  atomic transactions do not block routine edits. No additional reservation
+  scheme or permanent incomplete-state marker is required.
+- **Keep consequential gates.** When an edit could start conflicting work or
+  materially change authorization, apply the claim, relationship, and
+  authorization checks below. Unverifiable required state and unresolved
+  conflicts still block the dependent action. Never report an incomplete
+  update as complete.
+
 ### Coordination Gates
 
 These bind every session; docs/coordination.md holds the protocol that
@@ -768,7 +797,7 @@ condition is inert until something else tells you to go look.
     run the cross-unit claim arbitration.
   - Adding an `exclusive-with` declaration: the editor checks both endpoints
     and must not edit while any claim or foreign planning reservation is
-    active; a planning transaction may retain only its own unexpired
+    active; a planner may retain only its own unexpired
     reservation, with sufficient write-and-verification margin, on its
     assigned endpoint. The editor waits for the blocking record to release
     before changing the relationship. A declaration that appears during claim
