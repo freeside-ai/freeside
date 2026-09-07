@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 47
+revision: 48
 status: active
 updated: 2026-09-07
 ---
@@ -359,7 +359,7 @@ telemetry and sampled decision audits.
 **AttentionItem** contains:
 
 `id`, `project_id`, immutable `created_at` (nullable only for legacy records),
-`subject {subject_type: run | proposal_batch | project | system, subject_id,
+`subject {subject_type: task | run | proposal_batch | project | system, subject_id,
 run_id?, task_id?}`, `type`, `priority`, `reason`,
 `requested_decision`, `recommendation?`, `evidence_snapshot`, `agent_claims`,
 `artifact_digests`, `decision_surface {epoch, digest}` (the daemon-owned
@@ -401,9 +401,9 @@ Approval is not a universal action.
 | `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. When the failure is classified as provider quota, credential expiry, or capacity, the card also offers retry under a qualified alternate agent, or wait (see the explicit alternate-agent retry below). |
 | `agent_question` | Answer and retry, answer without retry, or stop. |
 | `publish_blocked` | Rerun trust evaluation, inspect the trust failure, or stop. Which publication path a repository uses is repository configuration, never a per-item choice (revision 44). |
-| `ready_for_final_review` | View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. |
-| `run_proposal` | Start, **start with changes**, decline, or snooze. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the run from the exact revised digest. It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
-| `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registry (added in 1B with the registry; first instance: follow-up issue filings in 1B.1, with proposed watches following once their schedule kind lands, Section [5.16](#516-the-durable-scheduler)). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `run_proposal`'s start-with-changes. `run_proposal` remains its own type. |
+| `ready_for_final_review` | Bound to the task. View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. Returning work starts a new run of the same task; any later final-review item still belongs to that task. Evidence and approvals retain their exact run, artifact-digest, and PR-head bindings. |
+| `task_proposal` | Start, **start with changes**, decline, or snooze. Start begins the task workflow from the exact accepted proposal artifact digest. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the task workflow from the exact revised digest. It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
+| `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registry (added in 1B with the registry; first instance: follow-up issue filings in 1B.1, with proposed watches following once their schedule kind lands, Section [5.16](#516-the-durable-scheduler)). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `task_proposal`'s start-with-changes. `task_proposal` remains its own type. |
 | `system_health` | Acknowledge, run doctor, stop unattended operation, or, on the notice a stop raises, resume unattended operation; the rules follow the table. |
 | `blocked` | Consolidates external waits that exceed Section [5.12](#512-workflow-definition-initiators-and-artifacts) thresholds. It is read-only. |
 
@@ -439,13 +439,13 @@ failure-specific, read from recorded facts:
 - An expiry or revocation needs an enrollment with a valid generation.
 - A capacity failure needs a different service route.
 
-Wait leaves the run parked with the same card until the operator returns to it.
+Wait leaves the task parked with the same card until the operator returns to it.
 The offer is stated once here and applies on whichever card surfaces such a
 failure, including a review-side quota or expiry failure; it never widens a
 card's other actions.
 
-Each switch is a new recorded attempt that preserves the original failure and
-its evidence, re-evaluates cost owner and the Section [7](#7-review-policy) review-independence rule
+Each explicit retry creates a new run of the same task. It preserves the
+original failure and its evidence, re-evaluates cost owner and the Section [7](#7-review-policy) review-independence rule
 against the new agent, and continues provider state only where the adapter
 proves compatibility (Section [5.8](#58-control-plane-trust); a different adapter is a fresh invocation).
 
@@ -604,7 +604,20 @@ recommendation-led presentation.
 - A stale submission receives a conflict and the replacement item.
 - Notifications are read-only hints, never authority.
 - A fault class is suggested; one tap corrects it, and it may stay unknown.
-- WIP caps apply to runs and initiatives. The all-work view is Freeside's
+- WIP caps count tasks, not runs, so retries do not inflate the cap. Initiative
+  caps remain separate, and `max_parallel_executions` still counts executions.
+  Membership starts at the task's latest admitted workflow start, including
+  any authorized restart after completion or abandonment. Admission checks
+  the cap at each such start. Count the task once until completion under its
+  current work-unit binding (Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection)) or explicit operator abandonment
+  is recorded after that start in recorded order. Earlier completion and
+  abandonment facts remain history; they cannot release the new start's slot.
+  Specification, implementation, waits, retryable failures, and final review
+  all retain the slot. A retry or return-to-agent keeps it; a terminal run,
+  card dismissal, or stopping an attempt does not release it. Unstarted or
+  snoozed proposals do not count, even if intake reserved a run identity.
+  This projection uses recorded task start, completion, and abandonment
+  facts, not just the newest run's lifecycle. The all-work view is Freeside's
   deterministic initiative projection (Sections [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) and [11](#11-roadmap-build-order-and-coordination)); GitHub Projects
   no longer serves that role (overturned, revision 25).
 
@@ -636,7 +649,7 @@ GitHub  <── reconciliation and publication ──>  freesided
 | **Git/publish** | Owns all GitHub credentials, deterministic external identities, invocation reconciliation, and, in 1B, the EvidencePublisher. |
 | **Store** | Uses SQLite with inbox/outbox and a content-addressed artifact store. Section [5.10](#510-coherent-backup-encrypted-checkpoints) defines encrypted checkpointed backup. |
 | **Sync API** | Serves atomic snapshots with revision, epoch, and invalidation semantics. |
-| **Freeside app** | Provides the SwiftUI macOS and iOS inbox, decision detail, and run timeline using platform-protected caches. |
+| **Freeside app** | Provides the SwiftUI macOS and iOS inbox, decision detail, task list, and task timeline with each run's timeline beneath it, using platform-protected caches. |
 
 **Core authority and replaceable infrastructure.** The daemon and clients own
 application semantics and authentication. Remote reachability (Section [5.2](#52-the-daemon-and-its-supervisor)),
@@ -2110,8 +2123,9 @@ Additional rules:
 
 - `rein` resolves into digested per-run policy with per-key provenance.
 - **Manual initiation uses `freesided submit`.** It registers the task's
-  source as a digest-addressed artifact, creates the task and its
-  specification run, and reserves the deterministic implementation identity.
+  source as a digest-addressed artifact, creates or fetches the task, starts
+  its specification workflow idempotently, and reserves the deterministic
+  implementation identity.
   The implementation run starts only after the specification stage accepts
   its specification and, when configured, the operator approves that
   specification's digest. Its result names the source digest and artifact,
@@ -2119,10 +2133,25 @@ Additional rules:
   identity as separate lanes. The approval claim, and
   then the created run, carries the approved implementation specification
   digest.
-- **Production acceptance identity is explicit.** The first manual submission
+- **Task identity and intake idempotency are separate.** A task receives an
+  opaque minted ID at creation. Its deterministic intake key is scoped to the
+  project: `(project_id, source_digest)` for submit, or
+  `(project_id, repository_id, issue_number)` for label intake. The repository
+  ID is the canonical repository identity, not a display name. Register the
+  task and its unique intake key in one transactional insert-or-fetch.
+  Repeated or concurrent intake of the same key returns the same committed
+  task, including its original minted ID. A rollback or crash before commit
+  leaves neither a task nor its key registered; replay may mint a new ID and
+  commits one pair. Identical sources in different projects have different
+  keys and create distinct tasks. A separate check-then-insert is insufficient.
+- **Production acceptance identity is explicit.** Runs and campaigns retain
+  content-addressed IDs that self-certify the bindings approvals rely on;
+  the opaque task ID does not replace those bindings. The first manual
+  submission
   derives a campaign deterministically from its content-addressed attempt-1
   implementation identity, so an exact repeat of the same submit stays
-  idempotent. A deliberate retry allocates the campaign's next attempt number,
+  idempotent. A deliberate retry stays within the task and allocates the
+  unchanged-specification campaign's next attempt number,
   which only ever increases. It binds the new implementation run to its exact
   terminal parent, the operator's reason, the original source digest, the
   approving specification run, and the unchanged approved specification digest.
@@ -2134,6 +2163,24 @@ Additional rules:
   mints no identity, and a terminal run can only continue as a deliberate new
   attempt. This command-level resume is distinct from provider-session resume
   in Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes) and from AttentionItem actions in Section [4](#4-the-attention-model).
+- **The task name is stored and has a bounded lifecycle.** An operator heading
+  takes precedence and skips the namer. Otherwise the advisory task namer
+  (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) supplies the first name; until a name is
+  available, including when inference fails, the task displays its identifier.
+  The first produced name is stored, never regenerated on read. At
+  specification submission, the specifier may refine an agent-provided name
+  once. It never replaces an operator-provided name. If only the identifier
+  fallback exists, the approved specification may supply the first name at
+  approval. That first name is frozen immediately, with no later automatic
+  refinement. Approval freezes every name; subsequent specification revisions and
+  retries do not rename the task. After approval, only an explicit operator
+  rename changes it. Agent-produced names retain producer-labeled claim
+  provenance. Names grant no execution, approval, or publication authority.
+- **Task name and PR title are separate fields.** Each has its own length
+  bound and validation contract; neither supplies the other's identity or
+  approval binding. The downstream field contracts define those bounds.
+  A task can keep its name as its runs and PRs change. A commit-subject limit
+  is not a task-name or PR-title limit.
 - `auto_start` is bounded by WIP caps. The conservative default is `propose`.
 - Raw findings are immutable. Classification is a versioned annotation.
 - Low-confidence materiality enters the Section [7](#7-review-policy) adjudication residue and
@@ -2158,7 +2205,7 @@ The engine, not an agent, runs deterministic policy jobs:
 - cleanup.
 
 Agents appear where judgment is the work: specifier, implementer, remediator,
-diagnostic, finding classifier, finding adjudicator (Section [7](#7-review-policy)), drift auditor
+diagnostic, task namer, finding classifier, finding adjudicator (Section [7](#7-review-policy)), drift auditor
 (Section [7](#7-review-policy)), reviewer, shadow reviewer, and, later, briefer.
 
 #### Daemon Judgment Calls
@@ -2181,7 +2228,11 @@ Every call site carries exactly one per-site authority contract:
    bounds on attention, compute, and starvation; and tests for extreme outputs
    and repeated calls. Existing classifier ceilings stay verbatim.
    Monotone-conservative annotation is a stricter subtype.
-2. **Advisory-only**: human and advisory-store consumers only.
+2. **Advisory-only**: human and advisory-store consumers only. The task namer
+   is one such site. Its schema-validated, producer-labeled name is a claim
+   for display, never a policy input. The site's budget and fail-safe rules
+   apply; unavailable inference leaves the identifier fallback and does not
+   block the task's workflow.
 3. **Proposal** into the closed effect registry below.
 4. **Bounded choice** among daemon-authored options whose worst-case effects
    were independently bounded before the call; cross-vendor driver selection is
@@ -2254,7 +2305,7 @@ from within a run, the accepted invocation or export identity plus an emission
 ordinal. A deliberate repeat gets a new command ID; retrying the same
 occurrence keeps it. Semantic content never defines occurrence identity. The
 instance ID is the effect identity for idempotence, ledgering, and crash
-reconciliation; content digests bind approvals. Instances: `run_proposal`
+reconciliation; content digests bind approvals. Instances: `task_proposal`
 (existing), follow-up issue filings (Section [5.17](#517-follow-up-issue-filing), 1B.1), and proposed watches
 (a planned extension that lands with its schedule kind and consumer,
 Section [5.16](#516-the-durable-scheduler)). Gates read resolved policy; rein is not a security dial.
@@ -2277,6 +2328,12 @@ databases are disposable read caches. The synchronization contract guarantees:
 - no consequential action until the client validates current state.
 
 #### Revision, Epoch, and Cache Semantics
+
+The sync resources include `Task` beside `Run`. The computed `TaskTimeline`
+groups a task's specification runs, campaigns, and implementation attempts;
+`RunTimeline` retains the exact run's events. Both are projections of recorded
+history, not new execution identities. Task snapshots and timeline reads obey
+the same revision, epoch, and read-transaction guarantees below as run data.
 
 `ServerState {sync_epoch, revision}`
 
@@ -2450,8 +2507,17 @@ fixed Go types and trusted event constructors. 1B implements only the kinds that
 have 1B consumers: the PR-checks deadline, the review-wait threshold, the
 base-advance staleness watch, and the installation poll, plus the permanent
 trusted-config jobs (doctor, janitor; not proposable, no expiry requirement).
-The staleness watch's consumer is the base-freshness fact on
-`ready_for_final_review` items, which stay live until merge or close.
+The base-advance staleness watch is bound to the task, so it follows the work
+across retries. Its consumer is the base-freshness fact on task-bound
+`ready_for_final_review` items. Section [4](#4-the-attention-model)'s item resolution rules still
+apply: returning work resolves that item and starts a new run of the same task.
+After return-to-agent, base-advance checks stay inactive until a new
+final-review item has a bound PR head. That item arms a watch with its own
+exact run, evidence, and head bindings.
+The watch revalidates its current run, evidence, and exact PR head when those
+bindings change; task identity never makes an earlier run's evidence or
+approvals fresh for a later one. Merge or close is still observed by the
+reconciler below.
 
 The doctor, the janitor, and the onboarding pending-install-or-expansion poll
 already run before 1B on plain tickers under their Section [10](#10-operations-and-onboarding) obligations. The
@@ -2525,7 +2591,7 @@ cannot authenticate a historical event (drift-create-revert is assumed
 reachable).
 
 Repository, filing identity, labels, and milestone derive from trusted policy
-and run lineage, never from proposal text. Every agent-controlled textual field
+and task lineage, never from proposal text. Every agent-controlled textual field
 is screened under a versioned ruleset on the Section [5.5](#55-the-ci-trust-boundary)
 commit-message-screening pattern. The effect identity is the proposal-instance
 ID (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). Idempotent check-before-create and crash-after-create
@@ -2560,10 +2626,16 @@ what is now unblocked, and what could run in parallel. Capture hooks record
 work-unit bindings, completion criteria, dependencies, and scope from 1B.0.
 Projection computation and its UI land in 1B.2 (Section [11](#11-roadmap-build-order-and-coordination)).
 
-A merge marks a unit done only through an exact daemon-recorded work-unit
-binding and completion criterion (for example, the bound issue closed by the
-merged PR). Partial, stacked, or related merges do not complete units. The
-frontier projection uses only explicit declarations: dependency edges, declared
+A merge marks a task done only through its current, non-superseded
+daemon-recorded work-unit binding and completion criterion (for example, the
+bound issue closed by the merged PR). Revising or replanning that binding
+supersedes the previous completion binding. A late merge against a superseded
+binding remains history; it cannot complete the current task, release its WIP
+slot, or unblock dependents through task completion.
+The per-run work-unit declaration carries the task's recorded scope,
+dependencies, and completion criterion. Partial, stacked, or related merges
+do not complete tasks. The frontier projection uses only explicit declarations:
+dependency edges, declared
 path scopes, contract serialization, and merge state. It binds to a
 per-resource freshness vector (reconciliation is per-resource; there is no
 global cursor to wait on). It renders per-resource staleness and incomplete
@@ -2950,9 +3022,10 @@ results.
 **Every finding batch is adjudicated before remediation authority is exercised**
 (decider: user; revision 31; #697). Routing findings straight to remediation
 assigned nobody the judgment that decides what a finding means for the approved
-work unit. A credible finding can be required by the accepted outcome yet
-prohibited here by the repository's own work-unit rules. It can be a legitimate
-adjacent improvement. It can contradict the approved specification. Or the
+task. A credible finding can be required by the accepted outcome yet
+prohibited within its declared scope by the repository's own work-unit rules.
+It can be a legitimate adjacent improvement. It can contradict the approved
+specification. Or the
 instructions that govern it can be ambiguous. Sending every finding to a
 remediator risks silent scope expansion. Treating every non-local fix as
 deferrable risks false-ready work, where the acceptance criteria depend on the
@@ -2960,15 +3033,16 @@ deferred fix.
 
 Adjudication distinguishes whether a finding is credible, whether the approved
 outcome requires it, whether the repository's own rules permit the proposed
-remediation to land in this work unit, and which safe route follows.
+remediation to land within this task's declared scope, and which safe route follows.
 
 Each review round with findings produces one immutable, digest-addressed
 FindingAdjudication artifact. The artifact binds the run, the exact finding
 batch and round, the approved specification artifact digest, the trusted
 repository-instruction snapshot digest, and the resolved policy digest. Its
-inputs are the approved work-unit specification, the immutable raw findings with
-their versioned classifications, the proposed remediation surface, the work
-unit's declared path scope, repository instructions from the trusted base, prior
+inputs are the task's approved specification, the immutable raw findings with
+their versioned classifications, the proposed remediation surface, the task's
+declared path scope carried by the bound run's work-unit declaration,
+repository instructions from the trusted base, prior
 disposition history, and any available structured repository facts (Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection)
 capture). The implementer's reasoning history is never an input.
 
@@ -3011,7 +3085,7 @@ cited instruction text and explanations, never in the normalized outcomes.
 The goal-relationship axis states what the approved outcome makes of the
 finding: `required`, `adjacent`, `contradictory`, or `unclear`. The
 work-unit-compatibility axis states whether the repository's rules let the
-proposed remediation land in this work unit. Its values are `allowed`,
+proposed remediation land within the task's declared scope. Its values are `allowed`,
 `work_unit_revision_required`, `separate_work_required`,
 `human_decision_required`, or `unknown`. Validity constraints replace the raw
 cross product. Compatibility is present exactly when the goal relationship is
@@ -3021,7 +3095,7 @@ route is a function of the axes:
 | Goal relationship | Compatibility | Route |
 | --- | --- | --- |
 | `required` | `allowed` | remediator → clean verification → re-review |
-| `required` | `work_unit_revision_required` | park; recommend a specification revision through the `spec_approval` revision path where prose alone must change, or a replan (a new run under a revised work unit) where the trusted work-unit scope itself must change (declared paths, dependencies, serialization), and a same-unit revision cannot alter that scope |
+| `required` | `work_unit_revision_required` | park; recommend a specification revision through the `spec_approval` revision path where prose alone must change, or a replan (a new run under the task's revised declared scope) where that trusted scope itself must change (declared paths, dependencies, serialization), and a specification-only revision cannot alter that scope |
 | `required` | `separate_work_required` | park; recommend prerequisite work (a Section [5.17](#517-follow-up-issue-filing) proposal where it is an issue), wait or stop; never defer-and-ready |
 | `required` | `human_decision_required` | recommendation-led `finding_adjudication` attention |
 | `required` | `unknown` | park plus recommendation-led attention; no scope widening |
@@ -3031,13 +3105,14 @@ route is a function of the axes:
 
 These eight rows are the complete valid vocabulary. Implementation fixtures
 enumerate them, not a sample of the cross product. A necessary finding that is
-incompatible with the current work unit parks or replans the run. The
+incompatible with the task's current declared scope parks or replans the run. The
 constraints make silent deferral structurally unrepresentable, because
 `required` has no route to a deferred disposition.
 
 Permission has a presumptive baseline, not an affirmative-citation requirement.
 Remediation is presumptively `allowed` when its proposed surface stays within
-the work unit's declared paths. And `allowed` is representable only as an
+the task's declared paths carried by this run's work-unit declaration. And
+`allowed` is representable only as an
 engine-derived value. The deterministic declared-path containment check is its
 sole producer. So model output cannot mint permission, and the adjudicator
 structurally cannot infer permission to exit the declared surface.
@@ -3481,7 +3556,7 @@ Actions and lifecycle live in Section [4](#4-the-attention-model); presentation 
 | `agent_question` | The question as a labeled agent claim, self-contained: what is blocked and any enumerated options. Answering never requires the transcript. | The agent's supporting context. |
 | `publish_blocked` | The trust rule that failed (daemon fact). | The failing artifact or scan detail. |
 | `ready_for_final_review` | The ask, a labeled change summary, and daemon verification verdicts with diff stats. | Digested review history, then the evidence packet, and the PR link last (navigation, not resolution). |
-| `run_proposal` | One line per candidate: intent plus expected cost and scope facts. | Full proposal artifact; “start with changes” shows the revised-digest diff. |
+| `task_proposal` | One line per candidate: intent plus expected cost and scope facts. | Full proposal artifact; “start with changes” shows the revised-digest diff. |
 | `effect_proposal` | The requested effect as a daemon fact from the validated artifact (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)): kind, daemon-resolved target, and bounded parameters. Agent cost, safety, and scope assertions are labeled claims, never merged into the fact line. | Full proposal artifact; “approve with changes” shows the revised-digest diff. |
 | `system_health` | The diagnostic fact and the unattended capability it impairs. | Doctor output. |
 | `blocked` | What is waited on and since when. Daemon facts only; no agent prose. | The waiting run's context. |
@@ -3573,9 +3648,9 @@ Build the installer only after the underlying interfaces survive real use. The
 | `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If the installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls. A callback or `--resume` reopens the same review after approval. |
 | `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe); the probe rules follow the table. |
 | `freesided auth add`, `auth adopt`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided identity and enrollment lifecycle (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); each subcommand's rules follow the table. |
-| `freesided submit` | Registers a manually initiated task from its source, starts specification, and reserves its future implementation run. |
-| `freesided reattempt --parent-run <run>` or `--campaign <campaign>` | Requires an operator reason and allocates the campaign's next attempt from an already approved specification. It refuses a live parent. |
-| `freesided resume --run <run>` | Reattaches observation to one exact non-terminal run without creating a replacement. It refuses terminal runs and points to `reattempt`. |
+| `freesided submit` | Creates or fetches a task from its project-scoped source key, starts its specification workflow idempotently, and reserves its future implementation run. |
+| `freesided reattempt --task <task>`, `--parent-run <run>`, or `--campaign <campaign>` | Requires an operator reason and allocates the campaign's next attempt from an already approved specification. The task selector resolves to the task's current campaign and its exact parent run; it refuses a live parent. |
+| `freesided resume --task <task>` or `--run <run>` | Reattaches observation to one exact non-terminal run without creating any identity. The task selector resolves to its current run. It refuses terminal runs and points to `reattempt`. |
 
 **`freesided doctor` probe rules.** The integrity probe extends to the Section
 [5.4](#54-credential-modes-egress-profiles-and-concurrency) account probe only after an empirical spike proves that the Codex app-server
@@ -3884,8 +3959,8 @@ Flow:
 `Claude → proven credential mode → proven ward handoff → gauntlet → clean
 verifier → audited publication → iPhone`
 
-The run starts through `freesided submit` under manually configured unattended
-preconditions.
+`freesided submit` creates or fetches the task and starts its specification run
+under manually configured unattended preconditions.
 
 Exit requires:
 
@@ -3954,7 +4029,7 @@ Phase 1B adds:
   units behind the admitted-agent contract (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). They are sequenced
   after the 1A.2 exit and behind the #401 pre-adoption gates, closed
   2026-08-02. Selection is a lineup line, never silent; and
-- the run timeline screen.
+- the task timeline screen, with each run's timeline beneath it.
 
 Precondition: the verified 1A exit. 1B proceeds in three internal exits.
 
@@ -3965,14 +4040,15 @@ Freeside-invoked binding. It also covers the Section [5.13](#513-deterministic-c
 contracts, with the finding classifier as the first ceiling-bounded annotation
 site and the diagnostic as the first advisory-only site. It covers the Section [6](#6-verification)
 verification state algebra and the Section [5.16](#516-the-durable-scheduler) scheduler with the four
-consumer-backed timer kinds. It covers the runs list (project-filterable,
-showing attached watches and deadlines) with the run timeline drill-down, and
+consumer-backed timer kinds. It covers the tasks list (project-filterable,
+showing attached watches and deadlines) with the task timeline and each run's
+timeline beneath it, and
 Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture hooks recording from the start.
 
 Contract sequencing inside 1B.0: the scheduler and the Section [7](#7-review-policy) review-stage
 chain (#427 and its substrate) gate first real-backlog use (revision 26,
 amending revision 25's scheduler-only statement). The state algebra and the
-effect-registry retrofit of `run_proposal` land within 1B.0 behind them,
+effect-registry retrofit of `task_proposal` land within 1B.0 behind them,
 serialized per contract discipline but off the loop's critical path.
 Real-backlog use begins during 1B.0 as soon as the minimal loop stands, at the
 close of wave 4 (this section's coordination table).
@@ -4224,29 +4300,45 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 47 ("Task vocabulary"):
+Revision 48 ("Task Scope, Identity, and Naming"):
 
-1. **A task is the unit of requested work, and runs belong to it**
-   (Sections [1](#1-what-freeside-is), [4](#4-the-attention-model), [5.12](#512-workflow-definition-initiators-and-artifacts), and [10](#10-operations-and-onboarding)): the clients showed every
-   execution as a run named by its stage, project, and issue number or
-   content hash, so two pieces of work in one project read alike and a
-   specification run, its implementation, and each retry appeared as
-   unrelated rows. Section [1](#1-what-freeside-is) now defines the task once: a requested piece
-   of work tracked from intake through specification, execution, review, and
-   completion, whose identity persists across specification revisions and
-   retries. A run is an execution belonging to a task; a campaign groups
-   implementation attempts against one unchanged approved specification, a
-   task spans campaigns as that specification changes, and a campaign stays
-   execution history rather than a concept the clients lead with, named by
-   the Section [10](#10-operations-and-onboarding) retry selector; an attention
-   item optionally references its task through `task_id`. The same word is
-   used in navigation, documentation, the CLI, the domain, and the API.
-   Rejected:
-   "work item", the plan's prior term, accurate but clunky as a navigation
-   label and already overloaded by the per-run work-unit declaration; and
-   merging a task's runs into one run, which would break the
-   content-addressed run identity that approvals bind to.
-   (User; devlog 2026-09-07-0921-task-vocabulary.md.)
+1. **Task scope follows the undertaking across runs** (Sections [4](#4-the-attention-model),
+   [5.12](#512-workflow-definition-initiators-and-artifacts)–[5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection),
+   [7](#7-review-policy), [9](#9-comprehension), [10](#10-operations-and-onboarding), and
+   [11](#11-roadmap-build-order-and-coordination)): attention subjects can name a task;
+   final-review items and base-advance watches follow it across retries.
+   Proposals use `task_proposal`, WIP counts tasks, and task lineage carries
+   follow-up filing and completion. Sync names `Task` and `TaskTimeline`;
+   retry/resume gain task selectors.
+   WIP counts started tasks through completion or explicit abandonment,
+   including waits and final review; unstarted proposals do not reserve slots.
+   Run-bound evidence, approvals, clocks,
+   execution caps, the `blocked` item, and historical wave rows keep their
+   existing scope. The `work_unit_revision_required` enum keeps its name;
+   its prose refers to the task's declared scope carried by a run.
+   (User; #1206; devlog 2026-09-07-1136-task-design-decisions.md.)
+2. **Task identity is opaque; intake idempotency is transactional**
+   (Section [5.12](#512-workflow-definition-initiators-and-artifacts)): mint a task ID
+   and register its project-scoped intake key in one insert-or-fetch
+   transaction. Repeated and concurrent intake converge, rollback leaves no
+   pair, and identical sources in different projects remain separate.
+   Rejected: content-addressing the mutable undertaking and check-then-insert
+   intake. Runs and campaigns retain their content-addressed approval
+   bindings; a revised approved specification starts a new campaign under
+   the same task.
+   (User; #1206; devlog 2026-09-07-1136-task-design-decisions.md.)
+3. **Names are stored, advisory, and stable**
+   (Sections [5.12](#512-workflow-definition-initiators-and-artifacts) and
+   [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)): prefer
+   the operator heading, otherwise use the advisory namer with an identifier
+   fallback. The specifier may refine an agent name once; operator names
+   survive. Approval freezes the name, after which only an explicit operator
+   rename changes it. Task-name and PR-title fields have separate bounds and
+   carry no identity or approval authority. Rejected: repeated automatic
+   renaming and sharing one task-name/PR-title field. This settles the source
+   note's deferred naming choice without rewriting that note.
+   (User; #1206; devlog 2026-09-07-1136-task-design-decisions.md.)
+
 ## 14. Risks
 
 | Risk | Current response |

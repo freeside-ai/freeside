@@ -1548,3 +1548,29 @@ Revision 46 ("Portable mode and routed-dispute placement"):
    Rejected: wave 8's chain directly after #1048, which buys a clean exit
    claim at the cost of the binding constraint.
    (User; devlog 2026-09-01-2231-portable-mode-and-dispute-placement.md; #1016.)
+
+## Revision 47
+
+Revision 47 ("Task vocabulary"):
+
+1. **A task is the unit of requested work, and runs belong to it**
+   (Sections [1](../plan.md#1-what-freeside-is), [4](../plan.md#4-the-attention-model), [5.12](../plan.md#512-workflow-definition-initiators-and-artifacts), and [10](../plan.md#10-operations-and-onboarding)): the clients showed every
+   execution as a run named by its stage, project, and issue number or
+   content hash, so two pieces of work in one project read alike and a
+   specification run, its implementation, and each retry appeared as
+   unrelated rows. Section [1](../plan.md#1-what-freeside-is) now defines the task once: a requested piece
+   of work tracked from intake through specification, execution, review, and
+   completion, whose identity persists across specification revisions and
+   retries. A run is an execution belonging to a task; a campaign groups
+   implementation attempts against one unchanged approved specification, a
+   task spans campaigns as that specification changes, and a campaign stays
+   execution history rather than a concept the clients lead with, named by
+   the Section [10](../plan.md#10-operations-and-onboarding) retry selector; an attention
+   item optionally references its task through `task_id`. The same word is
+   used in navigation, documentation, the CLI, the domain, and the API.
+   Rejected:
+   "work item", the plan's prior term, accurate but clunky as a navigation
+   label and already overloaded by the per-run work-unit declaration; and
+   merging a task's runs into one run, which would break the
+   content-addressed run identity that approvals bind to.
+   (User; devlog 2026-09-07-0921-task-vocabulary.md.)
