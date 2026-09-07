@@ -52,9 +52,10 @@ import Testing
             $0.run.id == RunFixtures.legacyRunID
         }!.run
 
+        let now = RunFixtures.screenshotInstant
         #expect(RunDisplay.title(active) == "Implementation · Round 2")
-        #expect(RunDisplay.metaLine(active).hasPrefix("freeside · #724 · started "))
-        #expect(RunDisplay.metaLine(legacy) == "freeside")
+        #expect(RunDisplay.metaLine(active, now: now).hasPrefix("freeside · #724 · last active "))
+        #expect(RunDisplay.metaLine(legacy, now: now) == "freeside")
         #expect(RunDisplay.secondaryLine(active) == .hold("Verification Findings"))
         #expect(RunDisplay.secondaryLine(ready) == .milestone("Publication Ready"))
         #expect(RunDisplay.secondaryLine(legacy) == .milestone("No milestone recorded"))
@@ -213,29 +214,128 @@ import Testing
     #endif
 
     @Test func labelsFallBackWithoutDisplayNames() {
+        let now = RunFixtures.screenshotInstant
         var run = RunFixtures.defaultRuns()[0].run
         run.created_at = nil
+        run.last_activity_at = nil
         run.display_names = nil
         #expect(RunDisplay.title(run) == "Implementation · Round 2")
-        #expect(RunDisplay.metaLine(run) == "freeside")
+        #expect(RunDisplay.metaLine(run, now: now) == "freeside")
         run.display_names = .init(
             value1: .init(
                 project: .init(text: "Project name", source: .name), work_unit: .init(text: "#12", source: .name)))
-        #expect(RunDisplay.metaLine(run) == "Project name · #12")
+        #expect(RunDisplay.metaLine(run, now: now) == "Project name · #12")
         run.display_names?.value1.project.text = ""
         run.display_names?.value1.work_unit.text = ""
-        #expect(RunDisplay.metaLine(run) == "freeside")
+        #expect(RunDisplay.metaLine(run, now: now) == "freeside")
     }
 
-    @Test func metaLineCarriesTheStartClockTimeAndTitleFallsBackToTheProject() {
+    @Test func titleFallsBackToTheProjectWithoutStages() {
         var run = RunFixtures.defaultRuns()[0].run
-        let started = Date(timeIntervalSince1970: 1_767_323_045)
-        run.created_at = started
-        let clock = started.formatted(date: .omitted, time: .shortened)
-        #expect(RunDisplay.metaLine(run) == "freeside · #724 · started \(clock)")
-
         run.stages = []
         #expect(RunDisplay.title(run) == "freeside")
+    }
+
+    /// The observed #1184 case: a run submitted on day 1 whose last
+    /// observation lands on day 2 sorts above a run submitted later on day 2
+    /// with an earlier last observation. That is the comparator working as
+    /// designed, so the order is pinned.
+    @Test func lateObservationLiftsAnEarlierStartedRunAndTheCardsShowIt() {
+        let now = MetaLineClock.now
+        var runs = MetaLineClock.threeRuns()
+        runs[0].run.created_at = MetaLineClock.instant(day: 4, hour: 14, minute: 25)
+        runs[0].run.last_activity_at = MetaLineClock.instant(day: 6, hour: 3, minute: 1)
+        runs[1].run.created_at = MetaLineClock.instant(day: 6, hour: 2, minute: 26)
+        runs[1].run.last_activity_at = MetaLineClock.instant(day: 6, hour: 2, minute: 49)
+        runs[2].run.created_at = MetaLineClock.instant(day: 4, hour: 14, minute: 35)
+        runs[2].run.last_activity_at = MetaLineClock.instant(day: 4, hour: 15, minute: 14)
+
+        let ordered = RunDisplay.sortedRuns(runs.reversed())
+
+        #expect(ordered.map(\.run.id) == runs.map(\.run.id))
+        let activity = ordered.compactMap(\.run.last_activity_at)
+        #expect(activity.count == runs.count)
+        #expect(activity == activity.sorted(by: >))
+        // Each card names the instant that decided its place, so the order
+        // reads off the list rather than only out of the comparator.
+        let shown = ordered.map { RunDisplay.metaLine($0.run, now: now) }
+        #expect(Set(shown).count == shown.count)
+    }
+
+    @Test func lastActiveIsRelativeUnderADayAndDatedFromADayOn() throws {
+        let now = MetaLineClock.now
+        func shown(_ secondsAgo: TimeInterval) throws -> String {
+            var run = try MetaLineClock.run()
+            run.last_activity_at = now.addingTimeInterval(-secondsAgo)
+            return RunDisplay.metaLine(run, now: now)
+        }
+
+        #expect(try shown(30 * 60) == "freeside · #724 · last active 30m ago")
+        #expect(try shown(86_400 - 60) == "freeside · #724 · last active 23h ago")
+        // The dated form's text is locale-dependent, so assert its shape.
+        let dated = try shown(86_400)
+        #expect(dated.hasPrefix("freeside · #724 · last active "))
+        #expect(!dated.hasSuffix(" ago"))
+    }
+
+    @Test func datedCardsSeparateTheSameClockTimeOnDifferentDays() throws {
+        let now = MetaLineClock.now
+        var earlier = try MetaLineClock.run()
+        earlier.last_activity_at = MetaLineClock.instant(day: 4, hour: 15, minute: 14)
+        var later = try MetaLineClock.run()
+        later.last_activity_at = MetaLineClock.instant(day: 5, hour: 15, minute: 14)
+
+        #expect(RunDisplay.metaLine(earlier, now: now) != RunDisplay.metaLine(later, now: now))
+    }
+
+    @Test func anUnobservedRunShowsNoTimeSegment() throws {
+        let now = MetaLineClock.now
+        var run = try MetaLineClock.run()
+        run.last_activity_at = nil
+
+        #expect(RunDisplay.metaLine(run, now: now) == "freeside · #724")
+        #expect(RunDisplay.exactActivityTimestamp(run) == nil)
+    }
+
+    @Test func hoverCarriesTheExactActivityInstant() throws {
+        var run = try MetaLineClock.run()
+        let activity = MetaLineClock.instant(day: 6, hour: 3, minute: 1)
+        run.last_activity_at = activity
+
+        #expect(RunDisplay.exactActivityTimestamp(run) == activity.formatted(.iso8601))
+    }
+
+    /// One fixed clock and UTC instants for the meta-line and ordering
+    /// tests, so neither the wall clock nor the host time zone can move
+    /// a case across the 24-hour boundary.
+    private enum MetaLineClock {
+        /// Two days past the newest instant these tests use, so every
+        /// fixed-date case lands on the dated side of the 24-hour boundary
+        /// and the relative cases set their own offsets from here.
+        static let now = instant(day: 8, hour: 14, minute: 0)
+
+        /// 2026-09-01T00:00:00Z, offset arithmetically so the instants stay
+        /// UTC whatever the host time zone is.
+        private static let september = Date(timeIntervalSince1970: 1_788_220_800)
+
+        static func instant(day: Int, hour: Int, minute: Int) -> Date {
+            september.addingTimeInterval(
+                TimeInterval((day - 1) * 86_400 + hour * 3_600 + minute * 60))
+        }
+
+        static func run() throws -> Components.Schemas.Run {
+            try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID })
+                .run
+        }
+
+        /// Three distinctly identified snapshots to order.
+        static func threeRuns() -> [Components.Schemas.RunSnapshot] {
+            (0..<3).map { index in
+                var snapshot = RunFixtures.defaultRuns()[0]
+                snapshot.run.id = "run-\(index)"
+                return snapshot
+            }
+        }
     }
 
     @Test func stageRailFollowsExistingStagesAndOutcome() throws {

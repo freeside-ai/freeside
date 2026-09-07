@@ -932,7 +932,7 @@
                             runs: runs,
                             schedules: schedules,
                             selection: .constant(activeRun.run.id)
-                        ).screenshotContent()
+                        ).screenshotContent(now: RunFixtures.screenshotInstant)
                     )))
             for scope in [RunListFilter.Scope.finished, .all] {
                 surfaces.append(
@@ -944,7 +944,7 @@
                                 schedules: schedules,
                                 selection: .constant(nil),
                                 initialScope: scope
-                            ).screenshotContent()
+                            ).screenshotContent(now: RunFixtures.screenshotInstant)
                         )))
             }
             for colorScheme in [ColorScheme.light, .dark] {
@@ -967,6 +967,7 @@
                                                 && $0.schedule.status == .armed
                                         },
                                         isSelected: isSelected,
+                                        now: RunFixtures.screenshotInstant,
                                         differentiateWithoutColorOverride: true)
                                 }
                             }
@@ -987,7 +988,8 @@
                                 $0.schedule.run_id == activeRun.run.id
                                     && $0.schedule.status == .armed
                             },
-                            isSelected: true
+                            isSelected: true,
+                            now: RunFixtures.screenshotInstant
                         )
                         .padding()
                     )))

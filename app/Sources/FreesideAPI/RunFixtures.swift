@@ -8,6 +8,11 @@ public enum RunFixtures {
     public static let legacyRunID = "run-freeside-540"
     public static let completedRunID = "run-freeside-640"
 
+    /// A fixed capture clock: five minutes past the newest fixture
+    /// observation, so run cards render their relative last-active text
+    /// deterministically instead of against the wall clock.
+    public static let screenshotInstant = date(2_700)
+
     public static func defaultRuns() -> [Components.Schemas.RunSnapshot] {
         let timelines = Dictionary(
             uniqueKeysWithValues: defaultTimelines().map { ($0.run_id, $0) })
