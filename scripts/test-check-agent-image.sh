@@ -261,6 +261,10 @@ if [ "${1:-}" = rig ]; then
 			exit 1
 		fi
 		printf '%s\n' 'rig-hold' >>"${STUB_DIR:?}/lifecycle.log"
+		printf '%s\n' "$BASHPID" >"${STUB_DIR:?}/holder.pid"
+		if [[ "${GO_STUB_RIG_HOLD_MODE:-ok}" == acquire-hang ]]; then
+			while :; do sleep 1; done
+		fi
 		printf '%s\n' '{"token":"test-token","manifest":{"version":1,"owner":{"user":"test","host":"host","pid":1},"acquired_at":"2026-08-15T12:00:00Z","resources":{"state_root":"/state","database_path":"/state/freeside.db","listen_address":"127.0.0.1:0","seed_root":"/seed","containers":[]},"token_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}'
 		printf '%s\n' "$*" >"${STUB_DIR:?}/rig-hold.args"
 		if [ "${GO_STUB_RIG_HOLD_MODE:-ok}" = release-fail ]; then
@@ -283,6 +287,13 @@ if [ "${1:-}" = rig ]; then
 		;;
 	check)
 		;;
+	recover)
+		printf '%s\n' rig-recover >>"${STUB_DIR:?}/lifecycle.log"
+		if kill -0 "$(cat "${STUB_DIR:?}/holder.pid")" 2>/dev/null ||
+			kill -0 "$(cat "${STUB_DIR:?}/daemon.pid")" 2>/dev/null; then
+			exit 1
+		fi
+		;;
 	resource)
 		case "$*" in
 		*"-name state-root"*) printf '%s\n' "${FREESIDE_REAL_RUN_STATE_ROOT:?}" ;;
@@ -294,7 +305,7 @@ if [ "${1:-}" = rig ]; then
 		;;
 	cleanup)
 		printf '%s\n' 'rig-cleanup' >>"${STUB_DIR:?}/lifecycle.log"
-		printf '%s\n' "$*" >"${STUB_DIR:?}/rig-cleanup.args"
+	printf '%s\n' "$*" >"${STUB_DIR:?}/rig-cleanup.args"
 		if [ "${GO_STUB_RIG_CLEANUP_MODE:-ok}" = hang ]; then
 			trap '' TERM INT
 			while :; do sleep 1; done
@@ -383,6 +394,8 @@ if [ "${1:-}" = follow ]; then
 	exit 0
 fi
 printf '%s\n' 'daemon-start' >>"${STUB_DIR:?}/lifecycle.log"
+printf '%s\n' "$BASHPID" >"${STUB_DIR:?}/daemon.pid"
+printf '%s\n' "$PPID" >"${STUB_DIR:?}/harness.pid"
 printf '%s\n' "$@" >"${STUB_DIR:?}/daemon.args.tmp"
 mv "${STUB_DIR:?}/daemon.args.tmp" "${STUB_DIR:?}/daemon.args"
 : >"${STUB_DIR:?}/daemon.args.ready"
@@ -404,6 +417,12 @@ FREESIDED_STUB
 	if [ "${GO_STUB_MODE:-}" != lifecycle ]; then
 		exit 97
 	fi
+	if grep -q '^daemon-stop$' "${STUB_DIR:?}/lifecycle.log"; then
+		echo 'endpoint stopped before final verification' >&2
+		exit 95
+	fi
+	kill -0 "$(cat "${STUB_DIR:?}/daemon.pid")"
+	printf '%s\n' final-verify >>"${STUB_DIR:?}/lifecycle.log"
 	if [ "${GO_STUB_VERIFY_MODE:-success}" = specification-failure-final ] &&
 		[[ " ${*} " == *" -v "* ]]; then
 		[ "${FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID:-}" = spec-run ]
@@ -439,10 +458,41 @@ FREESIDED_STUB
 		fi
 		;;
 	pending|approval-wait) ;;
-	success) ;;
+	success|walkthrough-delay|interrupt-term|interrupt-int|daemon-loss|holder-loss) ;;
+	skip) echo '--- SKIP: TestRealWorkItemCompletesProductionPipeline'; exit 0 ;;
+	missing-marker) echo 'PASS'; exit 0 ;;
 	*) exit 96 ;;
 	esac
 	printf '%s\n' 'real production pipeline verified: PR #7'
+	# A separate operator requests completion only after the foreground owner
+	# enters walkthrough. Do not make verifier success itself end the session.
+	(
+		for _ in $(seq 1 300); do
+			for session in "${STUB_DIR:?}"/real-work-session.*; do
+				[[ -f "$session/status" ]] || continue
+				if [[ "$(cat "$session/status")" == walkthrough ]]; then
+					kill -0 "$(cat "${STUB_DIR:?}/daemon.pid")" || exit 1
+					printf '%s\n' walkthrough >>"${STUB_DIR:?}/lifecycle.log"
+					case "${GO_STUB_VERIFY_MODE:-success}" in
+					walkthrough-delay)
+						sleep 3
+						[[ "$(cat "$session/status")" == walkthrough ]] || exit 1
+						kill -0 "$(cat "${STUB_DIR:?}/daemon.pid")" || exit 1
+						;;
+					interrupt-term) kill -TERM "$(cat "${STUB_DIR:?}/harness.pid")"; exit 0 ;;
+					interrupt-int) kill -INT "$(cat "${STUB_DIR:?}/harness.pid")"; exit 0 ;;
+					daemon-loss) kill -TERM "$(cat "${STUB_DIR:?}/daemon.pid")"; exit 0 ;;
+					holder-loss) kill -TERM "$(cat "${STUB_DIR:?}/holder.pid")"; exit 0 ;;
+					esac
+					bash "$session/real-work-session.sh" complete "$session" || exit 1
+					bash "$session/real-work-session.sh" complete "$session" || exit 1
+					exit 0
+				fi
+			done
+			sleep 0.01
+		done
+		exit 1
+	) </dev/null >/dev/null 2>&1 &
 	;;
 *)
 	exit 98
@@ -450,6 +500,18 @@ FREESIDED_STUB
 esac
 GO_STUB
   chmod +x "$stub_bin/go"
+	cat >"$stub_bin/launchctl" <<'LAUNCHCTL_STUB'
+#!/usr/bin/env bash
+if [[ "$1" == enable ]]; then
+	printf '%s\n' restore >>"${STUB_DIR:?}/lifecycle.log"
+fi
+exit 0
+LAUNCHCTL_STUB
+	cat >"$stub_bin/curl" <<'CURL_STUB'
+#!/usr/bin/env bash
+printf '%s\n' '{"status":"ok"}'
+CURL_STUB
+	chmod +x "$stub_bin/launchctl" "$stub_bin/curl"
 	cat >"$stub_bin/git" <<'GIT_STUB'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -532,7 +594,7 @@ SLEEP_STUB
 		FREESIDE_REAL_RUN_RUN_ID=stale-generic-run \
 		FREESIDE_REAL_RUN_INVOCATION=stale-generic-invocation \
     "$REAL_RUN" "$input_dir/spec.md" "$input_dir/policy.json" \
-    "$input_dir/publication.json" 2>&1)
+    "$input_dir/publication.json" </dev/null 2>&1)
   RC=$?
   set -e
 }
@@ -1161,10 +1223,64 @@ else
 fi
 rig_lifecycle=$(tr '\n' ' ' <"$CASE_DIR/lifecycle.log")
 case "$rig_lifecycle" in
-*"rig-hold identity-seed preflight submit daemon-start daemon-stop rig-cleanup rig-release "*)
+*"rig-hold identity-seed preflight submit daemon-start final-verify walkthrough daemon-stop rig-cleanup rig-release restore "*)
 	pass=$((pass + 1)) ;;
 *) report_failure "rig lifecycle was out of order: $rig_lifecycle" ;;
 esac
+
+begin_case "46a skipped final verification never reaches walkthrough"
+run_real_work lifecycle current ok ok skip
+assert_rc 1
+assert_lacks 'Walkthrough: run='
+
+begin_case "46b missing final marker never reaches walkthrough"
+run_real_work lifecycle current ok ok missing-marker
+assert_rc 1
+assert_lacks 'Walkthrough: run='
+
+begin_case "46c SIGTERM ends the owner with failure after cleanup"
+run_real_work lifecycle current ok ok interrupt-term
+assert_rc 143
+assert_contains 'logs and recovery inputs retained'
+
+begin_case "46d SIGINT ends the owner with failure after cleanup"
+run_real_work lifecycle current ok ok interrupt-int
+assert_rc 130
+
+begin_case "46e daemon loss fails the walkthrough"
+run_real_work lifecycle current ok ok daemon-loss
+assert_rc 1
+assert_contains 'daemon or rig lost during walkthrough'
+
+begin_case "46f dead holder uses checked stale recovery"
+run_real_work lifecycle current ok ok holder-loss
+assert_rc 1
+assert_contains 'checking stale recovery'
+if grep -qx rig-recover "$CASE_DIR/lifecycle.log"; then
+	pass=$((pass + 1))
+else
+	report_failure 'dead holder did not use rig recover'
+fi
+
+begin_case "46g EOF and production deadline do not complete the walkthrough"
+export FREESIDE_REAL_RUN_TIMEOUT_SECONDS=2
+run_real_work lifecycle current ok ok walkthrough-delay
+assert_rc 0
+assert_contains 'Walkthrough: run=impl-run'
+
+begin_case "46h acquisition timeout retains usable recovery inputs"
+run_real_work lifecycle current acquire-hang
+assert_rc 1
+assert_contains 'timed out waiting for the production rig lease'
+session=$(find "$CASE_DIR" -maxdepth 1 -type d -name 'real-work-session.*' | head -1)
+assert_exists "$session/state-root"
+assert_exists "$session/rig-timeout"
+assert_exists "$session/freesided"
+if [[ "$(cat "$session/status")" == recovery-required ]]; then
+	pass=$((pass + 1))
+else
+	report_failure 'acquisition timeout did not retain recovery-required status'
+fi
 
 begin_case "47 a legacy production-only replay remains runnable across upgrade"
 run_real_work lifecycle legacy
