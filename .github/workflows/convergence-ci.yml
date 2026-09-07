@@ -46,7 +46,10 @@ jobs:
           cache: false
       # Same two Go caches as daemon-ci.yml, which carries the rationale:
       # modules keyed on go.sum alone, build output on a rolling key so
-      # the harness build does not recompile from scratch every run.
+      # the harness build does not recompile from scratch every run. The
+      # build cache is split into restore here and a push-only "Save Go
+      # build output" step at the end of the job (#1161); see
+      # daemon-ci.yml for why.
       - name: Resolve Go cache paths
         id: go-cache
         run: |
@@ -59,7 +62,8 @@ jobs:
           key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
           restore-keys: go-mod-${{ runner.os }}-
       - name: Cache Go build output
-        uses: actions/cache@v4
+        id: go-build-cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ steps.go-cache.outputs.build }}
           key: go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
@@ -80,3 +84,11 @@ jobs:
           restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
       - name: Run the convergence pass
         run: bash scripts/check.sh convergence
+      # Last step so a failed job saves nothing; push-only so PR runs are
+      # restore-only. See daemon-ci.yml for the full rationale.
+      - name: Save Go build output
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
