@@ -28,3 +28,37 @@ func TestRunSnapshotLifecycleAndSupersession(t *testing.T) {
 		}
 	}
 }
+
+// TestBoundImplementationRun pins the specification hand-off rule (#1183): a
+// specification run whose production attempt is approved is superseded by that
+// attempt's implementation run, and nothing else is.
+func TestBoundImplementationRun(t *testing.T) {
+	const specRun, implRun = domain.RunID("run-spec"), domain.RunID("run-impl")
+	approved := domain.ProductionAttempt{
+		SpecificationRunID: specRun, ImplementationRunID: implRun, ApprovedSpecDigest: "sha256:spec",
+	}
+	unapproved := domain.ProductionAttempt{SpecificationRunID: specRun, ImplementationRunID: implRun}
+	foreign := domain.ProductionAttempt{
+		SpecificationRunID: "run-other", ImplementationRunID: implRun, ApprovedSpecDigest: "sha256:spec",
+	}
+	cases := []struct {
+		name    string
+		run     domain.RunID
+		attempt domain.ProductionAttempt
+		want    domain.RunID
+		bound   bool
+	}{
+		{"approved specification run is bound", specRun, approved, implRun, true},
+		{"unapproved specification run is not bound", specRun, unapproved, "", false},
+		{"implementation run of its own attempt is not bound", implRun, approved, "", false},
+		{"attempt naming a different specification run is not bound", specRun, foreign, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, bound := boundImplementationRun(domain.Run{ID: tc.run}, tc.attempt)
+			if bound != tc.bound || got != tc.want {
+				t.Errorf("boundImplementationRun = (%q, %v), want (%q, %v)", got, bound, tc.want, tc.bound)
+			}
+		})
+	}
+}

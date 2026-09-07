@@ -110,9 +110,14 @@ type Run struct {
 	Outcome         domain.RunOutcome        `json:"outcome"`
 	HoldReason      *domain.RunHoldReason    `json:"hold_reason"`
 	// Lifecycle splits the runs list into active and finished (#1134); it
-	// is derived from Outcome and SupersededBy, never stored.
+	// is derived from Outcome and SupersededBy, never stored. A superseded run
+	// reads finished whatever its outcome, which is how a bound specification
+	// run leaves the active list with a pending outcome (#1183).
 	Lifecycle domain.RunLifecycle `json:"lifecycle"`
-	// SupersededBy names the attempt that retried this run, or null.
+	// SupersededBy names the run that now owns this run's work, or null: the
+	// attempt that retried this run, or the implementation run a bound
+	// specification run's approved specification handed off to (#1183). The
+	// matching supervisor rule is deriveSupervisionState in observe/follow.go.
 	SupersededBy *domain.RunID `json:"superseded_by"`
 	// Completion carries the merge facts once the work unit is done, read
 	// from the re-gated completion row, or null.
@@ -611,7 +616,7 @@ func (s *Service) GetRun(ctx context.Context, id domain.RunID) (RunSnapshot, err
 		if err != nil {
 			return asRunObservationIntegrityError(err)
 		}
-		facts, err := runProjectionFactsFor(ctx, tx, id, observation)
+		facts, err := runProjectionFactsFor(ctx, tx, value.Value, observation)
 		if err != nil {
 			return asRunObservationIntegrityError(err)
 		}
@@ -662,7 +667,7 @@ func (s *Service) GetRunTimeline(ctx context.Context, id domain.RunID) (RunTimel
 			return asRunObservationIntegrityError(err)
 		}
 		observation = withAuthoritativeInvocationStatuses(observation)
-		facts, err := runProjectionFactsFor(ctx, tx, id, observation)
+		facts, err := runProjectionFactsFor(ctx, tx, run.Value, observation)
 		if err != nil {
 			return asRunObservationIntegrityError(err)
 		}
@@ -875,15 +880,20 @@ type runProjectionFacts struct {
 // completion row; the row is re-read here rather than threaded out of the
 // authentication pass. A missing row at this point is the same integrity
 // contradiction and fails closed the same way.
+//
+// It takes the whole run, not just its id, so it can resolve the specification
+// hand-off: a bound specification run has no retry successor but is superseded
+// by the implementation run its approved specification bound (#1183). A retry
+// successor keeps precedence over that hand-off.
 func runProjectionFactsFor(
-	ctx context.Context, tx *store.ReadTx, runID domain.RunID, observation domain.RunObservation,
+	ctx context.Context, tx *store.ReadTx, run domain.Run, observation domain.RunObservation,
 ) (runProjectionFacts, error) {
 	var facts runProjectionFacts
 	for _, milestone := range observation.Milestones {
 		if milestone.Kind != domain.MilestoneWorkUnitCompleted {
 			continue
 		}
-		completion, err := authenticatedWorkUnitCompletion(ctx, tx, runID, milestone)
+		completion, err := authenticatedWorkUnitCompletion(ctx, tx, run.ID, milestone)
 		if err != nil {
 			return runProjectionFacts{}, err
 		}
@@ -893,18 +903,53 @@ func runProjectionFactsFor(
 		}
 		break
 	}
-	successor, ok, err := tx.RunSuccessor(ctx, runID)
+	successor, ok, err := tx.RunSuccessor(ctx, run.ID)
 	if err != nil {
 		return runProjectionFacts{}, err
 	}
-	if ok {
+	switch {
+	case ok:
 		facts.supersededBy = &successor
+	case run.CampaignID != "":
+		// No retry successor: a bound specification run is instead superseded by
+		// the implementation run its approved specification bound. GetProductionAttempt
+		// re-authenticates the reconstructed attempt row (returned-object trust
+		// boundary); every campaign run has one, so a missing row is the same
+		// integrity failure the run read already fails on, propagated here.
+		attempt, err := tx.GetProductionAttempt(ctx, run.CampaignID, run.AttemptNumber)
+		if err != nil {
+			return runProjectionFacts{}, err
+		}
+		if implementationRun, bound := boundImplementationRun(run, attempt); bound {
+			facts.supersededBy = &implementationRun
+		}
 	}
-	facts.cost, err = tx.BillableCostSoFar(ctx, runID)
+	facts.cost, err = tx.BillableCostSoFar(ctx, run.ID)
 	if err != nil {
 		return runProjectionFacts{}, err
 	}
 	return facts, nil
+}
+
+// boundImplementationRun reports the implementation run that has taken over a
+// bound specification run's work, if any. The run is that hand-off when the
+// production attempt names it as the specification run and carries an approved
+// specification digest, which the engine sets when it submits the
+// implementation run (store.ApproveProductionAttempt via
+// engine.authenticateProductionAttempt). It is the same fact the supervisor
+// reads as implementation_bound (observe/follow.go deriveSupervisionState).
+//
+// It never names the run itself: an implementation run reads its own attempt
+// row, whose specification run is a different run, so an implementation run is
+// never reported as superseded by its own attempt.
+func boundImplementationRun(run domain.Run, attempt domain.ProductionAttempt) (domain.RunID, bool) {
+	if attempt.ApprovedSpecDigest == "" {
+		return "", false
+	}
+	if attempt.SpecificationRunID != run.ID || attempt.ImplementationRunID == run.ID {
+		return "", false
+	}
+	return attempt.ImplementationRunID, true
 }
 
 // runAttemptBindings indexes a run's attempt invocations. The invocation
@@ -1056,7 +1101,7 @@ func projectRunSnapshot(
 	if err != nil {
 		return RunSnapshot{}, fmt.Errorf("run %q conclusion: %w", run.ID, asRunObservationIntegrityError(err))
 	}
-	facts, err := runProjectionFactsFor(ctx, tx, run.ID, observation)
+	facts, err := runProjectionFactsFor(ctx, tx, run, observation)
 	if err != nil {
 		return RunSnapshot{}, fmt.Errorf("run %q facts: %w", run.ID, asRunObservationIntegrityError(err))
 	}
