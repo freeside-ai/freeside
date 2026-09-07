@@ -153,7 +153,7 @@ func TestCodexProductionReviewPromptPreservesPriorEvidenceCapacity(t *testing.T)
 		t.Fatalf("420-artifact production review prompt = %d bytes, limit %d",
 			len(prompt), maxCodexReviewPromptBytes)
 	}
-	command := codexReviewCommand("/workspace/project", "gpt-5.2-codex", "high", prompt)
+	command := codexReviewCommand("/workspace/project", "gpt-5.2-codex", "high", prompt, "base", "head")
 	if got := command[len(command)-1]; got != prompt {
 		t.Fatal("production review prompt was not preserved as its own command argument")
 	}
@@ -3167,7 +3167,8 @@ func TestCodexReviewRestartRecoversLegacyRoundAndRelaunchesSameRequest(t *testin
 		t.Fatal(err)
 	}
 	launchSpec := CodexReviewLaunchSpec{
-		RunID: string(id), WorkflowRunID: request.RunID,
+		ExpectedBase: request.BaseSHA,
+		RunID:        string(id), WorkflowRunID: request.RunID,
 		Image:                sourceConfig.Review.ApprovedImage,
 		WorkspaceSourceRunID: string(id), WorkspaceVolume: workspace.Volume,
 		ExpectedHead: request.HeadSHA, Prompt: codexProductionReviewPrompt(request),

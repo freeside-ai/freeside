@@ -1582,6 +1582,10 @@ func (s *Suite) probeCredentialContainment(ctx context.Context, run *suiteRun, c
 	return nil
 }
 
+// Explicit entry violations are invalid output. Read failures stay distinct so
+// review collection can retry exporting the stopped container after I/O fails.
+var errArchiveRegularFileInvalid = errors.New("invalid archive file entry")
+
 // extractArchiveRegularFile validates a rootfs tar and returns the bytes of one
 // regular file at the given absolute path (bounded by limit), reporting whether
 // it was found. Like archiveHasRegularFile it parses through EOF and rejects a
@@ -1603,31 +1607,31 @@ func extractArchiveRegularFile(r io.Reader, absolutePath string, limit int64) ([
 			return nil, false, fmt.Errorf("read tar: %w", err)
 		}
 		if len(hdr.Name) > maxArchivePathBytes {
-			return nil, false, errors.New("archive entry path exceeds the length cap")
+			return nil, false, fmt.Errorf("%w: archive entry path exceeds the length cap", errArchiveRegularFileInvalid)
 		}
 		name := path.Clean(strings.TrimPrefix(hdr.Name, "./"))
 		if strings.HasPrefix(name, "/") || name == ".." || strings.HasPrefix(name, "../") {
-			return nil, false, errors.New("archive entry escapes the archive root")
+			return nil, false, fmt.Errorf("%w: archive entry escapes the archive root", errArchiveRegularFileInvalid)
 		}
 		if name != wantPath {
 			continue
 		}
 		if found {
-			return nil, false, errors.New("archive carries more than one proof entry")
+			return nil, false, fmt.Errorf("%w: archive carries more than one proof entry", errArchiveRegularFileInvalid)
 		}
 		found = true
 		if hdr.Typeflag != tar.TypeReg {
-			return nil, false, errors.New("proof entry is not a regular file")
+			return nil, false, fmt.Errorf("%w: proof entry is not a regular file", errArchiveRegularFileInvalid)
 		}
 		if hdr.Size > limit {
-			return nil, false, errors.New("proof entry exceeds the cap")
+			return nil, false, fmt.Errorf("%w: proof entry exceeds the cap", errArchiveRegularFileInvalid)
 		}
 		data, err = io.ReadAll(io.LimitReader(tr, limit+1))
 		if err != nil {
 			return nil, false, fmt.Errorf("read proof entry: %w", err)
 		}
 		if int64(len(data)) > limit {
-			return nil, false, errors.New("proof entry exceeds the cap")
+			return nil, false, fmt.Errorf("%w: proof entry exceeds the cap", errArchiveRegularFileInvalid)
 		}
 	}
 }

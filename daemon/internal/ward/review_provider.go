@@ -62,7 +62,7 @@ type reviewProvider interface {
 	promptProtocol() string
 	// reviewCommand builds the in-container review argv from the read-only
 	// workspace target and the deployment-pinned model configuration.
-	reviewCommand(workspaceTarget, model, reasoningEffort, prompt string) []string
+	reviewCommand(workspaceTarget, model, reasoningEffort, prompt, baseSHA, headSHA string) []string
 	// vendor is the agent vendor whose native instruction mechanism this
 	// provider's review invocation consumes (Codex: domain.AgentVendorCodex).
 	vendor() domain.AgentVendor
@@ -168,15 +168,15 @@ func (codexReviewProvider) providerLabel() string { return "openai" }
 func (codexReviewProvider) topologyVersion() string { return codexReviewTopologyVersion }
 
 func (codexReviewProvider) completionEvidenceVersion() string { return "codex-review-completion-v1" }
-func (codexReviewProvider) resultEvidenceVersion() string     { return "codex-review-result-v3" }
-func (codexReviewProvider) configurationVersion() string      { return "codex-review-configuration-v3" }
+func (codexReviewProvider) resultEvidenceVersion() string     { return "codex-review-result-v4" }
+func (codexReviewProvider) configurationVersion() string      { return "codex-review-configuration-v4" }
 
 func (codexReviewProvider) promptProtocol() string { return codexProductionReviewPromptVersion }
 
 func (codexReviewProvider) reviewCommand(
-	workspaceTarget, model, reasoningEffort, prompt string,
+	workspaceTarget, model, reasoningEffort, prompt, baseSHA, headSHA string,
 ) []string {
-	return codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt)
+	return codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt, baseSHA, headSHA)
 }
 
 func (codexReviewProvider) vendor() domain.AgentVendor { return domain.AgentVendorCodex }

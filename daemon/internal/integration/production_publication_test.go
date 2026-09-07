@@ -2996,6 +2996,111 @@ func TestProductionPendingReviewPublishesNothing(t *testing.T) {
 	}
 }
 
+func TestProductionIncompleteReviewCannotPublishAfterRestart(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		class      domain.ReviewFailureClass
+		olderClean bool
+	}{
+		{domain.ReviewFailureConfiguration, false},
+		{domain.ReviewFailureTransient, false},
+		{domain.ReviewFailureConfiguration, true},
+		{domain.ReviewFailureTransient, true},
+	} {
+		t.Run(fmt.Sprintf("%s/older-clean=%t", tc.class, tc.olderClean), func(t *testing.T) {
+			class := tc.class
+			p := newProductionPublicationHarness(t, "")
+			round := 1
+			if tc.olderClean {
+				round = 2
+			}
+			id := engine.ProductionReviewInvocationID(p.runID, round)
+			p.reviewer.Script(id, fake.ReviewScript{
+				Outcome: fake.OutcomeComplete,
+				Result: exec.ReviewResult{
+					BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+					Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+					CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("unusable empty result")),
+				},
+			})
+			// Ward's collection tests drive normalization and authenticate its
+			// retained bytes. Here the terminal failure returned by Poll must
+			// dominate the source's earlier completed status and empty result.
+			p.reviewSource = &faultReviewSource{
+				ReviewSource: p.reviewer, failPollAt: 1,
+				failPollWith: errors.Join(exec.ErrNoResult, &exec.ReviewSourceFailure{
+					Class: class, Err: errors.New("review could not inspect its bound repository"),
+				}),
+			}
+			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+			p.startAndRecordExport(t)
+			if tc.olderClean {
+				old, err := domain.NewReviewRecord(domain.ReviewRecord{
+					InvocationID: engine.ProductionReviewInvocationID(p.runID, 1),
+					RunID:        p.runID, Round: 1, Provider: "openai", ModelConfiguration: "codex/test",
+					ConfigurationDigest: fake.DefaultReviewConfigurationDigest,
+					InstructionDigest:   productionDigest([]byte("superseded instructions")), CostOwner: "test",
+					BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
+					CompletionEvidence: productionDigest([]byte("prior clean review")), Outcome: domain.ReviewClean,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+					return tx.PutReviewRecord(p.ctx, old, nil)
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for restart := range 2 {
+				if restart != 0 {
+					p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+				}
+				result, err := p.reconcileLanes()
+				if err != nil || result.ReadyItemsCreated != 0 || result.LastPRNumber != 0 {
+					t.Fatalf("failed review readiness after restart=%d: %#v, %v", restart, result, err)
+				}
+				if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+					t.Fatalf("failed review published %d refs and %d PRs", refs, prs)
+				}
+				raw, err := sql.Open("sqlite", p.dbPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var proofs int
+				queryErr := raw.QueryRowContext(p.ctx, `SELECT count(*) FROM check_proofs p
+                    JOIN requirement_resolutions r ON r.digest = p.requirement_resolution_digest
+                    WHERE r.check_class = ?`, domain.CheckClassIndependentReview).Scan(&proofs)
+				if err := errors.Join(queryErr, raw.Close()); err != nil {
+					t.Fatal(err)
+				}
+				if proofs != 0 {
+					t.Fatalf("failed review persisted %d independent-review proofs", proofs)
+				}
+				if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+					records, err := tx.ListReviewRecords(p.ctx, p.runID)
+					if err != nil {
+						return err
+					}
+					if len(records) != round-1 {
+						t.Fatalf("failed review changed the prior review records: %#v", records)
+					}
+					failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
+					if err != nil {
+						return err
+					}
+					if failure.Class != class {
+						t.Fatalf("failure class changed after restart: %q", failure.Class)
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestProductionTransientReviewFailureBacksOffAndRetries(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")

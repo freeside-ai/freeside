@@ -76,15 +76,26 @@ func (b *CodexReviewLifecycle) CollectCodexReview(
 		return CodexReviewCollection{}, fmt.Errorf("%w: export review result: %w",
 			ErrCodexReviewOperational, err)
 	}
-	read := func(path string, limit int64) ([]byte, error) {
+	readOptional := func(path string, limit int64) ([]byte, bool, error) {
 		file, err := os.Open(archive) //nolint:gosec // gate-owned temp path
 		if err != nil {
-			return nil, fmt.Errorf("%w: open review archive: %w", ErrCodexReviewOperational, err)
+			return nil, false, fmt.Errorf("%w: open review archive: %w", ErrCodexReviewOperational, err)
 		}
 		defer file.Close() //nolint:errcheck // read-only temp file
 		body, found, err := extractArchiveRegularFile(file, path, limit)
 		if err != nil {
-			return nil, fmt.Errorf("%w: read review archive: %w", ErrCodexReviewOperational, err)
+			if errors.Is(err, errArchiveRegularFileInvalid) {
+				return nil, false, errors.Join(ErrCodexReviewOutputInvalid,
+					fmt.Errorf("invalid review archive output: %w", err))
+			}
+			return nil, false, fmt.Errorf("%w: read review archive: %w", ErrCodexReviewOperational, err)
+		}
+		return body, found, nil
+	}
+	read := func(path string, limit int64) ([]byte, error) {
+		body, found, err := readOptional(path, limit)
+		if err != nil {
+			return nil, err
 		}
 		if !found {
 			return nil, errors.Join(ErrCodexReviewOutputInvalid,
@@ -107,18 +118,17 @@ func (b *CodexReviewLifecycle) CollectCodexReview(
 		return CodexReviewCollection{}, err
 	}
 	collection := CodexReviewCollection{ExitStatus: status, Events: events}
-	var result []byte
+	result, found, err := readOptional(codexReviewResultPath, maxCodexReviewResultBytes)
+	if err != nil {
+		return collection, err
+	}
+	collection.Result = result
 	if status == 0 {
-		result, err = read(codexReviewResultPath, maxCodexReviewResultBytes)
-		if err != nil {
-			return collection, err
-		}
-		if len(bytes.TrimSpace(result)) == 0 {
+		if !found || len(bytes.TrimSpace(result)) == 0 {
 			return collection, errors.Join(ErrCodexReviewOutputInvalid,
 				failf(CheckControlPlaneIsolation, "Codex review result is empty"))
 		}
 	}
-	collection.Result = result
 	return collection, nil
 }
 

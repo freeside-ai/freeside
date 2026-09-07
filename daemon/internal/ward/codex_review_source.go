@@ -171,6 +171,12 @@ func (o CodexReviewSourceOutcome) verifyCompletionEvidence(provider reviewProvid
 	if o.Result.Provider != provider.providerLabel() {
 		return domain.ErrInvalidReviewCompletionEvidence
 	}
+	if provider.sourceLabel() == (codexReviewProvider{}).sourceLabel() && o.Collection != nil {
+		_, failed := codexTerminalFailure(o.Collection.Events)
+		if o.Collection.ExitStatus != 0 || failed {
+			return domain.ErrInvalidReviewCompletionEvidence
+		}
+	}
 	evidence, err := reviewResultEvidence(provider, *o.Result, o.CollectionEvidence)
 	if err != nil || evidence != o.Result.CompletionEvidence {
 		return errors.Join(err, domain.ErrInvalidReviewCompletionEvidence)
@@ -324,10 +330,14 @@ func (s *CodexReviewSource) startRequestedReview(
 		}
 		return &exec.ReviewSourceFailure{Class: class, Err: err}
 	}
+	expectedBase := ""
+	if s.reviewProvider().vendor() == domain.AgentVendorCodex {
+		expectedBase = req.BaseSHA
+	}
 	launch, err := s.cfg.Lifecycle.codexReview(ctx, s.cfg.Review, CodexReviewLaunchSpec{
 		RunID: string(id), WorkflowRunID: req.RunID, Image: s.cfg.Review.ApprovedImage,
 		WorkspaceSourceRunID: string(id), WorkspaceVolume: workspace.Volume,
-		ExpectedHead: req.HeadSHA, Prompt: s.reviewProvider().reviewPrompt(req),
+		ExpectedHead: req.HeadSHA, ExpectedBase: expectedBase, Prompt: s.reviewProvider().reviewPrompt(req),
 		Boundary: CodexReviewFreshStart, AuthMode: s.cfg.AuthMode,
 		AuthIdentityID: s.cfg.AuthIdentityID, AuthSnapshot: s.cfg.AuthSnapshot,
 		Instructions: instructions, InstructionFile: instructionFile,
@@ -755,6 +765,16 @@ func (s *CodexReviewSource) Inspect(
 			Failure: fmt.Sprintf("Codex review returned invalid raw output: %v", err),
 			Usage:   s.reviewUsageMeasurements(collection.Events),
 		}
+		// An output-shape failure can follow authenticated collection of the
+		// status and bounded event bytes. Keep those available bytes; failures
+		// before that boundary return no collection and get no invented evidence.
+		if collection.Events != nil {
+			retained := CodexReviewRetainedCollection(collection)
+			if retained.validate() == nil {
+				outcome.Collection = &retained
+				outcome.CollectionEvidence = collectionEvidence(s.reviewProvider(), retained)
+			}
+		}
 	} else {
 		outcome = s.normalizeCollection(id, request, collection)
 		if err := errors.Join(outcome.Validate(), outcome.verifyCompletionEvidence(s.reviewProvider())); err != nil {
@@ -852,14 +872,22 @@ func (s *CodexReviewSource) normalizeCollection(
 	failure := func(class domain.ReviewFailureClass, message string) CodexReviewSourceOutcome {
 		return CodexReviewSourceOutcome{
 			InvocationID: id, FailureClass: class, Failure: message, Usage: usage,
+			Collection: &retained, CollectionEvidence: collEvidence,
 		}
 	}
 	contradiction := func(message string) CodexReviewSourceOutcome {
 		return failure(domain.ReviewFailureContradiction, message)
 	}
-	if collection.ExitStatus != 0 {
+	_, terminalFailed := codexTerminalFailure(collection.Events)
+	if collection.ExitStatus != 0 || provider.sourceLabel() == (codexReviewProvider{}).sourceLabel() && terminalFailed {
 		class, terminalMessage := classifyReviewTerminalFailure(provider, collection.Events)
 		message := fmt.Sprintf("Codex review exited with status %d", collection.ExitStatus)
+		if provider.sourceLabel() == (codexReviewProvider{}).sourceLabel() && collection.ExitStatus == codexReviewAccessFailureExitStatus {
+			class, message = domain.ReviewFailureConfiguration, "Codex review cannot inspect its bound workspace and commits in the read-only sandbox"
+		}
+		if collection.ExitStatus == 0 {
+			message = "Codex review reported a terminal failure despite exit status 0"
+		}
 		if codexRefreshAttemptFailure([]byte(terminalMessage)) {
 			message = "Codex review attempted an in-container credential refresh"
 		}
@@ -1060,6 +1088,7 @@ func newCodexReviewConfigurationEnvelope(
 		AuthIdentityID: authIdentityID, CostOwner: costOwner,
 		CommandTemplateDigest: digestStrings(provider.reviewCommand(
 			cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, "<runtime-review-prompt>",
+			"<bound-base-sha>", "<bound-head-sha>",
 		)),
 		PromptProtocol: provider.promptProtocol(),
 	}, nil
@@ -1480,7 +1509,15 @@ func classifyReviewTerminalFailure(
 }
 
 func codexTerminalFailureMessage(events []byte) string {
+	message, _ := codexTerminalFailure(events)
+	return message
+}
+
+// Only provider terminal events decide this state. Failed exploratory tools
+// are nested items, and a later completed turn supersedes a recovered failure.
+func codexTerminalFailure(events []byte) (string, bool) {
 	var message string
+	var failed bool
 	for line := range bytes.SplitSeq(events, []byte("\n")) {
 		var terminal struct {
 			Type  string `json:"type"`
@@ -1491,12 +1528,19 @@ func codexTerminalFailureMessage(events []byte) string {
 		if err := RejectDuplicateJSONKeys(line); err != nil {
 			continue
 		}
-		if err := json.Unmarshal(line, &terminal); err != nil || terminal.Type != "turn.failed" {
+		if err := json.Unmarshal(line, &terminal); err != nil {
 			continue
 		}
-		message = terminal.Error.Message
+		switch terminal.Type {
+		case "turn.started":
+			message, failed = "Codex review turn did not complete", true
+		case "turn.failed":
+			message, failed = terminal.Error.Message, true
+		case "turn.completed":
+			message, failed = "", false
+		}
 	}
-	return message
+	return message, failed
 }
 
 func codexRefreshAttemptFailure(events []byte) bool {
