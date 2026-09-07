@@ -1237,7 +1237,8 @@ components:
         Whether a run still has something pending for the daemon or the
         operator (active) or is done with (finished), derived from
         RunOutcome and supersession. Finished covers completed, failed, lost,
-        unobserved, and any run a later attempt superseded; active covers
+        unobserved, and any run superseded by a retry or by implementation
+        taking over an approved specification run's work; active covers
         pending, published with no completion yet, and blocked with no
         successor. A client splits the runs list on this field instead of
         re-deriving it.
@@ -4399,8 +4400,10 @@ components:
           minLength: 1
           nullable: true
           description: >
-            The run id of the attempt that retried this run, or null when no
-            later attempt names it as parent.
+            The id of the run that now owns this run's work: either a later
+            implementation attempt that retried it, or the implementation
+            run taking over an approved specification run's work in the same
+            campaign attempt. Null when neither successor exists.
         completion:
           nullable: true
           allOf:

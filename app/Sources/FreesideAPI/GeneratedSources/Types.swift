@@ -1507,7 +1507,7 @@ public enum Components {
             case lost = "lost"
             case completed = "completed"
         }
-        /// Whether a run still has something pending for the daemon or the operator (active) or is done with (finished), derived from RunOutcome and supersession. Finished covers completed, failed, lost, unobserved, and any run a later attempt superseded; active covers pending, published with no completion yet, and blocked with no successor. A client splits the runs list on this field instead of re-deriving it.
+        /// Whether a run still has something pending for the daemon or the operator (active) or is done with (finished), derived from RunOutcome and supersession. Finished covers completed, failed, lost, unobserved, and any run superseded by a retry or by implementation taking over an approved specification run's work; active covers pending, published with no completion yet, and blocked with no successor. A client splits the runs list on this field instead of re-deriving it.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/RunLifecycle`.
@@ -8011,7 +8011,7 @@ public enum Components {
             public var hold_reason: Components.Schemas.Run.hold_reasonPayload?
             /// - Remark: Generated from `#/components/schemas/Run/lifecycle`.
             public var lifecycle: Components.Schemas.RunLifecycle
-            /// The run id of the attempt that retried this run, or null when no later attempt names it as parent.
+            /// The id of the run that now owns this run's work: either a later implementation attempt that retried it, or the implementation run taking over an approved specification run's work in the same campaign attempt. Null when neither successor exists.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/Run/superseded_by`.
@@ -8087,7 +8087,7 @@ public enum Components {
             ///   - outcome:
             ///   - hold_reason:
             ///   - lifecycle:
-            ///   - superseded_by: The run id of the attempt that retried this run, or null when no later attempt names it as parent.
+            ///   - superseded_by: The id of the run that now owns this run's work: either a later implementation attempt that retried it, or the implementation run taking over an approved specification run's work in the same campaign attempt. Null when neither successor exists.
             ///   - completion: The work unit's completion facts once the outcome is completed; null otherwise.
             ///   - billable_cost_so_far: The run's billable spend so far, computed the same way attention cards compute theirs; null before any billable observation.
             public init(

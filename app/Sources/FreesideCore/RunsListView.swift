@@ -554,7 +554,7 @@ enum RunDisplay {
     /// The four workflow stages in order, then any stage the daemon
     /// recorded under another name. A stage that exists and is not the
     /// last one has been left behind, so it reads completed; the last
-    /// existing stage carries the run's outcome; the rest are pending.
+    /// existing stage carries the run's outcome and lifecycle; the rest are pending.
     static func stageRail(_ run: Components.Schemas.Run) -> DecisionStageRailPresentation {
         var names = Components.Schemas.StageName.allCases.map {
             (name: $0.rawValue, label: AttentionDisplay.label($0))
@@ -567,7 +567,7 @@ enum RunDisplay {
         let entries = names.map { name, label in
             let state: DecisionStageRailPresentation.State =
                 if name == current {
-                    currentStageState(run.outcome)
+                    currentStageState(run)
                 } else if recorded.contains(name) {
                     .completed
                 } else {
@@ -584,14 +584,26 @@ enum RunDisplay {
     /// An unobserved run marks nothing current: the daemon recorded no
     /// milestone, so the rail must not claim a stage is under way.
     private static func currentStageState(
-        _ outcome: Components.Schemas.RunOutcome
+        _ run: Components.Schemas.Run
     ) -> DecisionStageRailPresentation.State {
-        switch outcome {
+        switch run.outcome {
         case .failed, .lost: .failed
         case .completed, .published: .completed
-        case .pending, .blocked: .current
+        case .pending:
+            isSpecificationHandoff(run) ? .completed : (run.lifecycle == .active ? .current : .pending)
+        case .blocked: run.lifecycle == .active ? .current : .pending
         case .unobserved: .pending
         }
+    }
+
+    /// The daemon constructs a single specification stage and permits retry
+    /// parents only on implementation runs. Classify from the source so a
+    /// partially loaded list does not turn a handoff into retry wording.
+    private static func isSpecificationHandoff(_ run: Components.Schemas.Run) -> Bool {
+        run.campaign_id != nil && run.attempt_number != nil
+            && run.lifecycle == .finished && run.superseded_by != nil
+            && run.stages.count == 1
+            && canonicalStageName(run.stages[0].name) == "specification"
     }
 
     static func identityLine(
@@ -600,6 +612,9 @@ enum RunDisplay {
         guard run.campaign_id != nil, let attempt = run.attempt_number else { return nil }
         let identity = "Attempt \(attempt)"
         if let successor = successorLabel(run, runs: runs) {
+            if isSpecificationHandoff(run) {
+                return "\(identity) · handed off to implementation (\(successor))"
+            }
             return "\(identity) · superseded by \(successor)"
         }
         return identity
@@ -623,6 +638,9 @@ enum RunDisplay {
         _ run: Components.Schemas.Run, runs: [Components.Schemas.RunSnapshot] = []
     ) -> SecondaryLine {
         if let successor = successorLabel(run, runs: runs) {
+            if isSpecificationHandoff(run) {
+                return .supersession("Handed off to implementation (\(successor))")
+            }
             return .supersession("Superseded by \(successor)")
         }
         if let completion = run.completion?.value1 {

@@ -12,17 +12,20 @@
             let name: String
             let width: CGFloat?
             let colorScheme: ColorScheme
+            let contrast: LaunchInputs.Contrast?
             let view: AnyView
 
             init(
                 name: String,
                 width: CGFloat? = nil,
                 colorScheme: ColorScheme = .light,
+                contrast: LaunchInputs.Contrast? = nil,
                 view: AnyView
             ) {
                 self.name = name
                 self.width = width
                 self.colorScheme = colorScheme
+                self.contrast = contrast
                 self.view = view
             }
         }
@@ -77,7 +80,8 @@
                             surface.view,
                             at: size.value,
                             width: surface.width ?? canvasWidth,
-                            colorScheme: surface.colorScheme)
+                            colorScheme: surface.colorScheme,
+                            contrast: surface.contrast)
                         actual[key] = try digest(image)
                         if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
                             _ = try dump(image, named: key)
@@ -947,6 +951,34 @@
                             ).screenshotContent(now: RunFixtures.screenshotInstant)
                         )))
             }
+            let handoffRows =
+                [RunFixtures.handedOffSpecificationRun()]
+                + runs.filter { $0.run.id == "run-freeside-656" }
+            for colorScheme in [ColorScheme.light, .dark] {
+                for contrast in [LaunchInputs.Contrast.standard, .increased] {
+                    surfaces.append(
+                        Surface(
+                            name: "runs-handoff-\(colorScheme)-\(contrast)",
+                            width: 640,
+                            colorScheme: colorScheme,
+                            contrast: contrast,
+                            view: AnyView(
+                                VStack(spacing: 12) {
+                                    ForEach(handoffRows, id: \.run.id) { snapshot in
+                                        RunRowView(
+                                            run: snapshot.run,
+                                            identityLine: RunDisplay.identityLine(snapshot.run, runs: runs),
+                                            secondaryLine: RunDisplay.secondaryLine(snapshot.run, runs: runs),
+                                            spendLine: nil,
+                                            schedules: [],
+                                            isSelected: false,
+                                            now: RunFixtures.screenshotInstant)
+                                    }
+                                }
+                                .padding()
+                            )))
+                }
+            }
             for colorScheme in [ColorScheme.light, .dark] {
                 surfaces.append(
                     Surface(
@@ -1426,7 +1458,8 @@
             _ view: AnyView,
             at size: DynamicTypeSize,
             width: CGFloat,
-            colorScheme: ColorScheme
+            colorScheme: ColorScheme,
+            contrast: LaunchInputs.Contrast? = nil
         ) async throws -> CGImage {
             guard let timeZone = TimeZone(secondsFromGMT: 0) else {
                 throw ScreenshotError.missingGMT
@@ -1449,7 +1482,23 @@
                 let renderer = ImageRenderer(content: root)
                 renderer.proposedSize = ProposedViewSize(width: width, height: nil)
                 renderer.scale = 1
-                guard let image = renderer.cgImage else {
+                // Use the same contrast override as deterministic app launches.
+                // Restore it before yielding so other tests keep their defaults.
+                let image: CGImage? = {
+                    guard let contrast else { return renderer.cgImage }
+                    let defaults = UserDefaults.standard
+                    let prior = defaults.object(forKey: "FreesideContrast")
+                    defaults.set(contrast.rawValue, forKey: "FreesideContrast")
+                    defer {
+                        if let prior {
+                            defaults.set(prior, forKey: "FreesideContrast")
+                        } else {
+                            defaults.removeObject(forKey: "FreesideContrast")
+                        }
+                    }
+                    return renderer.cgImage
+                }()
+                guard let image else {
                     throw ScreenshotError.renderFailed
                 }
                 let currentDigest = try digest(image)
