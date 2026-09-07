@@ -49,5 +49,5 @@
 //     enum omits default so the exhaustive linter forces new members to be
 //     handled (see artifact.go).
 //
-// ci build-cache measurement push 2 (#1161); dropped, not part of any merge.
+// ci build-cache measurement push 3 (#1161); dropped, not part of any merge.
 package domain
