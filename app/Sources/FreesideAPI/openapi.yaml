@@ -379,6 +379,33 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /runs/{run_id}/review/{round}/evidence:
+    get:
+      operationId: getReviewEvidence
+      tags: [runs]
+      summary: Read retained reviewer output for one round
+      description: >
+        Re-authenticates private retained output against the originating run and
+        exact reviewed base/head. Integrity errors return no partial content.
+      parameters:
+        - $ref: "#/components/parameters/RunID"
+        - name: round
+          in: path
+          required: true
+          description: The one-based review round belonging to this run.
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Labeled reviewer output or explicit unavailable evidence.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewEvidence"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /schedules:
     get:
       operationId: listSchedules
@@ -1067,13 +1094,13 @@ components:
     RunTimeline:
       type: object
       description: >
-        A computed, typed daemon-observation timeline for one run. It carries no
-        agent-authored free text; stage and attempt labels come from the Run
-        aggregate and join to invocation_id in these facts (plan §9).
+        A computed, typed daemon-observation timeline for one run. Review facts
+        are separate from retained reviewer output, which has its own
+        authenticated route. Stage labels come from the Run aggregate.
       additionalProperties: false
       required:
         [as_of_revision, as_of, run_id, milestones, hold, invocations,
-         completion, billable_cost_so_far]
+         completion, review, billable_cost_so_far]
       properties:
         as_of_revision:
           $ref: "#/components/schemas/AsOfRevision"
@@ -1096,6 +1123,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/InvocationObservation"
+        review:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RunReviewFacts"
         completion:
           nullable: true
           allOf:
@@ -1137,11 +1168,191 @@ components:
             live: false
             observed_at: "2026-01-02T03:14:05Z"
         completion: null
+        review: null
         billable_cost_so_far:
           currency: "USD"
           amount: "17.5"
           invocations: 1
           complete: true
+
+    RunReviewFacts:
+      type: "object"
+      description: Primary review history in ascending round order.
+      additionalProperties: false
+      required: ["rounds"]
+      properties:
+        rounds:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/RunReviewRound"
+    ReviewProgressState:
+      type: "string"
+      description: Progress derived from request, invocation and terminal review facts.
+      enum: ["pending", "running", "completed", "failed"]
+    ReviewSource:
+      type: "object"
+      description: "Origin of daemon-held facts. Today kind is freeside_invoked and status is null. Open strings reserve future external sources and quarantined/promoted status."
+      additionalProperties: false
+      required: ["kind", "status"]
+      properties:
+        kind:
+          type: "string"
+          minLength: 1
+          example: "freeside_invoked"
+        status:
+          type: "string"
+          nullable: true
+    ReviewRoundDispositions:
+      type: "object"
+      description: Counts of immutable dispositions and findings still open in one round.
+      additionalProperties: false
+      required: ["fixed", "declined", "deferred", "open"]
+      properties:
+        fixed:
+          type: "integer"
+          minimum: 0
+        declined:
+          type: "integer"
+          minimum: 0
+        deferred:
+          type: "integer"
+          minimum: 0
+        open:
+          type: "integer"
+          minimum: 0
+    ReviewRoundFailure:
+      type: "object"
+      description: The daemon-recorded failure class and diagnostic for one review round.
+      additionalProperties: false
+      required: ["class", "reason"]
+      properties:
+        class:
+          type: "string"
+          minLength: 1
+        reason:
+          type: "string"
+    ReviewEvidenceAvailability:
+      type: "string"
+      description: Whether authenticated retained reviewer output can be inspected.
+      enum: ["available", "unavailable", "unknown"]
+    ReviewRoundEvidence:
+      type: "object"
+      description: Completion evidence identity and availability of its retained reviewer output.
+      additionalProperties: false
+      required: ["completion_evidence", "availability"]
+      properties:
+        completion_evidence:
+          nullable: true
+          allOf:
+            - {"$ref":"#/components/schemas/Digest"}
+        availability:
+          $ref: "#/components/schemas/ReviewEvidenceAvailability"
+    RunReviewRound:
+      type: "object"
+      description: "One primary review round joined by invocation, run, round, base and head. Null request time identifies historical records predating request facts. Missing identity, outcome or count is unknown, never clean."
+      additionalProperties: false
+      required: ["round", "invocation_id", "state", "source", "base_sha", "head_sha", "requested_at", "completed_at", "provider", "model_configuration", "outcome", "findings_count", "dispositions", "failure", "retry_pending", "evidence"]
+      properties:
+        round:
+          type: "integer"
+          minimum: 1
+        invocation_id:
+          type: "string"
+          minLength: 1
+        state:
+          $ref: "#/components/schemas/ReviewProgressState"
+        source:
+          $ref: "#/components/schemas/ReviewSource"
+        base_sha:
+          type: "string"
+          minLength: 1
+        head_sha:
+          type: "string"
+          minLength: 1
+        requested_at:
+          type: "string"
+          format: "date-time"
+          nullable: true
+        completed_at:
+          type: "string"
+          format: "date-time"
+          nullable: true
+        provider:
+          type: "string"
+          nullable: true
+        model_configuration:
+          type: "string"
+          nullable: true
+        outcome:
+          nullable: true
+          allOf:
+            - {"$ref":"#/components/schemas/ReviewOutcome"}
+        findings_count:
+          type: "integer"
+          minimum: 0
+          nullable: true
+        dispositions:
+          nullable: true
+          allOf:
+            - {"$ref":"#/components/schemas/ReviewRoundDispositions"}
+        failure:
+          nullable: true
+          allOf:
+            - {"$ref":"#/components/schemas/ReviewRoundFailure"}
+        retry_pending:
+          type: "boolean"
+        evidence:
+          $ref: "#/components/schemas/ReviewRoundEvidence"
+    ReviewEvidence:
+      type: "object"
+      description: "Private retained reviewer output, re-authenticated on read. Labeled agent claims, never publishable verifier evidence. Bytes obey the review collection limits."
+      additionalProperties: false
+      required: ["source", "run_id", "round", "invocation_id", "content_kind", "head_binding", "source_head_sha", "sensitivity_class", "publish_eligible", "availability", "collection_evidence", "events", "result", "exit_status"]
+      properties:
+        source:
+          $ref: "#/components/schemas/ReviewSource"
+        run_id:
+          type: "string"
+        round:
+          type: "integer"
+          minimum: 1
+        invocation_id:
+          type: "string"
+        content_kind:
+          type: "string"
+          enum: ["reviewer_output"]
+        head_binding:
+          type: "string"
+          enum: ["head_bound"]
+        source_head_sha:
+          type: "string"
+        sensitivity_class:
+          type: "string"
+          enum: ["sensitive"]
+        publish_eligible:
+          type: "boolean"
+          enum: [false]
+        availability:
+          $ref: "#/components/schemas/ReviewEvidenceAvailability"
+        collection_evidence:
+          nullable: true
+          allOf:
+            - {"$ref":"#/components/schemas/Digest"}
+        events:
+          type: "string"
+          format: "byte"
+          description: Lossless base64-encoded retained transcript bytes.
+          nullable: true
+        result:
+          type: "string"
+          format: "byte"
+          description: Lossless base64-encoded retained result bytes.
+          nullable: true
+        exit_status:
+          type: "integer"
+          minimum: 0
+          maximum: 255
+          nullable: true
 
     WorkUnitCompletionFacts:
       type: object

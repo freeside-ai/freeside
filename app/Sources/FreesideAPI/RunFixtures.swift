@@ -119,6 +119,52 @@ public enum RunFixtures {
         ]
     }
 
+    public static func reviewRound(
+        _ state: Components.Schemas.ReviewProgressState,
+        round: Int = 1, findings: Bool = false,
+        availability: Components.Schemas.ReviewEvidenceAvailability = .unavailable
+    ) -> Components.Schemas.RunReviewRound {
+        .init(
+            round: round, invocation_id: "review-\(activeRunID)-\(round)",
+            state: state, source: .init(kind: "freeside_invoked"),
+            base_sha: String(repeating: "a", count: 40),
+            head_sha: String(repeating: round == 1 ? "b" : "c", count: 40),
+            requested_at: date(1_800),
+            completed_at: state == .completed || state == .failed ? date(1_920) : nil,
+            provider: state == .completed ? "openai" : nil,
+            model_configuration: state == .completed ? "codex/high" : nil,
+            outcome: state == .completed ? .init(value1: findings ? .findings : .clean) : nil,
+            findings_count: state == .completed ? (findings ? 3 : 0) : nil,
+            dispositions: state == .completed
+                ? .init(
+                    value1: .init(
+                        fixed: findings ? 1 : 0, declined: 0, deferred: findings ? 1 : 0, open: findings ? 1 : 0))
+                : nil,
+            failure: state == .failed
+                ? .init(
+                    value1: .init(_class: "configuration", reason: "The reviewer could not inspect the bound diff."))
+                : nil,
+            retry_pending: false,
+            evidence: .init(
+                completion_evidence: state == .completed
+                    ? .init(value1: "sha256:" + String(repeating: "e", count: 64)) : nil,
+                availability: availability))
+    }
+
+    public static func reviewEvidence(
+        runID: String, round: Components.Schemas.RunReviewRound
+    ) -> Components.Schemas.ReviewEvidence {
+        .init(
+            source: round.source, run_id: runID, round: round.round, invocation_id: round.invocation_id,
+            content_kind: .reviewer_output, head_binding: .head_bound, source_head_sha: round.head_sha,
+            sensitivity_class: .sensitive, publish_eligible: false, availability: round.evidence.availability,
+            events: round.evidence.availability == .available
+                ? .init("Reviewer output fixture: inspected the bound diff.".utf8) : nil,
+            result: round.evidence.availability == .available
+                ? .init("A retained reviewer claim, separate from daemon facts.".utf8) : nil,
+            exit_status: round.evidence.availability == .available ? 0 : nil)
+    }
+
     public static func defaultTimelines() -> [Components.Schemas.RunTimeline] {
         let activeMilestones: [Components.Schemas.RunMilestone] = [
             milestone(.run_submitted, runID: activeRunID, minute: 0),

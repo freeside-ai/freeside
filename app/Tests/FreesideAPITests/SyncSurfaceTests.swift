@@ -8,6 +8,43 @@ import Testing
 /// full-cache read, the heartbeat is the loss detector, and an epoch
 /// rotation simulates a daemon restore.
 @Suite struct SyncSurfaceTests {
+    @Test func reviewEvidenceJSONPreservesInvalidUTF8() throws {
+        let round = RunFixtures.reviewRound(.completed, availability: .available)
+        var evidence = RunFixtures.reviewEvidence(runID: RunFixtures.activeRunID, round: round)
+        let events: [UInt8] = [0x65, 0xff, 0x00, 0x0a]
+        let result: [UInt8] = [0x72, 0xfe, 0xc0]
+        evidence.events = .init(events)
+        evidence.result = .init(result)
+        evidence.collection_evidence = .init(value1: "sha256:" + String(repeating: "e", count: 64))
+        let body = try JSONEncoder().encode(evidence)
+        let decoded = try JSONDecoder().decode(Components.Schemas.ReviewEvidence.self, from: body)
+        #expect(Array(try #require(decoded.events).data) == events)
+        #expect(Array(try #require(decoded.result).data) == result)
+        #expect(decoded.collection_evidence == evidence.collection_evidence)
+    }
+
+    @Test func reviewEvidenceRoutePreservesRoundHeadAndClaimLabels() async throws {
+        var timeline = try #require(RunFixtures.defaultTimelines().first { $0.run_id == RunFixtures.activeRunID })
+        let round = RunFixtures.reviewRound(.completed, findings: true, availability: .available)
+        timeline.review = .init(value1: .init(rounds: [round]))
+        let client = APIClientFactory.mock(server: MockServer(timelines: [timeline]))
+        let projected = try await client.getRunTimeline(path: .init(run_id: timeline.run_id)).ok.body.json
+        #expect(projected.review?.value1.rounds == [round])
+        let evidence = try await client.getReviewEvidence(path: .init(run_id: timeline.run_id, round: 1)).ok.body.json
+        #expect(evidence.invocation_id == round.invocation_id)
+        #expect(evidence.source_head_sha == round.head_sha)
+        #expect(evidence.source == round.source)
+        #expect(evidence.content_kind == .reviewer_output)
+        #expect(!evidence.publish_eligible)
+        #expect(evidence.availability == .available)
+        #expect(evidence.events != nil)
+        let missing = try await client.getReviewEvidence(path: .init(run_id: timeline.run_id, round: 2))
+        guard case .notFound = missing else {
+            Issue.record("A different round must not receive retained output")
+            return
+        }
+    }
+
     @Test func bootstrapCarriesTheCursorAndTheWholeInbox() async throws {
         let client = APIClientFactory.mock(server: MockServer())
         let bootstrap = try await client.getSyncBootstrap().ok.body.json

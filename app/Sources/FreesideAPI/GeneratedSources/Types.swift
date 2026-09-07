@@ -141,6 +141,14 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /runs/{run_id}/timeline`.
     /// - Remark: Generated from `#/paths//runs/{run_id}/timeline/get(getRunTimeline)`.
     func getRunTimeline(_ input: Operations.getRunTimeline.Input) async throws -> Operations.getRunTimeline.Output
+    /// Read retained reviewer output for one round
+    ///
+    /// Re-authenticates private retained output against the originating run and exact reviewed base/head. Integrity errors return no partial content.
+    ///
+    ///
+    /// - Remark: HTTP `GET /runs/{run_id}/review/{round}/evidence`.
+    /// - Remark: Generated from `#/paths//runs/{run_id}/review/{round}/evidence/get(getReviewEvidence)`.
+    func getReviewEvidence(_ input: Operations.getReviewEvidence.Input) async throws -> Operations.getReviewEvidence.Output
     /// List durable schedules
     ///
     /// Lists the durable scheduler's synchronized schedule aggregates (plan §5.16). A partial fetch; it never marks the whole cache current (plan §5.14).
@@ -483,6 +491,22 @@ extension APIProtocol {
         headers: Operations.getRunTimeline.Input.Headers = .init()
     ) async throws -> Operations.getRunTimeline.Output {
         try await getRunTimeline(Operations.getRunTimeline.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Read retained reviewer output for one round
+    ///
+    /// Re-authenticates private retained output against the originating run and exact reviewed base/head. Integrity errors return no partial content.
+    ///
+    ///
+    /// - Remark: HTTP `GET /runs/{run_id}/review/{round}/evidence`.
+    /// - Remark: Generated from `#/paths//runs/{run_id}/review/{round}/evidence/get(getReviewEvidence)`.
+    public func getReviewEvidence(
+        path: Operations.getReviewEvidence.Input.Path,
+        headers: Operations.getReviewEvidence.Input.Headers = .init()
+    ) async throws -> Operations.getReviewEvidence.Output {
+        try await getReviewEvidence(Operations.getReviewEvidence.Input(
             path: path,
             headers: headers
         ))
@@ -1216,7 +1240,7 @@ public enum Components {
                 case run
             }
         }
-        /// A computed, typed daemon-observation timeline for one run. It carries no agent-authored free text; stage and attempt labels come from the Run aggregate and join to invocation_id in these facts (plan §9).
+        /// A computed, typed daemon-observation timeline for one run. Review facts are separate from retained reviewer output, which has its own authenticated route. Stage labels come from the Run aggregate.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/RunTimeline`.
@@ -1253,6 +1277,26 @@ public enum Components {
             public var hold: Components.Schemas.RunTimeline.holdPayload?
             /// - Remark: Generated from `#/components/schemas/RunTimeline/invocations`.
             public var invocations: [Components.Schemas.InvocationObservation]
+            /// - Remark: Generated from `#/components/schemas/RunTimeline/review`.
+            public struct reviewPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RunTimeline/review/value1`.
+                public var value1: Components.Schemas.RunReviewFacts
+                /// Creates a new `reviewPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.RunReviewFacts) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RunTimeline/review`.
+            public var review: Components.Schemas.RunTimeline.reviewPayload?
             /// The work unit's completion facts once a work_unit_completed milestone ends the timeline; null before then.
             ///
             ///
@@ -1314,6 +1358,7 @@ public enum Components {
             ///   - milestones:
             ///   - hold:
             ///   - invocations:
+            ///   - review:
             ///   - completion: The work unit's completion facts once a work_unit_completed milestone ends the timeline; null before then.
             ///   - billable_cost_so_far: The run's billable spend so far, computed the same way attention cards compute theirs; null before any billable observation.
             public init(
@@ -1323,6 +1368,7 @@ public enum Components {
                 milestones: [Components.Schemas.RunMilestone],
                 hold: Components.Schemas.RunTimeline.holdPayload? = nil,
                 invocations: [Components.Schemas.InvocationObservation],
+                review: Components.Schemas.RunTimeline.reviewPayload? = nil,
                 completion: Components.Schemas.RunTimeline.completionPayload? = nil,
                 billable_cost_so_far: Components.Schemas.RunTimeline.billable_cost_so_farPayload? = nil
             ) {
@@ -1332,6 +1378,7 @@ public enum Components {
                 self.milestones = milestones
                 self.hold = hold
                 self.invocations = invocations
+                self.review = review
                 self.completion = completion
                 self.billable_cost_so_far = billable_cost_so_far
             }
@@ -1342,6 +1389,7 @@ public enum Components {
                 case milestones
                 case hold
                 case invocations
+                case review
                 case completion
                 case billable_cost_so_far
             }
@@ -1371,6 +1419,10 @@ public enum Components {
                     [Components.Schemas.InvocationObservation].self,
                     forKey: .invocations
                 )
+                self.review = try container.decodeIfPresent(
+                    Components.Schemas.RunTimeline.reviewPayload.self,
+                    forKey: .review
+                )
                 self.completion = try container.decodeIfPresent(
                     Components.Schemas.RunTimeline.completionPayload.self,
                     forKey: .completion
@@ -1386,8 +1438,707 @@ public enum Components {
                     "milestones",
                     "hold",
                     "invocations",
+                    "review",
                     "completion",
                     "billable_cost_so_far"
+                ])
+            }
+        }
+        /// Primary review history in ascending round order.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunReviewFacts`.
+        public struct RunReviewFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RunReviewFacts/rounds`.
+            public var rounds: [Components.Schemas.RunReviewRound]
+            /// Creates a new `RunReviewFacts`.
+            ///
+            /// - Parameters:
+            ///   - rounds:
+            public init(rounds: [Components.Schemas.RunReviewRound]) {
+                self.rounds = rounds
+            }
+            public enum CodingKeys: String, CodingKey {
+                case rounds
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.rounds = try container.decode(
+                    [Components.Schemas.RunReviewRound].self,
+                    forKey: .rounds
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "rounds"
+                ])
+            }
+        }
+        /// Progress derived from request, invocation and terminal review facts.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewProgressState`.
+        @frozen public enum ReviewProgressState: String, Codable, Hashable, Sendable, CaseIterable {
+            case pending = "pending"
+            case running = "running"
+            case completed = "completed"
+            case failed = "failed"
+        }
+        /// Origin of daemon-held facts. Today kind is freeside_invoked and status is null. Open strings reserve future external sources and quarantined/promoted status.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewSource`.
+        public struct ReviewSource: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReviewSource/kind`.
+            public var kind: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReviewSource/status`.
+            public var status: Swift.String?
+            /// Creates a new `ReviewSource`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - status:
+            public init(
+                kind: Swift.String,
+                status: Swift.String? = nil
+            ) {
+                self.kind = kind
+                self.status = status
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case status
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Swift.String.self,
+                    forKey: .kind
+                )
+                self.status = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .status
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "status"
+                ])
+            }
+        }
+        /// Counts of immutable dispositions and findings still open in one round.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewRoundDispositions`.
+        public struct ReviewRoundDispositions: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundDispositions/fixed`.
+            public var fixed: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundDispositions/declined`.
+            public var declined: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundDispositions/deferred`.
+            public var deferred: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundDispositions/open`.
+            public var open: Swift.Int
+            /// Creates a new `ReviewRoundDispositions`.
+            ///
+            /// - Parameters:
+            ///   - fixed:
+            ///   - declined:
+            ///   - deferred:
+            ///   - open:
+            public init(
+                fixed: Swift.Int,
+                declined: Swift.Int,
+                deferred: Swift.Int,
+                open: Swift.Int
+            ) {
+                self.fixed = fixed
+                self.declined = declined
+                self.deferred = deferred
+                self.open = open
+            }
+            public enum CodingKeys: String, CodingKey {
+                case fixed
+                case declined
+                case deferred
+                case open
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.fixed = try container.decode(
+                    Swift.Int.self,
+                    forKey: .fixed
+                )
+                self.declined = try container.decode(
+                    Swift.Int.self,
+                    forKey: .declined
+                )
+                self.deferred = try container.decode(
+                    Swift.Int.self,
+                    forKey: .deferred
+                )
+                self.open = try container.decode(
+                    Swift.Int.self,
+                    forKey: .open
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "fixed",
+                    "declined",
+                    "deferred",
+                    "open"
+                ])
+            }
+        }
+        /// The daemon-recorded failure class and diagnostic for one review round.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewRoundFailure`.
+        public struct ReviewRoundFailure: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundFailure/class`.
+            public var _class: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundFailure/reason`.
+            public var reason: Swift.String
+            /// Creates a new `ReviewRoundFailure`.
+            ///
+            /// - Parameters:
+            ///   - _class:
+            ///   - reason:
+            public init(
+                _class: Swift.String,
+                reason: Swift.String
+            ) {
+                self._class = _class
+                self.reason = reason
+            }
+            public enum CodingKeys: String, CodingKey {
+                case _class = "class"
+                case reason
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self._class = try container.decode(
+                    Swift.String.self,
+                    forKey: ._class
+                )
+                self.reason = try container.decode(
+                    Swift.String.self,
+                    forKey: .reason
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "class",
+                    "reason"
+                ])
+            }
+        }
+        /// Whether authenticated retained reviewer output can be inspected.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewEvidenceAvailability`.
+        @frozen public enum ReviewEvidenceAvailability: String, Codable, Hashable, Sendable, CaseIterable {
+            case available = "available"
+            case unavailable = "unavailable"
+            case unknown = "unknown"
+        }
+        /// Completion evidence identity and availability of its retained reviewer output.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewRoundEvidence`.
+        public struct ReviewRoundEvidence: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundEvidence/completion_evidence`.
+            public struct completion_evidencePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ReviewRoundEvidence/completion_evidence/value1`.
+                public var value1: Components.Schemas.Digest
+                /// Creates a new `completion_evidencePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.Digest) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundEvidence/completion_evidence`.
+            public var completion_evidence: Components.Schemas.ReviewRoundEvidence.completion_evidencePayload?
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundEvidence/availability`.
+            public var availability: Components.Schemas.ReviewEvidenceAvailability
+            /// Creates a new `ReviewRoundEvidence`.
+            ///
+            /// - Parameters:
+            ///   - completion_evidence:
+            ///   - availability:
+            public init(
+                completion_evidence: Components.Schemas.ReviewRoundEvidence.completion_evidencePayload? = nil,
+                availability: Components.Schemas.ReviewEvidenceAvailability
+            ) {
+                self.completion_evidence = completion_evidence
+                self.availability = availability
+            }
+            public enum CodingKeys: String, CodingKey {
+                case completion_evidence
+                case availability
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.completion_evidence = try container.decodeIfPresent(
+                    Components.Schemas.ReviewRoundEvidence.completion_evidencePayload.self,
+                    forKey: .completion_evidence
+                )
+                self.availability = try container.decode(
+                    Components.Schemas.ReviewEvidenceAvailability.self,
+                    forKey: .availability
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "completion_evidence",
+                    "availability"
+                ])
+            }
+        }
+        /// One primary review round joined by invocation, run, round, base and head. Null request time identifies historical records predating request facts. Missing identity, outcome or count is unknown, never clean.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunReviewRound`.
+        public struct RunReviewRound: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/round`.
+            public var round: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/invocation_id`.
+            public var invocation_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/state`.
+            public var state: Components.Schemas.ReviewProgressState
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/source`.
+            public var source: Components.Schemas.ReviewSource
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/base_sha`.
+            public var base_sha: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/head_sha`.
+            public var head_sha: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/requested_at`.
+            public var requested_at: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/completed_at`.
+            public var completed_at: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/provider`.
+            public var provider: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/model_configuration`.
+            public var model_configuration: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/outcome`.
+            public struct outcomePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RunReviewRound/outcome/value1`.
+                public var value1: Components.Schemas.ReviewOutcome
+                /// Creates a new `outcomePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ReviewOutcome) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/outcome`.
+            public var outcome: Components.Schemas.RunReviewRound.outcomePayload?
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/findings_count`.
+            public var findings_count: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/dispositions`.
+            public struct dispositionsPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RunReviewRound/dispositions/value1`.
+                public var value1: Components.Schemas.ReviewRoundDispositions
+                /// Creates a new `dispositionsPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ReviewRoundDispositions) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/dispositions`.
+            public var dispositions: Components.Schemas.RunReviewRound.dispositionsPayload?
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/failure`.
+            public struct failurePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RunReviewRound/failure/value1`.
+                public var value1: Components.Schemas.ReviewRoundFailure
+                /// Creates a new `failurePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ReviewRoundFailure) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/failure`.
+            public var failure: Components.Schemas.RunReviewRound.failurePayload?
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/retry_pending`.
+            public var retry_pending: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/evidence`.
+            public var evidence: Components.Schemas.ReviewRoundEvidence
+            /// Creates a new `RunReviewRound`.
+            ///
+            /// - Parameters:
+            ///   - round:
+            ///   - invocation_id:
+            ///   - state:
+            ///   - source:
+            ///   - base_sha:
+            ///   - head_sha:
+            ///   - requested_at:
+            ///   - completed_at:
+            ///   - provider:
+            ///   - model_configuration:
+            ///   - outcome:
+            ///   - findings_count:
+            ///   - dispositions:
+            ///   - failure:
+            ///   - retry_pending:
+            ///   - evidence:
+            public init(
+                round: Swift.Int,
+                invocation_id: Swift.String,
+                state: Components.Schemas.ReviewProgressState,
+                source: Components.Schemas.ReviewSource,
+                base_sha: Swift.String,
+                head_sha: Swift.String,
+                requested_at: Foundation.Date? = nil,
+                completed_at: Foundation.Date? = nil,
+                provider: Swift.String? = nil,
+                model_configuration: Swift.String? = nil,
+                outcome: Components.Schemas.RunReviewRound.outcomePayload? = nil,
+                findings_count: Swift.Int? = nil,
+                dispositions: Components.Schemas.RunReviewRound.dispositionsPayload? = nil,
+                failure: Components.Schemas.RunReviewRound.failurePayload? = nil,
+                retry_pending: Swift.Bool,
+                evidence: Components.Schemas.ReviewRoundEvidence
+            ) {
+                self.round = round
+                self.invocation_id = invocation_id
+                self.state = state
+                self.source = source
+                self.base_sha = base_sha
+                self.head_sha = head_sha
+                self.requested_at = requested_at
+                self.completed_at = completed_at
+                self.provider = provider
+                self.model_configuration = model_configuration
+                self.outcome = outcome
+                self.findings_count = findings_count
+                self.dispositions = dispositions
+                self.failure = failure
+                self.retry_pending = retry_pending
+                self.evidence = evidence
+            }
+            public enum CodingKeys: String, CodingKey {
+                case round
+                case invocation_id
+                case state
+                case source
+                case base_sha
+                case head_sha
+                case requested_at
+                case completed_at
+                case provider
+                case model_configuration
+                case outcome
+                case findings_count
+                case dispositions
+                case failure
+                case retry_pending
+                case evidence
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.round = try container.decode(
+                    Swift.Int.self,
+                    forKey: .round
+                )
+                self.invocation_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .invocation_id
+                )
+                self.state = try container.decode(
+                    Components.Schemas.ReviewProgressState.self,
+                    forKey: .state
+                )
+                self.source = try container.decode(
+                    Components.Schemas.ReviewSource.self,
+                    forKey: .source
+                )
+                self.base_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .base_sha
+                )
+                self.head_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .head_sha
+                )
+                self.requested_at = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .requested_at
+                )
+                self.completed_at = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .completed_at
+                )
+                self.provider = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .provider
+                )
+                self.model_configuration = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .model_configuration
+                )
+                self.outcome = try container.decodeIfPresent(
+                    Components.Schemas.RunReviewRound.outcomePayload.self,
+                    forKey: .outcome
+                )
+                self.findings_count = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .findings_count
+                )
+                self.dispositions = try container.decodeIfPresent(
+                    Components.Schemas.RunReviewRound.dispositionsPayload.self,
+                    forKey: .dispositions
+                )
+                self.failure = try container.decodeIfPresent(
+                    Components.Schemas.RunReviewRound.failurePayload.self,
+                    forKey: .failure
+                )
+                self.retry_pending = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .retry_pending
+                )
+                self.evidence = try container.decode(
+                    Components.Schemas.ReviewRoundEvidence.self,
+                    forKey: .evidence
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "round",
+                    "invocation_id",
+                    "state",
+                    "source",
+                    "base_sha",
+                    "head_sha",
+                    "requested_at",
+                    "completed_at",
+                    "provider",
+                    "model_configuration",
+                    "outcome",
+                    "findings_count",
+                    "dispositions",
+                    "failure",
+                    "retry_pending",
+                    "evidence"
+                ])
+            }
+        }
+        /// Private retained reviewer output, re-authenticated on read. Labeled agent claims, never publishable verifier evidence. Bytes obey the review collection limits.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewEvidence`.
+        public struct ReviewEvidence: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/source`.
+            public var source: Components.Schemas.ReviewSource
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/run_id`.
+            public var run_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/round`.
+            public var round: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/invocation_id`.
+            public var invocation_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/content_kind`.
+            @frozen public enum content_kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case reviewer_output = "reviewer_output"
+            }
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/content_kind`.
+            public var content_kind: Components.Schemas.ReviewEvidence.content_kindPayload
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/head_binding`.
+            @frozen public enum head_bindingPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case head_bound = "head_bound"
+            }
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/head_binding`.
+            public var head_binding: Components.Schemas.ReviewEvidence.head_bindingPayload
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/source_head_sha`.
+            public var source_head_sha: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/sensitivity_class`.
+            @frozen public enum sensitivity_classPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case sensitive = "sensitive"
+            }
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/sensitivity_class`.
+            public var sensitivity_class: Components.Schemas.ReviewEvidence.sensitivity_classPayload
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/publish_eligible`.
+            public var publish_eligible: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/availability`.
+            public var availability: Components.Schemas.ReviewEvidenceAvailability
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/collection_evidence`.
+            public struct collection_evidencePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ReviewEvidence/collection_evidence/value1`.
+                public var value1: Components.Schemas.Digest
+                /// Creates a new `collection_evidencePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.Digest) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/collection_evidence`.
+            public var collection_evidence: Components.Schemas.ReviewEvidence.collection_evidencePayload?
+            /// Lossless base64-encoded retained transcript bytes.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/events`.
+            public var events: OpenAPIRuntime.Base64EncodedData?
+            /// Lossless base64-encoded retained result bytes.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/result`.
+            public var result: OpenAPIRuntime.Base64EncodedData?
+            /// - Remark: Generated from `#/components/schemas/ReviewEvidence/exit_status`.
+            public var exit_status: Swift.Int?
+            /// Creates a new `ReviewEvidence`.
+            ///
+            /// - Parameters:
+            ///   - source:
+            ///   - run_id:
+            ///   - round:
+            ///   - invocation_id:
+            ///   - content_kind:
+            ///   - head_binding:
+            ///   - source_head_sha:
+            ///   - sensitivity_class:
+            ///   - publish_eligible:
+            ///   - availability:
+            ///   - collection_evidence:
+            ///   - events: Lossless base64-encoded retained transcript bytes.
+            ///   - result: Lossless base64-encoded retained result bytes.
+            ///   - exit_status:
+            public init(
+                source: Components.Schemas.ReviewSource,
+                run_id: Swift.String,
+                round: Swift.Int,
+                invocation_id: Swift.String,
+                content_kind: Components.Schemas.ReviewEvidence.content_kindPayload,
+                head_binding: Components.Schemas.ReviewEvidence.head_bindingPayload,
+                source_head_sha: Swift.String,
+                sensitivity_class: Components.Schemas.ReviewEvidence.sensitivity_classPayload,
+                publish_eligible: Swift.Bool,
+                availability: Components.Schemas.ReviewEvidenceAvailability,
+                collection_evidence: Components.Schemas.ReviewEvidence.collection_evidencePayload? = nil,
+                events: OpenAPIRuntime.Base64EncodedData? = nil,
+                result: OpenAPIRuntime.Base64EncodedData? = nil,
+                exit_status: Swift.Int? = nil
+            ) {
+                self.source = source
+                self.run_id = run_id
+                self.round = round
+                self.invocation_id = invocation_id
+                self.content_kind = content_kind
+                self.head_binding = head_binding
+                self.source_head_sha = source_head_sha
+                self.sensitivity_class = sensitivity_class
+                self.publish_eligible = publish_eligible
+                self.availability = availability
+                self.collection_evidence = collection_evidence
+                self.events = events
+                self.result = result
+                self.exit_status = exit_status
+            }
+            public enum CodingKeys: String, CodingKey {
+                case source
+                case run_id
+                case round
+                case invocation_id
+                case content_kind
+                case head_binding
+                case source_head_sha
+                case sensitivity_class
+                case publish_eligible
+                case availability
+                case collection_evidence
+                case events
+                case result
+                case exit_status
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.source = try container.decode(
+                    Components.Schemas.ReviewSource.self,
+                    forKey: .source
+                )
+                self.run_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .run_id
+                )
+                self.round = try container.decode(
+                    Swift.Int.self,
+                    forKey: .round
+                )
+                self.invocation_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .invocation_id
+                )
+                self.content_kind = try container.decode(
+                    Components.Schemas.ReviewEvidence.content_kindPayload.self,
+                    forKey: .content_kind
+                )
+                self.head_binding = try container.decode(
+                    Components.Schemas.ReviewEvidence.head_bindingPayload.self,
+                    forKey: .head_binding
+                )
+                self.source_head_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .source_head_sha
+                )
+                self.sensitivity_class = try container.decode(
+                    Components.Schemas.ReviewEvidence.sensitivity_classPayload.self,
+                    forKey: .sensitivity_class
+                )
+                self.publish_eligible = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .publish_eligible
+                )
+                self.availability = try container.decode(
+                    Components.Schemas.ReviewEvidenceAvailability.self,
+                    forKey: .availability
+                )
+                self.collection_evidence = try container.decodeIfPresent(
+                    Components.Schemas.ReviewEvidence.collection_evidencePayload.self,
+                    forKey: .collection_evidence
+                )
+                self.events = try container.decodeIfPresent(
+                    OpenAPIRuntime.Base64EncodedData.self,
+                    forKey: .events
+                )
+                self.result = try container.decodeIfPresent(
+                    OpenAPIRuntime.Base64EncodedData.self,
+                    forKey: .result
+                )
+                self.exit_status = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .exit_status
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "source",
+                    "run_id",
+                    "round",
+                    "invocation_id",
+                    "content_kind",
+                    "head_binding",
+                    "source_head_sha",
+                    "sensitivity_class",
+                    "publish_eligible",
+                    "availability",
+                    "collection_evidence",
+                    "events",
+                    "result",
+                    "exit_status"
                 ])
             }
         }
@@ -10954,6 +11705,171 @@ public enum Operations {
             /// No entity exists under the identifier.
             ///
             /// - Remark: Generated from `#/paths//runs/{run_id}/timeline/get(getRunTimeline)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Read retained reviewer output for one round
+    ///
+    /// Re-authenticates private retained output against the originating run and exact reviewed base/head. Integrity errors return no partial content.
+    ///
+    ///
+    /// - Remark: HTTP `GET /runs/{run_id}/review/{round}/evidence`.
+    /// - Remark: Generated from `#/paths//runs/{run_id}/review/{round}/evidence/get(getReviewEvidence)`.
+    public enum getReviewEvidence {
+        public static let id: Swift.String = "getReviewEvidence"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/runs/{run_id}/review/{round}/evidence/GET/path`.
+            public struct Path: Sendable, Hashable {
+                /// The run's identifier.
+                ///
+                /// - Remark: Generated from `#/paths/runs/{run_id}/review/{round}/evidence/GET/path/run_id`.
+                public var run_id: Components.Parameters.RunID
+                /// The one-based review round belonging to this run.
+                ///
+                /// - Remark: Generated from `#/paths/runs/{run_id}/review/{round}/evidence/GET/path/round`.
+                public var round: Swift.Int
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - run_id: The run's identifier.
+                ///   - round: The one-based review round belonging to this run.
+                public init(
+                    run_id: Components.Parameters.RunID,
+                    round: Swift.Int
+                ) {
+                    self.run_id = run_id
+                    self.round = round
+                }
+            }
+            public var path: Operations.getReviewEvidence.Input.Path
+            /// - Remark: Generated from `#/paths/runs/{run_id}/review/{round}/evidence/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getReviewEvidence.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getReviewEvidence.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.getReviewEvidence.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            public init(
+                path: Operations.getReviewEvidence.Input.Path,
+                headers: Operations.getReviewEvidence.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/runs/{run_id}/review/{round}/evidence/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/runs/{run_id}/review/{round}/evidence/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.ReviewEvidence)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ReviewEvidence {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.getReviewEvidence.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.getReviewEvidence.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Labeled reviewer output or explicit unavailable evidence.
+            ///
+            /// - Remark: Generated from `#/paths//runs/{run_id}/review/{round}/evidence/get(getReviewEvidence)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.getReviewEvidence.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.getReviewEvidence.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No entity exists under the identifier.
+            ///
+            /// - Remark: Generated from `#/paths//runs/{run_id}/review/{round}/evidence/get(getReviewEvidence)/responses/404`.
             ///
             /// HTTP response code: `404 notFound`.
             case notFound(Components.Responses.NotFound)

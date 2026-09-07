@@ -45,8 +45,8 @@ func TestWorkUnitCompletedMilestoneMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 66 {
-		t.Fatalf("schema version = %d, want 66", got)
+	if got := rawVersion(t, db); got != 67 {
+		t.Fatalf("schema version = %d, want 67", got)
 	}
 	var kept int
 	if err := db.QueryRowContext(ctx,

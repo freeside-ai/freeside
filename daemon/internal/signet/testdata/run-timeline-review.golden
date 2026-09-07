@@ -1,0 +1,51 @@
+{
+  "as_of_revision": 3,
+  "as_of": "2026-08-12T13:00:00Z",
+  "run_id": "review-run",
+  "milestones": [],
+  "hold": null,
+  "invocations": [
+    {
+      "invocation_id": "review-1",
+      "run_id": "review-run",
+      "status": "running",
+      "live": false,
+      "observed_at": "2026-08-12T12:00:00Z"
+    }
+  ],
+  "completion": null,
+  "review": {
+    "rounds": [
+      {
+        "round": 1,
+        "invocation_id": "review-1",
+        "state": "completed",
+        "source": {
+          "kind": "freeside_invoked",
+          "status": null
+        },
+        "base_sha": "base",
+        "head_sha": "head",
+        "requested_at": "2026-08-12T12:00:00Z",
+        "completed_at": "2026-08-12T12:01:00Z",
+        "provider": "openai",
+        "model_configuration": "codex/high",
+        "outcome": "clean",
+        "findings_count": 0,
+        "dispositions": {
+          "fixed": 0,
+          "declined": 0,
+          "deferred": 0,
+          "open": 0
+        },
+        "failure": null,
+        "retry_pending": false,
+        "evidence": {
+          "completion_evidence": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "availability": "unavailable"
+        }
+      }
+    ]
+  },
+  "billable_cost_so_far": null
+}

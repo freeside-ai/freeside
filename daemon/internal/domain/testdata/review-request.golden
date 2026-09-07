@@ -1,0 +1,8 @@
+{
+  "invocation_id": "review-1",
+  "run_id": "run-1",
+  "round": 1,
+  "base_sha": "base",
+  "head_sha": "head",
+  "requested_at": "2026-09-07T12:00:00Z"
+}

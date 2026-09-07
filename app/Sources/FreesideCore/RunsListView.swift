@@ -680,6 +680,14 @@ enum RunDisplay {
         value.rawValue.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
+    static func label(_ value: Components.Schemas.ReviewProgressState) -> String {
+        value.rawValue.capitalized
+    }
+
+    static func reviewIdentity(_ round: Components.Schemas.RunReviewRound) -> String {
+        "\(round.provider ?? "Reviewer unknown") · \(round.model_configuration ?? "Model unknown")"
+    }
+
     static func label(_ value: Components.Schemas.RunHoldReason) -> String {
         value.rawValue.replacingOccurrences(of: "_", with: " ").capitalized
     }

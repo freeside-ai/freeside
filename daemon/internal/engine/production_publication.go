@@ -35,6 +35,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 const (
@@ -2955,6 +2956,9 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		return productionReviewPending, err
 	}
 	reviewWorkspace := req.Workspace
+	if err := w.recordReviewRequest(ctx, id, req); err != nil {
+		return productionReviewPending, err
+	}
 	authorityVerifier, ok := w.reviewSource.(exec.ReviewRequestAuthorityVerifier)
 	if !ok {
 		return w.recordReviewSourceFailure(ctx, task, id, round,
@@ -3040,6 +3044,9 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		return w.retryOrRecordReviewFailure(
 			ctx, task, id, round, binding.admission.Base.BaseSHA, task.HeadSHA, err,
 		)
+	}
+	if err := w.observeReviewInvocation(ctx, task.RunID, id, status); err != nil {
+		return productionReviewPending, err
 	}
 	if status == exec.StatusPending || status == exec.StatusRunning {
 		return productionReviewPending, nil
@@ -6072,4 +6079,74 @@ func (w *productionPublicationWorkflow) finishTask(
 	return w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.MarkOutboxDispatched(ctx, task.intentKey())
 	})
+}
+
+// recordReviewRequest preserves the first attempt instant. RequestReview may
+// fail or be replayed after a crash; neither changes the request's binding.
+func (w *productionPublicationWorkflow) recordReviewRequest(ctx context.Context, id domain.InvocationID, req exec.ReviewRequest) error {
+	var prior domain.ReviewRequestRecord
+	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		prior, err = tx.GetReviewRequest(ctx, id)
+		return err
+	})
+	if err == nil {
+		if prior.RunID != req.RunID || prior.Round != req.Round || prior.BaseSHA != req.BaseSHA || prior.HeadSHA != req.HeadSHA {
+			return domain.ErrParentKeyMismatch
+		}
+		return nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	// Before migration 67, an in-flight Codex request has only its provider
+	// journal. Codex persists that request before launch; absence therefore
+	// identifies a new request, while a damaged row must fail closed.
+	err = w.store.Read(ctx, func(tx *store.ReadTx) error {
+		row, err := tx.GetCodexReviewRequest(ctx, string(id))
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		binding := domain.ReviewRequestRecord{InvocationID: id, RunID: req.RunID, Round: req.Round, BaseSHA: req.BaseSHA, HeadSHA: req.HeadSHA}
+		original, err := ward.DecodeRetainedCodexReviewRequestFacts(binding, row.Body, row.BodyDigest)
+		if err != nil {
+			return err
+		}
+		req.RequestedAt = original.RequestedAt
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return w.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewRequest(ctx, domain.ReviewRequestRecord{
+			InvocationID: id, RunID: req.RunID, Round: req.Round, BaseSHA: req.BaseSHA, HeadSHA: req.HeadSHA, RequestedAt: req.RequestedAt,
+		})
+	})
+}
+
+// ReviewSource reports status, not the stage driver's separate Live evidence.
+// Preserve that distinction while using the same paced observation vocabulary.
+func (w *productionPublicationWorkflow) observeReviewInvocation(ctx context.Context, runID domain.RunID, id domain.InvocationID, status exec.Status) error {
+	observed, ok := observedStatus(status)
+	if !ok {
+		return nil
+	}
+	now := w.now().UTC()
+	key := "review:" + string(id)
+	if !w.holdPace.due(key, string(observed), now) {
+		return nil
+	}
+	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.RecordInvocationObservation(ctx, domain.InvocationObservation{
+			InvocationID: id, RunID: runID, Status: observed, Live: false, ObservedAt: now,
+		})
+	}); err != nil {
+		w.holdPace.forget(key)
+		return err
+	}
+	return nil
 }

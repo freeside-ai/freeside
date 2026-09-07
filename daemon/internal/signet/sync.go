@@ -150,6 +150,7 @@ type RunTimeline struct {
 	Hold              *domain.RunHoldObservation     `json:"hold"`
 	Invocations       []domain.InvocationObservation `json:"invocations"`
 	Completion        *WorkUnitCompletionFacts       `json:"completion"`
+	Review            *RunReviewFacts                `json:"review"`
 	BillableCostSoFar *domain.CostSoFar              `json:"billable_cost_so_far"`
 }
 
@@ -671,6 +672,10 @@ func (s *Service) GetRunTimeline(ctx context.Context, id domain.RunID) (RunTimel
 		if err != nil {
 			return asRunObservationIntegrityError(err)
 		}
+		facts.review, err = runReviewFacts(ctx, tx, id, observation.Invocations)
+		if err != nil {
+			return asRunObservationIntegrityError(err)
+		}
 		out = runTimeline(observation, state.Revision, time.Now().UTC(), facts)
 		return nil
 	})
@@ -861,6 +866,7 @@ func runTimeline(
 		Hold:              observation.Hold,
 		Invocations:       nonNilSlice(observation.Invocations),
 		Completion:        facts.completion,
+		Review:            facts.review,
 		BillableCostSoFar: facts.cost,
 	}
 }
@@ -869,6 +875,7 @@ func runTimeline(
 // carry beyond the observation itself (#1134): the authenticated completion
 // record's wire facts, the superseding attempt, and the spend figure.
 type runProjectionFacts struct {
+	review       *RunReviewFacts
 	completion   *WorkUnitCompletionFacts
 	supersededBy *domain.RunID
 	cost         *domain.CostSoFar
@@ -1255,8 +1262,10 @@ func authenticateRunObservation(
 	}
 	for _, invocation := range observation.Invocations {
 		if _, ok := attempts[invocation.InvocationID]; !ok {
-			return fmt.Errorf("invocation observation %q is not an attempt of run %q: %w",
-				invocation.InvocationID, run.ID, domain.ErrParentKeyMismatch)
+			if err := authenticateReviewObservation(ctx, tx, run.ID, invocation.InvocationID); err != nil {
+				return fmt.Errorf("invocation observation %q is not bound to run %q: %w: %w",
+					invocation.InvocationID, run.ID, domain.ErrParentKeyMismatch, err)
+			}
 		}
 	}
 	if observation.Hold != nil {

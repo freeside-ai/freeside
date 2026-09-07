@@ -47,6 +47,7 @@
     "bound_issue": 724,
     "recorded_at": "2026-08-10T15:34:56Z"
   },
+  "review": null,
   "billable_cost_so_far": {
     "currency": "USD",
     "amount": "17.5",
