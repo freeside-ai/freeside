@@ -63,6 +63,16 @@ public enum RunFixtures {
             from: completedTimeline())
     }
 
+    /// An approved specification handed to implementation in the same attempt.
+    /// Kept separate from the default mock scenarios for focused presentation tests.
+    public static func handedOffSpecificationRun() -> Components.Schemas.RunSnapshot {
+        snapshot(
+            id: "run-freeside-specification-bound", projectID: "freeside", stage: "specification",
+            attempt: 1, milestone: .run_submitted, outcome: .pending,
+            lifecycle: .finished, campaignID: "campaign-freeside-ready", campaignAttempt: 1,
+            supersededBy: readyRunID, workUnit: "#654")
+    }
+
     public static func completedTimeline() -> Components.Schemas.RunTimeline {
         .init(
             as_of_revision: 12, as_of: date(2_400), run_id: completedRunID,

@@ -407,6 +407,90 @@ import Testing
         #expect(RunDisplay.identityLine(noCampaign, runs: runs) == nil)
     }
 
+    @Test func specificationHandoffUsesSourceFactsWithOrWithoutSuccessor() {
+        let run = RunFixtures.handedOffSpecificationRun().run
+        let runs = RunFixtures.defaultRuns()
+        #expect(
+            RunDisplay.identityLine(run, runs: runs)
+                == "Attempt 1 · handed off to implementation (attempt 1)")
+        #expect(
+            RunDisplay.secondaryLine(run, runs: runs)
+                == .supersession("Handed off to implementation (attempt 1)"))
+        #expect(
+            RunDisplay.identityLine(run, runs: [])
+                == "Attempt 1 · handed off to implementation (run-freeside-654)")
+        #expect(
+            RunDisplay.secondaryLine(run)
+                == .supersession("Handed off to implementation (run-freeside-654)"))
+        let rail = RunDisplay.stageRail(run)
+        #expect(rail.entries.map(\.state) == [.completed, .pending, .pending, .pending])
+        #expect(rail.summary == "Specification completed, Implementation pending, Review pending, Verification pending")
+    }
+
+    @Test func handoffRequiresBoundCampaignSpecificationShape() {
+        let bound = RunFixtures.handedOffSpecificationRun().run
+        var unbound = bound
+        unbound.superseded_by = nil
+        unbound.lifecycle = .active
+        #expect(RunDisplay.identityLine(unbound, runs: []) == "Attempt 1")
+        #expect(RunDisplay.secondaryLine(unbound) == .milestone("Run Submitted"))
+        #expect(RunDisplay.stageRail(unbound).entries.first?.state == .current)
+
+        var noCampaign = bound
+        noCampaign.campaign_id = nil
+        var noAttempt = bound
+        noAttempt.attempt_number = nil
+        var mixed = bound
+        mixed.stages.append(.init(id: "implement", run_id: bound.id, name: "implement", attempts: []))
+        var noStages = bound
+        noStages.stages = []
+        var active = bound
+        active.lifecycle = .active
+        var implementation = bound
+        implementation.stages[0].name = "implement"
+        for run in [noCampaign, noAttempt, mixed, noStages, active, implementation] {
+            #expect(
+                RunDisplay.secondaryLine(run, runs: RunFixtures.defaultRuns())
+                    == .supersession("Superseded by attempt 1"))
+            #expect(!(RunDisplay.identityLine(run, runs: []) ?? "").contains("handed off"))
+        }
+        // An equal-number successor on an implementation is still not a handoff.
+        #expect(
+            RunDisplay.identityLine(implementation, runs: RunFixtures.defaultRuns())
+                == "Attempt 1 · superseded by attempt 1")
+    }
+
+    @Test func stageRailRespectsLifecycleWithoutInventingSuccess() {
+        let outcomes: [(Components.Schemas.RunOutcome, DecisionStageRailPresentation.State)] = [
+            (.pending, .pending), (.blocked, .pending), (.unobserved, .pending),
+            (.failed, .failed), (.lost, .failed), (.completed, .completed), (.published, .completed),
+        ]
+        for (outcome, finishedState) in outcomes {
+            for specification in [false, true] {
+                var run =
+                    specification
+                    ? RunFixtures.handedOffSpecificationRun().run : RunFixtures.defaultRuns()[0].run
+                run.lifecycle = .finished
+                run.superseded_by = "successor"
+                run.outcome = outcome
+                let expected: DecisionStageRailPresentation.State =
+                    specification && outcome == .pending ? .completed : finishedState
+                let rail = RunDisplay.stageRail(run)
+                let index = specification ? 0 : 1
+                #expect(rail.entries[index].state == expected)
+                #expect(!rail.entries.contains { $0.state == .current })
+                #expect(!rail.summary.contains("current"))
+                #expect(rail.entries.enumerated().allSatisfy { $0.offset == index || $0.element.state == .pending })
+
+                run.lifecycle = .active
+                run.superseded_by = nil
+                let activeState: DecisionStageRailPresentation.State =
+                    outcome == .pending || outcome == .blocked ? .current : finishedState
+                #expect(RunDisplay.stageRail(run).entries[index].state == activeState)
+            }
+        }
+    }
+
     @Test func spendUsesAttentionCardWording() throws {
         let active = RunFixtures.defaultRuns()[0].run
         let cost = try #require(active.billable_cost_so_far?.value1)
