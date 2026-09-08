@@ -408,6 +408,8 @@ func (e *Engine) reconcileOperatorFeedbackActions(
 func (w *productionPublicationWorkflow) reconcileOperatorFeedback(ctx context.Context) (int, error) {
 	return (&Engine{
 		store: w.store, signet: w.signet, productionPublication: w,
+		productionDeliveryValidator: w.validateDelivery,
+		admission:                   w.feedbackAdmission,
 	}).reconcileOperatorFeedbackActions(ctx, domain.ActionReturnToAgent)
 }
 

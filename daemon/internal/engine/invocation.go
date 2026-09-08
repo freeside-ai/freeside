@@ -628,6 +628,14 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)
 		if err != nil {
+			if errors.Is(err, ErrProductionInputUndeliverable) {
+				if failureErr := e.recordProductionDeliveryRefusal(
+					ctx, binding.run, stage, request.InvocationID, err.Error(),
+				); failureErr != nil {
+					return started, failureErr
+				}
+				continue
+			}
 			if reason, ok := dispatchHoldReason(err); ok {
 				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason); obsErr != nil {
 					return started, obsErr
