@@ -36,9 +36,13 @@ import Testing
         #expect(RunDisplay.round(stage) == nil)
     }
 
-    @Test func timelineTitleIsTheCampaignIdentityOrTheRunID() throws {
+    @Test func timelineTitleIsTheAttemptNumberOrTheRunID() throws {
         var run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
-        #expect(RunDisplay.timelineTitle(run) == "Campaign campaign-freeside-acceptance · Attempt 2")
+        #expect(try #require(run.campaign_id).count == 73)
+        #expect(RunDisplay.timelineTitle(run) == "Attempt 2")
+
+        run.campaign_id = "campaign-short"
+        #expect(RunDisplay.timelineTitle(run) == "Attempt 2")
 
         run.attempt_number = nil
         #expect(RunDisplay.timelineTitle(run) == RunFixtures.activeRunID)

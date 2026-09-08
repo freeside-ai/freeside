@@ -31,6 +31,7 @@ struct RunTimelineView: View {
 
     let coordinator: SyncCoordinator
     let snapshot: Components.Schemas.RunSnapshot
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var timeline: Components.Schemas.RunTimeline? {
         coordinator.timelinesByRunID[snapshot.run.id]
@@ -39,7 +40,7 @@ struct RunTimelineView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                header
+                header(at: dynamicTypeSize)
                 if let timeline {
                     if let hold = timeline.hold?.value1 {
                         holdCard(hold)
@@ -80,9 +81,9 @@ struct RunTimelineView: View {
     /// The project-owned timeline composition with fixture data supplied
     /// directly because ImageRenderer never executes the loading task.
     @ViewBuilder
-    func screenshotContent(_ timeline: Components.Schemas.RunTimeline) -> some View {
+    func screenshotContent(_ timeline: Components.Schemas.RunTimeline, at size: DynamicTypeSize) -> some View {
         VStack(alignment: .leading, spacing: 22) {
-            header
+            header(at: size)
             if let hold = timeline.hold?.value1 {
                 holdCard(hold)
             }
@@ -95,15 +96,24 @@ struct RunTimelineView: View {
         .foregroundStyle(Color.ink)
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
+    private func header(at size: DynamicTypeSize) -> some View {
+        let accessibilityLayout = size >= .accessibility1
+        let layout =
+            accessibilityLayout
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout())
+        return VStack(alignment: .leading, spacing: 10) {
+            layout {
                 VStack(alignment: .leading, spacing: 4) {
                     eyebrow
                     Text(RunDisplay.timelineTitle(snapshot.run))
                         .font(FreesideFont.largeTitle)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                Spacer()
+                if !accessibilityLayout {
+                    Spacer()
+                }
                 RunOutcomeBadge(outcome: snapshot.run.outcome)
             }
             HStack(spacing: 14) {
@@ -123,6 +133,14 @@ struct RunTimelineView: View {
                 if let reason = snapshot.run.attempt_reason {
                     Text("Reason: \(reason)")
                         .font(FreesideFont.callout)
+                }
+                if let campaignID = snapshot.run.campaign_id {
+                    Text("Campaign: \(campaignID)")
+                        .font(FreesideFont.monoCaption)
+                        .textSelection(.enabled)
+                        .contextMenu {
+                            Button("Copy campaign ID") { copy(campaignID) }
+                        }
                 }
                 if let parent = snapshot.run.parent_run_id {
                     Text("Parent run: \(parent)")
@@ -151,7 +169,7 @@ struct RunTimelineView: View {
         }
         .contextMenu {
             Button("Copy run ID") {
-                copyRunID()
+                copy(snapshot.run.id)
             }
         }
     }
@@ -255,12 +273,12 @@ struct RunTimelineView: View {
         return nil
     }
 
-    private func copyRunID() {
+    private func copy(_ string: String) {
         #if os(macOS)
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(snapshot.run.id, forType: .string)
+            NSPasteboard.general.setString(string, forType: .string)
         #elseif os(iOS)
-            UIPasteboard.general.string = snapshot.run.id
+            UIPasteboard.general.string = string
         #endif
     }
 

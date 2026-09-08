@@ -21,7 +21,7 @@ public enum RunFixtures {
                 id: activeRunID, projectID: "freeside", stage: "implementation",
                 attempt: 2, milestone: .invocation_started, outcome: .pending,
                 lifecycle: .active, hold: .verification_findings,
-                campaignID: "campaign-freeside-acceptance",
+                campaignID: "campaign-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                 campaignAttempt: 2, attemptReason: "Retry after repairing the acceptance rig",
                 parentRunID: "run-freeside-656", cost: activeCost, workUnit: "#724"),
             snapshot(
@@ -40,7 +40,8 @@ public enum RunFixtures {
             snapshot(
                 id: "run-freeside-656", projectID: "freeside", stage: "implementation",
                 attempt: 1, milestone: .terminal_recorded, outcome: .failed, lifecycle: .finished,
-                campaignID: "campaign-freeside-acceptance", campaignAttempt: 1,
+                campaignID: "campaign-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                campaignAttempt: 1,
                 supersededBy: activeRunID, workUnit: "#724"),
             snapshot(
                 id: "run-freeside-specification", projectID: "freeside", stage: "specification",
