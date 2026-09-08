@@ -28,7 +28,7 @@ const (
 
 const canonicalOutboxPublicationInsertTriggerSQL = `CREATE TRIGGER outbox_publication_intent_requires_current_insert
 BEFORE INSERT ON outbox
-WHEN NEW.kind = 'publish.publication' AND NEW.payload_version != 2
+WHEN NEW.kind = 'publish.publication' AND NEW.payload_version != 3
 BEGIN
     SELECT RAISE(ABORT, 'new publication intents require current payload version');
 END`

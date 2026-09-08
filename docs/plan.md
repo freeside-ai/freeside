@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 48
+revision: 49
 status: active
-updated: 2026-09-07
+updated: 2026-09-08
 ---
 
 # Freeside
@@ -2493,8 +2493,11 @@ Four machine-enforced rules govern evidence:
    type, and size only. Server code never decodes an image; clients and GitHub
    render it.
 4. **EvidencePublisher owns publication.** It lives in git/publish and follows
-   effectively-once discipline through digest-derived names,
-   check-before-create, and deterministic PR-section markers. It waits for 1B
+   effectively-once discipline through stable publication identities,
+   check-before-create, and deterministic PR-section markers. The identity
+   derives the default head branch; an operator may declare an exact branch
+   to meet the repository convention. The durable intent binds that name
+   before dispatch, and retries cannot change it. It waits for 1B
    because the first repository is deliberately non-UI (Section [11](#11-roadmap-build-order-and-coordination)). Phase 1A
    ships the artifact schema, provenance enforcement, and client rendering; 1B
    adds external publication with the first evidence-bearing workflow.
@@ -4300,44 +4303,19 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 48 ("Task Scope, Identity, and Naming"):
+Revision 49 ("Operator-Declared Publication Branches"):
 
-1. **Task scope follows the undertaking across runs** (Sections [4](#4-the-attention-model),
-   [5.12](#512-workflow-definition-initiators-and-artifacts)–[5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection),
-   [7](#7-review-policy), [9](#9-comprehension), [10](#10-operations-and-onboarding), and
-   [11](#11-roadmap-build-order-and-coordination)): attention subjects can name a task;
-   final-review items and base-advance watches follow it across retries.
-   Proposals use `task_proposal`, WIP counts tasks, and task lineage carries
-   follow-up filing and completion. Sync names `Task` and `TaskTimeline`;
-   retry/resume gain task selectors.
-   WIP counts started tasks through completion or explicit abandonment,
-   including waits and final review; unstarted proposals do not reserve slots.
-   Run-bound evidence, approvals, clocks,
-   execution caps, the `blocked` item, and historical wave rows keep their
-   existing scope. The `work_unit_revision_required` enum keeps its name;
-   its prose refers to the task's declared scope carried by a run.
-   (User; #1206; devlog 2026-09-07-1136-task-design-decisions.md.)
-2. **Task identity is opaque; intake idempotency is transactional**
-   (Section [5.12](#512-workflow-definition-initiators-and-artifacts)): mint a task ID
-   and register its project-scoped intake key in one insert-or-fetch
-   transaction. Repeated and concurrent intake converge, rollback leaves no
-   pair, and identical sources in different projects remain separate.
-   Rejected: content-addressing the mutable undertaking and check-then-insert
-   intake. Runs and campaigns retain their content-addressed approval
-   bindings; a revised approved specification starts a new campaign under
-   the same task.
-   (User; #1206; devlog 2026-09-07-1136-task-design-decisions.md.)
-3. **Names are stored, advisory, and stable**
-   (Sections [5.12](#512-workflow-definition-initiators-and-artifacts) and
-   [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)): prefer
-   the operator heading, otherwise use the advisory namer with an identifier
-   fallback. The specifier may refine an agent name once; operator names
-   survive. Approval freezes the name, after which only an explicit operator
-   rename changes it. Task-name and PR-title fields have separate bounds and
-   carry no identity or approval authority. Rejected: repeated automatic
-   renaming and sharing one task-name/PR-title field. This settles the source
-   note's deferred naming choice without rewriting that note.
-   (User; #1206; devlog 2026-09-07-1136-task-design-decisions.md.)
+1. **The operator may declare the exact publication branch** (Section
+   [5.15](#515-evidence-and-images)): the publication identity still derives
+   the default branch and the PR marker. An optional operator-supplied branch
+   satisfies repository naming conventions without changing that identity.
+   The durable intent binds the resolved name before dispatch; retries and
+   recovery reject another branch for the same identity, and foreign refs or
+   PR markers remain conflicts. Legacy records and published refs keep their
+   identity-derived names. Rejected: reading naming authority from repository
+   prose, adding a digest suffix to every declared name, changing the identity
+   encoding, and renaming existing branches.
+   (User; #1216; devlog 2026-09-07-2132-declared-publication-branch.md.)
 
 ## 14. Risks
 

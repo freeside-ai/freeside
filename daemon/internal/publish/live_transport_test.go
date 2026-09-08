@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -164,7 +166,7 @@ func cleanupLiveBranch(t *testing.T, client *http.Client, baseURL string, ts pub
 	}
 	auth := "Bearer " + tok.Token.Reveal()
 	body, err := doLiveCleanupRequest(context.Background(), client, http.MethodGet,
-		fmt.Sprintf("%s/repos/%s/git/ref/heads/%s", baseURL, repo, branch),
+		fmt.Sprintf("%s/repos/%s/git/ref/heads/%s", baseURL, repo, url.PathEscape(branch)),
 		nil, auth, http.StatusOK, http.StatusNotFound)
 	if err != nil {
 		t.Logf("cleanup: read branch %s: %v", branch, err)
@@ -184,8 +186,39 @@ func cleanupLiveBranch(t *testing.T, client *http.Client, baseURL string, ts pub
 		return
 	}
 	if _, err := doLiveCleanupRequest(context.Background(), client, http.MethodDelete,
-		fmt.Sprintf("%s/repos/%s/git/refs/heads/%s", baseURL, repo, branch),
+		fmt.Sprintf("%s/repos/%s/git/refs/heads/%s", baseURL, repo, url.PathEscape(branch)),
 		nil, auth, http.StatusNoContent, http.StatusNotFound); err != nil {
 		t.Logf("cleanup: delete branch %s: %v", branch, err)
+	}
+}
+
+func TestCleanupLiveBranchEscapesNameAndPreservesForeignHead(t *testing.T) {
+	t.Parallel()
+	const branch = "feat/a#b&c+d%2Fe"
+	for _, foreign := range []bool{false, true} {
+		t.Run(fmt.Sprint(foreign), func(t *testing.T) {
+			deleted := false
+			client := &http.Client{Transport: cleanupTransportFunc(func(req *http.Request) (*http.Response, error) {
+				status := http.StatusOK
+				body := `{"object":{"sha":"ours"}}`
+				switch {
+				case req.Method == http.MethodGet && req.URL.Path == "/repos/freeside-ai/evidence-repo/git/ref/heads/"+branch:
+					if foreign {
+						body = `{"object":{"sha":"foreign"}}`
+					}
+				case req.Method == http.MethodDelete && req.URL.Path == "/repos/freeside-ai/evidence-repo/git/refs/heads/"+branch:
+					deleted = true
+					status = http.StatusNoContent
+					body = ""
+				default:
+					t.Fatalf("unexpected cleanup request: %s %s", req.Method, req.URL.RequestURI())
+				}
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+			})}
+			cleanupLiveBranch(t, client, "https://api.github.test", testTokenSource(), "freeside-ai/evidence-repo", branch, "ours")
+			if deleted == foreign {
+				t.Fatalf("deleted = %t, foreign head = %t", deleted, foreign)
+			}
+		})
 	}
 }

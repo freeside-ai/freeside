@@ -28,8 +28,9 @@
 //
 // Deterministic publication identities and reconciliation (issue #81,
 // §5.9, §5.11): a publication identity derives purely from the
-// candidate's digests (DeriveIdentity), naming the branch and the PR
-// marker; every external effect is check-before-create under that
+// candidate's digests (DeriveIdentity), naming the default branch and the PR
+// marker. An operator may declare the head branch, frozen in the intent;
+// every external effect is check-before-create under that
 // identity (Publisher), with the intent recorded through the outbox
 // port (IntentLedger) keyed by invocation ID before dispatch; and the
 // branch and PR reconcile per resource with conditional requests

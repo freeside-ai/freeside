@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 )
 
 // ErrRemoteMissingBase is returned when the managed repository does
@@ -640,9 +642,8 @@ func (t *Transport) fetchBase(
 //
 // The target repository, the pushed commit, and the branch all come
 // from one GatedHead: the repository is its Repo, the head is its
-// SourceHeadSHA, and the branch is its identity's BranchName, so a
-// branch belonging to some other candidate is unrepresentable rather
-// than merely checked. That repository and base ref must be the ones
+// SourceHeadSHA, and the branch is its frozen Branch. That repository and
+// base ref must be the ones
 // the Checkout capability was actually fetched from, so a publication
 // cannot target a branch the enforced base was never reachable from.
 //
@@ -697,7 +698,7 @@ func (t *Transport) PushHead(ctx context.Context, co Checkout, gh GatedHead) (Pu
 	if gh.baseRef != co.baseRef {
 		return PushResult{}, fmt.Errorf("identity targets base ref %q, checkout was fetched from %q: %w", gh.baseRef, co.baseRef, ErrGitTransport)
 	}
-	branch := gh.identity.BranchName()
+	branch := gh.Branch()
 	if !validBranchName(branch) {
 		return PushResult{}, fmt.Errorf("branch %q is not a valid branch name", branch)
 	}
@@ -938,33 +939,7 @@ func ValidateCommitSHA(sha string) error {
 // only to the whole name: "release/.candidate" and
 // "release/candidate.lock" are invalid refs whose whole-name form
 // looks fine.
-func validBranchName(name string) bool {
-	if name == "" || len(name) > 255 {
-		return false
-	}
-	if strings.HasPrefix(name, "-") || strings.Contains(name, "@{") || strings.HasSuffix(name, ".") {
-		return false
-	}
-	for _, c := range name {
-		if c <= ' ' || c == 0x7f {
-			return false
-		}
-		switch c {
-		case ':', '?', '*', '[', '\\', '~', '^':
-			return false
-		}
-	}
-	for _, component := range strings.Split(name, "/") {
-		if component == "" ||
-			strings.HasPrefix(component, ".") ||
-			strings.HasSuffix(component, ".") ||
-			strings.HasSuffix(component, ".lock") ||
-			strings.Contains(component, "..") {
-			return false
-		}
-	}
-	return true
-}
+func validBranchName(name string) bool { return publicationrecord.ValidBranchName(name) }
 
 // ValidateBranchName applies the exact transport refname grammar before a
 // caller commits durable work that will later require FetchBase.

@@ -22,9 +22,8 @@ const IntentKindOutcome = publicationrecord.IntentKindOutcome
 // OutcomeKey, so a re-drive of the same publication converges on the one
 // recorded row rather than recording a second.
 //
-// Every field is a pure function of the publication identity and the one
-// PR that identity converges to, so an Outcome is deterministic per
-// identity. That is deliberate: the attempt axis (which invocation
+// The identity, its frozen branch, and the one PR it converges to make the
+// outcome deterministic per identity. The attempt axis (which invocation
 // published) lives on the outbox intent, not here, so two invocations
 // publishing the same content (a §5.9 operator re-run or crash recovery)
 // produce a byte-identical outcome and converge on the one row instead
@@ -79,6 +78,10 @@ func LoadOutcome(
 	if err != nil {
 		return Outcome{}, false, fmt.Errorf("load publication outcome: identity: %w", err)
 	}
+	branch, err := resolveBranch(id, candidate)
+	if err != nil {
+		return Outcome{}, false, err
+	}
 	key := OutcomeKey(id)
 	var entry store.QueueEntry
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
@@ -112,6 +115,9 @@ func LoadOutcome(
 			"publication outcome %q coordinates disagree with candidate",
 			key,
 		)
+	}
+	if outcome.Branch != branch {
+		return Outcome{}, false, fmt.Errorf("outcome branch %q differs from candidate branch %q: %w", outcome.Branch, branch, ErrPublicationConflict)
 	}
 	if err := verify(ctx, candidate, id, outcome); err != nil {
 		return Outcome{}, false, fmt.Errorf(

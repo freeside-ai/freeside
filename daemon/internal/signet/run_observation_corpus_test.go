@@ -338,7 +338,8 @@ func (f corpusFixture) seedReadyBinding(
 	intent := publicationrecord.Intent{
 		FormatVersion: publicationrecord.IntentFormatCurrent,
 		Identity:      identity, InvocationID: publication,
-		Repo: "owner/repo", BaseRef: "refs/heads/main", SourceHeadSHA: "cafebabe",
+		Branch: publicationrecord.BranchName(identity),
+		Repo:   "owner/repo", BaseRef: "refs/heads/main", SourceHeadSHA: "cafebabe",
 		AuthorizationID:       domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		ProducingInvocationID: producing, ReservationRunID: runID,
 	}

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/migrations"
@@ -38,8 +39,8 @@ func TestReadyReturnActionMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 67 {
-		t.Fatalf("schema version = %d, want 67", got)
+	if got := rawVersion(t, db); got != 68 {
+		t.Fatalf("schema version = %d, want 68", got)
 	}
 
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
@@ -240,7 +241,7 @@ func seedLegacyReadyBinding(t *testing.T, ctx context.Context, db *sql.DB, item 
 	identity := domain.Digest("sha256:" + strings.Repeat("b", 64))
 	publicationInvocationID := domain.InvocationID("publish-production")
 	intentPayload, err := json.Marshal(readyPublicationIntent{
-		FormatVersion: publicationrecord.IntentFormatCurrent,
+		FormatVersion: publicationrecord.IntentFormatHistory,
 		Identity:      identity, InvocationID: publicationInvocationID,
 		Repo: admission.Base.Repo, BaseRef: admission.Base.BaseRef,
 		SourceHeadSHA:         export.HeadSHA,
@@ -293,7 +294,9 @@ func seedLegacyReadyBinding(t *testing.T, ctx context.Context, db *sql.DB, item 
 		t.Fatal(err)
 	}
 	intentKey := "publish/" + string(publicationInvocationID) + "/" + readyPublicationIntentKind
-	if _, _, err := writer.EnqueueOutbox(ctx, intentKey, readyPublicationIntentKind, intentPayload); err != nil {
+	// The pre-upgrade schema admits format 2; preserve that historical row.
+	if _, err := tx.ExecContext(ctx, enqueueOutboxSQL, intentKey, readyPublicationIntentKind,
+		intentPayload, 2, contentaddr.Sum(intentPayload), formatTime(binding.RecordedAt)); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.MarkOutboxDispatched(ctx, intentKey); err != nil {

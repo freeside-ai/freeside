@@ -752,7 +752,8 @@ func seedReadyBindingAuthority(
 	intentPayload, err := (publish.Intent{
 		FormatVersion: publish.IntentFormatCurrent,
 		Identity:      identity.Digest(), InvocationID: publicationInvocationID,
-		Repo: "owner/repo", BaseRef: "main", SourceHeadSHA: headSHA,
+		Branch: identity.BranchName(),
+		Repo:   "owner/repo", BaseRef: "main", SourceHeadSHA: headSHA,
 		AuthorizationID:       domain.Digest("sha256:" + strings.Repeat("cd", 32)),
 		ProducingInvocationID: invocationID, ReservationRunID: runID,
 	}).Encode()

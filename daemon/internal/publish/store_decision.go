@@ -169,7 +169,7 @@ func (d *storePublicationDecision) prepare(
 				// compatibility. A modern retry can still create forge state,
 				// so its frozen readiness proofs must remain reconstructable.
 				validateReadinessProofs = c.DispositionHistory != nil &&
-					intent.FormatVersion == IntentFormatCurrent
+					intent.FormatVersion >= IntentFormatHistory
 			}
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return fmt.Errorf("read existing publication intent: %w", err)

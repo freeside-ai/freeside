@@ -922,7 +922,7 @@ func TestPublishExecutionRejectsModernIntentDowngrade(t *testing.T) {
 		t,
 		`UPDATE outbox
 		 SET payload = CAST(json_set(
-			json_remove(payload, '$.disposition_history_digest'),
+			json_remove(payload, '$.disposition_history_digest', '$.branch'),
 			'$.format_version', 1
 		 ) AS BLOB)
 		 WHERE idempotency_key = ?`,

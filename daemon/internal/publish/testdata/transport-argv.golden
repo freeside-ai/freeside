@@ -38,8 +38,8 @@
     "--atomic",
     "--porcelain",
     "--no-follow-tags",
-    "--force-with-lease=refs/heads/freeside/publish/0123456789abcdef:",
+    "--force-with-lease=refs/heads/feat/meaningful-task:",
     "https://github.com/freeasinbird/example.git",
-    "0123456789abcdef0123456789abcdef01234567:refs/heads/freeside/publish/0123456789abcdef"
+    "0123456789abcdef0123456789abcdef01234567:refs/heads/feat/meaningful-task"
   ]
 }

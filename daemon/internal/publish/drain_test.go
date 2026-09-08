@@ -341,7 +341,8 @@ func TestDrainRecoversHeadTransportBeforeForgeConvergence(t *testing.T) {
 	payload, err := publish.Intent{
 		FormatVersion: publish.IntentFormatCurrent,
 		Identity:      id.Digest(), InvocationID: cand.InvocationID,
-		Repo: cand.Repo, BaseRef: cand.BaseRef, SourceHeadSHA: cand.HeadSHA,
+		Branch: id.BranchName(),
+		Repo:   cand.Repo, BaseRef: cand.BaseRef, SourceHeadSHA: cand.HeadSHA,
 		AuthorizationID: *cand.AuthorizationID,
 	}.Encode()
 	if err != nil {
@@ -490,6 +491,7 @@ func TestDrainRejectsCorruptIntent(t *testing.T) {
 	payload, err := publish.Intent{
 		FormatVersion:   publish.IntentFormatCurrent,
 		Identity:        testCandidateIdentity(t).Digest(),
+		Branch:          testCandidateIdentity(t).BranchName(),
 		InvocationID:    "inv-other", // disagrees with the key
 		Repo:            "freeside-ai/evidence-repo",
 		BaseRef:         "main",
@@ -538,6 +540,7 @@ func TestDrainRejectsDivergedResolver(t *testing.T) {
 	intentPayload, err := publish.Intent{
 		FormatVersion:   publish.IntentFormatCurrent,
 		Identity:        id.Digest(),
+		Branch:          id.BranchName(),
 		InvocationID:    "inv-0001",
 		Repo:            "freeside-ai/evidence-repo",
 		BaseRef:         "main",
@@ -599,6 +602,7 @@ func TestDrainRejectsInvocationMismatch(t *testing.T) {
 	intentPayload, err := publish.Intent{
 		FormatVersion:   publish.IntentFormatCurrent,
 		Identity:        id.Digest(),
+		Branch:          id.BranchName(),
 		InvocationID:    "inv-0001",
 		Repo:            "freeside-ai/evidence-repo",
 		BaseRef:         "main",
@@ -648,6 +652,7 @@ func TestDrainRejectsAuthorizationMismatch(t *testing.T) {
 	intentPayload, err := publish.Intent{
 		FormatVersion:   publish.IntentFormatCurrent,
 		Identity:        id.Digest(),
+		Branch:          id.BranchName(),
 		InvocationID:    "inv-0001",
 		Repo:            "freeside-ai/evidence-repo",
 		BaseRef:         "main",

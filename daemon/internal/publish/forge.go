@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
@@ -95,7 +96,7 @@ type refState struct {
 // observation, not an error; a 304 against etag reports NotModified
 // with no other fields.
 func (f *forge) getRef(ctx context.Context, repo repoRef, branch, etag string) (refState, error) {
-	path := "/repos/" + repo.path() + "/git/ref/heads/" + branch
+	path := "/repos/" + repo.path() + "/git/ref/heads/" + url.PathEscape(branch)
 	resp, err := f.do(ctx, http.MethodGet, repo, path, etag, nil)
 	if err != nil {
 		return refState{}, fmt.Errorf("get ref: %w", err)
@@ -244,7 +245,7 @@ func (r prResponse) state() prState {
 // listPRsByHead lists pull requests (any state) whose head is
 // owner:branch.
 func (f *forge) listPRsByHead(ctx context.Context, repo repoRef, branch string) ([]prState, error) {
-	path := "/repos/" + repo.path() + "/pulls?head=" + repo.owner + ":" + branch + "&state=all&per_page=100"
+	path := "/repos/" + repo.path() + "/pulls?head=" + url.QueryEscape(repo.owner+":"+branch) + "&state=all&per_page=100"
 	resp, err := f.do(ctx, http.MethodGet, repo, path, "", nil)
 	if err != nil {
 		return nil, fmt.Errorf("list pulls: %w", err)

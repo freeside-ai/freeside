@@ -18,6 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -685,6 +686,7 @@ func TestSubmitProductionRunRefusesPreexistingPublicationIntent(t *testing.T) {
 	intent := publish.Intent{
 		FormatVersion:   publish.IntentFormatCurrent,
 		Identity:        submissionDigest(runID, "publication-identity"),
+		Branch:          publicationrecord.BranchName(submissionDigest(runID, "publication-identity")),
 		InvocationID:    publicationID,
 		Repo:            derivedBase.Repo,
 		BaseRef:         derivedBase.BaseRef,

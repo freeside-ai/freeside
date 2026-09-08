@@ -216,6 +216,7 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 	authID := liveAuth.ID
 	cand := publish.Candidate{
 		Repo:               repo,
+		Branch:             "chore/publication-test-" + nonce,
 		BaseRef:            baseRef,
 		HeadSHA:            headSHA,
 		Title:              "Freeside live effectively-once test " + nonce,
@@ -258,7 +259,7 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 	// makes cleanup discover any partial PR by that unique head branch.
 	cleanupPRNumber := 0
 	t.Cleanup(func() {
-		cleanupLivePublication(t, client, baseURL, ts, repo, id.BranchName(), cleanupPRNumber)
+		cleanupLivePublication(t, client, baseURL, ts, repo, cand.Branch, cleanupPRNumber)
 	})
 	res, err := p1.Publish(ctx, cand, approved)
 	if err != nil {
@@ -341,7 +342,7 @@ func cleanupLivePublication(t *testing.T, client *http.Client, baseURL string, t
 		}
 	}
 	if _, err := doLiveCleanupRequest(context.Background(), client, http.MethodDelete,
-		fmt.Sprintf("%s/repos/%s/git/refs/heads/%s", baseURL, repo, branch),
+		fmt.Sprintf("%s/repos/%s/git/refs/heads/%s", baseURL, repo, url.PathEscape(branch)),
 		nil, auth, http.StatusNoContent, http.StatusNotFound, http.StatusUnprocessableEntity); err != nil {
 		t.Logf("cleanup: delete branch %s: %v", branch, err)
 	}
@@ -445,6 +446,7 @@ func TestDoLiveCleanupRequestChecksStatus(t *testing.T) {
 
 func TestCleanupLivePublicationDiscoversPartialPR(t *testing.T) {
 	t.Parallel()
+	const branch = "feat/a#b&c+d%2Fe"
 	var requests []string
 	client := &http.Client{Transport: cleanupTransportFunc(func(req *http.Request) (*http.Response, error) {
 		requests = append(requests, req.Method+" "+req.URL.RequestURI())
@@ -452,12 +454,12 @@ func TestCleanupLivePublicationDiscoversPartialPR(t *testing.T) {
 		body := `[{"number":123}]`
 		switch {
 		case req.Method == http.MethodGet && req.URL.Path == "/repos/freeside-ai/evidence-repo/pulls":
-			if req.URL.Query().Get("head") != "freeside-ai:freeside/publish/abcdef" || req.URL.Query().Get("state") != "open" {
+			if req.URL.Query().Get("head") != "freeside-ai:"+branch || req.URL.Query().Get("state") != "open" {
 				t.Errorf("list query = %q", req.URL.RawQuery)
 			}
 		case req.Method == http.MethodPatch && req.URL.Path == "/repos/freeside-ai/evidence-repo/pulls/123":
 			body = `{}`
-		case req.Method == http.MethodDelete && req.URL.Path == "/repos/freeside-ai/evidence-repo/git/refs/heads/freeside/publish/abcdef":
+		case req.Method == http.MethodDelete && req.URL.Path == "/repos/freeside-ai/evidence-repo/git/refs/heads/"+branch:
 			status = http.StatusNoContent
 			body = ""
 		default:
@@ -467,7 +469,7 @@ func TestCleanupLivePublicationDiscoversPartialPR(t *testing.T) {
 	})}
 
 	cleanupLivePublication(t, client, "https://api.github.test", testTokenSource(),
-		"freeside-ai/evidence-repo", "freeside/publish/abcdef", 0)
+		"freeside-ai/evidence-repo", branch, 0)
 	if len(requests) != 3 {
 		t.Fatalf("cleanup requests = %v, want list, close, delete", requests)
 	}
