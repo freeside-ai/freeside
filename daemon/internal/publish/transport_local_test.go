@@ -52,7 +52,7 @@ func testGatedHead(t *testing.T, tr *Transport, in IdentityInput) GatedHead {
 			t.Fatal(err)
 		}
 	}
-	gated, err := gateHead(in, tr.publisher)
+	gated, err := gateHead(in, testBranch(t, in), tr.publisher)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,6 +400,30 @@ func TestPushHeadCreatesBranch(t *testing.T) {
 	}
 	if got := gitOut(t, remote.bare, "rev-parse", "refs/heads/"+testBranch(t, in)); got != head {
 		t.Errorf("remote branch = %s, want %s", got, head)
+	}
+}
+
+func TestPushHeadUsesDeclaredCapabilityBranch(t *testing.T) {
+	t.Parallel()
+	remote := newLocalRemote(t)
+	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := candidateHead(t, co)
+	gated := testGatedHead(t, remote.transport, testIdentityInput(remote.repo, head))
+	gated.branch = "feat/meaningful-task"
+	for i := 0; i < 2; i++ {
+		result, err := remote.transport.PushHead(t.Context(), co, gated)
+		if err != nil || result.Created != (i == 0) {
+			t.Fatalf("push %d = %+v, %v", i, result, err)
+		}
+	}
+	if got := gitOut(t, remote.bare, "rev-parse", "refs/heads/"+gated.Branch()); got != head {
+		t.Fatalf("declared branch head = %s", got)
+	}
+	if refs := gitOut(t, remote.bare, "for-each-ref", "--format=%(refname)", "refs/heads/freeside/"); refs != "" {
+		t.Fatalf("push also created default branch: %s", refs)
 	}
 }
 

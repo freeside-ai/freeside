@@ -126,7 +126,7 @@ func TestStoreLedgerAuthenticatesCommittedIntentFormat(t *testing.T) {
 	if err := raw.QueryRowContext(
 		ctx,
 		`UPDATE outbox
-		 SET payload = CAST(json_set(payload, '$.format_version', 1) AS BLOB)
+		 SET payload = CAST(json_set(json_remove(payload, '$.branch'), '$.format_version', 1) AS BLOB)
 		 WHERE idempotency_key = ?
 		 RETURNING payload`,
 		key,

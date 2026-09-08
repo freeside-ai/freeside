@@ -142,7 +142,8 @@ func TestReadyItemPRBindingAnchorsToReadyItem(t *testing.T) {
 	intentPayload, err := (publish.Intent{
 		FormatVersion: publish.IntentFormatCurrent,
 		Identity:      identity.Digest(), InvocationID: binding.PublicationInvocationID,
-		Repo: binding.Repo, BaseRef: binding.BaseRef, SourceHeadSHA: binding.HeadSHA,
+		Branch: identity.BranchName(),
+		Repo:   binding.Repo, BaseRef: binding.BaseRef, SourceHeadSHA: binding.HeadSHA,
 		AuthorizationID:       domain.Digest("sha256:" + strings.Repeat("ef", 32)),
 		ProducingInvocationID: binding.ProducingInvocationID, ReservationRunID: binding.RunID,
 	}).Encode()

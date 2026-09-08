@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -18,7 +19,8 @@ const (
 	IntentKindPublication = "publish.publication"
 	IntentKindOutcome     = "publish.outcome"
 	IntentFormatLegacy    = 1
-	IntentFormatCurrent   = 2
+	IntentFormatHistory   = 2
+	IntentFormatCurrent   = 3
 	branchPrefix          = "freeside/publish/"
 	branchDigestHexLen    = 16
 )
@@ -30,6 +32,7 @@ type Intent struct {
 	InvocationID             domain.InvocationID `json:"invocation_id"`
 	Repo                     string              `json:"repo"`
 	BaseRef                  string              `json:"base_ref"`
+	Branch                   string              `json:"branch,omitempty"`
 	SourceHeadSHA            string              `json:"source_head_sha"`
 	AuthorizationID          domain.Digest       `json:"authorization_id"`
 	DispositionHistoryDigest domain.Digest       `json:"disposition_history_digest,omitempty"`
@@ -38,7 +41,7 @@ type Intent struct {
 }
 
 func (i Intent) Validate() error {
-	if i.FormatVersion != IntentFormatLegacy && i.FormatVersion != IntentFormatCurrent {
+	if i.FormatVersion != IntentFormatLegacy && i.FormatVersion != IntentFormatHistory && i.FormatVersion != IntentFormatCurrent {
 		return fmt.Errorf("intent: unsupported format version %d", i.FormatVersion)
 	}
 	if i.FormatVersion == IntentFormatLegacy && i.DispositionHistoryDigest != "" {
@@ -46,6 +49,13 @@ func (i Intent) Validate() error {
 	}
 	if !contentaddr.Valid(string(i.Identity)) {
 		return fmt.Errorf("intent identity %q is not a publication identity digest", i.Identity)
+	}
+	if i.FormatVersion == IntentFormatCurrent {
+		if err := validateResolvedBranch(i.Identity, i.Branch, i.BaseRef); err != nil {
+			return fmt.Errorf("intent: %w", err)
+		}
+	} else if i.Branch != "" {
+		return errors.New("intent: old format carries branch")
 	}
 	if i.InvocationID == "" {
 		return errors.New("intent: empty invocation id")
@@ -127,11 +137,8 @@ func (o Outcome) Validate() error {
 	if o.HeadSHA == "" {
 		return errors.New("outcome: empty head sha")
 	}
-	if o.Branch == "" {
-		return errors.New("outcome: empty branch")
-	}
-	if want := BranchName(o.Identity); o.Branch != want {
-		return fmt.Errorf("outcome branch %q does not match identity branch %q", o.Branch, want)
+	if err := validateResolvedBranch(o.Identity, o.Branch, o.BaseRef); err != nil {
+		return fmt.Errorf("outcome: %w", err)
 	}
 	if o.PRNumber <= 0 {
 		return fmt.Errorf("outcome: non-positive pr number %d", o.PRNumber)
@@ -174,6 +181,60 @@ func BranchName(identity domain.Digest) string {
 	}
 	hexPart := contentaddr.Hex(string(identity))
 	return branchPrefix + hexPart[:branchDigestHexLen]
+}
+
+// ExpectedBranch returns the branch bound by a validated durable intent.
+// Old formats retain the identity-derived name without rewriting their rows.
+func ExpectedBranch(intent Intent) string {
+	if intent.FormatVersion == IntentFormatCurrent {
+		return intent.Branch
+	}
+	return BranchName(intent.Identity)
+}
+
+func validateResolvedBranch(identity domain.Digest, branch, baseRef string) error {
+	if branch == BranchName(identity) {
+		return nil
+	}
+	return ValidateDeclaredBranch(branch, baseRef)
+}
+
+// ValidateDeclaredBranch applies operator-input policy in addition to the
+// shared transport grammar. An empty baseRef omits only the base comparison.
+func ValidateDeclaredBranch(branch, baseRef string) error {
+	if !ValidBranchName(branch) || strings.HasPrefix(branch, "refs/") ||
+		strings.HasPrefix(branch, "freeside/") || branch == baseRef {
+		return fmt.Errorf("branch %q is invalid, reserved, or equals the base ref", branch)
+	}
+	return nil
+}
+
+// ValidBranchName is the transport's bounded git refname grammar. Component
+// checks also reject names such as release/.candidate and release/a.lock.
+func ValidBranchName(name string) bool {
+	if name == "" || len(name) > 255 {
+		return false
+	}
+	if strings.HasPrefix(name, "-") || strings.Contains(name, "@{") || strings.HasSuffix(name, ".") {
+		return false
+	}
+	for _, c := range name {
+		if c <= ' ' || c == 0x7f {
+			return false
+		}
+		switch c {
+		case ':', '?', '*', '[', '\\', '~', '^':
+			return false
+		}
+	}
+	for _, component := range strings.Split(name, "/") {
+		if component == "" || strings.HasPrefix(component, ".") ||
+			strings.HasSuffix(component, ".") || strings.HasSuffix(component, ".lock") ||
+			strings.Contains(component, "..") {
+			return false
+		}
+	}
+	return true
 }
 
 func decode(payload []byte, value any) error {

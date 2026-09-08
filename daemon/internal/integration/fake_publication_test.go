@@ -24,6 +24,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -1936,7 +1937,8 @@ func TestFakeCandidatePublicationRejectsUnboundReadyTerminalDecisionInputs(t *te
 	intent := publish.Intent{
 		FormatVersion: publish.IntentFormatCurrent,
 		Identity:      identity.Digest(), InvocationID: second.PublicationInvocationID,
-		Repo: fakePublicationRepo, BaseRef: second.BaseRef,
+		Branch: identity.BranchName(),
+		Repo:   fakePublicationRepo, BaseRef: second.BaseRef,
 		SourceHeadSHA:   ready.Item.PRHeadSHA,
 		AuthorizationID: authorizations[0].ID,
 	}
@@ -2893,6 +2895,7 @@ func TestFakeCandidatePublicationBlocksForeignIntentBetweenAdmissionAndReconcili
 	foreign := publish.Intent{
 		FormatVersion:   publish.IntentFormatCurrent,
 		Identity:        "sha256:01c663f9a986e10d214b2c31c75fa5088e2995674a8e8f2ba959111e06a23fb8",
+		Branch:          publicationrecord.BranchName("sha256:01c663f9a986e10d214b2c31c75fa5088e2995674a8e8f2ba959111e06a23fb8"),
 		InvocationID:    spec.PublicationInvocationID,
 		Repo:            fakePublicationRepo,
 		BaseRef:         "main",

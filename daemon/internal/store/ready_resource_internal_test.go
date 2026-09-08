@@ -63,7 +63,8 @@ func migrationsBeforeReadyResource(t *testing.T) fs.FS {
 			entry.Name() == "0064_specification_vocabulary.sql" ||
 			entry.Name() == "0065_comprehension_telemetry.sql" ||
 			entry.Name() == "0066_work_unit_completed_milestone.sql" ||
-			entry.Name() == "0067_review_requests.sql" || entry.IsDir() {
+			entry.Name() == "0067_review_requests.sql" ||
+			entry.Name() == "0068_declared_publication_branch.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())
@@ -143,8 +144,8 @@ func TestAttentionPRReferenceMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 67 {
-		t.Fatalf("schema version = %d, want 67", got)
+	if got := rawVersion(t, db); got != 68 {
+		t.Fatalf("schema version = %d, want 68", got)
 	}
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
 		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id,
@@ -451,6 +452,13 @@ func TestReadyItemPRReferenceAnchorRegatesWithoutProductionBinding(t *testing.T)
 // admission/export/outcome anchors can reject each forged coordinate.
 func TestReadyItemBindingRegatesEveryResourceCoordinate(t *testing.T) {
 	t.Parallel()
+	for _, branch := range []string{"freeside/publish/" + strings.Repeat("a", 16), "feat/meaningful-task"} {
+		t.Run(branch, func(t *testing.T) { testReadyItemBranchBinding(t, branch) })
+	}
+}
+
+func testReadyItemBranchBinding(t *testing.T, branch string) {
+	t.Helper()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 		domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
@@ -525,7 +533,8 @@ func TestReadyItemBindingRegatesEveryResourceCoordinate(t *testing.T) {
 	intentPayload, err := json.Marshal(readyPublicationIntent{
 		FormatVersion: publicationrecord.IntentFormatCurrent,
 		Identity:      identity, InvocationID: publicationInvocationID,
-		Repo: admission.Base.Repo, BaseRef: admission.Base.BaseRef,
+		Branch: branch,
+		Repo:   admission.Base.Repo, BaseRef: admission.Base.BaseRef,
 		SourceHeadSHA:         export.HeadSHA,
 		AuthorizationID:       domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		ProducingInvocationID: invocationID, ReservationRunID: runID,
@@ -535,7 +544,7 @@ func TestReadyItemBindingRegatesEveryResourceCoordinate(t *testing.T) {
 	}
 	payload, err := json.Marshal(readyPublicationOutcome{
 		Identity: identity, Repo: admission.Base.Repo, BaseRef: admission.Base.BaseRef,
-		HeadSHA: export.HeadSHA, Branch: "freeside/publish/" + strings.Repeat("a", 16),
+		HeadSHA: export.HeadSHA, Branch: branch,
 		PRNumber: 450, EvidenceEligible: true,
 	})
 	if err != nil {
@@ -594,6 +603,15 @@ func TestReadyItemBindingRegatesEveryResourceCoordinate(t *testing.T) {
 			})
 		}
 	}
+	t.Run("outcome branch binding", func(t *testing.T) {
+		if _, err := st.db.ExecContext(ctx, `UPDATE inbox SET payload = CAST(json_set(payload, '$.branch', 'feat/other-task') AS BLOB) WHERE idempotency_key = ?`, "publish.outcome/"+string(identity)); err != nil {
+			t.Fatal(err)
+		}
+		assertAttentionReadRejected(t)
+		if _, err := st.db.ExecContext(ctx, `UPDATE inbox SET payload = ? WHERE idempotency_key = ?`, payload, "publish.outcome/"+string(identity)); err != nil {
+			t.Fatal(err)
+		}
+	})
 	itemBody, err := encode(item)
 	if err != nil {
 		t.Fatal(err)
@@ -624,7 +642,8 @@ func TestReadyItemBindingRegatesEveryResourceCoordinate(t *testing.T) {
 	foreignIntent, err := json.Marshal(readyPublicationIntent{
 		FormatVersion: publicationrecord.IntentFormatCurrent,
 		Identity:      foreignIdentity, InvocationID: foreignPublicationInvocationID,
-		Repo: admission.Base.Repo, BaseRef: admission.Base.BaseRef,
+		Branch: publicationrecord.BranchName(foreignIdentity),
+		Repo:   admission.Base.Repo, BaseRef: admission.Base.BaseRef,
 		SourceHeadSHA:         export.HeadSHA,
 		AuthorizationID:       domain.Digest("sha256:" + strings.Repeat("d", 64)),
 		ProducingInvocationID: "inv-ready-foreign", ReservationRunID: "run-ready-foreign",

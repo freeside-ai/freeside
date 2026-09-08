@@ -95,7 +95,10 @@
 # the daemon can admit the submitted work.
 # The publication JSON is durable operator input with this shape:
 #   {"title":"Imperative PR title","body":"Why and What prose",
+#    "branch":"feat/meaningful-task-slug",
 #    "commit_author":{"app_slug":"canonical-app-slug","bot_user_id":123}}
+# The optional branch is an exact operator-declared head name. Omit it for
+# freeside/publish/<identity-hex16>; refs/ and freeside/ names are reserved.
 # Freeside writes Verification from the executed recipe and labels agent evidence
 # as claims. A Verification heading or section marker in body is refused at
 # submit. Publisher-owned sections reserve space, leaving 23,432 bytes for body.

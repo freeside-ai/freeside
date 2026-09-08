@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -138,6 +139,7 @@ type productionInvocationRequestWire struct {
 // content boundary. Production composition verifies CommitAuthor against the
 // App registration selected by the repository token before execution/import.
 type ProductionPublication struct {
+	Branch       string                 `json:"branch,omitempty"`
 	Title        string                 `json:"title"`
 	Body         string                 `json:"body"`
 	CommitAuthor ProductionCommitAuthor `json:"commit_author"`
@@ -179,6 +181,11 @@ func (a ProductionCommitAuthor) validate() error {
 // title and body. The body limit reserves every publisher-owned section,
 // including the identity marker, advisories, and disposition history.
 func (p ProductionPublication) Validate() error {
+	if p.Branch != "" {
+		if err := publicationrecord.ValidateDeclaredBranch(p.Branch, ""); err != nil {
+			return fmt.Errorf("production publication: %w", err)
+		}
+	}
 	if !utf8.ValidString(p.Title) || !utf8.ValidString(p.Body) {
 		return errors.New("production publication metadata is not valid UTF-8")
 	}

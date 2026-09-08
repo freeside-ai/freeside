@@ -75,13 +75,13 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			// Reconstruct schema 66 with only the in-flight provider journal,
-			// then exercise the real migration and workflow restart.
+			// Remove the request table and replay its migration plus subsequent
+			// migrations, retaining only the in-flight provider journal.
 			raw, err := sql.Open("sqlite", p.dbPath)
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, query := range []string{"DROP TABLE review_requests", "DELETE FROM schema_migrations WHERE version = 67"} {
+			for _, query := range []string{"DROP TABLE review_requests", "DELETE FROM schema_migrations WHERE version >= 67"} {
 				if _, err := raw.ExecContext(p.ctx, query); err != nil {
 					_ = raw.Close()
 					t.Fatal(err)

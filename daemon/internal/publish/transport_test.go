@@ -34,7 +34,7 @@ func TestTransportArgvGolden(t *testing.T) {
 		Push: pushArgs(
 			"https://github.com/freeasinbird/example.git",
 			"0123456789abcdef0123456789abcdef01234567",
-			"freeside/publish/0123456789abcdef",
+			"feat/meaningful-task",
 		),
 	}
 	b, err := json.MarshalIndent(fixture, "", "  ")

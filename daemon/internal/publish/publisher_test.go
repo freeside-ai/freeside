@@ -1628,6 +1628,7 @@ func TestVerifyOutcomeBindsUniqueLivePullRequestNumber(t *testing.T) {
 		HeadSHA: candidate.HeadSHA,
 	})
 	outcome := fixtureOutcome()
+	outcome.Branch = identity.BranchName()
 	if err := p.VerifyOutcome(
 		context.Background(), candidate, identity, outcome,
 	); err != nil {
@@ -1679,6 +1680,7 @@ func TestConvergeOutcomeRepairsExactDispositionHistoryWithoutCreating(t *testing
 	seedRepairIntent(t, st, candidate)
 	identity := testCandidateIdentity(t)
 	outcome := fixtureOutcome()
+	outcome.Branch = identity.BranchName()
 	gh := newFakeGitHub(t)
 	gh.prs = append(gh.prs, fakePR{
 		Number: outcome.PRNumber, State: "open", Title: candidate.Title,
@@ -1742,6 +1744,7 @@ func TestConvergeOutcomeRefusesTrustDriftBeforeRepair(t *testing.T) {
 	seedRepairIntent(t, st, candidate)
 	identity := testCandidateIdentity(t)
 	outcome := fixtureOutcome()
+	outcome.Branch = identity.BranchName()
 	gh := newFakeGitHub(t)
 	gh.prs = append(gh.prs, fakePR{
 		Number: outcome.PRNumber, State: "open", Title: candidate.Title,
@@ -1793,6 +1796,7 @@ func TestConvergeOutcomeRefusesAuthorizationLossBeforeRepair(t *testing.T) {
 	candidate := testCandidate(t)
 	identity := testCandidateIdentity(t)
 	outcome := fixtureOutcome()
+	outcome.Branch = identity.BranchName()
 	gh := newFakeGitHub(t)
 	gh.prs = append(gh.prs, fakePR{
 		Number: outcome.PRNumber, State: "open", Title: candidate.Title,
@@ -1821,6 +1825,7 @@ func TestConvergeOutcomeRevalidatesDispositionHistoryBeforeRepair(t *testing.T) 
 	seedRepairIntent(t, st, candidate)
 	identity := testCandidateIdentity(t)
 	outcome := fixtureOutcome()
+	outcome.Branch = identity.BranchName()
 	gh := newFakeGitHub(t)
 	gh.prs = append(gh.prs, fakePR{
 		Number: outcome.PRNumber, State: "open", Title: candidate.Title,
@@ -1869,6 +1874,7 @@ func TestConvergeOutcomeRevalidatesPersistedReadinessProofsBeforeRepair(t *testi
 	seedRepairIntent(t, st, candidate)
 	identity := testCandidateIdentity(t)
 	outcome := fixtureOutcome()
+	outcome.Branch = identity.BranchName()
 	gh := newFakeGitHub(t)
 	gh.prs = append(gh.prs, fakePR{
 		Number: outcome.PRNumber, State: "open", Title: candidate.Title,
@@ -2427,7 +2433,8 @@ func seedRepairIntent(t *testing.T, st *store.Store, candidate publish.Candidate
 	intent := publish.Intent{
 		FormatVersion: publish.IntentFormatCurrent,
 		Identity:      testCandidateIdentity(t).Digest(), InvocationID: candidate.InvocationID,
-		Repo: candidate.Repo, BaseRef: candidate.BaseRef, SourceHeadSHA: candidate.HeadSHA,
+		Branch: testCandidateIdentity(t).BranchName(),
+		Repo:   candidate.Repo, BaseRef: candidate.BaseRef, SourceHeadSHA: candidate.HeadSHA,
 		AuthorizationID: *candidate.AuthorizationID, DispositionHistoryDigest: domain.Digest(contentaddr.Sum([]byte(rendered))),
 	}
 	payload, err := intent.Encode()

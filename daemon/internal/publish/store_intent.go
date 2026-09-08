@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -78,15 +79,59 @@ func commitReservedIntent(
 			if _, err := DecodeStoredIntent(entry); err != nil {
 				return nil, false, fmt.Errorf("authenticate publication intent %q: %w", key, err)
 			}
+			if inserted {
+				if err := bindIdentityBranch(ctx, tx, payload); err != nil {
+					return nil, false, err
+				}
+			}
 		}
 		return entry.Payload, inserted, nil
 	case entry.Kind == IntentKindReservation && kind == IntentKindPublication:
 		// The row this call converged on is the reservation that was holding
 		// this key for its owner. Committing the intent is that reservation
 		// being settled, not a second row being written beside it.
+		if err := bindIdentityBranch(ctx, tx, payload); err != nil {
+			return nil, false, err
+		}
 		return promoteReservedIntent(ctx, tx, key, payload, entry, claim)
 	}
 	return nil, false, fmt.Errorf("key %q holds kind %q", entry.IdempotencyKey, entry.Kind)
+}
+
+// bindIdentityBranch runs in the intent transaction, before any dispatch.
+// Invocation keys alone cannot prevent a new attempt from renaming an identity
+// whose earlier attempt has not yet recorded its outcome. Include completed
+// and quarantined rows because neither releases an identity's branch binding.
+func bindIdentityBranch(ctx context.Context, tx *store.InternalTx, payload []byte) error {
+	intent, err := DecodeIntent(payload)
+	if err != nil {
+		return err
+	}
+	for _, list := range []func(context.Context, string) ([]store.QueueEntry, error){
+		tx.ListPendingOutbox, tx.ListDispatchedOutbox, tx.ListQuarantinedOutbox,
+	} {
+		entries, err := list(ctx, IntentKindPublication)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			prior, err := DecodeStoredIntent(entry)
+			if err != nil {
+				// A quarantined payload can be undecodable by design. It has
+				// no authenticated identity to bind; it can never dispatch.
+				if entry.Quarantined() {
+					continue
+				}
+				return err
+			}
+			if prior.Identity == intent.Identity &&
+				publicationrecord.ExpectedBranch(prior) != publicationrecord.ExpectedBranch(intent) {
+				return fmt.Errorf("identity %s is bound to branch %q, cannot publish branch %q: %w",
+					intent.Identity, publicationrecord.ExpectedBranch(prior), publicationrecord.ExpectedBranch(intent), ErrPublicationConflict)
+			}
+		}
+	}
+	return nil
 }
 
 // promoteReservedIntent settles a reservation into the intent it was holding

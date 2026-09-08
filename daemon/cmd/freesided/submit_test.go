@@ -1089,6 +1089,8 @@ func TestSubmitCommandRefusesBadInputs(t *testing.T) {
 	}
 
 	for name, body := range map[string]string{
+		"invalid branch":     `{"branch":"bad branch","title":"Test work","body":"Reviewer context.","commit_author":{"app_slug":"freeside-test","bot_user_id":12345}}`,
+		"reserved branch":    `{"branch":"freeside/task","title":"Test work","body":"Reviewer context.","commit_author":{"app_slug":"freeside-test","bot_user_id":12345}}`,
 		"missing title":      `{"body":"Reviewer context.","commit_author":{"app_slug":"freeside-test","bot_user_id":12345}}`,
 		"multiline title":    `{"title":"Bad\ntitle","body":"Reviewer context.","commit_author":{"app_slug":"freeside-test","bot_user_id":12345}}`,
 		"unknown field":      `{"title":"Test work","body":"Reviewer context.","summary":"hidden","commit_author":{"app_slug":"freeside-test","bot_user_id":12345}}`,

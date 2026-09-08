@@ -175,6 +175,7 @@ func TestFinalizeRejectsSubstitutedIntentCoordinates(t *testing.T) {
 	substituted := Intent{
 		FormatVersion:   IntentFormatCurrent,
 		Identity:        identity.Digest(),
+		Branch:          identity.BranchName(),
 		InvocationID:    candidate.InvocationID,
 		Repo:            "freeside-ai/foreign",
 		BaseRef:         "release",

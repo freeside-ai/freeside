@@ -442,13 +442,14 @@ func (tx *InternalTx) recordOutbox(
 
 func outboxPayloadVersion(kind string) int {
 	if kind == readyPublicationIntentKind {
-		return 2
+		return 3
 	}
 	return 1
 }
 
 func validateOutboxPayload(entry QueueEntry) error {
-	if entry.PayloadVersion != 1 && entry.PayloadVersion != 2 {
+	if entry.PayloadVersion != 1 && entry.PayloadVersion != 2 &&
+		(entry.Kind != readyPublicationIntentKind || entry.PayloadVersion != 3) {
 		return fmt.Errorf("stored payload version %d is invalid", entry.PayloadVersion)
 	}
 	if !contentaddr.Valid(entry.PayloadDigest) {

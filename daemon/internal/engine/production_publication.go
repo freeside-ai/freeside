@@ -5016,6 +5016,9 @@ func (w *productionPublicationWorkflow) loadPublicationOutcome(
 			"production publication intent disagrees with task: %w", domain.ErrParentKeyMismatch,
 		)
 	}
+	if err := publish.ValidateIntentBranch(intent, candidate, identity); err != nil {
+		return publish.Result{}, false, err
+	}
 	if err := publish.ValidateIntentDispositionHistory(intent, candidate); err != nil {
 		return publish.Result{}, false, fmt.Errorf(
 			"production publication intent disposition history: %w", err,
@@ -5645,7 +5648,7 @@ func productionCandidate(
 	profile := binding.profile.ProfileDigest
 	return publish.Candidate{
 		Repo: binding.admission.Base.Repo, BaseRef: binding.admission.Base.BaseRef,
-		HeadSHA: task.HeadSHA, Title: task.Publication.Title,
+		HeadSHA: task.HeadSHA, Title: task.Publication.Title, Branch: task.Publication.Branch,
 		Body: task.Publication.Body, DispositionHistory: dispositionHistory,
 		VerificationReport: report, ImportResult: &checkpoint.Imported,
 		ScopeDecision: task.scopeDecision,

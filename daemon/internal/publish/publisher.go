@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -29,6 +30,8 @@ type Candidate struct {
 	Repo string
 	// BaseRef is the base branch the publication PR targets.
 	BaseRef string
+	// Branch is the operator-declared head branch; empty selects the identity default.
+	Branch string
 	// HeadSHA is the candidate commit; it must already exist in the
 	// repository (the publisher creates refs, it does not upload
 	// objects).
@@ -201,18 +204,25 @@ func (p *Publisher) VerifyOutcome(
 	identity Identity,
 	outcome Outcome,
 ) error {
+	branch, err := resolveBranch(identity, c)
+	if err != nil {
+		return err
+	}
+	if outcome.Branch != branch {
+		return fmt.Errorf("outcome branch %q differs from candidate branch %q: %w", outcome.Branch, branch, ErrPublicationConflict)
+	}
 	repo, err := parseRepo(c.Repo)
 	if err != nil {
 		return fmt.Errorf("verify publication outcome: %w", err)
 	}
-	prs, err := p.forge.listPRsByHead(ctx, repo, identity.BranchName())
+	prs, err := p.forge.listPRsByHead(ctx, repo, branch)
 	if err != nil {
 		return fmt.Errorf("verify publication outcome: %w", err)
 	}
 	if len(prs) != 1 {
 		return fmt.Errorf(
 			"verify publication outcome: found %d pull requests on identity branch %s: %w",
-			len(prs), identity.BranchName(), ErrPublicationConflict,
+			len(prs), branch, ErrPublicationConflict,
 		)
 	}
 	pr := prs[0]
@@ -220,10 +230,10 @@ func (p *Publisher) VerifyOutcome(
 	if !ok || parsed != identity.Digest() {
 		return fmt.Errorf(
 			"verify publication outcome: pull request #%d occupies branch %s: %w",
-			pr.Number, identity.BranchName(), ErrForeignResource,
+			pr.Number, branch, ErrForeignResource,
 		)
 	}
-	if !prMatchesPublicationCoordinates(pr, repo, identity, c) {
+	if !prMatchesPublicationCoordinates(pr, repo, identity, c, branch) {
 		return fmt.Errorf(
 			"verify publication outcome: pull request #%d does not match candidate: %w",
 			pr.Number, ErrPublicationConflict,
@@ -249,6 +259,13 @@ func (p *Publisher) ConvergeOutcome(
 	identity Identity,
 	outcome Outcome,
 ) error {
+	branch, err := resolveBranch(identity, c)
+	if err != nil {
+		return err
+	}
+	if outcome.Branch != branch {
+		return fmt.Errorf("outcome branch %q differs from candidate branch %q: %w", outcome.Branch, branch, ErrPublicationConflict)
+	}
 	if c.DispositionHistory != nil {
 		if err := c.DispositionHistory.validateCandidate(c.RunID, c.HeadSHA); err != nil {
 			return fmt.Errorf("converge publication outcome: disposition history: %w", err)
@@ -356,6 +373,7 @@ func (p *Publisher) gateOutcomeRepair(
 // Transport to share mint state with Publisher for no gain.
 type GatedHead struct {
 	identity Identity
+	branch   string
 	repo     string
 	baseRef  string
 	headSHA  string
@@ -378,9 +396,11 @@ type GatedHead struct {
 	gated bool
 }
 
-// Identity is the publication identity derived from the gated candidate;
-// its BranchName is the only branch this capability authorizes.
+// Identity is the publication identity derived from the gated candidate.
 func (g GatedHead) Identity() Identity { return g.identity }
+
+// Branch is the only head branch this capability authorizes.
+func (g GatedHead) Branch() string { return g.branch }
 
 // Repo is the managed repository the gated candidate publishes to.
 func (g GatedHead) Repo() string { return g.repo }
@@ -395,10 +415,9 @@ func (g GatedHead) SourceHeadSHA() string { return g.headSHA }
 // and the transport that publisher gates for. It has exactly one
 // production call site: after preparePublication commits the publication
 // intent, which is after every gate has passed. It derives the identity
-// itself rather than accepting one, so a capability whose branch belongs
-// to one candidate and whose repository or head belongs to another is
-// unrepresentable even in-package.
-func gateHead(in IdentityInput, issuer *Publisher) (GatedHead, error) {
+// itself rather than accepting one. The branch is the resolved name just
+// committed in that candidate's intent.
+func gateHead(in IdentityInput, branch string, issuer *Publisher) (GatedHead, error) {
 	identity, err := DeriveIdentity(in)
 	if err != nil {
 		return GatedHead{}, err
@@ -409,6 +428,7 @@ func gateHead(in IdentityInput, issuer *Publisher) (GatedHead, error) {
 	}
 	return GatedHead{
 		identity: identity,
+		branch:   branch,
 		repo:     in.Repo,
 		baseRef:  in.BaseRef,
 		headSHA:  in.SourceHeadSHA,
@@ -565,6 +585,11 @@ func (p *Publisher) publish(
 		return Result{}, fmt.Errorf("publish: %w", err)
 	}
 
+	branch, err := resolveBranch(identity, c)
+	if err != nil {
+		return Result{}, err
+	}
+
 	// The composed PR content must parse back to exactly this identity,
 	// or the publisher's own PR would later be classified as foreign and
 	// convergence would deadlock: prose carrying a marker-shaped line
@@ -593,7 +618,7 @@ func (p *Publisher) publish(
 		// The gate is evaluated exactly once, here: the capability is
 		// minted only on this path, after preparePublication committed the
 		// intent, so the transport re-checks nothing the Publisher decided.
-		gated, err := gateHead(identityInput, p)
+		gated, err := gateHead(identityInput, branch, p)
 		if err != nil {
 			return Result{}, fmt.Errorf("publish: gate candidate head: %w", err)
 		}
@@ -602,7 +627,6 @@ func (p *Publisher) publish(
 		}
 	}
 
-	branch := identity.BranchName()
 	result := Result{Identity: identity, Branch: branch}
 
 	// Branch: check before create. An existing branch at the candidate
@@ -959,7 +983,11 @@ func (p *Publisher) convergePR(
 	expectedPRNumber int,
 	beforeRepair func() error,
 ) (number int, created bool, err error) {
-	prs, err := p.forge.listPRsByHead(ctx, repo, identity.BranchName())
+	branch, err := resolveBranch(identity, c)
+	if err != nil {
+		return 0, false, err
+	}
+	prs, err := p.forge.listPRsByHead(ctx, repo, branch)
 	if err != nil {
 		return 0, false, fmt.Errorf("publish: %w", err)
 	}
@@ -968,7 +996,7 @@ func (p *Publisher) convergePR(
 	for _, pr := range prs {
 		parsed, ok := ParseMarker(pr.Body)
 		if !ok || parsed != identity.Digest() {
-			return 0, false, fmt.Errorf("publish: pull request #%d occupies branch %s: %w", pr.Number, identity.BranchName(), ErrForeignResource)
+			return 0, false, fmt.Errorf("publish: pull request #%d occupies branch %s: %w", pr.Number, branch, ErrForeignResource)
 		}
 		ours = append(ours, pr)
 	}
@@ -988,7 +1016,7 @@ func (p *Publisher) convergePR(
 			// publication content was already stored. Accept that immutable
 			// converged state, but never patch or reopen it; a completed PR
 			// missing the frozen content remains a conflict.
-			if !allowCreate && prMatchesPublicationCoordinates(pr, repo, identity, c) &&
+			if !allowCreate && prMatchesPublicationCoordinates(pr, repo, identity, c, branch) &&
 				pr.Title == title && pr.Body == body {
 				return pr.Number, false, nil
 			}
@@ -1001,7 +1029,7 @@ func (p *Publisher) convergePR(
 		// checks, or resolved into a fork) or a base a human retargeted
 		// away from the candidate's would publish under coordinates the
 		// identity does not name.
-		if !prMatchesCandidate(pr, repo, identity, c) {
+		if !prMatchesCandidate(pr, repo, identity, c, branch) {
 			return 0, false, fmt.Errorf("publish: pull request #%d head or base does not match the candidate: %w", pr.Number, ErrPublicationConflict)
 		}
 		if pr.Title != title || pr.Body != body {
@@ -1018,7 +1046,7 @@ func (p *Publisher) convergePR(
 			// else: its returned object gets the same verification, so a
 			// PR moved or retargeted between the list and the patch never
 			// returns as a success.
-			if !prMatchesCandidate(patched, repo, identity, c) {
+			if !prMatchesCandidate(patched, repo, identity, c, branch) {
 				return 0, false, fmt.Errorf("publish: pull request #%d moved while converging: %w", pr.Number, ErrPublicationConflict)
 			}
 			// Stored content must be what was sent (the pre-check above
@@ -1037,7 +1065,7 @@ func (p *Publisher) convergePR(
 			identity.Digest(), ErrPublicationConflict)
 	}
 
-	pr, err := p.forge.createPR(ctx, repo, identity.BranchName(), c.BaseRef, title, body)
+	pr, err := p.forge.createPR(ctx, repo, branch, c.BaseRef, title, body)
 	if err != nil {
 		return 0, false, fmt.Errorf("publish: %w", err)
 	}
@@ -1046,7 +1074,7 @@ func (p *Publisher) convergePR(
 	// after the ref check — or a head or base resolved anywhere other
 	// than the coordinates the identity names — must not yield a
 	// success whose PR the evidence was not produced for.
-	if !prMatchesCandidate(pr, repo, identity, c) {
+	if !prMatchesCandidate(pr, repo, identity, c, branch) {
 		return 0, false, fmt.Errorf("publish: created pull request #%d head or base does not match the candidate: %w", pr.Number, ErrPublicationConflict)
 	}
 	// Same stored-as-sent check as the patch path.
@@ -1065,9 +1093,9 @@ func (p *Publisher) convergePR(
 // the created-PR response, the patched-PR response) runs this same
 // predicate, so no field is checked on one path and dropped on
 // another.
-func prMatchesCandidate(pr prState, repo repoRef, identity Identity, c Candidate) bool {
+func prMatchesCandidate(pr prState, repo repoRef, identity Identity, c Candidate, branch string) bool {
 	return pr.State == "open" &&
-		prMatchesPublicationCoordinates(pr, repo, identity, c)
+		prMatchesPublicationCoordinates(pr, repo, identity, c, branch)
 }
 
 func prMatchesPublicationCoordinates(
@@ -1075,10 +1103,11 @@ func prMatchesPublicationCoordinates(
 	repo repoRef,
 	identity Identity,
 	c Candidate,
+	branch string,
 ) bool {
 	parsed, ok := ParseMarker(pr.Body)
 	return (pr.State == "open" || pr.State == "closed") &&
-		pr.HeadRef == identity.BranchName() &&
+		pr.HeadRef == branch &&
 		pr.HeadSHA == c.HeadSHA &&
 		pr.HeadRepo == repo.path() &&
 		pr.BaseRef == c.BaseRef &&
@@ -1138,4 +1167,27 @@ func desiredPRContent(identity Identity, c Candidate) (title, body string, err e
 		)
 	}
 	return c.Title, body, nil
+}
+
+// resolveBranch preserves the content identity while binding an operator name.
+func resolveBranch(identity Identity, c Candidate) (string, error) {
+	if c.Branch == "" {
+		return identity.BranchName(), nil
+	}
+	if err := publicationrecord.ValidateDeclaredBranch(c.Branch, c.BaseRef); err != nil {
+		return "", err
+	}
+	return c.Branch, nil
+}
+
+// ValidateIntentBranch refuses a resolver that changes the intent's head branch.
+func ValidateIntentBranch(intent Intent, c Candidate, identity Identity) error {
+	branch, err := resolveBranch(identity, c)
+	if err != nil {
+		return err
+	}
+	if branch != publicationrecord.ExpectedBranch(intent) {
+		return fmt.Errorf("intent branch %q differs from candidate branch %q: %w", publicationrecord.ExpectedBranch(intent), branch, ErrPublicationConflict)
+	}
+	return nil
 }

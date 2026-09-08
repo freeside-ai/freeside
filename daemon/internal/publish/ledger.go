@@ -14,6 +14,7 @@ import (
 const (
 	IntentKindPublication = publicationrecord.IntentKindPublication
 	IntentFormatLegacy    = publicationrecord.IntentFormatLegacy
+	IntentFormatHistory   = publicationrecord.IntentFormatHistory
 	IntentFormatCurrent   = publicationrecord.IntentFormatCurrent
 )
 
@@ -30,6 +31,8 @@ const (
 // payload when a prior attempt already committed the key (recorded
 // false), so a retry converges on the original intent instead of
 // re-recording.
+// Implementations must bind each identity to one resolved branch across
+// invocation keys before dispatch; the store adapters do so transactionally.
 //
 // claim is the caller's proof that it holds the reservation occupying
 // the key (reservation.go), or nil when the invocation was never
@@ -68,12 +71,17 @@ func intentForCandidate(
 	if c.AuthorizationID == nil {
 		return Intent{}, fmt.Errorf("candidate carries no authorization binding: %w", ErrUnauthorizedPublication)
 	}
+	branch, err := resolveBranch(identity, c)
+	if err != nil {
+		return Intent{}, err
+	}
 	intent := Intent{
 		FormatVersion:         publicationrecord.IntentFormatCurrent,
 		Identity:              identity.Digest(),
 		InvocationID:          c.InvocationID,
 		Repo:                  c.Repo,
 		BaseRef:               c.BaseRef,
+		Branch:                branch,
 		SourceHeadSHA:         c.HeadSHA,
 		AuthorizationID:       *c.AuthorizationID,
 		ProducingInvocationID: producingInvocationID,
@@ -110,7 +118,7 @@ func ValidateIntentDispositionHistory(intent Intent, c Candidate) error {
 	if err != nil {
 		return err
 	}
-	if intent.FormatVersion == IntentFormatCurrent && intent.DispositionHistoryDigest != digest {
+	if intent.FormatVersion >= IntentFormatHistory && intent.DispositionHistoryDigest != digest {
 		return fmt.Errorf("intent disposition history changed: %w", ErrPublicationConflict)
 	}
 	return nil
@@ -120,15 +128,18 @@ func intentsCompatible(committed, proposed Intent) bool {
 	if committed == proposed {
 		return true
 	}
-	if committed.FormatVersion == publicationrecord.IntentFormatLegacy &&
-		proposed.FormatVersion == publicationrecord.IntentFormatCurrent {
-		proposed.FormatVersion = publicationrecord.IntentFormatLegacy
-		if committed.DispositionHistoryDigest == "" {
-			proposed.DispositionHistoryDigest = ""
+	if proposed.FormatVersion == IntentFormatCurrent && committed.FormatVersion < IntentFormatCurrent {
+		if proposed.Branch != publicationrecord.ExpectedBranch(committed) {
+			return false
 		}
-		return committed == proposed
+		proposed.Branch = ""
+		proposed.FormatVersion = IntentFormatHistory
 	}
-	return false
+	if committed.FormatVersion == IntentFormatLegacy && proposed.FormatVersion == IntentFormatHistory {
+		proposed.FormatVersion = IntentFormatLegacy
+		proposed.DispositionHistoryDigest = ""
+	}
+	return committed == proposed
 }
 
 // DecodeIntent deserializes and validates a ledger payload. Unknown

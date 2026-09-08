@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 )
@@ -226,13 +225,9 @@ func (tx *ReadTx) validateReadyItemPRBindingAgainst(
 	if err != nil {
 		return fmt.Errorf("publication outcome: %w", err)
 	}
-	hexIdentity := contentaddr.Hex(string(binding.PublicationIdentity))
-	if hexIdentity == "" {
-		return errRowInconsistent
-	}
 	if outcome.Identity != binding.PublicationIdentity || outcome.Repo != binding.Repo ||
 		outcome.BaseRef != binding.BaseRef || outcome.HeadSHA != binding.HeadSHA ||
-		outcome.PRNumber != binding.PRNumber || outcome.Branch != "freeside/publish/"+hexIdentity[:16] {
+		outcome.PRNumber != binding.PRNumber || outcome.Branch != publicationrecord.ExpectedBranch(intent) {
 		return errRowInconsistent
 	}
 	return nil

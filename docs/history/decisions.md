@@ -1574,3 +1574,44 @@ Revision 47 ("Task vocabulary"):
    merging a task's runs into one run, which would break the
    content-addressed run identity that approvals bind to.
    (User; devlog 2026-09-07-0921-task-vocabulary.md.)
+
+## Revision 48
+
+Revision 48 ("Task Scope, Identity, and Naming"):
+
+1. **Task scope follows the undertaking across runs** (Sections [4](../plan.md#4-the-attention-model),
+   [5.12](../plan.md#512-workflow-definition-initiators-and-artifacts)–[5.18](../plan.md#518-the-world-model-post-merge-recompute-and-frontier-projection),
+   [7](../plan.md#7-review-policy), [9](../plan.md#9-comprehension), [10](../plan.md#10-operations-and-onboarding), and
+   [11](../plan.md#11-roadmap-build-order-and-coordination)): attention subjects can name a task;
+   final-review items and base-advance watches follow it across retries.
+   Proposals use `task_proposal`, WIP counts tasks, and task lineage carries
+   follow-up filing and completion. Sync names `Task` and `TaskTimeline`;
+   retry/resume gain task selectors.
+   WIP counts started tasks through completion or explicit abandonment,
+   including waits and final review; unstarted proposals do not reserve slots.
+   Run-bound evidence, approvals, clocks,
+   execution caps, the `blocked` item, and historical wave rows keep their
+   existing scope. The `work_unit_revision_required` enum keeps its name;
+   its prose refers to the task's declared scope carried by a run.
+   (User; #1206; devlog 2026-09-07-1136-task-design-decisions.md.)
+2. **Task identity is opaque; intake idempotency is transactional**
+   (Section [5.12](../plan.md#512-workflow-definition-initiators-and-artifacts)): mint a task ID
+   and register its project-scoped intake key in one insert-or-fetch
+   transaction. Repeated and concurrent intake converge, rollback leaves no
+   pair, and identical sources in different projects remain separate.
+   Rejected: content-addressing the mutable undertaking and check-then-insert
+   intake. Runs and campaigns retain their content-addressed approval
+   bindings; a revised approved specification starts a new campaign under
+   the same task.
+   (User; #1206; devlog 2026-09-07-1136-task-design-decisions.md.)
+3. **Names are stored, advisory, and stable**
+   (Sections [5.12](../plan.md#512-workflow-definition-initiators-and-artifacts) and
+   [5.13](../plan.md#513-deterministic-components-judgment-calls-and-the-effect-registry)): prefer
+   the operator heading, otherwise use the advisory namer with an identifier
+   fallback. The specifier may refine an agent name once; operator names
+   survive. Approval freezes the name, after which only an explicit operator
+   rename changes it. Task-name and PR-title fields have separate bounds and
+   carry no identity or approval authority. Rejected: repeated automatic
+   renaming and sharing one task-name/PR-title field. This settles the source
+   note's deferred naming choice without rewriting that note.
+   (User; #1206; devlog 2026-09-07-1136-task-design-decisions.md.)

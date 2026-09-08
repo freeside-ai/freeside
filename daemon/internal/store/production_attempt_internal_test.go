@@ -60,8 +60,8 @@ func TestProductionAttemptMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 67 {
-		t.Fatalf("schema version = %d, want 67", got)
+	if got := rawVersion(t, db); got != 68 {
+		t.Fatalf("schema version = %d, want 68", got)
 	}
 	assertTableExists(t, db, "production_attempts", true)
 	st := &Store{db: db}

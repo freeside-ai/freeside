@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -203,6 +204,9 @@ func drainPendingPublications(
 			return dispatched, fmt.Errorf("drain publications: intent %q resolved to identity %s: %w",
 				entry.IdempotencyKey, derived.Digest(), errPublicationIntentDiverged)
 		}
+		if err := ValidateIntentBranch(intent, cand, derived); err != nil {
+			return dispatched, err
+		}
 		// Authorization axis (#168): the identity excludes the authorization
 		// binding, so a resolver reconstructing the same head under a
 		// different current authorization would derive the same identity yet
@@ -268,7 +272,7 @@ func finalizePublicationEntry(
 	intent Intent,
 	result Result,
 ) error {
-	if result.Identity.Digest() != intent.Identity {
+	if result.Identity.Digest() != intent.Identity || result.Branch != publicationrecord.ExpectedBranch(intent) {
 		return fmt.Errorf("publication intent %q disagrees with returned result: %w",
 			key, errPublicationIntentDiverged)
 	}
