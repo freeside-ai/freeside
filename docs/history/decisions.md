@@ -1631,3 +1631,21 @@ Revision 49 ("Operator-Declared Publication Branches"):
    prose, adding a digest suffix to every declared name, changing the identity
    encoding, and renaming existing branches.
    (User; #1216; devlog 2026-09-07-2132-declared-publication-branch.md.)
+
+---
+
+Revision 50 ("Protected User-Prompt Delivery"):
+
+1. **New Claude invocations receive the complete user prompt through a
+   protected file** (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)):
+   Ward seeds at most 1 MiB of UTF-8 input into an owned volume, independently
+   observes the root-owned, mode-0400 file and its digest, and journals the
+   volume binding before writer creation. The writer mounts it read-only
+   outside the workspace; its root launcher opens stdin before dropping
+   privileges. Durable delivery mode preserves historical argument limits,
+   commands and handoff identities. Rejected: increasing the shell-argument
+   bound, promoting user input into system instructions, or treating a
+   transport change as retry authority. The pinned Claude 2.1.220 probe
+   verified complete user-message delivery; production recovery remains a
+   separate work unit.
+   (User; #1242; devlog 2026-09-08-1530-protected-prompt-delivery.md.)

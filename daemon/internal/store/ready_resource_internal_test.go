@@ -64,7 +64,8 @@ func migrationsBeforeReadyResource(t *testing.T) fs.FS {
 			entry.Name() == "0065_comprehension_telemetry.sql" ||
 			entry.Name() == "0066_work_unit_completed_milestone.sql" ||
 			entry.Name() == "0067_review_requests.sql" ||
-			entry.Name() == "0068_declared_publication_branch.sql" || entry.IsDir() {
+			entry.Name() == "0068_declared_publication_branch.sql" ||
+			entry.Name() == "0069_successor_publication.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())
@@ -115,9 +116,8 @@ func TestAttentionPRReferenceMigrationAppliesFromHead(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `UPDATE server_state SET revision = 11 WHERE id = 1`); err != nil {
 		t.Fatalf("seed server revision: %v", err)
 	}
-	// Only the two rows consumed by this migration matter here. Disable FK
-	// checks while seeding their pre-upgrade shape instead of reconstructing
-	// the publication workflow that migration 0028 already tests.
+	// Seed the legacy resource and its structural parents. Later migrations
+	// rebuild this table under the same foreign keys.
 	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
 		t.Fatalf("disable foreign keys: %v", err)
 	}
@@ -137,6 +137,16 @@ func TestAttentionPRReferenceMigrationAppliesFromHead(t *testing.T) {
 		`{"item_id":"legacy-ready","run_id":"run-legacy-ready","producing_invocation_id":"inv-legacy","publication_invocation_id":"publish-legacy","publication_identity":"sha256:publication","repo":"owner/repo","repository_id":84958515,"pr_number":450,"base_ref":"main","head_sha":"cafebabe","recorded_at":"2026-08-09T12:00:00Z"}`); err != nil {
 		t.Fatalf("seed ready binding: %v", err)
 	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO runs
+		(id, project_id, policy_digest, entity_version, as_of_revision, body)
+		VALUES (?, 'proj-1', 'legacy-policy', 1, 1, '{}')`, runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO execution_admissions
+		(invocation_id, id, run_id, stage_id, attempt_id, operating_mode, admitted_at, body)
+		VALUES ('inv-legacy', 'admission-legacy', ?, 'stage-legacy', 'attempt-legacy', 'attended', '2026-08-09T12:00:00Z', '{}')`, runID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
 		t.Fatalf("enable foreign keys: %v", err)
 	}
@@ -144,8 +154,8 @@ func TestAttentionPRReferenceMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 68 {
-		t.Fatalf("schema version = %d, want 68", got)
+	if got := rawVersion(t, db); got != 69 {
+		t.Fatalf("schema version = %d, want 69", got)
 	}
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
 		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id,

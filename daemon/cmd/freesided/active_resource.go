@@ -113,6 +113,21 @@ func loadCompletionRecoveryState(
 	ctx context.Context, tx *store.ReadTx, readyBinding domain.ReadyItemPRBinding,
 ) (completionRecoveryState, error) {
 	state := completionRecoveryState{}
+	successor, err := tx.CurrentPublicationSuccessor(ctx, readyBinding.RunID)
+	if err != nil {
+		return state, err
+	}
+	if successor != nil && successor.ReadyItemID() != readyBinding.ItemID {
+		published, err := tx.PublishedProductionReadyItemID(ctx, readyBinding.RunID)
+		if err != nil {
+			return state, err
+		}
+		// Sealing a successor does not replace the PR's published head.
+		// Retire its predecessor's completion watch only after publication.
+		if published != readyBinding.ItemID {
+			return state, nil
+		}
+	}
 	declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, readyBinding.RunID)
 	if errors.Is(err, store.ErrNotFound) {
 		return state, nil
@@ -122,7 +137,7 @@ func loadCompletionRecoveryState(
 	}
 	state.declaration = &declaration
 
-	binding, err := tx.GetWorkUnitPRBinding(ctx, declaration.ID)
+	binding, err := tx.EffectiveWorkUnitPRBinding(ctx, declaration.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return state, nil
 	}
@@ -729,7 +744,7 @@ func (r activeResourceReconciler) observeReadyResource(
 		if err != nil {
 			return err
 		}
-		b, err := tx.GetWorkUnitPRBinding(ctx, d.ID)
+		b, err := tx.EffectiveWorkUnitPRBinding(ctx, d.ID)
 		if completionOnly && errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
@@ -939,7 +954,7 @@ func (r activeResourceReconciler) commit(ctx context.Context, observation active
 			if err != nil {
 				return err
 			}
-			unitBinding, err := tx.GetWorkUnitPRBinding(ctx, observation.completion.UnitID)
+			unitBinding, err := tx.EffectiveWorkUnitPRBinding(ctx, observation.completion.UnitID)
 			if err != nil {
 				return err
 			}

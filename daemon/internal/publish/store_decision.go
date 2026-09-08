@@ -96,6 +96,9 @@ func (d *storePublicationDecision) prepare(
 		decisionErr error
 	)
 	err := d.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := validateSuccessorCandidate(ctx, &tx.ReadTx, c, producingInvocationID); err != nil {
+			return err
+		}
 		if err := validateCurrentScopeDecision(ctx, &tx.ReadTx, c); err != nil {
 			return err
 		}

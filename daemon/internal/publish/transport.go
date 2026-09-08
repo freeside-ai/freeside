@@ -661,6 +661,19 @@ func (t *Transport) fetchBase(
 // bound to this transport cleared this head. Neither substitutes for the
 // other.
 func (t *Transport) PushHead(ctx context.Context, co Checkout, gh GatedHead) (PushResult, error) {
+	return t.pushHead(ctx, co, gh, "")
+}
+
+// UpdateHead preserves all checkout, repository and per-instance gates while
+// replacing only the exact predecessor named by the publisher's capability.
+func (t *Transport) UpdateHead(ctx context.Context, co Checkout, update GatedUpdate) (PushResult, error) {
+	if !validCommitSHA(update.expectedOldHead) {
+		return PushResult{}, ErrUngatedPublication
+	}
+	return t.pushHead(ctx, co, update.head, update.expectedOldHead)
+}
+
+func (t *Transport) pushHead(ctx context.Context, co Checkout, gh GatedHead, expectedOldHead string) (PushResult, error) {
 	if !gh.gated {
 		return PushResult{}, ErrUngatedPublication
 	}
@@ -794,13 +807,22 @@ func (t *Transport) PushHead(ctx context.Context, co Checkout, gh GatedHead) (Pu
 	}
 	switch remote {
 	case "":
+		if expectedOldHead != "" {
+			return PushResult{}, ErrPublicationConflict
+		}
 		// Absent: this push creates it.
 	case headSHA:
 		return PushResult{Created: false}, nil
 	default:
-		return PushResult{}, fmt.Errorf("branch %s exists at %s, candidate is %s: %w", branch, remote, headSHA, ErrPublicationConflict)
+		if expectedOldHead == "" || remote != expectedOldHead {
+			return PushResult{}, fmt.Errorf("branch %s exists at %s, candidate is %s: %w", branch, remote, headSHA, ErrPublicationConflict)
+		}
 	}
-	if _, _, err := r.runAuthed(ctx, tok, pushArgs(url, headSHA, branch)...); err != nil {
+	args := pushArgs(url, headSHA, branch)
+	if expectedOldHead != "" {
+		args[4] += expectedOldHead
+	}
+	if _, _, err := r.runAuthed(ctx, tok, args...); err != nil {
 		var tge *TransportGitError
 		if errors.As(err, &tge) && tge.Refusal == RefusalStaleLease {
 			// The ref appeared between observation and push. One

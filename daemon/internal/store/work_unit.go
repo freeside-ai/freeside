@@ -535,7 +535,7 @@ func (tx *ReadTx) completionSupported(ctx context.Context, c domain.WorkUnitComp
 	if err != nil {
 		return false, err
 	}
-	binding, err := tx.GetWorkUnitPRBinding(ctx, c.UnitID)
+	binding, err := tx.EffectiveWorkUnitPRBinding(ctx, c.UnitID)
 	if IsRowVerdict(err) {
 		return false, nil
 	}

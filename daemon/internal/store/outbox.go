@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -128,7 +129,7 @@ func (tx *WriteTx) RecordDispatchedOutbox(
 	if payload == nil {
 		payload = []byte{}
 	}
-	version := outboxPayloadVersion(kind)
+	version := outboxPayloadVersion(kind, payload)
 	digest := contentaddr.Sum(payload)
 	createdAt := formatTime(time.Now())
 	res, err := tx.tx.ExecContext(ctx, enqueueDispatchedOutboxSQL,
@@ -384,7 +385,7 @@ func (tx *InternalTx) PromoteOutbox(
 	if payload == nil {
 		payload = []byte{}
 	}
-	version := outboxPayloadVersion(toKind)
+	version := outboxPayloadVersion(toKind, payload)
 	digest := contentaddr.Sum(payload)
 	res, err := tx.tx.ExecContext(ctx, promoteOutboxSQL,
 		toKind, payload, version, digest,
@@ -420,7 +421,7 @@ func (tx *InternalTx) recordOutbox(
 	if payload == nil {
 		payload = []byte{}
 	}
-	version := outboxPayloadVersion(kind)
+	version := outboxPayloadVersion(kind, payload)
 	digest := contentaddr.Sum(payload)
 	createdAt := formatTime(time.Now())
 	res, err := tx.tx.ExecContext(
@@ -440,8 +441,14 @@ func (tx *InternalTx) recordOutbox(
 	return entry, affected > 0, nil
 }
 
-func outboxPayloadVersion(kind string) int {
+func outboxPayloadVersion(kind string, payload []byte) int {
 	if kind == readyPublicationIntentKind {
+		var envelope struct {
+			FormatVersion int `json:"format_version"`
+		}
+		if json.Unmarshal(payload, &envelope) == nil && envelope.FormatVersion == 4 {
+			return 4
+		}
 		return 3
 	}
 	return 1
@@ -449,7 +456,7 @@ func outboxPayloadVersion(kind string) int {
 
 func validateOutboxPayload(entry QueueEntry) error {
 	if entry.PayloadVersion != 1 && entry.PayloadVersion != 2 &&
-		(entry.Kind != readyPublicationIntentKind || entry.PayloadVersion != 3) {
+		(entry.Kind != readyPublicationIntentKind || (entry.PayloadVersion != 3 && entry.PayloadVersion != 4)) {
 		return fmt.Errorf("stored payload version %d is invalid", entry.PayloadVersion)
 	}
 	if !contentaddr.Valid(entry.PayloadDigest) {

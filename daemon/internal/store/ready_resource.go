@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
@@ -113,6 +114,10 @@ func (tx *InternalTx) RecordReadyItemPRBinding(ctx context.Context, binding doma
 // the item and run records it claims to describe. Stored coordinates are data,
 // never authority to retarget a ready item.
 func (tx *ReadTx) GetReadyItemPRBinding(ctx context.Context, itemID domain.ItemID) (domain.ReadyItemPRBinding, error) {
+	ctx, err := publicationReadContext(ctx, "ready/"+string(itemID))
+	if err != nil {
+		return domain.ReadyItemPRBinding{}, err
+	}
 	var (
 		storedItemID, storedRunID, producingInvocationID, publicationInvocationID string
 		publicationIdentity, recordedAt                                           string
@@ -227,8 +232,19 @@ func (tx *ReadTx) validateReadyItemPRBindingAgainst(
 	}
 	if outcome.Identity != binding.PublicationIdentity || outcome.Repo != binding.Repo ||
 		outcome.BaseRef != binding.BaseRef || outcome.HeadSHA != binding.HeadSHA ||
-		outcome.PRNumber != binding.PRNumber || outcome.Branch != publicationrecord.ExpectedBranch(intent) {
+		outcome.PRNumber != binding.PRNumber || outcome.Branch != publicationrecord.ExpectedBranch(intent) ||
+		!reflect.DeepEqual(outcome.Successor, intent.Successor) {
 		return errRowInconsistent
+	}
+	if intent.Successor != nil {
+		successor, err := tx.GetPublicationSuccessor(ctx, binding.RunID, binding.PublicationInvocationID)
+		if err != nil || successor.ReadyItemID() != item.ID {
+			return domain.ErrParentKeyMismatch
+		}
+		target, err := tx.PublicationSuccessorTarget(ctx, binding.RunID, binding.PublicationInvocationID)
+		if err != nil || !reflect.DeepEqual(target, *intent.Successor) {
+			return domain.ErrParentKeyMismatch
+		}
 	}
 	return nil
 }

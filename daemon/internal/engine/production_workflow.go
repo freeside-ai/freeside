@@ -1270,7 +1270,7 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 				return false, nil
 			}
 		}
-		if !legacy && !operatorFeedback && e.productionPublication != nil {
+		if !legacy && e.productionPublication != nil {
 			durable, err := e.productionPublication.authenticatesTerminal(ctx, run, *recorded)
 			if err != nil {
 				return false, err
@@ -1284,7 +1284,7 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		}
 		return false, nil
 	}
-	if !legacy && !operatorFeedback && e.productionPublication != nil {
+	if !legacy && e.productionPublication != nil {
 		queued, err := e.productionPublication.hasQueuedCompletion(ctx, run, attempt.InvocationID)
 		if err != nil {
 			return false, err

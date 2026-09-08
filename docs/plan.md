@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 50
+revision: 51
 status: active
 updated: 2026-09-08
 ---
@@ -401,7 +401,7 @@ Approval is not a universal action.
 | `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. When the failure is classified as provider quota, credential expiry, or capacity, the card also offers retry under a qualified alternate agent, or wait (see the explicit alternate-agent retry below). |
 | `agent_question` | Answer and retry, answer without retry, or stop. |
 | `publish_blocked` | Rerun trust evaluation, inspect the trust failure, or stop. Which publication path a repository uses is repository configuration, never a per-item choice (revision 44). |
-| `ready_for_final_review` | Bound to the task. View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. Returning work starts a new run of the same task; any later final-review item still belongs to that task. Evidence and approvals retain their exact run, artifact-digest, and PR-head bindings. |
+| `ready_for_final_review` | Bound to the task. View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. Returning published work starts a new feedback invocation in the same run and supersedes this item; any later final-review item has a new publication identity and exact head binding. Evidence and approvals retain their exact run, artifact-digest, and PR-head bindings. |
 | `task_proposal` | Start, **start with changes**, decline, or snooze. Start begins the task workflow from the exact accepted proposal artifact digest. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the task workflow from the exact revised digest. It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
 | `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registry (added in 1B with the registry; first instance: follow-up issue filings in 1B.1, with proposed watches following once their schedule kind lands, Section [5.16](#516-the-durable-scheduler)). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `task_proposal`'s start-with-changes. `task_proposal` remains its own type. |
 | `system_health` | Acknowledge, run doctor, stop unattended operation, or, on the notice a stop raises, resume unattended operation; the rules follow the table. |
@@ -444,7 +444,7 @@ The offer is stated once here and applies on whichever card surfaces such a
 failure, including a review-side quota or expiry failure; it never widens a
 card's other actions.
 
-Each explicit retry creates a new run of the same task. It preserves the
+Each explicit agent-switch retry creates a new run of the same task. It preserves the
 original failure and its evidence, re-evaluates cost owner and the Section [7](#7-review-policy) review-independence rule
 against the new agent, and continues provider state only where the adapter
 proves compatibility (Section [5.8](#58-control-plane-trust); a different adapter is a fresh invocation).
@@ -2517,6 +2517,29 @@ Four machine-enforced rules govern evidence:
    ships the artifact schema, provenance enforcement, and client rendering; 1B
    adds external publication with the first evidence-bearing workflow.
 
+A failed post-publication feedback invocation may offer the existing `retry`
+action only when its accepted return-command ancestry, failure outcome and exact
+retained inputs authenticate. A new command creates one new invocation in the
+same run; command replay returns its recorded result. Retry does not revise
+scope, policy, approvals, input artifacts or the original failure.
+
+The first completed feedback export seals a successor publication cycle. Its
+predecessor ready item and PR binding remain immutable. The new candidate gets
+fresh trusted verification and independent review, with rounds continuing above
+the predecessor review and within the existing run-wide bound. Remediation stays
+inside that cycle. Publication updates only the same owned open PR, using an
+exact expected-old-head Git lease and separate update authority. A missing,
+closed, foreign or changed resource blocks the effect. Interrupted updates may
+converge on the exact successor head and identity without creating a replacement
+PR. Each cycle records its own ready binding; current projections and merge
+observation derive the latest authenticated head while retaining historical
+records. A completed work unit cannot start another cycle.
+
+Rechecking a completed successor may publish that same candidate after fresh
+verification and review. If the recheck instead needs remediation, it records
+a review dispute; the completed task alone cannot authorize another producer.
+The separate continuation authority is tracked in #1247.
+
 ### 5.16 The Durable Scheduler
 
 One scheduler owns every durable deferred check: PR watches, deadlines, and
@@ -2528,7 +2551,7 @@ trusted-config jobs (doctor, janitor; not proposable, no expiry requirement).
 The base-advance staleness watch is bound to the task, so it follows the work
 across retries. Its consumer is the base-freshness fact on task-bound
 `ready_for_final_review` items. Section [4](#4-the-attention-model)'s item resolution rules still
-apply: returning work resolves that item and starts a new run of the same task.
+apply: returning published work supersedes that item and starts a new feedback invocation in the same run.
 After return-to-agent, base-advance checks stay inactive until a new
 final-review item has a bound PR head. That item arms a watch with its own
 exact run, evidence, and head bindings.
@@ -4318,21 +4341,19 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 50 ("Protected User-Prompt Delivery"):
+Revision 51 ("Same-Run Feedback Successors"):
 
-1. **New Claude invocations receive the complete user prompt through a
-   protected file** (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)):
-   Ward seeds at most 1 MiB of UTF-8 input into an owned volume, independently
-   observes the root-owned, mode-0400 file and its digest, and journals the
-   volume binding before writer creation. The writer mounts it read-only
-   outside the workspace; its root launcher opens stdin before dropping
-   privileges. Durable delivery mode preserves historical argument limits,
-   commands and handoff identities. Rejected: increasing the shell-argument
-   bound, promoting user input into system instructions, or treating a
-   transport change as retry authority. The pinned Claude 2.1.220 probe
-   verified complete user-message delivery; production recovery remains a
-   separate work unit.
-   (User; #1242; devlog 2026-09-08-1530-protected-prompt-delivery.md.)
+1. **Published feedback retries retain the run and create new publication
+   authority.** The owner approved the bounded recovery chain after prompt
+   delivery was repaired. A fresh Retry command preserves the accepted input
+   and original failure, and creates a fresh invocation. Its completed export
+   starts a separately keyed successor with fresh verification and independent
+   review. The successor updates the existing owned PR through an exact-old-head
+   lease; historical bindings remain unchanged. Rejected: identical command
+   replay as retry, overwriting the original publication task, reusing old
+   review evidence, and creating a replacement PR when the target moved or
+   disappeared. The existing run-wide review bound remains in force.
+   (User; #1246; devlog 2026-09-08-1630-feedback-successor.md.)
 
 ## 14. Risks
 

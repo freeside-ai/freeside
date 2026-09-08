@@ -39,8 +39,8 @@ func TestReadyReturnActionMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 68 {
-		t.Fatalf("schema version = %d, want 68", got)
+	if got := rawVersion(t, db); got != 69 {
+		t.Fatalf("schema version = %d, want 69", got)
 	}
 
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,

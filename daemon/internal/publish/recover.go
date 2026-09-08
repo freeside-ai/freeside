@@ -287,6 +287,7 @@ func finalizePublicationEntry(
 		Branch:           result.Branch,
 		PRNumber:         result.PRNumber,
 		EvidenceEligible: true,
+		Successor:        intent.Successor,
 	}
 	payload, err := outcome.Encode()
 	if err != nil {

@@ -255,6 +255,19 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 			if err := validateAnswerRoute(command, item); err != nil {
 				return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 			}
+			if command.Action == domain.ActionReturnToAgent && item.Subject.RunID != nil {
+				if err := tx.RequireIncompletePublication(ctx, *item.Subject.RunID); err != nil {
+					return err
+				}
+			}
+			if command.Action == domain.ActionRetry && item.ExecutionFailure != nil {
+				if command.Message != "" || len(command.Attachments) != 0 {
+					return domain.ErrParentKeyMismatch
+				}
+				if _, err := tx.OperatorFeedbackRetryParent(ctx, item); err != nil {
+					return fmt.Errorf("authenticate feedback retry: %w", err)
+				}
+			}
 			if item.Status != domain.StatusOpen {
 				return fmt.Errorf("submit command %q: %w", command.CommandID,
 					&ClosedItemError{CommandID: command.CommandID, Item: item, Snapshot: snap})

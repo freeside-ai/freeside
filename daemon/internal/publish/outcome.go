@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
@@ -116,7 +117,7 @@ func LoadOutcome(
 			key,
 		)
 	}
-	if outcome.Branch != branch {
+	if outcome.Branch != branch || !reflect.DeepEqual(outcome.Successor, candidate.Successor) {
 		return Outcome{}, false, fmt.Errorf("outcome branch %q differs from candidate branch %q: %w", outcome.Branch, branch, ErrPublicationConflict)
 	}
 	if err := verify(ctx, candidate, id, outcome); err != nil {

@@ -295,16 +295,17 @@ type integrationTransport struct {
 	symlinkTarget  string
 	replaceParent  string
 
-	mu             sync.Mutex
-	fetches        int
-	fetchErr       error
-	fetchEntered   chan struct{}
-	fetchRelease   chan struct{}
-	materializeErr error
-	pushes         int
-	lastMessage    string
-	fail           bool
-	conflict       bool
+	mu                     sync.Mutex
+	fetches                int
+	fetchErr               error
+	fetchEntered           chan struct{}
+	fetchRelease           chan struct{}
+	materializeErr         error
+	pushes                 int
+	lastMessage            string
+	fail                   bool
+	conflict               bool
+	successorUpdateFailure error
 }
 
 func (tr *integrationTransport) RetainWorktree(
