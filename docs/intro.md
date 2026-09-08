@@ -2,9 +2,9 @@
 
 This is the plain-language companion to the project: the goals and the core
 ideas, without the plan's implementation detail. It is **not normative**: it
-sets no rules and settles no disputes. It describes the product as intended.
-The workflow below now runs end to end on a real repository; the status pointer
-under "Where To Go Next" says what has landed and what is still being built.
+sets no rules and settles no disputes. It describes the intended product.
+For what you can run today, read the [README](../README.md); for what has
+landed, follow the wave tracker under "Where To Go Next".
 
 The source of truth is [`docs/plan.md`](plan.md). Where the two disagree, the
 plan wins, and nothing should cite this document as authority.
@@ -39,10 +39,9 @@ Freeside is the outer loop. It decides what work starts and inside what
 boundary, which harness and model do it, what evidence "ready" requires, what
 keeps moving while you are away, and which decisions come to you.
 
-Freeside is **an agent control plane**: the layer that directs agents rather
-than running them. It never runs the model loop itself. It launches and
-supervises the harnesses that do: the harness runs the agent, and you hold the
-reins.
+Freeside is the layer that directs agents rather than running them. It never
+runs the model loop itself. It launches and supervises the harnesses that do:
+the harness runs the agent, and you hold the reins.
 
 ## What Freeside Does
 
@@ -57,7 +56,7 @@ Freeside needs from you; it can concern a task, a project, or system health.
 
 Specification changes and retries stay within the same task. Once you approve
 the specification, the task's name stays fixed unless you rename it. Returning
-work from final review starts a new run of that task. Its history stays
+published work from final review continues the same run. Its history stays
 together, but evidence and approvals remain tied to the exact run,
 specification, and reviewed result they cover.
 
@@ -93,6 +92,35 @@ The intended experience, end to end:
 
 GitHub stays the system of record for code, reviews, and merging. Freeside runs
 the workflow and decides when to involve you. Merging stays yours.
+
+Work does not always go smoothly. Freeside also needs to handle failures and
+changes without losing your decisions or calling unfinished work ready:
+
+- **A required check fails.** Freeside blocks the work until the check passes,
+  unless a recorded waiver permits an exception for that check. If the work
+  proceeds under a waiver, the card names the exception instead of showing an
+  unqualified pass.
+- **The reviewer finds a real defect.** Freeside decides whether the fix is
+  needed and allowed for this task. When it is, the agent makes the fix and
+  Freeside has the revised work reviewed again, within the review policy's
+  limits. The card shows the finding, what was done about it, and why.
+- **The proposed code changes, or new commits land on the branch it will
+  merge into.** Freeside repeats the review and any checks whose results
+  depended on those versions. The work cannot be marked ready using results
+  that no longer apply.
+- **The specification needs to change after you approved it.** The revision
+  stays within the same task, but needs a new approval.
+- **You return work with feedback from the phone.** The agent receives your
+  feedback and the version you reviewed. Work continues in the same run, and
+  Freeside updates the existing pull request after fresh checks and review.
+- **An execution fails.** If the failure can be retried, Freeside tries again
+  within the same run, up to its configured retry limit. Otherwise, or when
+  that limit is reached, it stops the run and sends you an attention item
+  explaining what failed.
+- **The daemon restarts mid-run.** Freeside remembers committed decisions.
+  Before retrying an external action, such as opening a pull request, it
+  checks whether the action already succeeded. Actions it cannot safely retry
+  wait for you.
 
 The model, the harness, and the reasoning budget (how much thinking a run may
 spend) are choices Freeside can route. Freeside sits above the harness, so
@@ -238,6 +266,16 @@ on backup health.
 - **Not self-modifying.** Changing the rules is itself gated work, and
   control-plane configuration never changes at runtime.
 
+## When To Use Freeside
+
+Freeside is intended for small fixes as well as larger changes. Even a small
+patch can have consequences that deserve careful review.
+
+It is designed for one person running work on their own machine, with their
+preferred harness and subscriptions. Agents carry the work through
+implementation and review. You approve the specification, make the decisions
+Freeside brings to you, and review the pull request before merging it.
+
 ## How Success Is Measured
 
 The project succeeds only if all four conditions hold, and each needs an
@@ -266,6 +304,8 @@ passing them is worth it.
 
 ## Where To Go Next
 
+- [`README.md`](../README.md) says what you can run today and how to set it
+  up. This document says what the product is meant to be.
 - [`docs/github-app-postures.md`](github-app-postures.md) explains the default
   public GitHub App posture (who owns the GitHub App identity Freeside acts
   under), its residual risks, and when the private work-account posture is
