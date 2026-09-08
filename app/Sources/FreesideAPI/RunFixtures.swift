@@ -155,14 +155,39 @@ public enum RunFixtures {
     public static func reviewEvidence(
         runID: String, round: Components.Schemas.RunReviewRound
     ) -> Components.Schemas.ReviewEvidence {
-        .init(
+        let findings = round.findings_count == 3
+        let result =
+            findings
+            ? #"{"findings":[{"severity":"P1","location":{"path":"Sources/Cache.swift","start_line":42,"end_line":45},"explanation":"A failed write clears the last saved value. Keep the previous value until the replacement succeeds."},{"severity":"P2","location":{"path":"Tests/CacheTests.swift","start_line":18,"end_line":22},"explanation":"Cover the failed-write path so a later change cannot silently lose the saved value."},{"severity":"P3","location":{"path":"README.md","whole_file":true},"explanation":"Document whether a failed refresh keeps the last saved value."}]}"#
+            : #"{"findings":[]}"#
+        let message =
+            findings
+            ? "I inspected the candidate diff and the cache tests. I found a data-loss path and two related gaps. I did not run the tests."
+            : "I inspected the candidate diff and traced the cache read and write paths. I found no actionable defects. I did not run the tests; this review does not replace verification."
+        let activity = """
+            freeside-review-access-v1 base=\(round.base_sha) head=\(round.head_sha) cwd=/workspace
+            reviewer startup: using the configured model
+            {"type":"thread.started","thread_id":"fixture-review"}
+            {"type":"turn.started"}
+            {"type":"item.started","item":{"id":"command-1","type":"command_execution","command":"git diff --stat BASE HEAD","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+            {"type":"item.completed","item":{"id":"command-1","type":"command_execution","command":"git diff --stat BASE HEAD","aggregated_output":"Sources/Cache.swift | 12 ++++++------\\nTests/CacheTests.swift | 4 ++--","exit_code":0,"status":"completed"}}
+            {"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"\(message)"}}
+            {"type":"turn.completed"}
+            """
+        let diagnostics = """
+            reviewer startup: connection interrupted
+            {"type":"provider.notice","message":"Additional provider output is not supported by this reader."}
+            {"type":"turn.started"}
+            {"type":"turn.failed","error":{"message":"The reviewer could not inspect the bound diff."}}
+            """
+        return .init(
             source: round.source, run_id: runID, round: round.round, invocation_id: round.invocation_id,
             content_kind: .reviewer_output, head_binding: .head_bound, source_head_sha: round.head_sha,
             sensitivity_class: .sensitive, publish_eligible: false, availability: round.evidence.availability,
             events: round.evidence.availability == .available
-                ? .init("Reviewer output fixture: inspected the bound diff.".utf8) : nil,
+                ? .init((round.state == .failed ? diagnostics : activity).utf8) : nil,
             result: round.evidence.availability == .available
-                ? .init("A retained reviewer claim, separate from daemon facts.".utf8) : nil,
+                ? .init((round.state == .failed ? "" : result).utf8) : nil,
             exit_status: round.evidence.availability == .available ? 0 : nil)
     }
 

@@ -99,6 +99,7 @@ private struct ReviewEvidenceView: View {
     let round: Components.Schemas.RunReviewRound
     @Environment(\.dismiss) private var dismiss
     @State private var evidence: Components.Schemas.ReviewEvidence?
+    @State private var presentation: ReviewEvidencePresentation?
     @State private var failed = false
 
     var body: some View {
@@ -113,15 +114,9 @@ private struct ReviewEvidenceView: View {
             Text("Private, sensitive output. Not publishable verifier evidence.")
                 .font(FreesideFont.caption).foregroundStyle(Color.inkDim)
             if let evidence {
-                if evidence.availability == .available {
+                if evidence.availability == .available, let presentation {
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                            ReviewOutputText(bytes: Array(evidence.events?.data ?? []))
-                            ReviewOutputText(bytes: Array(evidence.result?.data ?? []))
-                        }
-                        .font(FreesideFont.monoCaption)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        ReviewEvidenceContent(round: round, evidence: evidence, presentation: presentation)
                     }
                 } else {
                     Text(evidence.availability == .unknown ? "Evidence unknown" : "Evidence unavailable")
@@ -136,13 +131,149 @@ private struct ReviewEvidenceView: View {
         .frame(minWidth: 280, minHeight: 280)
         .task {
             do {
-                evidence = try await coordinator.reviewEvidence(for: runID, round: round)
+                let loaded = try await coordinator.reviewEvidence(for: runID, round: round)
+                if loaded.availability == .available {
+                    let parsing = Task.detached(priority: .userInitiated) {
+                        ReviewEvidencePresentation(
+                            events: Array(loaded.events?.data ?? []),
+                            result: loaded.result.map { Array($0.data) }, exitStatus: loaded.exit_status)
+                    }
+                    presentation = await parsing.value
+                    try Task.checkCancellation()
+                }
+                evidence = loaded
             } catch is CancellationError {
                 return
             } catch {
                 failed = true
             }
         }
+    }
+}
+
+struct ReviewEvidenceContent: View {
+    let round: Components.Schemas.RunReviewRound
+    let evidence: Components.Schemas.ReviewEvidence
+    let presentation: ReviewEvidencePresentation
+    @State private var showsRaw = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                heading("Daemon facts")
+                Text("\(RunDisplay.label(round.state)) · \(RunDisplay.reviewIdentity(round))")
+                if let outcome = round.outcome?.value1 {
+                    Text("Outcome: \(outcome.rawValue.capitalized)")
+                }
+                if let count = round.findings_count { Text("\(count) findings recorded") }
+                Text("Reviewed head \(round.head_sha.prefix(12)) · Base \(round.base_sha.prefix(12))")
+                    .font(FreesideFont.monoCaption)
+                if let exit = presentation.exitStatus { Text("Collected process exit status: \(exit)") }
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: 10) {
+                heading("Reviewer’s reported conclusion · Agent claim")
+                switch presentation.conclusion {
+                case .noFindings:
+                    Text("The reviewer reported no findings.")
+                        .font(FreesideFont.sans(.headline, weight: .semibold))
+                case .findings(let findings):
+                    Text("The reviewer reported \(findings.count) findings.")
+                    ForEach(Array(findings.enumerated()), id: \.offset) { _, finding in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("\(finding.severity) · \(finding.location.label)")
+                                .font(FreesideFont.monoCaption)
+                            Text(finding.explanation)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
+                    }
+                case .absent, .unreadable:
+                    Text("No readable reviewer result.")
+                    Text(
+                        presentation.conclusion == .absent
+                            ? "The retained result is absent or empty."
+                            : "The retained result does not match the supported findings format."
+                    ).foregroundStyle(Color.inkDim)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                heading("Reviewer’s final message · Agent claim")
+                if let explanation = presentation.explanation {
+                    Text(explanation)
+                } else {
+                    Text("No explanation was retained.").foregroundStyle(Color.inkDim)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                heading("Recorded reviewer activity")
+                Text("Agent messages: \(presentation.messageCount) · Commands: \(presentation.commandCount)")
+                Text(presentation.terminalState ?? "No terminal turn state recorded")
+                Text("This transcript shows recorded activity, not independent verification of the review.")
+                    .font(FreesideFont.caption).foregroundStyle(Color.inkDim)
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(presentation.entries.filter { !$0.isDiagnostic }) { entry in
+                        entryView(entry)
+                    }
+                }
+            }
+            if presentation.diagnosticCount > 0 {
+                VStack(alignment: .leading, spacing: 8) {
+                    heading("Diagnostics and unsupported output")
+                    Text("\(presentation.diagnosticCount) entries · Separate from reviewer activity")
+                        .font(FreesideFont.caption).foregroundStyle(Color.inkDim)
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(presentation.entries.filter(\.isDiagnostic)) { entry in
+                            entryView(entry)
+                        }
+                    }
+                }
+            }
+            DisclosureGroup("Raw retained output", isExpanded: $showsRaw) {
+                if showsRaw {
+                    VStack(alignment: .leading, spacing: 12) {
+                        heading("Events · Raw retained bytes")
+                        ReviewOutputText(bytes: Array(evidence.events?.data ?? []))
+                        heading("Result · Raw retained bytes")
+                        ReviewOutputText(bytes: Array(evidence.result?.data ?? []))
+                    }
+                    .font(FreesideFont.monoCaption)
+                }
+            }
+        }
+        .font(FreesideFont.callout)
+        .foregroundStyle(Color.ink)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func heading(_ title: String) -> some View {
+        Text(title).font(FreesideFont.sans(.headline, weight: .semibold))
+    }
+
+    private func entryView(_ entry: ReviewEvidencePresentation.Entry) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(entry.kind.rawValue).font(FreesideFont.caption).foregroundStyle(Color.inkDim)
+            if let command = entry.command {
+                Text(command).font(FreesideFont.monoCaption)
+                if let exit = entry.exitCode {
+                    Text("Exit code: \(exit)").font(FreesideFont.caption)
+                } else {
+                    Text("Exit code not recorded").font(FreesideFont.caption)
+                }
+                if let status = entry.status { Text("Status: \(status)").font(FreesideFont.caption) }
+            }
+            if entry.invalidUTF8 {
+                Text("Invalid UTF-8 is shown with replacement characters. Retained bytes are unchanged.")
+                    .font(FreesideFont.caption).foregroundStyle(Color.inkDim)
+            }
+            Text(entry.text)
+                .font(entry.kind == .command || entry.isDiagnostic ? FreesideFont.monoCaption : FreesideFont.callout)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.rule.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
