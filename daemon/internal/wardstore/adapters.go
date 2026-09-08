@@ -1249,6 +1249,8 @@ func (a *Journal) MarkStatePrepared(
 			ConfigRootDigest:          state.ConfigRootDigest,
 			ContinuityDigest:          state.ContinuityDigest,
 			SessionScratchDigest:      state.SessionScratchDigest,
+			PromptFingerprint:         state.PromptFingerprint,
+			PromptDigest:              state.PromptDigest,
 		})
 	})
 }
@@ -1346,6 +1348,8 @@ func toStoreRecord(rec ward.HandoffJournalRecord) store.HandoffJournalRecord {
 			ConfigRootDigest:          rec.State.ConfigRootDigest,
 			ContinuityDigest:          rec.State.ContinuityDigest,
 			SessionScratchDigest:      rec.State.SessionScratchDigest,
+			PromptFingerprint:         rec.State.PromptFingerprint,
+			PromptDigest:              rec.State.PromptDigest,
 		}
 	}
 	if rec.Instructions != nil {
@@ -1399,6 +1403,8 @@ func fromStoreRecord(rec store.HandoffJournalRecord) ward.HandoffJournalRecord {
 			ConfigRootDigest:          rec.State.ConfigRootDigest,
 			ContinuityDigest:          rec.State.ContinuityDigest,
 			SessionScratchDigest:      rec.State.SessionScratchDigest,
+			PromptFingerprint:         rec.State.PromptFingerprint,
+			PromptDigest:              rec.State.PromptDigest,
 		}
 	}
 	if rec.Instructions != nil {

@@ -97,6 +97,8 @@ func (p testProvider) Workspace(id domain.InvocationID) string {
 
 func (testProvider) PrepareFailedStatus() int { return testPrepareFailedStatus }
 
+func (testProvider) PromptDelivery() PromptDelivery { return PromptArgument }
+
 func (testProvider) RenderPrompt(inputs ProviderPromptInputs) (string, error) {
 	return renderPromptParts(durableInputs{
 		Specification: inputs.Specification, PromptPackage: inputs.PromptPackage,

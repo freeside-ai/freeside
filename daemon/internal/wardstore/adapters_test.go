@@ -57,6 +57,17 @@ func TestAdaptersRoundTripAcrossStoreReopen(t *testing.T) {
 	if lease.Fence != 1 {
 		t.Fatalf("lease fence = %d, want 1", lease.Fence)
 	}
+	state := ward.HandoffJournalState{
+		ConfigRootFingerprint: "config-root", ContinuityFingerprint: "continuity",
+		SessionScratchFingerprint: "scratch", ConfigRootTarget: ward.ClaudeConfigRootTarget,
+		ContinuityTarget: ward.ClaudeContinuityTarget, SessionScratchTarget: ward.ClaudeSessionScratchTarget,
+		ConfigRootReadOnly: true, ConfigRootDigest: strings.Repeat("ab", 32),
+		ContinuityDigest: strings.Repeat("cd", 32), SessionScratchDigest: strings.Repeat("ef", 32),
+		PromptFingerprint: "prompt", PromptDigest: strings.Repeat("12", 32),
+	}
+	if err := adapters.Journal.MarkStatePrepared(ctx, rec.RunID, state); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("close first store: %v", err)
 	}
@@ -80,6 +91,9 @@ func TestAdaptersRoundTripAcrossStoreReopen(t *testing.T) {
 	if got.Lease == nil || got.Lease.Fence != lease.Fence ||
 		got.Lease.AuthIdentityID != identity.ID || got.Outcome != nil {
 		t.Fatalf("reopened record = %+v, want the same open leased record", got)
+	}
+	if got.State == nil || *got.State != state {
+		t.Fatalf("reopened state = %+v, want %+v", got.State, state)
 	}
 	current, err := adapters.Leaser.Get(ctx, identity.ID)
 	if err != nil {

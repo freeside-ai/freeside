@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 const (
@@ -32,6 +34,9 @@ func (b *Backend) prepareLaunchState(
 ) error {
 	if hs.Agent.LaunchState == LaunchStateNone {
 		return nil
+	}
+	if err := b.preparePrompt(ctx, hs, names, st); err != nil {
+		return err
 	}
 	for _, volume := range []struct {
 		name   string
@@ -94,6 +99,10 @@ func (b *Backend) prepareLaunchState(
 		ConfigRootDigest:          configDigest,
 		ContinuityDigest:          continuityDigest,
 		SessionScratchDigest:      scratchDigest,
+	}
+	if hs.Agent.PromptFile != nil {
+		prepared.PromptFingerprint = st.prompt.fingerprint
+		prepared.PromptDigest = contentaddr.Hex(string(hs.Agent.PromptFile.Digest))
 	}
 	st.preparedState = &prepared
 	if st.journalOpen {
@@ -428,7 +437,7 @@ func (b *Backend) verifyPreparedLaunchState(
 			)
 		}
 	}
-	for _, volume := range []struct {
+	volumes := []struct {
 		name        string
 		fingerprint string
 		claim       objectClaim
@@ -436,7 +445,18 @@ func (b *Backend) verifyPreparedLaunchState(
 		{names.ConfigRoot, st.preparedState.ConfigRootFingerprint, st.configRoot},
 		{names.Continuity, st.preparedState.ContinuityFingerprint, st.continuity},
 		{names.SessionScratch, st.preparedState.SessionScratchFingerprint, st.sessionScratch},
-	} {
+	}
+	if hs.Agent.PromptFile != nil {
+		if st.preparedState.PromptDigest != contentaddr.Hex(string(hs.Agent.PromptFile.Digest)) || st.preparedState.PromptFingerprint == "" {
+			return failf(CheckControlPlaneIsolation, "prepared prompt binding changed")
+		}
+		volumes = append(volumes, struct {
+			name        string
+			fingerprint string
+			claim       objectClaim
+		}{names.Prompt, st.preparedState.PromptFingerprint, st.prompt})
+	}
+	for _, volume := range volumes {
 		view, err := b.rt.InspectVolume(ctx, volume.name)
 		if err != nil {
 			return failf(CheckControlPlaneIsolation, "re-inspect state volume %q: %v", volume.name, err)

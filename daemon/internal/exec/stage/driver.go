@@ -1,6 +1,7 @@
 package stage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -221,6 +222,15 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 	// Detach before checking so provider-retained references cannot change the
 	// policy decision in the gap before ward freezes its own request.
 	hs = detachProviderHandoffSpec(hs)
+	if in.delivery() == PromptFileV1 {
+		if hs.Agent.PromptFile == nil ||
+			!bytes.Equal(hs.Agent.PromptFile.Body, []byte(in.Prompt)) ||
+			hs.Agent.PromptFile.Validate() != nil {
+			return ward.HandoffSpec{}, fmt.Errorf("%w: provider prompt file differs from durable input", ErrUnsupportedStart)
+		}
+	} else if hs.Agent.PromptFile != nil {
+		return ward.HandoffSpec{}, fmt.Errorf("%w: legacy prompt cannot acquire file delivery", ErrUnsupportedStart)
+	}
 	// The provider chooses vendor-specific containment details, but it cannot
 	// retarget the durable run, checkout, or admitted security bindings. Ward
 	// validates the returned shape; only this boundary can compare it with the
@@ -310,6 +320,7 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 }
 
 func detachProviderHandoffSpec(hs ward.HandoffSpec) ward.HandoffSpec {
+	hs.Agent.PromptFile = hs.Agent.PromptFile.Clone()
 	hs.Agent.Command = slices.Clone(hs.Agent.Command)
 	hs.Agent.Env = slices.Clone(hs.Agent.Env)
 	hs.Agent.CredentialMounts = slices.Clone(hs.Agent.CredentialMounts)
@@ -485,13 +496,20 @@ func (d *Driver) StartWithInputs(
 		return err
 	}
 	materialized := durableInputsFrom(inputs)
-	prompt, err := d.provider.RenderPrompt(providerPromptInputsFrom(materialized))
+	delivery := d.provider.PromptDelivery()
+	if !delivery.valid() {
+		return fmt.Errorf("%w: provider prompt delivery is invalid", ErrUnsupportedStart)
+	}
+	promptInputs := providerPromptInputsFrom(materialized)
+	promptInputs.Delivery = delivery
+	prompt, err := d.provider.RenderPrompt(promptInputs)
 
 	now := d.now().UTC()
 	in := intent{
 		InvocationID: id, RunID: runID, Phase: phaseSeeding, Spec: spec,
 		Seed: filepath.Join(d.seedRoot, runID), Prompt: prompt,
-		Inputs: materialized, Instructions: instructions,
+		PromptDelivery: delivery,
+		Inputs:         materialized, Instructions: instructions,
 		// Capture the composition-derived hydration argv into the durable
 		// record so recovery rebuilds the launch command from the intent, not
 		// from a d.prepare that a later deploy or mode change may have altered.

@@ -18,7 +18,7 @@ import (
 
 func TestProductionSpecificationDeliveryValidatorRejectsPromptOverflow(t *testing.T) {
 	st, blobs, run, promptDigest := deliveryValidatorFixture(t, true)
-	priorBody := []byte(strings.Repeat("r", 32<<10))
+	priorBody := []byte(strings.Repeat("r", 1<<20))
 	putDeliveryArtifact(t, st, blobs, "research-prompt-overflow", priorBody)
 	materializer, err := productionMaterializer(blobs)
 	if err != nil {
@@ -57,7 +57,7 @@ func TestProductionSpecificationDeliveryValidatorRejectsAggregateOverflow(t *tes
 
 func TestProductionRemediationDeliveryValidatorRejectsPromptOverflow(t *testing.T) {
 	st, blobs, run, promptDigest := deliveryValidatorFixture(t, true)
-	priorBody := []byte(strings.Repeat("r", 32<<10))
+	priorBody := []byte(strings.Repeat("r", 1<<20))
 	putDeliveryArtifact(t, st, blobs, "remediation-prompt-overflow", priorBody)
 	materializer, err := productionMaterializer(blobs)
 	if err != nil {
@@ -75,7 +75,7 @@ func TestProductionRemediationDeliveryValidatorRejectsPromptOverflow(t *testing.
 
 func TestProductionImplementationDeliveryValidatorRejectsInitialPromptOverflow(t *testing.T) {
 	_, blobs, run, promptDigest := deliveryValidatorFixture(t, false)
-	largeSpec := []byte(strings.Repeat("s", 32<<10))
+	largeSpec := []byte(strings.Repeat("s", 1<<20))
 	run.SpecDigest = domain.Digest(contentaddr.Sum(largeSpec))
 	if _, err := blobs.Put(run.SpecDigest, bytes.NewReader(largeSpec)); err != nil {
 		t.Fatal(err)

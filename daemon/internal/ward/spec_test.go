@@ -291,6 +291,9 @@ func TestInstructionSeederPublishesAWriterReadableBundle(t *testing.T) {
 func TestNamesFor(t *testing.T) {
 	n := namesFor("run-1")
 	want := handoffNames{
+		Prompt:              "freeside-handoff-run-1-prompt",
+		PromptSeeder:        "freeside-handoff-run-1-prompt-seed",
+		PromptObserver:      "freeside-handoff-run-1-prompt-check",
 		Workspace:           "freeside-handoff-run-1-ws",
 		Instructions:        "freeside-handoff-run-1-ins",
 		ConfigRoot:          "freeside-handoff-run-1-cfg",
@@ -733,7 +736,7 @@ func TestBuildAgentSpec(t *testing.T) {
 			instructions, names.Instructions, claudeInstructionMountTarget)
 	}
 	// The generated spec passes its own gate.
-	if err := validateAgentSpec(cfg, spec, names, "", false, hs.Agent.LaunchState); err != nil {
+	if err := validateAgentSpec(cfg, spec, names, "", false, hs.Agent.LaunchState, false); err != nil {
 		t.Errorf("validateAgentSpec(generated) = %v, want nil", err)
 	}
 }
@@ -784,7 +787,7 @@ func TestBuildAgentSpecLeasedWritableMount(t *testing.T) {
 		t.Errorf("writableCredentialTarget() = %q, want %q", got, want)
 	}
 	if err := validateAgentSpec(
-		cfg, spec, names, hs.writableCredentialTarget(), true, hs.Agent.LaunchState,
+		cfg, spec, names, hs.writableCredentialTarget(), true, hs.Agent.LaunchState, false,
 	); err != nil {
 		t.Errorf("validateAgentSpec(generated leased) = %v, want nil", err)
 	}

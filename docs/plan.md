@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 49
+revision: 50
 status: active
 updated: 2026-09-08
 ---
@@ -1747,6 +1747,21 @@ preserves their path scopes and precedence. Ward journals the bundle's source
 digests, composition version, and result digest before launch. Instruction
 files the agent modifies stay candidate diff content; they are always
 risk-flagged and never launch authority.
+
+New Claude invocations deliver the complete rendered stage prompt as user
+input through stdin. Ward seeds its immutable UTF-8 bytes, bounded at 1 MiB,
+into a separate owned volume. A credential-free, networkless observer proves
+the single root-owned, mode-0400 regular file and its digest before the writer
+exists. The prelaunch journal binds that digest and the volume fingerprint;
+the writer mounts the volume read-only outside the workspace. Its root
+launcher opens stdin before dropping privileges. This does not promote the
+stage prompt into the separate vendor instruction bundle or system role.
+
+Delivery mode is part of the durable stage intent. Historical intents without
+a mode retain argument delivery, its 31-KiB bound, and their original handoff
+identity, including an already-recorded refusal. Recovery never silently
+reinterprets one as file delivery. A new attempt needs its own ordinary
+authorization and identity; changing transport does not itself authorize retry.
 
 An initial launch uses a daemon-generated UUID, supplied with `--session-id` and
 journalled before the process is created. Provider resume is a separate
@@ -4303,19 +4318,21 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 49 ("Operator-Declared Publication Branches"):
+Revision 50 ("Protected User-Prompt Delivery"):
 
-1. **The operator may declare the exact publication branch** (Section
-   [5.15](#515-evidence-and-images)): the publication identity still derives
-   the default branch and the PR marker. An optional operator-supplied branch
-   satisfies repository naming conventions without changing that identity.
-   The durable intent binds the resolved name before dispatch; retries and
-   recovery reject another branch for the same identity, and foreign refs or
-   PR markers remain conflicts. Legacy records and published refs keep their
-   identity-derived names. Rejected: reading naming authority from repository
-   prose, adding a digest suffix to every declared name, changing the identity
-   encoding, and renaming existing branches.
-   (User; #1216; devlog 2026-09-07-2132-declared-publication-branch.md.)
+1. **New Claude invocations receive the complete user prompt through a
+   protected file** (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)):
+   Ward seeds at most 1 MiB of UTF-8 input into an owned volume, independently
+   observes the root-owned, mode-0400 file and its digest, and journals the
+   volume binding before writer creation. The writer mounts it read-only
+   outside the workspace; its root launcher opens stdin before dropping
+   privileges. Durable delivery mode preserves historical argument limits,
+   commands and handoff identities. Rejected: increasing the shell-argument
+   bound, promoting user input into system instructions, or treating a
+   transport change as retry authority. The pinned Claude 2.1.220 probe
+   verified complete user-message delivery; production recovery remains a
+   separate work unit.
+   (User; #1242; devlog 2026-09-08-1530-protected-prompt-delivery.md.)
 
 ## 14. Risks
 

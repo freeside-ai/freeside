@@ -4,6 +4,32 @@
 
 Daemon CI builds and tests on **Linux as well as macOS from day one**: the daemon core takes no Apple-only dependencies, making portability continuously verified rather than aspirational (plan §3.3).
 
+## Protected Prompt Delivery
+
+New Claude stage intents select `file_v1`. The renderer accepts at most 1 MiB
+of complete UTF-8 input. Ward verifies its digest on a separate protected
+volume before writer creation, journals the volume binding with launch state,
+and supplies the root-opened file as Claude's user stdin. Existing intents
+retain argument delivery and the original 31-KiB limit. This changes transport;
+it neither retries a failed invocation nor grants successor publication.
+
+The optional `TestPinnedClaudePromptStdinLive` probe uses a cached, pinned
+Claude 2.1.220 image, synthetic text larger than the argument limit, and a mock
+API on loopback inside a network-disabled container. It checks that the exact
+text reaches a user-message block after privilege drop, and that the dropped
+user cannot independently open the protected file. It uses no real provider
+credential. Set `FREESIDE_PROMPT_STDIN_LIVE=1`, `FREESIDE_PROMPT_IMAGE` to the
+digest-pinned image, `FREESIDE_RIG_ACQUISITION` to an authorized held rig's
+acquisition JSON, and `FREESIDE_STATE_DIR` to that rig's state root, then run:
+
+```sh
+go test ./internal/exec/claude -run '^TestPinnedClaudePromptStdinLive$' -count=1 -v
+```
+
+The probe registers one fresh container under the held rig, then verifies
+ownership before cleanup. Do not borrow an active exercise's rig without
+authorization. Its token stays in process memory and must not be printed.
+
 - **Toolchain:** Go (single static binary, supervised by launchd/systemd, dedicated user). Module `github.com/freeside-ai/freeside/daemon`, pinned in `go.mod`; build/test/run commands are in `AGENTS.md`.
 - **Scope boundary:** daemon-side code only. The daemon/client contract is defined in `api/`; server-side code implementing it lives here, never hand-authored to diverge from the spec.
 - **Status:** initialized in Phase 1A (Wave 0 unit 1). `internal/` holds one placeholder package per lane (`signet`, `export`, `importer`, `verify`, `publish`, `ward`, `domain`, `engine`); each lane's real code lands with its Wave unit.
