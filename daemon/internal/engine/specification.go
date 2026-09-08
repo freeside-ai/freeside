@@ -936,6 +936,10 @@ func cloneSpecificationWorkUnit(in *domain.WorkUnitDeclarationInput) *domain.Wor
 }
 
 func (r specificationRequest) validate() error {
+	return r.validateWithPublication(ProductionPublication.Validate)
+}
+
+func (r specificationRequest) validateWithPublication(validatePublication func(ProductionPublication) error) error {
 	if r.Version != specificationRequestVersion || r.SpecificationRunID == "" ||
 		r.ImplementationRunID == "" || r.SpecificationRunID == r.ImplementationRunID ||
 		r.ProjectID == "" || r.InvocationID == "" || r.Iteration < 1 ||
@@ -943,7 +947,7 @@ func (r specificationRequest) validate() error {
 		r.InvocationID != specificationInvocationID(r.SpecificationRunID, r.Iteration) {
 		return fmt.Errorf("invalid specification request identity: %w", domain.ErrParentKeyMismatch)
 	}
-	if err := r.Publication.Validate(); err != nil {
+	if err := validatePublication(r.Publication); err != nil {
 		return err
 	}
 	if r.CampaignID == "" {
@@ -1046,10 +1050,16 @@ func encodeSpecificationRequest(request specificationRequest) ([]byte, error) {
 }
 
 func decodeSpecificationRequest(entry store.QueueEntry) (specificationRequest, error) {
+	return decodeSpecificationRequestWithPublication(entry, ProductionPublication.Validate)
+}
+
+func decodeSpecificationRequestWithPublication(
+	entry store.QueueEntry, validatePublication func(ProductionPublication) error,
+) (specificationRequest, error) {
 	if entry.Kind != KindSpecificationInvocationRequested {
 		return specificationRequest{}, fmt.Errorf("specification intent kind %q: %w", entry.Kind, domain.ErrParentKeyMismatch)
 	}
-	request, err := decodeSpecificationPayload(entry.Payload)
+	request, err := decodeSpecificationPayloadWithPublication(entry.Payload, validatePublication)
 	if err != nil {
 		return specificationRequest{}, err
 	}
@@ -1060,14 +1070,23 @@ func decodeSpecificationRequest(entry store.QueueEntry) (specificationRequest, e
 }
 
 func decodeSpecificationPayload(payload []byte) (specificationRequest, error) {
+	return decodeSpecificationPayloadWithPublication(payload, ProductionPublication.Validate)
+}
+
+func decodeSpecificationPayloadWithPublication(
+	payload []byte, validatePublication func(ProductionPublication) error,
+) (specificationRequest, error) {
 	var request specificationRequest
 	if err := strictjson.Decode(payload, &request, strictjson.RejectInvalidUTF8, maxSpecificationContractBytes); err != nil {
 		return specificationRequest{}, fmt.Errorf("decode specification request: %w", err)
 	}
-	if err := request.validate(); err != nil {
+	if err := request.validateWithPublication(validatePublication); err != nil {
 		return specificationRequest{}, err
 	}
-	canonical, err := encodeSpecificationRequest(request)
+	// The bounded decode and validation above have already checked the request.
+	// Re-encode its original fields, without applying live publication policy
+	// again when the caller is retaining historical data for backup.
+	canonical, err := json.Marshal(request)
 	if err != nil {
 		return specificationRequest{}, err
 	}
@@ -1080,7 +1099,7 @@ func decodeSpecificationPayload(payload []byte) (specificationRequest, error) {
 // SpecificationInvocationBackupPayloadDigests authenticates a dispatch marker
 // for backup closure. Its artifact references are store IDs, not raw digests.
 func SpecificationInvocationBackupPayloadDigests(entry store.QueueEntry) ([]domain.Digest, error) {
-	if _, err := decodeSpecificationRequest(entry); err != nil {
+	if _, err := decodeSpecificationRequestWithPublication(entry, ProductionPublication.validateRetained); err != nil {
 		return nil, err
 	}
 	return nil, nil
@@ -1133,7 +1152,7 @@ func SpecificationImplementationClaimBackupPayloadDigests(entry store.QueueEntry
 	if entry.Kind != KindSpecificationImplementationClaim || !entry.Dispatched() {
 		return nil, domain.ErrParentKeyMismatch
 	}
-	request, err := decodeSpecificationPayload(entry.Payload)
+	request, err := decodeSpecificationPayloadWithPublication(entry.Payload, ProductionPublication.validateRetained)
 	if err != nil {
 		return nil, err
 	}

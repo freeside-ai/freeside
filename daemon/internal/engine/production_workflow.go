@@ -181,6 +181,20 @@ func (a ProductionCommitAuthor) validate() error {
 // title and body. The body limit reserves every publisher-owned section,
 // including the identity marker, advisories, and disposition history.
 func (p ProductionPublication) Validate() error {
+	if err := p.validateRetained(); err != nil {
+		return err
+	}
+	if err := publish.ValidateCandidateBody(p.Body); err != nil {
+		return fmt.Errorf("production publication body: %w", err)
+	}
+	return nil
+}
+
+// validateRetained checks immutable metadata for backup reconstruction only.
+// Historical prose remains data even when a later publisher reserves another
+// heading or more section space. Retention grants no execution or publication
+// authority: those readers continue to use Validate against current policy.
+func (p ProductionPublication) validateRetained() error {
 	if p.Branch != "" {
 		if err := publicationrecord.ValidateDeclaredBranch(p.Branch, ""); err != nil {
 			return fmt.Errorf("production publication: %w", err)
@@ -199,8 +213,8 @@ func (p ProductionPublication) Validate() error {
 	if strings.TrimSpace(p.Body) == "" {
 		return errors.New("production publication body must be non-empty")
 	}
-	if err := publish.ValidateCandidateBody(p.Body); err != nil {
-		return fmt.Errorf("production publication body: %w", err)
+	if len(p.Body) > 64<<10 {
+		return errors.New("production publication body exceeds the retained metadata limit")
 	}
 	if err := p.CommitAuthor.validate(); err != nil {
 		return err
@@ -740,7 +754,7 @@ func hasSpecificationReservationEvidence(
 // dispatch intent for the local checkpoint-health scan. The request is
 // self-contained and needs no external blobs.
 func ProductionInvocationBackupPayloadDigests(entry store.QueueEntry) ([]domain.Digest, error) {
-	if _, err := decodeProductionRequest(entry); err != nil {
+	if _, err := decodeProductionRequestWithPublication(entry, ProductionPublication.validateRetained); err != nil {
 		return nil, err
 	}
 	return nil, nil
@@ -841,6 +855,12 @@ func unsupportedProductionMarkerVersion(payload []byte) string {
 // decoded intent is a reconstruction boundary (the same discipline as
 // signet's decodeBoundInvocationRequest).
 func decodeProductionRequest(entry store.QueueEntry) (productionInvocationRequest, error) {
+	return decodeProductionRequestWithPublication(entry, ProductionPublication.Validate)
+}
+
+func decodeProductionRequestWithPublication(
+	entry store.QueueEntry, validatePublication func(ProductionPublication) error,
+) (productionInvocationRequest, error) {
 	if unsupported := unsupportedProductionMarkerVersion(entry.Payload); unsupported != "" {
 		return productionInvocationRequest{}, fmt.Errorf("decode payload: unsupported version %q: %w",
 			unsupported, errProductionMarkerUnsupportedVersion)
@@ -884,7 +904,7 @@ func decodeProductionRequest(entry store.QueueEntry) (productionInvocationReques
 			}
 			return productionInvocationRequest{}, fmt.Errorf("decode payload publication: %w", err)
 		}
-		if err := request.Publication.Validate(); err != nil {
+		if err := validatePublication(request.Publication); err != nil {
 			return productionInvocationRequest{}, fmt.Errorf("decode payload: %w", err)
 		}
 	default:

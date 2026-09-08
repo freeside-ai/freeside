@@ -1140,6 +1140,10 @@ func (w *productionPublicationWorkflow) loadProductionRequest(
 }
 
 func (t productionPublicationTask) validate() error {
+	return t.validateWithPublication(ProductionPublication.Validate)
+}
+
+func (t productionPublicationTask) validateWithPublication(validatePublication func(ProductionPublication) error) error {
 	_, remediationProducer := remediationRoundForInvocation(t.RunID, t.ProducingInvocationID)
 	validProducer := t.ProducingInvocationID == productionInvocationID(t.RunID) || remediationProducer
 	if t.Version != productionPublicationTaskVersion || t.RunID == "" || t.ProjectID == "" ||
@@ -1162,7 +1166,7 @@ func (t productionPublicationTask) validate() error {
 	if err := validateProductionReplayRecord(t.Replay); err != nil {
 		return err
 	}
-	if err := t.Publication.Validate(); err != nil {
+	if err := validatePublication(t.Publication); err != nil {
 		return err
 	}
 	replayDigests := productionReplayDigests(t.Replay)
@@ -1230,6 +1234,12 @@ func productionReplayDigests(replay ProductionReplay) []domain.Digest {
 }
 
 func decodeProductionPublicationTask(entry store.QueueEntry) (productionPublicationTask, error) {
+	return decodeProductionPublicationTaskWithPublication(entry, ProductionPublication.Validate)
+}
+
+func decodeProductionPublicationTaskWithPublication(
+	entry store.QueueEntry, validatePublication func(ProductionPublication) error,
+) (productionPublicationTask, error) {
 	if entry.Kind != KindProductionPublicationRequested {
 		return productionPublicationTask{}, fmt.Errorf("task %q has kind %q: %w",
 			entry.IdempotencyKey, entry.Kind, domain.ErrParentKeyMismatch)
@@ -1241,7 +1251,7 @@ func decodeProductionPublicationTask(entry store.QueueEntry) (productionPublicat
 		}
 		return productionPublicationTask{}, err
 	}
-	if err := task.validate(); err != nil {
+	if err := task.validateWithPublication(validatePublication); err != nil {
 		return productionPublicationTask{}, err
 	}
 	if entry.IdempotencyKey != productionPublicationTaskKey(task.RunID) {
@@ -1990,7 +2000,7 @@ func explicitProductionPaths(patterns []string) bool {
 // ProductionPublicationBackupPayloadDigests validates a durable production
 // task and returns every blob its replay and original result require.
 func ProductionPublicationBackupPayloadDigests(entry store.QueueEntry) ([]domain.Digest, error) {
-	task, err := decodeProductionPublicationTask(entry)
+	task, err := decodeProductionPublicationTaskWithPublication(entry, ProductionPublication.validateRetained)
 	if err != nil {
 		return nil, err
 	}
