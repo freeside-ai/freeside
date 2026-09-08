@@ -30,12 +30,12 @@ const (
 	identityDigestBytes     = len("sha256:") + sha256.Size*2
 	identityMarkerBytes     = len(markerPrefix) + identityDigestBytes + len(markerSuffix)
 	// maxCandidateBodyBytes reserves the worst-case publisher-owned body:
-	// three separators, the identity marker, the fixed advisories ceiling,
+	// five separators, the identity marker, the fixed section ceilings,
 	// and the disposition-history floor. Any prose accepted here therefore
 	// composes within GitHub's body ceiling without truncating that prose;
 	// disposition history may shrink from its 48 KiB ceiling to this floor.
-	maxCandidateBodyBytes = maxPullRequestBodyBytes - 4*len("\n\n") -
-		identityMarkerBytes - maxRenderedAdvisoriesBytes - maxRenderedScopeDecisionBytes - minRenderedDispositionHistoryBytes
+	maxCandidateBodyBytes = maxPullRequestBodyBytes - 5*len("\n\n") -
+		identityMarkerBytes - maxRenderedVerificationBytes - maxRenderedAdvisoriesBytes - maxRenderedScopeDecisionBytes - minRenderedDispositionHistoryBytes
 )
 
 // IdentityInput is the candidate material a publication identity is
@@ -191,7 +191,7 @@ func ValidateCandidateBody(body string) error {
 	if len(body) > maxPullRequestBodyBytes {
 		return fmt.Errorf("candidate body exceeds %d bytes", maxPullRequestBodyBytes)
 	}
-	if prose := strings.TrimRight(body, "\n"); prose != "" && len(prose) > maxCandidateBodyBytes {
+	if len(body) > maxCandidateBodyBytes {
 		return fmt.Errorf(
 			"candidate body exceeds %d bytes after reserving the publisher-owned sections",
 			maxCandidateBodyBytes,
@@ -210,6 +210,9 @@ func ValidateCandidateBody(body string) error {
 	}
 	if containsScopeDecisionMarker(body) {
 		return errors.New("candidate body contains a scope decision marker or heading")
+	}
+	if containsVerificationMarker(body) {
+		return errors.New("candidate body contains a verification section marker or heading")
 	}
 	return nil
 }

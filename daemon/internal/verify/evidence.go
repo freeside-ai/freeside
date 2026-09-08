@@ -1,12 +1,14 @@
 package verify
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // Artifact types the verifier emits. The verifier's evidence channel is
@@ -66,11 +68,11 @@ type Step struct {
 	OutputTruncated bool `json:"output_truncated"`
 }
 
-// report is the verification report's canonical JSON shape. It carries
+// Report is the verification report's canonical JSON shape. It carries
 // no timestamps, so the report bytes (and therefore the artifact
 // digest) are a deterministic function of what was verified and what
 // happened.
-type report struct {
+type Report struct {
 	HeadSHA      string        `json:"head_sha"`
 	BaseSHA      string        `json:"base_sha"`
 	RecipePath   string        `json:"recipe_path"`
@@ -85,6 +87,31 @@ type report struct {
 	TranscriptTruncated bool `json:"transcript_truncated"`
 }
 
+// ParseReport accepts exactly the canonical artifact shape written by the
+// verifier. The caller must separately bind these bytes to trusted evidence.
+func ParseReport(raw []byte) (Report, error) {
+	var rep Report
+	if err := strictjson.Decode(raw, &rep, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+		return Report{}, fmt.Errorf("parse verification report: %w", err)
+	}
+	if !rep.Outcome.valid() || rep.HeadSHA == "" || rep.RecipeDigest == "" {
+		return Report{}, fmt.Errorf("verification report lacks a valid outcome, head, or recipe")
+	}
+	for _, step := range rep.Steps {
+		if len(step.Argv) == 0 || step.Argv[0] == "" {
+			return Report{}, fmt.Errorf("verification report has an empty command")
+		}
+	}
+	canonical, err := json.MarshalIndent(rep, "", "  ")
+	if err != nil {
+		return Report{}, err
+	}
+	if !bytes.Equal(append(canonical, '\n'), raw) {
+		return Report{}, fmt.Errorf("verification report is not canonical")
+	}
+	return rep, nil
+}
+
 // buildEvidence stamps the verifier's account as §5.15 evidence: both
 // artifacts carry verifier provenance (producer class, invocation,
 // head-bound head, recipe digest), and publish eligibility originates
@@ -92,7 +119,7 @@ type report struct {
 // unapproved recipe the artifacts are emitted publish-ineligible, the
 // fail-closed direction; forging the bit is structurally impossible
 // from here.
-func buildEvidence(opts Options, recipeDigest domain.Digest, rep report, transcript []byte) ([]Evidence, error) {
+func buildEvidence(opts Options, recipeDigest domain.Digest, rep Report, transcript []byte) ([]Evidence, error) {
 	reportBytes, err := json.MarshalIndent(rep, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal verification report: %w", err)

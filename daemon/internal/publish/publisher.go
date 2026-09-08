@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -16,6 +17,11 @@ import (
 // revision, the evidence artifacts backing it, and the invocation
 // publishing it.
 type Candidate struct {
+	// VerificationReport holds the verifier's artifact bytes. The authorization
+	// gate binds them to its evidence snapshot before they can be published.
+	VerificationReport []byte
+	// ImportResult supplies agent claims, bound to the authorization's import digest.
+	ImportResult *importer.Result
 	// ScopeDecision is the accepted command's candidate-bound account of
 	// required work left outside the approved paths. The store re-gates it.
 	ScopeDecision *domain.ScopeDecisionFacts
@@ -27,9 +33,9 @@ type Candidate struct {
 	// repository (the publisher creates refs, it does not upload
 	// objects).
 	HeadSHA string
-	// Title and Body are the PR's human-facing content. The identity
-	// marker and, for an execution publication, the trusted disposition
-	// history are appended to Body deterministically; none enters the
+	// Title and Body are the PR's human-facing content. Publisher-owned
+	// sections and the identity marker are appended to Body deterministically;
+	// none of the rendered prose enters the
 	// publication identity, so wording or evidence-rendering fixes converge
 	// onto the same branch and PR instead of minting new ones.
 	Title string
@@ -856,7 +862,8 @@ func validateAuthorizationCandidate(c Candidate, auth domain.CandidateAuthorizat
 	if !reflect.DeepEqual(c.Advisories, AdvisoryFindings(auth.Findings)) {
 		return fmt.Errorf("candidate advisories do not match authorization %s: %w", auth.ID, ErrUnauthorizedPublication)
 	}
-	return nil
+	_, _, err = validateVerificationCandidate(c, auth)
+	return err
 }
 
 // recordIntent commits the publication intent through the outbox
@@ -1080,15 +1087,26 @@ func prMatchesPublicationCoordinates(
 }
 
 // desiredPRContent is the deterministic PR content for a candidate: operator
-// prose, fixed-bounded advisories and scope decision, disposition history fitted
-// to the remaining reserved space with digest-bound truncation, and the identity marker as the
-// final line (plan §5.15 rule 4). Operator prose is never truncated. The final
+// prose, fixed-bounded verification, advisories and scope decision, disposition
+// history fitted to the remaining space with digest-bound truncation, and the
+// identity marker as the final line (plan §5.15 rule 4). Operator prose is never truncated. The final
 // ceiling check remains a fail-closed guard over the complete composition.
 func desiredPRContent(identity Identity, c Candidate) (title, body string, err error) {
-	prose := strings.TrimRight(c.Body, "\n")
-	parts := make([]string, 0, 5)
+	prose := c.Body
+	parts := make([]string, 0, 6)
 	if prose != "" {
 		parts = append(parts, prose)
+	}
+	report, artifact, err := candidateVerificationReport(c)
+	if err != nil {
+		return "", "", err
+	}
+	if artifact != nil {
+		section, err := renderVerification(report, artifact.Digest, artifact.Provenance.ProducerInvocationID, c.ImportResult.Claims)
+		if err != nil {
+			return "", "", err
+		}
+		parts = append(parts, section)
 	}
 	if len(c.Advisories) > 0 {
 		parts = append(parts, renderAdvisories(c.Advisories))

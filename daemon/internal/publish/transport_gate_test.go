@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 )
@@ -98,7 +99,7 @@ func (c *composedGate) candidateBranch(t *testing.T) string {
 		Repo:            c.candidate.Repo,
 		BaseRef:         c.candidate.BaseRef,
 		SourceHeadSHA:   c.candidate.HeadSHA,
-		ArtifactDigests: []domain.Digest{testArtifactD},
+		ArtifactDigests: []domain.Digest{domain.Digest(contentaddr.Sum(testReport(c.candidate.HeadSHA)))},
 		RecipeDigest:    &recipe,
 	})
 	if err != nil {

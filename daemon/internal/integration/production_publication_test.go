@@ -868,6 +868,7 @@ func (p *productionPublicationHarness) startExecutionExport(
 		InvocationID: p.invocation, AdmissionID: admission.ID,
 		ObservedBaseSHA: p.baseSHA, HeadSHA: headSHA,
 		ManifestDigest: p.replay.ManifestDigest, RecordedAt: fakePublicationTime,
+		EvidenceManifestDigest: p.replay.EvidenceManifestDigest,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1015,6 +1016,17 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 		t.Fatalf("publication result = %#v", result)
 	}
 	p.assertReady(t)
+	body := p.forge.pullRequests()[0].Body
+	for _, want := range []string{"## Verification", "[&#34;/usr/bin/true&#34;]</code>, exit 0", p.replay.HeadSHA, p.baseSHA, string(p.recipeD), "Report artifact digest", "not run by Freeside"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("published body lacks %q", want)
+		}
+	}
+	if !strings.HasPrefix(body, productionPublicationMetadata().Body) ||
+		strings.Index(body, "freeside:verification") >= strings.Index(body, "freeside:disposition-history") ||
+		strings.Index(body, "freeside:disposition-history") >= strings.Index(body, "freeside:publication-identity") {
+		t.Fatal("publisher changed operator prose or section ordering")
+	}
 	if p.room.runs != 1 {
 		t.Fatalf("verification commands = %d, want 1", p.room.runs)
 	}
@@ -1054,6 +1066,9 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 	}
 	if p.transport.pushCount() != beforePushes {
 		t.Fatal("converged replay repeated the publication transport")
+	}
+	if p.forge.pullRequests()[0].Body != body {
+		t.Fatal("second reconcile changed publication body")
 	}
 }
 
@@ -4189,6 +4204,17 @@ func TestProductionPublicationRestartsAcrossDurableBoundaries(t *testing.T) {
 				}
 				p.assertReady(t)
 				p.assertRecoveryIdentity(t)
+				body := p.forge.pullRequests()[0].Body
+				p.restartDurableState(t)
+				p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+				for range 2 {
+					if _, err := p.reconcileLanes(); err != nil {
+						t.Fatal(err)
+					}
+					if p.forge.pullRequests()[0].Body != body {
+						t.Fatal("restart or repeated reconciliation changed publication body")
+					}
+				}
 				if refs, prs := p.forge.counts(); refs != 1 || prs != 1 {
 					t.Fatalf("restart duplicated publication effects: %d refs, %d PRs", refs, prs)
 				}

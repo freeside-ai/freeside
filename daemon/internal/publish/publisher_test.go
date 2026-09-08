@@ -20,8 +20,10 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
 // fixedTokenSource hands out one static token; publisher tests do not
@@ -651,11 +653,37 @@ func prJSON(pr fakePR) map[string]any {
 }
 
 const (
-	testHeadSHA   = "6dcb09b5b57875f334f61aebed695e2e4193db5e"
-	testOtherSHA  = "0000000000000000000000000000000000000000"
-	testRecipe    = domain.Digest("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	testArtifactD = domain.Digest("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	testHeadSHA  = "6dcb09b5b57875f334f61aebed695e2e4193db5e"
+	testOtherSHA = "0000000000000000000000000000000000000000"
+	testRecipe   = domain.Digest("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 )
+
+var testArtifactD = domain.Digest(contentaddr.Sum(testReport(testHeadSHA)))
+
+func testReport(head string) []byte {
+	raw, err := json.MarshalIndent(verify.Report{
+		HeadSHA: head, BaseSHA: testBaseSHA, RecipePath: ".freeside/verify.json",
+		RecipeDigest: testRecipe, Outcome: verify.OutcomePassed,
+		Steps: []verify.Step{{Argv: []string{"go", "test", "./..."}}},
+	}, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+	return append(raw, '\n')
+}
+
+func testImportResult(head string) *importer.Result {
+	return &importer.Result{CommitSHA: head}
+}
+
+func testImportDigest(t *testing.T, head string) domain.Digest {
+	t.Helper()
+	raw, err := json.Marshal(testImportResult(head))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return domain.Digest(contentaddr.Sum(raw))
+}
 
 // testEvidenceTime is the fixed UTC creation time used by the package's
 // evidence-metadata fixtures.
@@ -684,7 +712,7 @@ func testArtifact(t *testing.T, headSHA string) domain.Artifact {
 	a, err := domain.NewArtifact(domain.ArtifactInput{
 		ID:     "artifact-1",
 		Type:   domain.ArtifactKindVerificationReport,
-		Digest: testArtifactD,
+		Digest: domain.Digest(contentaddr.Sum(testReport(headSHA))),
 		Provenance: domain.Provenance{
 			ProducerClass:            domain.ProducerVerifier,
 			ProducerInvocationID:     "inv-producer",
@@ -721,6 +749,8 @@ func testCandidateAtHead(t *testing.T, headSHA string) publish.Candidate {
 		Title:              "Candidate: evidence-backed change",
 		Body:               "Verified candidate publication.",
 		Artifacts:          []domain.Artifact{testArtifact(t, headSHA)},
+		VerificationReport: testReport(headSHA),
+		ImportResult:       testImportResult(headSHA),
 		RecipeDigest:       &recipe,
 		InvocationID:       "inv-0001",
 		AuthorizationID:    &authID,
@@ -1194,8 +1224,7 @@ func TestPublishRefusesReusedInvocation(t *testing.T) {
 	// The reused-invocation candidate publishes different content, so it
 	// carries its own authorizing record; both must be resolvable, or the
 	// authorization gate would intercept before the intent-conflict check.
-	otherIn := authorizingInput(t)
-	otherIn.HeadSHA = testOtherSHA
+	otherIn := authorizingInputAtHead(t, testOtherSHA)
 	otherArtifacts := []domain.Artifact{testArtifact(t, testOtherSHA)}
 	otherEvidenceDigest, err := domain.ComputeEvidenceSnapshotDigest(otherArtifacts)
 	if err != nil {
@@ -1214,6 +1243,8 @@ func TestPublishRefusesReusedInvocation(t *testing.T) {
 	changed := c
 	changed.HeadSHA = testOtherSHA
 	changed.Artifacts = otherArtifacts
+	changed.VerificationReport = testReport(testOtherSHA)
+	changed.ImportResult = testImportResult(testOtherSHA)
 	changed.AuthorizationID = &otherID
 	requests := len(gh.requestLog())
 	if _, err := p.Publish(context.Background(), changed, testApprovedRecipes()); !errors.Is(err, publish.ErrPublicationConflict) {

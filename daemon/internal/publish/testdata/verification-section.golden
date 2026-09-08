@@ -1,0 +1,27 @@
+<!-- freeside:verification -->
+
+## Verification
+
+- Outcome: <code>passed</code>
+- Head: <code>bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb</code>
+- Base: <code>cccccccccccccccccccccccccccccccccccccccc</code>
+- Recipe digest: <code>sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</code>
+- Verification invocation: <code>verify-1</code>
+- Report artifact digest: <code>sha256:147a96dbc618c6af8e1369a7d485c0f7a2c55666a237df9d0712748eb5558fc6</code>
+
+Freeside ran these recipe commands at the head above. Any other check claimed in operator prose or agent evidence was not run by Freeside. Publisher-owned review evidence is recorded separately.
+
+Executed steps: 3.
+
+1. <code>[&#34;go&#34;,&#34;test&#34;,&#34;./...&#34;]</code>, exit 0
+2. <code>[&#34;go&#34;,&#34;vet&#34;,&#34;./...&#34;]</code>, exit 0; output truncated
+3. <code>[&#34;check&#34;,&#34;argument with spaces&#34;,&#34;\u003cscript\u003e&#34;]</code>, exit 0
+
+Transcript truncated.
+
+### Agent-Reported Evidence (claims, not run by Freeside)
+
+- Label: <code>freeside.summary</code>; artifact: <code>agent-summary</code>; digest: <code>sha256:4ee50386103e4ce58a65150d43f000a9575d25ec96840f777a7b30a4e4b4417c</code>; media type: <code>text/markdown</code>
+- Label: <code>test &lt;claim&gt;</code>; artifact: <code>agent-tests</code>; digest: <code>sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a</code>; media type: <code>application/json</code>
+
+<!-- /freeside:verification -->
