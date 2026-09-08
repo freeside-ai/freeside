@@ -17,7 +17,8 @@ Mac and iOS match on every line unless a line says otherwise.
 
 ## At a Glance
 
-- **Done:** pairing, inbox, decision detail, run list with watches and
+- **Done:** first-launch daemon address entry (no implicit sample data), pairing,
+  inbox, decision detail, run list with watches and
   deadlines, run timeline, freshness banner, Mac menu bar, the sync
   and command-retry machinery, and the run-proposal card with its
   "start with changes" and snooze sheets (its full-artifact view is not),

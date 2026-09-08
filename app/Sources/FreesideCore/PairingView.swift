@@ -12,6 +12,7 @@ import SwiftUI
 struct PairingView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Bindable var model: PairingModel
+    var onChangeServer: (() -> Void)? = nil
     let onPaired: (DeviceCredential) -> Void
 
     var body: some View {
@@ -90,6 +91,14 @@ struct PairingView: View {
             .scrollContentBackground(.hidden)
             .background(Color.ground)
             .navigationTitle("Pair with Freeside")
+            .toolbar {
+                if let onChangeServer {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Change server", action: onChangeServer)
+                            .disabled(model.phase == .pairing)
+                    }
+                }
+            }
             #if os(iOS)
                 .navigationBarTitleDisplayMode(
                     dynamicTypeSize.isAccessibilitySize ? .inline : .large)

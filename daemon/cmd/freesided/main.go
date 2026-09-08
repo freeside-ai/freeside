@@ -1,7 +1,5 @@
-// Command freesided is the Freeside daemon. The Phase 1A.0 composition serves
-// signet on loopback and drives the workflow engine with the permanent fake
-// StageDriver. Later Wave 2 units replace the driver and add operational
-// surfaces without changing the engine's durable reconciliation loop.
+// Command freesided serves the local control plane. Agent execution is disabled
+// until a driver is selected; the permanent fake is an explicit demo/test mode.
 package main
 
 import (
@@ -159,7 +157,7 @@ func main() {
 	publicationProjectID := flags.String("publication-project-id", "project-fake-publication", "publication project id")
 	publicationTitle := flags.String("publication-title", "Publish attended fake candidate", "pull request title")
 	publicationBody := flags.String("publication-body", "", "pull request body")
-	driverMode := flags.String("driver", "fake", "stage driver: fake (1A.0 walking skeleton) or claude (production, #237)")
+	driverMode := flags.String("driver", "disabled", "execution: disabled (setup only), fake (explicit demo), or claude (real agents)")
 	seedWalkingSkeleton := flags.Bool("seed-walking-skeleton", false,
 		"seed the 1A.0 walking-skeleton demo run under the fake driver (off by default so a production store stays empty, #1127)")
 	agentImage := flags.String("agent-image", "", "digest-pinned Claude agent image")
@@ -264,7 +262,9 @@ func main() {
 		os.Exit(2)
 	}
 	switch *driverMode {
+	case "disabled":
 	case "fake":
+		daemonConfig.FakeDriverEnabled = true
 	case "claude":
 		id := int64(0)
 		if v := repositoryID.Value(); v != nil {
@@ -313,7 +313,7 @@ func main() {
 			ShadowReviewRate:            *shadowReviewRate,
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "freesided: -driver %q is not fake or claude\n", *driverMode)
+		fmt.Fprintf(os.Stderr, "freesided: -driver %q is not disabled, fake, or claude\n", *driverMode)
 		os.Exit(2)
 	}
 	h, err := run(ctx, stop, daemonConfig)
@@ -372,6 +372,7 @@ func splitNonEmpty(value string) []string {
 
 type config struct {
 	DBPath                             string
+	FakeDriverEnabled                  bool
 	FakeDriverDir                      string
 	StateDir                           string
 	ListenAddr                         string
@@ -382,9 +383,7 @@ type config struct {
 	ApprovedRecipes                    map[domain.Digest]bool
 	BackupEncryptionWaiverRepositoryID *int64
 	// SeedWalkingSkeleton seeds the 1A.0 walking-skeleton demo run at startup
-	// under the fake driver. Off by default so a production store the installer
-	// launches never gains the demo approval item (#1127); the walking-skeleton
-	// tests and manual demos opt in.
+	// under an explicitly selected fake driver. Seeding alone never enables it.
 	SeedWalkingSkeleton bool
 	// IntakeInitiators are the configured label initiators the label-intake
 	// reconciler observes (#659). Empty leaves the loop supervised but idle; the
@@ -404,9 +403,8 @@ type config struct {
 	// now is the attention service clock. Production leaves it nil for the
 	// wall clock; tests can advance startup across pairing-code expiry.
 	now func() time.Time
-	// Claude, when set, replaces the permanent fake stage driver with the
-	// production Claude driver and its ward gate (#237). Nil keeps the 1A.0
-	// walking-skeleton composition byte-for-byte.
+	// Claude configures real execution and its ward gate. Without it or explicit
+	// FakeDriverEnabled, the daemon serves setup and state without an engine.
 	Claude *claudeDriverConfig
 }
 
@@ -513,6 +511,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if cfg.DBPath == "" {
 		return nil, errors.New("-db is required")
 	}
+	if cfg.SeedWalkingSkeleton && !cfg.FakeDriverEnabled {
+		return nil, errors.New("-seed-walking-skeleton requires -driver fake")
+	}
 	lock, err := daemonlock.Acquire(cfg.DBPath)
 	if err != nil {
 		return nil, fmt.Errorf("acquire database daemon lock: %w", err)
@@ -526,7 +527,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if cfg.StateDir == "" && cfg.Claude != nil {
 		cfg.StateDir = cfg.Claude.StateDir
 	}
-	if cfg.FakeDriverDir == "" {
+	if cfg.FakeDriverEnabled && cfg.FakeDriverDir == "" {
 		cfg.FakeDriverDir = cfg.DBPath + ".fake-stage-driver"
 	}
 	if cfg.ReconcileInterval == 0 {
@@ -651,7 +652,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	// production composition must not require walking-skeleton state on a
 	// fresh operator machine.
 	var driver *fake.StageDriver
-	if cfg.Claude == nil {
+	if cfg.FakeDriverEnabled {
 		driver, err = fake.NewStageDriverAt(cfg.FakeDriverDir)
 		if err != nil {
 			return nil, fmt.Errorf("open fake stage driver: %w", err)
@@ -682,7 +683,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return claudeWiring.reviewConfigurationDigest
 		}),
 	)
-	if cfg.Claude == nil {
+	if cfg.FakeDriverEnabled {
 		walkingSkeletonOptions := []engine.Option{engine.WithDaemonLock(lock)}
 		if cfg.Logger != nil {
 			walkingSkeletonOptions = append(walkingSkeletonOptions, engine.WithLogger(cfg.Logger))
@@ -692,9 +693,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, err
 		}
-		// Seed the demo run only when asked. The installer launches the fake
-		// driver without this flag, so a freshly onboarded production store no
-		// longer carries the walking-skeleton approval card (#1127).
+		// Even explicit fake execution starts without sample work unless asked.
 		if cfg.SeedWalkingSkeleton {
 			if _, err := workflow.StartFakeRun(parent, engine.FakeRunSpec{
 				RunID: defaultFakeRunID, ProjectID: defaultFakeProjectID,
@@ -703,7 +702,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				return nil, fmt.Errorf("seed walking-skeleton run: %w", err)
 			}
 		}
-	} else {
+	} else if cfg.Claude != nil {
 		claudeWiring, err = composeClaudeDriver(ctx, st, blobs, *cfg.Claude, cfg.Logger)
 		if err != nil {
 			return nil, err
@@ -856,8 +855,13 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if err := runDoctor(parent); err != nil {
 		return nil, fmt.Errorf("initial doctor pass: %w", err)
 	}
-	if err := workflow.ConvergeLegacyFakePublicationPolicies(parent); err != nil {
-		return nil, fmt.Errorf("converge legacy fake-publication policies: %w", err)
+	if workflow != nil {
+		if err := workflow.ConvergeLegacyFakePublicationPolicies(parent); err != nil {
+			return nil, fmt.Errorf("converge legacy fake-publication policies: %w", err)
+		}
+	}
+	if err := convergeExecutionConfiguration(parent, st, workflow != nil, cfg.now); err != nil {
+		return nil, fmt.Errorf("report execution configuration: %w", err)
 	}
 
 	logger := cfg.Logger
@@ -889,7 +893,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	var claudeSched *scheduler.Scheduler
 	var activeReconciler *activeResourceReconciler
 	var intakeReconcilerLoop *intakeReconciler
-	if claudeWiring == nil {
+	if cfg.FakeDriverEnabled {
 		// Construct every loop before making restart-gated recovery available.
 		// None is running yet, so no operator can resume into a partial start.
 		fakeSched, err = newFakeScheduler(st)
@@ -897,7 +901,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return nil, err
 		}
 		fakeSched.SetLogger(cfg.Logger)
-	} else {
+	} else if claudeWiring != nil {
 		// The doctor and janitor cadences live on the §5.16 durable scheduler;
 		// their initial coverage remains the direct calls above.
 		claudeSched, err = newClaudeScheduler(st, cfg, claudeWiring, runDoctor)
@@ -928,11 +932,13 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			now:          func() time.Time { return time.Now().UTC() },
 		}
 	}
-	if err := d.enableDurableStopRecovery(parent); err != nil {
-		return nil, fmt.Errorf("enable durable-stop recovery: %w", err)
+	if workflow != nil {
+		if err := d.enableDurableStopRecovery(parent); err != nil {
+			return nil, fmt.Errorf("enable durable-stop recovery: %w", err)
+		}
 	}
 
-	d.wg.Add(3)
+	d.wg.Add(2)
 	go func() {
 		defer d.wg.Done()
 		err := d.server.Serve(listener)
@@ -941,10 +947,13 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 		d.componentExited(parent, ctx, componentHTTP, err)
 	}()
-	go func() {
-		defer d.wg.Done()
-		d.componentExited(parent, ctx, componentWorkflow, workflow.Run(ctx, cfg.ReconcileInterval))
-	}()
+	if workflow != nil {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			d.componentExited(parent, ctx, componentWorkflow, workflow.Run(ctx, cfg.ReconcileInterval))
+		}()
+	}
 	go func() {
 		defer d.wg.Done()
 		d.componentExited(parent, ctx, componentLocalBackups, localBackups.Run(ctx))

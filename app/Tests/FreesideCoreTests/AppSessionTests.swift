@@ -293,6 +293,43 @@ private struct FailingCredentialStore: DeviceCredentialStore {
 }
 
 @Suite @MainActor struct AppSessionTests {
+    @Test func freshDeviceRequiresConnectionUnlessDemoIsExplicit() {
+        for (mock, pairingDemo, expected) in [
+            (false, false, AppSession.LaunchMode.needsConnection),
+            (true, false, .mock),
+            (false, true, .pairingDemo),
+        ] {
+            #expect(
+                AppSession.launchMode(
+                    argumentServerURL: nil, pairingDemo: pairingDemo, mockMode: mock,
+                    readiness: nil, persistedServerURL: nil, localDaemonURL: nil,
+                    hasCredential: { _ in
+                        Issue.record("An unconfigured launch must not look up credentials")
+                        return false
+                    }) == expected)
+        }
+    }
+
+    @Test func invalidExplicitServerRequiresConnectionInsteadOfDemoOrFallback() {
+        #expect(
+            AppSession.launchMode(
+                argumentServerURL: "not-a-server", pairingDemo: true, mockMode: true,
+                readiness: nil, persistedServerURL: "https://daemon.example",
+                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                hasCredential: { _ in false }) == .needsConnection)
+    }
+
+    @Test func connectionAddressAcceptsOnlyUsableDaemonURLs() {
+        #expect(AppSession.serverURL(from: " http://100.64.0.1:7331 \n")?.absoluteString == "http://100.64.0.1:7331")
+        #expect(AppSession.serverURL(from: "https://daemon.example/freeside") != nil)
+        for value in [
+            "", "not-a-server", "file:///tmp/server", "http://host:65536", "http://host:0",
+            "https://user:password@host", "https://host?token=value", "https://host#fragment",
+        ] {
+            #expect(AppSession.serverURL(from: value) == nil)
+        }
+    }
+
     @Test func launchResolutionUsesExplicitModesThenReadinessThenPersisted() {
         let local = DaemonReadiness(
             apiURL: URL(string: "http://127.0.0.1:7331")!, pairingCode: "483911")
@@ -679,11 +716,33 @@ private struct FailingCredentialStore: DeviceCredentialStore {
         #expect(coordinator.store.device.deviceID == "device-7")
     }
 
+    @Test func changingServerPreservesSavedCredentialsAndDeployment() throws {
+        let deploymentURL = URL(string: "http://100.64.0.1:7331")!
+        let credential = DeviceCredential(
+            deviceID: "device-change", token: testDeviceToken(for: "device-change"),
+            ntfySubscription: .mock)!
+        let credentials = InMemoryCredentialStore(credential: credential)
+        var persisted: [URL] = []
+        let session = AppSession(
+            client: APIClientFactory.mock(), credentials: credentials,
+            cache: InMemoryCacheStore(), deploymentURL: deploymentURL,
+            persistServerURL: { persisted.append($0) })
+
+        session.changeServer()
+
+        guard case .needsConnection = session.phase else {
+            Issue.record("expected address entry, got \(session.phase)")
+            return
+        }
+        #expect(try credentials.load() == credential)
+        #expect(persisted == [deploymentURL])
+    }
+
     @Test func aCredentialReadyLiveSessionPersistsItsDeploymentURL() async throws {
         // A live launch whose Keychain already holds a credential enters
         // `.ready` in init without pairing, so init is the only persistence
         // write; `completePairing` never runs. Skipping it strands the next
-        // unadorned relaunch on the mock or a previously persisted server
+        // unadorned relaunch on address entry or a previously persisted server
         // (reinstall with preserved Keychain and cleared preferences, or
         // switching back to a previously paired daemon).
         let deploymentURL = URL(string: "http://100.64.0.1:7331")!

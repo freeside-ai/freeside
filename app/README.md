@@ -13,10 +13,14 @@ The SwiftUI multiplatform client: the macOS + iOS attention inbox, decision deta
 Launch arguments select the composition (`AppSession.fromEnvironment`):
 
 - macOS default: the supervised daemon at `http://127.0.0.1:7331`; a readable readiness file selects the same deployment and prefills its pairing code, unless only the persisted deployment holds a device credential. A missing file leaves manual pairing entry available.
-- iOS default: the permissive in-process mock with a pre-paired identity — the inbox renders immediately.
+- iOS default: reconnect to the saved daemon, or ask for its address on a fresh installation. Continue to device pairing before the inbox opens. Missing or invalid configuration never selects sample data.
 - `-FreesideMock YES`: the permissive in-process mock, used by unsigned development and screenshot launches.
 - `-FreesidePairingDemo YES`: the full pairing flow against an enforcing mock; the code is `483911`.
 - `-FreesideServerURL <url>`: a real daemon; the device credential lives in the Keychain and the cache on disk.
+
+Mock and pairing-demo modes require explicit launch arguments. The installed
+Mac daemon also defaults to execution disabled: it serves pairing, state, and
+backups, with a setup notice in the inbox until a driver is configured.
 
 `FreesideServerURL` is read from `UserDefaults`, so an installed app that is launched from the Dock (where nothing forwards launch arguments) takes it from its persisted preferences instead; `install-mac-app.sh --server-url` writes that preference. A launch argument still wins, because the argument domain outranks the persistent one.
 

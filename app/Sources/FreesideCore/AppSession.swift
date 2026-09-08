@@ -12,15 +12,20 @@ import Observation
 @Observable
 public final class AppSession {
     public enum PhaseState {
+        case needsConnection
         case needsPairing(PairingModel)
         case ready(SyncCoordinator)
     }
 
     public private(set) var phase: PhaseState
 
-    private let client: any APIProtocol
-    private let cache: any CacheStore
-    private let deploymentURL: URL?
+    private struct Connection {
+        let client: any APIProtocol
+        let cache: any CacheStore
+        let deploymentURL: URL?
+    }
+
+    private var connection: Connection?
     private let persistServerURL: (URL) -> Void
 
     public init(
@@ -32,9 +37,7 @@ public final class AppSession {
         deploymentURL: URL? = nil,
         persistServerURL: @escaping (URL) -> Void = AppSession.persistServerURLToDefaults
     ) {
-        self.client = client
-        self.cache = cache
-        self.deploymentURL = deploymentURL
+        self.connection = Connection(client: client, cache: cache, deploymentURL: deploymentURL)
         self.persistServerURL = persistServerURL
         // An unreadable credential is indistinguishable from an absent
         // one here, and the recovery is the same either way: pairing
@@ -65,13 +68,35 @@ public final class AppSession {
     /// records its deployment URL so a later unadorned relaunch (the iOS
     /// home-screen case, which passes no launch arguments) re-enters live
     /// mode through `fromEnvironment()`'s persisted-URL branch instead of
-    /// falling back to the mock. Mock and pairing-demo sessions carry no
+    /// asking for a server again. Mock and pairing-demo sessions carry no
     /// `deploymentURL` and persist nothing.
     public func completePairing(_ credential: DeviceCredential) {
-        if let deploymentURL {
+        guard let connection else {
+            preconditionFailure("Pairing requires a configured connection")
+        }
+        if let deploymentURL = connection.deploymentURL {
             persistServerURL(deploymentURL)
         }
-        phase = .ready(Self.coordinator(client: client, cache: cache, credential: credential))
+        phase = .ready(
+            Self.coordinator(client: connection.client, cache: connection.cache, credential: credential))
+    }
+
+    private init() {
+        connection = nil
+        persistServerURL = Self.persistServerURLToDefaults
+        phase = .needsConnection
+    }
+
+    public func connect(serverURL: URL) {
+        let selected = Self.live(serverURL: serverURL)
+        connection = selected.connection
+        phase = selected.phase
+    }
+
+    /// Returns to address entry without changing saved deployments or credentials.
+    func changeServer() {
+        connection = nil
+        phase = .needsConnection
     }
 
     /// A first-run LaunchAgent may publish readiness after the window already
@@ -80,7 +105,7 @@ public final class AppSession {
     /// operator input or apply a local code to a persisted remote daemon.
     public func applyReadiness(_ readiness: DaemonReadiness?) {
         guard
-            let deploymentURL,
+            let deploymentURL = connection?.deploymentURL,
             case .needsPairing(let model) = phase
         else { return }
         guard let readiness else {
@@ -109,6 +134,7 @@ public final class AppSession {
     // MARK: - Launch compositions
 
     enum LaunchMode: Equatable {
+        case needsConnection
         case live(URL, pairingCode: String)
         case pairingDemo
         case mock
@@ -123,7 +149,8 @@ public final class AppSession {
         localDaemonURL: URL?,
         hasCredential: (URL) -> Bool
     ) -> LaunchMode {
-        if let argumentServerURL, let url = URL(string: argumentServerURL) {
+        if let argumentServerURL {
+            guard let url = serverURL(from: argumentServerURL) else { return .needsConnection }
             return .live(url, pairingCode: "")
         }
         if pairingDemo {
@@ -132,18 +159,7 @@ public final class AppSession {
         if mockMode {
             return .mock
         }
-        let persistedURL = persistedServerURL.flatMap { rawValue -> URL? in
-            guard
-                let url = URL(string: rawValue),
-                let scheme = url.scheme?.lowercased(),
-                scheme == "http" || scheme == "https",
-                url.host?.isEmpty == false
-            else { return nil }
-            if let port = url.port, !(1...65535).contains(port) {
-                return nil
-            }
-            return url
-        }
+        let persistedURL = persistedServerURL.flatMap { serverURL(from: $0) }
         if let readiness {
             let matchesLocalDaemon =
                 localDaemonURL.map {
@@ -165,13 +181,27 @@ public final class AppSession {
         if let localDaemonURL {
             return .live(localDaemonURL, pairingCode: "")
         }
-        return .mock
+        return .needsConnection
+    }
+
+    static func serverURL(from value: String) -> URL? {
+        guard
+            let components = URLComponents(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+            let scheme = components.scheme?.lowercased(),
+            scheme == "http" || scheme == "https",
+            components.host?.isEmpty == false,
+            components.user == nil, components.password == nil,
+            components.query == nil, components.fragment == nil
+        else { return nil }
+        if let port = components.port, !(1...65535).contains(port) { return nil }
+        return components.url
     }
 
     /// Explicit launch inputs stay the development override. Otherwise a
     /// daemon-host readiness file selects and prefills the local deployment,
     /// unless only the persisted deployment holds a device credential. The
-    /// local daemon fallback and today's permissive mock experience follow.
+    /// local daemon is the Mac fallback; other devices ask for a connection.
+    /// Sample data requires an explicit mock or pairing-demo launch argument.
     public static func fromEnvironment() -> AppSession {
         let defaults = UserDefaults.standard
         let arguments = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
@@ -197,6 +227,8 @@ public final class AppSession {
                 ).load()) != nil
             }
         ) {
+        case .needsConnection:
+            return AppSession()
         case .live(let url, let pairingCode):
             return live(serverURL: url, pairingCode: pairingCode)
         case .pairingDemo:
@@ -274,7 +306,7 @@ public final class AppSession {
         .appendingPathComponent("\(host)-\(digest)")
     }
 
-    /// The default demo surface: a permissive mock and a pre-paired
+    /// An explicitly requested demo: a permissive mock and a pre-paired
     /// mock identity, so the inbox renders immediately.
     public static func mock() -> AppSession {
         let secretSegment = Data(repeating: 0, count: 32).base64EncodedString()
