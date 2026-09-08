@@ -21,9 +21,29 @@ const (
 	IntentFormatLegacy    = 1
 	IntentFormatHistory   = 2
 	IntentFormatCurrent   = 3
+	IntentFormatSuccessor = 4
 	branchPrefix          = "freeside/publish/"
 	branchDigestHexLen    = 16
 )
+
+// SuccessorTarget names the exact predecessor resource an authenticated
+// successor may update. It never authorizes ordinary branch creation.
+type SuccessorTarget struct {
+	ItemID   domain.ItemID `json:"item_id"`
+	Identity domain.Digest `json:"identity"`
+	HeadSHA  string        `json:"head_sha"`
+	PRNumber int           `json:"pr_number"`
+	Branch   string        `json:"branch"`
+}
+
+func (s SuccessorTarget) Validate(baseRef string) error {
+	if s.ItemID == "" || !contentaddr.Valid(string(s.Identity)) || s.PRNumber < 1 ||
+		len(s.HeadSHA) != 40 || strings.Trim(s.HeadSHA, "0123456789abcdef") != "" ||
+		!ValidBranchName(s.Branch) || s.Branch == baseRef {
+		return domain.ErrParentKeyMismatch
+	}
+	return nil
+}
 
 // Intent is the durable publication effect recorded before dispatch.
 type Intent struct {
@@ -38,10 +58,11 @@ type Intent struct {
 	DispositionHistoryDigest domain.Digest       `json:"disposition_history_digest,omitempty"`
 	ProducingInvocationID    domain.InvocationID `json:"producing_invocation_id,omitempty"`
 	ReservationRunID         domain.RunID        `json:"reservation_run_id,omitempty"`
+	Successor                *SuccessorTarget    `json:"successor,omitempty"`
 }
 
 func (i Intent) Validate() error {
-	if i.FormatVersion != IntentFormatLegacy && i.FormatVersion != IntentFormatHistory && i.FormatVersion != IntentFormatCurrent {
+	if i.FormatVersion != IntentFormatLegacy && i.FormatVersion != IntentFormatHistory && i.FormatVersion != IntentFormatCurrent && i.FormatVersion != IntentFormatSuccessor {
 		return fmt.Errorf("intent: unsupported format version %d", i.FormatVersion)
 	}
 	if i.FormatVersion == IntentFormatLegacy && i.DispositionHistoryDigest != "" {
@@ -50,7 +71,14 @@ func (i Intent) Validate() error {
 	if !contentaddr.Valid(string(i.Identity)) {
 		return fmt.Errorf("intent identity %q is not a publication identity digest", i.Identity)
 	}
-	if i.FormatVersion == IntentFormatCurrent {
+	if i.FormatVersion == IntentFormatSuccessor {
+		if i.Successor == nil || i.Successor.Validate(i.BaseRef) != nil || i.Branch != i.Successor.Branch ||
+			i.ProducingInvocationID == "" || i.ReservationRunID == "" {
+			return domain.ErrParentKeyMismatch
+		}
+	} else if i.Successor != nil {
+		return domain.ErrParentKeyMismatch
+	} else if i.FormatVersion == IntentFormatCurrent {
 		if err := validateResolvedBranch(i.Identity, i.Branch, i.BaseRef); err != nil {
 			return fmt.Errorf("intent: %w", err)
 		}
@@ -115,13 +143,14 @@ func IntentKey(invocationID domain.InvocationID, kind string) (string, error) {
 
 // Outcome is the durable converged publication result.
 type Outcome struct {
-	Identity         domain.Digest `json:"identity"`
-	Repo             string        `json:"repo"`
-	BaseRef          string        `json:"base_ref"`
-	HeadSHA          string        `json:"head_sha"`
-	Branch           string        `json:"branch"`
-	PRNumber         int           `json:"pr_number"`
-	EvidenceEligible bool          `json:"evidence_eligible"`
+	Identity         domain.Digest    `json:"identity"`
+	Repo             string           `json:"repo"`
+	BaseRef          string           `json:"base_ref"`
+	HeadSHA          string           `json:"head_sha"`
+	Branch           string           `json:"branch"`
+	PRNumber         int              `json:"pr_number"`
+	EvidenceEligible bool             `json:"evidence_eligible"`
+	Successor        *SuccessorTarget `json:"successor,omitempty"`
 }
 
 func (o Outcome) Validate() error {
@@ -137,7 +166,11 @@ func (o Outcome) Validate() error {
 	if o.HeadSHA == "" {
 		return errors.New("outcome: empty head sha")
 	}
-	if err := validateResolvedBranch(o.Identity, o.Branch, o.BaseRef); err != nil {
+	if o.Successor != nil {
+		if err := o.Successor.Validate(o.BaseRef); err != nil || o.Branch != o.Successor.Branch || o.PRNumber != o.Successor.PRNumber {
+			return domain.ErrParentKeyMismatch
+		}
+	} else if err := validateResolvedBranch(o.Identity, o.Branch, o.BaseRef); err != nil {
 		return fmt.Errorf("outcome: %w", err)
 	}
 	if o.PRNumber <= 0 {
@@ -186,7 +219,7 @@ func BranchName(identity domain.Digest) string {
 // ExpectedBranch returns the branch bound by a validated durable intent.
 // Old formats retain the identity-derived name without rewriting their rows.
 func ExpectedBranch(intent Intent) string {
-	if intent.FormatVersion == IntentFormatCurrent {
+	if intent.FormatVersion == IntentFormatCurrent || intent.FormatVersion == IntentFormatSuccessor {
 		return intent.Branch
 	}
 	return BranchName(intent.Identity)

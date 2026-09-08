@@ -986,8 +986,12 @@ func authenticatedCompletionMilestone(
 	milestone domain.RunMilestone,
 	attempts map[domain.InvocationID]runAttemptBinding,
 ) (domain.WorkUnitCompletion, error) {
+	publication, err := tx.PublishedPublicationInvocationID(ctx, run.ID)
+	if err != nil {
+		return domain.WorkUnitCompletion{}, err
+	}
 	if err := authenticatePublicationInvocation(
-		run.ID, *milestone.InvocationID, domain.ProductionPublicationInvocationID(run.ID), attempts,
+		run.ID, *milestone.InvocationID, publication, attempts,
 	); err != nil {
 		return domain.WorkUnitCompletion{}, fmt.Errorf("milestone %s: %w", milestone.Kind, err)
 	}
@@ -1056,7 +1060,7 @@ func authenticatedWorkUnitCompletion(
 func authenticatedCompletionPRBinding(
 	ctx context.Context, tx *store.ReadTx, runID domain.RunID, unitID domain.WorkUnitID,
 ) error {
-	binding, err := tx.GetWorkUnitPRBinding(ctx, unitID)
+	binding, err := tx.EffectiveWorkUnitPRBinding(ctx, unitID)
 	if store.IsRowVerdict(err) {
 		return fmt.Errorf("work unit %s has no supported pr binding: %w (%w)",
 			unitID, domain.ErrParentKeyMismatch, err)
@@ -1064,7 +1068,11 @@ func authenticatedCompletionPRBinding(
 	if err != nil {
 		return err
 	}
-	ready, err := tx.GetReadyItemPRBinding(ctx, domain.ProductionReadyItemID(runID))
+	itemID, err := tx.PublishedProductionReadyItemID(ctx, runID)
+	if err != nil {
+		return err
+	}
+	ready, err := tx.GetReadyItemPRBinding(ctx, itemID)
 	if store.IsRowVerdict(err) {
 		return fmt.Errorf("run %q has no supported ready resource binding: %w (%w)",
 			runID, domain.ErrParentKeyMismatch, err)
@@ -1184,7 +1192,21 @@ func authenticateRunObservation(
 	items []store.Snapshotted[domain.AttentionItem],
 ) error {
 	attempts := runAttemptBindings(run)
-	var readyBinding *domain.ReadyItemPRBinding
+	readyBindings := make(map[domain.InvocationID]domain.ReadyItemPRBinding)
+	publications := map[domain.InvocationID]bool{domain.ProductionPublicationInvocationID(run.ID): true}
+	readyIDs := map[domain.ItemID]bool{domain.ProductionReadyItemID(run.ID): true}
+	blockedIDs := make(map[domain.ItemID]bool)
+	currentPublication := domain.ProductionPublicationInvocationID(run.ID)
+	chain, err := tx.PublicationSuccessorChain(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	for _, successor := range chain {
+		currentPublication = successor.PublicationID()
+		publications[successor.PublicationID()] = true
+		readyIDs[successor.ReadyItemID()] = true
+		blockedIDs[successor.BlockedItemID()] = true
+	}
 	blockedReasons := make(map[domain.RunHoldReason]bool)
 	reevaluationCommands := make(map[string]bool)
 	allDefinitiveBlocksRerun := true
@@ -1208,11 +1230,14 @@ func authenticateRunObservation(
 		}
 		switch item.Type {
 		case domain.AttentionReadyForFinalReview:
-			if item.ID != domain.ProductionReadyItemID(run.ID) {
+			if !readyIDs[item.ID] {
 				continue
 			}
 			if binding, err := tx.GetReadyItemPRBinding(ctx, item.ID); err == nil {
-				readyBinding = &binding
+				if !publications[binding.PublicationInvocationID] {
+					return domain.ErrParentKeyMismatch
+				}
+				readyBindings[binding.PublicationInvocationID] = binding
 			} else if !errors.Is(err, store.ErrNotFound) {
 				return fmt.Errorf("ready item %q authority: %w", item.ID, err)
 			}
@@ -1221,7 +1246,7 @@ func authenticateRunObservation(
 			if !definitive {
 				continue
 			}
-			identityValid := item.ID == domain.ProductionBlockedItemID(run.ID)
+			identityValid := item.ID == domain.ProductionBlockedItemID(run.ID) || blockedIDs[item.ID]
 			if !identityValid {
 				var err error
 				identityValid, err = AuthenticateReevaluatedBlockedItemIdentity(
@@ -1274,7 +1299,7 @@ func authenticateRunObservation(
 				run.ID, domain.ErrParentKeyMismatch)
 		}
 		holdInvocation := *observation.Hold.InvocationID
-		if !runObservationInvocation(run.ID, holdInvocation, attempts) {
+		if !publications[holdInvocation] && !runObservationInvocation(run.ID, holdInvocation, attempts) {
 			// Admission can hold either an initial invocation or a feedback
 			// continuation before it becomes an attempt. Both require a
 			// reserved intent bound to this run and a declared stage.
@@ -1287,6 +1312,9 @@ func authenticateRunObservation(
 	for index, milestone := range observation.Milestones {
 		invocation := *milestone.InvocationID
 		publicationInvocation := domain.ProductionPublicationInvocationID(run.ID)
+		if publications[invocation] {
+			publicationInvocation = invocation
+		}
 		switch milestone.Kind {
 		case domain.MilestoneRunSubmitted:
 			kind, err := authenticateReservedRunInvocation(ctx, tx, run, invocation)
@@ -1361,20 +1389,34 @@ func authenticateRunObservation(
 				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
 			}
 		case domain.MilestonePublicationReady:
-			readyMilestone = true
-			lastReadyMilestone = index
+			if invocation == currentPublication {
+				readyMilestone = true
+				lastReadyMilestone = index
+			}
 			if err := authenticatePublicationInvocation(
 				run.ID, invocation, publicationInvocation, attempts,
 			); err != nil {
 				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
 			}
-			if readyBinding == nil || readyBinding.PublicationInvocationID != invocation {
+			if _, found := readyBindings[invocation]; !found {
 				return fmt.Errorf("milestone %s has no durable ready item: %w",
 					milestone.Kind, domain.ErrParentKeyMismatch)
 			}
 		case domain.MilestonePublicationBlocked:
-			blockedMilestone = true
-			lastBlockedMilestone = index
+			currentBlock := invocation == currentPublication || len(chain) == 0
+			if !currentBlock {
+				if milestoneRun, commandID, ok := publicationReevaluationBlockedMilestoneCoordinates(invocation); ok && milestoneRun == run.ID {
+					root, err := publicationReevaluationRoot(ctx, tx, run.ID, commandID)
+					if err != nil {
+						return err
+					}
+					currentBlock = root == chain[len(chain)-1].BlockedItemID()
+				}
+			}
+			if currentBlock {
+				blockedMilestone = true
+				lastBlockedMilestone = index
+			}
 			if err := authenticateBlockedMilestoneInvocation(
 				run.ID, invocation, publicationInvocation, attempts, reevaluationCommands,
 			); err != nil {
@@ -1389,7 +1431,17 @@ func authenticateRunObservation(
 			// publication invocation, follows an authenticated ready that
 			// itself follows the last definitive block, and mirrors the
 			// store's re-gated completion record.
-			if !readyMilestone || lastReadyMilestone < lastBlockedMilestone {
+			publication, err := tx.PublishedPublicationInvocationID(ctx, run.ID)
+			if err != nil {
+				return err
+			}
+			prior := observation
+			prior.Milestones = observation.Milestones[:index]
+			published, err := PublicationCycleObservation(ctx, tx, prior, publication)
+			if err != nil {
+				return err
+			}
+			if !domain.PublicationReadyStands(published) {
 				return fmt.Errorf("milestone %s has no authenticated publication_ready after the last block: %w",
 					milestone.Kind, domain.ErrParentKeyMismatch)
 			}
@@ -1508,6 +1560,9 @@ func authenticateReevaluatedBlockedItemIdentity(
 	ctx context.Context, tx *store.ReadTx, itemID domain.ItemID,
 	runID domain.RunID, projectID domain.ProjectID, visited map[string]bool,
 ) (bool, error) {
+	if successor, err := tx.PublicationSuccessorForBlockedItem(ctx, runID, itemID); err != nil || successor != nil {
+		return successor != nil, err
+	}
 	itemRunID, commandID, ok := ReevaluatedBlockedItemCoordinates(itemID)
 	if !ok || itemRunID != runID {
 		return false, nil

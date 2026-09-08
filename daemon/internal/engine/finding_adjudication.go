@@ -1472,6 +1472,17 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 	if handled {
 		return diminishingState, nil
 	}
+	if task.Successor != nil && task.reevaluation != nil && len(remediationFindingIDs(artifact, routes)) > 0 {
+		// A reevaluation can recheck a completed cycle, but cannot replace
+		// its dispatched task with a new remediation producer.
+		if err := w.putReviewAttentionWithID(ctx, task, record,
+			"The rechecked successor needs code changes. This completed publication cycle cannot launch another remediation; discuss a new authorized continuation.",
+			domain.AttentionReviewDispute,
+			domain.ItemID("successor-reevaluation-review-"+task.reevaluation.CommandID)); err != nil {
+			return productionReviewPending, err
+		}
+		return productionReviewEscalated, nil
+	}
 	var remediation *preparedRemediationIntent
 	if w.artifacts != nil {
 		// A deterministic undeliverable-input refusal terminalized on a prior

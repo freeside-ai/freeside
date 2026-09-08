@@ -18,6 +18,9 @@ import (
 // revision, the evidence artifacts backing it, and the invocation
 // publishing it.
 type Candidate struct {
+	// Successor is a claim re-derived from the immutable return command and
+	// predecessor binding inside the store decision transaction.
+	Successor *publicationrecord.SuccessorTarget
 	// VerificationReport holds the verifier's artifact bytes. The authorization
 	// gate binds them to its evidence snapshot before they can be published.
 	VerificationReport []byte
@@ -525,6 +528,19 @@ func (p *Publisher) publish(
 	publishHead func(context.Context, GatedHead) error,
 	producingInvocationID *domain.InvocationID,
 ) (Result, error) {
+	if c.Successor != nil {
+		return Result{}, ErrUnauthorizedPublication
+	}
+	return p.publishWithTransport(ctx, c, approvedRecipes, publishHead, producingInvocationID)
+}
+
+func (p *Publisher) publishWithTransport(
+	ctx context.Context,
+	c Candidate,
+	approvedRecipes map[domain.Digest]bool,
+	publishHead func(context.Context, GatedHead) error,
+	producingInvocationID *domain.InvocationID,
+) (Result, error) {
 	if p.wiringErr != nil {
 		return Result{}, p.wiringErr
 	}
@@ -614,6 +630,14 @@ func (p *Publisher) publish(
 	); err != nil {
 		return Result{}, err
 	}
+	if c.Successor != nil {
+		if publishHead == nil {
+			return Result{}, ErrUnauthorizedPublication
+		}
+		if _, err := p.observeSuccessorPR(ctx, repo, identity, c); err != nil {
+			return Result{}, err
+		}
+	}
 	if publishHead != nil {
 		// The gate is evaluated exactly once, here: the capability is
 		// minted only on this path, after preparePublication committed the
@@ -628,6 +652,14 @@ func (p *Publisher) publish(
 	}
 
 	result := Result{Identity: identity, Branch: branch}
+	if c.Successor != nil {
+		ref, err := p.forge.getRef(ctx, repo, branch, "")
+		if err != nil || !ref.Exists || ref.SHA != c.HeadSHA {
+			return Result{}, errors.Join(err, ErrPublicationConflict)
+		}
+		result.PRNumber, err = p.convergeSuccessorPR(ctx, repo, identity, c, title, body)
+		return result, err
+	}
 
 	// Branch: check before create. An existing branch at the candidate
 	// head is the converged state; at any other commit it is unknown
@@ -903,6 +935,9 @@ func (p *Publisher) preparePublication(
 	producingInvocationID *domain.InvocationID,
 ) error {
 	var sourceInvocationID domain.InvocationID
+	if c.Successor != nil && (p.storeDecision == nil || producingInvocationID == nil) {
+		return ErrUnauthorizedPublication
+	}
 	if producingInvocationID != nil {
 		sourceInvocationID = *producingInvocationID
 	}
@@ -1171,6 +1206,12 @@ func desiredPRContent(identity Identity, c Candidate) (title, body string, err e
 
 // resolveBranch preserves the content identity while binding an operator name.
 func resolveBranch(identity Identity, c Candidate) (string, error) {
+	if c.Successor != nil {
+		if err := c.Successor.Validate(c.BaseRef); err != nil || c.Branch != c.Successor.Branch {
+			return "", errors.Join(err, ErrPublicationConflict)
+		}
+		return c.Successor.Branch, nil
+	}
 	if c.Branch == "" {
 		return identity.BranchName(), nil
 	}

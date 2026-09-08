@@ -145,6 +145,16 @@ func (t *GitPublicationTransport) PushHead(
 	return t.transport.PushHead(ctx, sealed.checkout, gated)
 }
 
+// UpdateHead is a separate capability-bearing successor effect. Ordinary
+// publication transports remain create-only unless they implement this seam.
+func (t *GitPublicationTransport) UpdateHead(ctx context.Context, checkout PublicationCheckout, gated publish.GatedUpdate) (publish.PushResult, error) {
+	sealed, ok := checkout.(gitPublicationCheckout)
+	if !ok || sealed.owner != t {
+		return publish.PushResult{}, ErrForeignPublicationCheckout
+	}
+	return t.transport.UpdateHead(ctx, sealed.checkout, gated)
+}
+
 // FakePublicationConfig supplies the already-reviewed deterministic and
 // external boundaries for the 1A.1 workflow.
 type FakePublicationConfig struct {

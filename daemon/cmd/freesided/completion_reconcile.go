@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -24,10 +25,32 @@ func appendWorkUnitCompletedMilestone(
 	if err != nil {
 		return err
 	}
-	if !domain.PublicationReadyStands(observation) {
+	publication, err := tx.PublishedPublicationInvocationID(ctx, runID)
+	if err != nil {
+		return err
+	}
+	published, err := signet.PublicationCycleObservation(ctx, &tx.ReadTx, observation, publication)
+	if err != nil {
+		return err
+	}
+	if !domain.PublicationReadyStands(published) {
 		return nil
 	}
-	return tx.AppendRunMilestone(ctx, workUnitCompletedMilestone(runID, completion))
+	milestone, err := currentWorkUnitCompletedMilestone(ctx, &tx.ReadTx, runID, completion)
+	if err != nil {
+		return err
+	}
+	return tx.AppendRunMilestone(ctx, milestone)
+}
+
+func currentWorkUnitCompletedMilestone(ctx context.Context, tx *store.ReadTx, runID domain.RunID, completion domain.WorkUnitCompletion) (domain.RunMilestone, error) {
+	invocation, err := tx.PublishedPublicationInvocationID(ctx, runID)
+	if err != nil {
+		return domain.RunMilestone{}, err
+	}
+	milestone := workUnitCompletedMilestone(runID, completion)
+	milestone.InvocationID = &invocation
+	return milestone, nil
 }
 
 // reconcileWorkUnitCompletionMilestones is the one-time start-up pass that
@@ -80,12 +103,34 @@ func reconcileWorkUnitCompletionMilestones(ctx context.Context, st *store.Store,
 			if hasMilestone(observation, domain.MilestoneWorkUnitCompleted) {
 				continue
 			}
-			if !domain.PublicationReadyStands(observation) {
+			publication, err := tx.PublishedPublicationInvocationID(ctx, declaration.RunID)
+			if store.IsRowVerdict(err) {
+				logger.Warn("work unit completion has no supported published invocation; no milestone appended",
+					"unit", completion.UnitID, "run", declaration.RunID, "error", err)
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			published, err := signet.PublicationCycleObservation(ctx, tx, observation, publication)
+			if store.IsRowVerdict(err) {
+				logger.Warn("work unit completion has no supported publication cycle; no milestone appended",
+					"unit", completion.UnitID, "run", declaration.RunID, "error", err)
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if !domain.PublicationReadyStands(published) {
 				logger.Warn("work unit completion run has no standing publication_ready; no milestone appended",
 					"unit", completion.UnitID, "run", declaration.RunID)
 				continue
 			}
-			pending = append(pending, workUnitCompletedMilestone(declaration.RunID, completion))
+			milestone, err := currentWorkUnitCompletedMilestone(ctx, tx, declaration.RunID, completion)
+			if err != nil {
+				return err
+			}
+			pending = append(pending, milestone)
 		}
 		return nil
 	}); err != nil {

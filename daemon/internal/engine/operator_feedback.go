@@ -373,11 +373,17 @@ func (e *Engine) reconcileOperatorFeedbackActions(
 }
 
 func (w *productionPublicationWorkflow) reconcileOperatorFeedback(ctx context.Context) (int, error) {
-	return (&Engine{
+	e := &Engine{
 		store: w.store, signet: w.signet, productionPublication: w,
 		productionDeliveryValidator: w.validateDelivery,
 		admission:                   w.feedbackAdmission,
-	}).reconcileOperatorFeedbackActions(ctx, domain.ActionReturnToAgent)
+	}
+	created, err := e.reconcileOperatorFeedbackActions(ctx, domain.ActionReturnToAgent)
+	if err != nil {
+		return created, err
+	}
+	retried, err := e.reconcileOperatorFeedbackRetries(ctx)
+	return created + retried, err
 }
 
 func (e *Engine) commandsForOperatorFeedback(
@@ -558,7 +564,7 @@ func (e *Engine) enqueueImplementationFeedback(
 			return err
 		}
 		if command.Action == domain.ActionReturnToAgent {
-			entry, err := tx.GetOutbox(ctx, productionPublicationTaskKey(runID))
+			entry, err := productionTaskForReadyItem(ctx, tx, runID, item.ID)
 			if err != nil {
 				return err
 			}
@@ -768,7 +774,7 @@ func (e *Engine) operatorFeedbackUndeliverableRecorded(
 		if err != nil {
 			return err
 		}
-		if err := verifyOperatorFeedbackUndeliverableItem(item, source, command); err != nil {
+		if err := verifyOperatorFeedbackUndeliverableItem(item, source, command, domain.AttentionExecutionFailure); err != nil {
 			return err
 		}
 		recorded = true
@@ -814,12 +820,28 @@ func (e *Engine) recordOperatorFeedbackUndeliverable(
 		source.Subject.RunID == nil {
 		return false, domain.ErrParentKeyMismatch
 	}
+	return e.recordOperatorFeedbackDeliveryFailure(ctx, source, command)
+}
+
+// The caller authenticates its accepted command before using the shared
+// immutable delivery-failure recorder.
+func (e *Engine) recordOperatorFeedbackDeliveryFailure(ctx context.Context, source domain.AttentionItem, command domain.Command) (bool, error) {
+	return e.recordOperatorFeedbackFailure(ctx, source, command, domain.AttentionExecutionFailure,
+		"Operator feedback input cannot be delivered to the implementation agent because the cumulative input exceeds delivery limits.")
+}
+
+func (e *Engine) recordOperatorFeedbackFailure(ctx context.Context, source domain.AttentionItem, command domain.Command, typ domain.AttentionType, reason string) (bool, error) {
 	itemID := operatorFeedbackUndeliverableItemID(command.CommandID)
 	created := false
 	err := e.store.Write(ctx, func(tx *store.WriteTx) error {
 		existing, err := tx.GetAttentionItem(ctx, itemID)
 		if err == nil {
-			return verifyOperatorFeedbackUndeliverableItem(existing, source, command)
+			// Completion can follow an already recorded delivery refusal.
+			// Preserve that command's first notice, including its reason.
+			if typ == domain.AttentionSystemHealth && existing.Type == domain.AttentionExecutionFailure {
+				return verifyOperatorFeedbackUndeliverableItem(existing, source, command, domain.AttentionExecutionFailure)
+			}
+			return verifyOperatorFeedbackUndeliverableItem(existing, source, command, typ)
 		}
 		if !errors.Is(err, store.ErrNotFound) {
 			return err
@@ -831,13 +853,18 @@ func (e *Engine) recordOperatorFeedbackUndeliverable(
 			return err
 		}
 		createdAt := e.productionPublication.attentionCreatedAt()
+		var posture *domain.HealthPosture
+		if typ == domain.AttentionSystemHealth {
+			advisory := domain.HealthPostureAdvisory
+			posture = &advisory
+		}
 		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 			ID: itemID, ProjectID: source.ProjectID,
-			Subject: subject, Type: domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
-			Reason:            "Operator feedback input cannot be delivered to the implementation agent because the cumulative input exceeds delivery limits.",
+			Subject: subject, Type: typ, Priority: domain.PriorityHigh,
+			Reason:            reason,
 			RequestedDecision: []domain.Action{domain.ActionAcknowledge},
 			ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
-			CreatedAt: &createdAt, DisplayNames: names, Status: domain.StatusOpen,
+			CreatedAt: &createdAt, DisplayNames: names, Status: domain.StatusOpen, Posture: posture,
 		}, e.productionPublication.approvedRecipes)
 		if err != nil {
 			return err
@@ -852,13 +879,16 @@ func (e *Engine) recordOperatorFeedbackUndeliverable(
 }
 
 func verifyOperatorFeedbackUndeliverableItem(
-	item domain.AttentionItem, source domain.AttentionItem, command domain.Command,
+	item domain.AttentionItem, source domain.AttentionItem, command domain.Command, typ domain.AttentionType,
 ) error {
 	validSubject := source.Subject.RunID != nil && item.Subject.Type == domain.SubjectRun &&
 		item.Subject.ID == domain.SubjectID(*source.Subject.RunID) && item.Subject.RunID != nil &&
 		*item.Subject.RunID == *source.Subject.RunID
 	if item.ID != operatorFeedbackUndeliverableItemID(command.CommandID) ||
-		item.Type != domain.AttentionExecutionFailure || item.ProjectID != source.ProjectID || !validSubject {
+		item.Type != typ || item.ProjectID != source.ProjectID || !validSubject {
+		return domain.ErrParentKeyMismatch
+	}
+	if typ == domain.AttentionSystemHealth && (item.Posture == nil || *item.Posture != domain.HealthPostureAdvisory) {
 		return domain.ErrParentKeyMismatch
 	}
 	return nil
@@ -914,6 +944,12 @@ func authenticateOperatorFeedbackTransition(
 	request, err := decodeOperatorFeedbackRequest(entry)
 	if err != nil || request.RunID != runID || request.StageID != stageID {
 		return operatorFeedbackRequest{}, ProductionPublication{}, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	if request.Retry != nil {
+		verified, err := tx.OperatorFeedbackIntent(ctx, request.InvocationID)
+		if err != nil || !reflect.DeepEqual(verified, request) {
+			return request, ProductionPublication{}, errors.Join(err, domain.ErrParentKeyMismatch)
+		}
 	}
 	run, err := tx.GetRun(ctx, runID)
 	if err != nil {
@@ -983,7 +1019,7 @@ func authenticateOperatorFeedbackTransition(
 		return operatorFeedbackRequest{}, ProductionPublication{}, errors.Join(err, domain.ErrParentKeyMismatch)
 	}
 	if command.Action == domain.ActionReturnToAgent {
-		taskEntry, err := tx.GetOutbox(ctx, productionPublicationTaskKey(runID))
+		taskEntry, err := productionTaskForReadyItem(ctx, tx, runID, item.ID)
 		if err != nil {
 			return operatorFeedbackRequest{}, ProductionPublication{}, err
 		}
@@ -1090,7 +1126,7 @@ func (e *Engine) authenticateOperatorFeedbackInput(
 		if command.Action != domain.ActionReturnToAgent {
 			return nil
 		}
-		entry, err := tx.GetOutbox(ctx, productionPublicationTaskKey(request.RunID))
+		entry, err := productionTaskForReadyItem(ctx, tx, request.RunID, item.ID)
 		if err != nil {
 			return err
 		}

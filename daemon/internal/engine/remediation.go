@@ -26,7 +26,7 @@ import (
 const (
 	// KindRemediationInvocationRequested is the engine-owned dispatch intent
 	// produced by an accepted finding-adjudication route.
-	KindRemediationInvocationRequested = "remediation_invocation_requested"
+	KindRemediationInvocationRequested = string(domain.RemediationInvocationRequestedKind)
 	remediationRequestVersion          = "freeside.remediation-request/v1"
 	remediationInputVersion            = "freeside.remediation-input/v1"
 	remediationInvocationIDPrefix      = "inv-remediate-"
@@ -57,20 +57,7 @@ type remediationReviewOutcome struct {
 	claims       []domain.AgentClaim
 }
 
-type remediationInvocationRequest struct {
-	Version             string              `json:"version"`
-	InvocationID        domain.InvocationID `json:"invocation_id"`
-	RunID               domain.RunID        `json:"run_id"`
-	StageID             domain.StageID      `json:"stage_id"`
-	Round               int                 `json:"round"`
-	ReviewInvocationID  domain.InvocationID `json:"review_invocation_id"`
-	AdjudicationDigest  domain.Digest       `json:"adjudication_digest"`
-	InputArtifactID     domain.ArtifactID   `json:"input_artifact_id"`
-	InputArtifactDigest domain.Digest       `json:"input_artifact_digest"`
-	BaseSHA             string              `json:"base_sha"`
-	HeadSHA             string              `json:"head_sha"`
-	FindingIDs          []domain.FindingID  `json:"finding_ids"`
-}
+type remediationInvocationRequest domain.RemediationInvocationIntent
 
 type remediationInput struct {
 	Version              string                     `json:"version"`
@@ -435,6 +422,12 @@ func authenticateRemediationInvocationTransition(
 		)
 	}
 	verified := authenticatedRemediationTransition{request: request}
+	if request.SuccessorPublicationID != "" {
+		successor, err := tx.GetPublicationSuccessor(ctx, request.RunID, request.SuccessorPublicationID)
+		if err != nil || successor.RunID != request.RunID || request.Round < successor.ReviewRound {
+			return authenticatedRemediationTransition{}, errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+	}
 	verified.binding.invocation, err = tx.GetAgentInvocation(ctx, request.InvocationID)
 	if err != nil {
 		return authenticatedRemediationTransition{}, err
@@ -1112,6 +1105,9 @@ func (w *productionPublicationWorkflow) prepareRemediationIntent(
 		BaseSHA: task.Replay.ObservedBaseSHA, HeadSHA: task.HeadSHA,
 		FindingIDs: findingIDs,
 	}
+	if task.Successor != nil {
+		request.SuccessorPublicationID = task.PublicationID
+	}
 	payload, err := encodeRemediationRequest(request)
 	if err != nil {
 		return nil, err
@@ -1150,7 +1146,7 @@ func (intent *preparedRemediationIntent) persist(
 		!slices.Equal(remediationFindingIDs(artifact, routes), intent.request.FindingIDs) {
 		return errors.Join(err, domain.ErrParentKeyMismatch)
 	}
-	taskEntry, err := tx.GetOutbox(ctx, productionPublicationTaskKey(intent.request.RunID))
+	taskEntry, err := tx.GetOutbox(ctx, intent.publication.intentKey())
 	if err != nil {
 		return err
 	}

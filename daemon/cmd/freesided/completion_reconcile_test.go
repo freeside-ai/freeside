@@ -191,3 +191,55 @@ func TestReconcileWorkUnitCompletionMilestonesSkipsWithoutStandingReady(t *testi
 		t.Fatalf("skipped reconcile moved the revision %d -> %d", revision, got)
 	}
 }
+
+func TestReconcileWorkUnitCompletionMilestonesIsolatesForeignCycle(t *testing.T) {
+	ctx := t.Context()
+	st := schedTestStore(t)
+	for _, runID := range []domain.RunID{"bad-cycle", "healthy-cycle"} {
+		capturedRunWithCriterion(t, st, runID, domain.ItemID("ready-"+runID), domain.CompletionBoundPRMerged, nil)
+	}
+	pull := domain.PullMergeFact{
+		Repo: "owner/repo", RepositoryID: 424242, PRNumber: 450,
+		State: domain.PullRequestClosed, Merged: true, MergeCommitSHA: "deadbeef",
+		BaseRef: "main", HeadSHA: "cafed00d", ObservedAt: activeResourceTestTime,
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if _, err := tx.AppendPullMergeFact(ctx, pull); err != nil {
+			return err
+		}
+		for _, runID := range []domain.RunID{"bad-cycle", "healthy-cycle"} {
+			declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, runID)
+			if err != nil {
+				return err
+			}
+			binding, err := tx.GetWorkUnitPRBinding(ctx, declaration.ID)
+			if err != nil {
+				return err
+			}
+			completion, ok := domain.EvaluateWorkUnitCompletion(declaration, binding, pull, nil)
+			if !ok {
+				return errors.New("fixture did not derive completion")
+			}
+			if err := tx.RecordWorkUnitCompletion(ctx, completion); err != nil {
+				return err
+			}
+		}
+		foreign, reason := domain.ProductionPublicationInvocationID("unrelated-run"), domain.HoldTrustBlocked
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: "bad-cycle", Kind: domain.MilestonePublicationBlocked,
+			InvocationID: &foreign, Reason: &reason, RecordedAt: activeResourceTestTime,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for range 2 {
+		if err := reconcileWorkUnitCompletionMilestones(ctx, st, logger); err != nil {
+			t.Fatal(err)
+		}
+		if got := workUnitCompletedMilestones(t, st, "bad-cycle"); len(got) != 0 {
+			t.Fatalf("foreign publication cycle gained completion mirror: %#v", got)
+		}
+		assertCompletionMilestone(t, st, "healthy-cycle", activeResourceTestTime)
+	}
+}

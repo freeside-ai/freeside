@@ -3,6 +3,7 @@ package publish
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
@@ -96,6 +97,11 @@ func intentForCandidate(
 	if producingInvocationID != "" {
 		intent.ReservationRunID = c.RunID
 	}
+	if c.Successor != nil {
+		intent.FormatVersion = publicationrecord.IntentFormatSuccessor
+		copy := *c.Successor
+		intent.Successor = &copy
+	}
 	if err := intent.Validate(); err != nil {
 		return Intent{}, err
 	}
@@ -125,7 +131,7 @@ func ValidateIntentDispositionHistory(intent Intent, c Candidate) error {
 }
 
 func intentsCompatible(committed, proposed Intent) bool {
-	if committed == proposed {
+	if reflect.DeepEqual(committed, proposed) {
 		return true
 	}
 	if proposed.FormatVersion == IntentFormatCurrent && committed.FormatVersion < IntentFormatCurrent {
@@ -139,7 +145,7 @@ func intentsCompatible(committed, proposed Intent) bool {
 		proposed.FormatVersion = IntentFormatLegacy
 		proposed.DispositionHistoryDigest = ""
 	}
-	return committed == proposed
+	return reflect.DeepEqual(committed, proposed)
 }
 
 // DecodeIntent deserializes and validates a ledger payload. Unknown

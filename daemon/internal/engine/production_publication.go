@@ -11,6 +11,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -160,14 +161,15 @@ type productionPublicationTask struct {
 	ProducingInvocationID domain.InvocationID `json:"producing_invocation_id"`
 	// LegacyRemediationNoop preserves v1 task decoding and byte-identical
 	// recorded replay. It is never consulted for change classification.
-	LegacyRemediationNoop bool                  `json:"remediation_noop,omitempty"`
-	VerificationID        domain.InvocationID   `json:"verification_invocation_id"`
-	PublicationID         domain.InvocationID   `json:"publication_invocation_id"`
-	HeadSHA               string                `json:"head_sha"`
-	Artifacts             []domain.Digest       `json:"artifacts,omitempty"`
-	Replay                ProductionReplay      `json:"replay"`
-	Publication           ProductionPublication `json:"publication"`
-	Summary               string                `json:"summary,omitempty"`
+	LegacyRemediationNoop bool                         `json:"remediation_noop,omitempty"`
+	VerificationID        domain.InvocationID          `json:"verification_invocation_id"`
+	PublicationID         domain.InvocationID          `json:"publication_invocation_id"`
+	HeadSHA               string                       `json:"head_sha"`
+	Artifacts             []domain.Digest              `json:"artifacts,omitempty"`
+	Replay                ProductionReplay             `json:"replay"`
+	Publication           ProductionPublication        `json:"publication"`
+	Summary               string                       `json:"summary,omitempty"`
+	Successor             *domain.PublicationSuccessor `json:"successor,omitempty"`
 	// reevaluation is reconstructed from a signet intent. It is never part of
 	// the original publication task row, whose bytes remain immutable.
 	reevaluation *productionReevaluation `json:"-"`
@@ -372,6 +374,14 @@ func productionRunIDFromPendingTaskKey(key string) (domain.RunID, bool) {
 	if runID, ok := productionRunIDFromPublicationTaskKey(key); ok {
 		return runID, true
 	}
+	if rest, ok := strings.CutPrefix(key, "production-publication-successor/"); ok {
+		encodedRun, commandID, found := strings.Cut(rest, "/")
+		runID, err := url.PathUnescape(encodedRun)
+		if err != nil || !found || runID == "" || commandID == "" || url.PathEscape(runID) != encodedRun {
+			return "", false
+		}
+		return domain.RunID(runID), true
+	}
 	runID, _, ok := signet.PublicationReevaluationCoordinates(key)
 	return runID, ok
 }
@@ -388,7 +398,17 @@ func (task productionPublicationTask) intentKey() string {
 	if task.reevaluation != nil {
 		return task.reevaluation.IntentKey
 	}
+	if task.Successor != nil {
+		return task.Successor.TaskKey()
+	}
 	return productionPublicationTaskKey(task.RunID)
+}
+
+func (task productionPublicationTask) readyItemID() domain.ItemID {
+	if task.Successor != nil {
+		return task.Successor.ReadyItemID()
+	}
+	return productionReadyItemID(task.RunID)
 }
 
 func (task productionPublicationTask) verificationCheckpointKey() string {
@@ -421,6 +441,9 @@ func (task productionPublicationTask) blockedMilestoneInvocationID() domain.Invo
 func (task productionPublicationTask) blockedItemID() domain.ItemID {
 	if task.reevaluation != nil {
 		return signet.ReevaluatedBlockedItemID(task.RunID, task.reevaluation.CommandID)
+	}
+	if task.Successor != nil {
+		return task.Successor.BlockedItemID()
 	}
 	return productionBlockedItemID(task.RunID)
 }
@@ -463,7 +486,7 @@ func (w *productionPublicationWorkflow) hasQueuedCompletion(
 	var entry store.QueueEntry
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		entry, err = tx.GetOutbox(ctx, productionPublicationTaskKey(run.ID))
+		entry, err = productionTaskForInvocation(ctx, tx, run.ID, invocationID)
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
@@ -493,11 +516,15 @@ func (w *productionPublicationWorkflow) hasQueuedCompletion(
 			domain.ErrParentKeyMismatch)
 	}
 	if task.ProducingInvocationID != invocationID {
+		if err := w.store.Read(ctx, func(tx *store.ReadTx) error { return authenticateTaskSuccessor(ctx, tx, task) }); err != nil {
+			return false, err
+		}
 		currentRound, currentIsRemediation := remediationRoundForInvocation(
 			run.ID, task.ProducingInvocationID)
 		priorRound, priorIsRemediation := remediationRoundForInvocation(run.ID, invocationID)
 		priorIsInitial := invocationID == productionInvocationID(run.ID)
-		if currentIsRemediation && (priorIsInitial || priorIsRemediation && priorRound < currentRound) {
+		priorIsFeedback := task.Successor != nil && invocationID == task.Successor.FeedbackInvocationID
+		if currentIsRemediation && (priorIsInitial || priorIsFeedback || priorIsRemediation && priorRound < currentRound) {
 			var (
 				admission domain.ExecutionAdmission
 				exported  domain.ExecutionExport
@@ -538,7 +565,8 @@ func (w *productionPublicationWorkflow) hasQueuedCompletion(
 			task.HeadSHA != request.HeadSHA {
 			return false, errors.Join(err, domain.ErrParentKeyMismatch)
 		}
-		if priorRound, prior := remediationRoundForInvocation(run.ID, task.ProducingInvocationID); task.ProducingInvocationID != productionInvocationID(run.ID) && (!prior || priorRound >= round) {
+		feedbackProducer := task.Successor != nil && task.ProducingInvocationID == task.Successor.FeedbackInvocationID
+		if priorRound, prior := remediationRoundForInvocation(run.ID, task.ProducingInvocationID); !feedbackProducer && task.ProducingInvocationID != productionInvocationID(run.ID) && (!prior || priorRound >= round) {
 			return false, domain.ErrImmutableTransition
 		}
 		return false, nil
@@ -604,7 +632,7 @@ func (w *productionPublicationWorkflow) authenticatesTerminal(
 	)
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		entry, err = tx.GetOutbox(ctx, productionPublicationTaskKey(run.ID))
+		entry, err = productionTaskForInvocation(ctx, tx, run.ID, terminal.InvocationID)
 		if err != nil {
 			return err
 		}
@@ -687,6 +715,17 @@ func RecordExecutionExport(
 		return fmt.Errorf("authenticate operator-feedback export: %w", err)
 	}
 	if operatorFeedback {
+		var publishedParent bool
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			_, _, found, err := tx.FeedbackPublicationParent(ctx, executionExport.InvocationID)
+			publishedParent = found
+			return err
+		}); err != nil {
+			return err
+		}
+		if publishedParent && admission.OperatingMode == domain.ModeUnattended {
+			return RecordProductionExecutionExport(ctx, st, executionExport, replay)
+		}
 		// A feedback invocation resumes implementation from durable input, but
 		// its first export is not itself a publication candidate. Recording it
 		// export-only lets the attempt close without minting a task that would
@@ -773,6 +812,7 @@ func RecordProductionExecutionExport(
 		previousTask    *productionPublicationTask
 		alreadyReplaced bool
 		legacyNoop      bool
+		successor       *domain.PublicationSuccessor
 	)
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -782,6 +822,19 @@ func RecordProductionExecutionExport(
 		}
 		run, err = tx.GetRun(ctx, admission.RunID)
 		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(string(executionExport.InvocationID), "inv-operator-feedback-") {
+			entry, err := tx.GetOutbox(ctx, string(executionExport.InvocationID))
+			if err != nil {
+				return err
+			}
+			_, inherited, err := authenticateOperatorFeedbackTransition(ctx, tx, entry, run.ID, admission.StageID)
+			if err != nil {
+				return err
+			}
+			publication = inherited
+			successor, err = preparePublicationSuccessor(ctx, tx, executionExport.InvocationID)
 			return err
 		}
 		if round, ok := remediationRoundForInvocation(run.ID, executionExport.InvocationID); ok {
@@ -802,7 +855,7 @@ func RecordProductionExecutionExport(
 				return errors.Join(err, domain.ErrParentKeyMismatch)
 			}
 			remediation = &request
-			taskEntry, err := tx.GetOutbox(ctx, productionPublicationTaskKey(run.ID))
+			taskEntry, err := productionTaskForInvocation(ctx, tx, run.ID, executionExport.InvocationID)
 			if err != nil {
 				return err
 			}
@@ -814,6 +867,7 @@ func RecordProductionExecutionExport(
 				return domain.ErrParentKeyMismatch
 			}
 			publication = verified.publication
+			successor = current.Successor
 			switch current.ProducingInvocationID {
 			case executionExport.InvocationID:
 				alreadyReplaced = true
@@ -822,6 +876,11 @@ func RecordProductionExecutionExport(
 				previous := current
 				previousTask = &previous
 			default:
+				if current.Successor != nil && current.ProducingInvocationID == current.Successor.FeedbackInvocationID {
+					previous := current
+					previousTask = &previous
+					return nil
+				}
 				if priorRound, ok := remediationRoundForInvocation(run.ID, current.ProducingInvocationID); !ok || priorRound >= round {
 					return domain.ErrImmutableTransition
 				}
@@ -857,6 +916,11 @@ func RecordProductionExecutionExport(
 			return fmt.Errorf("remediation export does not supersede the current candidate: %w",
 				domain.ErrParentKeyMismatch)
 		}
+	} else if successor != nil {
+		if executionExport.InvocationID != successor.FeedbackInvocationID ||
+			admission.StageID != operatorFeedbackStageID(executionExport.InvocationID) {
+			return domain.ErrParentKeyMismatch
+		}
 	} else if admission.StageID != productionStageID(run.ID) ||
 		executionExport.InvocationID != productionInvocationID(run.ID) {
 		return fmt.Errorf("production export disagrees with its initial stage: %w", domain.ErrParentKeyMismatch)
@@ -876,6 +940,10 @@ func RecordProductionExecutionExport(
 		Replay: replay, Publication: publication,
 		Summary: fmt.Sprintf("Imported candidate %s over base %s.",
 			executionExport.HeadSHA, executionExport.ObservedBaseSHA),
+	}
+	if successor != nil {
+		task.Successor = successor
+		task.PublicationID = successor.PublicationID()
 	}
 	if err := task.validate(); err != nil {
 		return err
@@ -925,6 +993,11 @@ func RecordProductionExecutionExport(
 		if err := tx.RecordExecutionExportRecord(ctx, executionExport); err != nil {
 			return err
 		}
+		if task.Successor != nil {
+			if err := tx.RecordPublicationSuccessor(ctx, *task.Successor); err != nil {
+				return err
+			}
+		}
 		reservation, err := publish.NewReservation(task.PublicationID, task.RunID)
 		if err != nil {
 			return err
@@ -932,7 +1005,7 @@ func RecordProductionExecutionExport(
 		if err := publish.ClaimInvocation(ctx, tx, reservation); err != nil {
 			return err
 		}
-		key := productionPublicationTaskKey(task.RunID)
+		key := task.intentKey()
 		if remediation == nil {
 			entry, _, err := tx.EnqueueOutbox(
 				ctx, key, KindProductionPublicationRequested, payload)
@@ -1023,7 +1096,7 @@ func (w *productionPublicationWorkflow) releaseTaskQuarantineIfRowAbsent(
 	ctx context.Context, run domain.Run,
 ) error {
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
-		_, err := tx.GetOutbox(ctx, productionPublicationTaskKey(run.ID))
+		_, err := currentProductionTaskEntry(ctx, tx, run.ID)
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
@@ -1077,8 +1150,16 @@ func (w *productionPublicationWorkflow) quarantineTaskMarkers(
 		}
 		producerRound, priorRemediation := remediationRoundForInvocation(
 			task.RunID, task.ProducingInvocationID)
+		priorFeedback := task.Successor != nil &&
+			task.ProducingInvocationID == task.Successor.FeedbackInvocationID &&
+			verified.request.SuccessorPublicationID == task.PublicationID
+		if priorFeedback {
+			if err := authenticateTaskSuccessor(ctx, tx, task); err != nil {
+				return classifyRemediationMarkerError(err)
+			}
+		}
 		priorProducer := task.ProducingInvocationID == productionInvocationID(task.RunID) ||
-			priorRemediation && producerRound < verified.request.Round
+			priorFeedback || priorRemediation && producerRound < verified.request.Round
 		if !priorProducer || task.HeadSHA != verified.request.HeadSHA {
 			return classifyRemediationMarkerError(domain.ErrParentKeyMismatch)
 		}
@@ -1148,11 +1229,19 @@ func (t productionPublicationTask) validate() error {
 func (t productionPublicationTask) validateWithPublication(validatePublication func(ProductionPublication) error) error {
 	_, remediationProducer := remediationRoundForInvocation(t.RunID, t.ProducingInvocationID)
 	validProducer := t.ProducingInvocationID == productionInvocationID(t.RunID) || remediationProducer
+	wantPublication := domain.ProductionPublicationInvocationID(t.RunID)
+	if t.Successor != nil {
+		if err := t.Successor.Validate(); err != nil || t.Successor.RunID != t.RunID {
+			return errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+		validProducer = t.ProducingInvocationID == t.Successor.FeedbackInvocationID || remediationProducer
+		wantPublication = t.Successor.PublicationID()
+	}
 	if t.Version != productionPublicationTaskVersion || t.RunID == "" || t.ProjectID == "" ||
 		!validProducer ||
 		(t.LegacyRemediationNoop && !remediationProducer) ||
 		t.VerificationID != productionVerificationInvocationIDForProducer(t.RunID, t.ProducingInvocationID) ||
-		t.PublicationID != domain.ProductionPublicationInvocationID(t.RunID) ||
+		t.PublicationID != wantPublication ||
 		!validCommitSHA(t.HeadSHA) {
 		return fmt.Errorf("invalid production publication task: %w", domain.ErrParentKeyMismatch)
 	}
@@ -1256,7 +1345,7 @@ func decodeProductionPublicationTaskWithPublication(
 	if err := task.validateWithPublication(validatePublication); err != nil {
 		return productionPublicationTask{}, err
 	}
-	if entry.IdempotencyKey != productionPublicationTaskKey(task.RunID) {
+	if entry.IdempotencyKey != task.intentKey() {
 		return productionPublicationTask{}, fmt.Errorf("production publication task key disagrees with run: %w",
 			domain.ErrParentKeyMismatch)
 	}
@@ -1303,7 +1392,7 @@ func (w *productionPublicationWorkflow) reconstructProductionReevaluationTask(
 		if err != nil {
 			return err
 		}
-		taskRow, err = tx.GetOutbox(ctx, productionPublicationTaskKey(request.RunID))
+		taskRow, err = productionTaskForBlockedItem(ctx, tx, request.RunID, request.ItemID)
 		return err
 	})
 	if err != nil {
@@ -1373,7 +1462,12 @@ type ProductionPublicationIdentity struct {
 func ProductionPublicationCompletion(
 	ctx context.Context, tx *store.ReadTx, run domain.Run,
 ) (ProductionPublicationIdentity, bool, error) {
-	entry, err := tx.GetOutbox(ctx, productionPublicationTaskKey(run.ID))
+	entry, err := currentProductionTaskEntry(ctx, tx, run.ID)
+	return productionPublicationCompletion(ctx, tx, run, entry, err, false)
+}
+
+func productionPublicationCompletion(ctx context.Context, tx *store.ReadTx, run domain.Run, entry store.QueueEntry, entryErr error, allowSuperseded bool) (ProductionPublicationIdentity, bool, error) {
+	err := entryErr
 	if errors.Is(err, store.ErrNotFound) {
 		return ProductionPublicationIdentity{}, false, nil
 	}
@@ -1392,6 +1486,11 @@ func ProductionPublicationCompletion(
 	}
 	if !entry.Dispatched() {
 		return ProductionPublicationIdentity{}, false, nil
+	}
+	if ready, err := tx.GetAttentionItemRecord(ctx, task.readyItemID()); err == nil && ready.Status == domain.StatusSuperseded && !allowSuperseded {
+		return ProductionPublicationIdentity{}, false, nil
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return ProductionPublicationIdentity{}, false, err
 	}
 	terminalEntry, err := tx.GetInbox(ctx, string(task.ProducingInvocationID))
 	if errors.Is(err, store.ErrNotFound) {
@@ -1439,7 +1538,15 @@ func AuthenticateProductionPublicationReady(
 	if !ready {
 		return false, nil
 	}
-	binding, err := tx.GetReadyItemPRBinding(ctx, domain.ProductionReadyItemID(run.ID))
+	itemID := domain.ProductionReadyItemID(run.ID)
+	if identity.PublicationInvocationID != domain.ProductionPublicationInvocationID(run.ID) {
+		successor, err := tx.GetPublicationSuccessor(ctx, run.ID, identity.PublicationInvocationID)
+		if err != nil {
+			return false, err
+		}
+		itemID = successor.ReadyItemID()
+	}
+	binding, err := tx.GetReadyItemPRBinding(ctx, itemID)
 	if err != nil {
 		return false, fmt.Errorf("authenticate publication-ready milestone: %w", err)
 	}
@@ -1476,6 +1583,14 @@ func AuthenticatedProductionRunConclusion(
 		}
 	}
 	identity, completed, err := ProductionPublicationCompletion(ctx, tx, run)
+	if domain.ConcludeRun(observation).Outcome == domain.RunOutcomeCompleted {
+		itemID, itemErr := tx.PublishedProductionReadyItemID(ctx, run.ID)
+		if itemErr != nil {
+			return domain.RunConclusion{}, itemErr
+		}
+		entry, entryErr := productionTaskForReadyItem(ctx, tx, run.ID, itemID)
+		identity, completed, err = productionPublicationCompletion(ctx, tx, run, entry, entryErr, true)
+	}
 	if err != nil {
 		return domain.RunConclusion{}, err
 	}
@@ -1817,6 +1932,9 @@ func (w *productionPublicationWorkflow) loadBinding(
 		if err != nil {
 			return err
 		}
+		if err := authenticateTaskSuccessor(ctx, tx, task); err != nil {
+			return err
+		}
 		binding.admission, err = tx.GetExecutionAdmissionRecord(ctx, task.ProducingInvocationID)
 		if err != nil {
 			return err
@@ -2020,6 +2138,17 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
+	if task.Successor != nil {
+		err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+			return tx.RequireIncompletePublication(ctx, task.RunID)
+		})
+		if errors.Is(err, store.ErrPublicationCompleted) {
+			return productionTaskOutcome{}, nil
+		}
+		if err != nil {
+			return productionTaskOutcome{}, err
+		}
+	}
 	if outcome, err := w.recoverScopeConflictTask(ctx, &task, binding); err != nil {
 		if errors.Is(err, domain.ErrParentKeyMismatch) || errors.Is(err, domain.ErrCardFactInconsistent) {
 			w.deferHeldTask(task)
@@ -2142,7 +2271,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if readyExists && !found {
 		return productionTaskOutcome{}, fmt.Errorf(
 			"ready item %q has no verification checkpoint: %w",
-			productionReadyItemID(task.RunID), domain.ErrParentKeyMismatch,
+			task.readyItemID(), domain.ErrParentKeyMismatch,
 		)
 	}
 	if found && !reflect.DeepEqual(checkpoint.Imported, imported) {
@@ -2198,6 +2327,9 @@ func (w *productionPublicationWorkflow) reconcileTask(
 				return productionTaskOutcome{}, productionPublicationRetryableError(err)
 			}
 			candidate := productionCandidate(task, binding, checkpoint, adoptedProfile, nil, report)
+			if err := w.bindSuccessorCandidate(ctx, task, &candidate); err != nil {
+				return productionTaskOutcome{}, err
+			}
 			history, err := publish.LoadDispositionHistory(
 				ctx, w.store, candidate, reviewInstructions.ResultDigest,
 			)
@@ -2363,6 +2495,9 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		return productionTaskOutcome{}, productionPublicationRetryableError(err)
 	}
 	candidate := productionCandidate(task, binding, checkpoint, adoptedProfile, nil, report)
+	if err := w.bindSuccessorCandidate(ctx, task, &candidate); err != nil {
+		return productionTaskOutcome{}, err
+	}
 	dispositionHistory, err := publish.LoadDispositionHistory(
 		ctx, w.store, candidate, reviewInstructions.ResultDigest,
 	)
@@ -2399,18 +2534,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		DurableTransitionPublicationEffect, DurableTransitionBefore); err != nil {
 		return productionTaskOutcome{}, err
 	}
-	published, err := w.publisher.PublishExecutionAfterGateAndFinalize(
-		ctx,
-		publish.ExecutionCandidate{Candidate: candidate, ProducingInvocationID: task.ProducingInvocationID},
-		w.approvedRecipes,
-		func(ctx context.Context, gated publish.GatedHead) error {
-			_, err := w.transport.PushHead(ctx, checkout, gated)
-			if err != nil && productionPublicationRetryableFailure(err) {
-				return productionPublicationRetryableError(err)
-			}
-			return err
-		},
-	)
+	published, err := w.publishCandidate(ctx, task, candidate, checkout)
 	if err != nil {
 		if isDurablePublicationConflict(err) {
 			return w.holdBlockedTask(
@@ -2707,6 +2831,15 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		return productionReviewPending, err
 	}
 	minimumRound := 1
+	if task.Successor != nil {
+		minimumRound = task.Successor.ReviewRound
+		if latestRecord != nil && latestRecord.Round < minimumRound {
+			latestRecord = nil
+		}
+		if latestFailure != nil && latestFailure.Round < minimumRound {
+			latestFailure = nil
+		}
+	}
 	if task.reevaluation != nil {
 		minimumRound = task.reevaluation.ReviewRound
 		if latestRecord != nil && latestRecord.Round < minimumRound {
@@ -4634,7 +4767,7 @@ func (w *productionPublicationWorkflow) recordAttendedPublicationHolds(ctx conte
 			}
 			runID, ok = task.RunID, true
 		} else {
-			runID, ok = productionRunIDFromPublicationTaskKey(entry.IdempotencyKey)
+			runID, ok = productionRunIDFromPendingTaskKey(entry.IdempotencyKey)
 		}
 		if !ok {
 			continue
@@ -4719,6 +4852,14 @@ func (w *productionPublicationWorkflow) recordWorkUnitPRBinding(
 		case err == nil:
 			want := record
 			want.RecordedAt = existing.RecordedAt
+			if task.Successor != nil {
+				if err := authenticateTaskSuccessor(ctx, &tx.ReadTx, task); err != nil {
+					return err
+				}
+				// The first binding remains historical authority. The new ready
+				// binding supplies the effective head for merge observation.
+				want.HeadSHA = existing.HeadSHA
+			}
 			if want != existing {
 				return fmt.Errorf("stored work-unit pr binding disagrees with the published state: %w",
 					store.ErrImmutableConflict)
@@ -4740,7 +4881,7 @@ func (w *productionPublicationWorkflow) recordReadyItemPRBinding(
 ) error {
 	return w.store.Write(ctx, func(tx *store.WriteTx) error {
 		record := domain.ReadyItemPRBinding{
-			ItemID:                  productionReadyItemID(task.RunID),
+			ItemID:                  task.readyItemID(),
 			RunID:                   task.RunID,
 			ProducingInvocationID:   task.ProducingInvocationID,
 			PublicationInvocationID: task.PublicationID,
@@ -4893,7 +5034,7 @@ func (w *productionPublicationWorkflow) loadReadyPublicationOutcome(
 	if !found {
 		return publish.Result{}, fmt.Errorf(
 			"ready item %q has no finalized publication outcome: %w",
-			productionReadyItemID(task.RunID), domain.ErrParentKeyMismatch,
+			task.readyItemID(), domain.ErrParentKeyMismatch,
 		)
 	}
 	return published, nil
@@ -4939,7 +5080,7 @@ func (w *productionPublicationWorkflow) armReadyItemWatches(
 	var item domain.AttentionItem
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		item, err = tx.GetAttentionItem(ctx, productionReadyItemID(task.RunID))
+		item, err = tx.GetAttentionItem(ctx, task.readyItemID())
 		return err
 	}); err != nil {
 		return fmt.Errorf("arm publication watches: %w", err)
@@ -4953,7 +5094,7 @@ func (w *productionPublicationWorkflow) hasReadyItemRecord(
 	ctx context.Context, task productionPublicationTask,
 ) (bool, error) {
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
-		_, err := tx.GetAttentionItemRecord(ctx, productionReadyItemID(task.RunID))
+		_, err := tx.GetAttentionItemRecord(ctx, task.readyItemID())
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
@@ -5580,7 +5721,11 @@ func (w *productionPublicationWorkflow) loadRemediationSourceTree(
 	if legacy {
 		versionMatches = checkpoint.Version == productionVerificationVersionV1 && checkpoint.HeadSHA == ""
 	}
-	if !versionMatches || checkpoint.TaskKey != productionPublicationTaskKey(task.RunID) ||
+	sourceVerificationValid := validRemediationSourceVerificationID(task.RunID, round, authorization.InvocationID)
+	if task.Successor != nil && authorization.InvocationID == productionVerificationInvocationIDForProducer(task.RunID, task.Successor.FeedbackInvocationID) {
+		sourceVerificationValid = true
+	}
+	if !versionMatches || checkpoint.TaskKey != task.intentKey() ||
 		checkpoint.Imported.CommitSHA != request.HeadSHA ||
 		!validCommitSHA(checkpoint.Imported.TreeSHA) || !importer.AllAdvisory(checkpoint.Imported.Findings) ||
 		authorization.Validate() != nil ||
@@ -5589,7 +5734,7 @@ func (w *productionPublicationWorkflow) loadRemediationSourceTree(
 		authorization.ImportResultDigest != importDigest ||
 		authorization.EvidenceSnapshotDigest != evidenceDigest ||
 		authorization.VerificationOutcome != domain.VerificationPassed ||
-		!validRemediationSourceVerificationID(task.RunID, round, authorization.InvocationID) ||
+		!sourceVerificationValid ||
 		!reflect.DeepEqual(storedAuthorization, authorization) ||
 		sourceImage.ID != checkpoint.ProjectImage || sourceImage.Repository != authorization.Repo ||
 		sourceImage.RepositoryID != binding.admission.Base.RepositoryID ||
@@ -5717,7 +5862,7 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 		return domain.AttentionItem{}, err
 	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: productionReadyItemID(task.RunID), ProjectID: task.ProjectID,
+		ID: task.readyItemID(), ProjectID: task.ProjectID,
 		Subject: subject,
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason: fmt.Sprintf("Published %s#%d and completed production verification.",

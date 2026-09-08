@@ -101,7 +101,7 @@ func (c mergeCapture) observe(
 			return err
 		}
 		declaration, declared = d, true
-		b, err := tx.GetWorkUnitPRBinding(ctx, d.ID)
+		b, err := tx.EffectiveWorkUnitPRBinding(ctx, d.ID)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
@@ -291,7 +291,7 @@ func (c mergeCapture) observe(
 		if err != nil {
 			return err
 		}
-		persistedBinding, err := tx.GetWorkUnitPRBinding(ctx, completion.UnitID)
+		persistedBinding, err := tx.EffectiveWorkUnitPRBinding(ctx, completion.UnitID)
 		if err != nil {
 			return err
 		}

@@ -289,6 +289,36 @@ func AuthenticatedRunConclusion(
 	observation domain.RunObservation,
 	publicationReadyAuthenticated bool,
 ) (domain.RunConclusion, error) {
+	if domain.ConcludeRun(observation).Outcome == domain.RunOutcomeCompleted {
+		publication, err := tx.PublishedPublicationInvocationID(ctx, run.ID)
+		if err != nil {
+			return domain.RunConclusion{}, err
+		}
+		published, err := PublicationCycleObservation(ctx, tx, observation, publication)
+		if err != nil {
+			return domain.RunConclusion{}, err
+		}
+		return authenticatedCompletedConclusion(ctx, tx, run, published, publicationReadyAuthenticated)
+	}
+	// Historical publication milestones remain visible, but only the current
+	// cycle can conclude a run after feedback returned its predecessor.
+	successor, err := tx.CurrentPublicationSuccessor(ctx, run.ID)
+	if err != nil {
+		return domain.RunConclusion{}, err
+	}
+	currentItem := domain.ProductionReadyItemID(run.ID)
+	if successor != nil {
+		currentItem = successor.ReadyItemID()
+		observation, err = PublicationCycleObservation(ctx, tx, observation, successor.PublicationID())
+		if err != nil {
+			return domain.RunConclusion{}, err
+		}
+	}
+	if item, err := tx.GetAttentionItemRecord(ctx, currentItem); err == nil && item.Status == domain.StatusSuperseded {
+		return domain.RunConclusion{Outcome: domain.RunOutcomePending}, nil
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return domain.RunConclusion{}, err
+	}
 	conclusion := domain.ConcludeRun(observation)
 	if conclusion.Outcome == domain.RunOutcomeCompleted {
 		return authenticatedCompletedConclusion(ctx, tx, run, observation, publicationReadyAuthenticated)
@@ -325,6 +355,54 @@ func AuthenticatedRunConclusion(
 		return domain.RunConclusion{Outcome: domain.RunOutcomePending}, nil
 	}
 	return conclusion, nil
+}
+
+// PublicationCycleObservation retains one authenticated publication cycle's
+// ready/block history without changing the durable milestone history.
+func PublicationCycleObservation(ctx context.Context, tx *store.ReadTx, observation domain.RunObservation, publication domain.InvocationID) (domain.RunObservation, error) {
+	root, err := publicationCycleBlockedItem(ctx, tx, observation.RunID, publication)
+	if err != nil {
+		return domain.RunObservation{}, err
+	}
+	chain, err := tx.PublicationSuccessorChain(ctx, observation.RunID)
+	if err != nil {
+		return domain.RunObservation{}, err
+	}
+	known := map[domain.InvocationID]bool{domain.ProductionPublicationInvocationID(observation.RunID): true}
+	for _, successor := range chain {
+		known[successor.PublicationID()] = true
+	}
+	filtered := observation
+	filtered.Milestones = nil
+	for _, milestone := range observation.Milestones {
+		if (milestone.Kind == domain.MilestonePublicationReady || milestone.Kind == domain.MilestonePublicationBlocked) &&
+			*milestone.InvocationID != publication {
+			if known[*milestone.InvocationID] {
+				continue
+			}
+			milestoneRun, commandID, ok := publicationReevaluationBlockedMilestoneCoordinates(*milestone.InvocationID)
+			if !ok || milestoneRun != observation.RunID || milestone.Kind != domain.MilestonePublicationBlocked {
+				return domain.RunObservation{}, domain.ErrParentKeyMismatch
+			}
+			actualRoot, err := publicationReevaluationRoot(ctx, tx, observation.RunID, commandID)
+			if err != nil {
+				return domain.RunObservation{}, err
+			}
+			if actualRoot != root {
+				continue
+			}
+		}
+		filtered.Milestones = append(filtered.Milestones, milestone)
+	}
+	return filtered, nil
+}
+
+func publicationCycleBlockedItem(ctx context.Context, tx *store.ReadTx, runID domain.RunID, publication domain.InvocationID) (domain.ItemID, error) {
+	if publication == domain.ProductionPublicationInvocationID(runID) {
+		return domain.ProductionBlockedItemID(runID), nil
+	}
+	successor, err := tx.GetPublicationSuccessor(ctx, runID, publication)
+	return successor.BlockedItemID(), err
 }
 
 // authenticatedCompletedConclusion accepts a completed conclusion only over a
@@ -423,7 +501,21 @@ func publicationBlockResolutionAuthenticated(
 	observation domain.RunObservation,
 	readyAfterBlock bool,
 ) (bool, error) {
-	itemID := domain.ProductionBlockedItemID(run.ID)
+	publication, err := tx.CurrentPublicationInvocationID(ctx, run.ID)
+	if err != nil {
+		return false, err
+	}
+	if domain.ConcludeRun(observation).Outcome == domain.RunOutcomeCompleted {
+		publication, err = tx.PublishedPublicationInvocationID(ctx, run.ID)
+		if err != nil {
+			return false, err
+		}
+	}
+	itemID, err := publicationCycleBlockedItem(ctx, tx, run.ID, publication)
+	if err != nil {
+		return false, err
+	}
+	rootItemID := itemID
 	visited := make(map[domain.ItemID]bool)
 	matchedReasons := make(map[domain.RunHoldReason]bool)
 	var predecessorRequest PublicationReevaluationRequest
@@ -434,7 +526,7 @@ func publicationBlockResolutionAuthenticated(
 		visited[itemID] = true
 		item, err := tx.GetAttentionItemRecord(ctx, itemID)
 		if errors.Is(err, store.ErrNotFound) {
-			if itemID == domain.ProductionBlockedItemID(run.ID) {
+			if itemID == rootItemID {
 				return false, fmt.Errorf("run %q publication block has no durable item: %w",
 					run.ID, domain.ErrParentKeyMismatch)
 			}
@@ -578,6 +670,30 @@ func publicationBlockResolutionAuthenticated(
 			return false, err
 		}
 		itemID = ReevaluatedBlockedItemID(run.ID, command.CommandID)
+	}
+}
+
+// publicationReevaluationRoot selects the publication cycle whose accepted
+// rerun chain owns a blocked milestone. Resolution authenticates its records.
+func publicationReevaluationRoot(ctx context.Context, tx *store.ReadTx, runID domain.RunID, commandID string) (domain.ItemID, error) {
+	seen := make(map[string]bool)
+	for {
+		if seen[commandID] {
+			return "", domain.ErrParentKeyMismatch
+		}
+		seen[commandID] = true
+		command, err := tx.GetCommand(ctx, commandID)
+		if err != nil || command.Action != domain.ActionRerunTrustEvaluation {
+			return "", errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+		carrierRun, previous, ok := ReevaluatedBlockedItemCoordinates(command.ItemID)
+		if !ok {
+			return command.ItemID, nil
+		}
+		if carrierRun != runID {
+			return "", domain.ErrParentKeyMismatch
+		}
+		commandID = previous
 	}
 }
 
