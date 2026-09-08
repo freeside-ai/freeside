@@ -1068,7 +1068,15 @@
                     name: "run-timeline",
                     view: AnyView(
                         RunTimelineView(coordinator: coordinator, snapshot: activeRun)
-                            .screenshotContent(timeline)
+                            .screenshotContent(timeline, at: dynamicTypeSize)
+                    )))
+            surfaces.append(
+                Surface(
+                    name: "run-timeline-390",
+                    width: 390,
+                    view: AnyView(
+                        RunTimelineView(coordinator: coordinator, snapshot: activeRun)
+                            .screenshotContent(timeline, at: dynamicTypeSize)
                     )))
 
             for colorScheme in [ColorScheme.light, .dark] {

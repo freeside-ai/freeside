@@ -540,10 +540,11 @@ enum RunDisplay {
             .map(AttentionDisplay.label) ?? name.capitalized
     }
 
-    /// The timeline title is the run's campaign identity; a run outside a
+    /// The timeline title is the attempt number; a run outside a
     /// campaign, or missing its attempt number, is titled by its id.
     static func timelineTitle(_ run: Components.Schemas.Run) -> String {
-        campaign(run) ?? run.id
+        guard run.campaign_id != nil, let attempt = run.attempt_number else { return run.id }
+        return "Attempt \(attempt)"
     }
 
     private static func projectName(_ run: Components.Schemas.Run) -> String {
@@ -653,11 +654,6 @@ enum RunDisplay {
             return .milestone(label(milestone))
         }
         return .milestone("No milestone recorded")
-    }
-
-    static func campaign(_ run: Components.Schemas.Run) -> String? {
-        guard let campaignID = run.campaign_id, let attempt = run.attempt_number else { return nil }
-        return "Campaign \(campaignID) · Attempt \(attempt)"
     }
 
     static func specificationLabel(_ run: Components.Schemas.Run) -> String {

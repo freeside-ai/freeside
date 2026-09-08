@@ -11,12 +11,15 @@ import Testing
 #endif
 
 @Suite struct RunsListViewTests {
-    @Test func campaignAttemptLabelCarriesExactIdentity() {
+    @Test func campaignAttemptKeepsExactIdentity() {
         let run = RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }!.run
 
         #expect(
-            RunDisplay.campaign(run)
-                == "Campaign campaign-freeside-acceptance · Attempt 2")
+            run.campaign_id
+                == "campaign-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        #expect(run.attempt_number == 2)
+        let predecessor = RunFixtures.defaultRuns().first { $0.run.id == "run-freeside-656" }!.run
+        #expect(predecessor.campaign_id == run.campaign_id)
         #expect(run.attempt_reason == "Retry after repairing the acceptance rig")
         #expect(run.parent_run_id == "run-freeside-656")
     }
