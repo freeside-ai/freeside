@@ -16,7 +16,7 @@ substantial manual setup; the local installer alone does not enable it.
 | I Want To… | Start Here | What To Expect |
 | --- | --- | --- |
 | Explore the interface | [Try the app](#try-the-app-with-sample-data) | Sample decisions in memory, with no daemon or agent accounts. |
-| Install a local client and daemon | [Install on Mac](#install-on-mac) | A signed app, background service, and device pairing. Execution is simulated by default. |
+| Install a local client and daemon | [Install on Mac](#install-on-mac) | A signed app, background service, and device pairing. Agent execution stays disabled until configured. |
 | Run agents on a repository | [Prepare a real run](#prepare-a-real-repository-run) | GitHub App setup, agent credentials, container images, and explicit execution policy. |
 | Use an iPhone as a client | [Connect an iPhone](#connect-an-iphone) | A source-built app paired with a reachable daemon on your Mac. |
 
@@ -87,10 +87,10 @@ Items…** from the app and approve Freeside.
    if it is stopped.
 2. The app reads the local daemon's readiness file and prefills its pairing
    code. Check the displayed host details and choose **Pair this device**.
-3. Open **Inbox** and **Runs**. On a fresh installation, an empty inbox is
-   expected. The bundled service uses a fake driver, which simulates execution,
-   and starts without demo tasks. Use the sample-data preview above for a
-   populated interface.
+3. Open **Inbox** and **Runs**. A fresh installation has no tasks and shows a
+   setup notice explaining that agent execution is not configured. The daemon
+   serves pairing, stored state, and backups without running agents or
+   simulating work. Follow the real-run setup below when you are ready.
 
 To check that the default local daemon is responding:
 
@@ -142,7 +142,7 @@ describes keyboard commands and connection modes in more detail.
 
 The repository includes a script for running and checking a real workflow,
 called the production exercise. You still need to prepare its inputs by hand.
-The installed daemon's default fake driver does not launch coding agents.
+The installed daemon leaves execution disabled until you configure a driver.
 Start with a small repository and a narrowly scoped task whose expected change
 you can review.
 
@@ -210,7 +210,9 @@ The source installer uses your free personal team. You need a connected,
 unlocked, trusted iPhone running iOS 17 or later with Developer Mode enabled.
 
 Follow [Installing on an iOS Device](app/README.md#installing-on-an-ios-device)
-for signing, first-launch trust, installation commands, and pairing. For a real
+for signing, first-launch trust, installation commands, and pairing. A fresh
+app asks for your daemon's address; it never falls back to sample data. After
+pairing, it remembers that address for later launches. For a real
 connection, both devices must be on the same Tailscale tailnet, and the daemon
 must listen on the Mac's Tailscale address. The default Mac installation
 listens on loopback only, so it is not reachable from the phone as installed.
@@ -225,7 +227,7 @@ device builds need periodic re-signing; the guide covers that maintenance.
 | The installer cannot choose a signing identity | Check Xcode Accounts and the [signing identity override](app/README.md#installing-the-operator-client), especially if you have multiple teams. |
 | The daemon is stopped or unreachable | Check the menu bar status, Login Items approval, the health URL, and `freesided.log`. After a production exercise, follow the [restoration steps](docs/production-walkthrough.md#restore-the-supervised-daemon). |
 | Pairing succeeds but sync stays stale | Rebuild and reinstall the client and daemon from the same commit; an API mismatch can appear as a freshness failure. |
-| A new installation has no tasks | This is expected for the default service. Preview sample data above, or complete real-run setup before submitting work. |
+| A new installation says execution is not configured | Complete real-run setup before submitting work. Sample data and fake execution are available only through explicit demo options. |
 
 ## Development and Further Reading
 

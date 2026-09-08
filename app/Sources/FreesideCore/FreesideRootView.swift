@@ -10,6 +10,7 @@ public struct FreesideRootView: View {
     @State private var flowPreferences: DecisionFlowPreferences
     @State private var technicalDetailsRequest: TechnicalDetailsRevealRequest?
     @State private var showsInboxClearResult: Bool
+    @State private var connectionAddress = ""
     private let launchColorScheme: ColorScheme?
     private let launchInboxScope: InboxStore.Scope?
     private let launchProjectID: String?
@@ -41,8 +42,7 @@ public struct FreesideRootView: View {
     }
 
     /// Composes from launch arguments (see AppSession.fromEnvironment
-    /// and LaunchInputs); the bare default remains the permissive mock
-    /// inbox.
+    /// and LaunchInputs); an unconfigured device asks for its daemon address.
     @MainActor
     public init() {
         self.init(session: .fromEnvironment())
@@ -51,10 +51,16 @@ public struct FreesideRootView: View {
     public var body: some View {
         Group {
             switch session.phase {
-            case .needsPairing(let model):
-                PairingView(model: model) { credential in
-                    session.completePairing(credential)
+            case .needsConnection:
+                DaemonConnectionView(address: $connectionAddress) { url in
+                    connectionAddress = url.absoluteString
+                    session.connect(serverURL: url)
                 }
+            case .needsPairing(let model):
+                PairingView(
+                    model: model,
+                    onChangeServer: connectionAddress.isEmpty ? nil : { session.changeServer() },
+                    onPaired: { credential in session.completePairing(credential) })
             case .ready(let coordinator):
                 synced(coordinator)
             }

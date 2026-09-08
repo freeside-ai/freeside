@@ -104,6 +104,7 @@ func TestRunDrainsBackgroundWorkersBeforeClosingStoreOnStartupFailure(t *testing
 	const signalRestoredLog = "signal disposition restored"
 	var logsAtStoreClose string
 	cfg := config{
+		FakeDriverEnabled: true,
 		DBPath:            filepath.Join(root, "freeside.db"),
 		FakeDriverDir:     filepath.Join(root, "driver"),
 		StateDir:          filepath.Join(root, "state"),
@@ -246,7 +247,8 @@ func TestRunConvergesLegacyFakePublicationBeforeStartingScheduler(t *testing.T) 
 	dbPath := filepath.Join(root, "freeside.db")
 	cfg := config{
 		DBPath: dbPath, FakeDriverDir: filepath.Join(root, "driver"),
-		ListenAddr: "127.0.0.1:0", ReconcileInterval: 10 * time.Millisecond,
+		FakeDriverEnabled: true,
+		ListenAddr:        "127.0.0.1:0", ReconcileInterval: 10 * time.Millisecond,
 	}
 	cleanCtx, stopClean := context.WithCancel(context.Background())
 	clean, err := run(cleanCtx, nil, cfg)
@@ -962,7 +964,7 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 		DBPath:        filepath.Join(root, "freeside.db"),
 		FakeDriverDir: filepath.Join(root, "driver"),
 		ListenAddr:    "127.0.0.1:0", ReconcileInterval: 5 * time.Millisecond,
-		SeedWalkingSkeleton: true,
+		SeedWalkingSkeleton: true, FakeDriverEnabled: true,
 	})
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -1044,17 +1046,16 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 }
 
 // TestRunWithoutSeedFlagLeavesTheStoreEmpty is the #1127 half of the
-// walking-skeleton seed gate: the default fake driver, which is exactly what
-// the Mac installer launches, seeds no demo run and so raises no demo approval
-// card in a freshly onboarded production store. The seeded path is proven by
-// TestRunDrivesFakeWorkflow, which now opts in with SeedWalkingSkeleton.
+// walking-skeleton seed gate: an explicitly selected fake driver seeds no demo
+// work without the seed flag. The default disabled mode is tested separately.
 func TestRunWithoutSeedFlagLeavesTheStoreEmpty(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	h, err := run(ctx, nil, config{
-		DBPath:        filepath.Join(root, "freeside.db"),
-		FakeDriverDir: filepath.Join(root, "driver"),
-		ListenAddr:    "127.0.0.1:0", ReconcileInterval: 5 * time.Millisecond,
+		FakeDriverEnabled: true,
+		DBPath:            filepath.Join(root, "freeside.db"),
+		FakeDriverDir:     filepath.Join(root, "driver"),
+		ListenAddr:        "127.0.0.1:0", ReconcileInterval: 5 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("run: %v", err)

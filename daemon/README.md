@@ -136,6 +136,14 @@ the PEM-copy pattern that can be detected from one machine.
 
 ## Operational Commands
 
+The long-running daemon defaults to `-driver disabled`. It serves pairing,
+health, stored state, and backups without starting an execution engine or
+simulating work. Its inbox explains that agent execution is not configured.
+Select `-driver claude` with the required production configuration for real
+agents. Select `-driver fake` only for an intentional demo or test; add
+`-seed-walking-skeleton` if that demo should start with sample work. Seeding
+without an explicit fake driver is rejected.
+
 `freesided setup -operator <login> -operator-id <id>` creates the Phase 1A
 single-directory layout and the canonical empty installation-authority
 document. The default is `~/.freeside`; `-config-dir` selects another root.

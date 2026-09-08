@@ -232,6 +232,7 @@ func startProcessFixture(
 ) *processFixture {
 	t.Helper()
 	args := []string{
+		"-driver", "fake",
 		"-db", filepath.Join(root, "freeside.db"),
 		"-fake-driver-dir", filepath.Join(root, "driver"),
 		"-listen", "127.0.0.1:0",
