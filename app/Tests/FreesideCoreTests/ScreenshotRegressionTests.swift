@@ -1081,6 +1081,31 @@
 
             for colorScheme in [ColorScheme.light, .dark] {
                 for width in [CGFloat(820), 390] {
+                    for (name, round) in [
+                        ("clean", RunFixtures.reviewRound(.completed, availability: .available)),
+                        ("findings", RunFixtures.reviewRound(.completed, findings: true, availability: .available)),
+                        ("diagnostic", RunFixtures.reviewRound(.failed, availability: .available)),
+                    ] {
+                        let evidence = RunFixtures.reviewEvidence(runID: activeRun.run.id, round: round)
+                        let presentation = ReviewEvidencePresentation(
+                            events: Array(evidence.events?.data ?? []),
+                            result: evidence.result.map { Array($0.data) }, exitStatus: evidence.exit_status)
+                        surfaces.append(
+                            Surface(
+                                name:
+                                    "review-evidence-\(name)-\(Int(width))-\(colorScheme == .dark ? "dark" : "light")",
+                                width: width, colorScheme: colorScheme, nativeAppearance: true,
+                                view: AnyView(
+                                    VStack(alignment: .leading, spacing: 14) {
+                                        Text("Reviewer output").font(FreesideFont.title)
+                                        Text("Agent claims · Round \(round.round) · Head \(round.head_sha.prefix(12))")
+                                            .font(FreesideFont.caption)
+                                        Text("Private, sensitive output. Not publishable verifier evidence.")
+                                            .font(FreesideFont.caption).foregroundStyle(Color.inkDim)
+                                        ReviewEvidenceContent(
+                                            round: round, evidence: evidence, presentation: presentation)
+                                    }.padding(24))))
+                    }
                     surfaces.append(
                         Surface(
                             name: "review-output-invalid-utf8-\(Int(width))-\(colorScheme == .dark ? "dark" : "light")",
