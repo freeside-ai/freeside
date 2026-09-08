@@ -47,8 +47,19 @@ reins.
 ## What Freeside Does
 
 **Freeside is a local, durable workflow controller that grants agents the
-autonomy to turn work items into evidence-backed pull requests and interrupts
+autonomy to turn tasks into evidence-backed pull requests and interrupts
 you only when your judgment is required.**
+
+A **task** is the work you want done, from the initial request through
+specification, execution, review, and completion. A **run** is an execution
+belonging to that task. An **attention item** is a decision or intervention
+Freeside needs from you; it can concern a task, a project, or system health.
+
+Specification changes and retries stay within the same task. Once you approve
+the specification, the task's name stays fixed unless you rename it. Returning
+work from final review starts a new run of that task. Its history stays
+together, but evidence and approvals remain tied to the exact run,
+specification, and reviewed result they cover.
 
 Workflows, initiators (the rules that start work), and policy are written down,
 explicit, and versioned. Permission moves out of moment-to-moment interruptions
@@ -56,9 +67,9 @@ and into deliberate, standing grants.
 
 The intended experience, end to end:
 
-1. A work item arrives. You submitted it, labeled an issue, or a scanner
+1. A task arrives. You submitted it, labeled an issue, or a scanner
    proposed it.
-2. A specifier (a planning pass that researches the item) turns it into a
+2. A specifier (a planning pass that researches the task) turns it into a
    specification.
 3. The specification reaches your attention inbox, and you approve it.
 4. An agent implements it in an isolated workspace, where the agent can work
