@@ -52,8 +52,8 @@ func putArtifactIdempotent(ctx context.Context, tx *store.WriteTx, artifact doma
 const (
 	// KindOperatorFeedbackInvocationRequested is the durable invocation intent
 	// created from answer_and_retry or return_to_agent.
-	KindOperatorFeedbackInvocationRequested = "operator_feedback_invocation_requested"
-	operatorFeedbackRequestVersion          = "freeside.operator-feedback-request/v1"
+	KindOperatorFeedbackInvocationRequested = string(domain.OperatorFeedbackInvocationRequestedKind)
+	operatorFeedbackRequestVersion          = domain.OperatorFeedbackInvocationIntentVersion
 	operatorFeedbackInputVersion            = "freeside.operator-feedback-input/v1"
 	specificationAnswerInputVersion         = "freeside.specification-answer-input/v1"
 	operatorFeedbackInstruction             = "Use the operator feedback as recorded input. Preserve the existing candidate, apply the supplied patch when present, and return a complete revised candidate."
@@ -63,19 +63,7 @@ const (
 
 var errOperatorFeedbackMarkerUnreadable = errors.New("operator-feedback marker unreadable")
 
-type operatorFeedbackRequest struct {
-	Version             string              `json:"version"`
-	InvocationID        domain.InvocationID `json:"invocation_id"`
-	RunID               domain.RunID        `json:"run_id"`
-	StageID             domain.StageID      `json:"stage_id"`
-	CommandID           string              `json:"command_id"`
-	ItemID              domain.ItemID       `json:"item_id"`
-	SourceInvocationID  domain.InvocationID `json:"source_invocation_id"`
-	InputArtifactID     domain.ArtifactID   `json:"input_artifact_id"`
-	InputArtifactDigest domain.Digest       `json:"input_artifact_digest"`
-	BaseSHA             string              `json:"base_sha,omitempty"`
-	HeadSHA             string              `json:"head_sha,omitempty"`
-}
+type operatorFeedbackRequest = domain.OperatorFeedbackInvocationIntent
 
 type operatorFeedbackInput struct {
 	Version              string                     `json:"version"`
@@ -183,24 +171,8 @@ func operatorFeedbackInputIDs(
 	return append(slices.Clone(invocation.InputIDs), current), nil
 }
 
-func (r operatorFeedbackRequest) validate() error {
-	if r.Version != operatorFeedbackRequestVersion || r.RunID == "" || r.CommandID == "" ||
-		r.ItemID == "" || r.SourceInvocationID == "" ||
-		r.InvocationID != operatorFeedbackInvocationID(r.CommandID) ||
-		r.StageID != operatorFeedbackStageID(r.InvocationID) ||
-		r.InputArtifactID != operatorFeedbackArtifactID(r.CommandID) ||
-		!contentaddr.Valid(string(r.InputArtifactDigest)) {
-		return domain.ErrParentKeyMismatch
-	}
-	if (r.BaseSHA == "") != (r.HeadSHA == "") ||
-		(r.BaseSHA != "" && (!validCommitSHA(r.BaseSHA) || !validCommitSHA(r.HeadSHA))) {
-		return domain.ErrParentKeyMismatch
-	}
-	return nil
-}
-
 func encodeOperatorFeedbackRequest(request operatorFeedbackRequest) ([]byte, error) {
-	if err := request.validate(); err != nil {
+	if err := request.Validate(); err != nil {
 		return nil, err
 	}
 	return json.Marshal(request)
@@ -211,18 +183,13 @@ func decodeOperatorFeedbackRequest(entry store.QueueEntry) (operatorFeedbackRequ
 		return operatorFeedbackRequest{}, errors.Join(
 			errOperatorFeedbackMarkerUnreadable, domain.ErrParentKeyMismatch)
 	}
-	var request operatorFeedbackRequest
-	if err := strictjson.Decode(entry.Payload, &request, strictjson.RejectInvalidUTF8, strictjson.Limit(1<<20)); err != nil {
+	request, err := domain.DecodeOperatorFeedbackInvocationIntent(entry.Payload)
+	if err != nil {
 		return operatorFeedbackRequest{}, errors.Join(errOperatorFeedbackMarkerUnreadable, err)
 	}
-	if err := request.validate(); err != nil || entry.IdempotencyKey != string(request.InvocationID) {
+	if entry.IdempotencyKey != string(request.InvocationID) {
 		return operatorFeedbackRequest{}, errors.Join(
-			errOperatorFeedbackMarkerUnreadable, err, domain.ErrParentKeyMismatch)
-	}
-	canonical, err := encodeOperatorFeedbackRequest(request)
-	if err != nil || !bytes.Equal(canonical, entry.Payload) {
-		return operatorFeedbackRequest{}, errors.Join(
-			errOperatorFeedbackMarkerUnreadable, err, domain.ErrParentKeyMismatch)
+			errOperatorFeedbackMarkerUnreadable, domain.ErrParentKeyMismatch)
 	}
 	return request, nil
 }
