@@ -15,10 +15,11 @@ type InvocationIntentKind string
 // Invocation dispatch intent kinds are durable protocol vocabulary shared by
 // the lanes that create them and readers that authenticate a started attempt.
 const (
-	AgentInvocationRequestedKind         InvocationIntentKind = "agent_invocation_requested"
-	ProductionInvocationRequestedKind    InvocationIntentKind = "production_invocation_requested"
-	SpecificationInvocationRequestedKind InvocationIntentKind = "specification_invocation_requested"
-	SpecificationDiscussionRequestedKind InvocationIntentKind = "specification_discussion_requested"
+	AgentInvocationRequestedKind            InvocationIntentKind = "agent_invocation_requested"
+	ProductionInvocationRequestedKind       InvocationIntentKind = "production_invocation_requested"
+	SpecificationInvocationRequestedKind    InvocationIntentKind = "specification_invocation_requested"
+	SpecificationDiscussionRequestedKind    InvocationIntentKind = "specification_discussion_requested"
+	OperatorFeedbackInvocationRequestedKind InvocationIntentKind = "operator_feedback_invocation_requested"
 )
 
 var AllInvocationIntentKinds = []InvocationIntentKind{
@@ -26,12 +27,13 @@ var AllInvocationIntentKinds = []InvocationIntentKind{
 	ProductionInvocationRequestedKind,
 	SpecificationInvocationRequestedKind,
 	SpecificationDiscussionRequestedKind,
+	OperatorFeedbackInvocationRequestedKind,
 }
 
 func (k InvocationIntentKind) valid() bool {
 	switch k {
 	case AgentInvocationRequestedKind, ProductionInvocationRequestedKind,
-		SpecificationInvocationRequestedKind, SpecificationDiscussionRequestedKind:
+		SpecificationInvocationRequestedKind, SpecificationDiscussionRequestedKind, OperatorFeedbackInvocationRequestedKind:
 		return true
 	default:
 		return false
@@ -179,6 +181,15 @@ func AuthenticateInvocationDispatchIntent(
 		if request.InvocationID != invocation || request.SpecificationRunID != runID ||
 			stageID != SpecificationStageID(runID) {
 			return fmt.Errorf("specification invocation intent does not bind run %q stage %q: %w", runID, stageID, ErrParentKeyMismatch)
+		}
+		return nil
+	case OperatorFeedbackInvocationRequestedKind:
+		request, err := DecodeOperatorFeedbackInvocationIntent(entry.Payload)
+		if err != nil {
+			return err
+		}
+		if request.InvocationID != invocation || request.RunID != runID || request.StageID != stageID {
+			return fmt.Errorf("operator-feedback intent does not bind run %q stage %q: %w", runID, stageID, ErrParentKeyMismatch)
 		}
 		return nil
 	case SpecificationDiscussionRequestedKind:

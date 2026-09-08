@@ -1275,13 +1275,10 @@ func authenticateRunObservation(
 		}
 		holdInvocation := *observation.Hold.InvocationID
 		if !runObservationInvocation(run.ID, holdInvocation, attempts) {
-			// A hold can precede any attempt: a run submitted but refused
-			// admission (a backend below the floor, an identity-parallelism
-			// limit) holds its reserved invocation before that invocation
-			// becomes an attempt. Bind it under the same reserved-intent
-			// authority the run_submitted milestone uses, so a hold on an
-			// invocation the run never reserved still fails closed.
-			if err := authenticateRunSubmission(ctx, tx, run, holdInvocation); err != nil {
+			// Admission can hold either an initial invocation or a feedback
+			// continuation before it becomes an attempt. Both require a
+			// reserved intent bound to this run and a declared stage.
+			if _, err := authenticateReservedRunInvocation(ctx, tx, run, holdInvocation); err != nil {
 				return fmt.Errorf("hold invocation is not bound to run %q: %w",
 					run.ID, domain.ErrParentKeyMismatch)
 			}
@@ -1292,8 +1289,12 @@ func authenticateRunObservation(
 		publicationInvocation := domain.ProductionPublicationInvocationID(run.ID)
 		switch milestone.Kind {
 		case domain.MilestoneRunSubmitted:
-			if err := authenticateRunSubmission(ctx, tx, run, invocation); err != nil {
+			kind, err := authenticateReservedRunInvocation(ctx, tx, run, invocation)
+			if err != nil {
 				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+			}
+			if kind == domain.OperatorFeedbackInvocationRequestedKind {
+				return fmt.Errorf("feedback continuation cannot submit run %q: %w", run.ID, domain.ErrParentKeyMismatch)
 			}
 		case domain.MilestoneInvocationAdmitted:
 			if err := authenticateAdmissionRun(ctx, tx, invocation, run.ID, attempts[invocation]); err != nil {
@@ -1462,21 +1463,21 @@ func observedStatusForExecutionOutcome(status domain.ExecutionOutcomeStatus) dom
 	return ""
 }
 
-func authenticateRunSubmission(
+func authenticateReservedRunInvocation(
 	ctx context.Context, tx *store.ReadTx, run domain.Run, invocation domain.InvocationID,
-) error {
+) (domain.InvocationIntentKind, error) {
 	entry, err := tx.GetOutbox(ctx, string(invocation))
 	if err != nil {
-		return err
+		return "", err
 	}
 	for _, stage := range run.Stages {
 		if err := domain.AuthenticateInvocationDispatchIntent(domain.InvocationDispatchIntent{
 			Kind: entry.Kind, IdempotencyKey: entry.IdempotencyKey, Payload: entry.Payload,
 		}, invocation, run.ID, stage.ID); err == nil {
-			return authenticateConversationInvocationIntent(ctx, tx, entry, invocation, run.ID)
+			return domain.InvocationIntentKind(entry.Kind), authenticateConversationInvocationIntent(ctx, tx, entry, invocation, run.ID)
 		}
 	}
-	return fmt.Errorf("submitted invocation %q does not bind to a stage of run %q: %w",
+	return "", fmt.Errorf("reserved invocation %q does not bind to a stage of run %q: %w",
 		invocation, run.ID, domain.ErrParentKeyMismatch)
 }
 

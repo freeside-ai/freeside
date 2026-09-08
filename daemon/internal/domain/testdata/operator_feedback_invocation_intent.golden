@@ -1,0 +1,11 @@
+{
+  "version": "freeside.operator-feedback-request/v1",
+  "invocation_id": "inv-operator-feedback-command",
+  "run_id": "run-1",
+  "stage_id": "operator-feedback-inv-operator-feedback-command",
+  "command_id": "command",
+  "item_id": "ready",
+  "source_invocation_id": "inv-implement-run-1",
+  "input_artifact_id": "operator-feedback-command",
+  "input_artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}
