@@ -205,6 +205,8 @@ type productionPublicationWorkflow struct {
 	newRoom                         func(domain.ProjectImage) (ProductionVerificationRoom, error)
 	reviewSource                    exec.ReviewSource
 	remediationPromptPackage        domain.Digest
+	validateDelivery                func(context.Context, exec.StartSpec) error
+	feedbackAdmission               *admitter
 	shadowReviewSource              exec.ReviewSource
 	findingAdjudicator              findingAdjudicator
 	signet                          *signet.Service

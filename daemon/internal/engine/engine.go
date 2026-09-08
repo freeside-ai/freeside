@@ -181,6 +181,8 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 		}
 		e.productionPublication.inference = e.inference
 		e.productionPublication.signet = e.signet
+		e.productionPublication.validateDelivery = e.productionDeliveryValidator
+		e.productionPublication.feedbackAdmission = e.admission
 		if e.inference.SupportsSite(inference.AdjudicatorSiteID) {
 			e.productionPublication.findingAdjudicator = &productionFindingAdjudicator{
 				client: e.inference, store: e.store, artifacts: e.productionPublication.artifacts,

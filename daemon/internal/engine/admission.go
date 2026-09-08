@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -313,6 +314,7 @@ func (e *Engine) admitAttempt(
 			return domain.ExecutionAdmission{}, false, fmt.Errorf(
 				"admit invocation %q: operator-feedback prompt package is unavailable", invocationID)
 		}
+		isProduction = true
 		promptPackageDigest = e.productionPublication.remediationPromptPackage
 	}
 	var capabilityManifestDigest *domain.Digest
@@ -421,8 +423,8 @@ func (e *Engine) validateProductionDelivery(
 	invocationID domain.InvocationID,
 	admission domain.ExecutionAdmission,
 ) error {
-	initial, remediation := productionDeliveryInvocation(invocationID, admission)
-	if !initial && !remediation {
+	production, remediation := productionDeliveryInvocation(invocationID, admission)
+	if !production && !remediation {
 		return nil
 	}
 	if e.productionDeliveryValidator == nil {
@@ -450,12 +452,14 @@ func (e *Engine) validateProductionDelivery(
 func productionDeliveryInvocation(
 	invocationID domain.InvocationID,
 	admission domain.ExecutionAdmission,
-) (initial, remediation bool) {
-	initial = invocationID == productionInvocationID(admission.RunID) &&
+) (production, remediation bool) {
+	production = invocationID == productionInvocationID(admission.RunID) &&
 		admission.StageID == productionStageID(admission.RunID)
+	production = production || (strings.HasPrefix(string(invocationID), "inv-operator-feedback-") &&
+		admission.StageID == operatorFeedbackStageID(invocationID))
 	round, remediation := remediationRoundForInvocation(admission.RunID, invocationID)
 	remediation = remediation && admission.StageID == remediationStageID(admission.RunID, round)
-	return initial, remediation
+	return production, remediation
 }
 
 func (e *Engine) validateProductionReplayDelivery(
@@ -463,8 +467,8 @@ func (e *Engine) validateProductionReplayDelivery(
 	invocationID domain.InvocationID,
 	admission domain.ExecutionAdmission,
 ) error {
-	initial, remediation := productionDeliveryInvocation(invocationID, admission)
-	if !initial && !remediation {
+	production, remediation := productionDeliveryInvocation(invocationID, admission)
+	if !production && !remediation {
 		return nil
 	}
 	inspection, err := e.driver.Inspect(ctx, invocationID)

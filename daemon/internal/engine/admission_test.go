@@ -154,37 +154,46 @@ func TestWithAdmissionRequiresConfigurationBoundUnattendedBackend(t *testing.T) 
 }
 
 func TestProductionReplayDeliveryDefersToKnownDriverInvocation(t *testing.T) {
-	runID := domain.RunID("run-replay-delivery")
-	invocationID := remediationInvocationID(runID, 1)
-	admission := domain.ExecutionAdmission{
-		InvocationID: invocationID,
-		RunID:        runID,
-		StageID:      remediationStageID(runID, 1),
-	}
-	refusal := errors.Join(ErrProductionInputUndeliverable, exec.ErrInputTooLarge)
-	validationCalls := 0
-	e := &Engine{
-		driver: replayInspectionDriver{
-			inspection: exec.Inspection{Status: exec.StatusRunning, Live: true},
-		},
-		productionDeliveryValidator: func(context.Context, exec.StartSpec) error {
-			validationCalls++
-			return refusal
-		},
-	}
-	if err := e.validateProductionReplayDelivery(t.Context(), invocationID, admission); err != nil {
-		t.Fatalf("known driver invocation = %v", err)
-	}
-	if validationCalls != 0 {
-		t.Fatalf("known driver invocation revalidated delivery %d times", validationCalls)
-	}
+	for _, feedback := range []bool{false, true} {
+		t.Run(map[bool]string{false: "remediation", true: "operator feedback"}[feedback], func(t *testing.T) {
+			runID := domain.RunID("run-replay-delivery")
+			invocationID := remediationInvocationID(runID, 1)
+			admission := domain.ExecutionAdmission{
+				InvocationID: invocationID,
+				RunID:        runID,
+				StageID:      remediationStageID(runID, 1),
+			}
+			if feedback {
+				invocationID = operatorFeedbackInvocationID("replay")
+				admission.InvocationID = invocationID
+				admission.StageID = operatorFeedbackStageID(invocationID)
+			}
+			refusal := errors.Join(ErrProductionInputUndeliverable, exec.ErrInputTooLarge)
+			validationCalls := 0
+			e := &Engine{
+				driver: replayInspectionDriver{
+					inspection: exec.Inspection{Status: exec.StatusRunning, Live: true},
+				},
+				productionDeliveryValidator: func(context.Context, exec.StartSpec) error {
+					validationCalls++
+					return refusal
+				},
+			}
+			if err := e.validateProductionReplayDelivery(t.Context(), invocationID, admission); err != nil {
+				t.Fatalf("known driver invocation = %v", err)
+			}
+			if validationCalls != 0 {
+				t.Fatalf("known driver invocation revalidated delivery %d times", validationCalls)
+			}
 
-	e.driver = replayInspectionDriver{err: exec.ErrUnknownInvocation}
-	if err := e.validateProductionReplayDelivery(t.Context(), invocationID, admission); !errors.Is(err, refusal) {
-		t.Fatalf("unknown driver invocation = %v, want delivery refusal", err)
-	}
-	if validationCalls != 1 {
-		t.Fatalf("unknown driver invocation validation calls = %d, want 1", validationCalls)
+			e.driver = replayInspectionDriver{err: exec.ErrUnknownInvocation}
+			if err := e.validateProductionReplayDelivery(t.Context(), invocationID, admission); !errors.Is(err, refusal) {
+				t.Fatalf("unknown driver invocation = %v, want delivery refusal", err)
+			}
+			if validationCalls != 1 {
+				t.Fatalf("unknown driver invocation validation calls = %d, want 1", validationCalls)
+			}
+		})
 	}
 }
 
@@ -379,6 +388,18 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 	}
 	operatorFeedbackBinding := binding
 	operatorFeedbackBinding.invocation = operatorFeedbackInvocation
+	validated = false
+	e.productionDeliveryValidator = func(_ context.Context, spec exec.StartSpec) error {
+		validated = spec.StageID == operatorFeedbackStageID(operatorFeedbackID) && spec.StageInputs != nil &&
+			spec.StageInputs.PromptPackageDigest == digest("8")
+		return errors.Join(ErrProductionInputUndeliverable, deliveryRefusal)
+	}
+	if _, admitted, err := e.admitAttempt(ctx, operatorFeedbackBinding, domain.Stage{
+		ID: operatorFeedbackStageID(operatorFeedbackID), Name: productionStageName,
+	}, operatorFeedbackID); admitted || !validated || !errors.Is(err, ErrProductionInputUndeliverable) {
+		t.Fatalf("operator-feedback delivery refusal = admitted %t, validated %t, err %v", admitted, validated, err)
+	}
+	e.productionDeliveryValidator = func(context.Context, exec.StartSpec) error { return nil }
 	operatorFeedbackAdmission, admitted, err := e.admitAttempt(ctx, operatorFeedbackBinding, domain.Stage{
 		ID: operatorFeedbackStageID(operatorFeedbackID), Name: productionStageName,
 	}, operatorFeedbackID)
