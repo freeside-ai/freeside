@@ -93,7 +93,7 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
-	rep := report{
+	rep := Report{
 		HeadSHA:             opts.HeadSHA,
 		BaseSHA:             opts.BaseSHA,
 		RecipePath:          opts.RecipePath,

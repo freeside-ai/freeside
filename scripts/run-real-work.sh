@@ -94,8 +94,11 @@
 # records the exact production configuration's ward conformance suite before
 # the daemon can admit the submitted work.
 # The publication JSON is durable operator input with this shape:
-#   {"title":"Imperative PR title","body":"Reviewer-ready PR body",
+#   {"title":"Imperative PR title","body":"Why and What prose",
 #    "commit_author":{"app_slug":"canonical-app-slug","bot_user_id":123}}
+# Freeside writes Verification from the executed recipe and labels agent evidence
+# as claims. A Verification heading or section marker in body is refused at
+# submit. Publisher-owned sections reserve space, leaving 23,432 bytes for body.
 # The slug and bot user ID claim the selected GitHub App bot's public canonical
 # attribution fields. Before execution, the daemon resolves that account from
 # the App registration selected by its installation token and requires an

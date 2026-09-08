@@ -23,6 +23,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
 // parseTestPEM parses the PKCS#1 PEM GitHub issues for App keys.
@@ -162,7 +163,17 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 	// one.
 	nonce := strconv.FormatInt(time.Now().UnixNano(), 10)
 	recipe := liveDigest("freeside-live-recipe-" + nonce)
-	artifactDigest := liveDigest("freeside-live-artifact-" + nonce)
+	// This forge-convergence fixture executes no verification commands.
+	// Its synthetic report must not invent any when the body is rendered.
+	report, err := json.MarshalIndent(verify.Report{
+		HeadSHA: headSHA, BaseSHA: headSHA, RecipeDigest: recipe,
+		RecipePath: "live-test-fixture", Outcome: verify.OutcomePassed,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	report = append(report, '\n')
+	artifactDigest := liveDigest(string(report))
 	approved := map[domain.Digest]bool{recipe: true}
 	artifact, err := domain.NewArtifact(domain.ArtifactInput{
 		ID:     "artifact-live",
@@ -194,7 +205,7 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 		Repo:                     repo,
 		BaseSHA:                  headSHA,
 		HeadSHA:                  headSHA,
-		ImportResultDigest:       liveDigest("freeside-live-import-" + nonce),
+		ImportResultDigest:       testImportDigest(t, headSHA),
 		VerificationRecipeDigest: recipe,
 		EvidenceSnapshotDigest:   evidenceDigest,
 		VerificationOutcome:      domain.VerificationPassed,
@@ -208,8 +219,10 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 		BaseRef:            baseRef,
 		HeadSHA:            headSHA,
 		Title:              "Freeside live effectively-once test " + nonce,
-		Body:               "Automated opt-in test (issue #82). Safe to close.",
+		Body:               "Automated opt-in test (issue #82) with synthetic verification evidence. Safe to close.",
 		Artifacts:          []domain.Artifact{artifact},
+		VerificationReport: report,
+		ImportResult:       testImportResult(headSHA),
 		RecipeDigest:       &recipe,
 		InvocationID:       domain.InvocationID("inv-live-" + nonce),
 		AuthorizationID:    &authID,

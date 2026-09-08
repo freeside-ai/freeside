@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -292,6 +294,7 @@ func (p *productionPublicationHarness) refuseStrippedScopeRepair(t *testing.T) {
 	var checkpoint struct {
 		Authorization domain.CandidateAuthorization `json:"authorization"`
 		Artifacts     []domain.Artifact             `json:"artifacts"`
+		Imported      importer.Result               `json:"imported"`
 	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		entry, err := tx.GetInbox(p.ctx, "production-verification/"+string(p.runID)+"/"+p.replay.HeadSHA)
@@ -307,6 +310,20 @@ func (p *productionPublicationHarness) refuseStrippedScopeRepair(t *testing.T) {
 		Repo: auth.Repo, BaseRef: "main", HeadSHA: auth.HeadSHA, Title: "Erased scope", Body: "Everything is complete.",
 		Artifacts: checkpoint.Artifacts, RecipeDigest: &auth.VerificationRecipeDigest, InvocationID: domain.ProductionPublicationInvocationID(p.runID),
 		AuthorizationID: &auth.ID, TrustProfileDigest: &auth.TrustProfileDigest, Advisories: publish.AdvisoryFindings(auth.Findings),
+		ImportResult: &checkpoint.Imported,
+	}
+	for _, artifact := range checkpoint.Artifacts {
+		if artifact.Type == domain.ArtifactKindVerificationReport {
+			reader, err := p.blobs.Open(artifact.Digest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.VerificationReport, err = io.ReadAll(reader)
+			closeErr := reader.Close()
+			if err != nil || closeErr != nil {
+				t.Fatal(errors.Join(err, closeErr))
+			}
+		}
 	}
 	var digests []domain.Digest
 	for _, a := range c.Artifacts {

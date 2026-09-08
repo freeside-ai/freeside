@@ -17,6 +17,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
@@ -38,8 +39,9 @@ const (
 	// publish.minRenderedDispositionHistoryBytes.
 	minRenderedDispositionHistoryBytes = 8 << 10
 	maxRenderedScopeDecisionBytes      = 12 << 10
-	maxCandidateBodyBytes              = maxPullRequestBodyBytes - 4*len("\n\n") -
-		identityMarkerBytes - maxRenderedAdvisoriesBytes - maxRenderedScopeDecisionBytes - minRenderedDispositionHistoryBytes
+	maxRenderedVerificationBytes       = 8 << 10
+	maxCandidateBodyBytes              = maxPullRequestBodyBytes - 5*len("\n\n") -
+		identityMarkerBytes - maxRenderedVerificationBytes - maxRenderedAdvisoriesBytes - maxRenderedScopeDecisionBytes - minRenderedDispositionHistoryBytes
 )
 
 // Task is the immutable fake-publication outbox payload.
@@ -398,7 +400,7 @@ func ValidateCandidateBody(body string) error {
 	if len(body) > maxPullRequestBodyBytes {
 		return fmt.Errorf("candidate body exceeds %d bytes", maxPullRequestBodyBytes)
 	}
-	if prose := strings.TrimRight(body, "\n"); prose != "" && len(prose) > maxCandidateBodyBytes {
+	if len(body) > maxCandidateBodyBytes {
 		return fmt.Errorf(
 			"candidate body exceeds %d bytes after reserving the publisher-owned sections",
 			maxCandidateBodyBytes,
@@ -417,10 +419,14 @@ func ValidateCandidateBody(body string) error {
 		"freeside:disposition-history", "freeside:control-plane-advisories",
 		"## freeside control-plane advisories",
 		"freeside:scope-decision", "## freeside scope decision",
+		"freeside:verification",
 	} {
 		if strings.Contains(lower, owned) {
 			return errors.New("candidate body contains a publisher-owned section marker")
 		}
+	}
+	if publicationrecord.ContainsVerificationHeading(body) {
+		return errors.New("candidate body contains a verification section heading")
 	}
 	return nil
 }

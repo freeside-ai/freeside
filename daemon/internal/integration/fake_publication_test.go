@@ -528,6 +528,11 @@ type publicationHarness struct {
 
 func newPublicationHarness(t *testing.T) *publicationHarness {
 	t.Helper()
+	return newPublicationHarnessWithRecipe(t, []byte(`{"commands":[["/usr/bin/true"]],"capture":"none"}`))
+}
+
+func newPublicationHarnessWithRecipe(t *testing.T, recipe []byte) *publicationHarness {
+	t.Helper()
 	ctx := t.Context()
 	root := t.TempDir()
 	base := filepath.Join(root, "base")
@@ -540,7 +545,6 @@ func newPublicationHarness(t *testing.T) *publicationHarness {
 	runGit(t, base, "commit", "-q", "-m", "base")
 	baseSHA := runGit(t, base, "rev-parse", "HEAD")
 
-	recipe := []byte(`{"commands":[["/usr/bin/true"]],"capture":"none"}`)
 	recipeDigest := verify.RecipeDigest(recipe)
 	auditEvidence := integrationWorkflowAuditEvidence(t, fakePublicationRepo, "publish")
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
@@ -1381,7 +1385,7 @@ func TestFakeCandidatePublicationReusesValidatedCheckoutDirectory(t *testing.T) 
 
 func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
 	t.Parallel()
-	h := newPublicationHarness(t)
+	h := newPublicationHarnessWithRecipe(t, []byte(`{"commands":[["/usr/bin/true"],["/usr/bin/true","second-step"]],"capture":"none"}`))
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
 	writeFile(t, workspace, "candidate.txt", "verified\n")
@@ -1434,6 +1438,12 @@ func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
 	if refs, prs := h.forge.counts(); refs != 1 || prs != 1 {
 		t.Fatalf("forge resources after first reconcile = refs:%d prs:%d", refs, prs)
 	}
+	body := h.forge.pullRequests()[0].Body
+	if !strings.Contains(body, "## Verification") || strings.Count(body, "exit 0") != 2 ||
+		!strings.Contains(body, "second-step") || !strings.Contains(body, string(h.recipeD)) ||
+		!strings.Contains(body, item.Item.PRHeadSHA) || !strings.Contains(body, "### Agent-Reported Evidence") {
+		t.Fatal("fake publication lacks executed verification results")
+	}
 
 	if _, err := h.store.Restore(h.ctx, checkpoint); err != nil {
 		t.Fatalf("Restore: %v", err)
@@ -1461,6 +1471,9 @@ func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
 	}
 	if replay, err := restored.Reconcile(h.ctx); err != nil || replay != (engine.ReconcileResult{}) {
 		t.Fatalf("settled reconcile = %+v, %v", replay, err)
+	}
+	if h.forge.pullRequests()[0].Body != body {
+		t.Fatal("fake publication changed body after restore and repeated reconcile")
 	}
 }
 

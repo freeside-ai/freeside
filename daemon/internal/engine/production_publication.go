@@ -2181,7 +2181,11 @@ func (w *productionPublicationWorkflow) reconcileTask(
 				}
 				return productionTaskOutcome{}, err
 			}
-			candidate := productionCandidate(task, binding, checkpoint, adoptedProfile, nil)
+			report, err := loadVerificationReport(w.artifacts, checkpoint.Artifacts, task.verificationInvocationID())
+			if err != nil {
+				return productionTaskOutcome{}, productionPublicationRetryableError(err)
+			}
+			candidate := productionCandidate(task, binding, checkpoint, adoptedProfile, nil, report)
 			history, err := publish.LoadDispositionHistory(
 				ctx, w.store, candidate, reviewInstructions.ResultDigest,
 			)
@@ -2342,7 +2346,11 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if adoptedErr != nil {
 		return productionTaskOutcome{}, adoptedErr
 	}
-	candidate := productionCandidate(task, binding, checkpoint, adoptedProfile, nil)
+	report, err := loadVerificationReport(w.artifacts, checkpoint.Artifacts, task.verificationInvocationID())
+	if err != nil {
+		return productionTaskOutcome{}, productionPublicationRetryableError(err)
+	}
+	candidate := productionCandidate(task, binding, checkpoint, adoptedProfile, nil, report)
 	dispositionHistory, err := publish.LoadDispositionHistory(
 		ctx, w.store, candidate, reviewInstructions.ResultDigest,
 	)
@@ -5630,6 +5638,7 @@ func productionCandidate(
 	checkpoint productionVerificationCheckpoint,
 	adoptedProfile *domain.Digest,
 	dispositionHistory *publish.DispositionHistory,
+	report []byte,
 ) publish.Candidate {
 	recipe := binding.image.RecipeDigest
 	authorization := checkpoint.Authorization.ID
@@ -5638,6 +5647,7 @@ func productionCandidate(
 		Repo: binding.admission.Base.Repo, BaseRef: binding.admission.Base.BaseRef,
 		HeadSHA: task.HeadSHA, Title: task.Publication.Title,
 		Body: task.Publication.Body, DispositionHistory: dispositionHistory,
+		VerificationReport: report, ImportResult: &checkpoint.Imported,
 		ScopeDecision: task.scopeDecision,
 		Advisories:    publish.AdvisoryFindings(checkpoint.Authorization.Findings),
 		Artifacts:     checkpoint.Artifacts, RecipeDigest: &recipe,

@@ -1394,7 +1394,11 @@ func (w *fakePublicationWorkflow) reconcileTask(
 		return taskOutcome{blocked: true}, nil
 	}
 
-	candidate := fakePublicationCandidate(task, checkpoint)
+	report, err := loadVerificationReport(w.artifacts, checkpoint.Artifacts, task.VerificationInvocationID)
+	if err != nil {
+		return taskOutcome{}, err
+	}
+	candidate := fakePublicationCandidate(task, checkpoint, report)
 	w.candidates[task.PublicationInvocationID] = publish.RecoveryCandidate{
 		Candidate: candidate, ApprovedRecipes: maps.Clone(w.approvedRecipes),
 		PublishHead: func(ctx context.Context, gated publish.GatedHead) error {
@@ -1522,8 +1526,12 @@ func (w *fakePublicationWorkflow) recoverFinalizedPublication(
 	if !checkpoint.Authorization.AuthorizesPublication {
 		return taskOutcome{}, false, nil
 	}
+	report, err := loadVerificationReport(w.artifacts, checkpoint.Artifacts, task.VerificationInvocationID)
+	if err != nil {
+		return taskOutcome{}, false, err
+	}
 	published, found, err := w.loadPublicationOutcome(
-		ctx, fakePublicationCandidate(task, checkpoint),
+		ctx, fakePublicationCandidate(task, checkpoint, report),
 	)
 	if err != nil || !found {
 		return taskOutcome{}, found, err
@@ -1537,6 +1545,7 @@ func (w *fakePublicationWorkflow) recoverFinalizedPublication(
 func fakePublicationCandidate(
 	task fakePublicationTask,
 	checkpoint fakePublicationCandidateCheckpoint,
+	report []byte,
 ) publish.Candidate {
 	recipeDigest := task.RecipeDigest
 	authorizationID := checkpoint.Authorization.ID
@@ -1544,6 +1553,7 @@ func fakePublicationCandidate(
 	return publish.Candidate{
 		Repo: task.Repo, BaseRef: task.BaseRef, HeadSHA: checkpoint.Imported.CommitSHA,
 		Title: task.Title, Body: task.Body, Artifacts: checkpoint.Artifacts,
+		VerificationReport: report, ImportResult: &checkpoint.Imported,
 		Advisories:   publish.AdvisoryFindings(checkpoint.Authorization.Findings),
 		RecipeDigest: &recipeDigest, InvocationID: task.PublicationInvocationID,
 		RunID:           task.RunID,

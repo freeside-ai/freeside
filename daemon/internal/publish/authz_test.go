@@ -40,7 +40,7 @@ func authorizingInputAtHead(t *testing.T, headSHA string) domain.CandidateAuthor
 		Repo:                     testTrustRepo,
 		BaseSHA:                  testBaseSHA,
 		HeadSHA:                  headSHA,
-		ImportResultDigest:       "sha256:import-result-fixture",
+		ImportResultDigest:       testImportDigest(t, headSHA),
 		VerificationRecipeDigest: testRecipe,
 		EvidenceSnapshotDigest:   evidenceDigest,
 		VerificationOutcome:      domain.VerificationPassed,
