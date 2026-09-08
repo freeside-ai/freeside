@@ -1615,3 +1615,19 @@ Revision 48 ("Task Scope, Identity, and Naming"):
    renaming and sharing one task-name/PR-title field. This settles the source
    note's deferred naming choice without rewriting that note.
    (User; #1206; devlog 2026-09-07-1136-task-design-decisions.md.)
+
+## Revision 49
+
+Revision 49 ("Operator-Declared Publication Branches"):
+
+1. **The operator may declare the exact publication branch** (Section
+   [5.15](../plan.md#515-evidence-and-images)): the publication identity still derives
+   the default branch and the PR marker. An optional operator-supplied branch
+   satisfies repository naming conventions without changing that identity.
+   The durable intent binds the resolved name before dispatch; retries and
+   recovery reject another branch for the same identity, and foreign refs or
+   PR markers remain conflicts. Legacy records and published refs keep their
+   identity-derived names. Rejected: reading naming authority from repository
+   prose, adding a digest suffix to every declared name, changing the identity
+   encoding, and renaming existing branches.
+   (User; #1216; devlog 2026-09-07-2132-declared-publication-branch.md.)

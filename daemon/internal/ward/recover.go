@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
@@ -128,6 +129,7 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	if err := rec.Validate(); err != nil {
 		return nil, err
 	}
+	hs = clonePromptSpec(hs)
 	hs.Agent.Command = slices.Clone(hs.Agent.Command)
 	hs.Agent.Env = slices.Clone(hs.Agent.Env)
 	hs.Agent.CredentialMounts = slices.Clone(hs.Agent.CredentialMounts)
@@ -146,6 +148,9 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		return nil, err
 	}
 	if digest != rec.SpecDigest {
+		if hs.Agent.PromptFile != nil {
+			return nil, fmt.Errorf("%w: legacy digest cannot authorize a prompt file", ErrInvalidJournalRecord)
+		}
 		legacyDigest, lerr := legacySpecDigest(hs)
 		if lerr != nil {
 			return nil, lerr
@@ -196,6 +201,16 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	}
 	postPreparation := rec.CredentialPreDigest != "" ||
 		rec.WriterComplete || rec.WriterFailureStatus != nil
+	if rec.State != nil {
+		if hs.Agent.PromptFile == nil {
+			if rec.State.PromptFingerprint != "" || rec.State.PromptDigest != "" {
+				return nil, fmt.Errorf("%w: argument delivery carries prompt-file proof", ErrInvalidJournalRecord)
+			}
+		} else if rec.State.PromptFingerprint == "" ||
+			rec.State.PromptDigest != contentaddr.Hex(string(hs.Agent.PromptFile.Digest)) {
+			return nil, fmt.Errorf("%w: prepared prompt proof does not bind its input", ErrInvalidJournalRecord)
+		}
+	}
 	if hs.Agent.LaunchState == LaunchStateClaudeClean &&
 		rec.State != nil && rec.Instructions == nil {
 		return nil, fmt.Errorf(
@@ -333,6 +348,12 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 			st.sessionScratch.fingerprint = rec.State.SessionScratchFingerprint
 		}
 		st.preparedInstructions = rec.Instructions
+	}
+	if hs.Agent.PromptFile != nil {
+		st.prompt.attempted, st.promptSeeder.attempted, st.promptObserver.attempted = true, true, true
+		if rec.State != nil {
+			st.prompt.fingerprint = rec.State.PromptFingerprint
+		}
 	}
 	if rec.Lease != nil {
 		// Re-gate the recorded window against the live store row before any
@@ -598,6 +619,8 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		{names.ConfigRootObserver, &st.configRootObserver},
 		{names.ContinuityObserver, &st.continuityObserver},
 		{names.ScratchObserver, &st.scratchObserver},
+		{names.PromptSeeder, &st.promptSeeder},
+		{names.PromptObserver, &st.promptObserver},
 	} {
 		if err := b.reapRecoveredContainer(
 			ctx, recovered.name, recovered.claim, st.ownershipLabel,

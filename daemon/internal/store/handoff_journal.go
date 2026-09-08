@@ -85,9 +85,14 @@ type HandoffJournalState struct {
 	ConfigRootDigest          string `json:"config_root_digest"`
 	ContinuityDigest          string `json:"continuity_digest"`
 	SessionScratchDigest      string `json:"session_scratch_digest"`
+	PromptFingerprint         string `json:"prompt_fingerprint,omitempty"`
+	PromptDigest              string `json:"prompt_digest,omitempty"`
 }
 
 func (s HandoffJournalState) validate() error {
+	if (s.PromptFingerprint == "") != (s.PromptDigest == "") {
+		return errors.New("handoff journal prompt binding is incomplete")
+	}
 	if s.ConfigRootFingerprint == "" || s.ContinuityFingerprint == "" ||
 		s.SessionScratchFingerprint == "" || s.ConfigRootDigest == "" ||
 		s.ContinuityDigest == "" || s.SessionScratchDigest == "" ||

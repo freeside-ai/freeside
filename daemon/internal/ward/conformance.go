@@ -43,6 +43,7 @@ func validateAgentSpec(
 	leasedCredentialTarget string,
 	leasedCredentialWritable bool,
 	statePolicy LaunchStatePolicy,
+	hasPrompt bool,
 ) error {
 	workspaceVolume := names.Workspace
 	// A bare-key env entry makes the CLI inherit the host's value, pulling a
@@ -66,12 +67,26 @@ func validateAgentSpec(
 	instructionMounts := 0
 	leasedMounts := 0
 	stateMounts := 0
+	promptCount := 0
 	stateVolumes := map[string]bool{
 		names.ConfigRoot:     true,
 		names.Continuity:     true,
 		names.SessionScratch: true,
 	}
 	for _, m := range spec.Mounts {
+		if m.Target == PromptFileTarget || m.Source == names.Prompt {
+			if !hasPrompt || m.Target != PromptFileTarget || m.Source != names.Prompt ||
+				m.Type != MountVolume || !m.ReadOnly ||
+				m.Target == cfg.WorkspaceTarget || strings.HasPrefix(m.Target, cfg.WorkspaceTarget+"/") ||
+				strings.HasPrefix(cfg.WorkspaceTarget, m.Target+"/") {
+				return failf(CheckControlPlaneIsolation, "prompt mount does not match its protected topology")
+			}
+			promptCount++
+			continue
+		}
+		if hasPrompt && (strings.HasPrefix(m.Target, PromptFileTarget+"/") || strings.HasPrefix(PromptFileTarget, m.Target+"/")) {
+			return failf(CheckControlPlaneIsolation, "mount overlaps the protected prompt")
+		}
 		if !m.Type.valid() {
 			return failf(CheckControlPlaneIsolation, "agent spec carries an unknown mount type")
 		}
@@ -180,6 +195,9 @@ func validateAgentSpec(
 	}
 	if workspaceMounts != 1 {
 		return failf(CheckCredentialSeparation, "agent spec does not carry exactly one workspace mount")
+	}
+	if (hasPrompt && promptCount != 1) || (!hasPrompt && promptCount != 0) {
+		return failf(CheckControlPlaneIsolation, "agent spec does not carry its exact prompt topology")
 	}
 	if instructionMounts != 1 {
 		return failf(CheckControlPlaneIsolation,

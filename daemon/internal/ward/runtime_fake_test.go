@@ -2,6 +2,7 @@ package ward
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -105,6 +106,7 @@ type fakeRuntime struct {
 	// placed in each volume. A present map entry with nil content represents
 	// the admitted empty overlay.
 	instructionState map[string][]byte
+	promptState      map[string][]byte
 	// stateManifest records config roots the state seeder prepared. Volumes
 	// absent from this map remain freshly empty.
 	stateManifest map[string]stateManifestKind
@@ -209,6 +211,7 @@ func newFakeRuntime(t *testing.T) *fakeRuntime {
 		volAgents:              map[string]string{},
 		snapshotFiles:          map[string]map[string][]byte{},
 		instructionState:       map[string][]byte{},
+		promptState:            map[string][]byte{},
 		stateManifest:          map[string]stateManifestKind{},
 		staged:                 map[string]string{},
 		baseProofPath:          "/handoff-base.txt",
@@ -832,6 +835,13 @@ func (f *fakeRuntime) CopyIntoContainer(ctx context.Context, id, hostDir, target
 		f.snapshotFiles[vol] = files
 		return nil
 	}
+	if c.spec.Mounts[0].Target == promptVolumeTarget {
+		body, err := os.ReadFile(filepath.Join(src, "prompt.txt")) //nolint:gosec // test-owned snapshot
+		if err == nil {
+			f.promptState[vol] = bytes.Clone(body)
+		}
+		return nil
+	}
 	head, err := os.ReadFile(filepath.Join(src, ".git", "HEAD")) //nolint:gosec // test fixture path
 	if err != nil {
 		body, readErr := os.ReadFile(filepath.Join(src, instructionFileName)) //nolint:gosec // test fixture path
@@ -990,6 +1000,17 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Write
 		return writeProofTar(dest, instructionProofPath, proof)
 	}
 	if vol, isStateObserver := c.observedVolume(stateProofPath); isStateObserver {
+		if c.spec.Mounts[0].Target == promptVolumeTarget {
+			var proof []byte
+			if body, ok := f.promptState[vol]; ok {
+				sum := sha256.Sum256(body)
+				proof = fmt.Appendf(nil, "%s %x\n", c.ownershipToken(), sum)
+			}
+			if f.observerProof != nil {
+				proof = f.observerProof(id, proof)
+			}
+			return writeProofTar(dest, stateProofPath, proof)
+		}
 		kind := stateManifestEmpty
 		for _, arg := range c.spec.Command {
 			if strings.Contains(arg, "'config_root'") {

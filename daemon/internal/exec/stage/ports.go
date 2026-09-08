@@ -16,9 +16,30 @@ import (
 type Provider interface {
 	HandoffSpec(context.Context, ProviderHandoffInput) (ward.HandoffSpec, error)
 	RenderPrompt(ProviderPromptInputs) (string, error)
+	PromptDelivery() PromptDelivery
 	RunID(domain.InvocationID) string
 	Workspace(domain.InvocationID) string
 	PrepareFailedStatus() int
+}
+
+// PromptDelivery selects a durable launch protocol. Missing legacy intent
+// fields are translated to PromptArgument only at reconstruction.
+type PromptDelivery string
+
+const (
+	PromptArgument PromptDelivery = "argument"
+	PromptFileV1   PromptDelivery = "file_v1"
+)
+
+var AllPromptDeliveries = []PromptDelivery{PromptArgument, PromptFileV1}
+
+func (d PromptDelivery) valid() bool {
+	switch d {
+	case PromptArgument, PromptFileV1:
+		return true
+	default:
+		return false
+	}
 }
 
 // UsageExtractor is the optional provider hook for numbers-only telemetry in
@@ -34,13 +55,14 @@ type UsageExtractor interface {
 // ProviderHandoffInput is the durable input needed to render one provider's
 // ward handoff request.
 type ProviderHandoffInput struct {
-	InvocationID domain.InvocationID
-	RunID        string
-	Spec         exec.StartSpec
-	Seed         string
-	Prompt       string
-	Instructions ward.VendorInstructions
-	Preparation  []string
+	InvocationID   domain.InvocationID
+	RunID          string
+	Spec           exec.StartSpec
+	Seed           string
+	Prompt         string
+	PromptDelivery PromptDelivery
+	Instructions   ward.VendorInstructions
+	Preparation    []string
 }
 
 // CredentialMountPolicy is the immutable provider topology a returned
@@ -55,6 +77,7 @@ type CredentialMountPolicy struct {
 // ProviderPromptInputs are the admitted immutable bodies a provider renders
 // into its invocation prompt.
 type ProviderPromptInputs struct {
+	Delivery       PromptDelivery
 	Specification  []byte
 	PromptPackage  []byte
 	Policy         []byte

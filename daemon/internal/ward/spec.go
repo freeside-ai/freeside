@@ -194,6 +194,8 @@ const (
 
 // AgentSpec describes the credential-bearing writer container.
 type AgentSpec struct {
+	// Omission preserves the exact JSON shape and digest of legacy handoffs.
+	PromptFile    *PromptFile `json:",omitempty"`
 	Image         string
 	Command       []string
 	Env           []string
@@ -580,6 +582,14 @@ type HandoffSpec struct {
 // (checks 1 and 2) live in validateAgentSpec, not here: this is "can the
 // gate even name things", not conformance.
 func (s HandoffSpec) validate() error {
+	if s.Agent.PromptFile != nil {
+		if s.Agent.LaunchState != LaunchStateClaudeClean {
+			return fmt.Errorf("%w: prompt file requires the Claude launch topology", ErrInvalidHandoffSpec)
+		}
+		if err := s.Agent.PromptFile.Validate(); err != nil {
+			return err
+		}
+	}
 	switch {
 	case !runIDPattern.MatchString(s.RunID):
 		return fmt.Errorf("%w: RunID %q does not match %s", ErrInvalidHandoffSpec, s.RunID, runIDPattern)
@@ -750,6 +760,9 @@ const WriterNoncePlaceholder = "{{FREESIDE_WRITER_NONCE}}"
 
 // handoffNames are the runtime object names one run owns.
 type handoffNames struct {
+	Prompt              string
+	PromptSeeder        string
+	PromptObserver      string
 	Workspace           string
 	Instructions        string
 	ConfigRoot          string
@@ -773,6 +786,9 @@ type handoffNames struct {
 
 func namesFor(runID string) handoffNames {
 	return handoffNames{
+		Prompt:              "freeside-handoff-" + runID + "-prompt",
+		PromptSeeder:        "freeside-handoff-" + runID + "-prompt-seed",
+		PromptObserver:      "freeside-handoff-" + runID + "-prompt-check",
 		Workspace:           "freeside-handoff-" + runID + "-ws",
 		Instructions:        "freeside-handoff-" + runID + "-ins",
 		ConfigRoot:          "freeside-handoff-" + runID + "-cfg",
@@ -812,7 +828,7 @@ type RuntimeResourceAuthorizer func(context.Context, RuntimeResourceNames) error
 // runID from ward's single naming authority.
 func RuntimeResourceNamesFor(runID string) RuntimeResourceNames {
 	names := namesFor(runID)
-	return RuntimeResourceNames{
+	return promptResourceNames(names, RuntimeResourceNames{
 		Containers: []string{
 			names.Seeder, names.Observer, names.InstructionSeeder, names.InstructionObserver,
 			names.ConfigRootSeeder, names.ConfigRootObserver, names.ContinuityObserver,
@@ -824,7 +840,7 @@ func RuntimeResourceNamesFor(runID string) RuntimeResourceNames {
 			names.SessionScratch,
 		},
 		Networks: []string{names.Network},
-	}
+	})
 }
 
 // PreJobRunIDForInvocation is the deterministic, bounded conformance run ID
@@ -874,6 +890,7 @@ func buildAgentSpec(
 		Source: names.Workspace,
 		Target: cfg.WorkspaceTarget,
 	}}
+	mounts = append(mounts, promptMounts(names, hs.Agent.PromptFile != nil)...)
 	for _, cm := range hs.Agent.CredentialMounts {
 		mounts = append(mounts, Mount{
 			Type:     MountVolume,

@@ -68,7 +68,7 @@ func TestProductionReturnToAgentPreflightsCompletePrompt(t *testing.T) {
 			}
 			// The package fits by itself; the approved spec, policy and complete
 			// candidate patch make the rendered continuation exceed transport limits.
-			body := []byte("<!-- freeside:render-prior-artifacts=v1 -->\n" + strings.Repeat("x", 31<<10))
+			body := []byte("<!-- freeside:render-prior-artifacts=v1 -->\n" + strings.Repeat("x", 1<<20))
 			p.remediationPromptPackage = productionDigest(body)
 			if _, err := p.blobs.Put(p.remediationPromptPackage, strings.NewReader(string(body))); err != nil {
 				t.Fatal(err)

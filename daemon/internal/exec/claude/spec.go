@@ -102,6 +102,8 @@ func (claudeProvider) RenderPrompt(inputs stage.ProviderPromptInputs) (string, e
 	return renderPromptParts(inputs)
 }
 
+func (claudeProvider) PromptDelivery() stage.PromptDelivery { return stage.PromptFileV1 }
+
 // ValidatePromptInputs runs the production Claude renderer over one fully
 // materialized bundle. Specification uses it before committing a follow-up
 // invocation, so content accepted for research cannot become an undeliverable
@@ -113,6 +115,7 @@ func ValidatePromptInputs(inputs exec.StageInputs) error {
 		priorBodies[i] = prior[i].Bytes()
 	}
 	_, err := renderPromptParts(stage.ProviderPromptInputs{
+		Delivery:       stage.PromptFileV1,
 		Specification:  inputs.Specification().Bytes(),
 		PromptPackage:  inputs.PromptPackage().Bytes(),
 		Policy:         inputs.Policy().Bytes(),
@@ -121,12 +124,9 @@ func ValidatePromptInputs(inputs exec.StageInputs) error {
 	return err
 }
 
-// maxPromptBytes bounds the rendered prompt below Linux's 128-KiB
-// MAX_ARG_STRLEN. It travels inside one sh -c argument because the writer gets
-// no stdin and ward's mount vocabulary is volume-only. Shell quoting expands
-// every apostrophe fourfold, so 31 KiB plus the fixed command remains below
-// the kernel limit even for the worst input. A larger prompt needs a ward
-// prompt-mount vocabulary, which is a shared contract change.
+// maxPromptBytes is the retained argument protocol's bound. Its worst-case
+// shell quoting must remain below Linux's single-argument limit. New launches
+// use Ward's independently bounded prompt file; recovery never changes modes.
 const (
 	linuxMaxArgumentBytes = 128 << 10
 	maxPromptBytes        = 31 << 10
@@ -148,6 +148,10 @@ const (
 // before the outcome marker, so the git-blind export walk never sees it. An
 // empty prepare keeps the attended launch command byte-identical.
 func agentCommand(prompt, sessionID string, invocationID domain.InvocationID, prepare []string) []string {
+	return agentCommandWithInput(shellQuote(prompt), sessionID, invocationID, prepare)
+}
+
+func agentCommandWithInput(promptInput, sessionID string, invocationID domain.InvocationID, prepare []string) []string {
 	transcriptSource := export.EvidenceSource{
 		Label: "agent-transcript", MediaType: "application/jsonl",
 		Path: transcriptEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
@@ -253,7 +257,7 @@ func agentCommand(prompt, sessionID string, invocationID domain.InvocationID, pr
 		shellQuote(workspaceDir),
 		guardPrefix,
 		shellQuote(credentialTokenPath), shellQuote(credentialTokenPath),
-		shellQuote(ward.ClaudeConfigRootTarget), agentUID, agentGID, shellQuote(prompt),
+		shellQuote(ward.ClaudeConfigRootTarget), agentUID, agentGID, promptInput,
 		shellQuote(sessionID), shellQuote(instructionBundlePath),
 		shellQuote(transcriptPath),
 		declareFixedSources,
@@ -359,11 +363,25 @@ func renderPromptParts(inputs stage.ProviderPromptInputs) (string, error) {
 		string(inputs.Specification) + prior.String() +
 		"\n\n--- Resolved per-run policy ---\n\n" +
 		string(inputs.Policy) + "\n"
-	if len(prompt) > maxPromptBytes {
+	limit, err := promptByteLimit(inputs.Delivery)
+	if err != nil {
+		return "", err
+	}
+	if len(prompt) > limit {
 		return "", fmt.Errorf("%w: rendered prompt is %d bytes, limit %d",
-			ErrUnsupportedStart, len(prompt), maxPromptBytes)
+			ErrUnsupportedStart, len(prompt), limit)
 	}
 	return prompt, nil
+}
+
+func promptByteLimit(delivery stage.PromptDelivery) (int, error) {
+	switch delivery {
+	case "", stage.PromptArgument:
+		return maxPromptBytes, nil
+	case stage.PromptFileV1:
+		return ward.MaxPromptFileBytes, nil
+	}
+	return 0, fmt.Errorf("%w: unknown prompt delivery %q", ErrUnsupportedStart, delivery)
 }
 
 // shellQuote renders one argument as a single-quoted shell word.
@@ -447,7 +465,23 @@ func (p claudeProvider) HandoffSpec(
 			return ward.HandoffSpec{}, fmt.Errorf("instruction base for %s: %w", boundary, err)
 		}
 	}
-	return hs, nil
+	switch in.PromptDelivery {
+	case "", stage.PromptArgument:
+		if len(in.Prompt) > maxPromptBytes {
+			return ward.HandoffSpec{}, fmt.Errorf("%w: legacy prompt exceeds argument limit", ErrUnsupportedStart)
+		}
+		return hs, nil
+	case stage.PromptFileV1:
+		hs.Agent.PromptFile = ward.NewPromptFile([]byte(in.Prompt))
+		if err := hs.Agent.PromptFile.Validate(); err != nil {
+			return ward.HandoffSpec{}, fmt.Errorf("%w: %w", ErrUnsupportedStart, err)
+		}
+		// The root shell opens stdin before setpriv drops privileges. Prompt
+		// bytes never enter argv, and remain user input rather than instructions.
+		hs.Agent.Command = agentCommandWithInput("< "+shellQuote(ward.PromptFilePath), sessionIDFor(id), id, in.Preparation)
+		return hs, nil
+	}
+	return ward.HandoffSpec{}, fmt.Errorf("%w: unknown prompt delivery", ErrUnsupportedStart)
 }
 
 // transcriptPath is where the CLI's stream-json transcript lands: inside the

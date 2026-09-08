@@ -153,7 +153,7 @@ func TestValidateAgentSpecViolations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 			tc.mutate(&spec)
-			err := validateAgentSpec(cfg, spec, names, "", false, hs.Agent.LaunchState)
+			err := validateAgentSpec(cfg, spec, names, "", false, hs.Agent.LaunchState, false)
 			if !errors.Is(err, ErrConformance) {
 				t.Fatalf("validateAgentSpec = %v, want ErrConformance", err)
 			}
@@ -210,7 +210,7 @@ func TestValidateAgentSpecInstructionPathOverlaps(t *testing.T) {
 			)
 			tc.mutate(&spec)
 
-			err := validateAgentSpec(cfg, spec, names, "", false, hs.Agent.LaunchState)
+			err := validateAgentSpec(cfg, spec, names, "", false, hs.Agent.LaunchState, false)
 			wantCheckFailure(t, err, CheckCredentialSeparation)
 		})
 	}
@@ -256,7 +256,7 @@ func TestValidateAgentSpecLeasedViolations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 			tc.mutate(&spec)
-			err := validateAgentSpec(cfg, spec, names, target, hs.leasedCredentialWritable(), hs.Agent.LaunchState)
+			err := validateAgentSpec(cfg, spec, names, target, hs.leasedCredentialWritable(), hs.Agent.LaunchState, false)
 			if !errors.Is(err, ErrConformance) {
 				t.Fatalf("validateAgentSpec = %v, want ErrConformance", err)
 			}
@@ -378,7 +378,7 @@ func TestValidateAgentSpecRedactsMalformedEnv(t *testing.T) {
 		t.Run(redactPath(entry), func(t *testing.T) {
 			spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 			spec.Env = append(spec.Env, entry)
-			err := validateAgentSpec(cfg, spec, names, "", false, hs.Agent.LaunchState)
+			err := validateAgentSpec(cfg, spec, names, "", false, hs.Agent.LaunchState, false)
 			if !errors.Is(err, ErrConformance) {
 				t.Fatalf("validateAgentSpec = %v, want ErrConformance", err)
 			}
@@ -696,7 +696,7 @@ func TestConformanceReasonsRedactUntrustedFields(t *testing.T) {
 	agent := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 	agent.Mounts[1].Target = secret
 	if err := validateAgentSpec(
-		cfg, agent, names, "", false, hs.Agent.LaunchState,
+		cfg, agent, names, "", false, hs.Agent.LaunchState, false,
 	); err == nil || strings.Contains(err.Error(), secret) {
 		t.Errorf("agent conformance failure leaked or accepted an untrusted field: %v", err)
 	}
@@ -781,6 +781,7 @@ func TestValidateAgentSpecNoCredentials(t *testing.T) {
 		"",
 		false,
 		hs.Agent.LaunchState,
+		false,
 	); err != nil {
 		t.Errorf("credential-free agent spec: %v, want nil", err)
 	}

@@ -169,6 +169,9 @@ type objectClaim struct {
 // workspace carrying this invocation's unpredictable ownershipLabel; an
 // ordinary already-exists collision does not carry it and is left untouched.
 type runState struct {
+	prompt              objectClaim
+	promptSeeder        objectClaim
+	promptObserver      objectClaim
 	ownershipLabel      Label
 	workspace           objectClaim
 	instructions        objectClaim
@@ -295,6 +298,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	callerCtx := ctx
 	// The request is caller-owned. Freeze its slices before they feed either
 	// expected allowlists or a Runtime call.
+	hs = clonePromptSpec(hs)
 	hs.Agent.Command = slices.Clone(hs.Agent.Command)
 	hs.Agent.Env = slices.Clone(hs.Agent.Env)
 	hs.Agent.CredentialMounts = slices.Clone(hs.Agent.CredentialMounts)
@@ -471,7 +475,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	)
 	if err := validateAgentSpec(
 		b.cfg, preflightAgentSpec, names, hs.leasedCredentialTarget(), hs.leasedCredentialWritable(),
-		hs.Agent.LaunchState,
+		hs.Agent.LaunchState, hs.Agent.PromptFile != nil,
 	); err != nil {
 		return nil, err
 	}
@@ -627,7 +631,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	)
 	if err := validateAgentSpec(
 		b.cfg, agentSpec, names, hs.leasedCredentialTarget(), hs.leasedCredentialWritable(),
-		hs.Agent.LaunchState,
+		hs.Agent.LaunchState, hs.Agent.PromptFile != nil,
 	); err != nil {
 		return nil, err
 	}
@@ -1416,6 +1420,8 @@ func (b runtimeOps) teardown(
 		claim objectClaim
 	}
 	containerClaims := []containerClaim{
+		{id: names.PromptSeeder, claim: st.promptSeeder},
+		{id: names.PromptObserver, claim: st.promptObserver},
 		{id: names.Seeder, claim: st.seeder},
 		{id: names.Observer, claim: st.observer},
 		{id: names.InstructionSeeder, claim: st.instructionSeeder},
@@ -1497,6 +1503,7 @@ func (b runtimeOps) teardown(
 		claim objectClaim
 	}
 	volumeClaims := []volumeClaim{
+		{name: names.Prompt, claim: st.prompt},
 		{name: names.Workspace, claim: st.workspace},
 		{name: names.Instructions, claim: st.instructions},
 		{name: names.ConfigRoot, claim: st.configRoot},
