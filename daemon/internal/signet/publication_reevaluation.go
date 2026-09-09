@@ -31,49 +31,22 @@ const (
 // PublicationReevaluationOutcome is the terminal result named by a completion
 // marker. The marker establishes terminality; its references are re-read only
 // to authenticate that fact against the accepted command and durable result.
-type PublicationReevaluationOutcome string
+type PublicationReevaluationOutcome = domain.PublicationReevaluationOutcome
 
 const (
-	PublicationReevaluationPublished       PublicationReevaluationOutcome = "published"
-	PublicationReevaluationBlocked         PublicationReevaluationOutcome = "blocked"
-	PublicationReevaluationReviewEscalated PublicationReevaluationOutcome = "review_escalated"
+	PublicationReevaluationPublished       = domain.PublicationReevaluationPublished
+	PublicationReevaluationBlocked         = domain.PublicationReevaluationBlocked
+	PublicationReevaluationReviewEscalated = domain.PublicationReevaluationReviewEscalated
 )
-
-func (o PublicationReevaluationOutcome) valid() bool {
-	switch o {
-	case PublicationReevaluationPublished,
-		PublicationReevaluationBlocked,
-		PublicationReevaluationReviewEscalated:
-		return true
-	}
-	return false
-}
 
 // PublicationReevaluationRequest is the immutable signet-to-engine intent.
 // The engine re-reads every referenced record before treating it as authority.
-type PublicationReevaluationRequest struct {
-	RunID              domain.RunID  `json:"run_id"`
-	ItemID             domain.ItemID `json:"item_id"`
-	ItemVersion        int           `json:"item_version"`
-	CommandID          string        `json:"command_id"`
-	PRHeadSHA          string        `json:"pr_head_sha"`
-	TrustProfileDigest domain.Digest `json:"trust_profile_digest"`
-	ReviewRound        int           `json:"review_round"`
-}
+type PublicationReevaluationRequest = domain.PublicationReevaluationRequest
 
 // PublicationReevaluationCompletion is written in the same transaction as
 // the production terminal record. EvidenceItemID names a durable item to
 // authenticate; it is never trusted as authority on its own.
-type PublicationReevaluationCompletion struct {
-	RunID                domain.RunID                   `json:"run_id"`
-	CommandID            string                         `json:"command_id"`
-	IntentKey            string                         `json:"intent_key"`
-	Outcome              PublicationReevaluationOutcome `json:"outcome"`
-	PRHeadSHA            string                         `json:"pr_head_sha"`
-	EvidenceItemID       domain.ItemID                  `json:"evidence_item_id"`
-	EvidenceItemVersion  int                            `json:"evidence_item_version"`
-	TerminalInvocationID domain.InvocationID            `json:"terminal_invocation_id"`
-}
+type PublicationReevaluationCompletion = domain.PublicationReevaluationCompletion
 
 // PublicationReevaluationCompletionKey keys the terminal fact by the accepted
 // command. Unlike the intent key, the run is authenticated from the payload
@@ -155,10 +128,7 @@ func DecodePublicationReevaluationCompletion(payload []byte) (PublicationReevalu
 }
 
 func validatePublicationReevaluationCompletion(completion PublicationReevaluationCompletion) error {
-	if completion.RunID == "" || completion.CommandID == "" || completion.IntentKey == "" ||
-		!completion.Outcome.valid() || completion.PRHeadSHA == "" ||
-		completion.EvidenceItemID == "" || completion.EvidenceItemVersion < 1 ||
-		completion.TerminalInvocationID != PublicationReevaluationTerminalInvocationID(completion.CommandID) {
+	if completion.Validate() != nil {
 		return fmt.Errorf("publication reevaluation completion is incomplete: %w",
 			domain.ErrParentKeyMismatch)
 	}
@@ -695,6 +665,12 @@ func publicationReevaluationRoot(ctx context.Context, tx *store.ReadTx, runID do
 		}
 		commandID = previous
 	}
+}
+
+// AuthenticatePublicationReevaluationCompletion rechecks the accepted rerun and
+// its terminal evidence for consumers that may start a separate approved cycle.
+func AuthenticatePublicationReevaluationCompletion(ctx context.Context, tx *store.ReadTx, run domain.Run, request PublicationReevaluationRequest) (PublicationReevaluationCompletion, bool, error) {
+	return authenticatePublicationReevaluationCompletion(ctx, tx, run, request)
 }
 
 func authenticatePublicationReevaluationCompletion(

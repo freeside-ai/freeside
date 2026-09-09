@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
@@ -56,6 +57,10 @@ func (tx *WriteTx) RecordPublicationSuccessor(ctx context.Context, successor dom
 // damaged immutable history while preserving the transition-refusal contract.
 var ErrPublicationCompleted = fmt.Errorf("publication already completed: %w", domain.ErrImmutableTransition)
 
+// ErrNoPublishedContinuationTarget is a legitimate refusal when the original
+// cycle stopped before its first publication, not damaged retained authority.
+var ErrNoPublishedContinuationTarget = fmt.Errorf("no published continuation target: %w", domain.ErrImmutableTransition)
+
 // A completed unit cannot start a new publication cycle. Check row presence,
 // not a derived current completion, so damaged completion evidence also blocks.
 func (tx *ReadTx) RequireIncompletePublication(ctx context.Context, runID domain.RunID) error {
@@ -91,6 +96,9 @@ func (tx *ReadTx) GetPublicationSuccessor(ctx context.Context, runID domain.RunI
 func (tx *ReadTx) validatePublicationSuccessor(ctx context.Context, successor domain.PublicationSuccessor) error {
 	if err := successor.Validate(); err != nil {
 		return err
+	}
+	if successor.EffectiveOrigin() == domain.PublicationSuccessorRemediation {
+		return tx.validateContinuationSuccessor(ctx, successor)
 	}
 	returned, ready, found, err := tx.FeedbackPublicationParent(ctx, successor.FeedbackInvocationID)
 	if err != nil || !found || returned.RunID != successor.RunID || returned.CommandID != successor.CommandID ||
@@ -193,22 +201,58 @@ func (tx *ReadTx) PublishedProductionReadyItemID(ctx context.Context, runID doma
 	if successor == nil {
 		return domain.ProductionReadyItemID(runID), nil
 	}
-	var published bool
-	if err := tx.tx.QueryRowContext(ctx, `SELECT EXISTS (
-		SELECT 1 FROM ready_item_pr_bindings WHERE item_id = ?)`, successor.ReadyItemID()).Scan(&published); err != nil {
-		return "", err
-	}
-	if !published {
-		return successor.PredecessorItemID, nil
-	}
-	ready, err := tx.GetReadyItemPRBinding(ctx, successor.ReadyItemID())
+	ready, err := tx.publishedReadyAtOrBefore(ctx, runID, successor.ReadyItemID())
 	if err != nil {
 		return "", err
 	}
-	if ready.PublicationInvocationID != successor.PublicationID() {
-		return "", domain.ErrParentKeyMismatch
+	return ready.ItemID, nil
+}
+
+func (tx *ReadTx) PublicationSuccessorForReadyItem(ctx context.Context, runID domain.RunID, itemID domain.ItemID) (domain.PublicationSuccessor, error) {
+	var publication domain.InvocationID
+	if command, ok := strings.CutPrefix(string(itemID), "production-ready-feedback-"); ok {
+		publication = domain.InvocationID("publish-feedback-" + command)
+	} else if command, ok := strings.CutPrefix(string(itemID), "production-ready-continuation-"); ok {
+		publication = domain.InvocationID("publish-continuation-" + command)
+	} else {
+		return domain.PublicationSuccessor{}, domain.ErrParentKeyMismatch
 	}
-	return successor.ReadyItemID(), nil
+	s, err := tx.GetPublicationSuccessor(ctx, runID, publication)
+	if err != nil || s.ReadyItemID() != itemID {
+		return s, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	return s, nil
+}
+
+// A rechecked cycle may have stopped before publication. Its place in the
+// chain remains sealed, while only an actually published ancestor owns a head.
+func (tx *ReadTx) publishedReadyAtOrBefore(ctx context.Context, runID domain.RunID, itemID domain.ItemID) (domain.ReadyItemPRBinding, error) {
+	seen := make(map[domain.ItemID]bool)
+	for {
+		if seen[itemID] {
+			return domain.ReadyItemPRBinding{}, domain.ErrParentKeyMismatch
+		}
+		seen[itemID] = true
+		var published bool
+		if err := tx.tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM ready_item_pr_bindings WHERE item_id = ?)`, itemID).Scan(&published); err != nil {
+			return domain.ReadyItemPRBinding{}, err
+		}
+		if published {
+			ready, err := tx.GetReadyItemPRBinding(ctx, itemID)
+			if err != nil || ready.RunID != runID {
+				return ready, errors.Join(err, domain.ErrParentKeyMismatch)
+			}
+			return ready, nil
+		}
+		if itemID == domain.ProductionReadyItemID(runID) {
+			return domain.ReadyItemPRBinding{}, ErrNoPublishedContinuationTarget
+		}
+		parent, err := tx.PublicationSuccessorForReadyItem(ctx, runID, itemID)
+		if err != nil {
+			return domain.ReadyItemPRBinding{}, err
+		}
+		itemID = parent.PredecessorItemID
+	}
 }
 
 func (tx *ReadTx) PublishedPublicationInvocationID(ctx context.Context, runID domain.RunID) (domain.InvocationID, error) {
@@ -270,6 +314,9 @@ func (tx *ReadTx) EffectiveWorkUnitPRBinding(ctx context.Context, unitID domain.
 // AuthenticateSuccessorProducer excludes the original export and other
 // feedback cycles even if their old evidence still validates independently.
 func (tx *ReadTx) AuthenticateSuccessorProducer(ctx context.Context, successor domain.PublicationSuccessor, producer domain.InvocationID) error {
+	if err := tx.validatePublicationSuccessor(ctx, successor); err != nil {
+		return err
+	}
 	if producer == successor.FeedbackInvocationID {
 		return tx.validatePublicationSuccessor(ctx, successor)
 	}
@@ -285,7 +332,7 @@ func (tx *ReadTx) AuthenticateSuccessorProducer(ctx context.Context, successor d
 	if err != nil || !bytes.Equal(canonical, entry.Payload) || entry.Kind != "remediation_invocation_requested" ||
 		!entry.Dispatched() || request.Version != "freeside.remediation-request/v1" ||
 		request.InvocationID != producer || request.RunID != successor.RunID ||
-		request.SuccessorPublicationID != successor.PublicationID() || request.Round < successor.ReviewRound ||
+		!successor.AllowsRemediation(request) ||
 		string(producer) != fmt.Sprintf("inv-remediate-%d-%s", request.Round, request.RunID) {
 		return domain.ErrParentKeyMismatch
 	}
@@ -330,7 +377,7 @@ func (tx *ReadTx) PublicationSuccessorTarget(ctx context.Context, runID domain.R
 	if err != nil {
 		return publicationrecord.SuccessorTarget{}, err
 	}
-	ready, err := tx.GetReadyItemPRBinding(ctx, successor.PredecessorItemID)
+	ready, err := tx.publishedReadyAtOrBefore(ctx, runID, successor.PredecessorItemID)
 	if err != nil {
 		return publicationrecord.SuccessorTarget{}, err
 	}

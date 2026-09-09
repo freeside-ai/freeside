@@ -236,6 +236,11 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 		return ReconcileResult{}, fmt.Errorf("reconcile operator feedback: %w", err)
 	}
 	runTransitions += feedbackTransitions
+	continuations, err := e.reconcilePublicationContinuations(ctx)
+	if err != nil {
+		return ReconcileResult{}, fmt.Errorf("reconcile publication continuations: %w", err)
+	}
+	runTransitions += continuations
 	capabilityRetries, err := e.reconcileCapabilityRetries(ctx)
 	if err != nil {
 		return ReconcileResult{}, fmt.Errorf("reconcile capability retries: %w", err)

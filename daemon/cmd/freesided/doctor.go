@@ -143,6 +143,7 @@ func backupPayloadExtractors() map[string]store.BackupPayloadDigestExtractor {
 		engine.KindRemediationInvocationRequested:      engine.RemediationInvocationBackupPayloadDigests,
 		engine.KindOperatorFeedbackInvocationRequested: engine.OperatorFeedbackInvocationBackupPayloadDigests,
 		domain.PublicationSuccessorKind:                engine.PublicationSuccessorBackupPayloadDigests,
+		domain.PublicationContinuationRequestedKind:    engine.PublicationContinuationBackupPayloadDigests,
 		engine.KindSpecificationInvocationRequested:    engine.SpecificationInvocationBackupPayloadDigests,
 		engine.KindSpecificationDiscussionRequested:    engine.SpecificationDiscussionBackupPayloadDigests,
 		engine.KindSpecificationImplementationClaim:    engine.SpecificationImplementationClaimBackupPayloadDigests,

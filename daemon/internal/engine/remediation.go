@@ -424,7 +424,7 @@ func authenticateRemediationInvocationTransition(
 	verified := authenticatedRemediationTransition{request: request}
 	if request.SuccessorPublicationID != "" {
 		successor, err := tx.GetPublicationSuccessor(ctx, request.RunID, request.SuccessorPublicationID)
-		if err != nil || successor.RunID != request.RunID || request.Round < successor.ReviewRound {
+		if err != nil || !successor.AllowsRemediation(domain.RemediationInvocationIntent(request)) {
 			return authenticatedRemediationTransition{}, errors.Join(err, domain.ErrParentKeyMismatch)
 		}
 	}
@@ -1146,16 +1146,22 @@ func (intent *preparedRemediationIntent) persist(
 		!slices.Equal(remediationFindingIDs(artifact, routes), intent.request.FindingIDs) {
 		return errors.Join(err, domain.ErrParentKeyMismatch)
 	}
-	taskEntry, err := tx.GetOutbox(ctx, intent.publication.intentKey())
-	if err != nil {
-		return err
-	}
-	currentTask, err := decodeProductionPublicationTask(taskEntry)
-	if err != nil {
-		return err
-	}
-	if taskEntry.Dispatched() || !reflect.DeepEqual(currentTask, intent.publication) {
-		return domain.ErrImmutableTransition
+	if intent.publication.continuation != nil {
+		if err := persistContinuationAuthority(ctx, tx, *intent.publication.continuation); err != nil {
+			return err
+		}
+	} else {
+		taskEntry, err := tx.GetOutbox(ctx, intent.publication.intentKey())
+		if err != nil {
+			return err
+		}
+		currentTask, err := decodeProductionPublicationTask(taskEntry)
+		if err != nil {
+			return err
+		}
+		if taskEntry.Dispatched() || !reflect.DeepEqual(currentTask, intent.publication) {
+			return domain.ErrImmutableTransition
+		}
 	}
 	run, err := tx.GetRun(ctx, intent.request.RunID)
 	if err != nil {
