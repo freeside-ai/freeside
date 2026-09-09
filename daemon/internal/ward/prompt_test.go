@@ -15,6 +15,23 @@ import (
 )
 
 func TestPromptScriptsHandleFreshVolumeAndRejectUnexpectedContents(t *testing.T) {
+	// Exporter preflight requires sh, but not an external printf executable.
+	// Exercise successful proof and extra-entry rejection with only the
+	// observer's external tools in PATH, leaving printf to the shell.
+	toolDir := t.TempDir()
+	checksum := "sha256sum"
+	if runtime.GOOS == "darwin" {
+		checksum = "shasum"
+	}
+	for _, tool := range []string{"sh", "find", "stat", "sync", checksum} {
+		path, err := osexec.LookPath(tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(path, filepath.Join(toolDir, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, shape := range []string{"empty_lost_found", "populated_lost_found", "linked_lost_found", "wrong_mode", "extra_entry"} {
 		t.Run(shape, func(t *testing.T) {
 			root, input, ready := t.TempDir(), t.TempDir(), t.TempDir()
@@ -54,7 +71,8 @@ func TestPromptScriptsHandleFreshVolumeAndRejectUnexpectedContents(t *testing.T)
 			}
 			proof := filepath.Join(t.TempDir(), "proof")
 			// Run the generated scripts against real files. Normalize root to the
-			// test owner and BSD stat on macOS; production remains root/GNU Linux.
+			// test owner and BSD stat on macOS. Keep find unchanged: the production
+			// exporter uses BusyBox, which also lacks GNU find's -printf action.
 			adapt := func(script string) string {
 				script = strings.NewReplacer(promptVolumeTarget, root, promptStageDir, input, promptReadyDir, ready,
 					stateProofPath, proof, "chown 0:0 ", fmt.Sprintf("chown %d:%d ", os.Getuid(), os.Getgid())).Replace(script)
@@ -63,7 +81,6 @@ func TestPromptScriptsHandleFreshVolumeAndRejectUnexpectedContents(t *testing.T)
 				}
 				if runtime.GOOS == "darwin" {
 					script = strings.ReplaceAll(script, "stat -c '%a:%u:%g'", "stat -f '%Lp:%u:%g'")
-					script = strings.ReplaceAll(script, "-printf x", "-exec printf x \\;")
 					script = strings.ReplaceAll(script, "sha256sum ", "shasum -a 256 ")
 				}
 				return script
@@ -85,7 +102,9 @@ func TestPromptScriptsHandleFreshVolumeAndRejectUnexpectedContents(t *testing.T)
 				t.Fatalf("seed: %v: %s", seedErr, out)
 			}
 			observer := buildPromptObserverSpec(testConfig(), hs, namesFor(hs.RunID), owner).Command[2]
-			out, observeErr := osexec.CommandContext(t.Context(), "sh", "-c", adapt(observer)).CombinedOutput() //nolint:gosec // generated script, test-owned paths
+			observeCmd := osexec.CommandContext(t.Context(), "sh", "-c", adapt(observer)) //nolint:gosec // generated script, test-owned paths
+			observeCmd.Env = append(os.Environ(), "PATH="+toolDir)
+			out, observeErr := observeCmd.CombinedOutput()
 			if shape == "extra_entry" {
 				if observeErr == nil {
 					t.Fatal("extra volume entry accepted")
