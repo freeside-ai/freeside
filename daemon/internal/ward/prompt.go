@@ -168,7 +168,7 @@ func buildPromptObserverSpec(cfg Config, hs HandoffSpec, names handoffNames, own
 	// Prove a single regular file, its root-owned modes and actual byte hash.
 	// A failed check emits no accepted proof, including failed sha256sum.
 	script := "set -eu; LC_ALL=C; export LC_ALL; [ -f " + file + " ] && [ ! -L " + file + " ]; " +
-		"[ \"$(find " + root + " -mindepth 1 -maxdepth 1 -printf x)\" = x ]; " +
+		"[ \"$(find " + root + " -mindepth 1 -maxdepth 1 -exec sh -c 'printf x' \\;)\" = x ]; " +
 		"[ \"$(stat -c '%a:%u:%g' " + root + ")\" = '755:0:0' ]; " +
 		"[ \"$(stat -c '%a:%u:%g' " + file + ")\" = '400:0:0' ]; " +
 		"digest=$(sha256sum " + file + "); digest=${digest%% *}; " +
