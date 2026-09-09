@@ -418,6 +418,8 @@ func TestHandoffReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.T
 	ctx := context.Background()
 	authErr := errors.New("temporary journal read failure")
 	recovered := false
+	now := fixedNow
+	completedAt := fixedNow.Add(5 * time.Minute)
 	var (
 		d      *Driver
 		outDir string
@@ -439,6 +441,7 @@ func TestHandoffReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.T
 			if err := os.Chmod(d.dir, 0o500); err != nil { //nolint:gosec // G302: state directory, not a file
 				return nil, err
 			}
+			now = completedAt
 			return &ward.HandoffResult{
 				ExportDir: outDir, Manifest: manifest,
 				Workspace: ward.WorkspaceObservation{ObservedBaseSHA: testBase.BaseSHA},
@@ -451,6 +454,7 @@ func TestHandoffReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.T
 		authenticateFn: func(string, string) error { return authErr },
 	}
 	d = newTestDriver(t, gate, newStubExports())
+	d.now = func() time.Time { return now }
 	t.Cleanup(func() {
 		_ = os.Chmod(d.dir, 0o700) //nolint:gosec // G302: state directory, not a file
 		if outDir != "" {
@@ -465,29 +469,18 @@ func TestHandoffReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.T
 		t.Fatalf("StartWithInputs: %v", err)
 	}
 
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		d.mu.Lock()
-		sess := d.running[testInvoke]
-		pending := sess != nil && sess.pendingIntent != nil
-		finished := false
-		if sess != nil {
-			select {
-			case <-sess.done:
-				finished = true
-			default:
-			}
-		}
-		d.mu.Unlock()
-		if pending && finished {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("returned handoff was not retained after the state write failed")
-		}
-		time.Sleep(5 * time.Millisecond)
+	d.mu.Lock()
+	sess := d.running[testInvoke]
+	d.mu.Unlock()
+	if sess == nil {
+		t.Fatal("returned handoff was not retained after the state write failed")
+	}
+	<-sess.done
+	if sess.pendingIntent == nil {
+		t.Fatal("returned handoff was not retained after the state write failed")
 	}
 
+	now = completedAt.Add(time.Hour)
 	if err := os.Chmod(d.dir, 0o700); err != nil { //nolint:gosec // G302: state directory, not a file
 		t.Fatalf("restore driver state permissions: %v", err)
 	}
@@ -505,6 +498,9 @@ func TestHandoffReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.T
 	if in.Phase != phaseExported || in.Export == nil || in.Export.Dir != outDir {
 		t.Fatalf("retried intent = %#v, want exact exported handoff", in)
 	}
+	if !in.Export.RecordedAt.Equal(completedAt) {
+		t.Fatalf("retried export time = %v, want original stamp %v", in.Export.RecordedAt, completedAt)
+	}
 	if recovered {
 		t.Fatal("driver asked ward to recover a handoff whose return was retained")
 	}
@@ -519,6 +515,8 @@ func TestRecoveryReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.
 	ctx := context.Background()
 	authErr := errors.New("temporary journal read failure")
 	recoveryCalls := 0
+	now := fixedNow
+	completedAt := fixedNow.Add(5 * time.Minute)
 	var (
 		d      *Driver
 		outDir string
@@ -541,6 +539,7 @@ func TestRecoveryReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.
 			if err := os.Chmod(d.dir, 0o500); err != nil { //nolint:gosec // G302: state directory, not a file
 				return nil, err
 			}
+			now = completedAt
 			return &ward.RecoveryResult{
 				Outcome: ward.RecoveryExported, ExportDir: outDir, Manifest: manifest,
 				Workspace: ward.WorkspaceObservation{ObservedBaseSHA: testBase.BaseSHA},
@@ -549,6 +548,7 @@ func TestRecoveryReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.
 		authenticateFn: func(string, string) error { return authErr },
 	}
 	d = newTestDriver(t, gate, newStubExports())
+	d.now = func() time.Time { return now }
 	t.Cleanup(func() {
 		_ = os.Chmod(d.dir, 0o700) //nolint:gosec // G302: state directory, not a file
 		if outDir != "" {
@@ -568,6 +568,7 @@ func TestRecoveryReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.
 		t.Fatal("recovery return was not retained after the state write failed")
 	}
 
+	now = completedAt.Add(time.Hour)
 	if err := os.Chmod(d.dir, 0o700); err != nil { //nolint:gosec // G302: state directory, not a file
 		t.Fatalf("restore driver state permissions: %v", err)
 	}
@@ -584,6 +585,9 @@ func TestRecoveryReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.
 	}
 	if in.Phase != phaseExported || in.Export == nil || in.Export.Dir != outDir {
 		t.Fatalf("retried recovery intent = %#v, want exact exported handoff", in)
+	}
+	if !in.Export.RecordedAt.Equal(completedAt) {
+		t.Fatalf("retried export time = %v, want original stamp %v", in.Export.RecordedAt, completedAt)
 	}
 	if recoveryCalls != 1 {
 		t.Fatalf("ward Recover calls = %d, want 1", recoveryCalls)
@@ -1355,6 +1359,105 @@ func TestCommitResultPreservesTheDurableExportedIntent(t *testing.T) {
 	}
 	if result.Status != exec.StatusCompleted || result.HeadSHA != head {
 		t.Fatalf("result = %#v, want completed head %s", result, head)
+	}
+}
+
+func TestRecoveredExportRecordsHandoffCompletionTime(t *testing.T) {
+	for _, delta := range []time.Duration{5 * time.Minute, -5 * time.Minute} {
+		t.Run(delta.String(), func(t *testing.T) {
+			testRecoveredExportCompletionTime(t, fixedNow.Add(delta))
+		})
+	}
+}
+
+func testRecoveredExportCompletionTime(t *testing.T, completedAt time.Time) {
+	t.Parallel()
+	ctx := context.Background()
+	repo, base := emptyBaseRepo(t)
+	released := timestampTestExport(t, base)
+	now := fixedNow
+	gate := &stubGate{recoverFn: func(string, ward.HandoffSpec) (*ward.RecoveryResult, error) {
+		now = completedAt
+		return &ward.RecoveryResult{
+			Outcome: ward.RecoveryExported, ExportDir: released.Dir, Manifest: released.Manifest,
+			Workspace: ward.WorkspaceObservation{ObservedBaseSHA: base},
+		}, nil
+	}}
+	exports := newStubExports()
+	d := newTestDriver(t, gate, exports)
+	d.seeder = recoveryGitSeeder{repo: repo}
+	d.now = func() time.Time { return now }
+	spec := testStartSpec()
+	spec.Base.BaseSHA = base
+	in := orphanWithSpec(t, d, phaseRunning, nil, spec)
+	if err := d.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := d.Collect(ctx, testInvoke); err != nil || result.Status != exec.StatusCompleted {
+		t.Fatalf("Collect = %+v, %v; want completed", result, err)
+	}
+	record := exports.records[testInvoke]
+	want := completedAt
+	if want.Before(fixedNow) {
+		want = fixedNow
+	}
+	if !record.RecordedAt.Equal(want) {
+		t.Fatalf("export time = %v, start = %v; want completion %v", record.RecordedAt, in.RecordedAt, want)
+	}
+	if err := domain.ValidateExportBinding(domain.ExecutionAdmission{
+		ID: spec.AdmissionID, InvocationID: testInvoke, Base: spec.Base, AdmittedAt: fixedNow,
+	}, record); err != nil {
+		t.Fatalf("completion violates admission binding: %v", err)
+	}
+}
+
+func TestExportRecordedAtSurvivesRestartAndReplay(t *testing.T) {
+	for _, stamped := range []bool{true, false} {
+		t.Run(fmt.Sprintf("stamped=%t", stamped), func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			repo, base := emptyBaseRepo(t)
+			released := timestampTestExport(t, base)
+			want := fixedNow
+			if stamped {
+				want = fixedNow.Add(5 * time.Minute)
+				released.RecordedAt = want
+			}
+			exports := newStubExports()
+			d := newTestDriver(t, &stubGate{}, exports)
+			d.seeder = recoveryGitSeeder{repo: repo}
+			spec := testStartSpec()
+			spec.Base.BaseSHA = base
+			orphanWithSpec(t, d, phaseExported, released, spec)
+			in, err := d.loadIntent(ctx, testInvoke)
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := fixedNow.Add(time.Hour)
+			clockCalls := 0
+			d.now = func() time.Time { clockCalls++; return now }
+			for attempt := range 2 {
+				// Re-run the import-and-record crash window against the same
+				// immutable row, keeping the released directory until both finish.
+				result, err := d.finish(ctx, in, in.Export.outcome(), d.authority.ImportOptionsRecord, nil)
+				if err != nil || result.Status != exec.StatusCompleted {
+					t.Fatalf("finish attempt %d = %+v, %v; want completed", attempt, result, err)
+				}
+				if got := exports.records[testInvoke].RecordedAt; !got.Equal(want) {
+					t.Fatalf("export time = %v, want pinned time %v", got, want)
+				}
+				now = now.Add(time.Hour)
+			}
+			if err := d.Reconcile(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if result, err := d.Collect(ctx, testInvoke); err != nil || result.Status != exec.StatusCompleted {
+				t.Fatalf("Collect replay = %+v, %v; want completed", result, err)
+			}
+			if clockCalls != 0 {
+				t.Fatalf("export replay read the clock %d times", clockCalls)
+			}
+		})
 	}
 }
 

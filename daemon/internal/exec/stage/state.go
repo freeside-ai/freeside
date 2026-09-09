@@ -50,10 +50,11 @@ const (
 )
 
 // intent is the driver's durable per-invocation record. It pins every value
-// a replayed pipeline must reproduce byte-identically (RecordedAt for the
-// export row, CommitDate for the importer's commit), because a crash between
-// the export write and the result commit replays the pipeline and the
-// write-once store rows must converge rather than collide.
+// a replayed pipeline must reproduce byte-identically (Export.RecordedAt for
+// the export row, with RecordedAt as the legacy fallback, and CommitDate for
+// the importer's commit), because a crash between the export write and the
+// result commit replays the pipeline and the write-once store rows must
+// converge rather than collide.
 type intent struct {
 	InvocationID domain.InvocationID `json:"invocation_id"`
 	RunID        string              `json:"run_id"`
@@ -159,6 +160,13 @@ func providerHandoffInputFrom(in intent) ProviderHandoffInput {
 	}
 }
 
+func (i intent) exportRecordedAt() time.Time {
+	if i.Export != nil && !i.Export.RecordedAt.IsZero() {
+		return i.Export.RecordedAt
+	}
+	return i.RecordedAt
+}
+
 func (i intent) delivery() PromptDelivery {
 	if i.PromptDelivery == "" {
 		return PromptArgument
@@ -228,6 +236,9 @@ func (p phase) valid() bool {
 // releasedExport is the durable form of one gate release: enough to finish
 // the pipeline after a restart without calling the gate again.
 type releasedExport struct {
+	// RecordedAt pins the first attempt to persist the gate's return. Retries
+	// retain this stamp; records written before it existed have a zero value.
+	RecordedAt        time.Time               `json:"recorded_at,omitzero"`
 	Dir               string                  `json:"dir"`
 	Manifest          export.Manifest         `json:"manifest"`
 	Evidence          export.EvidenceManifest `json:"evidence"`

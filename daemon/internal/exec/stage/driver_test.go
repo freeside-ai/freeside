@@ -2462,6 +2462,87 @@ func waitSessionDone(t *testing.T, d *Driver, id domain.InvocationID) {
 	t.Fatal("pipeline session did not exit")
 }
 
+func TestLiveExportRecordsHandoffCompletionTime(t *testing.T) {
+	for _, delta := range []time.Duration{5 * time.Minute, -5 * time.Minute} {
+		t.Run(delta.String(), func(t *testing.T) {
+			testLiveExportCompletionTime(t, fixedNow.Add(delta))
+		})
+	}
+}
+
+func testLiveExportCompletionTime(t *testing.T, completedAt time.Time) {
+	t.Parallel()
+	ctx := context.Background()
+	repo, base := emptyBaseRepo(t)
+	released := timestampTestExport(t, base)
+	now := fixedNow
+	release := make(chan struct{})
+	gate := &stubGate{handoffFn: func(ward.HandoffSpec) (*ward.HandoffResult, error) {
+		<-release
+		now = completedAt
+		return &ward.HandoffResult{
+			ExportDir: released.Dir, Manifest: released.Manifest,
+			Workspace: ward.WorkspaceObservation{ObservedBaseSHA: base},
+		}, nil
+	}}
+	exports := newStubExports()
+	d := newTestDriver(t, gate, exports)
+	d.seeder = recoveryGitSeeder{repo: repo}
+	d.now = func() time.Time { return now }
+	spec := testStartSpec()
+	spec.Base.BaseSHA = base
+	inputs := stageInputs(t, &spec)
+	if err := d.StartWithInputs(ctx, testInvoke, spec,
+		func(context.Context) (exec.StageInputs, error) { return inputs, nil },
+	); err != nil {
+		t.Fatal(err)
+	}
+	d.mu.Lock()
+	sess := d.running[testInvoke]
+	d.mu.Unlock()
+	close(release)
+	<-sess.done
+	if result, err := d.Collect(ctx, testInvoke); err != nil || result.Status != exec.StatusCompleted {
+		t.Fatalf("Collect = %+v, %v; want completed", result, err)
+	}
+	in, err := d.loadIntent(ctx, testInvoke)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := exports.records[testInvoke]
+	want := completedAt
+	if want.Before(fixedNow) {
+		want = fixedNow
+	}
+	if !record.RecordedAt.Equal(want) || !in.Export.RecordedAt.Equal(want) {
+		t.Fatalf("export time = %v, durable stamp = %v, start = %v; want completion %v",
+			record.RecordedAt, in.Export.RecordedAt, in.RecordedAt, want)
+	}
+	if err := domain.ValidateExportBinding(domain.ExecutionAdmission{
+		ID: spec.AdmissionID, InvocationID: testInvoke, Base: spec.Base, AdmittedAt: fixedNow,
+	}, record); err != nil {
+		t.Fatalf("completion violates admission binding: %v", err)
+	}
+}
+
+func timestampTestExport(t *testing.T, base string) *releasedExport {
+	t.Helper()
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "candidate.txt"), []byte("candidate\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp("", "freeside-handoff-"+testRunIDFor(testInvoke)+"-out-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	manifest, err := export.Export(os.DirFS(workspace), dir, export.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &releasedExport{Dir: dir, Manifest: manifest, ObservedBaseSHA: base}
+}
+
 // TestExportConvergenceAcceptsAnIdenticalReplay is the regression for a
 // pointer-comparison convergence check: ExecutionExport carries the optional
 // evidence digest as a pointer, and the constructor and the store's decode
