@@ -176,6 +176,12 @@ type OutcomeRecorder interface {
 type AdmissionAuthority interface {
 	AuthenticateAdmission(context.Context, domain.InvocationID, exec.StartSpec) error
 	AuthenticateStart(context.Context, domain.InvocationID, exec.StartSpec) error
+	// AuthenticateImport requires current admission and import policy for a
+	// handoff already authenticated as released by Gate. It grants no authority
+	// to start or resume a provider and does not require its old launch proof.
+	AuthenticateImport(context.Context, domain.InvocationID, exec.StartSpec) error
+	// ImportOptions applies current import policy only after Gate authenticates
+	// the released handoff. It does not authorize provider execution.
 	ImportOptions(context.Context, domain.InvocationID, exec.StartSpec, importer.Options) (importer.Options, error)
 	// ImportOptionsRecord reconstructs the exact policy for a released export
 	// from immutable admission and resolved-policy records.

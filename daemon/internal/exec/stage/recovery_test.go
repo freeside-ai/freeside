@@ -628,7 +628,7 @@ func TestLiveImportPhasePersistenceRetriesBeforeCurrentPolicy(t *testing.T) {
 				return nil
 			}
 			protected = true
-			d.authority = stubAuthority{startErr: drift, recordImportCalls: &recordImportCalls}
+			d.authority = stubAuthority{startErr: drift, importErr: drift, recordImportCalls: &recordImportCalls}
 			return os.Chmod(d.dir, 0o500) //nolint:gosec // G302: force the phase write to fail
 		},
 	}
@@ -722,7 +722,7 @@ func TestRecoveredImportPhasePersistenceRetriesBeforeCurrentPolicy(t *testing.T)
 				return nil
 			}
 			protected = true
-			d.authority = stubAuthority{startErr: drift, recordImportCalls: &recordImportCalls}
+			d.authority = stubAuthority{startErr: drift, importErr: drift, recordImportCalls: &recordImportCalls}
 			return os.Chmod(d.dir, 0o500) //nolint:gosec // G302: force the phase write to fail
 		},
 	}
@@ -813,7 +813,7 @@ func TestPreHandoffCrashRerunsInsteadOfRecovering(t *testing.T) {
 func TestCurrentPolicyRequiredForWorkAndImportRetries(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	drift := errors.New("current backend conformance changed")
+	drift := errors.New("current admission policy changed")
 
 	for _, preterminalPhase := range []phase{phaseSeeding, phaseRunning, phaseImportPending} {
 		t.Run(string(preterminalPhase), func(t *testing.T) {
@@ -837,7 +837,7 @@ func TestCurrentPolicyRequiredForWorkAndImportRetries(t *testing.T) {
 					t.Fatalf("record current import start: %v", err)
 				}
 			}
-			d.authority = stubAuthority{startErr: drift}
+			d.authority = stubAuthority{startErr: drift, importErr: drift}
 			if _, err := d.listIntents(ctx); !errors.Is(err, drift) {
 				t.Fatalf("list %s intent = %v, want current-policy refusal",
 					preterminalPhase, err)
@@ -932,6 +932,40 @@ func TestGoneExportConvergesToLostAfterCurrentPolicyDrift(t *testing.T) {
 
 func TestSurvivingExportCompletesFromAdmissionAfterCurrentPolicyDrift(t *testing.T) {
 	t.Parallel()
+	testSurvivingExportAfterDrift(t, false)
+}
+
+func TestStartedImportCompletesAfterBackendDrift(t *testing.T) {
+	t.Parallel()
+	testSurvivingExportAfterDrift(t, true)
+}
+
+func TestMarkedImportRequiresAuthenticatedRelease(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	gate := &stubGate{authenticateFn: func(string, string) error {
+		return ward.ErrInvalidJournalRecord
+	}}
+	exports := newStubExports()
+	d := newTestDriver(t, gate, exports)
+	in := orphan(t, d, phaseImportPending, &releasedExport{
+		Dir:             filepath.Join(os.TempDir(), "freeside-handoff-"+testRunIDFor(testInvoke)+"-out-unproven"),
+		Manifest:        export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}},
+		ObservedBaseSHA: testBase.BaseSHA,
+	})
+	if err := d.recordCurrentImportStart(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Reconcile(ctx); !errors.Is(err, ward.ErrInvalidJournalRecord) {
+		t.Fatalf("unproven released output accepted: %v", err)
+	}
+	if len(exports.records) != 0 || len(gate.specs) != 0 {
+		t.Fatal("unproven release imported or started provider work")
+	}
+}
+
+func testSurvivingExportAfterDrift(t *testing.T, currentImport bool) {
+	t.Helper()
 	ctx := context.Background()
 	repo := t.TempDir()
 	if err := runRecoveryGit(ctx, repo, "init", "-q"); err != nil {
@@ -963,15 +997,37 @@ func TestSurvivingExportCompletesFromAdmissionAfterCurrentPolicyDrift(t *testing
 	gate := &stubGate{}
 	d := newTestDriver(t, gate, exports)
 	d.seeder = recoveryGitSeeder{repo: repo}
-	d.authority = stubAuthority{startErr: errors.New("current backend conformance changed")}
+	currentCalls, recordedCalls := 0, 0
+	authority := stubAuthority{
+		startErr:           errors.New("current backend conformance changed"),
+		currentImportCalls: &currentCalls, recordImportCalls: &recordedCalls,
+	}
+	if !currentImport {
+		authority.importErr = errors.New("current import policy changed")
+	}
+	d.authority = authority
 	spec := testStartSpec()
 	spec.Base.BaseSHA = baseSHA
 	in := orphanWithSpec(t, d, phaseExported, &releasedExport{
 		Dir: outDir, Manifest: manifest, ObservedBaseSHA: spec.Base.BaseSHA,
 	}, spec)
+	if currentImport {
+		if err := d.recordCurrentImportStart(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.advance(&in, phaseImportPending, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	if err := d.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile surviving export after conformance drift: %v", err)
+	}
+	if currentImport && (currentCalls == 0 || recordedCalls != 0) {
+		t.Fatalf("marked recovery used current=%d, recorded=%d import calls", currentCalls, recordedCalls)
+	}
+	if !currentImport && (recordedCalls == 0 || currentCalls != 0) {
+		t.Fatalf("legacy recovery used current=%d, recorded=%d import calls", currentCalls, recordedCalls)
 	}
 	result, err := d.Collect(ctx, in.InvocationID)
 	if err != nil {
@@ -985,6 +1041,12 @@ func TestSurvivingExportCompletesFromAdmissionAfterCurrentPolicyDrift(t *testing
 	}
 	if len(gate.specs) != 0 {
 		t.Fatal("export recovery started new agent work")
+	}
+	if err := d.Reconcile(ctx); err != nil {
+		t.Fatalf("repeated recovery: %v", err)
+	}
+	if len(exports.records) != 1 || len(gate.specs) != 0 {
+		t.Fatal("repeated recovery changed the export or started agent work")
 	}
 }
 
@@ -1016,7 +1078,7 @@ func TestLiveImportRefusalRemainsBoundToCurrentPolicy(t *testing.T) {
 	}}
 	d := newTestDriver(t, gate, newStubExports())
 	d.authority = stubAuthority{
-		startErr: drift, currentImportCalls: &currentImportCalls,
+		startErr: drift, importErr: drift, currentImportCalls: &currentImportCalls,
 		recordImportCalls: &recordImportCalls,
 	}
 	in := orphan(t, d, phaseSeeding, nil)

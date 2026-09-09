@@ -1676,3 +1676,14 @@ Revision 52 ("Approve Remediation After Publication Rechecks"):
    durable acknowledgment-only refusal when no PR exists, instead of granting
    first-publication authority. Completed work also refuses continuation.
    (User; #1247; devlog 2026-09-08-1950-remediation-continuation.md.)
+
+Revision 53 ("Exclude Ignored Build Output From Published Candidates"):
+
+1. **Trusted base ignore rules can exclude new out-of-scope regular files.**
+   The owner assigned a deterministic repair after generated build output again
+   rejected an otherwise completed live execution. Excluded files never enter
+   constructed commits; all other findings and security checks remain intact.
+   Tracked files, explicitly allowed additions, and no-change handoffs retain
+   their behavior. Candidate and host ignore rules have no authority.
+   (User assignment; implementation decision for #1132;
+   devlog 2026-09-09-1040-ignored-build-output.md.)

@@ -347,9 +347,32 @@ func (c *productionCommitAuthorAuthenticationCache) forget(id domain.InvocationI
 	delete(c.entries, id)
 }
 
+type admissionReadKind string
+
+const (
+	admissionRecorded     admissionReadKind = "recorded"
+	admissionForExecution admissionReadKind = "execution"
+	admissionForImport    admissionReadKind = "import"
+)
+
+var AllAdmissionReadKinds = []admissionReadKind{admissionRecorded, admissionForExecution, admissionForImport}
+
+func (k admissionReadKind) valid() bool {
+	switch k {
+	case admissionRecorded, admissionForExecution, admissionForImport:
+		return true
+	default:
+		return false
+	}
+}
+
 func (a storeAdmissionAuthority) admission(
-	ctx context.Context, id domain.InvocationID, spec exec.StartSpec, requireCurrent bool,
+	ctx context.Context, id domain.InvocationID, spec exec.StartSpec, kind admissionReadKind,
 ) (domain.ExecutionAdmission, []string, error) {
+	if !kind.valid() {
+		return domain.ExecutionAdmission{}, nil, fmt.Errorf("invalid admission read kind %q", kind)
+	}
+	requireCurrent := kind != admissionRecorded
 	var admission domain.ExecutionAdmission
 	var allowedPaths []string
 	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -362,14 +385,16 @@ func (a storeAdmissionAuthority) admission(
 		if err != nil {
 			return err
 		}
-		if requireCurrent {
+		if kind == admissionForExecution {
 			// Existing attempts bypass fresh admission on replay. Re-run the
 			// recording-time conformance check here so an intent admitted under
 			// backend configuration A cannot start or recover after this daemon
-			// has restarted under a current proof for B. The authenticate gate
-			// tolerates a same-configuration recheck in progress (a supersession
-			// marker for A) so this daemon's own startup re-proof cannot make an
-			// in-flight admission permanently unauthenticatable (issue #761); a
+			// has restarted under a current proof for B. Authenticated released
+			// output can only be imported, so its current-policy read omits this
+			// launch gate while retaining the admission and path checks.
+			// The authenticate gate tolerates a same-configuration recheck in
+			// progress (a supersession marker for A) so this daemon's startup
+			// re-proof cannot permanently reject an in-flight admission (#761); a
 			// proof for a different configuration B still refuses.
 			if err := tx.AuthenticateBackendConformant(ctx, admission); err != nil {
 				return err
@@ -496,14 +521,24 @@ func recordedPathAllowlist(
 func (a storeAdmissionAuthority) AuthenticateAdmission(
 	ctx context.Context, id domain.InvocationID, spec exec.StartSpec,
 ) error {
-	_, _, err := a.admission(ctx, id, spec, false)
+	_, _, err := a.admission(ctx, id, spec, admissionRecorded)
 	return err
 }
 
 func (a storeAdmissionAuthority) AuthenticateStart(
 	ctx context.Context, id domain.InvocationID, spec exec.StartSpec,
 ) error {
-	admission, _, err := a.admission(ctx, id, spec, true)
+	admission, _, err := a.admission(ctx, id, spec, admissionForExecution)
+	if err != nil {
+		return err
+	}
+	return a.authenticateInvocationStart(ctx, id, admission, spec.Base.Repo)
+}
+
+func (a storeAdmissionAuthority) AuthenticateImport(
+	ctx context.Context, id domain.InvocationID, spec exec.StartSpec,
+) error {
+	admission, _, err := a.admission(ctx, id, spec, admissionForImport)
 	if err != nil {
 		return err
 	}
@@ -563,7 +598,7 @@ func (a storeAdmissionAuthority) authenticateSpecificationInvocation(
 func (a storeAdmissionAuthority) ImportOptions(
 	ctx context.Context, id domain.InvocationID, spec exec.StartSpec, opts importer.Options,
 ) (importer.Options, error) {
-	admission, allowedPaths, err := a.admission(ctx, id, spec, true)
+	admission, allowedPaths, err := a.admission(ctx, id, spec, admissionForImport)
 	if err != nil {
 		return importer.Options{}, err
 	}
@@ -623,7 +658,7 @@ func (a storeAdmissionAuthority) applySpecificationFindingProfile(
 func (a storeAdmissionAuthority) ImportOptionsRecord(
 	ctx context.Context, id domain.InvocationID, spec exec.StartSpec, opts importer.Options,
 ) (importer.Options, error) {
-	admission, allowedPaths, err := a.admission(ctx, id, spec, false)
+	admission, allowedPaths, err := a.admission(ctx, id, spec, admissionRecorded)
 	if err != nil {
 		return importer.Options{}, err
 	}
