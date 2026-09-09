@@ -32,7 +32,7 @@ authorization. Its token stays in process memory and must not be printed.
 
 - **Toolchain:** Go (single static binary, supervised by launchd/systemd, dedicated user). Module `github.com/freeside-ai/freeside/daemon`, pinned in `go.mod`; build/test/run commands are in `AGENTS.md`.
 - **Scope boundary:** daemon-side code only. The daemon/client contract is defined in `api/`; server-side code implementing it lives here, never hand-authored to diverge from the spec.
-- **Status:** initialized in Phase 1A (Wave 0 unit 1). `internal/` holds one placeholder package per lane (`signet`, `export`, `importer`, `verify`, `publish`, `ward`, `domain`, `engine`); each lane's real code lands with its Wave unit.
+- **Status:** every lane in `internal/` holds real, tested Go code, not placeholders, and the daemon builds as `freesided` (`cmd/freesided`). Per-wave implementation progress lives in the pinned `Wave N (…) tracking` issue, resolved by the plan's [wave-tracker rule](../docs/plan.md#implementation-coordination-building-freeside-with-agents).
 
 ## Testing conventions
 
