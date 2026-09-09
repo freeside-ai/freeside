@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 52
+revision: 53
 status: active
-updated: 2026-09-08
+updated: 2026-09-09
 ---
 
 # Freeside
@@ -1418,6 +1418,17 @@ The importer never trusts the workspace's `.git`, hooks, configuration, or
 agent-written manifests. It enforces the exact base SHA, canonical paths,
 allowlists, size limits, control-plane restrictions, and Section [5.4](#54-credential-modes-egress-profiles-and-concurrency) best-effort
 secret scanning.
+
+For repository publication, a new regular file outside the declared scope may
+be excluded from the constructed candidate only when the exact trusted base's
+`.gitignore` rules ignore it. Tracked changes and explicitly in-scope additions
+keep their existing semantics. Candidate ignore rules, workspace Git state,
+checkout-local excludes, and host Git configuration cannot authorize exclusion.
+The full returned content still undergoes the existing integrity, structural,
+secret, size, collision, and control-plane checks. Only the allowlist finding
+for an excluded addition is removed; no such file enters a constructed commit.
+Specification imports and handoffs requiring no repository changes retain their
+existing behavior.
 
 Permanent tests include malicious manifests, commit plans, blobs, and
 evidence. Trusted verification recipes load only from approved control-plane
@@ -4354,18 +4365,16 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 52 ("Approve Remediation After Publication Rechecks"):
+Revision 53 ("Exclude Ignored Build Output From Published Candidates"):
 
-1. **Approve grants one new cycle after a recheck needs code changes.** The
-   accepted dispute command binds the rechecked task, findings round, and
-   remediation continuation. Rechecks and command replay grant no producer
-   authority. Successor history and old evidence remain immutable; fresh
-   verification and independent review remain under the run-wide bound. An
-   unpublished blocked cycle retains its place in the chain, while the last
-   published ancestor supplies the exact PR head to update. The owner chose a
-   durable acknowledgment-only refusal when no PR exists, instead of granting
-   first-publication authority. Completed work also refuses continuation.
-   (User; #1247; devlog 2026-09-08-1950-remediation-continuation.md.)
+1. **Trusted base ignore rules can exclude new out-of-scope regular files.**
+   The owner assigned a deterministic repair after generated build output again
+   rejected an otherwise completed live execution. Excluded files never enter
+   constructed commits; all other findings and security checks remain intact.
+   Tracked files, explicitly allowed additions, and no-change handoffs retain
+   their behavior. Candidate and host ignore rules have no authority.
+   (User assignment; implementation decision for #1132;
+   devlog 2026-09-09-1040-ignored-build-output.md.)
 
 ## 14. Risks
 

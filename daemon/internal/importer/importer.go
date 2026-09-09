@@ -98,6 +98,27 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 	}
 	findings = append(findings, secretFindings...)
 	findings = append(findings, evidenceFindings...)
+	ignored, err := ignoredAdditions(ctx, g, base, changes, opts, scratch)
+	if err != nil {
+		return Result{}, err
+	}
+	// Security and size checks above still cover the complete returned change
+	// set. Only the scope finding for excluded, base-ignored additions is no
+	// longer applicable: those files cannot enter any constructed commit.
+	kept := changes[:0]
+	for _, c := range changes {
+		if !ignored[c.path] {
+			kept = append(kept, c)
+		}
+	}
+	changes = kept
+	keptFindings := findings[:0]
+	for _, f := range findings {
+		if f.Kind != FindingAllowlistViolation || !ignored[f.Path] {
+			keptFindings = append(keptFindings, f)
+		}
+	}
+	findings = keptFindings
 	if opts.Policy.CommitPlan == domain.CommitPlanPlanPreferred && planPresent {
 		findings = append(findings, scanCommitPlanStrings(planRaw)...)
 	}

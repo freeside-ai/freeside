@@ -68,6 +68,9 @@
 //   - derive.go   change derivation against the enforced base (the
 //     manifest is a full snapshot; what changed is computed here, never
 //     taken from workspace parentage)
+//   - ignored.go  exact-base ignore matching for out-of-scope regular
+//     additions; all original security findings remain, excluded content
+//     never enters construction
 //   - importer.go the Import orchestrator and Result
 //   - policy.go   §5.5/§5.8 path classes, the declared-scope
 //     allowlist, and size policy over the change set
