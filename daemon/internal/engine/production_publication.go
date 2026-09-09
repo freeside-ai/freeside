@@ -687,7 +687,7 @@ func (w *productionPublicationWorkflow) authenticatesTerminal(
 		task.Replay.ManifestDigest != executionExport.ManifestDigest ||
 		!sameOptionalDigest(task.Replay.EvidenceManifestDigest, executionExport.EvidenceManifestDigest) ||
 		(task.Replay.CommitPlanDigest != nil) != executionExport.CommitPlanPresent ||
-		!task.Replay.ImportOptions.CommitDate.Equal(executionExport.RecordedAt) {
+		!productionReplayPrecedesCompletion(task.Replay.ImportOptions.CommitDate, executionExport.RecordedAt) {
 		return false, fmt.Errorf("production terminal disagrees with durable publication task: %w",
 			domain.ErrParentKeyMismatch)
 	}
@@ -809,7 +809,7 @@ func RecordProductionExecutionExport(
 		replay.ManifestDigest != executionExport.ManifestDigest ||
 		!sameOptionalDigest(replay.EvidenceManifestDigest, executionExport.EvidenceManifestDigest) ||
 		(replay.CommitPlanDigest != nil) != executionExport.CommitPlanPresent ||
-		!replay.ImportOptions.CommitDate.Equal(executionExport.RecordedAt) {
+		!productionReplayPrecedesCompletion(replay.ImportOptions.CommitDate, executionExport.RecordedAt) {
 		return fmt.Errorf("production replay disagrees with execution export: %w", domain.ErrParentKeyMismatch)
 	}
 	if err := validateProductionReplayRecord(replay); err != nil {
@@ -2065,7 +2065,7 @@ func (w *productionPublicationWorkflow) loadBinding(
 		binding.replay.ManifestDigest != binding.export.ManifestDigest ||
 		!sameOptionalDigest(binding.replay.EvidenceManifestDigest, binding.export.EvidenceManifestDigest) ||
 		(binding.replay.CommitPlanDigest != nil) != binding.export.CommitPlanPresent ||
-		!binding.replay.ImportOptions.CommitDate.Equal(binding.export.RecordedAt) ||
+		!productionReplayPrecedesCompletion(binding.replay.ImportOptions.CommitDate, binding.export.RecordedAt) ||
 		(task.reevaluation == nil && binding.admission.TrustProfileDigest != nil &&
 			binding.profile.ProfileDigest != *binding.admission.TrustProfileDigest) ||
 		binding.profile.Repo != binding.admission.Base.Repo ||
@@ -2080,6 +2080,13 @@ func (w *productionPublicationWorkflow) loadBinding(
 		return productionBinding{}, err
 	}
 	return binding, nil
+}
+
+// Replay uses the start-pinned commit date to reproduce HeadSHA. RecordedAt
+// describes export completion and may be later; legacy exports use the same
+// instant for both. Neither timestamp may be rewritten during reconstruction.
+func productionReplayPrecedesCompletion(commitDate, recordedAt time.Time) bool {
+	return !commitDate.IsZero() && !recordedAt.IsZero() && !commitDate.After(recordedAt)
 }
 
 func validateProductionReplayOptions(
