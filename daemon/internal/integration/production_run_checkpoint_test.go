@@ -16,8 +16,8 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-// A retained checkpoint proves publication history and continuation authority;
-// only a current open ready binding proves a newly completed publication.
+// A retained checkpoint proves authenticated publication history, not permission
+// to continue work. Only a current open ready binding proves current readiness.
 type realRunCheckpoint struct {
 	State   string                    `json:"state"`
 	Binding domain.ReadyItemPRBinding `json:"binding"`
@@ -65,11 +65,12 @@ func readRealRunCheckpoint(ctx context.Context, tx *store.ReadTx, runID domain.R
 			return result, err
 		}
 		if selected == current {
-			if result.ready.Status != domain.StatusSuperseded {
-				return result, fmt.Errorf("retained ready item is not awaiting feedback")
-			}
-			if err := realRunFeedbackContinuation(ctx, tx, result.Binding); err != nil {
-				return result, err
+			if result.ready.Status == domain.StatusSuperseded {
+				if err := realRunFeedbackContinuation(ctx, tx, result.Binding); err != nil {
+					return result, err
+				}
+			} else if result.ready.Status != domain.StatusDismissed {
+				return result, fmt.Errorf("retained ready item is neither dismissed nor awaiting feedback")
 			}
 		}
 		// A different current ID was obtained through the authenticated sealed

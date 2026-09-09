@@ -297,6 +297,9 @@ func testPublishedFeedbackRetry(t *testing.T, scenario string) {
 	}
 	if completeFeedbackSuccessor(t, p, "inv-operator-feedback-retry-feedback", ready.Item.PRHeadSHA, scenario) {
 		assertSuccessorCorruptionRejected(t, p)
+		if scenario == "clean" {
+			assertDismissedRunHistory(t, p)
+		}
 	}
 }
 
@@ -1011,7 +1014,7 @@ func assertRealRunCheckpoint(t *testing.T, p *productionPublicationHarness, reta
 		if err != nil {
 			return err
 		}
-		if checkpoint.State != state {
+		if state != "" && checkpoint.State != state {
 			return fmt.Errorf("checkpoint state %q, want %q", checkpoint.State, state)
 		}
 		return nil

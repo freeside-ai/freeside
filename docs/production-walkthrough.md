@@ -81,6 +81,15 @@ upgrade has opened writable, it never rolls back the database or restores an
 unchecked older service. This protects startup writes and preserved evidence;
 the saved encrypted checkpoint is recovery evidence, not an automatic rollback.
 
+A dismissed current ready card can also supply a retained historical checkpoint.
+Resume restores access to the same run and decision history while the card stays
+dismissed. It does not grant a Retry, return-to-agent, or publication action.
+The remote PR must still be open at the authenticated head, and a recorded
+work-unit completion still refuses this resume path. Stopped cards do not qualify
+as dismissed history. Preserve the successful publication checkpoint from before
+dismissal: the ordinary `verify` command still requires an open ready card and
+will refuse the dismissed one.
+
 Before completing the upgraded session, install its exact reviewed daemon using
 the existing Mac installer, with `--daemon-path /absolute/new-session/freesided`.
 The restoration gate compares the installed daemon's Go build ID with the retained

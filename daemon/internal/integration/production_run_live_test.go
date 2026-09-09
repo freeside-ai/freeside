@@ -502,7 +502,7 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 		t.Fatal(err)
 	}
 	if checkpoint.State == "retained" {
-		t.Logf("retained production checkpoint verified: run=%s prior PR #%d at head %s; feedback is not a new ready result", runID, outcome.PRNumber, export.HeadSHA)
+		t.Logf("retained production checkpoint verified: run=%s prior PR #%d at head %s; publication history is not a current ready result", runID, outcome.PRNumber, export.HeadSHA)
 		return
 	}
 
