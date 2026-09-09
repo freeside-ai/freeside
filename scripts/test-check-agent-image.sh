@@ -226,17 +226,34 @@ run_real_work() {
 	preflight_mode=${6:-ok}
 	seed_mode=${7:-ok}
 	checkout_mode=${8:-clean}
+	resume_mode=${9:-}
 	input_dir=$CASE_DIR/inputs
   stub_bin=$CASE_DIR/bin
   mkdir -p "$input_dir" "$stub_bin"
   : >"$input_dir/spec.md"
   : >"$input_dir/policy.json"
   : >"$input_dir/publication.json"
+  touch "$input_dir/prompts.json" "$input_dir/specifier.md" "$input_dir/remediator.md" "$input_dir/CLAUDE.md"
+  mkdir -p "$CASE_DIR/review-input"
+  touch "$CASE_DIR/review-input/auth.json" "$CASE_DIR/review-input/AGENTS.md"
 	cat >"$stub_bin/go" <<'GO_STUB'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'called\n' >"${STUB_DIR:?}/go.log"
 case " ${*} " in
+*" tool buildid "*)
+  if [[ ( "${RESUME_STUB_MODE:-}" == post-migration-fail || "${RESUME_STUB_MODE:-}" == recovery-mismatch ) && "$3" == */old/freesided ]]; then
+    printf '%s\n' old-build-id
+  else
+    printf '%s\n' fixture-build-id
+  fi
+  exit 0 ;;
+*" test -c "*)
+  while [[ "$1" != -o ]]; do shift; done
+  printf '#!/usr/bin/env bash\nexec %q test -v\n' "$0" > "$2"
+  chmod +x "$2"
+  exit 0
+  ;;
 *" build "*)
 	if [ "${GO_STUB_MODE:-}" = build-fail ]; then
 		exit 97
@@ -265,7 +282,16 @@ if [ "${1:-}" = rig ]; then
 		if [[ "${GO_STUB_RIG_HOLD_MODE:-ok}" == acquire-hang ]]; then
 			while :; do sleep 1; done
 		fi
-		printf '%s\n' '{"token":"test-token","manifest":{"version":1,"owner":{"user":"test","host":"host","pid":1},"acquired_at":"2026-08-15T12:00:00Z","resources":{"state_root":"/state","database_path":"/state/freeside.db","listen_address":"127.0.0.1:0","seed_root":"/seed","containers":[]},"token_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}'
+		python3 - <<'PYRIG'
+import json, os
+state = os.environ['FREESIDE_REAL_RUN_STATE_ROOT']
+print(json.dumps({'token': 'test-token', 'manifest': {
+    'version': 1, 'owner': {'user': 'test', 'host': 'host', 'pid': 1},
+    'acquired_at': '2026-08-15T12:00:00Z', 'token_sha256': 'a' * 64,
+    'resources': {'state_root': state, 'database_path': state + '/freeside.db',
+                  'listen_address': os.environ['FREESIDE_REAL_RUN_LISTEN'],
+                  'seed_root': os.environ['FREESIDE_REAL_RUN_SEED_ROOT'], 'containers': []}}}))
+PYRIG
 		printf '%s\n' "$*" >"${STUB_DIR:?}/rig-hold.args"
 		if [ "${GO_STUB_RIG_HOLD_MODE:-ok}" = release-fail ]; then
 			trap 'exit 17' USR1
@@ -337,9 +363,15 @@ if [ "${1:-}" = preflight ]; then
 	printf '%s\n' 'preflight' >>"${STUB_DIR:?}/lifecycle.log"
 	printf '%s\n' "$@" >"${STUB_DIR:?}/preflight.args"
 	: >"${STUB_DIR:?}/preflight.called"
+	if [[ -f "$STUB_DIR/intermediate-schema" && ! -f "$STUB_DIR/migration-continued" ]]; then exit 91; fi
 	if [ "${GO_STUB_PREFLIGHT_MODE:-ok}" = fail ]; then
 		printf '%s\n' '{"version":"freeside-production-composition-v1","status":"failed","checks":[{"name":"reviewer_image","status":"failed","evidence":"reviewer image is stale","remediation":"rebuild and re-pin the reviewer image"}]}'
 		exit 1
+	fi
+	if [[ -f "$STUB_DIR/old/composition-manifest.json" ]]; then
+		[[ "${RESUME_STUB_MODE:-}" != post-migration-fail ]] || exit 91
+		cat "$STUB_DIR/old/composition-manifest.json"
+		exit 0
 	fi
 	printf '%s\n' '{"version":"freeside-production-composition-v1","status":"passed","identity":{"implementation_run_id":"impl-run","implementation_invocation_id":"impl-inv"},"checks":[{"name":"build_egress_reachability","status":"not_run","evidence":"read-only preflight"}]}'
 	exit 0
@@ -405,6 +437,7 @@ FREESIDED_STUB
 	chmod +x "$output"
 	;;
 *" test "*)
+	if [[ "${FREESIDE_REAL_RUN_SCHEMA_TEST:-}" == 1 ]]; then exit 0; fi
 	[ -z "${FREESIDE_REAL_RUN_RUN_ID+x}" ]
 	[ -z "${FREESIDE_REAL_RUN_INVOCATION+x}" ]
 	if [ -z "${FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION:-}" ]; then
@@ -412,6 +445,7 @@ FREESIDED_STUB
 		if [ "${GO_STUB_SEED_MODE:-ok}" = fail ]; then
 			exit 97
 		fi
+		if [[ -f "$STUB_DIR/intermediate-schema" ]]; then touch "$STUB_DIR/migration-continued"; fi
 		exit 0
 	fi
 	if [ "${GO_STUB_MODE:-}" != lifecycle ]; then
@@ -463,6 +497,11 @@ FREESIDED_STUB
 	missing-marker) echo 'PASS'; exit 0 ;;
 	*) exit 96 ;;
 	esac
+	if [[ -n "${FREESIDE_REAL_RUN_CHECKPOINT_PATH:-}" ]]; then
+		state=ready
+		[[ "${FREESIDE_REAL_RUN_RETAINED:-0}" != 1 ]] || state=retained
+		printf '{"state":"%s","binding":{"repo":"freeside-ai/freeside","repository_id":1,"pr_number":7,"head_sha":"fixture-head","base_ref":"main"},"branch":"fix/fixture"}\n' "$state" > "$FREESIDE_REAL_RUN_CHECKPOINT_PATH"
+	fi
 	printf '%s\n' 'real production pipeline verified: PR #7'
 	# A separate operator requests completion only after the foreground owner
 	# enters walkthrough. Do not make verifier success itself end the session.
@@ -509,7 +548,7 @@ exit 0
 LAUNCHCTL_STUB
 	cat >"$stub_bin/curl" <<'CURL_STUB'
 #!/usr/bin/env bash
-printf '%s\n' '{"status":"ok"}'
+printf '%s\n' '{"status":"ok","version":"0123456789ab"}'
 CURL_STUB
 	chmod +x "$stub_bin/launchctl" "$stub_bin/curl"
 	cat >"$stub_bin/git" <<'GIT_STUB'
@@ -547,6 +586,85 @@ SLEEP_STUB
 	fi
   digest="sha256:$(printf 'a%.0s' {1..64})"
 
+  run_args=("$input_dir/spec.md" "$input_dir/policy.json" "$input_dir/publication.json")
+  if [[ -n "$resume_mode" ]]; then
+    mkdir -p "$CASE_DIR/old/submission-inputs" "$CASE_DIR/state/freeside.db.checkpoints"
+    cp "$input_dir/spec.md" "$CASE_DIR/old/submission-inputs/spec.json"
+    cp "$input_dir/policy.json" "$input_dir/publication.json" "$CASE_DIR/old/submission-inputs/"
+    printf '%s\n' completed > "$CASE_DIR/old/status"
+    printf '%s\n' "$CASE_DIR/state" > "$CASE_DIR/old/state-root"
+    printf '%s\n' '127.0.0.1:8677' > "$CASE_DIR/old/listener"
+    printf '%s\n' impl-run > "$CASE_DIR/old/implementation-run"
+    printf '%s\n' impl-inv > "$CASE_DIR/old/implementation-invocation"
+    printf '%s\n' '{"run_id":"impl-run","implementation_invocation_id":"impl-inv","specification_run_id":"spec-run"}' > "$CASE_DIR/old/submit.json"
+    python3 - "$CASE_DIR" <<'PYFIXTURE'
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1])
+(p / 'old/rig-acquisition.json').write_text(json.dumps({'manifest': {'resources': {'seed_root': str(p / 'seed')}}}))
+fields = 'repository repository_id base_ref base_sha profile_digest review_configuration_digest allowed_paths claude_auth_identity claude_auth_volume codex_auth_identity images identity build_egress_configuration_digest'.split()
+composition = dict.fromkeys(fields)
+composition['identity'] = {'implementation_run_id': 'impl-run', 'implementation_invocation_id': 'impl-inv'}
+(p / 'old/composition-manifest.json').write_text(json.dumps(composition))
+PYFIXTURE
+    touch "$CASE_DIR/state/freeside.db"
+    printf '%s\n' 'retained encrypted checkpoint fixture' > "$CASE_DIR/state/freeside.db.checkpoints/latest.backup"
+    [[ "$resume_mode" != live ]] || printf '%s\n' walkthrough > "$CASE_DIR/old/status"
+    if [[ "$resume_mode" == recovery || "$resume_mode" == recovery-mismatch ]]; then
+      printf '%s\n' recovery-required > "$CASE_DIR/old/status"
+      touch "$CASE_DIR/old/runtime-upgrade-started" "$CASE_DIR/old/rig-release-verified"
+      cp "$CASE_DIR/old/composition-manifest.json" "$CASE_DIR/old/retained-composition.json"
+      printf '%s\n' 0123456789ab > "$CASE_DIR/old/build-version"
+      printf '#!/usr/bin/env bash\nexit 0\n' > "$CASE_DIR/old/verify-real-run"
+      chmod +x "$CASE_DIR/old/verify-real-run"
+    fi
+    cat > "$stub_bin/gh" <<'GH_STUB'
+#!/usr/bin/env bash
+printf '%s\n' '{"state":"open","number":7,"head":{"sha":"fixture-head","ref":"fix/fixture","repo":{"id":1}},"base":{"ref":"main","repo":{"id":1}}}'
+GH_STUB
+    chmod +x "$stub_bin/gh"
+    cat > "$CASE_DIR/old/freesided" <<'OLD_STUB'
+#!/usr/bin/env bash
+printf '%s\n' old-preflight >>"$STUB_DIR/lifecycle.log"
+if [[ "${RESUME_STUB_MODE:-}" == mismatch || "${RESUME_STUB_MODE:-}" == recovery-mismatch ]]; then
+  python3 - "$STUB_DIR/old/composition-manifest.json" <<'PYCHANGED'
+import json, sys
+value = json.load(open(sys.argv[1]))
+value['base_sha'] = 'changed-input'
+print(json.dumps(value))
+PYCHANGED
+else
+  cat "$STUB_DIR/old/composition-manifest.json"
+fi
+OLD_STUB
+    chmod +x "$CASE_DIR/old/freesided"
+    run_args=(--resume-session "$CASE_DIR/old")
+  fi
+  run_command=("$REAL_RUN" "${run_args[@]}")
+  if [[ "$resume_mode" == migration-* ]]; then
+    cat > "$stub_bin/migration-retry" <<'RETRY_STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+real_run=$1
+shift
+mode=$RESUME_STUB_MODE
+seed_mode=ok
+[[ "$mode" != migration-before-write ]] || seed_mode=fail
+set +e
+RESUME_STUB_MODE=post-migration-fail GO_STUB_SEED_MODE=$seed_mode "$real_run" "$@"
+first_rc=$?
+set -e
+[[ "$first_rc" != 0 ]] || exit 99
+sessions=("$STUB_DIR"/real-work-session.*)
+touch "$STUB_DIR/intermediate-schema"
+if [[ "$mode" == migration-changed-input ]]; then
+  printf '%s\n' changed >>"$FREESIDE_REAL_RUN_PROMPT_PACKAGE"
+fi
+export RESUME_STUB_MODE=continued GO_STUB_SEED_MODE=ok
+exec "$real_run" --resume-session "${sessions[0]}"
+RETRY_STUB
+    chmod +x "$stub_bin/migration-retry"
+    run_command=("$stub_bin/migration-retry" "$REAL_RUN" "${run_args[@]}")
+  fi
   set +e
 	OUT=$(env \
 		PATH="$stub_bin:$TMP:$PATH" \
@@ -557,6 +675,8 @@ SLEEP_STUB
 		GO_STUB_VERIFY_MODE="$verify_mode" \
 		GO_STUB_PREFLIGHT_MODE="$preflight_mode" \
 		GO_STUB_SEED_MODE="$seed_mode" \
+		RESUME_STUB_MODE="$resume_mode" \
+		FREESIDE_REAL_RUN_RESTORE_DAEMON="$CASE_DIR/old/freesided" \
 		GIT_STUB_CHECKOUT_MODE="$checkout_mode" \
 		REAL_SLEEP="$real_sleep" \
 		FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS="${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}" \
@@ -593,8 +713,7 @@ SLEEP_STUB
     FREESIDE_REAL_RUN_ALLOWED_PATHS=scripts/ \
 		FREESIDE_REAL_RUN_RUN_ID=stale-generic-run \
 		FREESIDE_REAL_RUN_INVOCATION=stale-generic-invocation \
-    "$REAL_RUN" "$input_dir/spec.md" "$input_dir/policy.json" \
-    "$input_dir/publication.json" </dev/null 2>&1)
+    "${run_command[@]}" </dev/null 2>&1)
   RC=$?
   set -e
 }
@@ -1443,6 +1562,73 @@ done
 
 # Keep the production-lifecycle supervisor fixtures on the existing scripts
 # CI path without widening automation-control files.
+begin_case "retained restart authenticates history without submission"
+run_real_work lifecycle current ok ok success ok ok clean resume
+assert_rc 0
+assert_contains "Retained endpoint restored"
+assert_lacks "submitting the work item"
+assert_not_exists "$CASE_DIR/submit.args"
+[[ "$(cat "$CASE_DIR/old/status")" == completed ]] || report_failure "old session changed"
+
+begin_case "retained restart refuses a still-live session"
+run_real_work lifecycle current ok ok success ok ok clean live
+assert_rc 1
+assert_contains "complete/recover the old session"
+assert_not_exists "$CASE_DIR/go.log"
+
+begin_case "released failed upgrade resumes through its retained binary"
+run_real_work lifecycle current ok ok success ok ok clean recovery
+assert_rc 0
+assert_contains "Retained endpoint restored"
+assert_not_exists "$CASE_DIR/submit.args"
+[[ "$(cat "$CASE_DIR/old/status")" == recovery-required ]] || report_failure "old recovery evidence changed"
+
+begin_case "retained mismatch refuses before any database writer"
+run_real_work lifecycle current ok ok success ok ok clean mismatch
+assert_rc 1
+assert_contains "retained composition changed: base_sha"
+assert_not_exists "$CASE_DIR/submit.args"
+if grep -Eq 'identity-seed|^follow' "$CASE_DIR/lifecycle.log"; then
+  report_failure "refused retained inputs still opened the database writable"
+fi
+
+begin_case "post-migration failure preserves restart provenance"
+run_real_work lifecycle current ok ok success ok ok clean post-migration-fail
+assert_rc 2
+assert_contains "production composition preflight failed"
+for session in "$CASE_DIR"/real-work-session.*; do
+  [[ -f "$session/runtime-upgrade-started" && -f "$session/retained-composition.json" &&
+    -f "$session/submit.json" && "$(cat "$session/implementation-run")" == impl-run &&
+    "$(cat "$session/status")" == recovery-required && -f "$session/rig-release-verified" ]] ||
+    report_failure "post-migration failure lost original restart inputs"
+done
+
+begin_case "failed second resume preserves inherited restoration gate"
+run_real_work lifecycle current ok ok success ok ok clean recovery-mismatch
+assert_rc 1
+assert_contains "retained composition changed: base_sha"
+assert_contains "Recovery requires installing"
+for session in "$CASE_DIR"/real-work-session.*; do
+  [[ -f "$session/runtime-upgrade-inherited" && ! -f "$session/runtime-upgrade-started" &&
+    -f "$session/restore-freesided" && "$(cat "$session/status")" == recovery-required ]] ||
+    report_failure "early second refusal lost inherited restoration gate"
+done
+
+for mode in migration-continue migration-before-write; do
+  begin_case "$mode preserves the approved migration attempt"
+  run_real_work lifecycle current ok ok success ok ok clean "$mode"
+  assert_rc 0
+  assert_contains "Continuing the same approved migration attempt"
+  assert_contains "Retained endpoint restored"
+  assert_not_exists "$CASE_DIR/submit.args"
+done
+
+begin_case "changed migration inputs cannot bypass schema preflight"
+run_real_work lifecycle current ok ok success ok ok clean migration-changed-input
+assert_rc 1
+assert_contains "interrupted migration inputs or reviewed build changed"
+assert_not_exists "$CASE_DIR/migration-continued"
+
 bash "$SCRIPT_DIR/test-run-real-work-supervision.sh"
 
 # ---------------------------------------------------------------- summary

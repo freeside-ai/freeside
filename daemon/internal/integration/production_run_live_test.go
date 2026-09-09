@@ -379,112 +379,58 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	invocationID := binding.invocationID
 	runID := binding.runID
 
-	var (
-		admission            domain.ExecutionAdmission
-		export               domain.ExecutionExport
-		terminal             *domain.ExecutionOutcome
-		ready                domain.AttentionItem
-		blocked              domain.AttentionItem
-		specificationFailure domain.AttentionItem
-		outcome              publish.Outcome
-	)
+	retained := os.Getenv("FREESIDE_REAL_RUN_RETAINED") == "1"
+	var admission domain.ExecutionAdmission
+	var export domain.ExecutionExport
+	var checkpoint realRunCheckpoint
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		admission, err = tx.GetExecutionAdmission(ctx, invocationID)
+		anchor, err := tx.GetExecutionAdmissionRecord(ctx, invocationID)
 		if err != nil {
-			if !errors.Is(err, store.ErrNotFound) || specificationRunID == "" {
-				return err
-			}
-			items, listErr := tx.ListAttentionItems(ctx)
-			if listErr != nil {
-				return listErr
-			}
-			specificationFailure = realRunSpecificationFailure(items, specificationRunID)
-			if specificationFailure.ID != "" {
-				return nil
+			if errors.Is(err, store.ErrNotFound) && specificationRunID != "" {
+				items, listErr := tx.ListAttentionItems(ctx)
+				if listErr != nil {
+					return listErr
+				}
+				failure := realRunSpecificationFailure(items, specificationRunID)
+				if failure.ID != "" {
+					return fmt.Errorf("real run specification failed: run=%s item=%s", specificationRunID, failure.ID)
+				}
 			}
 			return err
 		}
-		if _, _, err := validateRealRunImplementationBinding(identityInput, &admission.RunID); err != nil {
+		if _, _, err := validateRealRunImplementationBinding(identityInput, &anchor.RunID); err != nil {
 			return err
 		}
-		executionOutcome, outcomeErr := tx.GetExecutionOutcomeRecord(ctx, invocationID)
-		switch {
-		case outcomeErr == nil:
-			terminal = &executionOutcome
-			return nil
-		case !errors.Is(outcomeErr, store.ErrNotFound):
-			return outcomeErr
+		if anchor.Base.Repo != env.repo || anchor.Base.RepositoryID != env.repositoryID || anchor.Base.BaseSHA != env.baseSHA {
+			return fmt.Errorf("retained run differs from configured repository/base")
 		}
-		export, err = tx.GetExecutionExport(ctx, invocationID)
+		checkpoint, err = readRealRunCheckpoint(ctx, tx, runID, retained)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.GetInbox(ctx, string(invocationID)); err != nil {
-			return err
+		invocationID = checkpoint.Binding.ProducingInvocationID
+		if checkpoint.State == "retained" {
+			admission, err = tx.GetExecutionAdmissionRecord(ctx, invocationID)
+			if err == nil {
+				export, err = tx.GetExecutionExportRecord(ctx, invocationID)
+			}
+		} else {
+			admission, err = tx.GetExecutionAdmission(ctx, invocationID)
+			if err == nil {
+				export, err = tx.GetExecutionExport(ctx, invocationID)
+			}
 		}
-		items, err := tx.ListAttentionItems(ctx)
-		if err != nil {
-			return err
-		}
-		ready, blocked, err = realRunAttentionState(items, runID)
-		if err != nil {
-			return err
-		}
-		if blocked.ID != "" {
-			return nil
-		}
-		if ready.ID == "" {
-			return store.ErrNotFound
-		}
-		artifactDigests := make([]domain.Digest, len(ready.EvidenceSnapshot))
-		for index, artifact := range ready.EvidenceSnapshot {
-			artifactDigests[index] = artifact.Digest
-		}
-		identity, err := publish.DeriveIdentity(publish.IdentityInput{
-			Repo: env.repo, BaseRef: env.baseRef, SourceHeadSHA: ready.PRHeadSHA,
-			ArtifactDigests: artifactDigests, RecipeDigest: &env.approvedRecipe,
-		})
-		if err != nil {
-			return err
-		}
-		entry, err := tx.GetInbox(ctx, publish.OutcomeKey(identity))
-		if err != nil {
-			return err
-		}
-		if entry.Kind != publish.IntentKindOutcome {
-			return fmt.Errorf("publication outcome row has kind %q", entry.Kind)
-		}
-		outcome, err = publish.DecodeOutcome(entry.Payload)
 		return err
 	}); err != nil {
 		t.Fatalf("read durable execution record: %v", err)
 	}
-	if specificationFailure.ID != "" {
-		t.Fatalf(
-			"real run specification failed: run=%s item=%s reason=%q",
-			specificationRunID,
-			specificationFailure.ID,
-			specificationFailure.Reason,
-		)
-	}
-	if blocked.ID != "" {
-		t.Fatalf("real run publication blocked: %s", blocked.Reason)
-	}
-	if terminal != nil {
-		t.Fatalf(
-			"real run terminal outcome: status=%s summary=%q",
-			terminal.Status,
-			terminal.Summary,
-		)
-	}
-	if ready.Status != domain.StatusOpen || ready.PRHeadSHA != export.HeadSHA ||
-		len(ready.EvidenceSnapshot) == 0 {
-		t.Errorf("ready item = %#v, want open with verifier evidence at export head", ready)
+	ready, outcome := checkpoint.ready, checkpoint.outcome
+	if ready.PRHeadSHA != export.HeadSHA || len(ready.EvidenceSnapshot) == 0 {
+		t.Error("publication evidence does not match its authenticated producer export")
 	}
 	if outcome.Repo != env.repo || outcome.BaseRef != env.baseRef ||
 		outcome.HeadSHA != export.HeadSHA || outcome.PRNumber <= 0 || !outcome.EvidenceEligible {
-		t.Errorf("publication outcome = %#v, want the exact verified export head", outcome)
+		t.Error("publication outcome does not name the exact verified export head")
 	}
 
 	// Admission: the unattended class the run was actually admitted under.
@@ -528,34 +474,36 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 		t.Errorf("export does not bind to its admission: %v", err)
 	}
 
-	// Acceptance happened exactly once after publication, and the run reported
-	// no failure or publish-blocked item.
-	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		if _, err := tx.GetInbox(ctx, string(invocationID)); err != nil {
-			return err
-		}
-		_, err := tx.GetAttentionItem(ctx, domain.ItemID("execution-failure-"+string(invocationID)))
-		if err == nil {
-			t.Error("the run raised an execution_failure item")
+	if checkpoint.State == "ready" {
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			if _, err := tx.GetInbox(ctx, string(invocationID)); err != nil {
+				return err
+			}
+			items, err := tx.ListAttentionItems(ctx)
+			if err != nil {
+				return err
+			}
+			_, blocked, err := realRunAttentionState(items, runID)
+			if err != nil {
+				return err
+			}
+			if blocked.ID != "" {
+				return fmt.Errorf("run retains an open publish-blocked item")
+			}
 			return nil
+		}); err != nil {
+			t.Fatalf("read acceptance state: %v", err)
 		}
-		if !errors.Is(err, store.ErrNotFound) {
-			return err
-		}
-		items, err := tx.ListAttentionItems(ctx)
-		if err != nil {
-			return err
-		}
-		_, blocked, err := realRunAttentionState(items, runID)
-		if err != nil {
-			return err
-		}
-		if blocked.ID != "" {
-			t.Error("the run retains an open production publish-blocked item")
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("read acceptance state: %v", err)
+	}
+	if t.Failed() {
+		return
+	}
+	if err := writeRealRunCheckpoint(os.Getenv("FREESIDE_REAL_RUN_CHECKPOINT_PATH"), checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.State == "retained" {
+		t.Logf("retained production checkpoint verified: run=%s prior PR #%d at head %s; feedback is not a new ready result", runID, outcome.PRNumber, export.HeadSHA)
+		return
 	}
 
 	t.Logf("real production pipeline verified: PR #%d at head %s over base %s",
@@ -623,7 +571,7 @@ func realRunAttentionState(
 			continue
 		}
 		switch {
-		case item.Value.Type == domain.AttentionReadyForFinalReview:
+		case item.Value.Type == domain.AttentionReadyForFinalReview && item.Value.Status == domain.StatusOpen:
 			if ready.ID != "" {
 				return domain.AttentionItem{}, domain.AttentionItem{},
 					errors.New("multiple ready items name the real run")

@@ -17,7 +17,8 @@ STUB
 cat >"$tmp/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 printf 'health\n' >>"$FIXTURE/events"
-[[ "$RESTORE_MODE" != timeout ]]
+[[ "$RESTORE_MODE" != timeout ]] || exit 1
+printf '{"status":"ok","version":"%s"}\n' "${HEALTH_BUILD:-reviewed-build}"
 STUB
 chmod +x "$tmp/bin/launchctl" "$tmp/bin/curl"
 
@@ -90,6 +91,7 @@ done
 
 for signal in TERM INT; do
 	new_session "interrupt-$signal"
+	touch "$FIXTURE/runtime-upgrade-started"
 	touch "$FIXTURE/hang"
 	python3 - "$signal" <<'PY'
 import os
@@ -136,4 +138,43 @@ for mode in failure approval registration-failure timeout; do
 	[[ "$(grep -c '^rig ' "$FIXTURE/events")" == 1 ]]
 	grep -q '^earlier restore diagnostic$' "$FIXTURE/restore.log"
 done
+
+cat >"$tmp/bin/go" <<'STUB'
+#!/usr/bin/env bash
+[[ "$1 $2" == 'tool buildid' ]] || exit 2
+if [[ "$3" == */installed && -f "$FIXTURE/old-installed" ]]; then
+  echo old-build
+else
+  echo reviewed-build
+fi
+STUB
+chmod +x "$tmp/bin/go"
+new_session upgraded-recovery
+cp "$FIXTURE/freesided" "$FIXTURE/installed"
+cp "$root/scripts/real-work-retained.py" "$FIXTURE/"
+cat >"$FIXTURE/verify-real-run" <<'STUB'
+#!/usr/bin/env bash
+[[ "$FREESIDE_REAL_RUN_SCHEMA_TEST" == 1 && "$FREESIDE_REAL_RUN_STATE_ROOT" == "$FIXTURE/state" ]]
+[[ ! -f "$FIXTURE/schema-refusal" ]]
+STUB
+chmod +x "$FIXTURE/verify-real-run"
+printf '%s\n' reviewed-build >"$FIXTURE/build-version"
+touch "$FIXTURE/runtime-upgrade-started" "$FIXTURE/old-installed"
+export FREESIDE_REAL_RUN_RESTORE_DAEMON="$FIXTURE/installed"
+run_recovery
+[[ "$rc" != 0 && "$(cat "$FIXTURE/status")" == recovery-required && -f "$FIXTURE/rig-release-verified" ]]
+if grep -q '^launchctl ' "$FIXTURE/events"; then echo 'old binary was restored' >&2; exit 1; fi
+rm "$FIXTURE/old-installed"
+touch "$FIXTURE/schema-refusal"
+run_recovery
+[[ "$rc" != 0 && "$(cat "$FIXTURE/status")" == recovery-required ]]
+if grep -q '^launchctl ' "$FIXTURE/events"; then echo 'incompatible schema was restored' >&2; exit 1; fi
+rm "$FIXTURE/schema-refusal"
+export HEALTH_BUILD=old-build
+run_recovery
+[[ "$rc" != 0 && "$(cat "$FIXTURE/status")" == recovery-required ]]
+export HEALTH_BUILD=reviewed-build
+run_recovery
+[[ "$rc" == 0 && "$(cat "$FIXTURE/status")" == completed ]]
+[[ "$(grep -c '^rig ' "$FIXTURE/events")" == 1 ]]
 echo 'PASS: session completion, stale recovery, retained diagnostics and restoration'

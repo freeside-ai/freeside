@@ -2,6 +2,8 @@
 # run-real-work.sh — the §11 1A.2 gated-unattended production exercise.
 #
 # Usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json> [work-unit.json]
+#        run-real-work.sh --resume-session <completed-session-directory>
+# Resume keeps the existing run and starts no submission or client command.
 #
 # Submits one source work item through `freesided submit`, runs the daemon with
 # the production Claude driver, and pauses at the human specification-approval
@@ -80,6 +82,10 @@
 #   FREESIDE_REAL_RUN_BUILD_PROXY   supported unauthenticated HTTP proxy used
 #                                    when building the already-pinned images;
 #                                    live reachability is recorded not_run
+#   FREESIDE_REAL_RUN_RESTORE_DAEMON installed app daemon for upgraded-session
+#                                    restoration (default ~/Applications/Freeside.app/
+#                                    Contents/Resources/freesided); must match
+#                                    the retained daemon's Go build ID
 #
 # The harness supplies FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID,
 # FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION, and (when present)
@@ -115,6 +121,14 @@
 set -euo pipefail
 umask 077
 
+retained_session=""
+if [[ "${1:-}" == --resume-session ]]; then
+  [[ $# == 2 && -d "$2" ]] || { echo 'usage: run-real-work.sh --resume-session <completed-session>' >&2; exit 2; }
+  retained_session=$(cd "$2" && pwd)
+  set -- "$retained_session/submission-inputs/spec.json" \
+    "$retained_session/submission-inputs/policy.json" "$retained_session/submission-inputs/publication.json"
+  [[ ! -f "$retained_session/submission-inputs/work-unit.json" ]] || set -- "$@" "$retained_session/submission-inputs/work-unit.json"
+fi
 spec_file="${1:-}"
 policy_file="${2:-}"
 publication_file="${3:-}"
@@ -178,6 +192,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$repo_root/scripts/run-real-work-supervision.sh"
 # shellcheck source=scripts/real-work-lifecycle.sh
 source "$repo_root/scripts/real-work-lifecycle.sh"
+if [[ -n "$retained_session" ]]; then
+  python3 "$repo_root/scripts/real-work-retained.py" validate "$retained_session"
+fi
 diagnostic_dir=${FREESIDE_REAL_RUN_DIAGNOSTIC_DIR:-$HOME/Library/Logs/Freeside}
 if [[ -z "${FREESIDE_REAL_RUN_DIAGNOSTIC_DIR:-}" ]]; then
 	mkdir -p "$diagnostic_dir"
@@ -186,7 +203,8 @@ fi
 diagnostic_dir=$(cd "$diagnostic_dir" && pwd)
 workdir="$(mktemp -d "$diagnostic_dir/real-work-session.XXXXXX")"
 cp "$repo_root/scripts/real-work-session.sh" "$repo_root/scripts/real-work-lifecycle.sh" \
-	"$repo_root/app/scripts/restore-supervised-daemon.sh" "$workdir/"
+	"$repo_root/app/scripts/restore-supervised-daemon.sh" \
+  "$repo_root/scripts/real-work-verify.sh" "$repo_root/scripts/real-work-retained.py" "$workdir/"
 printf 'starting\n' >"$workdir/status"
 echo "run-real-work: retained session: $workdir" >&2
 daemon_pid=""
@@ -232,6 +250,9 @@ printf '%s\n' "$rig_release_timeout" >"$workdir/rig-timeout"
 
 write_diagnostic() {
 	local selected_run="" candidate
+	# follow opens writable. A refusal before the upgrade boundary must not
+	# migrate the retained database just to produce cleanup diagnostics.
+	if [[ -n "$retained_session" && ! -f "$workdir/runtime-upgrade-started" ]]; then return 0; fi
 	[[ -z "$implementation_run_id" ]] || selected_run=$implementation_run_id
 	[[ -n "$selected_run" || -z "$specification_run_id" ]] || selected_run=$specification_run_id
 	[[ -n "$selected_run" ]] || return 0
@@ -355,11 +376,13 @@ cleanup() {
 	fi
 	[[ -z "$composition_evidence_tmp" ]] || rm -f "$composition_evidence_tmp"
 	if [[ "$cleanup_failed" == false && "$rig_acquired" == true ]]; then
+		: >"$workdir/rig-release-verified"
 		printf 'rig-released\n' >"$workdir/status"
-		if bash "$workdir/restore-supervised-daemon.sh" 2>&1 | tee -a "$workdir/restore.log"; then
+		if real_work_restore_supervised "$workdir"; then
 			printf 'completed\n' >"$workdir/status"
 		else
 			cleanup_failed=true
+			printf 'recovery-required\n' >"$workdir/status"
 		fi
 	elif [[ "$cleanup_failed" == true ]]; then
 		printf 'recovery-required\n' >"$workdir/status"
@@ -393,6 +416,29 @@ if [[ -n "$work_unit_file" ]]; then
 	work_unit_file="$submission_inputs/work-unit.json"
 fi
 
+if [[ -n "$retained_session" ]]; then
+  printf '%s\n' "$retained_session" > "$workdir/predecessor-session"
+  approved_composition="$retained_session/retained-composition.json"
+  [[ -f "$approved_composition" ]] || approved_composition="$retained_session/composition-manifest.json"
+  cp "$approved_composition" "$workdir/retained-composition.json"
+  cp "$retained_session/submit.json" "$workdir/submit.json"
+  implementation_run_id=$(python3 "$workdir/real-work-retained.py" identity "$retained_session" run_id)
+  implementation_invocation_id=$(python3 "$workdir/real-work-retained.py" identity "$retained_session" implementation_invocation_id)
+  specification_run_id=$(python3 "$workdir/real-work-retained.py" identity "$retained_session" specification_run_id)
+  printf '%s\n' "$implementation_run_id" > "$workdir/implementation-run"
+  printf '%s\n' "$implementation_invocation_id" > "$workdir/implementation-invocation"
+  if [[ -f "$retained_session/runtime-upgrade-started" ]]; then
+    : >"$workdir/runtime-upgrade-inherited"
+    cp "$retained_session/freesided" "$workdir/restore-freesided"
+    cp "$retained_session/verify-real-run" "$workdir/restore-verifier"
+    cp "$retained_session/build-version" "$workdir/restore-build-version"
+  elif [[ -f "$retained_session/runtime-upgrade-inherited" ]]; then
+    : >"$workdir/runtime-upgrade-inherited"
+    cp "$retained_session/restore-freesided" "$retained_session/restore-verifier" \
+      "$retained_session/restore-build-version" "$workdir/"
+  fi
+fi
+
 echo "building freesided" >&2
 # The composition preflight rejects a daemon whose build identity carries a
 # -dirty stamp, so refuse a dirty checkout here, before the build, where the
@@ -402,7 +448,10 @@ if [[ -n "$(git -C "$repo_root" status --porcelain)" ]]; then
 	exit 2
 fi
 build_version="$(git -C "$repo_root" rev-parse --short=12 HEAD)"
+printf '%s\n' "$build_version" >"$workdir/build-version"
 (cd "$repo_root/daemon" && go build -ldflags "-X main.version=$build_version" -o "$workdir/freesided" ./cmd/freesided)
+(cd "$repo_root/daemon" && go test -c -o "$workdir/verify-real-run" ./internal/integration)
+
 
 echo "acquiring the production rig lease" >&2
 "$workdir/freesided" rig hold \
@@ -448,31 +497,12 @@ printf '%s\n' "$rig_release_timeout" >"$workdir/rig-timeout"
 printf '%s\n' "$listen_address" >"$workdir/listener"
 require_live_rig
 
-# Provision the durable auth-identity binding before the composition
-# preflight inspects the database, and before the daemon can reach
-# admission. The verifier records it and exits without verifying because no
-# invocation id is set yet; this is prerequisite setup, not work submission,
-# and preflight, immutable evidence, submit, and daemon startup all stay
-# ordered after it.
-# Both implementation identity variables are unset for this call on purpose:
-# exported values left over from an earlier run would make the seeding step
-# verify that old invocation instead of skipping, and its failure would surface
-# here as the misleading "could not record the auth identity binding". The
-# legacy generic names are scrubbed from every verifier call too, so stale
-# operator exports cannot trip the verifier's migration guard.
-echo "recording the auth identity binding" >&2
-env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
-  -u FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID \
-  -u FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION \
-  -u FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID \
-  FREESIDE_REAL_RUN_LIVE_TEST=1 \
-  go test -C "$repo_root/daemon" ./internal/integration/ \
-    -run TestRealWorkItemCompletesProductionPipeline -count=1 > "$workdir/seed.log" 2>&1 || {
-  echo "run-real-work: could not record the auth identity binding" >&2
-  cat "$workdir/seed.log" >&2
-  exit 1
-}
-require_live_rig
+if [[ -n "$retained_session" ]]; then
+  # The daemon is stopped and the fresh rig proves exclusion. Preserve the
+  # supported encrypted checkpoint before the ordinary migration below.
+  cp "$db_path.checkpoints/latest.backup" "$workdir/pre-upgrade.backup"
+  cmp "$db_path.checkpoints/latest.backup" "$workdir/pre-upgrade.backup"
+fi
 
 echo "validating the immutable production composition" >&2
 composition_manifest="$workdir/composition-manifest.json"
@@ -515,6 +545,46 @@ fi
 if [[ -n "${FREESIDE_REAL_RUN_BUILD_PROXY:-}" ]]; then
 	preflight_args+=(-build-proxy "$FREESIDE_REAL_RUN_BUILD_PROXY")
 fi
+if [[ -n "$retained_session" ]]; then
+  receipt_args=("$build_version" "$spec_file" "$policy_file" "$publication_file" "$work_unit_file"
+    "${required[@]}" FREESIDE_REAL_RUN_BUILD_PROXY)
+  if [[ "$(cat "$retained_session/status")" == recovery-required &&
+    -f "$retained_session/runtime-upgrade-started" &&
+    -f "$retained_session/runtime-upgrade-receipt.json" ]]; then
+    python3 "$workdir/real-work-retained.py" receipt-check \
+      "$retained_session/runtime-upgrade-receipt.json" "${receipt_args[@]}"
+    echo 'Continuing the same approved migration attempt with unchanged inputs and reviewed build.' >&2
+  else
+    # Preflight may audit existing-schema authority, but cannot migrate or seed.
+    retained_preflight_binary="$retained_session/freesided"
+    if [[ ! -f "$retained_session/runtime-upgrade-started" && -f "$retained_session/runtime-upgrade-inherited" ]]; then
+      retained_preflight_binary="$workdir/restore-freesided"
+    fi
+    "$retained_preflight_binary" preflight "${preflight_args[@]}" >"$workdir/pre-upgrade-composition.json"
+    python3 "$workdir/real-work-retained.py" compare \
+      "$workdir/retained-composition.json" "$workdir/pre-upgrade-composition.json"
+  fi
+  python3 "$workdir/real-work-retained.py" receipt-write \
+    "$workdir/runtime-upgrade-receipt.json" "${receipt_args[@]}"
+  : >"$workdir/runtime-upgrade-started"
+fi
+
+# Provision the auth identities before the new binary's composition check.
+# Scrub all invocation variables so seeding cannot verify a previous run.
+echo "recording the auth identity binding" >&2
+env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
+  -u FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID \
+  -u FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION \
+  -u FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID \
+  FREESIDE_REAL_RUN_LIVE_TEST=1 \
+  go test -C "$repo_root/daemon" ./internal/integration/ \
+    -run TestRealWorkItemCompletesProductionPipeline -count=1 > "$workdir/seed.log" 2>&1 || {
+  echo "run-real-work: could not record the auth identity binding" >&2
+  cat "$workdir/seed.log" >&2
+  exit 1
+}
+require_live_rig
+
 if ! "$workdir/freesided" preflight "${preflight_args[@]}" >"$composition_manifest"; then
 	echo "run-real-work: production composition preflight failed" >&2
 	cat "$composition_manifest" >&2
@@ -524,6 +594,11 @@ fi
 # The state-root evidence path is content-addressed and no-clobber. An exact
 # replay converges on the same bytes; different resolved inputs cannot replace
 # earlier acceptance evidence.
+if [[ -n "$retained_session" ]]; then
+  python3 "$repo_root/scripts/real-work-retained.py" compare \
+    "$workdir/retained-composition.json" "$composition_manifest"
+fi
+
 composition_digest=$(shasum -a 256 "$composition_manifest" | awk '{print $1}')
 composition_evidence_dir="$FREESIDE_REAL_RUN_STATE_ROOT/production-evidence/composition"
 composition_evidence="$composition_evidence_dir/$composition_digest.json"
@@ -552,6 +627,9 @@ if ! cmp -s "$composition_manifest" "$composition_evidence"; then
 fi
 echo "production composition manifest: $composition_evidence" >&2
 
+if [[ -n "$retained_session" ]]; then
+  echo "reattaching retained implementation run=$implementation_run_id; no submission or client command" >&2
+else
 echo "submitting the work item" >&2
 require_live_rig
 submit_log="$workdir/submit.json"
@@ -586,6 +664,22 @@ else
   echo "legacy production-only replay: no specification approval gate" >&2
 fi
 echo "reserved implementation run=$implementation_run_id invocation=$implementation_invocation_id" >&2
+
+fi
+printf '%s\n' "$implementation_run_id" > "$workdir/implementation-run"
+printf '%s\n' "$implementation_invocation_id" > "$workdir/implementation-invocation"
+# Keep a build-bound verifier and only its named configuration so later checks
+# do not depend on the source checkout or capture unrelated environment secrets.
+{
+  for name in "${required[@]}"; do printf 'export %s=%q\n' "$name" "${!name}"; done
+  printf 'export FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID=%q\n' "$implementation_run_id"
+  printf 'export FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION=%q\n' "$implementation_invocation_id"
+  if [[ -n "$specification_run_id" ]]; then
+    printf 'export FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID=%q\n' "$specification_run_id"
+  else
+    printf 'unset FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID\n'
+  fi
+} > "$workdir/verification-env.sh"
 
 specification_verifier_env=(-u FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID)
 if [[ -n "$specification_run_id" ]]; then
@@ -631,6 +725,31 @@ require_live_rig
   -publication-credentials-dir "$FREESIDE_REAL_RUN_APP_CREDS" \
   >> "$workdir/daemon.log" 2>&1 &
 daemon_pid=$!
+
+if [[ -n "$retained_session" ]]; then
+  healthy=false
+  for _ in $(seq 1 60); do
+    child_job_exists "$daemon_pid" || break
+    require_live_rig
+    if curl --fail --silent --max-time 2 "http://$listen_address/health" > "$workdir/health.json" &&
+      python3 "$workdir/real-work-retained.py" health "$workdir/health.json" "$build_version" 2>/dev/null; then
+      healthy=true
+      break
+    fi
+    sleep 1
+  done
+  [[ "$healthy" == true ]] || { echo 'Replacement daemon health/build not verified' >&2; exit 1; }
+  bash "$workdir/real-work-verify.sh" retained > "$workdir/verify-retained.log" 2>&1 || {
+    echo "Retained checkpoint refused; inspect $workdir/verify-retained.log" >&2
+    exit 1
+  }
+  echo "Retained endpoint restored for run=$implementation_run_id; this is not successor-publication acceptance." >&2
+  printf 'Verify the current publication: bash %q verify %q\n' "$workdir/real-work-session.sh" "$workdir" >&2
+  printf 'Complete explicitly: bash %q complete %q\n' "$workdir/real-work-session.sh" "$workdir" >&2
+  real_work_walkthrough "$workdir" "$daemon_pid"
+  exit 0
+fi
+
 
 if [[ -n "$specification_run_id" ]]; then
   echo "gated-unattended: waiting for an operator to approve or revise the generated specification" >&2

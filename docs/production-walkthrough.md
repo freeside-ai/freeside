@@ -38,6 +38,95 @@ Later actions can change the run, so the earlier verification does not prove a
 later head. Health from the default service on port 7331 does not prove this run
 is still available at its paired endpoint.
 
+## Replace A Retained Runtime
+
+A runtime upgrade uses a fresh rig acquisition after the old session releases
+its ownership. First run that session's printed `complete` command (or `recover`
+after an interruption), finish the requested app restoration actions, and verify
+its status is `completed`. Do not transfer a live lease, replace its binary in
+place, delete its rig manifest, or replay the original submission as Retry.
+An interrupted upgrade may instead remain `recovery-required` after `recover`
+has verified rig release. That session can be resumed directly with the command
+below; its release proof and upgrade marker are required. Do not change its
+status file to claim completion.
+
+From a clean checkout of the reviewed replacement, export the same required
+configuration as the original run, including its state root, seed root, listener,
+base, images and review settings. Suspend the supervised service as described
+above, then run:
+
+```sh
+bash scripts/run-real-work.sh --resume-session /absolute/old-session
+```
+
+The harness requires the existing database and binds the retained run and
+invocation to the original submission and composition manifest. It builds a new
+daemon and matching verifier, acquires a fresh rig, preserves a copy of the
+latest encrypted checkpoint before opening the database for migration, and
+uses the retained binary's non-migrating preflight to check approved inputs before
+the replacement can migrate or seed the database. It checks the new composition
+again afterward. Original composition, submission receipt and run IDs are saved
+before migration or identity seeding, so a refused or interrupted upgrade remains
+resumable. It does not submit work or issue a client command.
+Pairing, signing material, approvals, attempts and prior session evidence remain
+in their existing locations. The new session records its predecessor.
+
+Startup checks the listener's build and an authenticated retained publication
+checkpoint, including the remote PR head through the operator's `gh` access.
+A failed or pending feedback attempt may leave the previous ready item
+superseded. That historical checkpoint permits resuming the walkthrough but
+does not count as a completed successor publication. A failed restart uses the
+same checked rig cleanup and release path as an ordinary session. Once the
+upgrade has opened writable, it never rolls back the database or restores an
+unchecked older service. This protects startup writes and preserved evidence;
+the saved encrypted checkpoint is recovery evidence, not an automatic rollback.
+
+Before completing the upgraded session, install its exact reviewed daemon using
+the existing Mac installer, with `--daemon-path /absolute/new-session/freesided`.
+The restoration gate compares the installed daemon's Go build ID with the retained
+binary, opens the retained database read-only with the matching verifier, and
+checks that the restored service reports the same build. Rebuilding separately
+may produce a different build ID; supply the retained binary to the installer.
+Go and the installer prerequisites remain required. The default installed binary
+is `~/Applications/Freeside.app/Contents/Resources/freesided`; for another install
+location, set `FREESIDE_REAL_RUN_RESTORE_DAEMON` before completion, or pass the
+installed daemon path as the third argument to recovery:
+
+```sh
+bash /absolute/new-session/real-work-session.sh recover /absolute/new-session \
+  /absolute/Freeside.app/Contents/Resources/freesided
+```
+
+A refused build, schema or health check leaves `recovery-required`. After installing
+the session's daemon, repeat `recover`. Alternatively, resume that released session
+from the same reviewed source version with unchanged inputs. Before migration,
+the harness records an atomic receipt containing that version and a digest of
+the configuration and input contents, including prompt and review snapshots.
+Matching that receipt allows an interrupted migration to finish even if its
+intermediate schema cannot pass preflight. Changed versions or inputs are refused;
+full composition verification still gates daemon startup after migration.
+Original approved composition remains separate from observations. Neither route
+deletes a marker manually or replaces the database. Preflight may write authority
+audit records under an existing schema; it does not migrate or seed identities.
+
+Once the retained endpoint is available, use the supported client Retry action
+on its execution-failure card when offered. After the workflow publishes a new
+ready result, run the new session's printed verification command:
+
+```sh
+bash /absolute/new-session/real-work-session.sh verify /absolute/new-session
+```
+
+This read-only check requires the current open ready item, its authenticated
+producer/export and publication outcome, a review covering that head, and an
+open remote PR with the same repository, number, branch, base ref and head.
+Superseded cards remain history. Each invocation preserves separate diagnostics;
+a premature or failed verification returns nonzero and leaves the daemon
+available for recovery. Only a successful `ready` checkpoint and remote check
+establish publication acceptance. Verify both paired clients separately against
+that run and head, then complete the new session deliberately. Fixture results
+alone do not establish live replacement or client acceptance.
+
 ## Complete Deliberately
 
 Run the exact command the harness prints in a second terminal. Its form is:
