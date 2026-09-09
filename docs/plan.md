@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 53
+revision: 54
 status: active
 updated: 2026-09-09
 ---
@@ -1351,6 +1351,15 @@ verified candidate ──▶ required review pass (Section 7; pre-publication,
    adjudicated findings drive remediation and reverification)
 reviewed candidate ──▶ git/publish ──▶ GitHub PR (under trust profile)
 ```
+
+Once ward authenticates a completed, released handoff, importing that output
+cannot start or resume the provider. A daemon upgrade may change the backend
+fingerprint without stranding this import: exact launch conformance still gates
+new execution and running recovery. An import already begun continues to apply
+current admission, trust, path, and attribution policy on every retry; its
+durable import-start marker cannot be erased or bypassed by changing private
+phase data. The released-output proof and the publisher's independent current
+authority gates remain required.
 
 Exactly two channels leave the agent workspace, and they never mix:
 
@@ -4365,16 +4374,17 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 53 ("Exclude Ignored Build Output From Published Candidates"):
+Revision 54 ("Recover Released Imports Across Daemon Upgrades"):
 
-1. **Trusted base ignore rules can exclude new out-of-scope regular files.**
-   The owner assigned a deterministic repair after generated build output again
-   rejected an otherwise completed live execution. Excluded files never enter
-   constructed commits; all other findings and security checks remain intact.
-   Tracked files, explicitly allowed additions, and no-change handoffs retain
-   their behavior. Candidate and host ignore rules have no authority.
-   (User assignment; implementation decision for #1132;
-   devlog 2026-09-09-1040-ignored-build-output.md.)
+1. **Completed handoff imports do not reauthorize provider execution.** The
+   owner assigned recovery of a preserved released result after an upgraded
+   daemon's fingerprint blocked its import. Ward must authenticate the release;
+   current import policy and the durable import-start marker remain binding.
+   Exact backend conformance still gates starting or resuming the provider, and
+   publication retains its own current authority checks. Recorded-policy
+   fallback after a current import began remains forbidden.
+   (User assignment; implementation decision for #1260;
+   devlog 2026-09-09-1300-released-import-recovery.md.)
 
 ## 14. Risks
 

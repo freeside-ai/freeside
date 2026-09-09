@@ -482,9 +482,10 @@ func decodeIntent(body []byte) (intent, error) {
 }
 
 // regate re-checks the immutable admission and containment facts carried by a
-// reconstructed record. Preterminal work additionally requires current
-// conformance so it cannot run under a class this driver would now refuse;
-// terminal history authenticates its durable export or outcome without being
+// reconstructed record. Work that can start or resume a provider additionally
+// requires current conformance; authenticated released output uses current
+// import policy without re-authorizing the completed provider execution.
+// Terminal history authenticates its durable export or outcome without being
 // made unreadable by a later conformance lapse or configuration change.
 func (d *Driver) regate(ctx context.Context, i intent, forceCurrent bool) error {
 	return d.regateWithCurrentPolicy(ctx, i, forceCurrent, true)
@@ -529,6 +530,8 @@ func (d *Driver) regateWithCurrentPolicy(
 		return fmt.Errorf("authenticate intent %s: %w", i.InvocationID, err)
 	}
 	if i.Export != nil {
+		// This release proof also gates marked current-policy import recovery
+		// below. Exported phases require nonnil Export in intent.validate.
 		if err := d.authenticateReleasedExport(ctx, i, i.Export.Dir); err != nil {
 			return classifyReleasedExportAuthentication(err)
 		}
@@ -687,6 +690,7 @@ func (d *Driver) regateWithCurrentPolicy(
 		// policy. Without one, the independent import-start record distinguishes
 		// a current-policy retry from admission-bound legacy or crash-only replay;
 		// the decoded private phase never supplies that authority.
+		requireCurrent = false
 		record, found, err := d.exports.LookupExecutionExportRecord(ctx, i.InvocationID)
 		if err != nil {
 			return fmt.Errorf("%w: authenticate exported result %s: %w",
@@ -704,7 +708,13 @@ func (d *Driver) regateWithCurrentPolicy(
 				return fmt.Errorf("%w: authenticate current import start %s: %w",
 					ErrRecoveryRetryable, i.InvocationID, err)
 			}
-			requireCurrent = current && applyCurrentPolicy
+			if current && applyCurrentPolicy {
+				// Ward authenticated the released export above; private phase
+				// alone cannot select this terminal-only authority.
+				if err := d.authority.AuthenticateImport(ctx, i.InvocationID, i.Spec); err != nil {
+					return fmt.Errorf("authenticate current import %s: %w", i.InvocationID, err)
+				}
+			}
 		}
 	case phaseSeeding, phaseRunning:
 		requireCurrent = applyCurrentPolicy

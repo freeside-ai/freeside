@@ -338,6 +338,7 @@ func (s refuseOnCancelSeeder) FetchBaseWorktree(
 type stubAuthority struct {
 	err                error
 	startErr           error
+	importErr          error
 	currentImportCalls *int
 	recordImportCalls  *int
 }
@@ -363,10 +364,19 @@ func (a stubAuthority) ImportOptions(
 	if a.currentImportCalls != nil {
 		(*a.currentImportCalls)++
 	}
-	if a.startErr != nil {
-		return opts, a.startErr
+	if a.importErr != nil {
+		return opts, a.importErr
 	}
 	return opts, a.err
+}
+
+func (a stubAuthority) AuthenticateImport(
+	context.Context, domain.InvocationID, exec.StartSpec,
+) error {
+	if a.importErr != nil {
+		return a.importErr
+	}
+	return a.err
 }
 
 func (a stubAuthority) ImportOptionsRecord(
