@@ -55,3 +55,36 @@ real_work_walkthrough() {
 		sleep 1
 	done
 }
+
+# A writable runtime upgrade cannot fall back to an unverified older service.
+# Installation remains the operator's job; recovery never rolls back durable data.
+real_work_restore_supervised() {
+	local session=$1 installed=${2:-${FREESIDE_REAL_RUN_RESTORE_DAEMON:-$HOME/Applications/Freeside.app/Contents/Resources/freesided}}
+	local expected actual daemon="$session/freesided" verifier="$session/verify-real-run" version="$session/build-version"
+	if [[ ! -f "$session/runtime-upgrade-started" && -f "$session/runtime-upgrade-inherited" ]]; then
+		daemon="$session/restore-freesided"
+		verifier="$session/restore-verifier"
+		version="$session/restore-build-version"
+	fi
+	if [[ -f "$session/runtime-upgrade-started" || -f "$session/runtime-upgrade-inherited" ]]; then
+		if [[ ! -x "$installed" ]] ||
+			! expected=$(go tool buildid "$daemon") ||
+			! actual=$(go tool buildid "$installed") ||
+			[[ -z "$expected" || "$actual" != "$expected" ]]; then
+			echo 'Recovery requires installing the session daemon with install-mac-app.sh --daemon-path before restoring the service.' >&2
+			return 1
+		fi
+		if ! FREESIDE_REAL_RUN_SCHEMA_TEST=1 \
+			FREESIDE_REAL_RUN_STATE_ROOT="$(cat "$session/state-root")" \
+			"$verifier" -test.run '^TestRealRunRetainedSchema$' -test.count=1 \
+			>"$session/verify-schema.log" 2>&1; then
+			echo "Retained schema compatibility refused; inspect $session/verify-schema.log. No data was restored." >&2
+			return 1
+		fi
+	fi
+	bash "$session/restore-supervised-daemon.sh" 2>&1 | tee -a "$session/restore.log" || return 1
+	if [[ -f "$session/runtime-upgrade-started" || -f "$session/runtime-upgrade-inherited" ]]; then
+		curl --fail --silent --show-error --max-time 2 http://127.0.0.1:7331/health >"$session/restored-health.json" &&
+			python3 "$session/real-work-retained.py" health "$session/restored-health.json" "$(cat "$version")"
+	fi
+}

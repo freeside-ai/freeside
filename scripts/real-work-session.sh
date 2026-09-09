@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
-# Usage: real-work-session.sh complete|recover <retained-session-directory>
+# Usage: real-work-session.sh complete|recover|verify <retained-session-directory> [installed-daemon-path]
 # Recovery never signals a stored PID. The rig command proves stale ownership,
 # database/listener exclusion and exact-resource cleanup before clearing a gate.
 set -euo pipefail
 umask 077
 action=${1:-}
 session=${2:-}
-if [[ "$action" != complete && "$action" != recover ]] || [[ ! -f "$session/status" ]]; then
-	echo 'usage: real-work-session.sh complete|recover <session-directory>' >&2
+if [[ "$action" != complete && "$action" != recover && "$action" != verify ]] || [[ ! -f "$session/status" ]]; then
+	echo 'usage: real-work-session.sh complete|recover|verify <session-directory>' >&2
 	exit 2
 fi
 session=$(cd "$session" && pwd)
 status=$(cat "$session/status")
+if [[ "$action" == verify ]]; then
+  [[ -x "$session/verify-real-run" && -f "$session/real-work-verify.sh" ]] || {
+    echo 'This older session has no retained verifier; use a reviewed runtime restart.' >&2
+    exit 1
+  }
+  exec bash "$session/real-work-verify.sh" publication
+fi
 if [[ "$action" == complete ]]; then
 	case "$status" in
 	walkthrough)
@@ -40,15 +47,17 @@ source "$session/real-work-lifecycle.sh"
 state_root=$(cat "$session/state-root")
 bound=$(cat "$session/rig-timeout")
 [[ "$bound" =~ ^[1-9][0-9]*$ ]] || exit 2
-if [[ "$status" != rig-released && "$status" != completed ]]; then
+if [[ "$status" != rig-released && "$status" != completed && ! -f "$session/rig-release-verified" ]]; then
 	if ! real_work_bounded_rig "$session" "$bound" recover -state-root "$state_root" -confirm; then
 		echo "Recovery refused or timed out. Gate and binary retained; see $session/rig-cleanup.log. A live holder must finish through its foreground harness." >&2
 		exit 1
 	fi
 	printf 'rig-released\n' >"$session/status"
 fi
+: >"$session/rig-release-verified"
 [[ "$recovery_signal" == 0 ]] || exit "$recovery_signal"
-if ! bash "$session/restore-supervised-daemon.sh" 2>&1 | tee -a "$session/restore.log"; then
+if ! real_work_restore_supervised "$session" "${3:-${FREESIDE_REAL_RUN_RESTORE_DAEMON:-$HOME/Applications/Freeside.app/Contents/Resources/freesided}}"; then
+	if [[ -f "$session/runtime-upgrade-started" || -f "$session/runtime-upgrade-inherited" ]]; then printf 'recovery-required\n' >"$session/status"; fi
 	echo "Rig released; supervised restoration incomplete. Retry recover for $session." >&2
 	exit 1
 fi

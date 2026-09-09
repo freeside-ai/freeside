@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"path/filepath"
 	"reflect"
@@ -116,6 +117,10 @@ func testPublishedFeedbackRetry(t *testing.T, scenario string) {
 		})
 		t.Fatalf("eligible failure has no Retry: %v", failure.Item.RequestedDecision)
 	}
+	if scenario == "clean" {
+		assertRealRunCheckpoint(t, p, true, "retained")
+		assertRealRunCheckpoint(t, p, false, "")
+	}
 	var oldOutcome domain.ExecutionOutcome
 	var oldInput domain.AgentInvocation
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
@@ -142,6 +147,9 @@ func testPublishedFeedbackRetry(t *testing.T, scenario string) {
 	}
 	if _, err := p.attention.Submit(p.ctx, retryInput); err != nil {
 		t.Fatal(err)
+	}
+	if scenario == "clean" {
+		assertRealRunCheckpoint(t, p, true, "retained")
 	}
 	if scenario == "completed-after-retry" || scenario == "completed-before-retry-commit" {
 		if scenario == "completed-after-retry" {
@@ -237,6 +245,23 @@ func testPublishedFeedbackRetry(t *testing.T, scenario string) {
 		if _, err := p.workflow.ReconcileProductionPublications(p.ctx); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if scenario == "clean" {
+		assertRealRunCheckpoint(t, p, true, "retained")
+		key := "inv-operator-feedback-retry-feedback"
+		original := readOutboxPayload(t, p, key)
+		var altered map[string]any
+		if err := json.Unmarshal(original, &altered); err != nil {
+			t.Fatal(err)
+		}
+		altered["run_id"] = "missing-retry-run"
+		body, err := json.Marshal(altered)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeOutboxPayload(t, p, key, body)
+		assertRealRunCheckpoint(t, p, true, "")
+		writeOutboxPayload(t, p, key, original)
 	}
 	if _, err := p.attention.Submit(p.ctx, returnInput); err != nil {
 		t.Fatal(err)
@@ -409,6 +434,19 @@ func completeFeedbackSuccessor(t *testing.T, p *productionPublicationHarness, in
 		t.Fatal(err)
 	}
 	if err := engine.RecordExecutionExport(p.ctx, p.store, exported, replay); err != nil {
+		t.Fatal(err)
+	}
+	assertRealRunCheckpoint(t, p, true, "retained")
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		successor, err := tx.CurrentPublicationSuccessor(p.ctx, p.runID)
+		if err != nil || successor == nil {
+			return fmt.Errorf("checkpoint fixture has no sealed successor: %w", err)
+		}
+		if _, err := readRealRunCheckpoint(p.ctx, tx, p.runID, false); err == nil {
+			return fmt.Errorf("unpublished successor passed final verification")
+		}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	checkpoint := filepath.Join(t.TempDir(), "successor-checkpoint.db")
@@ -619,6 +657,13 @@ func completeFeedbackSuccessor(t *testing.T, p *productionPublicationHarness, in
 		current, err := tx.GetReadyItemPRBinding(p.ctx, currentID)
 		if err != nil {
 			return err
+		}
+		checkpoint, err := readRealRunCheckpoint(p.ctx, tx, p.runID, false)
+		if err != nil {
+			return err
+		}
+		if checkpoint.State != "ready" || checkpoint.Binding != current {
+			t.Fatal("live verifier selected historical publication instead of successor")
 		}
 		if current.ItemID == old.ItemID || current.HeadSHA != replay.HeadSHA || old.HeadSHA != oldHead || current.PRNumber != old.PRNumber {
 			t.Fatalf("incorrect successor bindings: old=%#v current=%#v", old, current)
@@ -951,4 +996,27 @@ func assertUnreadableSuccessorTaskHeld(t *testing.T, p *productionPublicationHar
 		t.Fatalf("unreadable successor advanced: refs=%d prs=%d verification=%d", refs, prs, p.room.runs)
 	}
 	writeOutboxPayload(t, p, key, original)
+}
+
+func assertRealRunCheckpoint(t *testing.T, p *productionPublicationHarness, retained bool, state string) {
+	t.Helper()
+	err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		checkpoint, err := readRealRunCheckpoint(p.ctx, tx, p.runID, retained)
+		if err != nil {
+			return err
+		}
+		if checkpoint.State != state {
+			return fmt.Errorf("checkpoint state %q, want %q", checkpoint.State, state)
+		}
+		return nil
+	})
+	if state == "" {
+		if err == nil {
+			t.Fatal("unready publication passed final verification")
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
 }
