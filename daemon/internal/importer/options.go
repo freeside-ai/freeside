@@ -115,8 +115,10 @@ type Policy struct {
 	// findings honestly, and tolerance is the pipeline's disposition.
 	FindingProfile *FindingProfile `json:",omitempty"`
 	// Allowlist, when non-nil, is the work unit's declared path scope as
-	// glob patterns ("**" spans path segments): every derived change,
-	// deletions included, must match one, and a change outside it is an
+	// glob patterns ("**" spans path segments): every published change,
+	// deletions included, must match one. New regular additions ignored by the
+	// exact base outside this scope are excluded from construction after the
+	// existing security checks. Every remaining change outside it is an
 	// allowlist_violation finding. nil means unrestricted; an empty
 	// non-nil list flags every change.
 	Allowlist []string

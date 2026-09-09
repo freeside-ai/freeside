@@ -1663,3 +1663,16 @@ Revision 51 ("Same-Run Feedback Successors"):
    review evidence, and creating a replacement PR when the target moved or
    disappeared. The existing run-wide review bound remains in force.
    (User; #1246; devlog 2026-09-08-1630-feedback-successor.md.)
+
+Revision 52 ("Approve Remediation After Publication Rechecks"):
+
+1. **Approve grants one new cycle after a recheck needs code changes.** The
+   accepted dispute command binds the rechecked task, findings round, and
+   remediation continuation. Rechecks and command replay grant no producer
+   authority. Successor history and old evidence remain immutable; fresh
+   verification and independent review remain under the run-wide bound. An
+   unpublished blocked cycle retains its place in the chain, while the last
+   published ancestor supplies the exact PR head to update. The owner chose a
+   durable acknowledgment-only refusal when no PR exists, instead of granting
+   first-publication authority. Completed work also refuses continuation.
+   (User; #1247; devlog 2026-09-08-1950-remediation-continuation.md.)
