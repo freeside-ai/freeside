@@ -260,6 +260,14 @@ func (d *Driver) advance(in *intent, next phase, released *releasedExport) error
 	defer d.mu.Unlock()
 	in.Phase = next
 	if released != nil {
+		if next == phaseExported {
+			released.RecordedAt = d.now().UTC()
+			// A wall-clock correction must not make the immutable export
+			// predate the invocation that produced it.
+			if released.RecordedAt.Before(in.RecordedAt) {
+				released.RecordedAt = in.RecordedAt
+			}
+		}
 		in.Export = released
 	}
 	if err := d.saveIntent(*in); err != nil {
@@ -378,7 +386,7 @@ func (d *Driver) finish(
 		ManifestDigest:         manifestDigest,
 		EvidenceManifestDigest: evidenceDigest,
 		CommitPlanPresent:      out.commitPlanPresent,
-		RecordedAt:             in.RecordedAt,
+		RecordedAt:             in.exportRecordedAt(),
 	})
 	if err != nil {
 		return exec.StageResult{}, err
