@@ -1,0 +1,9 @@
+{
+  "version": "freeside.publication-successor/v1",
+  "run_id": "run-1",
+  "command_id": "return-1",
+  "feedback_invocation_id": "inv-feedback-1",
+  "predecessor_item_id": "production-ready-run-1",
+  "prior_review_invocation_id": "review-1",
+  "review_round": 2
+}

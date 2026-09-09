@@ -31,7 +31,7 @@ import (
 )
 
 func TestPublishedFeedbackRetryPreservesFailedAttemptAndInput(t *testing.T) {
-	for _, name := range []string{"clean", "questions", "completed-before-failure", "completed-after-retry", "completed-before-retry-commit", "completed-after-sealing", "completed-after-successor-block", "attended-successor", "remediation", "reevaluation", "reevaluation-escalation"} {
+	for _, name := range []string{"clean", "questions", "completed-before-failure", "completed-after-retry", "completed-before-retry-commit", "completed-after-sealing", "completed-after-successor-block", "attended-successor", "remediation", "reevaluation", "reevaluation-escalation", "reevaluation-continuation", "reevaluation-continuation-upgrade", "reevaluation-continuation-repeated", "reevaluation-continuation-completed-before-approve", "reevaluation-continuation-completed-after-approve", "reevaluation-continuation-completed-after-queue", "reevaluation-continuation-corrupt", "reevaluation-continuation-cyclic", "reevaluation-continuation-moved", "reevaluation-continuation-missing", "reevaluation-continuation-foreign", "reevaluation-continuation-closed", "reevaluation-continuation-stop", "reevaluation-continuation-discuss"} {
 		t.Run(name, func(t *testing.T) { testPublishedFeedbackRetry(t, name) })
 	}
 }
@@ -586,9 +586,12 @@ func completeFeedbackSuccessor(t *testing.T, p *productionPublicationHarness, in
 		p.restartDurableState(t)
 		p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 		wantVerifications = 3
-		if scenario == "reevaluation-escalation" {
+		if scenario == "reevaluation-escalation" || strings.HasPrefix(scenario, "reevaluation-continuation") {
 			scriptSuccessorFinding(t, p, replay)
 			assertSuccessorReevaluationEscalates(t, p)
+			if strings.HasPrefix(scenario, "reevaluation-continuation") {
+				completePublicationContinuation(t, p, run, scenario)
+			}
 			return false
 		}
 	}
@@ -920,7 +923,8 @@ func assertSuccessorReevaluationEscalates(t *testing.T, p *productionPublication
 		t.Fatal(err)
 	}
 	item := productionItemRecord(t, p, "successor-reevaluation-review-rerun-feedback-trust")
-	if item.Type != domain.AttentionReviewDispute || item.Status != domain.StatusOpen || !strings.Contains(item.Reason, "cannot launch another remediation") {
+	if item.Type != domain.AttentionReviewDispute || item.Status != domain.StatusOpen || !strings.Contains(item.Reason, "Approve starts one remediation continuation") ||
+		!reflect.DeepEqual(item.RequestedDecision, []domain.Action{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop}) {
 		t.Fatalf("missing actionable escalation: %#v", item)
 	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {

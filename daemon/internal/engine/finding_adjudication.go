@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -1472,13 +1473,14 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 	if handled {
 		return diminishingState, nil
 	}
-	if task.Successor != nil && task.reevaluation != nil && len(remediationFindingIDs(artifact, routes)) > 0 {
+	if task.reevaluation != nil && len(remediationFindingIDs(artifact, routes)) > 0 {
 		// A reevaluation can recheck a completed cycle, but cannot replace
 		// its dispatched task with a new remediation producer.
-		if err := w.putReviewAttentionWithID(ctx, task, record,
-			"The rechecked successor needs code changes. This completed publication cycle cannot launch another remediation; discuss a new authorized continuation.",
+		if err := w.putReviewAttentionWithActionsAndID(ctx, task, record,
+			publicationContinuationReason,
 			domain.AttentionReviewDispute,
-			domain.ItemID("successor-reevaluation-review-"+task.reevaluation.CommandID)); err != nil {
+			domain.ItemID(domain.PublicationContinuationItemPrefix+task.reevaluation.CommandID),
+			[]domain.Action{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop}, nil); err != nil {
 			return productionReviewPending, err
 		}
 		return productionReviewEscalated, nil
@@ -1529,28 +1531,7 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 				return err
 			}
 		}
-		for _, entry := range artifact.Entries {
-			route := routes[entry.FindingID]
-			var disposition domain.ReviewDisposition
-			switch route {
-			case domain.RouteDefer:
-				disposition = domain.ReviewDispositionDeferred
-			case domain.RouteDecline:
-				disposition = domain.ReviewDispositionDeclined
-			default:
-				continue
-			}
-			reason := fmt.Sprintf("%s (finding adjudication %s)",
-				strings.TrimSpace(entry.Rationale), artifact.Digest)
-			if err := tx.PutFindingDisposition(ctx, domain.ReviewDispositionRecord{
-				FindingID: entry.FindingID, RunID: artifact.RunID, Round: artifact.Round,
-				Disposition: disposition, Reason: reason,
-				AdjudicationDigest: artifact.Digest, CreatedAt: dispositionAt,
-			}); err != nil {
-				return err
-			}
-		}
-		return nil
+		return persistFindingRouteDispositions(ctx, tx, artifact, routes, dispositionAt)
 	}); err != nil {
 		return productionReviewPending, err
 	}
@@ -1570,6 +1551,32 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		return productionReviewPassed, nil
 	}
 	return productionReviewPending, nil
+}
+
+func persistFindingRouteDispositions(ctx context.Context, tx *store.WriteTx, artifact domain.FindingAdjudication, routes map[domain.FindingID]domain.AdjudicationRoute, at time.Time) error {
+	for _, entry := range artifact.Entries {
+		var disposition domain.ReviewDisposition
+		switch routes[entry.FindingID] {
+		case domain.RouteDefer:
+			disposition = domain.ReviewDispositionDeferred
+		case domain.RouteDecline:
+			disposition = domain.ReviewDispositionDeclined
+		case domain.RouteRemediate, domain.RouteParkRevision, domain.RouteParkSeparateWork,
+			domain.RouteAttentionHumanDecision, domain.RouteParkUnknown, domain.RouteDispute, domain.RouteAttentionUnclear:
+			continue
+		}
+		if disposition == "" {
+			return domain.ErrParentKeyMismatch
+		}
+		reason := fmt.Sprintf("%s (finding adjudication %s)", strings.TrimSpace(entry.Rationale), artifact.Digest)
+		if err := tx.PutFindingDisposition(ctx, domain.ReviewDispositionRecord{
+			FindingID: entry.FindingID, RunID: artifact.RunID, Round: artifact.Round,
+			Disposition: disposition, Reason: reason, AdjudicationDigest: artifact.Digest, CreatedAt: at,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // reenterFindingAdjudication validates the structured dissent carrier. The

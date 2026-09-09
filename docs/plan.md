@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 51
+revision: 52
 status: active
 updated: 2026-09-08
 ---
@@ -394,7 +394,7 @@ Approval is not a universal action.
 | --- | --- |
 | `spec_approval` | Approve, request changes, discuss, or stop. Render the full specification. A revision shows the diff from the last reviewed version, prior comments, and claimed addressals. |
 | `review_diminishing_returns` | Finish now; apply the current batch and finish; continue under specified policy; or turn a recurring preference into a project-policy proposal PR. It never mutates policy directly. |
-| `review_dispute` | For a routed finding: discuss or stop; the transaction that would execute the adjudication is deferred (#1016). For an observation-only shadow finding: approve continuation without routing the finding, discuss, or stop; only approve lets the run reach readiness, and stop ends the run and raises the normal durable publication-blocked surface. |
+| `review_dispute` | For a routed finding: discuss or stop; the transaction that would execute the adjudication is deferred (#1016). For an observation-only shadow finding: approve continuation without routing the finding, discuss, or stop; only approve lets the run reach readiness, and stop ends the run and raises the normal durable publication-blocked surface. For a completed publication cycle whose trust recheck needs code changes: approve one remediation continuation on the existing owned PR, discuss, or stop. Without a published PR, approve records an acknowledgment-only refusal. |
 | `finding_adjudication` | Accept the recommended route, choose an offered alternative, discuss, or stop (added with the Section [7](#7-review-policy) adjudication routing, 1B). Acceptance binds to the adjudication artifact digest and the item version; a Discuss response re-invokes adjudication against the same version bindings, and the new artifact supersedes the item. Stop leaves the run parked. |
 | `review_contradiction` | Recover only the exact persisted contradiction named by the card, or leave it parked. The card renders the bound run, invocation, round, base SHA, head SHA, and immutable failure-body digest; recovery preserves the original failure evidence. |
 | `review_configuration` | Adopt the review configuration (`adopt_review_configuration`), discuss, or stop. The run is parked, not terminal. Adopting authorizes one operator-approved profile supersession, limited to review configuration, for exactly the parked failure the card's binding names. The superseding profile is resolved at decision time as the repository's currently activated revision and re-gated on every read. Stop concludes the run as a configuration failure, as it always did. The card renders the same bound coordinates as `review_contradiction` plus the digest of the superseded profile. |
@@ -2535,10 +2535,23 @@ PR. Each cycle records its own ready binding; current projections and merge
 observation derive the latest authenticated head while retaining historical
 records. A completed work unit cannot start another cycle.
 
-Rechecking a completed successor may publish that same candidate after fresh
-verification and review. If the recheck instead needs remediation, it records
-a review dispute; the completed task alone cannot authorize another producer.
-The separate continuation authority is tracked in #1247.
+Rechecking a completed publication cycle may publish that same candidate after
+fresh verification and review. If an original or successor cycle's recheck
+needs remediation, it records one review dispute per recheck command. Only an
+accepted approve on that dispute authorizes one remediation continuation. The
+rechecked task and evidence remain immutable. The continuation receives fresh
+verification and independent review above the recheck's findings round, within
+the existing run-wide bound, and updates the same owned PR through the exact
+expected-old-head lease.
+
+A blocked cycle may have stopped before publication. Its continuation retains
+that cycle in the chain, while the last actually published ancestor supplies
+the PR and expected old head. It never invents a ready binding for an
+unpublished candidate. If no PR has ever been published, approve records a
+durable acknowledgment-only refusal and starts no producer. A completed work
+unit refuses approval at acceptance; completion after acceptance records the
+same kind of durable refusal before remediation starts. Neither rechecking
+trust nor replaying a command grants new producer authority.
 
 ### 5.16 The Durable Scheduler
 
@@ -4341,19 +4354,18 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 51 ("Same-Run Feedback Successors"):
+Revision 52 ("Approve Remediation After Publication Rechecks"):
 
-1. **Published feedback retries retain the run and create new publication
-   authority.** The owner approved the bounded recovery chain after prompt
-   delivery was repaired. A fresh Retry command preserves the accepted input
-   and original failure, and creates a fresh invocation. Its completed export
-   starts a separately keyed successor with fresh verification and independent
-   review. The successor updates the existing owned PR through an exact-old-head
-   lease; historical bindings remain unchanged. Rejected: identical command
-   replay as retry, overwriting the original publication task, reusing old
-   review evidence, and creating a replacement PR when the target moved or
-   disappeared. The existing run-wide review bound remains in force.
-   (User; #1246; devlog 2026-09-08-1630-feedback-successor.md.)
+1. **Approve grants one new cycle after a recheck needs code changes.** The
+   accepted dispute command binds the rechecked task, findings round, and
+   remediation continuation. Rechecks and command replay grant no producer
+   authority. Successor history and old evidence remain immutable; fresh
+   verification and independent review remain under the run-wide bound. An
+   unpublished blocked cycle retains its place in the chain, while the last
+   published ancestor supplies the exact PR head to update. The owner chose a
+   durable acknowledgment-only refusal when no PR exists, instead of granting
+   first-publication authority. Completed work also refuses continuation.
+   (User; #1247; devlog 2026-09-08-1950-remediation-continuation.md.)
 
 ## 14. Risks
 

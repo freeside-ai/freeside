@@ -64,6 +64,7 @@ func (a integrationAuditor) Audit(context.Context, string, string) (domain.Workf
 
 type integrationPR struct {
 	Number  int
+	State   string
 	Title   string
 	Body    string
 	HeadRef string
@@ -220,8 +221,12 @@ func (f *integrationForge) interceptRequest(hook func(method, path string) bool)
 }
 
 func integrationPRJSON(pr integrationPR) map[string]any {
+	state := pr.State
+	if state == "" {
+		state = "open"
+	}
 	return map[string]any{
-		"number": pr.Number, "state": "open", "title": pr.Title, "body": pr.Body,
+		"number": pr.Number, "state": state, "title": pr.Title, "body": pr.Body,
 		"head": map[string]any{
 			"ref": pr.HeadRef, "sha": pr.HeadSHA,
 			"repo": map[string]string{"full_name": fakePublicationRepo},

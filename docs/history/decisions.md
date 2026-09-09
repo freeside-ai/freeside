@@ -1649,3 +1649,17 @@ Revision 50 ("Protected User-Prompt Delivery"):
    verified complete user-message delivery; production recovery remains a
    separate work unit.
    (User; #1242; devlog 2026-09-08-1530-protected-prompt-delivery.md.)
+
+Revision 51 ("Same-Run Feedback Successors"):
+
+1. **Published feedback retries retain the run and create new publication
+   authority.** The owner approved the bounded recovery chain after prompt
+   delivery was repaired. A fresh Retry command preserves the accepted input
+   and original failure, and creates a fresh invocation. Its completed export
+   starts a separately keyed successor with fresh verification and independent
+   review. The successor updates the existing owned PR through an exact-old-head
+   lease; historical bindings remain unchanged. Rejected: identical command
+   replay as retry, overwriting the original publication task, reusing old
+   review evidence, and creating a replacement PR when the target moved or
+   disappeared. The existing run-wide review bound remains in force.
+   (User; #1246; devlog 2026-09-08-1630-feedback-successor.md.)
