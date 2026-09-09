@@ -512,17 +512,22 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 
 func realRunBackupPayloadExtractors() map[string]store.BackupPayloadDigestExtractor {
 	return map[string]store.BackupPayloadDigestExtractor{
-		engine.FakePublicationTaskKind:              engine.FakePublicationBackupPayloadDigests,
-		engine.FakePublicationInvocationOwnerKind:   engine.FakePublicationInvocationOwnerBackupPayloadDigests,
-		signet.AgentInvocationRequestedKind:         signet.AgentInvocationBackupPayloadDigests,
-		signet.PublicationReevaluationRequestedKind: signet.PublicationReevaluationBackupPayloadDigests,
-		signet.PublicationReevaluationCompletedKind: signet.PublicationReevaluationCompletionBackupPayloadDigests,
-		engine.KindProductionInvocationRequested:    engine.ProductionInvocationBackupPayloadDigests,
-		engine.KindProductionPublicationRequested:   engine.ProductionPublicationBackupPayloadDigests,
-		engine.KindSpecificationInvocationRequested: engine.SpecificationInvocationBackupPayloadDigests,
-		engine.KindSpecificationImplementationClaim: engine.SpecificationImplementationClaimBackupPayloadDigests,
-		publish.IntentKindReservation:               publish.ReservationBackupPayloadDigests,
-		publish.IntentKindPublication:               publish.PublicationBackupPayloadDigests,
+		engine.FakePublicationTaskKind:                 engine.FakePublicationBackupPayloadDigests,
+		engine.FakePublicationInvocationOwnerKind:      engine.FakePublicationInvocationOwnerBackupPayloadDigests,
+		signet.AgentInvocationRequestedKind:            signet.AgentInvocationBackupPayloadDigests,
+		signet.PublicationReevaluationRequestedKind:    signet.PublicationReevaluationBackupPayloadDigests,
+		signet.PublicationReevaluationCompletedKind:    signet.PublicationReevaluationCompletionBackupPayloadDigests,
+		engine.KindProductionInvocationRequested:       engine.ProductionInvocationBackupPayloadDigests,
+		engine.KindProductionPublicationRequested:      engine.ProductionPublicationBackupPayloadDigests,
+		engine.KindRemediationInvocationRequested:      engine.RemediationInvocationBackupPayloadDigests,
+		engine.KindOperatorFeedbackInvocationRequested: engine.OperatorFeedbackInvocationBackupPayloadDigests,
+		domain.PublicationSuccessorKind:                engine.PublicationSuccessorBackupPayloadDigests,
+		domain.PublicationContinuationRequestedKind:    engine.PublicationContinuationBackupPayloadDigests,
+		engine.KindSpecificationInvocationRequested:    engine.SpecificationInvocationBackupPayloadDigests,
+		engine.KindSpecificationDiscussionRequested:    engine.SpecificationDiscussionBackupPayloadDigests,
+		engine.KindSpecificationImplementationClaim:    engine.SpecificationImplementationClaimBackupPayloadDigests,
+		publish.IntentKindReservation:                  publish.ReservationBackupPayloadDigests,
+		publish.IntentKindPublication:                  publish.PublicationBackupPayloadDigests,
 	}
 }
 
