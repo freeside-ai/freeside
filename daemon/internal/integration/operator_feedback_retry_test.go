@@ -426,9 +426,11 @@ func completeFeedbackSuccessor(t *testing.T, p *productionPublicationHarness, in
 	replay := buildProductionReplayWithContentAt(t, p.publicationHarness, p.runID, run.SpecDigest,
 		submissionSpecification(string(p.runID)), p.declaration.BoundIssue, invocation, fakePublicationTime.Add(time.Minute),
 		"production change\ncorrected decision note\n")
+	completedAt := replay.ImportOptions.CommitDate.Add(30 * time.Second)
+	p.now = completedAt.Add(time.Second)
 	exported, err := domain.NewExecutionExport(domain.ExecutionExportInput{
 		InvocationID: invocation, AdmissionID: admission.ID, ObservedBaseSHA: p.baseSHA,
-		HeadSHA: replay.HeadSHA, ManifestDigest: replay.ManifestDigest, RecordedAt: replay.ImportOptions.CommitDate,
+		HeadSHA: replay.HeadSHA, ManifestDigest: replay.ManifestDigest, RecordedAt: completedAt,
 	})
 	if err != nil {
 		t.Fatal(err)
