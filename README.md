@@ -1,17 +1,33 @@
 # Freeside
 
-**Freeside runs coding-agent workflows locally, turning tasks into
-evidence-backed pull requests and asking you when a decision is needed.**
-It controls which work starts, where agents can work, which credentials they
-receive, and what verification must pass. A background service (the daemon)
-saves workflow state so it survives restarts. Mac and iPhone apps show
-progress and decisions. The harness runs the agent; you hold the reins.
-Read the [introduction](docs/intro.md) for the core ideas.
+**Freeside runs coding-agent workflows on your machine, turning tasks into
+pull requests and asking you when your judgment is needed.**
 
-**Freeside is still under development.** You currently build it from source
-to install it. You can preview the interface, install the Mac client and local
-daemon, or prepare a real repository run. Running real agents still needs
-substantial manual setup; the local installer alone does not enable it.
+Freeside is intended for small fixes as well as larger changes. The goal is
+useful, correct work that's worth the attention, maintenance, money, and risk
+it costs. Agents can keep working without constant supervision while you
+approve specifications and judge results. The agent works in your preferred
+harness, such as Claude Code or Codex. You keep your existing subscriptions.
+
+In the intended workflow, Freeside controls when work is ready: it runs
+approved checks, arranges independent review, and collects the evidence you
+need to judge the result. The daemon, a local background service, keeps GitHub
+credentials outside the agent's workspace and publishes the reviewed work as
+a pull request. You review and merge it.
+
+*The harness runs the agent; you hold the reins.*
+
+Verification and review apply to the exact code being accepted. When that code
+or the branch it will merge into changes, Freeside repeats the review and any
+checks affected by the change. Your decisions survive retries and restarts,
+but an approval applies only to the versions you approved. If its inputs
+change, it no longer applies.
+Read the [introduction](docs/intro.md) for the core ideas and the intended
+experience.
+
+**Freeside is still under development. Expect rough edges.** The pinned wave
+tracker in [GitHub Issues](https://github.com/freeside-ai/freeside/issues)
+records implementation progress.
 
 | I Want To… | Start Here | What To Expect |
 | --- | --- | --- |
