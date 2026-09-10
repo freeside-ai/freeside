@@ -22,6 +22,14 @@ const (
 	auditMaxPages                = 100
 )
 
+var errAuditFeatureUnavailable = errors.New("audit feature unavailable on repository plan")
+
+// Keep unavailable capabilities distinct from absent settings in the digest.
+// This marker contains no provider response text or inferred security facts.
+type auditUnavailableFeature struct {
+	PlanUnavailable bool `json:"plan_unavailable"`
+}
+
 // WorkflowAuditor reads the live automation authority for a repository and
 // returns a fresh trusted observation. Reads are external but non-mutating;
 // the publication decision recorder persists and gates the returned value.
@@ -176,7 +184,7 @@ func (a *GitHubWorkflowAuditor) collect(ctx context.Context, repo repoRef, sha, 
 	if err != nil {
 		return workflowAuditEvidence{}, workflowFacts{}, err
 	}
-	branchProtection, err := a.objectOrNotFound(ctx, repo, "/repos/"+repo.path()+"/branches/"+url.PathEscape(baseRef)+"/protection")
+	branchProtection, err := a.branchProtection(ctx, repo, baseRef)
 	if err != nil {
 		return workflowAuditEvidence{}, workflowFacts{}, fmt.Errorf("read branch protection: %w", err)
 	}
@@ -475,8 +483,11 @@ func (a *GitHubWorkflowAuditor) environments(ctx context.Context, repo repoRef) 
 	return environments, secretEnvironments, nil
 }
 
-func (a *GitHubWorkflowAuditor) rulesets(ctx context.Context, repo repoRef) ([]any, error) {
-	summaries, err := a.arrayPages(ctx, repo, "/repos/"+repo.path()+"/rulesets?includes_parents=true")
+func (a *GitHubWorkflowAuditor) rulesets(ctx context.Context, repo repoRef) (any, error) {
+	summaries, err := a.rulesetSummaries(ctx, repo)
+	if errors.Is(err, errAuditFeatureUnavailable) {
+		return auditUnavailableFeature{PlanUnavailable: true}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -606,7 +617,8 @@ func (a *GitHubWorkflowAuditor) runners(ctx context.Context, repo repoRef) ([]au
 	return runners, nil
 }
 
-func (a *GitHubWorkflowAuditor) objectOrNotFound(ctx context.Context, repo repoRef, requestPath string) (any, error) {
+func (a *GitHubWorkflowAuditor) branchProtection(ctx context.Context, repo repoRef, baseRef string) (any, error) {
+	requestPath := "/repos/" + repo.path() + "/branches/" + url.PathEscape(baseRef) + "/protection"
 	resp, err := a.forge.do(ctx, http.MethodGet, repo, requestPath, "", nil)
 	if err != nil {
 		return nil, err
@@ -614,6 +626,9 @@ func (a *GitHubWorkflowAuditor) objectOrNotFound(ctx context.Context, repo repoR
 	defer drainAndClose(resp.Body)
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
+	}
+	if auditFeatureUnavailable(resp) {
+		return auditUnavailableFeature{PlanUnavailable: true}, nil
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{Status: resp.StatusCode, RequestPath: requestPath}
@@ -628,16 +643,11 @@ func (a *GitHubWorkflowAuditor) objectOrNotFound(ctx context.Context, repo repoR
 	return decoded, nil
 }
 
-func (a *GitHubWorkflowAuditor) arrayPages(ctx context.Context, repo repoRef, basePath string) ([]any, error) {
+func (a *GitHubWorkflowAuditor) rulesetSummaries(ctx context.Context, repo repoRef) ([]any, error) {
 	var all []any
-	separator := "&"
-	if !strings.Contains(basePath, "?") {
-		separator = "?"
-	}
 	for page := 1; page <= auditMaxPages; page++ {
-		requestPath := fmt.Sprintf("%s%sper_page=%d&page=%d", basePath, separator, auditPageSize, page)
-		var decoded []any
-		if err := a.getJSON(ctx, repo, requestPath, &decoded); err != nil {
+		decoded, err := a.rulesetPage(ctx, repo, page)
+		if err != nil {
 			return nil, err
 		}
 		if decoded == nil {
@@ -649,6 +659,41 @@ func (a *GitHubWorkflowAuditor) arrayPages(ctx context.Context, repo repoRef, ba
 		}
 	}
 	return nil, errors.New("pagination exceeded 100 pages")
+}
+
+func (a *GitHubWorkflowAuditor) rulesetPage(ctx context.Context, repo repoRef, page int) ([]any, error) {
+	requestPath := fmt.Sprintf("/repos/%s/rulesets?includes_parents=true&per_page=%d&page=%d", repo.path(), auditPageSize, page)
+	resp, err := a.forge.do(ctx, http.MethodGet, repo, requestPath, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer drainAndClose(resp.Body)
+	// A failure after collecting summaries is incomplete evidence, even if
+	// GitHub reports a plan restriction partway through the audit.
+	if page == 1 && auditFeatureUnavailable(resp) {
+		return nil, errAuditFeatureUnavailable
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, &APIError{Status: resp.StatusCode, RequestPath: requestPath}
+	}
+	var decoded []any
+	if err := decodeResponse(resp.Body, &decoded); err != nil {
+		return nil, err
+	}
+	return decoded, nil
+}
+
+// Only the two optional governance endpoints use this classification. All
+// effective-authority reads retain the ordinary fatal API error behavior.
+func auditFeatureUnavailable(resp *http.Response) bool {
+	if resp.StatusCode != http.StatusForbidden {
+		return false
+	}
+	var decoded struct {
+		Message string `json:"message"`
+	}
+	return decodeResponse(resp.Body, &decoded) == nil &&
+		decoded.Message == "Upgrade to GitHub Pro or make this repository public to enable this feature."
 }
 
 func (a *GitHubWorkflowAuditor) getJSON(ctx context.Context, repo repoRef, requestPath string, out any) error {
