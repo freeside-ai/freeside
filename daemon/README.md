@@ -300,6 +300,13 @@ different review, as does replacement of the bounded pending intent, and
 invalidates the earlier approval. That is the one Freeside manual review; a
 GitHub organization approval remains a separate native prerequisite.
 
+Private repositories do not need paid branch-protection or ruleset features
+to be onboarded. When GitHub explicitly reports those features as unavailable
+under the repository plan, the audit retains `plan_unavailable: true` for each
+affected feature. All automation-authority reads still run; ordinary permission
+errors and incomplete audits still refuse onboarding. Enabling those features
+later changes the audit digest and requires the existing profile reapproval.
+
 `freesided doctor -db <path> -backend-configuration-digest <digest>` reports
 the current config-bound conformance and workspace-handoff declaration plus
 checkpoint encryption, checkpoint currency, artifact closure, and restore-test
