@@ -30,7 +30,9 @@ checkpoint = {"state": "ready", "branch": "fix/output", "binding": {
 observed = {"state": "open", "number": 7,
             "head": {"sha": "expected-head", "ref": "fix/output", "repo": {"id": 42}},
             "base": {"ref": "main", "repo": {"id": 42}}}
-module.check_remote(checkpoint, observed)
+for state in ("ready", "retained"):
+    module.check_remote(dict(checkpoint, state=state), observed)
+refuses(lambda: module.check_remote(dict(checkpoint, state="unknown"), observed))
 for path, value in ((["state"], "closed"), (["number"], 8),
                     (["head", "sha"], "old-head"), (["head", "ref"], "other"),
                     (["head", "repo", "id"], 99), (["base", "repo", "id"], 99),
@@ -41,6 +43,28 @@ for path, value in ((["state"], "closed"), (["number"], 8),
         leaf = leaf[key]
     leaf[path[-1]] = value
     refuses(lambda: module.check_remote(checkpoint, changed))
+
+completed = dict(checkpoint, state="completed", completion={
+    "pr_number": 7, "merge_commit_sha": "expected-merge"})
+merged = dict(observed, state="closed", merged=True, merge_commit_sha="expected-merge")
+module.check_remote(completed, merged)
+for path, value in ((["state"], "open"), (["merged"], False), (["merged"], 1),
+                    (["merge_commit_sha"], "other-merge"), (["merge_commit_sha"], None),
+                    (["number"], 8), (["head", "sha"], "other-head"),
+                    (["head", "ref"], "other-branch"), (["head", "repo", "id"], 99),
+                    (["base", "repo", "id"], 99), (["base", "ref"], "other-base")):
+    changed = copy.deepcopy(merged)
+    leaf = changed
+    for key in path[:-1]:
+        leaf = leaf[key]
+    leaf[path[-1]] = value
+    refuses(lambda: module.check_remote(completed, changed))
+for completion in (None, {}, {"pr_number": 8, "merge_commit_sha": "expected-merge"},
+                   {"pr_number": 7, "merge_commit_sha": ""},
+                   {"pr_number": 7, "merge_commit_sha": None}):
+    refuses(lambda: module.check_remote(dict(completed, completion=completion), merged))
+for state in ("ready", "retained"):
+    refuses(lambda: module.check_remote(dict(checkpoint, state=state), merged))
 
 fields = "repository repository_id base_ref base_sha profile_digest review_configuration_digest allowed_paths claude_auth_identity claude_auth_volume codex_auth_identity images identity build_egress_configuration_digest".split()
 original = dict.fromkeys(fields, "unchanged")

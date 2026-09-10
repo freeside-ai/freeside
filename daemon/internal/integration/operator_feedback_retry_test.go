@@ -299,6 +299,7 @@ func testPublishedFeedbackRetry(t *testing.T, scenario string) {
 		assertSuccessorCorruptionRejected(t, p)
 		if scenario == "clean" {
 			assertDismissedRunHistory(t, p)
+			assertCompletedSuccessorCheckpoint(t, p)
 		}
 	}
 }
