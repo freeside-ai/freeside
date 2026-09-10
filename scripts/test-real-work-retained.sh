@@ -72,7 +72,7 @@ module.compare_composition(original, dict(original, daemon_build="new", rig="new
 for field in fields:
     refuses(lambda: module.compare_composition(original, dict(original, **{field: "changed"})))
 for field in ("shadow_review_configuration_digest", "review_instructions_present",
-              "review_instructions_digest"):
+              "review_instructions_digest", "judgment_configuration_digest"):
     refuses(lambda: module.compare_composition(original, dict(original, **{field: "changed"})))
 
 with tempfile.TemporaryDirectory() as temp:
@@ -135,6 +135,25 @@ with tempfile.TemporaryDirectory() as temp:
             assert receipt != module.upgrade_receipt('reviewed-version', inputs, names)
             os.environ[name] = saved
     content.write_text('changed credential fixture')
+    assert receipt != module.upgrade_receipt('reviewed-version', inputs, names)
+    judgment_bin = session / 'claude'
+    judgment_token = session / 'judgment-token'
+    judgment_bin.write_text('pinned CLI fixture')
+    judgment_token.write_text('private subscription fixture')
+    extra = {'FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN': str(judgment_bin),
+             'FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256': 'pin',
+             'FREESIDE_REAL_RUN_JUDGMENT_MODEL': 'model',
+             'FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT': judgment_token.name}
+    os.environ.update(extra)
+    names.extend(extra)
+    receipt = module.upgrade_receipt('reviewed-version', inputs, names)
+    assert 'private subscription fixture' not in json.dumps(receipt)
+    for path in (judgment_bin, judgment_token):
+        saved = path.read_text()
+        path.write_text('changed')
+        assert receipt != module.upgrade_receipt('reviewed-version', inputs, names)
+        path.write_text(saved)
+    os.environ['FREESIDE_REAL_RUN_JUDGMENT_MODEL'] = 'another'
     assert receipt != module.upgrade_receipt('reviewed-version', inputs, names)
 print("PASS: retained identities/composition and exact remote publication checks")
 PY

@@ -158,6 +158,9 @@ func main() {
 	publicationTitle := flags.String("publication-title", "Publish attended fake candidate", "pull request title")
 	publicationBody := flags.String("publication-body", "", "pull request body")
 	driverMode := flags.String("driver", "disabled", "execution: disabled (setup only), fake (explicit demo), or claude (real agents)")
+	var judgmentsConfig judgmentConfig
+	judgmentFlags(flags, &judgmentsConfig)
+	flags.StringVar(&judgmentsConfig.ExpectedDigest, "judgment-configuration-digest", "", "required preflight digest when subscription judgments are enabled")
 	seedWalkingSkeleton := flags.Bool("seed-walking-skeleton", false,
 		"seed the 1A.0 walking-skeleton demo run under the fake driver (off by default so a production store stays empty, #1127)")
 	agentImage := flags.String("agent-image", "", "digest-pinned Claude agent image")
@@ -285,7 +288,7 @@ func main() {
 		daemonConfig.Claude = &claudeDriverConfig{
 			AgentImage: domain.ImageRef(*agentImage), ExporterImage: *exporterImage,
 			ContainerBin: *containerBin, SeedRoot: *seedRoot,
-			StateDir: *stateDir, RigTokenFile: *rigTokenFile,
+			StateDir: *stateDir, RigTokenFile: *rigTokenFile, Judgments: judgmentsConfig,
 			ProviderEndpoints:              strings.Split(*providerEndpoints, ","),
 			PromptPackageFile:              *promptPackage,
 			SpecificationPromptPackageFile: *specificationPromptPackage,
@@ -745,10 +748,14 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			},
 			MaxCallsPerRoot: 20, MaxStarvationPerRoot: 10 * time.Minute,
 		}
+		judgmentBinding, err := composeRuntimeJudgments(cfg.Claude.Judgments, cfg.Claude.ReviewInputRoot)
+		if err != nil {
+			return nil, fmt.Errorf("compose subscription judgments: %w", err)
+		}
 		judgments, err := inference.New(inference.Config{
 			StatePath:  filepath.Join(cfg.StateDir, "inference-budget.json"),
 			AnchorPath: cfg.DBPath + ".inference-budget-anchor",
-			Binding:    inference.Binding{Provider: "unavailable", Model: "unbound"},
+			Binding:    judgmentBinding,
 			Sites: []inference.Site{
 				inference.ClassifierSite(judgmentBudget), inference.AdjudicatorSite(judgmentBudget),
 				inference.DiagnosticSite(judgmentBudget), inference.DiscussionSite(judgmentBudget),

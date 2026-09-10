@@ -67,6 +67,11 @@
 #                                    agent may rewrite (no match-everything
 #                                    default: it is a containment control)
 # Optional environment:
+#   FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN absolute native Claude CLI path
+#   FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256 exact executable content pin
+#   FREESIDE_REAL_RUN_JUDGMENT_MODEL explicit Claude model for daemon judgments
+#   FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT existing setup-token file relative
+#                                    to REVIEW_INPUT_ROOT; all four go together
 #   FREESIDE_REAL_RUN_TIMEOUT_SECONDS global supervision deadline in seconds;
 #                                    a positive integer (default 2400)
 #   FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES consecutive transient
@@ -542,12 +547,28 @@ preflight_args=(
 if [[ -n "$work_unit_file" ]]; then
 	preflight_args+=(-work-unit "$work_unit_file")
 fi
+judgment_names=(FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256
+  FREESIDE_REAL_RUN_JUDGMENT_MODEL FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT)
+judgment_args=()
+if [[ -n "${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN:-}${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256:-}${FREESIDE_REAL_RUN_JUDGMENT_MODEL:-}${FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT:-}" ]]; then
+  for name in "${judgment_names[@]}"; do
+    if [[ -z "${!name:-}" ]]; then
+      echo "run-real-work: $name is required for subscription judgments" >&2
+      exit 2
+    fi
+  done
+  judgment_args=(-judgment-claude-bin "$FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN"
+    -judgment-claude-sha256 "$FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256"
+    -judgment-model "$FREESIDE_REAL_RUN_JUDGMENT_MODEL"
+    -judgment-auth-snapshot "$FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT")
+  preflight_args+=("${judgment_args[@]}")
+fi
 if [[ -n "${FREESIDE_REAL_RUN_BUILD_PROXY:-}" ]]; then
 	preflight_args+=(-build-proxy "$FREESIDE_REAL_RUN_BUILD_PROXY")
 fi
 if [[ -n "$retained_session" ]]; then
   receipt_args=("$build_version" "$spec_file" "$policy_file" "$publication_file" "$work_unit_file"
-    "${required[@]}" FREESIDE_REAL_RUN_BUILD_PROXY)
+    "${required[@]}" FREESIDE_REAL_RUN_BUILD_PROXY "${judgment_names[@]}")
   if [[ "$(cat "$retained_session/status")" == recovery-required &&
     -f "$retained_session/runtime-upgrade-started" &&
     -f "$retained_session/runtime-upgrade-receipt.json" ]]; then
@@ -627,6 +648,22 @@ if ! cmp -s "$composition_manifest" "$composition_evidence"; then
 fi
 echo "production composition manifest: $composition_evidence" >&2
 
+if [[ ${#judgment_args[@]} -gt 0 ]]; then
+  judgment_digest=$(python3 - "$composition_evidence" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    digest = json.load(source).get("judgment_configuration_digest")
+if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+    raise SystemExit("run-real-work: preflight judgment digest is missing or invalid")
+print(digest)
+PY
+  )
+  judgment_args+=(-judgment-configuration-digest "$judgment_digest")
+fi
+
 if [[ -n "$retained_session" ]]; then
   echo "reattaching retained implementation run=$implementation_run_id; no submission or client command" >&2
 else
@@ -691,6 +728,7 @@ require_live_rig
 # FREESIDE_REAL_RUN_LISTEN pins the exact leased listener so an operator's
 # paired client can reach the specification-approval gate.
 "$workdir/freesided" \
+  "${judgment_args[@]}" \
   -listen "$listen_address" \
   -db "$db_path" \
   -driver claude \

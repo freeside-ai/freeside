@@ -59,6 +59,14 @@ def upgrade_receipt(version, inputs, names):
                  "FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS"):
         paths.append(Path(values["FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT"]) / values[name])
     content = [hashlib.sha256(path.read_bytes()).hexdigest() for path in paths]
+    if values.get("FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN"):
+        paths_for_judgment = (
+            Path(values["FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN"]),
+            Path(values["FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT"]) /
+            values["FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT"],
+        )
+        content.extend(hashlib.sha256(path.read_bytes()).hexdigest()
+                       for path in paths_for_judgment)
     canonical = json.dumps({"values": values, "content": content}, sort_keys=True).encode()
     return {"version": version, "inputs_digest": hashlib.sha256(canonical).hexdigest()}
 
@@ -73,7 +81,7 @@ def compare_composition(old, new):
         if old[field] != new[field]:
             raise ValueError(f"retained composition changed: {field}")
     for field in ("shadow_review_configuration_digest", "review_instructions_present",
-                  "review_instructions_digest"):
+                  "review_instructions_digest", "judgment_configuration_digest"):
         if old.get(field) != new.get(field):
             raise ValueError(f"retained composition changed: {field}")
 
