@@ -300,6 +300,18 @@ different review, as does replacement of the bounded pending intent, and
 invalidates the earlier approval. That is the one Freeside manual review; a
 GitHub organization approval remains a separate native prerequisite.
 
+If the installation was terminally quarantined, start a fresh native
+installation with `-recover-installation <quarantined-id> -installation-id 0`
+and the ordinary onboarding arguments. Do not combine recovery with `-resume`
+or `-approve`. Recovery retains the prior authority in an owner-only
+`installation-recovery-<app-id>-<old-installation-id>-<revision>.json` file,
+then replaces only that withdrawn binding and its matching pending request.
+The quarantine journal remains unchanged, and the old installation can never
+satisfy the new request. Select only the requested repository when installing;
+other repositories can be onboarded through the ordinary expansion flow later.
+Resume without `-recover-installation` and approve the newly displayed review.
+Prior approvals remain historical evidence and do not authorize the replacement.
+
 Private repositories do not need paid branch-protection or ruleset features
 to be onboarded. When GitHub explicitly reports those features as unavailable
 under the repository plan, the audit retains `plan_unavailable: true` for each

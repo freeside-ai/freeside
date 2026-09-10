@@ -234,15 +234,10 @@ func (j janitorJournal) record(entry janitorAuditEntry) janitorJournal {
 // quarantined installation while carrying an unrelated pending envelope fails
 // the pass until the operator reconciles the file.
 //
-// A withdrawal reaches the pending envelope by installation ID, which leaves one
-// case open (#283). Once the operator has removed the stale binding, a *later*
-// envelope authored with no installation ID matches by account, so a quarantined
-// installation that outlived its deletion can satisfy it and escape cleanup.
-// Closing it needs the withdrawn set to reach the reconciliation gate, which is
-// #263's pending-envelope semantics rather than this store's. What it cannot do
-// is regain credentials: a zero-ID envelope carries an empty current set, and
-// only that set enters janitor coverage, so the escape grants no repository and
-// ends when the envelope expires.
+// The served snapshot also carries the withdrawn IDs into reconciliation and
+// onboarding token checks. A later zero-ID envelope may admit a genuinely new
+// installation on the same account, but cannot admit a quarantined installation
+// that survived its attempted deletion.
 func applyQuarantine(
 	entry InstallationAuthorityEntry,
 	quarantined []quarantinedInstallation,

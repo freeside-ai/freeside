@@ -231,7 +231,13 @@ func (s *InstallationAuthorityStore) InstallationAuthority(
 	if err != nil {
 		return InstallationAuthority{}, err
 	}
-	return served.authority(), nil
+	snapshot := served.authority()
+	for _, record := range journal.Quarantined {
+		if record.RegistrationID == registrationID {
+			snapshot.QuarantinedInstallationIDs = append(snapshot.QuarantinedInstallationIDs, record.InstallationID)
+		}
+	}
+	return snapshot, nil
 }
 
 // Document returns the complete operator-authored authority document through
@@ -263,6 +269,25 @@ func (s *InstallationAuthorityStore) UpdateDocument(
 	ctx context.Context,
 	update func(*InstallationAuthorityDocument) error,
 ) error {
+	return s.updateDocument(ctx, update, nil)
+}
+
+// UpdateQuarantinedInstallation serializes explicit recovery with quarantine
+// writes. The original authority is retained before its active binding changes;
+// the terminal journal is never rewritten by recovery.
+func (s *InstallationAuthorityStore) UpdateQuarantinedInstallation(
+	ctx context.Context, registrationID, installationID int64,
+	update func(*InstallationAuthorityDocument) error,
+) error {
+	if registrationID <= 0 || installationID <= 0 {
+		return errors.New("installation recovery: positive registration and quarantined installation IDs are required")
+	}
+	return s.updateDocument(ctx, update, &quarantineKey{registrationID: registrationID, installationID: installationID})
+}
+
+func (s *InstallationAuthorityStore) updateDocument(
+	ctx context.Context, update func(*InstallationAuthorityDocument) error, recovery *quarantineKey,
+) error {
 	if s == nil {
 		return errors.New("installation authority: nil store")
 	}
@@ -288,12 +313,47 @@ func (s *InstallationAuthorityStore) UpdateDocument(
 	if err != nil {
 		return err
 	}
+	var archive string
+	if recovery != nil {
+		journal, err := s.loadJournalLocked()
+		if err != nil {
+			return err
+		}
+		quarantined := false
+		for _, record := range journal.Quarantined {
+			if record.RegistrationID == recovery.registrationID && record.InstallationID == recovery.installationID {
+				quarantined = true
+			}
+		}
+		if !quarantined {
+			return errors.New("installation recovery: selected installation is not quarantined")
+		}
+		entry, err := document.entry(recovery.registrationID)
+		if err != nil {
+			return err
+		}
+		archive = fmt.Sprintf("installation-recovery-%d-%d-%d.json", recovery.registrationID, recovery.installationID, entry.DurableIntentRevision)
+	}
 	if err := update(&document); err != nil {
 		return err
 	}
 	replacement, err := document.Encode()
 	if err != nil {
 		return err
+	}
+	if archive != "" {
+		previous, err := s.readFile(archive, installationAuthorityMaxBytes)
+		if err == nil {
+			if string(previous) != string(payload) {
+				return errors.New("installation recovery: retained authority differs from current authority")
+			}
+		} else if errors.Is(err, os.ErrNotExist) {
+			if err := s.writeFile(archive, payload); err != nil {
+				return fmt.Errorf("retain installation authority before recovery: %w", err)
+			}
+		} else {
+			return err
+		}
 	}
 	return s.writeFile(installationAuthorityFileName, replacement)
 }

@@ -59,6 +59,18 @@ func TestParseOnboardConfigBuildEgress(t *testing.T) {
 			t.Fatalf("BuildProxy = %q, want empty", cfg.BuildProxy)
 		}
 	})
+	t.Run("recovery is an explicit fresh request", func(t *testing.T) {
+		cfg, err := parseOnboardConfig(append(slices.Clone(baseArgs), "-recover-installation", "33"), io.Discard)
+		if err != nil || cfg.RecoverInstallationID != 33 || cfg.InstallationID != 0 {
+			t.Fatalf("recovery config = %+v, %v", cfg, err)
+		}
+		for _, extra := range [][]string{{"-resume"}, {"-approve", "prior-digest"}, {"-installation-id", "33"}} {
+			args := append(slices.Clone(baseArgs), "-recover-installation", "33")
+			if _, err := parseOnboardConfig(append(args, extra...), io.Discard); err == nil {
+				t.Fatalf("accepted incompatible recovery flags: %v", extra)
+			}
+		}
+	})
 }
 
 func TestOnboardStoreCanPassSubmitTopicKeyGate(t *testing.T) {

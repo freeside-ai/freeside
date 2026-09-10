@@ -132,6 +132,16 @@ func TestOnboardingTokenSourceRegatesCachedReadOnlyMint(t *testing.T) {
 	}
 
 	gate.pendingReady = true
+	authority.authority.Pending.InstallationID = 0
+	authority.authority.QuarantinedInstallationIDs = []int64{777}
+	if _, err := tokens.Token(context.Background(), testTrustRepo); err == nil {
+		t.Fatal("cached readiness restored a quarantined installation through a zero-ID envelope")
+	}
+	if requests != 1 {
+		t.Fatal("quarantined readiness caused another mint")
+	}
+	authority.authority.QuarantinedInstallationIDs = nil
+	authority.authority.Pending.InstallationID = 777
 	authority.authority.Pending.ExpiresAt = fixtureTime
 	if _, err := tokens.Token(context.Background(), testTrustRepo); err == nil ||
 		strings.Contains(err.Error(), fixtureTokenValue) {

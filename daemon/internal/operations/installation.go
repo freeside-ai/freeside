@@ -20,6 +20,69 @@ type AuthorityDocumentStore interface {
 	) error
 }
 
+// QuarantinedInstallationStore verifies the terminal quarantine and retains the
+// original authority under the same lock as the replacement document write.
+type QuarantinedInstallationStore interface {
+	UpdateQuarantinedInstallation(context.Context, int64, int64, func(*publish.InstallationAuthorityDocument) error) error
+}
+
+// RecoverInstallation starts a fresh native installation, never a reactivation.
+// Only the selected withdrawn binding and its own pending request are replaced.
+func RecoverInstallation(
+	ctx context.Context, documents QuarantinedInstallationStore,
+	oldInstallationID int64, req InstallationIntentRequest, now func() time.Time,
+) (publish.PendingEnvelopeRecord, error) {
+	if documents == nil || now == nil || oldInstallationID <= 0 || req.InstallationID != 0 {
+		return publish.PendingEnvelopeRecord{}, errors.New("installation recovery: require an old quarantined ID and a fresh zero-ID request")
+	}
+	var pending publish.PendingEnvelopeRecord
+	err := documents.UpdateQuarantinedInstallation(ctx, req.RegistrationID, oldInstallationID,
+		func(document *publish.InstallationAuthorityDocument) error {
+			entry, err := authorityEntry(*document, req.RegistrationID)
+			if err != nil {
+				return err
+			}
+			found := false
+			for i, binding := range entry.TrustedInstallations {
+				if binding.InstallationID != oldInstallationID {
+					continue
+				}
+				if binding.AccountID != req.AccountID || !strings.EqualFold(binding.Account, req.Account) {
+					return errors.New("installation recovery: account differs from quarantined binding")
+				}
+				entry.TrustedInstallations = slices.Delete(entry.TrustedInstallations, i, i+1)
+				found = true
+				break
+			}
+			if !found {
+				return errors.New("installation recovery: quarantined binding is absent; use the existing fresh-install request")
+			}
+			if entry.Pending != nil {
+				if entry.Pending.InstallationID == nil || *entry.Pending.InstallationID != oldInstallationID {
+					return errors.New("installation recovery: an unrelated pending request must be preserved")
+				}
+				entry.Pending = nil
+			}
+			replaceAuthorityEntry(document, entry)
+			pending, err = BeginInstallation(ctx, installationDocument{document}, req, now)
+			return err
+		})
+	return pending, err
+}
+
+// installationDocument lets recovery reuse the ordinary intent rules inside
+// its already-held durable transaction, without a second store lock or write.
+type installationDocument struct {
+	document *publish.InstallationAuthorityDocument
+}
+
+func (d installationDocument) UpdateDocument(ctx context.Context, update func(*publish.InstallationAuthorityDocument) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return update(d.document)
+}
+
 // InstallationIntentRequest supplies canonical coordinates already displayed
 // by GitHub's native installation flow.
 type InstallationIntentRequest struct {

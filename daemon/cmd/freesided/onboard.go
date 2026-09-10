@@ -33,35 +33,36 @@ func runOnboardMain(args []string) {
 }
 
 type onboardConfig struct {
-	Repository        string
-	DBPath            string
-	StateDir          string
-	RegistrationID    int64
-	RepositoryID      int64
-	Account           string
-	AccountID         int64
-	InstallationID    int64
-	Resume            bool
-	InstallWait       time.Duration
-	CredentialsDir    string
-	Commit            string
-	BaseRef           string
-	RecipePath        string
-	SourceDir         string
-	BaseImage         string
-	BaseBuildRef      string
-	ReviewConfig      string
-	CommitPlan        domain.CommitPlanMode
-	Approval          string
-	Registry          string
-	LocalRegistryPort int
-	ImageName         string
-	RefTag            string
-	GitPath           string
-	ContainerPath     string
-	TempDir           string
-	DNS               []string
-	BuildProxy        string
+	Repository            string
+	DBPath                string
+	StateDir              string
+	RegistrationID        int64
+	RepositoryID          int64
+	Account               string
+	AccountID             int64
+	InstallationID        int64
+	RecoverInstallationID int64
+	Resume                bool
+	InstallWait           time.Duration
+	CredentialsDir        string
+	Commit                string
+	BaseRef               string
+	RecipePath            string
+	SourceDir             string
+	BaseImage             string
+	BaseBuildRef          string
+	ReviewConfig          string
+	CommitPlan            domain.CommitPlanMode
+	Approval              string
+	Registry              string
+	LocalRegistryPort     int
+	ImageName             string
+	RefTag                string
+	GitPath               string
+	ContainerPath         string
+	TempDir               string
+	DNS                   []string
+	BuildProxy            string
 }
 
 type stringList []string
@@ -125,6 +126,9 @@ func runOnboardCommand(
 	if err != nil {
 		return err
 	}
+	if trusted != nil && cfg.RecoverInstallationID > 0 {
+		return errors.New("installation recovery: repository already has a current trusted installation")
+	}
 	if trusted == nil {
 		if cfg.Account == "" || cfg.AccountID <= 0 || cfg.InstallationID < 0 {
 			return errors.New(
@@ -146,7 +150,19 @@ func runOnboardCommand(
 			if err != nil {
 				return err
 			}
-			pending, err := operations.BeginInstallation(ctx, authority, intent, time.Now)
+			var pending publish.PendingEnvelopeRecord
+			if cfg.RecoverInstallationID > 0 {
+				pending, err = operations.RecoverInstallation(ctx, authority, cfg.RecoverInstallationID, intent, time.Now)
+			} else {
+				snapshot, snapshotErr := authority.InstallationAuthority(ctx, cfg.RegistrationID)
+				if snapshotErr != nil {
+					return snapshotErr
+				}
+				if slices.Contains(snapshot.QuarantinedInstallationIDs, cfg.InstallationID) {
+					return errors.New("installation is quarantined; use -recover-installation with -installation-id 0 for a fresh native installation")
+				}
+				pending, err = operations.BeginInstallation(ctx, authority, intent, time.Now)
+			}
 			if err != nil {
 				return err
 			}
@@ -287,6 +303,7 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	flags.StringVar(&cfg.Account, "account", "", "canonical repository-owning account login")
 	flags.Int64Var(&cfg.AccountID, "account-id", 0, "canonical numeric repository-owning account ID")
 	flags.Int64Var(&cfg.InstallationID, "installation-id", 0, "selected installation ID; zero before GitHub assigns one")
+	flags.Int64Var(&cfg.RecoverInstallationID, "recover-installation", 0, "quarantined installation ID to replace through a fresh native installation")
 	flags.BoolVar(&cfg.Resume, "resume", false, "resume the existing bounded installation intent")
 	flags.DurationVar(&cfg.InstallWait, "install-wait", 10*time.Minute, "maximum wait for native installation approval")
 	flags.StringVar(&cfg.CredentialsDir, "credentials-dir", "",
@@ -348,6 +365,9 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	}
 	if cfg.InstallWait <= 0 {
 		return onboardConfig{}, errors.New("-install-wait must be positive")
+	}
+	if cfg.RecoverInstallationID < 0 || (cfg.RecoverInstallationID > 0 && (cfg.InstallationID != 0 || cfg.Resume || cfg.Approval != "")) {
+		return onboardConfig{}, errors.New("-recover-installation requires a positive quarantined ID, -installation-id 0, and no -resume or -approve")
 	}
 	if cfg.RecipePath == "" && cfg.SourceDir == "" {
 		return onboardConfig{}, errors.New("-recipe or -source is required")
