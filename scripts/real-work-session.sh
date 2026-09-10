@@ -43,7 +43,7 @@ recovery_signal=0
 trap 'recovery_signal=130' INT
 trap 'recovery_signal=143' TERM
 # shellcheck source=scripts/real-work-lifecycle.sh
-source "$session/real-work-lifecycle.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/real-work-lifecycle.sh"
 state_root=$(cat "$session/state-root")
 bound=$(cat "$session/rig-timeout")
 [[ "$bound" =~ ^[1-9][0-9]*$ ]] || exit 2

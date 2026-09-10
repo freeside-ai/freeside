@@ -217,6 +217,28 @@ leave `recovery.lock`; establish that the helper has stopped before removing
 that empty lock directory and retrying. Never remove rig manifests or clear a
 gate while the daemon or recorded resources remain live.
 
+The recovery command first removes exactly the manifest-recorded containers,
+then recovers review-owned volumes and networks through their existing journal.
+The full review namespace must belong to the stale manifest; journal ownership,
+fingerprints and lease checks still govern persistent resource removal. A lost
+review receives its normal interrupted outcome, without running a provider or
+advancing the workflow. Unknown persistent resources keep the rig gate closed.
+Recovery opens only an existing database at the binary's exact schema; it never
+migrates or recreates one.
+
+If an older retained binary lacks the required recovery fix, use the current
+reviewed helper with an explicit reviewed recovery binary:
+
+```sh
+FREESIDE_REAL_RUN_RECOVERY_DAEMON=/absolute/reviewed/freesided \
+  bash /absolute/reviewed-checkout/scripts/real-work-session.sh recover /absolute/session
+```
+
+This selects the binary only for `rig recover` and uses the helper's adjacent
+lifecycle script. It preserves the session's saved binary, scripts and inputs.
+Supervised restoration keeps its existing installation and schema checks;
+choosing a recovery binary does not install it or authorize a runtime upgrade.
+
 `daemon.log`, `verify-final.log`, `rig-cleanup.log` and `restore.log` retain
 earlier diagnostics. Keep the entire private session until recovery and the
 operator's evidence review are finished. There is no detached daemon continuation

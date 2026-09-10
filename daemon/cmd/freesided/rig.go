@@ -24,8 +24,10 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
+	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
 
 const defaultRigLaunchAgentLabel = "ai.freeside.daemon"
@@ -48,6 +50,26 @@ type rigHost interface {
 	DeleteContainers(context.Context, string, []string) error
 	PresentPersistentResources(context.Context, string, []string, []string) ([]string, []string, error)
 	RuntimeCLIActive(context.Context, string) (bool, error)
+	RecoverReviewResources(context.Context, string, daemonlock.RigManifest) error
+}
+
+func (productionRigHost) RecoverReviewResources(
+	ctx context.Context, executable string, manifest daemonlock.RigManifest,
+) (retErr error) {
+	st, err := store.OpenExisting(ctx, manifest.Resources.DatabasePath, store.Options{})
+	if err != nil {
+		return fmt.Errorf("open existing review journal: %w", err)
+	}
+	defer func() { retErr = errors.Join(retErr, st.Close()) }()
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		return err
+	}
+	return ward.RecoverCodexReviewResources(ctx, ward.NewCLIRuntime(executable), adapters.Journal,
+		filepath.Join(manifest.Resources.StateRoot, "ward-exports"), ward.RuntimeResourceNames{
+			Containers: manifest.Resources.Containers,
+			Volumes:    manifest.Resources.Volumes, Networks: manifest.Resources.Networks,
+		})
 }
 
 type productionRigHost struct {
@@ -696,6 +718,23 @@ func runRigRecover(
 	}
 	if err := cleanupRigContainers(ctx, host, *containerBin, present); err != nil {
 		return err
+	}
+	volumes, networks, err := host.PresentPersistentResources(ctx, *containerBin,
+		manifest.Resources.Volumes, manifest.Resources.Networks)
+	if err != nil {
+		return err
+	}
+	if len(volumes)+len(networks) > 0 {
+		active, err := host.RuntimeCLIActive(ctx, *containerBin)
+		if err != nil {
+			return err
+		}
+		if active {
+			return errors.New("runtime CLI process is still active; wait before recovering review journals")
+		}
+		if err := host.RecoverReviewResources(ctx, *containerBin, manifest); err != nil {
+			return fmt.Errorf("recover recorded review journals: %w", err)
+		}
 	}
 	if err := requireRigResourcesAbsent(ctx, host, *containerBin, manifest.Resources); err != nil {
 		return err
