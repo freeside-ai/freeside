@@ -402,12 +402,24 @@ func (d *Driver) restoreDurableOutcome(
 	in.PendingUsage = nil
 	switch stored.Status {
 	case domain.ExecutionOutcomeFailed:
+		claims, _, err := d.artifacts.LookupClaims(ctx, in.InvocationID)
+		if err != nil {
+			return intent{}, false, fmt.Errorf("%w: recover failure claims: %w", ErrRecoveryRetryable, err)
+		}
+		artifacts := make([]domain.Digest, 0, len(claims))
+		for _, claim := range claims {
+			if err := claim.Validate(); err != nil || claim.Provenance.ProducerInvocationID != in.InvocationID {
+				return intent{}, false, fmt.Errorf("%w: invalid recovered failure claim", ErrUnsupportedStart)
+			}
+			artifacts = append(artifacts, claim.Digest)
+		}
 		in.Phase = phaseCommitted
 		in.Result = &exec.StageResult{
 			InvocationID: in.InvocationID,
 			Status:       exec.StatusFailed,
 			Summary:      stored.Summary,
 			Usage:        usage,
+			Artifacts:    artifacts,
 		}
 	case domain.ExecutionOutcomeCanceled:
 		in.Phase = phaseCommitted

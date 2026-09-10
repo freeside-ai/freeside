@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 55
+revision: 56
 status: active
 updated: 2026-09-10
 ---
@@ -1536,7 +1536,16 @@ untrusted input to a new attempt.
 For an uncommanded stop, a matching nonzero marker is terminal failure. Ward
 validates the nonce and status, persists `WriterFailureStatus` before any
 cleanup can erase the marker-bearing workspace, completes teardown, and closes
-`failed`. Export is refused even when partial edits exist.
+`failed`. Source export is refused even when partial edits exist. A declared
+failure transcript may be retained through the existing sensitive-evidence
+mechanism: after writer quiescence, the read-only observer copies only the
+fixed, invocation-bound transcript and its descriptor, with independent size,
+regular-file, provenance, and secret-scan checks. Valid UTF-8 is retained as
+plain text because a failed CLI may interleave stderr with structured output.
+The journal records the retained digest or an explicit unavailable disposition
+before cleanup. Operational capture failures leave the workspace and journal
+open for recovery. A retained transcript supplies no source, verification, or
+publication authority.
 
 Recovery checks the durable amendments first and branches on them before it
 inspects marker state: `CancellationIntent` takes first precedence; then an
@@ -4380,16 +4389,16 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 55 ("Prove Cache-Independent Project Images"):
+Revision 56 ("Retain Failed Writer Diagnostics"):
 
-1. **Successful cache-masked installation requires a complete masked recipe
-   proof.** A dependency-free project exposed the old assumption that every
-   npm installation needs cached packages. Preserve the negative network-error
-   proof for projects that do need them; otherwise prove each trusted command
-   in a fresh workspace with both preparation and execution cache-masked and
-   network-disabled. Do not classify lockfile shapes or add dummy dependencies.
-   (User assignment; implementation decision for #1284;
-   devlog 2026-09-10-0955-cache-independent-project-images.md.)
+1. **Failed writers retain bounded sensitive diagnostics before cleanup.**
+   A nonzero exit still forbids source export. Reuse the stopped writer's
+   outcome observer and established sensitive-evidence mechanism to retain
+   only its declared transcript. Journal the capture disposition before
+   teardown; storage failures preserve the source for recovery. This closes
+   the diagnostic gap without accepting partial edits or rerunning a provider.
+   (User assignment; implementation decision for #1286;
+   devlog 2026-09-10-1219-failed-writer-transcripts.md.)
 
 ## 14. Risks
 

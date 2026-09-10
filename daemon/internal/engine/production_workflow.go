@@ -1636,7 +1636,11 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 			if err != nil {
 				return err
 			}
-			item, err := productionFailureItem(run, terminal, createdAt, facts, names)
+			claims, err := failureTranscriptClaims(ctx, tx, facts)
+			if err != nil {
+				return err
+			}
+			item, err := productionFailureItem(run, terminal, createdAt, facts, names, claims)
 			if err != nil {
 				return err
 			}
@@ -1821,6 +1825,7 @@ func (e *Engine) recordProductionDeliveryRefusal(
 func productionFailureItem(
 	run domain.Run, terminal productionTerminalRecord, createdAt time.Time,
 	facts *domain.ExecutionFailureFacts, displayNames *domain.DisplayNames,
+	claims []domain.AgentClaim,
 ) (domain.AttentionItem, error) {
 	runID := run.ID
 	reason := fmt.Sprintf("Unattended %s stage ended %q without an accepted result.",
@@ -1840,6 +1845,7 @@ func productionFailureItem(
 		Reason:            reason,
 		RequestedDecision: actions,
 		ExecutionFailure:  facts,
+		AgentClaims:       claims,
 		DisplayNames:      displayNames,
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt: &createdAt,
@@ -1854,7 +1860,7 @@ func productionDeliveryRefusalItem(
 	run domain.Run, terminal productionTerminalRecord, createdAt time.Time,
 	facts *domain.ExecutionFailureFacts, displayNames *domain.DisplayNames,
 ) (domain.AttentionItem, error) {
-	item, err := productionFailureItem(run, terminal, createdAt, facts, displayNames)
+	item, err := productionFailureItem(run, terminal, createdAt, facts, displayNames, nil)
 	if err != nil {
 		return domain.AttentionItem{}, err
 	}

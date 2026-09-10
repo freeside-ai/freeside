@@ -79,3 +79,32 @@ func executionFailureFacts(
 		Outcome: mapped, Stage: stage, InvocationID: invocationID,
 	}, nil
 }
+
+// failureTranscriptClaims makes retained diagnostics discoverable through the
+// existing attention evidence surface. It never copies transcript bytes into
+// the card, and only a durable failed invocation may supply the claim.
+func failureTranscriptClaims(ctx context.Context, tx *store.WriteTx, facts *domain.ExecutionFailureFacts) ([]domain.AgentClaim, error) {
+	if facts == nil || facts.Outcome != domain.ExecutionOutcomeFailed {
+		return nil, nil
+	}
+	claims, err := tx.GetAgentClaims(ctx, facts.InvocationID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var retained []domain.AgentClaim
+	for _, claim := range claims {
+		if claim.Label != "agent-transcript" {
+			continue
+		}
+		if claim.Provenance.ProducerInvocationID != facts.InvocationID ||
+			claim.Provenance.SensitivityClass != domain.SensitivitySensitive ||
+			claim.Provenance.HeadBinding != domain.HeadIndependent || claim.Text != nil {
+			return nil, fmt.Errorf("failure transcript disagrees with invocation: %w", domain.ErrParentKeyMismatch)
+		}
+		retained = append(retained, claim)
+	}
+	return retained, nil
+}

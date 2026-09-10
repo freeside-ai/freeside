@@ -1699,3 +1699,14 @@ Revision 54 ("Recover Released Imports Across Daemon Upgrades"):
    fallback after a current import began remains forbidden.
    (User assignment; implementation decision for #1260;
    devlog 2026-09-09-1300-released-import-recovery.md.)
+
+Revision 55 ("Prove Cache-Independent Project Images"):
+
+1. **Successful cache-masked installation requires a complete masked recipe
+   proof.** A dependency-free project exposed the old assumption that every
+   npm installation needs cached packages. Preserve the negative network-error
+   proof for projects that do need them; otherwise prove each trusted command
+   in a fresh workspace with both preparation and execution cache-masked and
+   network-disabled. Do not classify lockfile shapes or add dummy dependencies.
+   (User assignment; implementation decision for #1284;
+   devlog 2026-09-10-0955-cache-independent-project-images.md.)

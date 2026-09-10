@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 // The §5.4 export scan (ward's check-7 hook): the last gate between an
@@ -84,8 +86,8 @@ func (credentialScanner) Scan(ctx context.Context, dir string) error {
 			if relErr != nil {
 				rel = filepath.Base(path)
 			}
-			return fmt.Errorf("credential material matching %s found in exported %s",
-				patternName(matched), rel)
+			return fmt.Errorf("%w: credential material matching %s found in exported %s",
+				ward.ErrOutputScanRefused, patternName(matched), rel)
 		}
 		return nil
 	})

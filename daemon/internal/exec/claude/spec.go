@@ -440,6 +440,12 @@ func (p claudeProvider) HandoffSpec(
 			Mode: ward.SeedBaseCheckout, SourceDir: in.Seed, Base: spec.Base,
 		},
 		Agent: ward.AgentSpec{
+			FailureTranscript: &export.EvidenceSource{
+				Label: "agent-transcript", MediaType: "application/jsonl",
+				Path: transcriptEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+				SensitivityClass:     export.EvidenceSensitivitySensitive,
+				ProducerInvocationID: string(id),
+			},
 			Image:             string(spec.ImageRef),
 			Command:           agentCommand(in.Prompt, sessionIDFor(id), id, in.Preparation),
 			Env:               agentEnv(),

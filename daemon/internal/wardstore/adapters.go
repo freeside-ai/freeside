@@ -1296,6 +1296,13 @@ func (a *Journal) MarkWriterFailed(ctx context.Context, runID string, status int
 	})
 }
 
+// MarkFailureEvidence records the immutable diagnostic disposition.
+func (a *Journal) MarkFailureEvidence(ctx context.Context, runID, digest string, unavailable bool) error {
+	return a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.MarkHandoffFailureEvidence(ctx, runID, digest, unavailable)
+	})
+}
+
 // MarkExportMaterialized commits the verified export's host location.
 func (a *Journal) MarkExportMaterialized(ctx context.Context, runID, exportDir string) error {
 	return a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -1314,16 +1321,18 @@ func (a *Journal) Close(
 
 func toStoreRecord(rec ward.HandoffJournalRecord) store.HandoffJournalRecord {
 	converted := store.HandoffJournalRecord{
-		RunID:                 rec.RunID,
-		OwnershipToken:        rec.OwnershipToken,
-		SpecDigest:            rec.SpecDigest,
-		ObservedBaseSHA:       rec.ObservedBaseSHA,
-		CredentialPreDigest:   rec.CredentialPreDigest,
-		WriterComplete:        rec.WriterComplete,
-		CancellationRequested: rec.CancellationRequested,
-		WriterFailureStatus:   rec.WriterFailureStatus,
-		ExportDir:             rec.ExportDir,
-		OpenedAt:              rec.OpenedAt.UTC(),
+		FailureEvidenceDigest:      rec.FailureEvidenceDigest,
+		FailureEvidenceUnavailable: rec.FailureEvidenceUnavailable,
+		RunID:                      rec.RunID,
+		OwnershipToken:             rec.OwnershipToken,
+		SpecDigest:                 rec.SpecDigest,
+		ObservedBaseSHA:            rec.ObservedBaseSHA,
+		CredentialPreDigest:        rec.CredentialPreDigest,
+		WriterComplete:             rec.WriterComplete,
+		CancellationRequested:      rec.CancellationRequested,
+		WriterFailureStatus:        rec.WriterFailureStatus,
+		ExportDir:                  rec.ExportDir,
+		OpenedAt:                   rec.OpenedAt.UTC(),
 	}
 	if rec.Lease != nil {
 		converted.Lease = &store.HandoffJournalLease{
@@ -1369,16 +1378,18 @@ func toStoreRecord(rec ward.HandoffJournalRecord) store.HandoffJournalRecord {
 
 func fromStoreRecord(rec store.HandoffJournalRecord) ward.HandoffJournalRecord {
 	converted := ward.HandoffJournalRecord{
-		RunID:                 rec.RunID,
-		OwnershipToken:        rec.OwnershipToken,
-		SpecDigest:            rec.SpecDigest,
-		ObservedBaseSHA:       rec.ObservedBaseSHA,
-		CredentialPreDigest:   rec.CredentialPreDigest,
-		WriterComplete:        rec.WriterComplete,
-		CancellationRequested: rec.CancellationRequested,
-		WriterFailureStatus:   rec.WriterFailureStatus,
-		ExportDir:             rec.ExportDir,
-		OpenedAt:              rec.OpenedAt,
+		FailureEvidenceDigest:      rec.FailureEvidenceDigest,
+		FailureEvidenceUnavailable: rec.FailureEvidenceUnavailable,
+		RunID:                      rec.RunID,
+		OwnershipToken:             rec.OwnershipToken,
+		SpecDigest:                 rec.SpecDigest,
+		ObservedBaseSHA:            rec.ObservedBaseSHA,
+		CredentialPreDigest:        rec.CredentialPreDigest,
+		WriterComplete:             rec.WriterComplete,
+		CancellationRequested:      rec.CancellationRequested,
+		WriterFailureStatus:        rec.WriterFailureStatus,
+		ExportDir:                  rec.ExportDir,
+		OpenedAt:                   rec.OpenedAt,
 	}
 	if rec.Lease != nil {
 		converted.Lease = &ward.HandoffJournalLease{

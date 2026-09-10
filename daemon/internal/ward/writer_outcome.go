@@ -57,13 +57,23 @@ func (b *Backend) observeWriterOutcome(
 		return 0, failf(CheckWriterTermination, "writer-outcome observer: %v", err)
 	}
 	status, err := b.readWriterOutcomeProof(
-		ctx, hs.RunID, names.WriterObserver, st.ownershipLabel.Value, st,
+		ctx, hs, names.WriterObserver, st.ownershipLabel.Value, st,
 	)
 	if err != nil {
 		return 0, err
 	}
+	if status != 0 {
+		if b.cfg.Journal != nil {
+			st.preserveForRecovery, st.leaveJournalOpen = true, true
+			if err := b.cfg.Journal.MarkWriterFailed(ctx, hs.RunID, status); err != nil {
+				return 0, errors.Join(ErrWriterFailed, err)
+			}
+			st.preserveForRecovery, st.leaveJournalOpen = false, false
+		}
+		st.writerFailureStatus = &status
+	}
 	if err := b.rt.DeleteContainer(ctx, names.WriterObserver); err != nil {
-		return 0, failf(CheckWriterTermination, "delete writer-outcome observer: %v", err)
+		return 0, writerObservationError(status, failf(CheckWriterTermination, "delete writer-outcome observer: %v", err))
 	}
 	if err := b.verifyContainerAbsent(
 		ctx,
@@ -72,18 +82,26 @@ func (b *Backend) observeWriterOutcome(
 		st.ownershipLabel,
 		CheckWriterTermination,
 	); err != nil {
-		return 0, err
+		return 0, writerObservationError(status, err)
 	}
 	st.writerObserver = objectClaim{}
 	return status, nil
 }
 
+func writerObservationError(status int, err error) error {
+	if status != 0 {
+		return errors.Join(ErrWriterFailed, err)
+	}
+	return err
+}
+
 func (b *Backend) readWriterOutcomeProof(
 	ctx context.Context,
-	runID, id, nonce string,
+	hs HandoffSpec,
+	id, nonce string,
 	st *runState,
 ) (int, error) {
-	dir, err := os.MkdirTemp("", "freeside-handoff-"+runID+"-writer-")
+	dir, err := os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-writer-")
 	if err != nil {
 		return 0, failf(CheckWriterTermination, "create writer-outcome proof directory: %v", err)
 	}
@@ -110,7 +128,16 @@ func (b *Backend) readWriterOutcomeProof(
 	if !found {
 		return 0, failf(CheckWriterTermination, "writer produced no outcome marker")
 	}
-	return verifyWriterOutcomeProof(data, nonce)
+	status, err := verifyWriterOutcomeProof(data, nonce)
+	if err != nil {
+		return 0, err
+	}
+	if status != 0 {
+		if err := b.captureFailureEvidence(ctx, hs, st, f, status); err != nil {
+			return 0, errors.Join(ErrWriterFailed, err)
+		}
+	}
+	return status, nil
 }
 
 // verifyWriterOutcomeProof authenticates the marker's freshness and shape,

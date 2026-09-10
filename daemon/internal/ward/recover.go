@@ -59,7 +59,8 @@ type RecoveryResult struct {
 	// exported outcomes.
 	LossCause string
 	// FailureStatus is populated only for RecoveryFailed.
-	FailureStatus int
+	FailureStatus   int
+	FailureEvidence *FailureEvidence
 	// ExportDir holds the freshly verified manifest and blobs; the caller
 	// owns the directory and removes it when done.
 	ExportDir         string
@@ -147,7 +148,23 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	if err != nil {
 		return nil, err
 	}
+	if digest != rec.SpecDigest && hs.Agent.FailureTranscript != nil {
+		// A historical spec never authorized diagnostic capture. Match its
+		// complete former shape, then retain that omission during recovery.
+		prior := hs
+		prior.Agent.FailureTranscript = nil
+		priorDigest, err := specDigest(prior)
+		if err != nil {
+			return nil, err
+		}
+		if priorDigest == rec.SpecDigest {
+			hs, digest = prior, priorDigest
+		}
+	}
 	if digest != rec.SpecDigest {
+		if hs.Agent.FailureTranscript != nil {
+			return nil, fmt.Errorf("%w: legacy digest cannot authorize failure transcript capture", ErrInvalidJournalRecord)
+		}
 		if hs.Agent.PromptFile != nil {
 			return nil, fmt.Errorf("%w: legacy digest cannot authorize a prompt file", ErrInvalidJournalRecord)
 		}
@@ -276,10 +293,11 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 				return nil, fmt.Errorf("%w: failed record lacks writer status",
 					ErrInvalidJournalRecord)
 			}
-			return &RecoveryResult{
-				Outcome: RecoveryFailed, Admission: adm,
-				FailureStatus: *rec.WriterFailureStatus,
-			}, nil
+			out, err := b.failedRecoveryResult(ctx, hs, rec)
+			if out != nil {
+				out.Admission = adm
+			}
+			return out, err
 		case HandoffCanceled:
 			if !rec.CancellationRequested {
 				return nil, fmt.Errorf("%w: canceled record lacks cancellation intent",
@@ -329,7 +347,7 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	for _, claim := range []*objectClaim{
 		&st.workspace, &st.instructions,
 		&st.seeder, &st.observer, &st.instructionSeeder, &st.instructionObserver,
-		&st.credObsPre, &st.credObsPost, &st.agent, &st.exporter, &st.network,
+		&st.credObsPre, &st.credObsPost, &st.agent, &st.writerObserver, &st.exporter, &st.network,
 	} {
 		claim.attempted = true
 	}
@@ -507,10 +525,38 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		return &RecoveryResult{Outcome: RecoveryCanceled, Admission: adm}, nil
 	}
 	if rec.WriterFailureStatus != nil {
-		return &RecoveryResult{
-			Outcome: RecoveryFailed, Admission: adm,
-			FailureStatus: *rec.WriterFailureStatus,
-		}, nil
+		if hs.Agent.FailureTranscript != nil && rec.FailureEvidenceDigest == "" && !rec.FailureEvidenceUnavailable {
+			if err := b.reapRecoveredContainer(ctx, names.Agent, &st.agent, st.ownershipLabel); err != nil {
+				return nil, err
+			}
+			ours, err := b.workspaceOurs(ctx, names.Workspace, st)
+			if err != nil {
+				return nil, err
+			}
+			if ours {
+				if err := b.reapRecoveredContainer(ctx, names.WriterObserver, &st.writerObserver, st.ownershipLabel); err != nil {
+					return nil, err
+				}
+				observed, err := b.observeWriterOutcome(ctx, hs, names, st)
+				if err != nil {
+					return nil, err
+				}
+				if observed != *rec.WriterFailureStatus {
+					return nil, fmt.Errorf("%w: writer status changed during failure recovery", ErrInvalidJournalRecord)
+				}
+			} else if err := b.cfg.Journal.MarkFailureEvidence(ctx, rec.RunID, "", true); err != nil {
+				return nil, err
+			}
+			rec, err = b.refreshFailureRecord(ctx, rec)
+			if err != nil {
+				return nil, err
+			}
+		}
+		out, err := b.failedRecoveryResult(ctx, hs, rec)
+		if out != nil {
+			out.Admission = adm
+		}
+		return out, err
 	}
 	if !rec.WriterComplete {
 		if hs.Agent.OutcomeMarkerPath != "" {
@@ -539,10 +585,15 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 					); jerr != nil {
 						return nil, fmt.Errorf("journal recovered writer failure: %w", jerr)
 					}
-					return &RecoveryResult{
-						Outcome: RecoveryFailed, Admission: adm,
-						FailureStatus: status,
-					}, nil
+					current, err := b.refreshFailureRecord(ctx, rec)
+					if err != nil {
+						return nil, err
+					}
+					out, err := b.failedRecoveryResult(ctx, hs, current)
+					if out != nil {
+						out.Admission = adm
+					}
+					return out, err
 				}
 				if oerr != nil {
 					var cf *ConformanceFailure

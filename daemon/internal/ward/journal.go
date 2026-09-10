@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
@@ -210,6 +211,10 @@ type HandoffJournalRecord struct {
 	// journal-bound nonce marker. It is amended before cleanup can erase the
 	// marker and outranks later marker absence during recovery.
 	WriterFailureStatus *int `json:"writer_failure_status"`
+	// FailureEvidenceDigest binds a scanned private transcript. Unavailable
+	// records a permanent capture refusal; neither means capture is pending.
+	FailureEvidenceDigest      string `json:"failure_evidence_digest,omitempty"`
+	FailureEvidenceUnavailable bool   `json:"failure_evidence_unavailable,omitempty"`
 	// State is the prepared clean launch-state topology. It is nil for
 	// state-free synthetic writers and until preparation is durable.
 	State *HandoffJournalState `json:"state"`
@@ -240,6 +245,12 @@ var ownershipTokenPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 // the re-supplied spec (digest) and the live runtime world (everything
 // else), never by believing the record.
 func (r HandoffJournalRecord) Validate() error {
+	if r.FailureEvidenceDigest != "" || r.FailureEvidenceUnavailable {
+		if r.WriterFailureStatus == nil || (r.FailureEvidenceDigest != "" &&
+			(r.FailureEvidenceUnavailable || !contentaddr.Valid(r.FailureEvidenceDigest))) {
+			return fmt.Errorf("%w: invalid failure evidence disposition", ErrInvalidJournalRecord)
+		}
+	}
 	if !runIDPattern.MatchString(r.RunID) {
 		return fmt.Errorf("%w: journal record run id does not match %s", ErrInvalidJournalRecord, runIDPattern)
 	}
@@ -351,6 +362,7 @@ type HandoffJournal interface {
 	// MarkWriterFailed durably records an authenticated nonzero launcher
 	// status before cleanup removes its workspace evidence.
 	MarkWriterFailed(ctx context.Context, runID string, status int) error
+	MarkFailureEvidence(ctx context.Context, runID, digest string, unavailable bool) error
 	// MarkExportMaterialized durably records where the verified export
 	// landed, before the completed close makes the outcome terminal.
 	MarkExportMaterialized(ctx context.Context, runID, exportDir string) error

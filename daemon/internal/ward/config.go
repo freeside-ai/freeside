@@ -78,9 +78,15 @@ type AuthStoreLeaseMutationGuard interface {
 // so no output reaches the gauntlet worker unscanned.
 type OutputScanner interface {
 	// Scan examines dir (the extracted, digest-verified handoff output). A
-	// non-nil error fails the handoff's export_verification check.
+	// non-nil error fails the handoff's export_verification check. Policy
+	// refusals wrap ErrOutputScanRefused; other errors remain retryable when
+	// retaining failed-writer diagnostics.
 	Scan(ctx context.Context, dir string) error
 }
+
+// ErrOutputScanRefused identifies content that scanning policy forbids
+// retaining, as distinct from an operational failure to examine the content.
+var ErrOutputScanRefused = errors.New("output scan refused content")
 
 // ErrInvalidConfig is the class sentinel for a Config that cannot gate
 // anything; New wraps it with the specific violation.

@@ -198,6 +198,10 @@ func promptMounts(names handoffNames, present bool) []Mount {
 
 func clonePromptSpec(hs HandoffSpec) HandoffSpec {
 	hs.Agent.PromptFile = hs.Agent.PromptFile.Clone()
+	if hs.Agent.FailureTranscript != nil {
+		copy := *hs.Agent.FailureTranscript
+		hs.Agent.FailureTranscript = &copy
+	}
 	return hs
 }
 
