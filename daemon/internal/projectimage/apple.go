@@ -390,9 +390,13 @@ func (a appleBackend) Run(ctx context.Context, spec runSpec) (result runResult, 
 		args = append(args, "--tmpfs", NPMCachePath)
 	}
 	if spec.Workspace != "" {
+		// Match ProjectImageRoom's preparation and recipe environment so the
+		// publication proof does not accept a different execution context.
 		args = append(args,
 			"--volume", spec.Workspace+":/workspace",
 			"--workdir", "/workspace",
+			"--env", "HOME=/tmp/freeside-home",
+			"--env", "LC_ALL=C",
 		)
 	}
 	args = append(args, "--", spec.ImageRef)

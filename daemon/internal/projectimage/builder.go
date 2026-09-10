@@ -452,31 +452,8 @@ func (b *Builder) proveOffline(
 	if preflight.ExitCode != 0 {
 		return fmt.Errorf("offline preflight exited %d: %w", preflight.ExitCode, ErrProofFailed)
 	}
-	for index, argv := range commands {
-		workspace := filepath.Join(scratch, fmt.Sprintf("positive-%d", index))
-		if err := b.source.Copy(ctx, sourceDir, commit, workspace); err != nil {
-			return fmt.Errorf("materialize positive workspace %d: %w", index, err)
-		}
-		preparation, err := b.backend.Run(ctx, runSpec{
-			ImageRef: imageRef, Workspace: workspace, Argv: []string{PreparationPath},
-		})
-		if err != nil {
-			return fmt.Errorf("hydrate positive workspace %d: %w: %w", index, err, ErrProofFailed)
-		}
-		if preparation.ExitCode != 0 {
-			return fmt.Errorf("hydrate positive workspace %d exited %d (%s): %w",
-				index, preparation.ExitCode, boundedOutput(preparation.Output), ErrProofFailed)
-		}
-		result, err := b.backend.Run(ctx, runSpec{
-			ImageRef: imageRef, Workspace: workspace, Argv: append([]string{}, argv...),
-		})
-		if err != nil {
-			return fmt.Errorf("recipe command %d %q: %w: %w", index, argv[0], err, ErrProofFailed)
-		}
-		if result.ExitCode != 0 {
-			return fmt.Errorf("recipe command %d %q exited %d (%s): %w",
-				index, argv[0], result.ExitCode, boundedOutput(result.Output), ErrProofFailed)
-		}
+	if err := b.proveRecipe(ctx, sourceDir, commit, imageRef, commands, scratch, false); err != nil {
+		return err
 	}
 
 	negative := filepath.Join(scratch, "negative")
@@ -491,10 +468,55 @@ func (b *Builder) proveOffline(
 	case runErr != nil:
 		return fmt.Errorf("cache-masked preparation could not execute: %w: %w", runErr, ErrProofFailed)
 	case result.ExitCode == 0:
-		return fmt.Errorf("preparation succeeded with %s masked: %w", NPMCachePath, ErrProofFailed)
+		// npm need not consume cached packages, for example with no dependencies.
+		// Prove the complete recipe works without them rather than infer this
+		// from lockfile shape or accept installation alone as sufficient proof.
+		if err := b.proveRecipe(ctx, sourceDir, commit, imageRef, commands, scratch, true); err != nil {
+			return fmt.Errorf("cache-independent verification: %w", err)
+		}
 	case !networkFailure.Match(result.Output):
 		return fmt.Errorf("cache-masked preparation failed without a registry/network attempt (%s): %w",
 			boundedOutput(result.Output), ErrProofFailed)
+	}
+	return nil
+}
+
+func (b *Builder) proveRecipe(
+	ctx context.Context,
+	sourceDir, commit, imageRef string,
+	commands [][]string,
+	scratch string,
+	maskCache bool,
+) error {
+	prefix := "positive"
+	if maskCache {
+		prefix = "cache-masked"
+	}
+	for index, argv := range commands {
+		workspace := filepath.Join(scratch, fmt.Sprintf("%s-%d", prefix, index))
+		if err := b.source.Copy(ctx, sourceDir, commit, workspace); err != nil {
+			return fmt.Errorf("materialize positive workspace %d: %w", index, err)
+		}
+		preparation, err := b.backend.Run(ctx, runSpec{
+			ImageRef: imageRef, Workspace: workspace, Argv: []string{PreparationPath}, MaskCache: maskCache,
+		})
+		if err != nil {
+			return fmt.Errorf("hydrate positive workspace %d: %w: %w", index, err, ErrProofFailed)
+		}
+		if preparation.ExitCode != 0 {
+			return fmt.Errorf("hydrate positive workspace %d exited %d (%s): %w",
+				index, preparation.ExitCode, boundedOutput(preparation.Output), ErrProofFailed)
+		}
+		result, err := b.backend.Run(ctx, runSpec{
+			ImageRef: imageRef, Workspace: workspace, Argv: append([]string{}, argv...), MaskCache: maskCache,
+		})
+		if err != nil {
+			return fmt.Errorf("recipe command %d %q: %w: %w", index, argv[0], err, ErrProofFailed)
+		}
+		if result.ExitCode != 0 {
+			return fmt.Errorf("recipe command %d %q exited %d (%s): %w",
+				index, argv[0], result.ExitCode, boundedOutput(result.Output), ErrProofFailed)
+		}
 	}
 	return nil
 }
@@ -610,6 +632,11 @@ func createBuildContext(
 	}
 	if err := os.WriteFile(filepath.Join(contextDir, "toolchain-launcher"), []byte(nodeToolchainLauncher), 0o755); err != nil { //nolint:gosec // G306: executable fixed builder-owned helper
 		return fmt.Errorf("write Node toolchain launcher: %w", err)
+	}
+	// WriteFile's mode is filtered by the caller's umask; image provenance
+	// requires these fixed launcher bytes to be executable with exactly 0755.
+	if err := os.Chmod(filepath.Join(contextDir, "toolchain-launcher"), 0o755); err != nil { //nolint:gosec // G302: public fixed launcher inside the private build context
+		return fmt.Errorf("set Node toolchain launcher mode: %w", err)
 	}
 	containerfile := renderContainerfile(request, recipeDigest)
 	if err := os.WriteFile(filepath.Join(contextDir, "Containerfile"), []byte(containerfile), 0o600); err != nil {

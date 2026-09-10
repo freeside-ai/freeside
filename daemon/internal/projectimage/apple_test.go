@@ -136,6 +136,20 @@ func taggedRef(specs []commandSpec, localRef string) string {
 }
 
 func TestAppleRunPreservesRecipeArgvWithRuntimeWorkingDirectory(t *testing.T) {
+	for _, masked := range []bool{false, true} {
+		for _, argv := range [][]string{
+			{PreparationPath},
+			{"tool", "argument with spaces", "$(opaque)", "*.literal"},
+		} {
+			t.Run(fmt.Sprintf("masked=%t/%s", masked, argv[0]), func(t *testing.T) {
+				testAppleRunVerificationEnvironment(t, masked, argv)
+			})
+		}
+	}
+}
+
+func testAppleRunVerificationEnvironment(t *testing.T, masked bool, argv []string) {
+	t.Helper()
 	runner := &managedRunner{next: func(_ context.Context, spec commandSpec) (commandOutput, error) {
 		if len(spec.Args) == 0 || spec.Args[0] != "run" {
 			return commandOutput{}, nil
@@ -143,10 +157,9 @@ func TestAppleRunPreservesRecipeArgvWithRuntimeWorkingDirectory(t *testing.T) {
 		return commandOutput{exited: true}, nil
 	}}
 	backend := appleBackend{containerPath: "/usr/bin/container", runner: runner}
-	argv := []string{"tool", "argument with spaces", "$(opaque)", "*.literal"}
 	if _, err := backend.Run(t.Context(), runSpec{
 		ImageRef:  "example.test/image@sha256:" + strings.Repeat("a", 64),
-		Workspace: "/host/workspace", Argv: argv,
+		Workspace: "/host/workspace", Argv: argv, MaskCache: masked,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -156,10 +169,18 @@ func TestAppleRunPreservesRecipeArgvWithRuntimeWorkingDirectory(t *testing.T) {
 	args := runner.specs[0].Args
 	wantPrefix := []string{
 		"run", "--rm", "--cidfile", args[3], "--label", args[5],
-		"--network", "none", "--volume", "/host/workspace:/workspace",
-		"--workdir", "/workspace",
-		"--", "example.test/image@sha256:" + strings.Repeat("a", 64),
+		"--network", "none",
 	}
+	if masked {
+		wantPrefix = append(wantPrefix, "--tmpfs", NPMCachePath)
+	}
+	wantPrefix = append(wantPrefix,
+		"--volume", "/host/workspace:/workspace",
+		"--workdir", "/workspace",
+		"--env", "HOME=/tmp/freeside-home",
+		"--env", "LC_ALL=C",
+		"--", "example.test/image@sha256:"+strings.Repeat("a", 64),
+	)
 	if len(args) != len(wantPrefix)+len(argv) ||
 		!slices.Equal(args[:len(wantPrefix)], wantPrefix) ||
 		!slices.Equal(args[len(wantPrefix):], argv) {

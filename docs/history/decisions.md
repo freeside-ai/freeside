@@ -1687,3 +1687,15 @@ Revision 53 ("Exclude Ignored Build Output From Published Candidates"):
    their behavior. Candidate and host ignore rules have no authority.
    (User assignment; implementation decision for #1132;
    devlog 2026-09-09-1040-ignored-build-output.md.)
+
+Revision 54 ("Recover Released Imports Across Daemon Upgrades"):
+
+1. **Completed handoff imports do not reauthorize provider execution.** The
+   owner assigned recovery of a preserved released result after an upgraded
+   daemon's fingerprint blocked its import. Ward must authenticate the release;
+   current import policy and the durable import-start marker remain binding.
+   Exact backend conformance still gates starting or resuming the provider, and
+   publication retains its own current authority checks. Recorded-policy
+   fallback after a current import began remains forbidden.
+   (User assignment; implementation decision for #1260;
+   devlog 2026-09-09-1300-released-import-recovery.md.)
