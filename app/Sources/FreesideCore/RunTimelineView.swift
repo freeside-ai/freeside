@@ -244,7 +244,9 @@ struct RunTimelineView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(attemptContext(invocationID: invocation.invocation_id) ?? invocation.invocation_id)
                     .font(FreesideFont.sans(.headline, weight: .semibold))
-                Text(invocation.observed_at.formatted(date: .abbreviated, time: .shortened))
+                // The observed time is freshness (the daemon's last look), not
+                // the attempt's place in history; the "Observed" prefix says so.
+                Text("Observed \(invocation.observed_at.formatted(date: .abbreviated, time: .shortened))")
                     .font(FreesideFont.monoCaption)
                     .foregroundStyle(Color.inkDim)
             }
