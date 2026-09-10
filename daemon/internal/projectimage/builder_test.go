@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -81,6 +82,8 @@ type fakeBackend struct {
 	publishes      []publishSpec
 	negativeOutput []byte
 	negativeErr    error
+	maskedFailure  string
+	maskedRunErr   bool
 	failRecipe     string
 	allowlistErr   error
 	provenanceErr  error
@@ -145,6 +148,15 @@ func (f *fakeBackend) Run(_ context.Context, spec runSpec) (runResult, error) {
 	spec.Argv = append([]string{}, spec.Argv...)
 	f.runs = append(f.runs, spec)
 	if spec.MaskCache {
+		if !slices.Equal(spec.Argv, []string{"npm", "ci", "--ignore-scripts"}) {
+			if spec.Argv[0] == f.maskedFailure {
+				if f.maskedRunErr {
+					return runResult{}, errors.New("masked runtime failed")
+				}
+				return runResult{ExitCode: 1, Output: []byte("masked command failed")}, nil
+			}
+			return runResult{ExitCode: 0}, nil
+		}
 		exitCode := 1
 		if f.negativeErr == nil {
 			exitCode = 0
@@ -407,7 +419,24 @@ func TestBuildRefutesBaseAndProofFailures(t *testing.T) {
 			b.provenanceErr = errors.New("label mismatch")
 		}},
 		{"recipe failure", func(b *fakeBackend) { b.failRecipe = "npm" }},
-		{"negative cache probe succeeds", func(b *fakeBackend) { b.negativeErr = nil }},
+		{"cache-independent hydration fails", func(b *fakeBackend) {
+			b.negativeErr = nil
+			b.maskedFailure = PreparationPath
+		}},
+		{"cache-independent recipe fails", func(b *fakeBackend) {
+			b.negativeErr = nil
+			b.maskedFailure = "npm"
+		}},
+		{"cache-independent hydration cannot execute", func(b *fakeBackend) {
+			b.negativeErr = nil
+			b.maskedFailure = PreparationPath
+			b.maskedRunErr = true
+		}},
+		{"cache-independent recipe cannot execute", func(b *fakeBackend) {
+			b.negativeErr = nil
+			b.maskedFailure = "npm"
+			b.maskedRunErr = true
+		}},
 		{"negative misses network class", func(b *fakeBackend) {
 			b.negativeOutput = []byte("permission denied")
 		}},
@@ -423,7 +452,49 @@ func TestBuildRefutesBaseAndProofFailures(t *testing.T) {
 			if !errors.Is(err, ErrProofFailed) {
 				t.Fatalf("Build = %v, want ErrProofFailed", err)
 			}
+			if strings.HasPrefix(tc.name, "cache-independent") && len(backend.publishes) != 0 {
+				t.Fatal("failed cache-independent proof reached publication")
+			}
 		})
+	}
+}
+
+func TestBuildProvesCacheIndependentRecipeInFreshMaskedWorkspaces(t *testing.T) {
+	backend := newFakeBackend()
+	backend.negativeErr = nil
+	if _, err := newBuilder(&fakeSource{}, backend, t.TempDir()).Build(t.Context(), validRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if len(backend.runs) != 14 || len(backend.publishes) != 1 {
+		t.Fatalf("runs/publications = %d/%d, want 14/1", len(backend.runs), len(backend.publishes))
+	}
+	used := map[string]bool{backend.runs[7].Workspace: true}
+	for index := range 3 {
+		used[backend.runs[1+index*2].Workspace] = true
+	}
+	for index, argv := range [][]string{{"npm", "run", "lint"}, {"npm", "run", "typecheck"}, {"npm", "test"}} {
+		preparation, command := backend.runs[8+index*2], backend.runs[9+index*2]
+		if !preparation.MaskCache || !command.MaskCache ||
+			!slices.Equal(preparation.Argv, []string{PreparationPath}) || !slices.Equal(command.Argv, argv) {
+			t.Fatalf("masked proof %d changed preparation, recipe or masking: %+v / %+v", index, preparation, command)
+		}
+		if preparation.Workspace == "" || preparation.Workspace != command.Workspace || used[command.Workspace] {
+			t.Fatalf("masked proof %d did not use one fresh workspace: %+v / %+v", index, preparation, command)
+		}
+		used[command.Workspace] = true
+	}
+}
+
+func TestBuildContextWithRestrictiveUmask(t *testing.T) {
+	if os.Getenv("FREESIDE_TEST_BUILD_CONTEXT_UMASK") == "1" {
+		TestBuildContextPreparationBindsNPMInputs(t)
+		return
+	}
+	// Change the process-wide umask only in a child, isolated from other tests.
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", `umask 077; exec "$@"`, "sh", os.Args[0], "-test.run=^TestBuildContextWithRestrictiveUmask$") //nolint:gosec // G204: this test executable and fixed shell script
+	cmd.Env = append(os.Environ(), "FREESIDE_TEST_BUILD_CONTEXT_UMASK=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("restrictive-umask build context: %v\n%s", err, output)
 	}
 }
 

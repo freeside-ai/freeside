@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 54
+revision: 55
 status: active
-updated: 2026-09-09
+updated: 2026-09-10
 ---
 
 # Freeside
@@ -1595,9 +1595,15 @@ artifact without a Freeside source change.
 
 The declared verification recipe runs verbatim with networking disabled. The
 builder proves both that this clean run passes and that the baked dependency
-material is load-bearing. For the second, a negative probe masks that
-material and must fail by attempting the registry or network access the
-positive run did not need. A candidate that changes the dependency closure
+material is load-bearing or unnecessary for the recipe. A probe masks that
+material: preparation must either fail by attempting the registry or network
+access the positive run did not need, or succeed and pass a second complete
+recipe proof without the cache. In the latter case, each recipe command gets
+a fresh exact-commit workspace; both its image-owned preparation and the
+command run with the cache masked and networking disabled. Installation alone
+is insufficient. This admits dependency-free and other cache-independent
+projects by execution, without inferring support from lockfile shape.
+A candidate that changes the dependency closure
 beyond the baked inputs fails loudly and requires a new reviewed project
 image, unless the policy-gated rebuild below applies. Verification never
 fetches a missing dependency.
@@ -1613,7 +1619,7 @@ when it stays inside the project's declared policy. The gate holds when:
 - The verification recipe is unchanged.
 
 Under those conditions the reusable builder rebuilds the project image from the
-trusted recipe, reruns the networkless positive run and the negative probe, and
+trusted recipe, reruns the networkless positive run and the masked-cache proof, and
 records the new provenance, and the run resumes against the new digest-pinned
 reference without an AttentionItem. Any other delta (a new authority, an
 unpinned or VCS source, a recipe change, a failed positive run or probe) keeps
@@ -4374,17 +4380,16 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 54 ("Recover Released Imports Across Daemon Upgrades"):
+Revision 55 ("Prove Cache-Independent Project Images"):
 
-1. **Completed handoff imports do not reauthorize provider execution.** The
-   owner assigned recovery of a preserved released result after an upgraded
-   daemon's fingerprint blocked its import. Ward must authenticate the release;
-   current import policy and the durable import-start marker remain binding.
-   Exact backend conformance still gates starting or resuming the provider, and
-   publication retains its own current authority checks. Recorded-policy
-   fallback after a current import began remains forbidden.
-   (User assignment; implementation decision for #1260;
-   devlog 2026-09-09-1300-released-import-recovery.md.)
+1. **Successful cache-masked installation requires a complete masked recipe
+   proof.** A dependency-free project exposed the old assumption that every
+   npm installation needs cached packages. Preserve the negative network-error
+   proof for projects that do need them; otherwise prove each trusted command
+   in a fresh workspace with both preparation and execution cache-masked and
+   network-disabled. Do not classify lockfile shapes or add dummy dependencies.
+   (User assignment; implementation decision for #1284;
+   devlog 2026-09-10-0955-cache-independent-project-images.md.)
 
 ## 14. Risks
 
