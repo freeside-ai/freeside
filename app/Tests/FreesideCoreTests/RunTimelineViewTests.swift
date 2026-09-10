@@ -58,9 +58,12 @@ import Testing
         func observation(_ id: String, at offset: TimeInterval) -> Components.Schemas.InvocationObservation {
             .init(invocation_id: id, run_id: run.id, status: .completed, live: false, observed_at: base + offset)
         }
-        let first = observation("inv-\(run.id)-1", at: 0)
+        // Attempt 1 re-observed after attempt 2, and the stray observed newest
+        // of all: attempt order, not observation time, decides the rows, and
+        // Unattributed sorts last however fresh its row.
+        let first = observation("inv-\(run.id)-1", at: 120)
         let second = observation("inv-\(run.id)-2", at: 60)
-        let stray = observation("inv-unknown", at: 30)
+        let stray = observation("inv-unknown", at: 240)
 
         let groups = RunTimelineGrouping.groups(invocations: [first, stray, second], stages: run.stages)
 
@@ -93,10 +96,12 @@ import Testing
                         number: 1, invocation_id: "inv-remediation-1")
                 ]))
         let base = Date(timeIntervalSinceReferenceDate: 1_000)
+        // The earlier production attempt is re-observed after the remediation
+        // attempt; the later stage still leads by attempt position.
         let production = Components.Schemas.InvocationObservation(
-            invocation_id: "inv-\(run.id)-2", run_id: run.id, status: .completed, live: false, observed_at: base)
+            invocation_id: "inv-\(run.id)-2", run_id: run.id, status: .completed, live: false, observed_at: base + 60)
         let remediation = Components.Schemas.InvocationObservation(
-            invocation_id: "inv-remediation-1", run_id: run.id, status: .running, live: true, observed_at: base + 60)
+            invocation_id: "inv-remediation-1", run_id: run.id, status: .running, live: true, observed_at: base)
 
         let groups = RunTimelineGrouping.groups(invocations: [production, remediation], stages: run.stages)
 
@@ -104,17 +109,129 @@ import Testing
         #expect(groups[0].invocations.map(\.invocation_id) == [remediation.invocation_id, production.invocation_id])
     }
 
-    @Test func newestUnattributedObservationLeadsTheGroups() throws {
+    @Test func unattributedObservationsAlwaysSortLast() throws {
         let run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
         let base = Date(timeIntervalSinceReferenceDate: 1_000)
         let owned = Components.Schemas.InvocationObservation(
             invocation_id: "inv-\(run.id)-2", run_id: run.id, status: .running, live: true, observed_at: base)
-        let stray = Components.Schemas.InvocationObservation(
-            invocation_id: "inv-unknown", run_id: run.id, status: .gone, live: false, observed_at: base + 1)
+        // Observed after the owned attempt, yet Unattributed is always last.
+        let strayLater = Components.Schemas.InvocationObservation(
+            invocation_id: "inv-zzz", run_id: run.id, status: .gone, live: false, observed_at: base + 100)
+        let strayEarlier = Components.Schemas.InvocationObservation(
+            invocation_id: "inv-aaa", run_id: run.id, status: .gone, live: false, observed_at: base + 50)
 
-        let groups = RunTimelineGrouping.groups(invocations: [owned, stray], stages: run.stages)
+        let groups = RunTimelineGrouping.groups(
+            invocations: [owned, strayLater, strayEarlier], stages: run.stages)
 
-        #expect(groups.map(\.label) == [RunTimelineGrouping.unattributedLabel, "Implementation"])
+        #expect(groups.map(\.label) == ["Implementation", RunTimelineGrouping.unattributedLabel])
+        // Within Unattributed, rows order by invocation_id, not observation.
+        #expect(groups[1].invocations.map(\.invocation_id) == ["inv-aaa", "inv-zzz"])
+    }
+
+    @Test func refreshedOldAttemptsKeepAttemptOrder() throws {
+        let run = RunFixtures.refreshedHistoryRun().run
+        let timeline = RunFixtures.refreshedHistoryTimeline()
+
+        let groups = RunTimelineGrouping.groups(
+            invocations: timeline.invocations, stages: run.stages,
+            reviewRounds: timeline.review?.value1.rounds ?? [], milestones: timeline.milestones)
+        let implementation = try #require(groups.first { $0.label == "Implementation" })
+
+        // The completed remediation attempt leads, then the gone attempt 2,
+        // then the failed attempt 1, even though the two early attempts carry
+        // the newest observed_at.
+        #expect(
+            implementation.invocations.map(\.invocation_id) == [
+                "inv-\(RunFixtures.refreshedRunID)-remediation-1",
+                "inv-\(RunFixtures.refreshedRunID)-2",
+                "inv-\(RunFixtures.refreshedRunID)-1",
+            ])
+    }
+
+    @Test func reviewGroupPlacementFollowsStartNotObservation() throws {
+        let run = RunFixtures.refreshedHistoryRun().run
+        let timeline = RunFixtures.refreshedHistoryTimeline()
+        let rounds = try #require(timeline.review?.value1.rounds)
+        let newestImplementationStart = try #require(
+            timeline.milestones.first {
+                $0.kind == .invocation_started
+                    && $0.invocation_id == "inv-\(RunFixtures.refreshedRunID)-remediation-1"
+            }
+        ).recorded_at
+
+        func leadingLabel(reviewRequestedAt: Date, observedShift: TimeInterval) -> String {
+            var shiftedRounds = rounds
+            shiftedRounds[0].requested_at = reviewRequestedAt
+            let shiftedInvocations = timeline.invocations.map {
+                invocation -> Components.Schemas.InvocationObservation in
+                var moved = invocation
+                moved.observed_at = moved.observed_at.addingTimeInterval(observedShift)
+                return moved
+            }
+            return RunTimelineGrouping.groups(
+                invocations: shiftedInvocations, stages: run.stages,
+                reviewRounds: shiftedRounds, milestones: timeline.milestones
+            ).first?.label ?? ""
+        }
+
+        // Review requested after the newest implementation start leads;
+        // requested before it, Implementation leads.
+        #expect(
+            leadingLabel(reviewRequestedAt: newestImplementationStart.addingTimeInterval(60), observedShift: 0)
+                == "Review")
+        #expect(
+            leadingLabel(reviewRequestedAt: newestImplementationStart.addingTimeInterval(-60), observedShift: 0)
+                == "Implementation")
+        // Moving every observed_at far forward changes neither leader.
+        #expect(
+            leadingLabel(reviewRequestedAt: newestImplementationStart.addingTimeInterval(60), observedShift: 100_000)
+                == "Review")
+        #expect(
+            leadingLabel(reviewRequestedAt: newestImplementationStart.addingTimeInterval(-60), observedShift: 100_000)
+                == "Implementation")
+    }
+
+    @Test func groupsWithoutAStartFactSortAfterThoseWithOne() throws {
+        var run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
+        run.stages[0].name = "implement"
+        let base = Date(timeIntervalSinceReferenceDate: 1_000)
+        let owned = Components.Schemas.InvocationObservation(
+            invocation_id: "inv-\(run.id)-2", run_id: run.id, status: .completed, live: false, observed_at: base)
+        let reviewObservation = Components.Schemas.InvocationObservation(
+            invocation_id: "review-\(run.id)-1", run_id: run.id, status: .completed, live: false,
+            observed_at: base + 1_000)
+        // A review round with no requested_at has no start fact.
+        var round = RunFixtures.reviewRound(.completed)
+        round.invocation_id = "review-\(run.id)-1"
+        round.requested_at = nil
+        // The implementation attempt has an invocation_started start fact.
+        let started = Components.Schemas.RunMilestone(
+            run_id: run.id, kind: .invocation_started, invocation_id: owned.invocation_id, recorded_at: base)
+
+        let groups = RunTimelineGrouping.groups(
+            invocations: [reviewObservation, owned], stages: run.stages,
+            reviewRounds: [round], milestones: [started])
+
+        #expect(groups.map(\.label) == ["Implementation", "Review"])
+    }
+
+    @Test func movingObservedTimeNeverReordersHistory() {
+        let run = RunFixtures.refreshedHistoryRun().run
+        let timeline = RunFixtures.refreshedHistoryTimeline()
+        func order(shift: TimeInterval) -> [[String]] {
+            let shifted = timeline.invocations.map { invocation -> Components.Schemas.InvocationObservation in
+                var moved = invocation
+                moved.observed_at = moved.observed_at.addingTimeInterval(shift)
+                return moved
+            }
+            return RunTimelineGrouping.groups(
+                invocations: shifted, stages: run.stages,
+                reviewRounds: timeline.review?.value1.rounds ?? [], milestones: timeline.milestones
+            ).map { $0.invocations.map(\.invocation_id) }
+        }
+
+        #expect(order(shift: 0) == order(shift: 500_000))
+        #expect(order(shift: 0) == order(shift: -500_000))
     }
 
     @Test func staleGoneObservationShowsAnObservationGap() {

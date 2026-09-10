@@ -940,7 +940,11 @@
                     attentionItems: inbox,
                     runs: runs,
                     schedules: schedules,
-                    runTimelines: RunFixtures.defaultTimelines()
+                    // The refreshed-history timeline is cached (not added to
+                    // defaultTimelines) so its own run-timeline surface resolves
+                    // review labels the way the app does, without churning the
+                    // runs-list digests that defaultTimelines feeds.
+                    runTimelines: RunFixtures.defaultTimelines() + [RunFixtures.refreshedHistoryTimeline()]
                 ))
             let coordinator = SyncCoordinator(client: client, cache: cache)
             guard let activeRun = runs.first(where: { $0.run.id == RunFixtures.activeRunID }) else {
@@ -1077,6 +1081,25 @@
                     view: AnyView(
                         RunTimelineView(coordinator: coordinator, snapshot: activeRun)
                             .screenshotContent(timeline, at: dynamicTypeSize)
+                    )))
+            // Attempt-ordered history (#1263): two early attempts re-observed
+            // after a later completed attempt, plus a review round, so the
+            // ordering does not follow observation time.
+            let historyRun = RunFixtures.refreshedHistoryRun()
+            surfaces.append(
+                Surface(
+                    name: "run-timeline-history",
+                    view: AnyView(
+                        RunTimelineView(coordinator: coordinator, snapshot: historyRun)
+                            .screenshotContent(RunFixtures.refreshedHistoryTimeline(), at: dynamicTypeSize)
+                    )))
+            surfaces.append(
+                Surface(
+                    name: "run-timeline-history-390",
+                    width: 390,
+                    view: AnyView(
+                        RunTimelineView(coordinator: coordinator, snapshot: historyRun)
+                            .screenshotContent(RunFixtures.refreshedHistoryTimeline(), at: dynamicTypeSize)
                     )))
 
             for colorScheme in [ColorScheme.light, .dark] {

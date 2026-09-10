@@ -7,6 +7,7 @@ public enum RunFixtures {
     public static let readyRunID = "run-freeside-654"
     public static let legacyRunID = "run-freeside-540"
     public static let completedRunID = "run-freeside-640"
+    public static let refreshedRunID = "run-freeside-refreshed"
 
     /// A fixed capture clock: five minutes past the newest fixture
     /// observation, so run cards render their relative last-active text
@@ -72,6 +73,78 @@ public enum RunFixtures {
             attempt: 1, milestone: .run_submitted, outcome: .pending,
             lifecycle: .finished, campaignID: "campaign-freeside-ready", campaignAttempt: 1,
             supersededBy: readyRunID, workUnit: "#654")
+    }
+
+    /// A run that exercises attempt-ordered invocation history (#1263): two
+    /// early implementation attempts re-observed long after a later remediation
+    /// attempt completed, plus one review round. Kept out of `defaultRuns()`
+    /// and `defaultTimelines()` so the runs-list screenshot digests do not
+    /// churn.
+    public static func refreshedHistoryRun() -> Components.Schemas.RunSnapshot {
+        var snapshot = snapshot(
+            id: refreshedRunID, projectID: "freeside", stage: "implement",
+            attempt: 2, milestone: .publication_ready, outcome: .pending,
+            lifecycle: .active, workUnit: "#1263")
+        // The completed attempt is the daemon's remediation `implement` stage,
+        // appended after the first two attempts (creation order), so it holds
+        // the newest attempt position under one Implementation heading.
+        let remediationStageID = "stage-\(refreshedRunID)-remediation"
+        snapshot.run.stages.append(
+            .init(
+                id: remediationStageID, run_id: refreshedRunID, name: "implement",
+                attempts: [
+                    .init(
+                        id: "attempt-\(refreshedRunID)-remediation-1", stage_id: remediationStageID,
+                        number: 1, invocation_id: "inv-\(refreshedRunID)-remediation-1")
+                ]))
+        return projectingObservationTimes(snapshot, from: refreshedHistoryTimeline())
+    }
+
+    public static func refreshedHistoryTimeline() -> Components.Schemas.RunTimeline {
+        let remediationInvocation = "inv-\(refreshedRunID)-remediation-1"
+        var round = reviewRound(.completed)
+        round.invocation_id = "review-\(refreshedRunID)-1"
+        round.requested_at = date(3_600)
+        round.completed_at = date(3_720)
+        return .init(
+            as_of_revision: 12, as_of: date(5_100), run_id: refreshedRunID,
+            milestones: [
+                milestone(.run_submitted, runID: refreshedRunID, minute: 0),
+                milestone(.invocation_admitted, runID: refreshedRunID, attempt: 1, minute: 1),
+                milestone(.invocation_started, runID: refreshedRunID, attempt: 1, minute: 2),
+                milestone(.invocation_admitted, runID: refreshedRunID, attempt: 2, minute: 20),
+                milestone(.invocation_started, runID: refreshedRunID, attempt: 2, minute: 21),
+                .init(
+                    run_id: refreshedRunID, kind: .invocation_admitted,
+                    invocation_id: remediationInvocation, recorded_at: date(2_400)),
+                .init(
+                    run_id: refreshedRunID, kind: .invocation_started,
+                    invocation_id: remediationInvocation, recorded_at: date(2_460)),
+                .init(
+                    run_id: refreshedRunID, kind: .terminal_recorded,
+                    invocation_id: remediationInvocation,
+                    terminal: .init(value1: .completed), recorded_at: date(3_000)),
+                milestone(.publication_ready, runID: refreshedRunID, minute: 55),
+            ],
+            invocations: [
+                // The two early attempts, re-observed long after the remediation
+                // attempt completed: their late observed_at must not lift them
+                // above the completed attempt.
+                .init(
+                    invocation_id: "inv-\(refreshedRunID)-1", run_id: refreshedRunID,
+                    status: .failed, live: false, observed_at: date(5_000)),
+                .init(
+                    invocation_id: "inv-\(refreshedRunID)-2", run_id: refreshedRunID,
+                    status: .gone, live: false, observed_at: date(4_000)),
+                .init(
+                    invocation_id: remediationInvocation, run_id: refreshedRunID,
+                    status: .completed, live: false, observed_at: date(3_050)),
+                .init(
+                    invocation_id: round.invocation_id, run_id: refreshedRunID,
+                    status: .completed, live: false, observed_at: date(3_700)),
+            ],
+            review: .init(value1: .init(rounds: [round])),
+            billable_cost_so_far: nil)
     }
 
     public static func completedTimeline() -> Components.Schemas.RunTimeline {
