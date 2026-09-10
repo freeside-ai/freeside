@@ -409,7 +409,7 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 			return err
 		}
 		invocationID = checkpoint.Binding.ProducingInvocationID
-		if checkpoint.State == "retained" {
+		if checkpoint.State == "retained" || checkpoint.State == "completed" {
 			admission, err = tx.GetExecutionAdmissionRecord(ctx, invocationID)
 			if err == nil {
 				export, err = tx.GetExecutionExportRecord(ctx, invocationID)
@@ -503,6 +503,10 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	}
 	if checkpoint.State == "retained" {
 		t.Logf("retained production checkpoint verified: run=%s prior PR #%d at head %s; publication history is not a current ready result", runID, outcome.PRNumber, export.HeadSHA)
+		return
+	}
+	if checkpoint.State == "completed" {
+		t.Logf("completed production checkpoint verified: run=%s PR #%d merged as %s; restored history grants no execution authority", runID, outcome.PRNumber, checkpoint.Completion.MergeCommitSHA)
 		return
 	}
 

@@ -80,12 +80,24 @@ def compare_composition(old, new):
 
 def check_remote(checkpoint, observed):
     binding = checkpoint["binding"]
-    if (observed["state"] != "open" or observed["number"] != binding["pr_number"]
+    if (observed["number"] != binding["pr_number"]
             or observed["head"]["sha"] != binding["head_sha"]
             or observed["head"]["ref"] != checkpoint["branch"]
             or observed["base"]["ref"] != binding["base_ref"]
             or observed["base"]["repo"]["id"] != binding["repository_id"]
             or observed["head"]["repo"]["id"] != binding["repository_id"]):
+        raise ValueError("remote PR no longer matches the authenticated publication")
+    if checkpoint["state"] == "completed":
+        completion = checkpoint.get("completion")
+        if not isinstance(completion, dict):
+            raise ValueError("completed checkpoint has no authenticated completion")
+        merge = completion.get("merge_commit_sha")
+        if (not isinstance(merge, str) or not merge
+                or completion.get("pr_number") != binding["pr_number"]
+                or observed["state"] != "closed" or observed.get("merged") is not True
+                or observed.get("merge_commit_sha") != merge):
+            raise ValueError("remote merge does not match the authenticated completion")
+    elif checkpoint["state"] not in ("ready", "retained") or observed["state"] != "open":
         raise ValueError("remote PR no longer matches the authenticated publication")
 
 

@@ -19,12 +19,13 @@ import (
 // A retained checkpoint proves authenticated publication history, not permission
 // to continue work. Only a current open ready binding proves current readiness.
 type realRunCheckpoint struct {
-	State   string                    `json:"state"`
-	Binding domain.ReadyItemPRBinding `json:"binding"`
-	Branch  string                    `json:"branch"`
-	Review  *domain.ReviewRecord      `json:"review,omitempty"`
-	ready   domain.AttentionItem
-	outcome publish.Outcome
+	State      string                     `json:"state"`
+	Binding    domain.ReadyItemPRBinding  `json:"binding"`
+	Branch     string                     `json:"branch"`
+	Review     *domain.ReviewRecord       `json:"review,omitempty"`
+	Completion *domain.WorkUnitCompletion `json:"completion,omitempty"`
+	ready      domain.AttentionItem
+	outcome    publish.Outcome
 }
 
 func readRealRunCheckpoint(ctx context.Context, tx *store.ReadTx, runID domain.RunID, retained bool) (realRunCheckpoint, error) {
@@ -57,6 +58,17 @@ func readRealRunCheckpoint(ctx context.Context, tx *store.ReadTx, runID domain.R
 		return result, errors.Join(err, domain.ErrParentKeyMismatch)
 	}
 	result.Branch = result.outcome.Branch
+	completion, err := realRunCompletedCheckpoint(ctx, tx, runID, result.Binding)
+	if err != nil {
+		return result, err
+	}
+	if completion != nil {
+		if !retained {
+			return result, store.ErrPublicationCompleted
+		}
+		result.State, result.Completion = "completed", completion
+		return result, nil
+	}
 	if selected != current || result.ready.Status != domain.StatusOpen {
 		if !retained {
 			return result, fmt.Errorf("current publication has no open ready item")
@@ -91,6 +103,35 @@ func readRealRunCheckpoint(ctx context.Context, tx *store.ReadTx, runID domain.R
 	}
 	result.State, result.Review = "ready", &review
 	return result, nil
+}
+
+// A completion is historical authority for restoring access, never permission
+// to execute again. Reuse the store's full declaration/fact-timeline re-gate,
+// then bind its result to the publication this run actually produced.
+func realRunCompletedCheckpoint(ctx context.Context, tx *store.ReadTx, runID domain.RunID, ready domain.ReadyItemPRBinding) (*domain.WorkUnitCompletion, error) {
+	declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, runID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	completion, err := tx.GetWorkUnitCompletion(ctx, declaration.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	binding, err := tx.EffectiveWorkUnitPRBinding(ctx, declaration.ID)
+	if err != nil {
+		return nil, err
+	}
+	if ready.RunID != runID || binding.Repo != ready.Repo || binding.RepositoryID != ready.RepositoryID ||
+		binding.PRNumber != ready.PRNumber || binding.BaseRef != ready.BaseRef || binding.HeadSHA != ready.HeadSHA {
+		return nil, fmt.Errorf("completed work-unit binding disagrees with published ready resource: %w", domain.ErrParentKeyMismatch)
+	}
+	return &completion, nil
 }
 
 func realRunFeedbackContinuation(ctx context.Context, tx *store.ReadTx, published domain.ReadyItemPRBinding) error {

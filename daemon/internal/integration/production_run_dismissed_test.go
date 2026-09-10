@@ -20,7 +20,8 @@ func TestRealRunDismissedCheckpointPreservesHistory(t *testing.T) {
 	}
 	assertDismissedRunHistory(t, p)
 	recordOriginalCompletion(t, p)
-	assertRealRunCheckpoint(t, p, true, "")
+	assertRealRunCheckpoint(t, p, true, "completed")
+	assertRealRunCheckpoint(t, p, false, "")
 }
 
 // Use the same assertion for the original publication and a reviewed successor.
