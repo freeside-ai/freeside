@@ -534,3 +534,57 @@ Security limitations, stated for the operator surface:
   the observation contract narrows what the *observation surface* carries,
   not what raw database access could reach. Remote exposure arrives only
   with the API unit that carries these shapes over `api/`.
+
+### Subscription-Backed Daemon Judgments
+
+The production classifier and finding adjudicator can use the existing Claude
+subscription setup-token mechanism. Configure all four flags together:
+
+```text
+-judgment-claude-bin /absolute/path/to/claude
+-judgment-claude-sha256 <sha256-of-that-native-executable>
+-judgment-model <explicit-Claude-model>
+-judgment-auth-snapshot <existing-token-file-relative-to-review-input-root>
+```
+
+Use the existing private setup-token snapshot, with the same ownership and
+permissions required for Claude shadow review. No new API key or login is
+needed. The default, with all four flags absent, keeps inference unavailable
+and preserves the existing conservative fallback behavior. Diagnostic and
+Discussion sites continue to use their fallback outputs with this adapter.
+
+The adapter pins and privately copies the native CLI, supplies allowlisted
+fields through stdin, and launches with safe mode, no tools or MCP, no saved
+session, and an empty temporary home/configuration directory. It does not give
+the model a repository workspace. It rejects incomplete responses, missing or
+contradictory usage, model substitution, and invalid judgment JSON. Calls have
+one turn, the site's deadline and output-token limit, and one shared in-flight
+slot across judgment sites. Compute units mean generated tokens; input bytes
+have their own site limit. The existing ledger reserves each call's full
+allowance before dispatch. Account-lineup attribution remains the separate
+#900 design decision; this binding does not represent it as implemented.
+
+Preflight reports `judgment_configuration` and a secret-free
+`judgment_configuration_digest`. The real-run harness accepts the corresponding
+`FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN`,
+`FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256`,
+`FREESIDE_REAL_RUN_JUDGMENT_MODEL`, and
+`FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT` environment variables. Retained
+restoration requires the same binding, including its credential content;
+adding a judgment backend to an unbound retained session is a configuration
+change and is refused. A separately configured challenge can enable it.
+At startup, enabled judgments also require `-judgment-configuration-digest`
+from successful preflight. The harness supplies it from the immutable manifest;
+a token rotation or configuration change between preflight and startup is refused.
+
+Before deploying a different native CLI pin, run the protocol probe from
+`daemon/` with `FREESIDE_JUDGMENT_CLI` and
+`FREESIDE_JUDGMENT_CLI_SHA256` set:
+
+```sh
+go test ./internal/claudeinference -run TestPinnedClaudeCLIProtocol -count=1 -v
+```
+
+It uses a synthetic token and a localhost mock provider to check the actual
+CLI's model, zero-tool input, output bound, and terminal response format.
+It does not perform a real provider call or establish live review acceptance.

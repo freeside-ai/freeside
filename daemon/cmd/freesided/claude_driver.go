@@ -48,6 +48,7 @@ import (
 // endpoint, or identity would put an unaudited value into the durable
 // admission record.
 type claudeDriverConfig struct {
+	Judgments         judgmentConfig
 	AgentImage        domain.ImageRef
 	ExporterImage     string
 	ContainerBin      string

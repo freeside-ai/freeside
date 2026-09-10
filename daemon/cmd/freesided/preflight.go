@@ -90,6 +90,7 @@ type compositionImage struct {
 }
 
 type compositionManifest struct {
+	JudgmentConfigurationDigest     string                 `json:"judgment_configuration_digest,omitempty"`
 	Version                         string                 `json:"version"`
 	Status                          compositionStatus      `json:"status"`
 	Rig                             daemonlock.RigManifest `json:"rig"`
@@ -115,6 +116,7 @@ type compositionManifest struct {
 }
 
 type preflightConfig struct {
+	Judgments                   judgmentConfig
 	DBPath                      string
 	RigTokenFile                string
 	ServerURL                   string
@@ -261,6 +263,15 @@ func runPreflightCommandWithEnvironment(
 	}
 	evaluateComposition(ctx, &manifest, cfg, environment, now, rigErr, identityErr,
 		reviewDigestErr, shadowReviewDigestErr)
+	if cfg.Judgments != (judgmentConfig{}) {
+		_, digest, err := composeJudgments(cfg.Judgments, cfg.ReviewInputRoot)
+		if err != nil {
+			failCheck(&manifest, "judgment_configuration", "subscription judgment binding is unavailable or unsafe", "verify the existing setup-token snapshot and exact native CLI pin")
+		} else {
+			manifest.JudgmentConfigurationDigest = digest
+			passCheck(&manifest, "judgment_configuration", "existing Claude subscription and pinned CLI configured; provider call not attempted")
+		}
+	}
 	body, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode composition manifest: %w", err)
@@ -282,6 +293,7 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 	flags.StringVar(&cfg.RigTokenFile, "rig-token-file", "", "rig hold acquisition JSON (required)")
 	flags.StringVar(&cfg.ServerURL, "server-url", "", "operator client URL for the leased listener (required)")
 	flags.StringVar(&cfg.ContainerBin, "container-bin", "container", "Apple container CLI path")
+	judgmentFlags(flags, &cfg.Judgments)
 	flags.StringVar(&cfg.AgentImage, "agent-image", "", "digest-pinned implementer image (required)")
 	flags.StringVar(&cfg.ExporterImage, "exporter-image", "", "digest-pinned exporter image (required)")
 	flags.StringVar(&cfg.ReviewImage, "review-image", "", "digest-pinned reviewer image (required)")
@@ -373,6 +385,9 @@ func newCompositionManifest(cfg preflightConfig, daemonBuild string, now time.Ti
 	}
 	if cfg.ShadowReviewImage != "" {
 		names = append(names, "shadow_reviewer_image")
+	}
+	if cfg.Judgments != (judgmentConfig{}) {
+		names = append(names, "judgment_configuration")
 	}
 	checks := make([]compositionCheck, 0, len(names))
 	for _, name := range names {
@@ -1011,34 +1026,40 @@ func inspectShadowReviewSetupToken(cfg preflightConfig) error {
 	if cfg.ShadowReviewImage == "" {
 		return nil
 	}
+	_, err := readSetupTokenSnapshot(cfg.ReviewInputRoot, cfg.ShadowReviewAuthSnapshot)
+	return err
+}
+
+func readSetupTokenSnapshot(inputRoot, snapshot string) ([]byte, error) {
+	cfg := preflightConfig{ReviewInputRoot: inputRoot, ShadowReviewAuthSnapshot: snapshot}
 	if !canonicalAbsolute(cfg.ReviewInputRoot) || !canonicalAbsolute(cfg.ShadowReviewAuthSnapshot) {
-		return errors.New("shadow setup-token path is not canonical and absolute")
+		return nil, errors.New("shadow setup-token path is not canonical and absolute")
 	}
 	rootInfo, err := os.Lstat(cfg.ReviewInputRoot)
 	rootStat, rootStatOK := rootInfoSyscallStat(rootInfo)
 	if err != nil || rootInfo == nil || !rootInfo.IsDir() || rootInfo.Mode().Perm()&0o077 != 0 ||
 		!rootStatOK || !preflightUIDMatches(rootStat, os.Geteuid()) {
-		return errors.New("shadow setup-token root is not a private operator-owned directory")
+		return nil, errors.New("shadow setup-token root is not a private operator-owned directory")
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(cfg.ReviewInputRoot)
 	if err != nil {
-		return errors.New("shadow setup-token root cannot be resolved")
+		return nil, errors.New("shadow setup-token root cannot be resolved")
 	}
 	resolvedToken, err := filepath.EvalSymlinks(cfg.ShadowReviewAuthSnapshot)
 	if err != nil {
-		return errors.New("shadow setup-token snapshot cannot be resolved")
+		return nil, errors.New("shadow setup-token snapshot cannot be resolved")
 	}
 	rel, err := filepath.Rel(resolvedRoot, resolvedToken)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return errors.New("shadow setup-token path leaves the review input root")
+		return nil, errors.New("shadow setup-token path leaves the review input root")
 	}
 	before, err := os.Lstat(cfg.ShadowReviewAuthSnapshot)
 	if err != nil || !before.Mode().IsRegular() {
-		return errors.New("shadow setup-token snapshot is absent or not a regular file")
+		return nil, errors.New("shadow setup-token snapshot is absent or not a regular file")
 	}
 	file, err := os.OpenFile(resolvedToken, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return errors.New("shadow setup-token snapshot is unreadable")
+		return nil, errors.New("shadow setup-token snapshot is unreadable")
 	}
 	opened, statErr := file.Stat()
 	openedStat, openedStatOK := rootInfoSyscallStat(opened)
@@ -1050,27 +1071,27 @@ func inspectShadowReviewSetupToken(cfg preflightConfig) error {
 		!os.SameFile(before, opened) || !os.SameFile(opened, after) ||
 		!openedStatOK || opened.Mode().Perm()&0o077 != 0 || opened.Mode().Perm()&0o400 == 0 ||
 		openedStat.Nlink != 1 || !preflightUIDMatches(openedStat, os.Geteuid()) {
-		return errors.New("shadow setup-token snapshot changed while inspected")
+		return nil, errors.New("shadow setup-token snapshot changed while inspected")
 	}
 	if len(body) > preflightMaxShadowReviewCredentialBytes {
-		return errors.New("shadow setup-token snapshot exceeds the maximum size")
+		return nil, errors.New("shadow setup-token snapshot exceeds the maximum size")
 	}
 	if opened.Size() != int64(len(body)) {
-		return errors.New("shadow setup-token snapshot changed while inspected")
+		return nil, errors.New("shadow setup-token snapshot changed while inspected")
 	}
 	token := body
 	if n := len(token); n > 0 && token[n-1] == '\n' {
 		token = token[:n-1]
 	}
 	if len(token) == 0 {
-		return errors.New("shadow setup-token snapshot is empty")
+		return nil, errors.New("shadow setup-token snapshot is empty")
 	}
 	for _, b := range token {
 		if b < 0x20 || b == 0x7f {
-			return errors.New("shadow setup-token snapshot carries a control character")
+			return nil, errors.New("shadow setup-token snapshot carries a control character")
 		}
 	}
-	return nil
+	return token, nil
 }
 
 func rootInfoSyscallStat(info os.FileInfo) (*syscall.Stat_t, bool) {
