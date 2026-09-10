@@ -16,8 +16,9 @@ struct RunReviewSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Review").font(FreesideFont.title)
-            if let facts, !facts.rounds.isEmpty {
-                ForEach(facts.rounds, id: \.invocation_id) { round in
+            let rounds = RunHistoryPresentation.rounds(facts)
+            if !rounds.isEmpty {
+                ForEach(rounds, id: \.invocation_id) { round in
                     roundCard(round)
                 }
             } else {

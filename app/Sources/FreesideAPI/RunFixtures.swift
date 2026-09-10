@@ -216,6 +216,11 @@ public enum RunFixtures {
                         invocation_id: "inv-\(activeRunID)-2", run_id: activeRunID,
                         status: .running, live: true, observed_at: date(2_100))
                 ],
+                review: .init(
+                    value1: .init(rounds: [
+                        reviewRound(.completed, round: 1, findings: true),
+                        reviewRound(.running, round: 2),
+                    ])),
                 completion: nil,
                 billable_cost_so_far: .init(value1: activeCost)),
             .init(
