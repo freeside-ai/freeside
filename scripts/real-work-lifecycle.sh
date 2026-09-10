@@ -5,13 +5,21 @@ real_work_bounded_rig() {
 	local session=$1 bound=$2
 	shift 2
 	local supervisor result command_pid
+	local rig_daemon="$session/freesided"
+	if [[ "${1:-}" == recover && -n "${FREESIDE_REAL_RUN_RECOVERY_DAEMON:-}" ]]; then
+		rig_daemon=$FREESIDE_REAL_RUN_RECOVERY_DAEMON
+		[[ "$rig_daemon" == /* && -x "$rig_daemon" ]] || {
+			echo 'Recovery daemon must be an absolute executable path.' >&2
+			return 1
+		}
+	fi
 	local result_file=$session/rig-command-status
 	rm -f "$result_file"
 	set -m
 	(
 		set +m
 		set +e
-		"$session/freesided" rig "$@" >>"$session/rig-cleanup.log" 2>&1 &
+		"$rig_daemon" rig "$@" >>"$session/rig-cleanup.log" 2>&1 &
 		command_pid=$!
 		trap '' TERM
 		wait "$command_pid"

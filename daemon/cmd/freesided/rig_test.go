@@ -18,16 +18,24 @@ import (
 )
 
 type fakeRigHost struct {
-	supervised  bool
-	live        bool
-	description string
-	containers  map[string]bool
-	volumes     map[string]bool
-	networks    map[string]bool
-	runtimeCLI  bool
-	inspected   []string
-	deleted     []string
-	probed      []string
+	supervised     bool
+	live           bool
+	description    string
+	containers     map[string]bool
+	volumes        map[string]bool
+	networks       map[string]bool
+	runtimeCLI     bool
+	inspected      []string
+	deleted        []string
+	probed         []string
+	recoverReviews func(context.Context, string, daemonlock.RigManifest) error
+}
+
+func (h *fakeRigHost) RecoverReviewResources(ctx context.Context, executable string, manifest daemonlock.RigManifest) error {
+	if h.recoverReviews != nil {
+		return h.recoverReviews(ctx, executable, manifest)
+	}
+	return nil
 }
 
 func (h *fakeRigHost) ProbeDaemon(
@@ -741,6 +749,74 @@ func TestRigRecoverRequiresDeadListenerAndExplicitConfirmation(t *testing.T) {
 	}
 	if _, err := daemonlock.ReadRigManifest(stateRoot); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("confirmed recovery left manifest: %v", err)
+	}
+}
+
+func TestRigRecoverJournalsAfterContainersAndBeforeRelease(t *testing.T) {
+	stateRoot, lease, _, names := acquireBoundRig(t, "review-interrupted")
+	manifest, err := daemonlock.ReadRigManifest(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Abandon(); err != nil {
+		t.Fatal(err)
+	}
+	volume := manifest.Resources.Volumes[0]
+	host := &fakeRigHost{
+		containers: map[string]bool{names[0]: true},
+		volumes:    map[string]bool{volume: true},
+	}
+	journalFailure := errors.New("journal unavailable")
+	host.recoverReviews = func(ctx context.Context, executable string, got daemonlock.RigManifest) error {
+		if len(host.containers) != 0 {
+			t.Fatal("journal teardown ran with a surviving recorded container")
+		}
+		if executable != "container-test" || got.Resources.DatabasePath != manifest.Resources.DatabasePath {
+			t.Fatal("wrong recovery composition")
+		}
+		lock, err := daemonlock.Acquire(got.Resources.DatabasePath)
+		if err == nil {
+			_ = lock.Close()
+			t.Fatal("database exclusion was not held during journal recovery")
+		}
+		if !errors.Is(err, daemonlock.ErrAlreadyRunning) {
+			t.Fatal(err)
+		}
+		if _, err := daemonlock.ReadRigManifest(stateRoot); err != nil {
+			t.Fatal("rig released before journal cleanup")
+		}
+		return journalFailure
+	}
+	args := []string{"-state-root", stateRoot, "-container-bin", "container-test", "-confirm"}
+	if err := runRigRecover(t.Context(), args, ioDiscard{}, ioDiscard{}, host); !errors.Is(err, journalFailure) {
+		t.Fatalf("recovery error = %v", err)
+	}
+	if _, err := daemonlock.ReadRigManifest(stateRoot); err != nil {
+		t.Fatal("journal failure cleared gate")
+	}
+	host.recoverReviews = func(context.Context, string, daemonlock.RigManifest) error {
+		delete(host.volumes, volume)
+		return nil
+	}
+	if err := runRigRecover(t.Context(), args, ioDiscard{}, ioDiscard{}, host); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := daemonlock.ReadRigManifest(stateRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("gate remains after recovery: %v", err)
+	}
+}
+
+func TestRigReviewJournalNeverCreatesMissingDatabase(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "missing.db")
+	err := newProductionRigHost().RecoverReviewResources(t.Context(), "must-not-run", daemonlock.RigManifest{
+		Resources: daemonlock.RigResources{StateRoot: root, DatabasePath: path},
+	})
+	if err == nil {
+		t.Fatal("recovery created a missing database")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing database was changed: %v", err)
 	}
 }
 

@@ -76,6 +76,24 @@ run_recovery
 [[ "$rc" == 0 && "$(grep -c '^rig ' "$FIXTURE/events")" == 1 ]]
 bash "$FIXTURE/real-work-session.sh" complete "$FIXTURE" >>"$FIXTURE/output"
 
+new_session reviewed-recovery-binary
+cp "$FIXTURE/freesided" "$FIXTURE/reviewed-freesided"
+printf '#!/usr/bin/env bash\nexit 91\n' >"$FIXTURE/freesided"
+printf 'exit 92\n' >"$FIXTURE/real-work-lifecycle.sh"
+FREESIDE_REAL_RUN_RECOVERY_DAEMON="$FIXTURE/reviewed-freesided" \
+  bash "$root/scripts/real-work-session.sh" recover "$FIXTURE" >"$FIXTURE/output" 2>&1
+[[ "$(cat "$FIXTURE/status")" == completed && ! -f "$FIXTURE/manifest" ]]
+grep -q 'exit 91' "$FIXTURE/freesided"
+grep -q 'exit 92' "$FIXTURE/real-work-lifecycle.sh"
+
+new_session invalid-recovery-binary
+if FREESIDE_REAL_RUN_RECOVERY_DAEMON=relative-binary \
+  bash "$root/scripts/real-work-session.sh" recover "$FIXTURE" >"$FIXTURE/output" 2>&1; then
+  echo 'relative recovery executable accepted' >&2
+  exit 1
+fi
+[[ -f "$FIXTURE/manifest" && ! -f "$FIXTURE/events" ]]
+
 for refusal in live-database live-listener live-holder resource-remains hang; do
 	new_session "$refusal"
 	touch "$FIXTURE/$refusal"
