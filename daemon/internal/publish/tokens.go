@@ -318,6 +318,9 @@ func (s *OnboardingTokenSource) resolve(
 			"onboarding token: repository has no current exact onboarding authority")
 	}
 	installationID, ready := s.gate.PendingReady(*authority.Pending)
+	if _, withdrawn := validated.quarantined[installationID]; withdrawn {
+		return InstallationBinding{}, errors.New("onboarding token: reconciled installation is quarantined")
+	}
 	if !ready || installationID <= 0 ||
 		(validated.pending.installationID > 0 &&
 			validated.pending.installationID != installationID) {

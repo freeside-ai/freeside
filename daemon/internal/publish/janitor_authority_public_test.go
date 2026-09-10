@@ -46,4 +46,11 @@ func TestInstallationAuthorityAllowsRepositoryRevalidatesCredentialBinding(t *te
 	); err == nil {
 		t.Fatal("mismatched registration unexpectedly passed credential-bound validation")
 	}
+	authority.TrustedInstallations[0].RegistrationID = appID
+	for _, withdrawn := range [][]int64{{777}, {0}, {778, 778}} {
+		authority.QuarantinedInstallationIDs = withdrawn
+		if allowed, err := publish.InstallationAuthorityAllowsRepository(app, authority, repositoryID, time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)); err == nil || allowed {
+			t.Fatalf("invalid/withdrawn authority %v accepted: %v, %v", withdrawn, allowed, err)
+		}
+	}
 }

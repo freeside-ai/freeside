@@ -56,6 +56,9 @@ type InstallationAuthority struct {
 	TrustedOwners         []TrustedOwner
 	TrustedInstallations  []TrustedInstallation
 	Pending               *PendingInstallationEnvelope
+	// QuarantinedInstallationIDs are terminal exclusions from the journal,
+	// including IDs no longer present in the authored active bindings.
+	QuarantinedInstallationIDs []int64
 }
 
 // InstallationAuthoritySource supplies the canonical installation bindings and
@@ -86,6 +89,7 @@ type validatedInstallationAuthority struct {
 	trustedOwners map[trustedOwnerKey]struct{}
 	trusted       map[int64]authorityCandidate
 	pending       *authorityCandidate
+	quarantined   map[int64]struct{}
 }
 
 // InstallationAuthorityAllowsRepository re-runs the credential-bound
@@ -121,6 +125,16 @@ func validateInstallationAuthority(
 	validated := validatedInstallationAuthority{
 		trustedOwners: make(map[trustedOwnerKey]struct{}, len(snapshot.TrustedOwners)),
 		trusted:       make(map[int64]authorityCandidate, len(snapshot.TrustedInstallations)),
+		quarantined:   make(map[int64]struct{}, len(snapshot.QuarantinedInstallationIDs)),
+	}
+	for _, id := range snapshot.QuarantinedInstallationIDs {
+		if id <= 0 {
+			return validatedInstallationAuthority{}, errors.New("invalid quarantined installation ID")
+		}
+		if _, duplicate := validated.quarantined[id]; duplicate {
+			return validatedInstallationAuthority{}, errors.New("duplicate quarantined installation ID")
+		}
+		validated.quarantined[id] = struct{}{}
 	}
 	seenOwnerIDs := make(map[int64]string, len(snapshot.TrustedOwners))
 	for _, owner := range snapshot.TrustedOwners {
@@ -144,6 +158,9 @@ func validateInstallationAuthority(
 	seenBoundAccounts := make(map[trustedOwnerKey]int64, len(snapshot.TrustedInstallations))
 	seenRepositoryIDs := make(map[int64]int64)
 	for _, binding := range snapshot.TrustedInstallations {
+		if _, withdrawn := validated.quarantined[binding.InstallationID]; withdrawn {
+			return validatedInstallationAuthority{}, errors.New("trusted installation is quarantined")
+		}
 		if binding.RegistrationID != app.AppID || binding.InstallationID <= 0 ||
 			binding.AccountID <= 0 || validateOwnerLogin(binding.Account) != nil {
 			return validatedInstallationAuthority{}, errors.New("invalid trusted installation binding")
@@ -247,6 +264,9 @@ func validateInstallationAuthority(
 		!pending.ExpiresAt.After(now) {
 		return validated, nil
 	}
+	if _, withdrawn := validated.quarantined[pending.InstallationID]; withdrawn {
+		return validated, nil
+	}
 	validated.pending = &authorityCandidate{
 		pending:               true,
 		activeEpoch:           pending.ActiveEpoch,
@@ -318,6 +338,9 @@ func isRepositorySubset(subset, set []int64) bool {
 func (a validatedInstallationAuthority) candidate(
 	installation installationResponse,
 ) (authorityCandidate, bool, bool) {
+	if _, withdrawn := a.quarantined[installation.ID]; withdrawn {
+		return authorityCandidate{}, false, false
+	}
 	if a.pending != nil &&
 		(a.pending.installationID == 0 || a.pending.installationID == installation.ID) {
 		if a.pending.account == strings.ToLower(installation.Account.Login) &&
