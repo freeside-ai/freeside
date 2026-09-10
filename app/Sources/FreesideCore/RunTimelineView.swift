@@ -219,7 +219,8 @@ struct RunTimelineView: View {
     private func invocationSection(_ timeline: Components.Schemas.RunTimeline) -> some View {
         let groups = RunTimelineGrouping.groups(
             invocations: timeline.invocations, stages: snapshot.run.stages,
-            reviewRounds: timeline.review?.value1.rounds ?? [])
+            reviewRounds: timeline.review?.value1.rounds ?? [],
+            milestones: timeline.milestones)
         return VStack(alignment: .leading, spacing: 10) {
             Text("Latest Invocation Observations")
                 .font(FreesideFont.title)
@@ -329,65 +330,135 @@ enum RunHistoryPresentation {
     }
 }
 
-/// Invocation observations grouped under the stage whose attempt produced
-/// them, newest first at both levels, so the latest observation of the
-/// latest stage leads.
+/// Invocation observations grouped under the stage or review round that
+/// produced them, ordered by attempt with the newest attempt first, using
+/// facts the daemon never rewrites. A stage attempt's position is its stage's
+/// index in `run.stages` paired with the attempt number (both daemon creation
+/// order, `daemon/internal/engine/invocation.go`), and its start instant is
+/// its `invocation_started` milestone, falling back to `invocation_admitted`;
+/// a review round's are its `round` and its `requested_at`. Observation time
+/// is deliberately kept out of the ordering: a late re-observation of an old
+/// failed or gone attempt updates only that row's freshness, never its place.
 enum RunTimelineGrouping {
     static let unattributedLabel = "Unattributed"
 
     struct Group: Equatable, Identifiable {
         let id: String
         let label: String
-        /// Newest observation first.
+        /// Newest attempt first.
         let invocations: [Components.Schemas.InvocationObservation]
-
-        var newestObservedAt: Date? { invocations.first?.observed_at }
     }
+
+    private enum Kind { case stage, review, unattributed }
 
     /// Groups key on the canonical stage name, not the stage record: the
     /// daemon appends a further `implement` stage for each remediation
     /// round and operator-feedback pass, and those belong under one
     /// Implementation heading. An observation whose invocation matches no
-    /// recorded attempt lands under `Unattributed`, a group ordered by its
-    /// newest observation like any other rather than pinned last.
+    /// recorded attempt or review round lands under `Unattributed`, which
+    /// always sorts last.
     static func groups(
         invocations: [Components.Schemas.InvocationObservation],
         stages: [Components.Schemas.Stage],
-        reviewRounds: [Components.Schemas.RunReviewRound] = []
+        reviewRounds: [Components.Schemas.RunReviewRound] = [],
+        milestones: [Components.Schemas.RunMilestone] = []
     ) -> [Group] {
+        // The durable attempt position: the daemon appends stages in creation
+        // order and numbers attempts contiguously, so a re-observation cannot
+        // move a row.
+        func stagePosition(_ invocationID: String) -> (Int, Int)? {
+            for (index, stage) in stages.enumerated()
+            where stage.attempts.contains(where: { $0.invocation_id == invocationID }) {
+                let number = stage.attempts.first { $0.invocation_id == invocationID }?.number ?? 0
+                return (index, number)
+            }
+            return nil
+        }
+        func reviewNumber(_ invocationID: String) -> Int? {
+            reviewRounds.first { $0.invocation_id == invocationID }?.round
+        }
+        // The append-only start fact that places a group relative to the
+        // others, never an observation time.
+        func startInstant(_ invocationID: String) -> Date? {
+            if let round = reviewRounds.first(where: { $0.invocation_id == invocationID }) {
+                return round.requested_at
+            }
+            if let started = milestones.first(where: {
+                $0.kind == .invocation_started && $0.invocation_id == invocationID
+            }) {
+                return started.recorded_at
+            }
+            return milestones.first {
+                $0.kind == .invocation_admitted && $0.invocation_id == invocationID
+            }?.recorded_at
+        }
+
+        struct Entry {
+            let id: String
+            let label: String
+            let kind: Kind
+        }
         var membership: [String: [Components.Schemas.InvocationObservation]] = [:]
-        var order: [(id: String, label: String)] = []
+        var order: [Entry] = []
         for invocation in invocations {
             let owner = stages.first { stage in
                 stage.attempts.contains { $0.invocation_id == invocation.invocation_id }
             }
-            let isReview = reviewRounds.contains { $0.invocation_id == invocation.invocation_id }
+            let isReview = reviewNumber(invocation.invocation_id) != nil
             let key =
                 isReview
                 ? "review" : (owner.map { "stage:\(RunDisplay.canonicalStageName($0.name))" } ?? "unattributed")
             if membership[key] == nil {
-                order.append(
-                    (
-                        id: key,
-                        label: isReview ? "Review" : (owner.map { RunDisplay.stageLabel($0.name) } ?? unattributedLabel)
-                    ))
+                let entry: Entry
+                if isReview {
+                    entry = Entry(id: key, label: "Review", kind: .review)
+                } else if let owner {
+                    entry = Entry(id: key, label: RunDisplay.stageLabel(owner.name), kind: .stage)
+                } else {
+                    entry = Entry(id: key, label: unattributedLabel, kind: .unattributed)
+                }
+                order.append(entry)
             }
             membership[key, default: []].append(invocation)
         }
-        return order.map { entry in
-            Group(
-                id: entry.id, label: entry.label,
-                invocations: (membership[entry.id] ?? []).sorted {
-                    if $0.observed_at != $1.observed_at { return $0.observed_at > $1.observed_at }
-                    return $0.invocation_id < $1.invocation_id
-                })
+        return order.map { entry -> (entry: Entry, group: Group) in
+            let rows = membership[entry.id] ?? []
+            let sorted: [Components.Schemas.InvocationObservation]
+            switch entry.kind {
+            case .stage:
+                sorted = rows.sorted {
+                    (stagePosition($0.invocation_id) ?? (-1, -1))
+                        > (stagePosition($1.invocation_id) ?? (-1, -1))
+                }
+            case .review:
+                sorted = rows.sorted {
+                    (reviewNumber($0.invocation_id) ?? -1) > (reviewNumber($1.invocation_id) ?? -1)
+                }
+            case .unattributed:
+                sorted = rows.sorted { $0.invocation_id < $1.invocation_id }
+            }
+            return (entry, Group(id: entry.id, label: entry.label, invocations: sorted))
         }
-        .sorted {
-            let lhs = $0.newestObservedAt ?? .distantPast
-            let rhs = $1.newestObservedAt ?? .distantPast
-            if lhs != rhs { return lhs > rhs }
-            return $0.label < $1.label
+        .sorted { lhs, rhs in
+            // Unattributed always sorts last, whatever its rows' start facts.
+            if (lhs.entry.kind == .unattributed) != (rhs.entry.kind == .unattributed) {
+                return rhs.entry.kind == .unattributed
+            }
+            let lhsStart = lhs.group.invocations.first.flatMap { startInstant($0.invocation_id) }
+            let rhsStart = rhs.group.invocations.first.flatMap { startInstant($0.invocation_id) }
+            switch (lhsStart, rhsStart) {
+            case (let left?, let right?):
+                if left != right { return left > right }
+            case (.some, .none):
+                return true  // A known start leads a group with none.
+            case (.none, .some):
+                return false
+            case (.none, .none):
+                break
+            }
+            return lhs.group.label < rhs.group.label
         }
+        .map(\.group)
     }
 }
 
