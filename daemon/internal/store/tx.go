@@ -25,6 +25,10 @@ type ServerState struct {
 // Only valid until the callback returns.
 type ReadTx struct {
 	tx *sql.Tx
+	// Only Store.Read initializes these caches: write transactions must observe
+	// their own mutations rather than reuse authenticated authority.
+	initialAttemptAuthorities map[initialAttemptAuthorityKey]bool
+	publicationSuccessorReads map[string]domain.PublicationSuccessor
 	// approvedRecipes is the store's boundary policy set (see
 	// Options.ApprovedRecipes), carried on every transaction so a Get can
 	// re-derive an evidence artifact's publish_eligibility instead of trusting
@@ -173,6 +177,8 @@ func (s *Store) Read(ctx context.Context, fn func(*ReadTx) error) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	readTx := s.newReadTx(tx)
+	readTx.initialAttemptAuthorities = make(map[initialAttemptAuthorityKey]bool)
+	readTx.publicationSuccessorReads = make(map[string]domain.PublicationSuccessor)
 	if err := fn(&readTx); err != nil {
 		return err
 	}

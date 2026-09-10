@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -475,6 +476,25 @@ func completePublicationContinuationCycle(t *testing.T, p *productionPublication
 			t.Fatalf("continuation chain: %#v", chain)
 		}
 		last := chain[len(chain)-1]
+		for range 3 {
+			got, err := tx.GetPublicationSuccessor(p.ctx, last.RunID, last.PublicationID())
+			if err != nil || got != last {
+				t.Fatalf("repeated successor read: %#v, %v", got, err)
+			}
+			// Returned values must not give the caller a way to alter the
+			// retained authority used by the next read.
+			got.CommandID = "caller-mutation"
+			again, err := tx.GetPublicationSuccessor(p.ctx, last.RunID, last.PublicationID())
+			if err != nil || again != last || again == got {
+				t.Fatalf("caller changed retained successor: %#v, %v", again, err)
+			}
+		}
+		canceled, cancel := context.WithCancel(p.ctx)
+		cancel()
+		got, err := tx.GetPublicationSuccessor(canceled, last.RunID, last.PublicationID())
+		if !errors.Is(err, context.Canceled) || got != (domain.PublicationSuccessor{}) {
+			t.Fatalf("canceled successor read: %#v, %v", got, err)
+		}
 		if err := tx.AuthenticateSuccessorProducer(p.ctx, last, producer); err != nil {
 			return err
 		}

@@ -87,6 +87,36 @@ func (tx *ReadTx) authenticateInitialAttemptAuthority(ctx context.Context, attem
 	if attempt.AttemptNumber != 1 {
 		return nil
 	}
+	key := initialAttemptAuthorityKey{
+		campaignID: attempt.CampaignID, specificationRunID: attempt.SpecificationRunID,
+		implementationRunID: attempt.ImplementationRunID, sourceDigest: attempt.SourceDigest,
+		publicationDigest: attempt.PublicationDigest, approvedSpecDigest: attempt.ApprovedSpecDigest,
+	}
+	if tx.initialAttemptAuthorities[key] {
+		return ctx.Err()
+	}
+	if err := tx.authenticateInitialAttemptAuthorityUncached(ctx, attempt); err != nil {
+		return err
+	}
+	if tx.initialAttemptAuthorities != nil {
+		tx.initialAttemptAuthorities[key] = true
+	}
+	return nil
+}
+
+// These are every caller-supplied coordinate read by the initial authority
+// checks. The remaining evidence comes from the same immutable read snapshot.
+// No publication recursion or mutable returned object is cached.
+type initialAttemptAuthorityKey struct {
+	campaignID          domain.CampaignID
+	specificationRunID  domain.RunID
+	implementationRunID domain.RunID
+	sourceDigest        domain.Digest
+	publicationDigest   domain.Digest
+	approvedSpecDigest  domain.Digest
+}
+
+func (tx *ReadTx) authenticateInitialAttemptAuthorityUncached(ctx context.Context, attempt domain.ProductionAttempt) error {
 	entry, err := tx.GetOutbox(ctx, string(domain.SpecificationInvocationID(attempt.SpecificationRunID, 1)))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {

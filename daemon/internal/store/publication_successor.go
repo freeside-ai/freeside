@@ -81,6 +81,16 @@ func (tx *ReadTx) GetPublicationSuccessor(ctx context.Context, runID domain.RunI
 	if err != nil {
 		return domain.PublicationSuccessor{}, err
 	}
+	cacheKey := ""
+	if tx.publicationSuccessorReads != nil {
+		cacheKey = publicationReadPath(ctx)
+		if cached, found := tx.publicationSuccessorReads[cacheKey]; found {
+			if err := ctx.Err(); err != nil {
+				return domain.PublicationSuccessor{}, err
+			}
+			return cached, nil
+		}
+	}
 	entry, err := tx.GetOutbox(ctx, key)
 	if err != nil {
 		return domain.PublicationSuccessor{}, err
@@ -90,7 +100,11 @@ func (tx *ReadTx) GetPublicationSuccessor(ctx context.Context, runID domain.RunI
 		!entry.Dispatched() || successor.PublicationID() != publication || successor.RunID != runID {
 		return successor, errors.Join(err, domain.ErrParentKeyMismatch)
 	}
-	return successor, tx.validatePublicationSuccessor(ctx, successor)
+	err = tx.validatePublicationSuccessor(ctx, successor)
+	if err == nil && tx.publicationSuccessorReads != nil {
+		tx.publicationSuccessorReads[cacheKey] = successor
+	}
+	return successor, err
 }
 
 func (tx *ReadTx) validatePublicationSuccessor(ctx context.Context, successor domain.PublicationSuccessor) error {
@@ -402,6 +416,18 @@ type publicationReadKey struct{}
 type publicationReadLink struct {
 	key    string
 	parent *publicationReadLink
+}
+
+// Include every active link: a proof under one ancestry must not suppress a
+// cycle error under another. Length prefixes distinguish keys containing the
+// separators. PublicationSuccessor contains only scalar fields, so a cached
+// value cannot be mutated by its caller.
+func publicationReadPath(ctx context.Context) string {
+	var path strings.Builder
+	for link, _ := ctx.Value(publicationReadKey{}).(*publicationReadLink); link != nil; link = link.parent {
+		fmt.Fprintf(&path, "%d:%s", len(link.key), link.key)
+	}
+	return path.String()
 }
 
 // Carry the active reconstruction path across ready, feedback and successor
