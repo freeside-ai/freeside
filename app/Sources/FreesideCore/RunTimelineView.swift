@@ -204,16 +204,10 @@ struct RunTimelineView: View {
     }
 
     private func timelineSection(_ timeline: Components.Schemas.RunTimeline) -> some View {
-        let entries = timeline.milestones.enumerated().map { index, milestone in
-            DecisionStageRailPresentation.Entry(
-                id: "\(index)-\(milestone.kind.rawValue)-\(milestone.recorded_at.timeIntervalSince1970)",
-                title: RunDisplay.label(milestone.kind),
-                detail: milestoneDetail(milestone),
-                context: attemptContext(invocationID: milestone.invocation_id),
-                timestamp: milestone.recorded_at.formatted(
-                    date: .abbreviated, time: .shortened),
-                state: index == timeline.milestones.count - 1 ? .current : .completed)
-        }
+        let entries = RunHistoryPresentation.entries(
+            milestones: timeline.milestones,
+            detail: milestoneDetail,
+            context: attemptContext)
         return StageRail(
             title: "Stage, Round & Decision History",
             presentation: .timeline(entries: entries),
@@ -293,6 +287,45 @@ struct RunTimelineView: View {
             return RunDisplay.label(reason)
         }
         return nil
+    }
+}
+
+/// Orders the run detail's history surfaces newest first without sorting by
+/// timestamp. The daemon records milestones oldest first (`ORDER BY id`) and
+/// review rounds in ascending round order, so reversing that record order
+/// puts the latest entry on top while keeping equal-timestamp entries in a
+/// deterministic, tie-stable order and keeping `.current` on the daemon's
+/// last-recorded milestone.
+enum RunHistoryPresentation {
+    /// Builds the decision-history rail entries in daemon order (last one
+    /// `.current`), then returns them reversed so the newest leads. `detail`
+    /// and `context` stay the view's own closures over run state.
+    static func entries(
+        milestones: [Components.Schemas.RunMilestone],
+        detail: (Components.Schemas.RunMilestone) -> String?,
+        context: (String?) -> String?
+    ) -> [DecisionStageRailPresentation.Entry] {
+        let ordered = milestones.enumerated().map { index, milestone in
+            DecisionStageRailPresentation.Entry(
+                id: "\(index)-\(milestone.kind.rawValue)-\(milestone.recorded_at.timeIntervalSince1970)",
+                title: RunDisplay.label(milestone.kind),
+                detail: detail(milestone),
+                context: context(milestone.invocation_id),
+                timestamp: milestone.recorded_at.formatted(
+                    date: .abbreviated, time: .shortened),
+                state: index == milestones.count - 1 ? .current : .completed)
+        }
+        return Array(ordered.reversed())
+    }
+
+    /// Review rounds newest round first. The daemon supplies them ascending,
+    /// so reversing keeps ties in reverse record order without a timestamp
+    /// sort. Missing facts yield no rounds.
+    static func rounds(
+        _ facts: Components.Schemas.RunReviewFacts?
+    ) -> [Components.Schemas.RunReviewRound] {
+        guard let facts else { return [] }
+        return Array(facts.rounds.reversed())
     }
 }
 

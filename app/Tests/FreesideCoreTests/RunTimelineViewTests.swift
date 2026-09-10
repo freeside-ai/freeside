@@ -170,6 +170,70 @@ import Testing
         #expect(RunDisplay.specificationLabel(ready) == "Approved specification")
     }
 
+    @Test func historyEntriesLeadWithTheNewestMilestoneMarkedCurrent() throws {
+        let timeline = try #require(
+            RunFixtures.defaultTimelines().first { $0.run_id == RunFixtures.activeRunID })
+        let milestones = timeline.milestones
+        #expect(milestones.count == 6)
+
+        let entries = RunHistoryPresentation.entries(
+            milestones: milestones, detail: { _ in nil }, context: { _ in nil })
+
+        #expect(entries.count == milestones.count)
+        #expect(entries.first?.state == .current)
+        #expect(entries.dropFirst().allSatisfy { $0.state == .completed })
+        #expect(entries.map(\.title) == milestones.reversed().map { RunDisplay.label($0.kind) })
+    }
+
+    @Test func equalTimestampMilestonesKeepReverseDaemonOrder() {
+        let stamp = Date(timeIntervalSinceReferenceDate: 5_000)
+        let earlier = Components.Schemas.RunMilestone(
+            run_id: "run-1", kind: .invocation_admitted, invocation_id: "inv-a", recorded_at: stamp)
+        let later = Components.Schemas.RunMilestone(
+            run_id: "run-1", kind: .invocation_started, invocation_id: "inv-b", recorded_at: stamp)
+
+        // Reversal is index-based, so equal timestamps never depend on a
+        // sort's stability: the later-recorded milestone leads every run.
+        for _ in 0..<8 {
+            let entries = RunHistoryPresentation.entries(
+                milestones: [earlier, later], detail: { _ in nil }, context: { $0 })
+            #expect(entries.map(\.context) == ["inv-b", "inv-a"])
+            #expect(entries.first?.state == .current)
+        }
+    }
+
+    @Test func reorderingPreservesEachEntrysFields() throws {
+        let timeline = try #require(
+            RunFixtures.defaultTimelines().first { $0.run_id == RunFixtures.activeRunID })
+        let milestones = timeline.milestones
+        let detail: (Components.Schemas.RunMilestone) -> String? = { "detail-\($0.kind.rawValue)" }
+        let context: (String?) -> String? = { $0.map { "ctx-\($0)" } }
+
+        let entries = RunHistoryPresentation.entries(
+            milestones: milestones, detail: detail, context: context)
+
+        let oldestFirst = milestones.enumerated().map { index, milestone in
+            DecisionStageRailPresentation.Entry(
+                id: "\(index)-\(milestone.kind.rawValue)-\(milestone.recorded_at.timeIntervalSince1970)",
+                title: RunDisplay.label(milestone.kind),
+                detail: detail(milestone),
+                context: context(milestone.invocation_id),
+                timestamp: milestone.recorded_at.formatted(date: .abbreviated, time: .shortened),
+                state: index == milestones.count - 1 ? .current : .completed)
+        }
+        #expect(entries == Array(oldestFirst.reversed()))
+    }
+
+    @Test func reviewRoundsLeadWithTheHighestRound() {
+        let facts = Components.Schemas.RunReviewFacts(rounds: [
+            RunFixtures.reviewRound(.completed, round: 1, findings: true),
+            RunFixtures.reviewRound(.running, round: 2),
+        ])
+        #expect(RunHistoryPresentation.rounds(facts).map(\.round) == [2, 1])
+        #expect(RunHistoryPresentation.rounds(Components.Schemas.RunReviewFacts(rounds: [])).isEmpty)
+        #expect(RunHistoryPresentation.rounds(nil).isEmpty)
+    }
+
     @Test func timelineRequestKeyChangesOnBootstrapAndEpochRotation() throws {
         let snapshot = try #require(
             RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID })
