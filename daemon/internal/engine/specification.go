@@ -3012,9 +3012,13 @@ func (e *Engine) recordSpecificationFailure(ctx context.Context, run domain.Run,
 		if err != nil {
 			return err
 		}
+		claims, err := failureTranscriptClaims(ctx, tx, facts)
+		if err != nil {
+			return err
+		}
 		item, err := specificationFailureItem(run,
 			domain.ItemID("execution-failure-"+string(request.InvocationID)), status, summary,
-			createdAt, invocationID, outcomeStatus, names)
+			createdAt, invocationID, outcomeStatus, names, claims)
 		if err != nil {
 			return err
 		}
@@ -3044,7 +3048,7 @@ func (e *Engine) recordSpecificationRevisionFailure(
 	}
 	item, err := specificationFailureItem(run,
 		specificationRevisionFailureItemID(request),
-		status, summary, e.specification.now().UTC(), nil, nil, names)
+		status, summary, e.specification.now().UTC(), nil, nil, names, nil)
 	if err != nil {
 		return err
 	}
@@ -3098,6 +3102,7 @@ func specificationFailureItem(
 	run domain.Run, id domain.ItemID, status exec.Status, summary string, createdAt time.Time,
 	invocationID *domain.InvocationID, outcome *domain.ExecutionOutcomeStatus,
 	displayNames *domain.DisplayNames,
+	claims []domain.AgentClaim,
 ) (domain.AttentionItem, error) {
 	runID := run.ID
 	reason := fmt.Sprintf("Specification ended %q without an accepted specification.", status)
@@ -3115,7 +3120,7 @@ func specificationFailureItem(
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
 		Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityHigh, Reason: reason,
 		RequestedDecision: []domain.Action{domain.ActionDiscuss, domain.ActionStop}, ItemVersion: 1,
-		ExecutionFailure: facts, DisplayNames: displayNames,
+		ExecutionFailure: facts, DisplayNames: displayNames, AgentClaims: claims,
 		InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
 		CreatedAt: &createdAt,
 	}, nil)
@@ -3352,7 +3357,7 @@ func (e *Engine) reconcileSpecificationGates(ctx context.Context) (int, int, err
 				}
 				failure, itemErr := specificationFailureItem(run,
 					domain.ItemID("execution-failure-spec-revision-"+string(request.ImplementationRunID)),
-					exec.StatusFailed, ErrSpecificationIterationsExhausted.Error(), e.specification.now().UTC(), nil, nil, names)
+					exec.StatusFailed, ErrSpecificationIterationsExhausted.Error(), e.specification.now().UTC(), nil, nil, names, nil)
 				if itemErr != nil {
 					return started, blocked, itemErr
 				}

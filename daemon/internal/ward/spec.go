@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
 // BackendName is the backend's name in policy, refusals, and audit records:
@@ -194,6 +195,9 @@ const (
 
 // AgentSpec describes the credential-bearing writer container.
 type AgentSpec struct {
+	// FailureTranscript pins the one diagnostic source retained after a failed
+	// writer. Omission preserves historical handoff digests and behavior.
+	FailureTranscript *export.EvidenceSource `json:",omitempty"`
 	// Omission preserves the exact JSON shape and digest of legacy handoffs.
 	PromptFile    *PromptFile `json:",omitempty"`
 	Image         string
@@ -617,6 +621,15 @@ func (s HandoffSpec) validate() error {
 				ErrInvalidHandoffSpec, occurrences)
 		}
 	}
+	if source := s.Agent.FailureTranscript; source != nil {
+		if s.Agent.OutcomeMarkerPath == "" || source.Validate() != nil ||
+			source.Label != "agent-transcript" || source.MediaType != "application/jsonl" ||
+			source.HeadBinding != export.EvidenceHeadIndependent ||
+			source.SensitivityClass != export.EvidenceSensitivitySensitive ||
+			path.Dir(source.Path) != export.EvidenceWorkspaceDir {
+			return fmt.Errorf("%w: invalid failure transcript binding", ErrInvalidHandoffSpec)
+		}
+	}
 	if err := s.Agent.VendorInstructions.validate(); err != nil {
 		return err
 	}
@@ -953,8 +966,7 @@ func buildWriterOutcomeObserverSpec(
 		Image: cfg.ExporterImage,
 		Command: []string{
 			"sh", "-c",
-			"set -eu; cat " + shellQuote(hs.Agent.OutcomeMarkerPath) +
-				" > " + shellQuote(writerOutcomeProofPath) + "; sync",
+			writerOutcomeObserverCommand(cfg.WorkspaceTarget, hs),
 		},
 		NetworkDisabled: true,
 		Mounts: []Mount{{

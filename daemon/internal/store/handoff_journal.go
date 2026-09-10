@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
@@ -133,26 +134,34 @@ func (i HandoffJournalInstructions) Validate() error { return i.validate() }
 // entity. Every extracted column is cross-checked against the validated body
 // when reconstructed.
 type HandoffJournalRecord struct {
-	RunID                 string                      `json:"run_id"`
-	OwnershipToken        string                      `json:"ownership_token"`
-	SpecDigest            string                      `json:"spec_digest"`
-	ObservedBaseSHA       string                      `json:"observed_base_sha"`
-	CredentialPreDigest   string                      `json:"credential_pre_digest"`
-	WriterComplete        bool                        `json:"writer_complete"`
-	CancellationRequested bool                        `json:"cancellation_requested"`
-	WriterFailureStatus   *int                        `json:"writer_failure_status"`
-	State                 *HandoffJournalState        `json:"state"`
-	Instructions          *HandoffJournalInstructions `json:"instructions"`
-	Lease                 *HandoffJournalLease        `json:"lease"`
-	ExportDir             string                      `json:"export_dir"`
-	Outcome               *HandoffJournalOutcome      `json:"outcome"`
-	OpenedAt              time.Time                   `json:"opened_at"`
+	RunID                      string                      `json:"run_id"`
+	OwnershipToken             string                      `json:"ownership_token"`
+	SpecDigest                 string                      `json:"spec_digest"`
+	ObservedBaseSHA            string                      `json:"observed_base_sha"`
+	CredentialPreDigest        string                      `json:"credential_pre_digest"`
+	WriterComplete             bool                        `json:"writer_complete"`
+	CancellationRequested      bool                        `json:"cancellation_requested"`
+	WriterFailureStatus        *int                        `json:"writer_failure_status"`
+	FailureEvidenceDigest      string                      `json:"failure_evidence_digest,omitempty"`
+	FailureEvidenceUnavailable bool                        `json:"failure_evidence_unavailable,omitempty"`
+	State                      *HandoffJournalState        `json:"state"`
+	Instructions               *HandoffJournalInstructions `json:"instructions"`
+	Lease                      *HandoffJournalLease        `json:"lease"`
+	ExportDir                  string                      `json:"export_dir"`
+	Outcome                    *HandoffJournalOutcome      `json:"outcome"`
+	OpenedAt                   time.Time                   `json:"opened_at"`
 }
 
 // Validate re-runs the store-owned state and shape gates. Ward applies its
 // stricter run/token/digest grammar again after the adapter reconstructs this
 // value.
 func (r HandoffJournalRecord) Validate() error {
+	if r.FailureEvidenceDigest != "" || r.FailureEvidenceUnavailable {
+		if r.WriterFailureStatus == nil || (r.FailureEvidenceDigest != "" &&
+			(r.FailureEvidenceUnavailable || !contentaddr.Valid(r.FailureEvidenceDigest))) {
+			return errors.New("invalid failure evidence disposition")
+		}
+	}
 	if r.RunID == "" || r.OwnershipToken == "" || r.SpecDigest == "" {
 		return errors.New("handoff journal identity fields are required")
 	}
@@ -253,6 +262,7 @@ func (tx *InternalTx) BeginHandoffJournal(ctx context.Context, rec HandoffJourna
 
 func validateNewHandoffJournal(rec HandoffJournalRecord) error {
 	if rec.ObservedBaseSHA != "" || rec.CredentialPreDigest != "" ||
+		rec.FailureEvidenceDigest != "" || rec.FailureEvidenceUnavailable ||
 		rec.WriterComplete || rec.CancellationRequested || rec.WriterFailureStatus != nil ||
 		rec.State != nil || rec.Instructions != nil ||
 		rec.ExportDir != "" || rec.Outcome != nil {
@@ -486,6 +496,23 @@ func (tx *InternalTx) MarkHandoffWriterFailed(
 		default:
 			return ErrHandoffJournalProofConflict
 		}
+	})
+}
+
+// MarkHandoffFailureEvidence records one immutable diagnostic disposition.
+func (tx *InternalTx) MarkHandoffFailureEvidence(ctx context.Context, runID, digest string, unavailable bool) error {
+	return tx.amendHandoffJournal(ctx, runID, func(rec *HandoffJournalRecord) error {
+		if rec.WriterFailureStatus == nil || (digest == "") == !unavailable {
+			return ErrHandoffJournalProofConflict
+		}
+		if rec.FailureEvidenceDigest != "" || rec.FailureEvidenceUnavailable {
+			if rec.FailureEvidenceDigest != digest || rec.FailureEvidenceUnavailable != unavailable {
+				return ErrHandoffJournalProofConflict
+			}
+			return nil
+		}
+		rec.FailureEvidenceDigest, rec.FailureEvidenceUnavailable = digest, unavailable
+		return nil
 	})
 }
 

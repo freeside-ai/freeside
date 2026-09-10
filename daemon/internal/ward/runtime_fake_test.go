@@ -123,7 +123,9 @@ type fakeRuntime struct {
 	writerOutcomeProofPath string
 	// writerStatus is the launcher status synthesized for the workspace
 	// marker. Zero is the successful default.
-	writerStatus int
+	writerStatus      int
+	failureTranscript []byte
+	failureDescriptor []byte
 	// credState is each credential volume's simulated store content; the
 	// synthesized credential proof digests it, so a test mutates the store by
 	// changing the state string (e.g. from an agent onStart hook).
@@ -1032,7 +1034,24 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Write
 		if f.observerProof != nil {
 			proof = f.observerProof(id, proof)
 		}
-		return writeProofTar(dest, f.writerOutcomeProofPath, proof)
+		if f.failureDescriptor == nil {
+			return writeProofTar(dest, f.writerOutcomeProofPath, proof)
+		}
+		tw := tar.NewWriter(dest)
+		for _, file := range []struct {
+			name string
+			body []byte
+		}{
+			{f.writerOutcomeProofPath, proof}, {failureDescriptorProof, f.failureDescriptor}, {failureTranscriptProof, f.failureTranscript},
+		} {
+			if err := tw.WriteHeader(&tar.Header{Name: strings.TrimPrefix(file.name, "/"), Mode: 0o600, Size: int64(len(file.body)), Typeflag: tar.TypeReg}); err != nil {
+				return err
+			}
+			if _, err := tw.Write(file.body); err != nil {
+				return err
+			}
+		}
+		return tw.Close()
 	}
 	src, err := os.Open(f.exportTarPath)
 	if err != nil {

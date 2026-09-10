@@ -118,8 +118,8 @@ func TestCredentialScannerBlocksLeakedMaterial(t *testing.T) {
 				t.Fatalf("write: %v", err)
 			}
 			err := (credentialScanner{}).Scan(context.Background(), dir)
-			if err == nil {
-				t.Fatal("scanner admitted an export carrying credential material")
+			if !errors.Is(err, ward.ErrOutputScanRefused) {
+				t.Fatalf("scanner did not classify credential material as a policy refusal: %v", err)
 			}
 			// The error locates the leak without reproducing the secret: an
 			// error a client or an attention item can carry must not become a
@@ -131,6 +131,14 @@ func TestCredentialScannerBlocksLeakedMaterial(t *testing.T) {
 				t.Fatalf("scanner error does not name the file: %v", err)
 			}
 		})
+	}
+}
+
+func TestCredentialScannerIOFailureIsNotPolicyRefusal(t *testing.T) {
+	t.Parallel()
+	err := (credentialScanner{}).Scan(t.Context(), filepath.Join(t.TempDir(), "missing"))
+	if !errors.Is(err, os.ErrNotExist) || errors.Is(err, ward.ErrOutputScanRefused) {
+		t.Fatalf("operational scan failure classified incorrectly: %v", err)
 	}
 }
 

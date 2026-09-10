@@ -78,6 +78,12 @@ func (d *Driver) runPipeline(ctx context.Context, in intent) {
 	log.Debug("pipeline started", "phase", string(in.Phase))
 	result, err := d.handoffAndImport(ctx, in)
 	if err == nil {
+		if result.Status == exec.StatusFailed {
+			if err := d.commitRecoveredTerminal(in.InvocationID, result); err != nil {
+				log.Error("failed writer terminal remains pending", "error", err)
+			}
+			return
+		}
 		// A failed terminal write is retained on the live session and retried
 		// by Inspect/Collect; the asynchronous pipeline has no caller to
 		// return it to, so this record is where the retained failure surfaces
@@ -126,7 +132,7 @@ func (d *Driver) runPipeline(ctx context.Context, in intent) {
 	}
 	d.commit(log, in.InvocationID, exec.StageResult{
 		InvocationID: in.InvocationID, Status: status,
-		Summary: truncateSummary(err.Error()), Usage: result.Usage,
+		Summary: truncateSummary(err.Error()), Usage: result.Usage, Artifacts: result.Artifacts,
 	})
 }
 
@@ -212,6 +218,16 @@ func (d *Driver) handoffAndImport(ctx context.Context, in intent) (exec.StageRes
 	}
 	handoff, err := d.gate.Handoff(ctx, hs)
 	if err != nil {
+		if errors.Is(err, ward.ErrWriterFailed) {
+			recovered, recoveryErr := d.gate.Recover(ctx, in.RunID, hs)
+			if recoveryErr != nil {
+				return exec.StageResult{}, fmt.Errorf("%w: recover failed writer: %w", ErrRecoveryRetryable, recoveryErr)
+			}
+			if recovered.Outcome == ward.RecoveryFailed {
+				return d.failedWriterResult(ctx, in, recovered)
+			}
+			return exec.StageResult{}, fmt.Errorf("%w: failed writer recovery returned %s", ErrRecoveryRetryable, recovered.Outcome)
+		}
 		return exec.StageResult{}, fmt.Errorf("ward handoff: %w", err)
 	}
 	out := exportOutcome{
@@ -1997,23 +2013,11 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 		// means the engine does not mint a fresh attempt).
 		return d.commitLost(ctx, in.InvocationID)
 	case ward.RecoveryFailed:
-		// The pre-agent preparation sentinel is indistinguishable from an agent
-		// failure under the bare status line, so name it: the workspace-hydration
-		// helper ran and exited nonzero before the agent started (e.g. its
-		// manifest guard exit 42), which is an environment fault the operator
-		// triages differently from an agent exit.
-		summary := fmt.Sprintf("%s writer exited with status %d.", d.displayName, recovered.FailureStatus)
-		if recovered.FailureStatus == d.provider.PrepareFailedStatus() {
-			summary = fmt.Sprintf(
-				"Workspace preparation failed before the agent started (status %d): "+
-					"the project-image hydration helper exited nonzero.",
-				d.provider.PrepareFailedStatus())
+		result, err := d.failedWriterResult(ctx, in, recovered)
+		if err != nil {
+			return err
 		}
-		return d.commitRecoveredTerminal(in.InvocationID, exec.StageResult{
-			InvocationID: in.InvocationID,
-			Status:       exec.StatusFailed,
-			Summary:      truncateSummary(summary),
-		})
+		return d.commitRecoveredTerminal(in.InvocationID, result)
 	case ward.RecoveryCanceled:
 		return d.commitRecoveredTerminal(in.InvocationID, exec.StageResult{
 			InvocationID: in.InvocationID,

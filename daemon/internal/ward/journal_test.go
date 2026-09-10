@@ -37,6 +37,7 @@ type fakeJournal struct {
 	leaser *fakeLeaser
 
 	failBegin, failMark, failCancellation, failClose error
+	failFailureEvidence                              error
 }
 
 func newFakeJournal() *fakeJournal {
@@ -283,6 +284,27 @@ func (j *fakeJournal) MarkCancellationRequested(_ context.Context, runID string)
 		return err
 	}
 	rec.CancellationRequested = true
+	return nil
+}
+
+func (j *fakeJournal) MarkFailureEvidence(_ context.Context, runID, digest string, unavailable bool) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.recordCall("journal-failure-evidence " + runID)
+	if j.failFailureEvidence != nil {
+		return j.failFailureEvidence
+	}
+	rec, err := j.open(runID)
+	if err != nil {
+		return err
+	}
+	if rec.FailureEvidenceDigest != "" || rec.FailureEvidenceUnavailable {
+		if rec.FailureEvidenceDigest != digest || rec.FailureEvidenceUnavailable != unavailable {
+			return errors.New("failure evidence conflict")
+		}
+		return nil
+	}
+	rec.FailureEvidenceDigest, rec.FailureEvidenceUnavailable = digest, unavailable
 	return nil
 }
 
