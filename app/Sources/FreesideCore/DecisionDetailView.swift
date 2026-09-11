@@ -60,6 +60,7 @@ struct DecisionDetailView: View {
     @State private var specApprovalReader: SpecApprovalReader?
     @State private var pendingConfirmation: PendingConfirmation?
     @State private var capabilityRetrySnapshot: Components.Schemas.AttentionItemSnapshot?
+    @State private var actionDetailsRevealRequest: TechnicalDetailsRevealRequest?
     @State private var sectionPreferences: DecisionSectionPreferences
     @State private var inspectorPresented: Bool
     @State private var detailWidth: CGFloat = 0
@@ -77,7 +78,7 @@ struct DecisionDetailView: View {
     private let showsValidationProgress: Bool
     private let now: Date
     private let itemID: String
-    private let detailsRevealRequest: TechnicalDetailsRevealRequest?
+    private let externalDetailsRevealRequest: TechnicalDetailsRevealRequest?
     private let onConsumeDetailsRevealRequest: (UUID) -> Void
     private let externalInspectorPresented: Binding<Bool>?
     private let onSelectItem: (String) -> Void
@@ -112,7 +113,7 @@ struct DecisionDetailView: View {
         _expandedFindings = State(initialValue: expandedFindings)
         attachments = store.attachments
         self.itemID = itemID
-        self.detailsRevealRequest = detailsRevealRequest
+        self.externalDetailsRevealRequest = detailsRevealRequest
         self.onConsumeDetailsRevealRequest = onConsumeDetailsRevealRequest
         externalInspectorPresented = inspectorPresented
         self.onSelectItem = onSelectItem
@@ -326,17 +327,30 @@ struct DecisionDetailView: View {
         externalInspectorPresented ?? $inspectorPresented
     }
 
+    private var detailsRevealRequest: TechnicalDetailsRevealRequest? {
+        actionDetailsRevealRequest ?? externalDetailsRevealRequest
+    }
+
+    private func consumeDetailsRevealRequest(_ nonce: UUID) {
+        if actionDetailsRevealRequest?.nonce == nonce {
+            actionDetailsRevealRequest = nil
+            Task { await model.recordTrustFailureInspection() }
+        } else {
+            onConsumeDetailsRevealRequest(nonce)
+        }
+    }
+
     private func revealTechnicalDetailsIfRequested(using scrollProxy: ScrollViewProxy) {
         guard let detailsRevealRequest, detailsRevealRequest.itemID == itemID else { return }
         detailsExpanded.wrappedValue = true
-        model.emitDetailsOpenedBeforeActing()
         #if os(macOS)
             inspectorBinding.wrappedValue = true
         #else
             withAnimation {
                 scrollProxy.scrollTo(ScrollTarget.technicalDetails, anchor: .top)
             }
-            onConsumeDetailsRevealRequest(detailsRevealRequest.nonce)
+            model.emitDetailsOpenedBeforeActing()
+            consumeDetailsRevealRequest(detailsRevealRequest.nonce)
         #endif
     }
 
@@ -346,11 +360,11 @@ struct DecisionDetailView: View {
         ) {
             guard let detailsRevealRequest, detailsRevealRequest.itemID == itemID else { return }
             detailsExpanded.wrappedValue = true
-            model.emitDetailsOpenedBeforeActing()
             withAnimation {
                 scrollProxy.scrollTo(ScrollTarget.technicalDetails, anchor: .top)
             }
-            onConsumeDetailsRevealRequest(detailsRevealRequest.nonce)
+            model.emitDetailsOpenedBeforeActing()
+            consumeDetailsRevealRequest(detailsRevealRequest.nonce)
         }
     #endif
 
@@ -2832,6 +2846,9 @@ struct DecisionDetailView: View {
         item: Components.Schemas.AttentionItem?
     ) {
         switch action {
+        case .inspect_trust_failure:
+            detailsExpanded.wrappedValue = true
+            actionDetailsRevealRequest = .init(itemID: itemID, nonce: UUID())
         case .discuss:
             messageEditor = .discuss
         case .request_changes:
