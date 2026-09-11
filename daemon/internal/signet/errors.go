@@ -40,6 +40,11 @@ var ErrCallerSetDecidedAt = errors.New("decided_at is stamped by the accepting t
 // actionOutcome).
 var ErrUnsupportedAction = errors.New("action's transaction is not yet available at this boundary")
 
+// ErrDoctorUnavailable rejects a new diagnostic request when the configured
+// schedule cannot deliver it. The command transaction rolls back, so the HTTP
+// boundary reports a definitive rejection rather than an uncertain commit.
+var ErrDoctorUnavailable = errors.New("doctor is unavailable")
+
 var (
 	ErrInvalidProposalDecisionPayload            = errors.New("proposal decision payload is invalid")
 	ErrInvalidFindingAdjudicationDecisionPayload = errors.New("finding adjudication decision payload is invalid")

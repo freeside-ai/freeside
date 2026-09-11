@@ -51,6 +51,8 @@ type Service struct {
 	// (the dev CLI, the fake driver) and the gate is absent; the engine still
 	// re-derives effectiveness on every read either way.
 	effectiveReviewConfig func() domain.Digest
+	doctorSchedule        domain.ScheduleID
+	doctorAvailable       func() bool
 	now                   func() time.Time
 	rand                  io.Reader
 	// logger records durable diagnoses the read projections would otherwise
@@ -65,6 +67,16 @@ type Service struct {
 // tests can pin expiry and generated identities; production composition
 // passes only WithPairingKey.
 type Option func(*Service)
+
+// WithDoctorSchedule binds Run doctor to the deployment's existing durable
+// doctor job. available reports whether its diagnostic consumer is running;
+// persisted schedule rows alone do not establish a consumer in this process.
+func WithDoctorSchedule(id domain.ScheduleID, available func() bool) Option {
+	return func(s *Service) {
+		s.doctorSchedule = id
+		s.doctorAvailable = available
+	}
+}
 
 // WithPairingKey supplies the daemon-held pairing key. Without it, minting
 // and redeeming pairing codes fail closed.
@@ -356,6 +368,10 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 				if err := s.applySnoozeProposal(ctx, tx, command, item, s.now().UTC()); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
+			case outcomeRunsDoctor:
+				if err := s.requestDoctor(ctx, tx); err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
 			case outcomeRecords, outcomePending:
 				// Records: the command record is the whole effect. Pending:
 				// unreachable, rejected above before PutCommand.
@@ -465,6 +481,7 @@ const (
 	// the displayed offer and concludes the carrier as superseded. The engine
 	// consumes the durable command into a new production attempt.
 	outcomeRetriesWithCapabilities
+	outcomeRunsDoctor
 )
 
 // actionOutcome maps an action to what its acceptance does, following plan
@@ -473,8 +490,9 @@ const (
 // the Wave 2 engine's, the issue's own deferral). Record-only actions have no
 // item effect by design: open_pr is navigation, not resolution; acknowledge
 // means seen, never resolved; mark_seen decides nothing; inspect_trust_failure
-// is navigation; run_doctor leaves a system_health item blocking until the
-// diagnostic clears. Stop/resume of unattended operation conclude the decided
+// is navigation. run_doctor makes the existing diagnostic schedule due while
+// leaving a system_health item blocking until the diagnostic clears.
+// Stop/resume of unattended operation conclude the decided
 // item and append the durable operating transition in the accepting
 // transaction (issue #319; applyStopUnattended, applyResumeUnattended).
 // Recover review similarly concludes its carrier and appends the command-backed
@@ -535,8 +553,10 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		return domain.StatusDismissed, outcomeDeclinesProposal
 	case domain.ActionSnooze:
 		return "", outcomeSnoozesProposal
+	case domain.ActionRunDoctor:
+		return "", outcomeRunsDoctor
 	case domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionAcknowledge,
-		domain.ActionInspectTrustFailure, domain.ActionRunDoctor:
+		domain.ActionInspectTrustFailure:
 		return "", outcomeRecords
 	case domain.ActionDiscuss:
 		return "", outcomeDiscusses
