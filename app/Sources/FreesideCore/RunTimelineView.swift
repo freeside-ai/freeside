@@ -258,16 +258,10 @@ struct RunTimelineView: View {
     }
 
     private func attemptContext(invocationID: String?) -> String? {
-        guard let invocationID else { return nil }
-        if let round = timeline?.review?.value1.rounds.first(where: { $0.invocation_id == invocationID }) {
-            return "Review · Round \(round.round)"
-        }
-        for stage in snapshot.run.stages {
-            if let attempt = stage.attempts.first(where: { $0.invocation_id == invocationID }) {
-                return "\(RunDisplay.stageLabel(stage.name)) · Round \(attempt.number)"
-            }
-        }
-        return nil
+        RunHistoryPresentation.attemptContext(
+            invocationID: invocationID,
+            stages: snapshot.run.stages,
+            reviewRounds: timeline?.review?.value1.rounds ?? [])
     }
 
     private func copy(_ string: String) {
@@ -329,6 +323,51 @@ enum RunHistoryPresentation {
     ) -> [Components.Schemas.RunReviewRound] {
         guard let facts else { return [] }
         return Array(facts.rounds.reversed())
+    }
+
+    /// The row label for an attempt or review round, shared by the decision
+    /// history rail and the invocation observations.
+    ///
+    /// A review round reads `Review · Round <n>` and takes precedence. Every
+    /// other invocation reads `<Stage> · Round <n>` with the daemon's
+    /// per-stage `Attempt.number`. That number restarts at 1 for each stage,
+    /// and the daemon appends a fresh `implement` stage for each remediation
+    /// and operator-feedback pass, so a run that recorded the same stage more
+    /// than once would show several rows all labelled "Round 1". When the
+    /// owning stage's canonical name (folding `implement` into
+    /// `implementation`) repeats across `run.stages`, the label also names the
+    /// pass in stage creation order: `Implementation · Pass 2 · Round 1`. The
+    /// label says "Pass" rather than "remediation" or "operator feedback"
+    /// because the API `Stage` carries no field recording why a stage was
+    /// added, so the reason can't be named without guessing.
+    ///
+    /// Returns nil when the invocation matches no attempt or review round, so
+    /// the caller falls back to the invocation id.
+    static func attemptContext(
+        invocationID: String?,
+        stages: [Components.Schemas.Stage],
+        reviewRounds: [Components.Schemas.RunReviewRound]
+    ) -> String? {
+        guard let invocationID else { return nil }
+        if let round = reviewRounds.first(where: { $0.invocation_id == invocationID }) {
+            return "Review · Round \(round.round)"
+        }
+        for (index, stage) in stages.enumerated() {
+            guard let attempt = stage.attempts.first(where: { $0.invocation_id == invocationID })
+            else { continue }
+            let label = RunDisplay.stageLabel(stage.name)
+            let canonical = RunDisplay.canonicalStageName(stage.name)
+            let sameName = stages.enumerated().filter {
+                RunDisplay.canonicalStageName($0.element.name) == canonical
+            }
+            if sameName.count > 1,
+                let pass = sameName.firstIndex(where: { $0.offset == index }).map({ $0 + 1 })
+            {
+                return "\(label) · Pass \(pass) · Round \(attempt.number)"
+            }
+            return "\(label) · Round \(attempt.number)"
+        }
+        return nil
     }
 }
 
