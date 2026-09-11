@@ -138,10 +138,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Cache SwiftPM dependencies
-        # xcodebuild resolves the same twelve packages the package job
-        # does, from the same shared cache; see that job for the
-        # rationale. Its checkouts land in DerivedData, which stays
-        # uncached for the same reason app/.build does.
+        # xcodebuild resolves app/Package.swift's graph, pruned to the
+        # packages the app targets consume, from the same shared cache
+        # the package job uses; see that job for the rationale. Its
+        # checkouts land in DerivedData, which stays uncached for the
+        # same reason app/.build does.
         uses: actions/cache@v4
         with:
           path: ~/Library/Caches/org.swift.swiftpm
