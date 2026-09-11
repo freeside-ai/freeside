@@ -6,11 +6,23 @@
     public struct DaemonHealth: Equatable, Sendable {
         public let version: String
         public let startedAt: Date
+        /// The daemon's reported API contract digest (GET /health). Compared
+        /// with this client's compiled-in `APIContract.digest` to flag a
+        /// client/daemon contract skew in the menu.
+        public let contractDigest: String
 
-        public init(version: String, startedAt: Date) {
+        /// `contractDigest` defaults to this client's own digest, so a
+        /// fixture or preview reads as a same-build daemon; the live health
+        /// checker always passes the daemon's reported value.
+        public init(version: String, startedAt: Date, contractDigest: String = APIContract.digest) {
             self.version = version
             self.startedAt = startedAt
+            self.contractDigest = contractDigest
         }
+
+        /// Whether the daemon was built from the same API spec as this
+        /// client. A mismatch means one of the two must be updated.
+        public var contractMatchesClient: Bool { contractDigest == APIContract.digest }
     }
 
     public protocol DaemonHealthChecking: Sendable {
@@ -37,7 +49,9 @@
             return try await withThrowingTaskGroup(of: DaemonHealth.self) { group in
                 group.addTask {
                     let body = try await makeClient(serverURL).getHealth().ok.body.json
-                    return DaemonHealth(version: body.version, startedAt: body.started_at)
+                    return DaemonHealth(
+                        version: body.version, startedAt: body.started_at,
+                        contractDigest: body.contract_digest)
                 }
                 group.addTask {
                     try await Task.sleep(for: timeout)

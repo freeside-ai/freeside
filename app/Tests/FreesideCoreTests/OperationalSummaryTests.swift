@@ -26,6 +26,14 @@ import Testing
         #expect(summary.daemonState == .connected)
     }
 
+    @Test func contractMismatchFreshnessMapsToItsDaemonState() {
+        let summary = OperationalSummary(
+            openSnapshots: [],
+            runs: [],
+            freshness: .contractMismatch(daemonContract: "sha256:" + String(repeating: "a", count: 64)))
+        #expect(summary.daemonState == .contractMismatch)
+    }
+
     @Test func waitingLongestFollowsTheDisplayedWaitNotCreation() {
         var older = AttentionFixtures.fixture(type: .spec_approval)
         older.item.created_at = Date(timeIntervalSince1970: 10)

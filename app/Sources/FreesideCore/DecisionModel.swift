@@ -239,7 +239,7 @@ public final class DecisionModel {
         // however recently this card validated. Unvalidated carries no
         // signal either way; the per-item validation above decides.
         switch store.freshness {
-        case .unreachable, .syncFailing, .unauthenticated: return false
+        case .unreachable, .syncFailing, .contractMismatch, .unauthenticated: return false
         case .unvalidated, .fresh: break
         }
         switch phase {

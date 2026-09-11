@@ -7,6 +7,7 @@ struct OperationalSummary: Equatable {
         case connected = "Connected"
         case unreachable = "Unreachable"
         case syncFailing = "Sync failing"
+        case contractMismatch = "Contract mismatch"
         case unauthenticated = "Pairing required"
     }
 
@@ -61,6 +62,7 @@ struct OperationalSummary: Equatable {
             case .fresh: .connected
             case .unreachable: .unreachable
             case .syncFailing: .syncFailing
+            case .contractMismatch: .contractMismatch
             case .unauthenticated: .unauthenticated
             }
     }
@@ -181,7 +183,7 @@ struct OperationalSummaryView: View {
     private var daemonStateColor: Color {
         switch summary.daemonState {
         case .checking, .connected: .ink
-        case .unreachable, .syncFailing, .unauthenticated: .waxText
+        case .unreachable, .syncFailing, .contractMismatch, .unauthenticated: .waxText
         }
     }
 }

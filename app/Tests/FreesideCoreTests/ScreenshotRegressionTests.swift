@@ -1060,6 +1060,22 @@
                             onSelectItem: { _ in },
                             onShowRuns: {},
                             now: screenshotNow))))
+            // The contract-mismatch state renders distinctly from fresh and
+            // the other failure states (#1265).
+            surfaces.append(
+                Surface(
+                    name: "operational-summary-contract-mismatch",
+                    width: 640,
+                    view: AnyView(
+                        OperationalSummaryView(
+                            summary: OperationalSummary(
+                                openSnapshots: store.openSnapshots,
+                                runs: runs,
+                                freshness: .contractMismatch(
+                                    daemonContract: "sha256:" + String(repeating: "a", count: 64))),
+                            onSelectItem: { _ in },
+                            onShowRuns: {},
+                            now: screenshotNow))))
             guard
                 let timeline = RunFixtures.defaultTimelines().first(where: {
                     $0.run_id == activeRun.run.id
@@ -1358,6 +1374,20 @@
                     name: "freshness-banner-stale",
                     lastUpdatedAt: Date().addingTimeInterval(
                         -(SyncCoordinator.stalenessThreshold + 1))))
+            // The contract-mismatch banner shows both short digests and the
+            // fix, distinct from the sync-failing and unreachable banners
+            // (#1265). The daemon digest is a fixed fixture value.
+            surfaces.append(
+                Surface(
+                    name: "freshness-banner-contract-mismatch",
+                    width: 640,
+                    view: AnyView(
+                        VStack(spacing: 0) {
+                            FreshnessBanner(
+                                freshness: .contractMismatch(
+                                    daemonContract: "sha256:" + String(repeating: "a", count: 64)))
+                            Text("Inbox").padding()
+                        })))
 
             var due = AttentionFixtures.degradedReady().item
             due.expires_when = screenshotNow.addingTimeInterval(2 * 3_600)
@@ -1376,7 +1406,11 @@
                                 InboxRowView(item: age, now: screenshotNow)
                             }.padding().background(Color.ground))))
             }
-            for surface in surfaces where ["pairing", "freshness-banner-stale"].contains(surface.name) {
+            for surface in surfaces
+            where [
+                "pairing", "freshness-banner-stale", "freshness-banner-contract-mismatch",
+                "operational-summary-contract-mismatch",
+            ].contains(surface.name) {
                 surfaces.append(
                     Surface(
                         name: surface.name + "-dark",

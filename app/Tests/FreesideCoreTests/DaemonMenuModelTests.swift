@@ -80,6 +80,34 @@
             #expect(model.state == .running(restarted, restartObserved: true))
         }
 
+        @Test func aForeignContractDigestReachesRunningButFlagsAMismatch() async {
+            let service = FakeDaemonService(status: .enabled)
+            let matching = DaemonHealth(
+                version: "1.0.0", startedAt: Date(timeIntervalSince1970: 1_725_184_800))
+            #expect(matching.contractMatchesClient)
+            let foreign = DaemonHealth(
+                version: "1.0.0", startedAt: Date(timeIntervalSince1970: 1_725_184_800),
+                contractDigest: "sha256:" + String(repeating: "f", count: 64))
+            #expect(!foreign.contractMatchesClient)
+
+            let health = ScriptedDaemonHealth([.health(foreign)])
+            let model = DaemonMenuModel(
+                service: service,
+                healthChecker: health,
+                registerOnFirstRun: false,
+                readReadiness: { nil })
+
+            // The daemon is up, so the state stays .running; the menu reads
+            // the mismatch off the health, not off a separate state.
+            await model.refresh()
+            #expect(model.state == .running(foreign, restartObserved: false))
+            guard case .running(let observed, _) = model.state else {
+                Issue.record("expected .running")
+                return
+            }
+            #expect(!observed.contractMatchesClient)
+        }
+
         @Test func startStopAndApprovalActionsUseOnlyTheFacade() async {
             let service = FakeDaemonService(status: .notRegistered)
             let health = ScriptedDaemonHealth([.failure])

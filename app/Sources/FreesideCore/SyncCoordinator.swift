@@ -174,15 +174,22 @@ public final class SyncCoordinator {
                     await bootstrap()
                 }
             case .undocumented(let statusCode, _):
-                mark(failureStatus: statusCode)
+                let diagnosed = await failureFreshness(status: statusCode)
+                guard generation == syncGeneration else { return }
+                store.freshness = diagnosed
             }
         } catch {
             guard generation == syncGeneration else { return }
+            let diagnosed: InboxStore.Freshness
             if error is ConversationContractValidation.InvalidConversation {
-                store.freshness = .syncFailing
+                // A decoded-but-invalid conversation is a reachable,
+                // failing read: probe for a contract skew like any other.
+                diagnosed = await diagnoseSyncFailure()
             } else {
-                store.freshness = freshnessForReadError(error)
+                diagnosed = await diagnosedReadFreshness(error)
             }
+            guard generation == syncGeneration else { return }
+            store.freshness = diagnosed
         }
     }
 
@@ -253,11 +260,15 @@ public final class SyncCoordinator {
                     }
                 }
             case .undocumented(let statusCode, _):
-                mark(failureStatus: statusCode)
+                let diagnosed = await failureFreshness(status: statusCode)
+                guard generation == syncGeneration else { return }
+                store.freshness = diagnosed
             }
         } catch {
             guard generation == syncGeneration else { return }
-            store.freshness = freshnessForReadError(error)
+            let diagnosed = await diagnosedReadFreshness(error)
+            guard generation == syncGeneration else { return }
+            store.freshness = diagnosed
         }
     }
 
@@ -405,14 +416,22 @@ public final class SyncCoordinator {
                 }
                 persist()
             case .undocumented(let statusCode, _):
-                mark(failureStatus: statusCode)
+                let diagnosed = await failureFreshness(status: statusCode)
+                guard requestGeneration == runListGeneration,
+                    requestCacheGeneration == cacheGeneration
+                else { return }
+                store.freshness = diagnosed
             }
         } catch {
             guard requestGeneration == runListGeneration,
                 requestCacheGeneration == cacheGeneration
             else { return }
             if error is CancellationError || Task.isCancelled { return }
-            store.freshness = freshnessForReadError(error)
+            let diagnosed = await diagnosedReadFreshness(error)
+            guard requestGeneration == runListGeneration,
+                requestCacheGeneration == cacheGeneration
+            else { return }
+            store.freshness = diagnosed
         }
     }
 
@@ -469,7 +488,11 @@ public final class SyncCoordinator {
                     // The daemon answered, just with the wrong run's
                     // timeline: a reachable-but-failing read, not silence.
                     timelineLoadStates[runID] = .unavailable
-                    store.freshness = .syncFailing
+                    let diagnosed = await diagnoseSyncFailure()
+                    guard timelineGenerations[runID] == requestGeneration,
+                        requestCacheGeneration == cacheGeneration
+                    else { return }
+                    store.freshness = diagnosed
                     return
                 }
                 timelinesByRunID[runID] = timeline
@@ -480,7 +503,11 @@ public final class SyncCoordinator {
                 timelineLoadStates[runID] = .unavailable
             case .undocumented(let statusCode, _):
                 timelineLoadStates[runID] = .unavailable
-                mark(failureStatus: statusCode)
+                let diagnosed = await failureFreshness(status: statusCode)
+                guard timelineGenerations[runID] == requestGeneration,
+                    requestCacheGeneration == cacheGeneration
+                else { return }
+                store.freshness = diagnosed
             }
         } catch {
             guard timelineGenerations[runID] == requestGeneration else { return }
@@ -496,7 +523,11 @@ public final class SyncCoordinator {
                 return
             }
             timelineLoadStates[runID] = .unavailable
-            store.freshness = freshnessForReadError(error)
+            let diagnosed = await diagnosedReadFreshness(error)
+            guard timelineGenerations[runID] == requestGeneration,
+                requestCacheGeneration == cacheGeneration
+            else { return }
+            store.freshness = diagnosed
         }
     }
 
@@ -552,9 +583,60 @@ public final class SyncCoordinator {
     /// Maps an answered non-401 status to its freshness state. The daemon
     /// responded, so this is never `.unreachable`: 401 is the credential
     /// state, any other status is a reachable daemon whose reads are
-    /// failing.
-    private func mark(failureStatus: Int) {
-        store.freshness = failureStatus == 401 ? .unauthenticated : .syncFailing
+    /// failing, refined by a health probe into `.contractMismatch` on a
+    /// contract-digest skew. Returns the state; the caller re-checks its
+    /// round generation before writing it, so the awaited probe cannot let
+    /// a superseded round overwrite a newer one.
+    private func failureFreshness(status: Int) async -> InboxStore.Freshness {
+        status == 401 ? .unauthenticated : await diagnoseSyncFailure()
+    }
+
+    /// The diagnosed freshness for a thrown read error: `.unreachable`
+    /// stays (no response arrived), while a reachable-but-failing read
+    /// (`.syncFailing`) is refined by a health probe into
+    /// `.contractMismatch` on a contract-digest skew. Caller re-guards the
+    /// write as above.
+    private func diagnosedReadFreshness(_ error: any Error) async -> InboxStore.Freshness {
+        freshnessForReadError(error) == .syncFailing ? await diagnoseSyncFailure() : .unreachable
+    }
+
+    /// Probes `/health` to tell a contract skew from a generic sync
+    /// failure. When a sync read has already failed as reachable-but-
+    /// failing, a `/health` answer whose `contract_digest` differs from
+    /// this client's compiled-in `APIContract.digest` means the two were
+    /// built from different specs, so the client must not expect to sync;
+    /// report `.contractMismatch`. A matching digest, a transport error,
+    /// or an undecodable health body (including a pre-#1265 daemon with no
+    /// digest field) stays `.syncFailing`.
+    ///
+    /// The probe races a short timeout, as the daemon-menu health checker
+    /// does: a daemon that stops between the failed read and this request,
+    /// or a network that starts black-holing traffic, would otherwise leave
+    /// this await pending until the transport timeout, stalling the shared
+    /// refresh task so later refreshes only join it. Timeout falls back to
+    /// `.syncFailing`, the same as any other unreachable-probe outcome.
+    private func diagnoseSyncFailure() async -> InboxStore.Freshness {
+        let client = store.client
+        return await withTaskGroup(of: InboxStore.Freshness.self) { group in
+            group.addTask {
+                guard let output = try? await client.getHealth(),
+                    case .ok(let ok) = output,
+                    let body = try? ok.body.json
+                else {
+                    return .syncFailing
+                }
+                if body.contract_digest != APIContract.digest {
+                    return .contractMismatch(daemonContract: body.contract_digest)
+                }
+                return .syncFailing
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(3))
+                return .syncFailing
+            }
+            defer { group.cancelAll() }
+            return await group.next() ?? .syncFailing
+        }
     }
 
     /// Classifies a thrown sync-read error. OpenAPIRuntime raises a

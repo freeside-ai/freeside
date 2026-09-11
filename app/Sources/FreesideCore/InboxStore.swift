@@ -55,6 +55,17 @@ public final class InboxStore {
         /// got no answer at all) so the operator sees a live-but-erroring
         /// daemon for what it is; still a cached read-only view.
         case syncFailing
+        /// The daemon answered `/health` with a contract digest different
+        /// from this client's compiled-in `APIContract.digest`: the client
+        /// and daemon were built from different API specs, so this client
+        /// must not expect to sync. Diagnosed reactively when a sync read
+        /// fails; distinct from `.syncFailing` so the operator sees a
+        /// specific, actionable state (update the daemon or the app) rather
+        /// than a generic failure. Carries the daemon's reported digest for
+        /// display. Cached read-only view. A daemon older than #1265 has no
+        /// digest field, so its health does not decode and the client stays
+        /// in `.syncFailing`; that one transition is accepted.
+        case contractMismatch(daemonContract: String)
         /// The daemon answered 401: this device's credential no longer
         /// authenticates (revoked, or not yet paired).
         case unauthenticated

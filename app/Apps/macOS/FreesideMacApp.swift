@@ -166,6 +166,13 @@ private struct DaemonMenu: View {
             Label("Daemon running", systemImage: "checkmark.circle.fill").bold()
             Text("Version \(health.version)")
             Text("Started \(health.startedAt.formatted(date: .abbreviated, time: .standard))")
+            if !health.contractMatchesClient {
+                Label("Contract mismatch", systemImage: "exclamationmark.triangle.fill")
+                Text(
+                    "Daemon contract \(ContractDigestDisplay.short(health.contractDigest)), "
+                        + "app built for \(ContractDigestDisplay.shortClient) — "
+                        + "update the daemon or the app.")
+            }
             if restartObserved {
                 Label("Restart observed", systemImage: "arrow.clockwise")
             }
@@ -335,6 +342,9 @@ private enum DaemonMenuDemo {
         case "unreachable":
             status = .enabled
             health = .unreachable
+        case "mismatch":
+            status = .enabled
+            health = .contractMismatch
         default:
             status = .notRegistered
             health = .unreachable
@@ -364,6 +374,7 @@ private final class DemoDaemonService: DaemonServiceControlling {
 private struct DemoHealthChecker: DaemonHealthChecking {
     enum Result: Sendable {
         case running
+        case contractMismatch
         case unreachable
     }
 
@@ -374,6 +385,12 @@ private struct DemoHealthChecker: DaemonHealthChecking {
         switch result {
         case .running:
             return DaemonHealth(version: "1.0.0", startedAt: startedAt)
+        case .contractMismatch:
+            // A daemon built from a different spec, for the menu's
+            // contract-mismatch demo/screenshot state (#1265).
+            return DaemonHealth(
+                version: "1.0.0", startedAt: startedAt,
+                contractDigest: "sha256:" + String(repeating: "a", count: 64))
         case .unreachable:
             throw URLError(.cannotConnectToHost)
         }
