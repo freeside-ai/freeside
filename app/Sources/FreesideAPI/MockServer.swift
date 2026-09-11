@@ -101,6 +101,7 @@ public actor MockServer {
     private var epochGeneration = 1
     private var healthVersion = "mock"
     private var healthStartedAt = Date(timeIntervalSince1970: 1_725_184_800)
+    private var healthContractDigest = APIContract.digest
     private var healthAvailable = true
     private var beforeRespond: BeforeRespond?
     private var afterRespond: BeforeRespond?
@@ -308,6 +309,12 @@ public actor MockServer {
     /// state, so liveness clients can exercise running, outage, and restart.
     public func setHealthAvailable(_ available: Bool) {
         healthAvailable = available
+    }
+
+    /// Serves a contract digest other than this client's, so a test can
+    /// exercise the client/daemon contract-skew diagnosis.
+    public func setHealthContractDigest(_ digest: String) {
+        healthContractDigest = digest
     }
 
     public func restart(version: String? = nil, startedAt: Date) {
@@ -681,7 +688,9 @@ public actor MockServer {
 
     func healthStatus() throws -> Components.Schemas.HealthStatus {
         guard healthAvailable else { throw HealthUnavailableError() }
-        return .init(status: .ok, version: healthVersion, started_at: healthStartedAt)
+        return .init(
+            status: .ok, contract_digest: healthContractDigest, version: healthVersion,
+            started_at: healthStartedAt)
     }
 
     /// One canonical snapshot of every synchronized resource from a

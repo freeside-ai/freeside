@@ -11,18 +11,19 @@ public import struct Foundation.Date
 #endif
 /// A type that performs HTTP operations defined by the OpenAPI document.
 public protocol APIProtocol: Sendable {
-    /// Process liveness, version, and start time
+    /// Process liveness, contract identity, version, and start time
     ///
-    /// Answers only "is the daemon process up, which build, since when."
-    /// Supervisors and the external liveness probe poll it (plan §5.2);
-    /// the operator client uses `version` for skew detection and
-    /// `started_at` for restart visibility (a start time that keeps
-    /// moving under a supervisor is crash-loop evidence). The response
-    /// deliberately carries no operational state: unattended-admission
-    /// stops, `system_health` items, and everything else requiring
-    /// judgment stay on the authenticated surfaces (plan §4), so this
-    /// route widens what an unpaired caller learns by nothing beyond
-    /// liveness, version, and start time.
+    /// Answers only "is the daemon process up, which build and API
+    /// contract, since when." Supervisors and the external liveness probe
+    /// poll it (plan §5.2); the operator client uses `contract_digest`
+    /// for client/daemon contract-skew detection, `version` for the human
+    /// build label, and `started_at` for restart visibility (a start time
+    /// that keeps moving under a supervisor is crash-loop evidence). The
+    /// response deliberately carries no operational state:
+    /// unattended-admission stops, `system_health` items, and everything
+    /// else requiring judgment stay on the authenticated surfaces (plan
+    /// §4), so this route widens what an unpaired caller learns by nothing
+    /// beyond liveness, contract identity, version, and start time.
     ///
     ///
     /// - Remark: HTTP `GET /health`.
@@ -307,18 +308,19 @@ public protocol APIProtocol: Sendable {
 
 /// Convenience overloads for operation inputs.
 extension APIProtocol {
-    /// Process liveness, version, and start time
+    /// Process liveness, contract identity, version, and start time
     ///
-    /// Answers only "is the daemon process up, which build, since when."
-    /// Supervisors and the external liveness probe poll it (plan §5.2);
-    /// the operator client uses `version` for skew detection and
-    /// `started_at` for restart visibility (a start time that keeps
-    /// moving under a supervisor is crash-loop evidence). The response
-    /// deliberately carries no operational state: unattended-admission
-    /// stops, `system_health` items, and everything else requiring
-    /// judgment stay on the authenticated surfaces (plan §4), so this
-    /// route widens what an unpaired caller learns by nothing beyond
-    /// liveness, version, and start time.
+    /// Answers only "is the daemon process up, which build and API
+    /// contract, since when." Supervisors and the external liveness probe
+    /// poll it (plan §5.2); the operator client uses `contract_digest`
+    /// for client/daemon contract-skew detection, `version` for the human
+    /// build label, and `started_at` for restart visibility (a start time
+    /// that keeps moving under a supervisor is crash-loop evidence). The
+    /// response deliberately carries no operational state:
+    /// unattended-admission stops, `system_health` items, and everything
+    /// else requiring judgment stay on the authenticated surfaces (plan
+    /// §4), so this route widens what an unpaired caller learns by nothing
+    /// beyond liveness, contract identity, version, and start time.
     ///
     ///
     /// - Remark: HTTP `GET /health`.
@@ -3763,7 +3765,12 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/HealthStatus/status`.
             public var status: Components.Schemas.HealthStatus.statusPayload
-            /// The daemon build version, for operator-client skew detection.
+            /// Identifies the api/openapi.yaml this daemon was built from: "sha256:" plus the lowercase hex SHA-256 of the spec's exact bytes. A client built from a different spec must not expect to sync; it compares this with its own compiled-in digest to diagnose a contract skew instead of a silent sync failure.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/HealthStatus/contract_digest`.
+            public var contract_digest: Swift.String
+            /// The daemon build version: a human-readable build label, not a contract identity (see `contract_digest`).
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/HealthStatus/version`.
@@ -3777,19 +3784,23 @@ public enum Components {
             ///
             /// - Parameters:
             ///   - status: Fixed at `ok`; liveness is proven by answering at all.
-            ///   - version: The daemon build version, for operator-client skew detection.
+            ///   - contract_digest: Identifies the api/openapi.yaml this daemon was built from: "sha256:" plus the lowercase hex SHA-256 of the spec's exact bytes. A client built from a different spec must not expect to sync; it compares this with its own compiled-in digest to diagnose a contract skew instead of a silent sync failure.
+            ///   - version: The daemon build version: a human-readable build label, not a contract identity (see `contract_digest`).
             ///   - started_at: The current process's start time (RFC3339 UTC). Under a supervisor, a start time that keeps advancing across polls is crash-loop evidence.
             public init(
                 status: Components.Schemas.HealthStatus.statusPayload,
+                contract_digest: Swift.String,
                 version: Swift.String,
                 started_at: Foundation.Date
             ) {
                 self.status = status
+                self.contract_digest = contract_digest
                 self.version = version
                 self.started_at = started_at
             }
             public enum CodingKeys: String, CodingKey {
                 case status
+                case contract_digest
                 case version
                 case started_at
             }
@@ -3798,6 +3809,10 @@ public enum Components {
                 self.status = try container.decode(
                     Components.Schemas.HealthStatus.statusPayload.self,
                     forKey: .status
+                )
+                self.contract_digest = try container.decode(
+                    Swift.String.self,
+                    forKey: .contract_digest
                 )
                 self.version = try container.decode(
                     Swift.String.self,
@@ -3809,6 +3824,7 @@ public enum Components {
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "status",
+                    "contract_digest",
                     "version",
                     "started_at"
                 ])
@@ -10285,18 +10301,19 @@ public enum Components {
 
 /// API operations, with input and output types, generated from `#/paths` in the OpenAPI document.
 public enum Operations {
-    /// Process liveness, version, and start time
+    /// Process liveness, contract identity, version, and start time
     ///
-    /// Answers only "is the daemon process up, which build, since when."
-    /// Supervisors and the external liveness probe poll it (plan §5.2);
-    /// the operator client uses `version` for skew detection and
-    /// `started_at` for restart visibility (a start time that keeps
-    /// moving under a supervisor is crash-loop evidence). The response
-    /// deliberately carries no operational state: unattended-admission
-    /// stops, `system_health` items, and everything else requiring
-    /// judgment stay on the authenticated surfaces (plan §4), so this
-    /// route widens what an unpaired caller learns by nothing beyond
-    /// liveness, version, and start time.
+    /// Answers only "is the daemon process up, which build and API
+    /// contract, since when." Supervisors and the external liveness probe
+    /// poll it (plan §5.2); the operator client uses `contract_digest`
+    /// for client/daemon contract-skew detection, `version` for the human
+    /// build label, and `started_at` for restart visibility (a start time
+    /// that keeps moving under a supervisor is crash-loop evidence). The
+    /// response deliberately carries no operational state:
+    /// unattended-admission stops, `system_health` items, and everything
+    /// else requiring judgment stay on the authenticated surfaces (plan
+    /// §4), so this route widens what an unpaired caller learns by nothing
+    /// beyond liveness, contract identity, version, and start time.
     ///
     ///
     /// - Remark: HTTP `GET /health`.

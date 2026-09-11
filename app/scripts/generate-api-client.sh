@@ -25,13 +25,21 @@ repo_dir="$(cd "$app_dir/.." && pwd)"
 schema_mirror="$app_dir/Sources/FreesideAPI/openapi.yaml"
 
 cp "$repo_dir/api/openapi.yaml" "$schema_mirror"
+# Regenerate the compiled-in contract-digest constants from the same spec, so
+# a spec change that forgets them is drift here (and in the pre-commit hook).
+bash "$repo_dir/scripts/api-contract-digest.sh" --write
 swift package \
     --package-path "$app_dir" \
     --only-use-versions-from-resolved-file \
     plugin --allow-writing-to-package-directory \
     generate-code-from-openapi --target FreesideAPI
 
-outputs=(app/Sources/FreesideAPI/openapi.yaml app/Sources/FreesideAPI/GeneratedSources)
+outputs=(
+    app/Sources/FreesideAPI/openapi.yaml
+    app/Sources/FreesideAPI/GeneratedSources
+    app/Sources/FreesideAPI/ContractDigest.swift
+    daemon/internal/signet/contract_digest.go
+)
 
 if [[ $mode == against-index ]]; then
     # Regeneration output versus the index: `git diff` reports tracked drift

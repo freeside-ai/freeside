@@ -1710,3 +1710,14 @@ Revision 55 ("Prove Cache-Independent Project Images"):
    network-disabled. Do not classify lockfile shapes or add dummy dependencies.
    (User assignment; implementation decision for #1284;
    devlog 2026-09-10-0955-cache-independent-project-images.md.)
+
+Revision 56 ("Retain Failed Writer Diagnostics"):
+
+1. **Failed writers retain bounded sensitive diagnostics before cleanup.**
+   A nonzero exit still forbids source export. Reuse the stopped writer's
+   outcome observer and established sensitive-evidence mechanism to retain
+   only its declared transcript. Journal the capture disposition before
+   teardown; storage failures preserve the source for recovery. This closes
+   the diagnostic gap without accepting partial edits or rerunning a provider.
+   (User assignment; implementation decision for #1286;
+   devlog 2026-09-10-1219-failed-writer-transcripts.md.)
