@@ -376,4 +376,95 @@ import Testing
             highestObservedServerRevision: 10)
         #expect(key != RunTimelineView.TimelineRequestKey(snapshot: snapshot, cursors: afterEpoch))
     }
+
+    private func stage(
+        _ name: String, id: String, attempts: [(number: Int, invocation: String)]
+    ) -> Components.Schemas.Stage {
+        .init(
+            id: id, run_id: "run", name: name,
+            attempts: attempts.map {
+                .init(id: "\(id)-\($0.number)", stage_id: id, number: $0.number, invocation_id: $0.invocation)
+            })
+    }
+
+    @Test func singleStageKeepsThePlainRoundLabel() {
+        let stages = [stage("implement", id: "s1", attempts: [(1, "inv-1"), (2, "inv-2")])]
+        #expect(
+            RunHistoryPresentation.attemptContext(invocationID: "inv-1", stages: stages, reviewRounds: [])
+                == "Implementation · Round 1")
+        #expect(
+            RunHistoryPresentation.attemptContext(invocationID: "inv-2", stages: stages, reviewRounds: [])
+                == "Implementation · Round 2")
+    }
+
+    @Test func repeatedStagesQualifyEachLabelWithItsPass() {
+        let run = RunFixtures.refreshedHistoryRun().run
+        let id = RunFixtures.refreshedRunID
+        func label(_ invocation: String) -> String? {
+            RunHistoryPresentation.attemptContext(invocationID: invocation, stages: run.stages, reviewRounds: [])
+        }
+        #expect(label("inv-\(id)-1") == "Implementation · Pass 1 · Round 1")
+        #expect(label("inv-\(id)-2") == "Implementation · Pass 1 · Round 2")
+        #expect(label("inv-\(id)-remediation-1") == "Implementation · Pass 2 · Round 1")
+    }
+
+    @Test func passCountingFollowsTheCanonicalStageName() {
+        // `implement` folds into `implementation`, so these are passes 1 and 2
+        // of one series; the differently named stage between them isn't counted.
+        let stages = [
+            stage("implement", id: "s1", attempts: [(1, "inv-a")]),
+            stage("audit", id: "s2", attempts: [(1, "inv-mid")]),
+            stage("implementation", id: "s3", attempts: [(1, "inv-b")]),
+        ]
+        #expect(
+            RunHistoryPresentation.attemptContext(invocationID: "inv-a", stages: stages, reviewRounds: [])
+                == "Implementation · Pass 1 · Round 1")
+        #expect(
+            RunHistoryPresentation.attemptContext(invocationID: "inv-b", stages: stages, reviewRounds: [])
+                == "Implementation · Pass 2 · Round 1")
+        #expect(
+            RunHistoryPresentation.attemptContext(invocationID: "inv-mid", stages: stages, reviewRounds: [])
+                == "Audit · Round 1")
+    }
+
+    @Test func reviewRoundLabelWinsOverStages() {
+        var round = RunFixtures.reviewRound(.completed, round: 3)
+        round.invocation_id = "inv-review"
+        // Two implement stages would otherwise pass-qualify the label, and a
+        // stage even references the review invocation; the review round wins.
+        let stages = [
+            stage("implement", id: "s1", attempts: [(7, "inv-review")]),
+            stage("implement", id: "s2", attempts: [(1, "inv-x")]),
+        ]
+        #expect(
+            RunHistoryPresentation.attemptContext(
+                invocationID: "inv-review", stages: stages, reviewRounds: [round]) == "Review · Round 3")
+    }
+
+    @Test func unmatchedInvocationYieldsNil() {
+        let stages = [stage("implement", id: "s1", attempts: [(1, "inv-1")])]
+        #expect(
+            RunHistoryPresentation.attemptContext(invocationID: "inv-unknown", stages: stages, reviewRounds: [])
+                == nil)
+        #expect(RunHistoryPresentation.attemptContext(invocationID: nil, stages: stages, reviewRounds: []) == nil)
+    }
+
+    @Test func historyRailEntriesCarryThePassQualifiedContext() {
+        let run = RunFixtures.refreshedHistoryRun().run
+        let timeline = RunFixtures.refreshedHistoryTimeline()
+        let context: (String?) -> String? = {
+            RunHistoryPresentation.attemptContext(
+                invocationID: $0, stages: run.stages, reviewRounds: timeline.review?.value1.rounds ?? [])
+        }
+        let entries = RunHistoryPresentation.entries(
+            milestones: timeline.milestones, detail: { _ in nil }, context: context)
+
+        // Each remediation-invocation milestone (admitted, started, terminal)
+        // carries the Pass 2 context; attempt 2's two milestones carry Pass 1,
+        // Round 2; and attempt 1's four milestones carry Pass 1, Round 1.
+        func count(_ label: String) -> Int { entries.filter { $0.context == label }.count }
+        #expect(count("Implementation · Pass 2 · Round 1") == 3)
+        #expect(count("Implementation · Pass 1 · Round 2") == 2)
+        #expect(count("Implementation · Pass 1 · Round 1") == 4)
+    }
 }
