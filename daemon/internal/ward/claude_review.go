@@ -59,7 +59,7 @@ func (claudeReviewProvider) completionEvidenceVersion() string { return "claude-
 func (claudeReviewProvider) resultEvidenceVersion() string     { return "claude-review-result-v1" }
 func (claudeReviewProvider) configurationVersion() string      { return "claude-review-configuration-v1" }
 
-func (claudeReviewProvider) promptProtocol() string { return "claude-production-review-prompt-v1" }
+func (claudeReviewProvider) promptProtocol() string { return "claude-production-review-prompt-v2" }
 
 func (claudeReviewProvider) reviewCommand(
 	workspaceTarget, model, reasoningEffort, prompt, _, _ string,

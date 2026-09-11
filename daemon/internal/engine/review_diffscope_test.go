@@ -104,6 +104,63 @@ func TestReviewedDiffScopeFailsOnNonRepositoryCheckout(t *testing.T) {
 	}
 }
 
+// The batch parameter introduces a defect in the unchanged body. Its finding
+// must anchor on the causal signature change, not the unchanged return line.
+func TestReviewedDiffScopeSignatureChangeRequiresChangedLocation(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, "src"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	runRemediationGit(t, repo, nil, "init", "-q", "-b", "main", "--object-format=sha1")
+	writeReviewedFile(t, repo, "src/capacity.js", "export function canReserve(used, capacity) {\n  return used < capacity;\n}\n")
+	runRemediationGit(t, repo, nil, "add", "-A")
+	runRemediationGit(t, repo, nil, "commit", "-q", "-m", "base")
+	base := strings.TrimSpace(string(runRemediationGit(t, repo, nil, "rev-parse", "HEAD")))
+	writeReviewedFile(t, repo, "src/capacity.js", "export function canReserve(used, capacity, count = 1) {\n  return used < capacity;\n}\n")
+	runRemediationGit(t, repo, nil, "commit", "-qam", "candidate")
+	head := strings.TrimSpace(string(runRemediationGit(t, repo, nil, "rev-parse", "HEAD")))
+	scope, err := reviewedDiffScope(t.Context(), t.TempDir(), repo, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		line int
+		want bool
+	}{{1, true}, {2, false}} {
+		location := &domain.FindingLocation{Path: "src/capacity.js", StartLine: tc.line, EndLine: tc.line}
+		if got := scope.Overlaps(location); got != tc.want {
+			t.Errorf("signature-only change, line %d: overlap = %t, want %t", tc.line, got, tc.want)
+		}
+	}
+}
+
+// Removing the guard leaves no changed candidate-side line. The existing
+// file-level location represents the removed code without citing unchanged code.
+func TestReviewedDiffScopePureDeletionUsesWholeFileLocation(t *testing.T) {
+	repo := t.TempDir()
+	runRemediationGit(t, repo, nil, "init", "-q", "-b", "main", "--object-format=sha1")
+	writeReviewedFile(t, repo, "capacity.js", "export function reserve(used, capacity, count) {\n  if (used + count > capacity) throw new Error('full');\n  return used + count;\n}\n")
+	runRemediationGit(t, repo, nil, "add", "-A")
+	runRemediationGit(t, repo, nil, "commit", "-q", "-m", "base")
+	base := strings.TrimSpace(string(runRemediationGit(t, repo, nil, "rev-parse", "HEAD")))
+	writeReviewedFile(t, repo, "capacity.js", "export function reserve(used, capacity, count) {\n  return used + count;\n}\n")
+	runRemediationGit(t, repo, nil, "commit", "-qam", "candidate")
+	head := strings.TrimSpace(string(runRemediationGit(t, repo, nil, "rev-parse", "HEAD")))
+	scope, err := reviewedDiffScope(t.Context(), t.TempDir(), repo, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for line := 1; line <= 3; line++ {
+		location := &domain.FindingLocation{Path: "capacity.js", StartLine: line, EndLine: line}
+		if scope.Overlaps(location) {
+			t.Errorf("pure deletion accepted unchanged candidate line %d", line)
+		}
+	}
+	if !scope.Overlaps(&domain.FindingLocation{Path: "capacity.js"}) {
+		t.Error("pure deletion rejected the touched path's whole-file location")
+	}
+}
+
 // TestReviewedDiffScopeRendersRenameAsDeleteAndAdd proves the derivation
 // disables git rename detection: a candidate that removes a file and adds a
 // similar one keeps both endpoints resolvable, so the candidate-deleted file's

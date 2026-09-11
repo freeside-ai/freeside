@@ -29,7 +29,7 @@ import (
 // normalization / strict-JSON decode, and (b) launch-spec mount + command + env
 // derivation. A diff-read asserts equivalence; this harness measures it.
 
-// Pin historical constants and the explicitly revised #1212 protocol versions
+// Pin historical constants and the explicitly revised #1212 and #1291 protocols
 // so evidence, labels, and topology cannot silently change.
 const (
 	baseSourceLabel               = "codex_local"
@@ -39,11 +39,12 @@ const (
 	// #1212 deliberately invalidates old configuration and completion approvals.
 	currentResultEvidenceVersion = "codex-review-result-v4"
 	currentConfigurationVersion  = "codex-review-configuration-v4"
-	basePromptProtocol           = "codex-production-review-prompt-v3"
+	// #1291 aligns location guidance with the existing diff-overlap gate.
+	currentPromptProtocol = "codex-production-review-prompt-v4"
 )
 
 // TestReviewProviderConstantsMatchBase pins the Codex provider's value seam to
-// the historical constants, except the deliberate #1212 version changes.
+// the historical constants, except the deliberate #1212 and #1291 changes.
 func TestReviewProviderConstantsMatchBase(t *testing.T) {
 	p := codexReviewProvider{}
 	cases := []struct {
@@ -57,7 +58,7 @@ func TestReviewProviderConstantsMatchBase(t *testing.T) {
 		{"completionEvidenceVersion", p.completionEvidenceVersion(), baseCompletionEvidenceVersion},
 		{"resultEvidenceVersion", p.resultEvidenceVersion(), currentResultEvidenceVersion},
 		{"configurationVersion", p.configurationVersion(), currentConfigurationVersion},
-		{"promptProtocol", p.promptProtocol(), basePromptProtocol},
+		{"promptProtocol", p.promptProtocol(), currentPromptProtocol},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {

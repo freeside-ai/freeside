@@ -100,7 +100,7 @@ func TestCodexProductionReviewPromptAppliesPrecisionFirstAdmissionBar(t *testing
 			t.Fatalf("production review prompt omitted %q:\n%s", want, prompt)
 		}
 	}
-	if codexProductionReviewPromptVersion != "codex-production-review-prompt-v3" {
+	if codexProductionReviewPromptVersion != "codex-production-review-prompt-v4" {
 		t.Fatalf("prompt protocol = %q", codexProductionReviewPromptVersion)
 	}
 }
