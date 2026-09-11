@@ -120,6 +120,9 @@ func main() {
 		case "follow":
 			runFollowMain(os.Args[2:])
 			return
+		case "pairing-code":
+			runPairingCodeMain(os.Args[2:])
+			return
 		case "enroll-codex":
 			runEnrollCodexMain(os.Args[2:])
 			return
@@ -499,6 +502,7 @@ type daemon struct {
 	driver        *fake.StageDriver
 	listener      net.Listener
 	server        *http.Server
+	pairing       *pairingControl
 	cancel        context.CancelFunc
 	sessionCloser sessionCloser
 	errs          chan error
@@ -530,6 +534,18 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}()
 	if cfg.StateDir == "" && cfg.Claude != nil {
 		cfg.StateDir = cfg.Claude.StateDir
+	}
+	var pairing *pairingControl
+	if cfg.StateDir != "" {
+		pairing, err = newPairingControl(cfg.StateDir)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if !lockTransferred {
+				_ = pairing.Close()
+			}
+		}()
 	}
 	if cfg.FakeDriverEnabled && cfg.FakeDriverDir == "" {
 		cfg.FakeDriverDir = cfg.DBPath + ".fake-stage-driver"
@@ -887,7 +903,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	d := &daemon{
 		lock:  lock,
 		store: st, attention: attention, workflow: workflow, driver: driver,
-		listener: listener, cancel: cancel, errs: make(chan error, 1),
+		listener: listener, pairing: pairing, cancel: cancel, errs: make(chan error, 1),
 		logger: logger, now: cfg.now,
 		server: &http.Server{
 			Handler: signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st), signet.HealthResponse{
@@ -898,6 +914,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	if claudeWiring != nil {
 		d.sessionCloser = claudeWiring.closer
+	}
+	if d.pairing != nil {
+		d.pairing.configure(d.readiness().APIURL, attention.MintPairingCode)
 	}
 	var fakeSched *scheduler.Scheduler
 	var claudeSched *scheduler.Scheduler
@@ -957,6 +976,15 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 		d.componentExited(parent, ctx, componentHTTP, err)
 	}()
+	if d.pairing != nil {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			if err := d.pairing.Serve(); !errors.Is(err, http.ErrServerClosed) {
+				d.componentExited(parent, ctx, componentPairingControl, err)
+			}
+		}()
+	}
 	if workflow != nil {
 		d.wg.Add(1)
 		go func() {
@@ -975,6 +1003,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			}
 			cancel()
 			_ = d.server.Close()
+			_ = d.pairing.Close()
 			d.wg.Wait()
 		}
 	}()
@@ -1028,6 +1057,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	d.pairingCode = pairingCode
 	if err := publishReadiness(cfg.StateDir, d.readiness()); err != nil {
 		return nil, err
+	}
+	if d.pairing != nil {
+		if err := d.pairing.publish(); err != nil {
+			return nil, err
+		}
 	}
 	success = true
 	lockTransferred = true
@@ -1154,8 +1188,9 @@ func (d *daemon) Close() error {
 		ctx, cancel := context.WithTimeout(context.Background(), serverShutdownBudget)
 		defer cancel()
 		shutdownErr := d.server.Shutdown(ctx)
+		pairingErr := d.pairing.Close()
 		d.wg.Wait()
-		d.closeErr = errors.Join(driverErr, shutdownErr, d.store.Close(), d.lock.Close())
+		d.closeErr = errors.Join(driverErr, shutdownErr, pairingErr, d.store.Close(), d.lock.Close())
 	})
 	return d.closeErr
 }

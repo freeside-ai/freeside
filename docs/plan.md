@@ -792,6 +792,14 @@ implementation exists.
   every start. Under a supervisor there is no terminal to read stdout, and
   same-user file readability is the same trust boundary as today's
   terminal. The stdout line remains for foreground runs.
+- An operator running as the daemon's OS user can request a fresh code with
+  `freesided pairing-code -state-dir <existing-state-directory>`. A private
+  Unix socket authenticates kernel peer credentials on macOS and Linux and
+  calls the running daemon's existing mint service. Its private advertisement
+  is separate from startup readiness; a conflicting owner is refused and
+  shutdown removes only owned control resources. The command prints the
+  endpoint, code and expiry, without restarting or changing the workflow.
+  There is no network mint route or new paired-device authority.
 - The away-from-host liveness probe stays outside the process (Section [5.16](#516-the-durable-scheduler)
   keeps process heartbeats as plain tickers). An external probe polls
   `/health` and notifies over ntfy when the daemon is unreachable or
@@ -2408,6 +2416,13 @@ the same revision, epoch, and read-transaction guarantees below as run data.
 Pairing uses a short-lived code shown or printed on the daemon host; no display
 is assumed. The daemon stores only a credential hash or a device public key,
 never reusable plaintext. Devices can be revoked.
+
+Host renewal uses the same ten-minute, single-use minting contract as startup.
+It creates another code without extending, overwriting or deleting old code
+records, changing existing device credentials or revocation, or advancing the
+client revision. Only the running daemon writes the code record; the host CLI
+does not open the database. Codes appear only in private host output, never
+ordinary logs. Renewal does not submit, approve, revise or resume work.
 
 Device identity is independent of network identity. Tailscale identity is never
 Freeside device identity or authorization. Every supported reachability mode
