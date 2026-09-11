@@ -177,7 +177,7 @@ func TestClaudeReviewProviderConstants(t *testing.T) {
 		{"completionEvidenceVersion", p.completionEvidenceVersion(), "claude-review-completion-v1"},
 		{"resultEvidenceVersion", p.resultEvidenceVersion(), "claude-review-result-v1"},
 		{"configurationVersion", p.configurationVersion(), "claude-review-configuration-v1"},
-		{"promptProtocol", p.promptProtocol(), "claude-production-review-prompt-v1"},
+		{"promptProtocol", p.promptProtocol(), "claude-production-review-prompt-v2"},
 		{"reviewContainerSuffix", p.reviewContainerSuffix(), "-claude"},
 		{"homeTarget", p.homeTarget(), claudeReviewHome},
 		{"configHomeTarget", p.configHomeTarget(), claudeReviewConfigTarget},

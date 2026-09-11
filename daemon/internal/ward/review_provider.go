@@ -13,8 +13,9 @@ import (
 // severity scale, each carrying a file location and an explanation. A location
 // is one of two variants (a JSON-Schema anyOf): the concrete new-side line
 // range {path, start_line≥1, end_line≥1}, or the whole-file marker
-// {path, whole_file:true} for a finding on a candidate-deleted file — which has
-// no new-side line — or an otherwise wholly file-level finding (§7, #855). The
+// {path, whole_file:true} for a finding caused by a pure-deletion hunk with no
+// relevant changed new-side line, a candidate-deleted file, or an otherwise
+// wholly file-level finding (§7, #855). The
 // two variants are mutually exclusive: additionalProperties:false lets each
 // object carry only its own fields. anyOf (not oneOf) is used because it is the
 // union form OpenAI structured outputs supports; the range variant is byte-for-
@@ -24,7 +25,7 @@ import (
 // Codex passes the schema via --output-schema (from a file); Claude passes it
 // inline via --json-schema. Both providers share this single literal so the two
 // runtimes can never drift on the severity scale or the location shape.
-const reviewFindingsJSONSchema = `{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["P0","P1","P2","P3"]},"location":{"anyOf":[{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1}},"required":["path","start_line","end_line"],"additionalProperties":false},{"type":"object","properties":{"path":{"type":"string"},"whole_file":{"type":"boolean","enum":[true],"description":"Set true only for a finding on a candidate-deleted file (no new-side line) or an otherwise wholly file-level finding; use the start_line/end_line range for every finding with concrete new-side lines."}},"required":["path","whole_file"],"additionalProperties":false}]},"explanation":{"type":"string"}},"required":["severity","location","explanation"],"additionalProperties":false}}},"required":["findings"],"additionalProperties":false}`
+const reviewFindingsJSONSchema = `{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["P0","P1","P2","P3"]},"location":{"description":"Use a canonical repository-relative path in the exact reviewed diff. Concrete ranges are inclusive, 1-based candidate-side lines, with end_line >= start_line, and must overlap at least one changed line. Anchor on the causal change, not an unchanged failure site; do not pad a range. When a relevant candidate-side changed line exists, use a concrete range, not whole_file.","anyOf":[{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1}},"required":["path","start_line","end_line"],"additionalProperties":false},{"type":"object","properties":{"path":{"type":"string"},"whole_file":{"type":"boolean","enum":[true],"description":"Set true for a finding caused by a pure-deletion hunk with no relevant candidate-side changed line: use the touched path and identify the removed code and its causal failure precisely in the explanation. Also allowed for a candidate-deleted file (no new-side line) or an otherwise wholly file-level finding on a changed file. When a relevant candidate-side changed line exists, use a concrete range; never substitute whole_file for a concrete location that fails overlap."}},"required":["path","whole_file"],"additionalProperties":false}]},"explanation":{"type":"string"}},"required":["severity","location","explanation"],"additionalProperties":false}}},"required":["findings"],"additionalProperties":false}`
 
 // review_provider.go carries the provider-neutral seam of the review runtime
 // (#872). The Codex ReviewSource and the forthcoming Claude shadow ReviewSource
@@ -58,7 +59,7 @@ type reviewProvider interface {
 	// "codex-review-configuration-v3").
 	configurationVersion() string
 	// promptProtocol identifies the review prompt contract carried in the
-	// configuration envelope (Codex: "codex-production-review-prompt-v3").
+	// configuration envelope (Codex: "codex-production-review-prompt-v4").
 	promptProtocol() string
 	// reviewCommand builds the in-container review argv from the read-only
 	// workspace target and the deployment-pinned model configuration.

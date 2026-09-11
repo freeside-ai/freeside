@@ -25,7 +25,7 @@ import (
 
 var ErrCodexReviewOutcomeNotFound = errors.New("codex review outcome not found")
 
-const codexProductionReviewPromptVersion = "codex-production-review-prompt-v3"
+const codexProductionReviewPromptVersion = "codex-production-review-prompt-v4"
 
 const codexProductionReviewRules = `Apply these daemon-owned Freeside review rules:
 1. Trust re-derivation
@@ -658,6 +658,12 @@ Apply a precision-first admission test focused on correctness, security, data lo
 - It is discrete and actionable.
 - It is not speculative, pre-existing, or merely stylistic.
 - It survives a deliberate attempt to falsify it against the code and diff.
+
+Locate each finding using a canonical repository-relative path in the exact reviewed diff:
+- Concrete ranges use inclusive, 1-based candidate-side line numbers and must overlap at least one changed line. Keep the range tight and its end at or after its start.
+- When a change makes unchanged code incorrect, anchor the finding on the causal changed line and explain the failure in the unchanged code. Do not pad the range to manufacture overlap or cite an unrelated change.
+- For a finding caused by a pure-deletion hunk with no relevant candidate-side changed line, use whole_file:true on the touched path and identify the removed code and its causal failure precisely in the explanation.
+- Also use whole_file:true for a candidate-deleted file with no new-side line, or an otherwise wholly file-level finding on a changed file. When a relevant candidate-side changed line exists, use a concrete range; never substitute whole_file for a concrete location that fails overlap.
 
 %s
 
