@@ -711,6 +711,7 @@ func isCommandRequestError(err error) bool {
 // possibly-committed 5xx that holds its pending slot and replays forever.
 func isCommandAuthorityRejection(err error) bool {
 	for _, target := range []error{
+		ErrDoctorUnavailable,
 		ErrProposalSnoozed,
 		domain.ErrReviewConfigAdoptionIneffective,
 		domain.ErrReviewConfigSupersessionInvalid,

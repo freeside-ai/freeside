@@ -21,6 +21,7 @@ import (
 func TestWriteCommandErrorClassifiesAuthorityRejections(t *testing.T) {
 	t.Parallel()
 	for _, sentinel := range []error{
+		ErrDoctorUnavailable,
 		domain.ErrReviewConfigAdoptionIneffective,
 		domain.ErrReviewConfigSupersessionInvalid,
 		domain.ErrReviewConfigRecoveryBindingMissing,

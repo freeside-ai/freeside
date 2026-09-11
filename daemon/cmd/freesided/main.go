@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -665,12 +666,14 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		workflow              *engine.Engine
 		claudeWiring          *claudeComposition
 		doctorConvergenceLock sync.Mutex
+		doctorAvailable       atomic.Bool
 	)
 	attention := signet.NewService(st,
 		signet.WithPairingKey(pairingKey),
 		signet.WithHostFacts(signet.HostFacts{DisplayName: hostName, ConnectionMode: connectionMode}),
 		signet.WithClock(cfg.now),
 		signet.WithLogger(cfg.Logger),
+		signet.WithDoctorSchedule(doctorScheduleID, doctorAvailable.Load),
 		signet.WithBlobStore(blobs),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: cfg.NtfyURL, TopicKey: topicKey,
@@ -990,6 +993,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	if claudeSched != nil {
 		d.wg.Add(4)
+		doctorAvailable.Store(true)
 		// The production publication lane gets its own loop: one task holds a
 		// clone, a containerized verification, and GitHub calls for minutes,
 		// which inside the reconcile loop would stall every other run,
@@ -1001,8 +1005,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}()
 		go func() {
 			defer d.wg.Done()
-			d.componentExited(parent, ctx, componentScheduler,
-				claudeSched.Run(ctx, cfg.SchedulerInterval))
+			err := claudeSched.Run(ctx, cfg.SchedulerInterval)
+			doctorAvailable.Store(false)
+			d.componentExited(parent, ctx, componentScheduler, err)
 		}()
 		go func() {
 			defer d.wg.Done()
