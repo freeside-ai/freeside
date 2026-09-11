@@ -24,6 +24,8 @@ type ReviewHostInstructions struct {
 	Body    []byte
 }
 
+var errReviewInstructionsRefused = errors.New("review instructions refused")
+
 func (h ReviewHostInstructions) validate() error {
 	if !h.Present {
 		if h.Digest != "" || len(h.Body) != 0 {
@@ -84,7 +86,9 @@ func (w *productionPublicationWorkflow) composeReviewInstructions(
 	}
 	bundle, binding, err := exec.ComposeCodexReviewInstructions(host, sources)
 	if err != nil {
-		return exec.ReviewInstructionBinding{}, err
+		// The pure composer rejects instruction content or its delivery budget;
+		// filesystem and artifact-store failures retain their original errors.
+		return exec.ReviewInstructionBinding{}, fmt.Errorf("%w: %w", errReviewInstructionsRefused, err)
 	}
 	if w.reviewHostInstructions.Present &&
 		(binding.HostDigest == nil || *binding.HostDigest != w.reviewHostInstructions.Digest) {
@@ -177,8 +181,8 @@ func readExactBaseReviewInstruction(path string, remaining int64) ([]byte, error
 		return nil, errors.Join(readErr, closeErr)
 	}
 	if int64(len(body)) > remaining {
-		return nil, fmt.Errorf("exact-base review instructions exceed %d bytes",
-			domain.MaxVendorInstructionBytes)
+		return nil, fmt.Errorf("%w: exact-base review instructions exceed %d bytes",
+			errReviewInstructionsRefused, domain.MaxVendorInstructionBytes)
 	}
 	return body, nil
 }

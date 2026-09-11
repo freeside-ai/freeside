@@ -2256,8 +2256,25 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	}
 	var reviewInstructions exec.ReviewInstructionBinding
 	if !w.holdOnly {
-		reviewInstructions, err = w.composeReviewInstructions(checkoutDir)
+		// FetchBase deliberately leaves the import worktree empty. Discover
+		// instructions in a separate materialization of its pinned base, before
+		// importing any candidate-controlled files into the original checkout.
+		instructionDir := filepath.Join(scratch, "base-instructions")
+		if err := w.transport.RetainWorktree(ctx, checkout, instructionDir, binding.admission.Base.BaseSHA); err != nil {
+			if errors.Is(err, publish.ErrMaterializationRefused) {
+				return w.holdBlockedTask(ctx, task, importer.Result{CommitSHA: task.HeadSHA},
+					"Publication is durably held because the trusted base cannot be materialized for review instructions. Resolve the repository materialization problem before retrying.",
+					domain.HoldTrustBlocked)
+			}
+			return productionTaskOutcome{}, fmt.Errorf("materialize exact-base review instructions: %w", err)
+		}
+		reviewInstructions, err = w.composeReviewInstructions(instructionDir)
 		if err != nil {
+			if errors.Is(err, errReviewInstructionsRefused) {
+				return w.holdBlockedTask(ctx, task, importer.Result{CommitSHA: task.HeadSHA},
+					"Publication is durably held because the trusted review instructions cannot be composed within the approved delivery limits. Resolve the instruction configuration problem before retrying.",
+					domain.HoldTrustBlocked)
+			}
 			return productionTaskOutcome{}, fmt.Errorf(
 				"compose exact-base review instructions: %w", err)
 		}
