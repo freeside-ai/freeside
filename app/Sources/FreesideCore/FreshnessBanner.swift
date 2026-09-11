@@ -62,6 +62,18 @@ struct FreshnessBanner: View {
                 wash: .accentWashSoft,
                 foreground: .ink
             )
+        case .contractMismatch(let daemonContract):
+            banner(
+                """
+                Daemon contract \(ContractDigestDisplay.short(daemonContract)), \
+                app built for \(ContractDigestDisplay.shortClient) — update the daemon \
+                or the app. Showing cached items; actions are disabled.
+                """,
+                keyword: "Mismatch",
+                tint: .accentText,
+                wash: .accentWashSoft,
+                foreground: .ink
+            )
         case .unauthenticated:
             banner(
                 "This device's access was revoked. Cached items stay readable; actions are disabled.",

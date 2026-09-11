@@ -11,6 +11,16 @@ import Testing
         let first = try await client.getHealth().ok.body.json
         #expect(first.status == .ok)
         #expect(first.version == "mock")
+        // By default the mock serves this client's own contract digest, so a
+        // client built from the same spec sees a match; the mutator can serve
+        // a foreign one to exercise the skew diagnosis.
+        #expect(first.contract_digest == APIContract.digest)
+
+        let foreign = "sha256:" + String(repeating: "b", count: 64)
+        await server.setHealthContractDigest(foreign)
+        let skewed = try await client.getHealth().ok.body.json
+        #expect(skewed.contract_digest == foreign)
+        await server.setHealthContractDigest(APIContract.digest)
 
         let restartedAt = Date(timeIntervalSince1970: 1_725_184_860)
         await server.restart(version: "mock-2", startedAt: restartedAt)

@@ -97,23 +97,24 @@ paths:
     get:
       operationId: getHealth
       tags: [health]
-      summary: Process liveness, version, and start time
+      summary: Process liveness, contract identity, version, and start time
       # Unauthenticated by design, with POST /pairing: the callers are
       # supervisors, external liveness probes, and the operator surface
       # deciding whether a daemon is up at all, none of which holds a
       # device credential (plan §5.2).
       security: []
       description: |
-        Answers only "is the daemon process up, which build, since when."
-        Supervisors and the external liveness probe poll it (plan §5.2);
-        the operator client uses `version` for skew detection and
-        `started_at` for restart visibility (a start time that keeps
-        moving under a supervisor is crash-loop evidence). The response
-        deliberately carries no operational state: unattended-admission
-        stops, `system_health` items, and everything else requiring
-        judgment stay on the authenticated surfaces (plan §4), so this
-        route widens what an unpaired caller learns by nothing beyond
-        liveness, version, and start time.
+        Answers only "is the daemon process up, which build and API
+        contract, since when." Supervisors and the external liveness probe
+        poll it (plan §5.2); the operator client uses `contract_digest`
+        for client/daemon contract-skew detection, `version` for the human
+        build label, and `started_at` for restart visibility (a start time
+        that keeps moving under a supervisor is crash-loop evidence). The
+        response deliberately carries no operational state:
+        unattended-admission stops, `system_health` items, and everything
+        else requiring judgment stay on the authenticated surfaces (plan
+        §4), so this route widens what an unpaired caller learns by nothing
+        beyond liveness, contract identity, version, and start time.
       responses:
         "200":
           description: The process is up.
@@ -2187,18 +2188,28 @@ components:
         liveness is proven by answering; degraded operational states are
         deliberately not disclosed here (plan §4 owns them, behind
         authentication).
-      required: [status, version, started_at]
+      required: [status, contract_digest, version, started_at]
       additionalProperties: false
       properties:
         status:
           type: string
           enum: [ok]
           description: Fixed at `ok`; liveness is proven by answering at all.
+        contract_digest:
+          type: string
+          pattern: "^sha256:[0-9a-f]{64}$"
+          description: >
+            Identifies the api/openapi.yaml this daemon was built from:
+            "sha256:" plus the lowercase hex SHA-256 of the spec's exact
+            bytes. A client built from a different spec must not expect to
+            sync; it compares this with its own compiled-in digest to
+            diagnose a contract skew instead of a silent sync failure.
         version:
           type: string
           minLength: 1
           description: >
-            The daemon build version, for operator-client skew detection.
+            The daemon build version: a human-readable build label, not a
+            contract identity (see `contract_digest`).
         started_at:
           type: string
           format: date-time
@@ -2208,6 +2219,7 @@ components:
             crash-loop evidence.
       example:
         status: "ok"
+        contract_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
         version: "0.1.0"
         started_at: "2026-01-02T03:04:05Z"
 

@@ -14,11 +14,13 @@ on:
     paths:
       - "api/**"
       - "scripts/check.sh"
+      - "scripts/api-contract-digest.sh"
       - ".github/workflows/api-ci.yml"
   pull_request:
     paths:
       - "api/**"
       - "scripts/check.sh"
+      - "scripts/api-contract-digest.sh"
       - ".github/workflows/api-ci.yml"
 
 permissions:

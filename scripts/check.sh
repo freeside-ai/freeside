@@ -14,7 +14,7 @@
 # Components and steps (`--list` prints the same table):
 #   daemon       build test vet lint
 #   app          generate format test build-mac build-ios
-#   api          lint
+#   api          lint digest
 #   scripts      syntax shellcheck suites vocabulary trackercollect
 #   convergence  run
 #   docs         plan-links
@@ -52,7 +52,7 @@ steps_for() { # <component>; prints the component's steps in default order
   case $1 in
     daemon) echo 'build test vet lint' ;;
     app) echo 'generate format test build-mac build-ios' ;;
-    api) echo 'lint' ;;
+    api) echo 'lint digest' ;;
     scripts) echo 'syntax shellcheck suites vocabulary trackercollect' ;;
     convergence) echo 'run' ;;
     docs) echo 'plan-links' ;;
@@ -139,6 +139,7 @@ api_lint() {
   in_dir "$ROOT" $VACUUM lint -r api/vacuum.ruleset.yaml --details \
     --fail-severity warn api/openapi.yaml
 }
+api_digest() { in_dir "$ROOT" bash scripts/api-contract-digest.sh --check; }
 
 # --- scripts ---------------------------------------------------------------
 

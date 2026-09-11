@@ -639,6 +639,37 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         await recover()
     }
 
+    @Test func aFailingReadAgainstAMismatchedContractSurfacesContractMismatch() async throws {
+        // A reachable-but-failing sync read against a daemon whose /health
+        // reports a contract digest different from this client's is
+        // diagnosed as a contract skew, not a generic sync failure. The same
+        // failure with a matching digest stays .syncFailing, and a transport
+        // outage (no /health answer at all) stays .unreachable.
+        let foreign = "sha256:" + String(repeating: "a", count: 64)
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        #expect(coordinator.store.freshness == .fresh)
+
+        await server.setHealthContractDigest(foreign)
+        await server.setBeforeRespond { op in
+            if op == "getSyncBootstrap" { throw MockServer.ForcedStatus(500) }
+        }
+        await coordinator.bootstrap()
+        #expect(coordinator.store.freshness == .contractMismatch(daemonContract: foreign))
+
+        // The identical failure, now with a matching digest, is not a skew.
+        await server.setHealthContractDigest(APIContract.digest)
+        await coordinator.bootstrap()
+        #expect(coordinator.store.freshness == .syncFailing)
+
+        // A transport outage silences /health too, so it stays .unreachable
+        // rather than being misreported as a skew.
+        await server.setBeforeRespond { _ in throw MockOutage() }
+        await coordinator.heartbeat()
+        #expect(coordinator.store.freshness == .unreachable)
+    }
+
     @Test func answered200WithUndecodableBodySurfacesSyncFailing() async throws {
         // Schema skew: the daemon answers 200 but the body does not match
         // this client's schema, so `ok.body.json` throws. That is an

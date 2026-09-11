@@ -112,7 +112,8 @@ setup_repo() {
 
   mkdir -p "$REPO/api" \
     "$REPO/app/Sources/FreesideAPI/GeneratedSources" \
-    "$REPO/app/scripts" "$REPO/.githooks"
+    "$REPO/app/scripts" "$REPO/scripts" \
+    "$REPO/daemon/internal/signet" "$REPO/.githooks"
   printf 'schema: v1\n' >"$REPO/api/openapi.yaml"
   cp "$REPO/api/openapi.yaml" "$REPO/app/Sources/FreesideAPI/openapi.yaml"
   printf 'generator: config\n' \
@@ -126,6 +127,12 @@ setup_repo() {
   cp "$ROOT/app/scripts/generate-api-client.sh" \
     "$REPO/app/scripts/generate-api-client.sh"
   chmod +x "$REPO/app/scripts/generate-api-client.sh"
+  # generate-api-client.sh regenerates the contract-digest constants through
+  # this helper, so the fixture needs it and its output dirs (created above)
+  # for a schema-changing case to reach the generator instead of aborting.
+  cp "$ROOT/scripts/api-contract-digest.sh" \
+    "$REPO/scripts/api-contract-digest.sh"
+  chmod +x "$REPO/scripts/api-contract-digest.sh"
   cp "$ROOT/.githooks/pre-commit" "$REPO/.githooks/pre-commit"
   chmod +x "$REPO/.githooks/pre-commit"
 

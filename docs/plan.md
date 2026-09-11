@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 56
+revision: 57
 status: active
-updated: 2026-09-10
+updated: 2026-09-11
 ---
 
 # Freeside
@@ -776,9 +776,12 @@ implementation exists.
 
 **Liveness and address.**
 
-- Unauthenticated `GET /health` returns exactly `{status, version,
-  started_at}`: liveness, version-skew detection, and crash-loop evidence (a
-  moving start time under a supervisor). Everything richer stays on the
+- Unauthenticated `GET /health` returns exactly `{status, contract_digest,
+  version, started_at}`: liveness, API contract-skew detection
+  (`contract_digest`, the SHA-256 of `api/openapi.yaml`, so a client and
+  daemon built from different specs are diagnosed rather than silently
+  failing to sync), the build version, and crash-loop evidence (a moving
+  start time under a supervisor). Everything richer stays on the
   authenticated surfaces (Sections [4](#4-the-attention-model) and [5.14](#514-client-synchronization-and-conversations)); the route tells an unpaired
   caller nothing more.
 - Under supervision, the unit file sets an explicit fixed loopback listen
@@ -4389,16 +4392,18 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 56 ("Retain Failed Writer Diagnostics"):
+Revision 57 ("API Contract Digest on /health"):
 
-1. **Failed writers retain bounded sensitive diagnostics before cleanup.**
-   A nonzero exit still forbids source export. Reuse the stopped writer's
-   outcome observer and established sensitive-evidence mechanism to retain
-   only its declared transcript. Journal the capture disposition before
-   teardown; storage failures preserve the source for recovery. This closes
-   the diagnostic gap without accepting partial edits or rerunning a provider.
-   (User assignment; implementation decision for #1286;
-   devlog 2026-09-10-1219-failed-writer-transcripts.md.)
+1. **`GET /health` carries a spec-derived contract digest for client/daemon
+   skew detection.** The daemon reports `contract_digest` (`sha256:` of
+   `api/openapi.yaml`'s exact bytes) beside the build `version`, compiled into
+   a daemon constant and a Swift client constant that cannot drift from the
+   spec. On a sync read that fails as reachable-but-failing, the client probes
+   `/health` and, when the reported digest differs from its own, reports a
+   contract-skew state instead of a generic sync failure. Whole-contract
+   detection; per-feature gating (#1266), version tolerance, and proactive
+   skew polling are non-goals. (User assignment; implementation decision for
+   #1265; devlog 2026-09-11-1012-contract-digest-skew.md.)
 
 ## 14. Risks
 

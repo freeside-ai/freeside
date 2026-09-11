@@ -14,7 +14,10 @@
 # The hook stages nothing; it regenerates, compares, and prints the paths to
 # `git add`. A `git commit <pathspec>` that omits the regenerated output is
 # refused for the same reason: the commit would ship a schema without its
-# client.
+# client. Regeneration also refreshes the contract-digest constants
+# (app/Sources/FreesideAPI/ContractDigest.swift and
+# daemon/internal/signet/contract_digest.go), so a spec change that omits
+# them is refused here too.
 set -euo pipefail
 
 # Merge commits are exempt, matching commit-msg. git runs this hook for the

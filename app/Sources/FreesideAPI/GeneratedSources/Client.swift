@@ -54,18 +54,19 @@ public struct Client: APIProtocol {
     private var converter: Converter {
         client.converter
     }
-    /// Process liveness, version, and start time
+    /// Process liveness, contract identity, version, and start time
     ///
-    /// Answers only "is the daemon process up, which build, since when."
-    /// Supervisors and the external liveness probe poll it (plan §5.2);
-    /// the operator client uses `version` for skew detection and
-    /// `started_at` for restart visibility (a start time that keeps
-    /// moving under a supervisor is crash-loop evidence). The response
-    /// deliberately carries no operational state: unattended-admission
-    /// stops, `system_health` items, and everything else requiring
-    /// judgment stay on the authenticated surfaces (plan §4), so this
-    /// route widens what an unpaired caller learns by nothing beyond
-    /// liveness, version, and start time.
+    /// Answers only "is the daemon process up, which build and API
+    /// contract, since when." Supervisors and the external liveness probe
+    /// poll it (plan §5.2); the operator client uses `contract_digest`
+    /// for client/daemon contract-skew detection, `version` for the human
+    /// build label, and `started_at` for restart visibility (a start time
+    /// that keeps moving under a supervisor is crash-loop evidence). The
+    /// response deliberately carries no operational state:
+    /// unattended-admission stops, `system_health` items, and everything
+    /// else requiring judgment stay on the authenticated surfaces (plan
+    /// §4), so this route widens what an unpaired caller learns by nothing
+    /// beyond liveness, contract identity, version, and start time.
     ///
     ///
     /// - Remark: HTTP `GET /health`.
