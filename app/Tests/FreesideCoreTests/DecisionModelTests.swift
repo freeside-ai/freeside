@@ -38,6 +38,44 @@ import Testing
         #expect(model.actionsEnabled)
     }
 
+    @Test func inspectTrustFailureRecordsEngagementAfterDetailsReveal() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-publish_blocked")
+        await model.validate()
+        await server.setBeforeRespond { operation in
+            if operation == "recordComprehensionEvent" { throw CancellationError() }
+        }
+        // Requesting the action cannot record engagement. Only the view's
+        // subsequent details-revealed callback may submit the inspection.
+        await model.submit(.inspect_trust_failure)
+        #expect(model.pendingCommand == nil)
+        #expect(model.appliedRecord == nil)
+        #expect(store.comprehensionQueue.isEmpty)
+
+        await model.recordTrustFailureInspection()
+
+        #expect(model.appliedRecord?.action == .inspect_trust_failure)
+        #expect(model.snapshot?.item.status == .open)
+        #expect(model.actionsEnabled)
+        #expect(
+            store.comprehensionQueue.filter {
+                $0.input.kind == .details_opened_before_acting
+            }.count == 1)
+    }
+
+    @Test func inspectTrustFailureWithoutNavigationDoesNotRecordEngagement() async {
+        let store = await makeStore(server: MockServer())
+        let model = DecisionModel(store: store, itemID: "item-publish_blocked")
+        await model.validate()
+
+        await model.submit(.inspect_trust_failure)
+
+        #expect(model.pendingCommand == nil)
+        #expect(model.appliedRecord == nil)
+        #expect(model.submissionError == "the trust details could not be opened")
+    }
+
     @Test func degradedReadySummarySurvivesMockSyncAndDrivesDisplay() async {
         let degraded = AttentionFixtures.degradedReady()
         let store = await makeStore(server: MockServer(items: [degraded]))

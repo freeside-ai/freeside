@@ -655,6 +655,12 @@ public final class DecisionModel {
         return submissionClaimGeneration != generationBefore
     }
 
+    // Called by the view only after its platform details handler has
+    // presented and scrolled the inspection destination.
+    func recordTrustFailureInspection() async {
+        await submit(.inspect_trust_failure, trustDetailsRevealed: true)
+    }
+
     public func submit(_ action: Components.Schemas.Action) async {
         await submit(
             action, revision: nil, snoozeUntil: nil, alternativeChoices: nil,
@@ -699,7 +705,8 @@ public final class DecisionModel {
         alternativeChoices: [Components.Schemas.AlternativeChoice]? = nil,
         message: String? = nil,
         answerRoute: Components.Schemas.AnswerRoute? = nil,
-        reviewedSnapshot: Components.Schemas.AttentionItemSnapshot? = nil
+        reviewedSnapshot: Components.Schemas.AttentionItemSnapshot? = nil,
+        trustDetailsRevealed: Bool = false
     ) async {
         guard actionsEnabled, isSubmittable(action), let snapshot else { return }
         if let reviewedSnapshot {
@@ -770,6 +777,13 @@ public final class DecisionModel {
                 submissionError = "the pull request could not be opened"
                 return
             }
+        }
+        if action == .inspect_trust_failure {
+            guard trustDetailsRevealed else {
+                submissionError = "the trust details could not be opened"
+                return
+            }
+            emitDetailsOpenedBeforeActing()
         }
         // The command claims the item's in-flight slot and durably records
         // itself before the first byte leaves: a card recreated mid-flight
