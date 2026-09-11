@@ -36,6 +36,7 @@ func TestBuildVersionPrefersStampedValue(t *testing.T) {
 func TestExitClassificationIsComplete(t *testing.T) {
 	want := map[componentKind]exitDisposition{
 		componentHTTP:                  exitRestartSafe,
+		componentPairingControl:        exitRestartSafe,
 		componentWorkflow:              exitDurableStop,
 		componentLocalBackups:          exitDurableStop,
 		componentScheduler:             exitDurableStop,

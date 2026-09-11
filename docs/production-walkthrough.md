@@ -31,6 +31,22 @@ identities, and rechecks policy, evidence and the exact published head. It does
 not migrate the database or create missing backup keys or artifact directories.
 Both a successful exit and the explicit verification success marker are required.
 
+If pairing has not finished before the startup code expires, keep the session
+running and use its retained binary to request a fresh code as the daemon's OS
+user:
+
+```sh
+/absolute/session/freesided pairing-code \
+  -state-dir "$(cat /absolute/session/state-root)"
+```
+
+Use the active campaign's state directory and the returned `api_url`, not the
+normal installed service's endpoint. The command prints a private code and its
+ten-minute expiry. Keep that output out of shared logs and evidence; record a
+redacted mint/preview receipt and successful client pairing instead. Renewal
+does not consume or create a workflow attempt, restart the session, or authorize
+another submission. Any campaign-specific minting budget still applies.
+
 During the walkthrough, fetch the printed run on both paired clients and exercise
 its offered ready-card actions. Record which actions actually ran, the run and
 invocation IDs, endpoint, and the published head that final verification checked.

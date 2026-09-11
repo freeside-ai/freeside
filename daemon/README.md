@@ -34,6 +34,34 @@ authorization. Its token stays in process memory and must not be printed.
 - **Scope boundary:** daemon-side code only. The daemon/client contract is defined in `api/`; server-side code implementing it lives here, never hand-authored to diverge from the spec.
 - **Status:** every lane in `internal/` holds real, tested Go code, not placeholders, and the daemon builds as `freesided` (`cmd/freesided`). Per-wave implementation progress lives in the pinned `Wave N (…) tracking` issue, resolved by the plan's [wave-tracker rule](../docs/plan.md#implementation-coordination-building-freeside-with-agents).
 
+## Renew A Pairing Code
+
+If the startup code expires, run this command as the daemon's OS user:
+
+```sh
+freesided pairing-code -state-dir /path/to/existing/daemon-state
+```
+
+The daemon must already be running with that `-state-dir`. The command prints
+one JSON object with `api_url`, `pairing_code` and `expires_at`. Treat stdout
+as private pairing material. The code expires after ten minutes and can enroll
+one device; ordinary daemon logs do not contain it. Existing codes retain
+their original expiry and redemption state.
+
+The CLI contacts the daemon through its private `pairing-control.json`
+advertisement and Unix socket. Both ends check kernel peer credentials on
+macOS and Linux. The socket lives in a short `0700` temporary directory because
+macOS cannot bind Unix sockets under long state paths; the socket and
+advertisement are `0600`. A state-directory lock prevents competing daemons
+from replacing a live advertisement. Normal shutdown removes only the control
+resources it created. A restart uses a fresh socket, without deleting unknown
+leftovers from a crash.
+
+Renewal uses the running daemon's existing mint service. It does not open the
+database from the CLI, restart the daemon, change work or grant paired devices
+host authority. A wrong or unavailable endpoint fails. The network API offers
+only the existing pairing preview and redemption, never code minting.
+
 ## Testing conventions
 
 **Template store.** Use `storetest.Open(t, path, opts)` from

@@ -57,6 +57,7 @@ type componentKind string
 
 const (
 	componentHTTP                  componentKind = "http"
+	componentPairingControl        componentKind = "pairing_control"
 	componentWorkflow              componentKind = "workflow"
 	componentLocalBackups          componentKind = "local_backups"
 	componentScheduler             componentKind = "scheduler"
@@ -69,6 +70,7 @@ const (
 // AllComponentKinds is the complete exit-classification registration set.
 var AllComponentKinds = []componentKind{
 	componentHTTP,
+	componentPairingControl,
 	componentWorkflow,
 	componentLocalBackups,
 	componentScheduler,
@@ -81,6 +83,7 @@ var AllComponentKinds = []componentKind{
 func (k componentKind) valid() bool {
 	switch k {
 	case componentHTTP,
+		componentPairingControl,
 		componentWorkflow,
 		componentLocalBackups,
 		componentScheduler,
@@ -127,7 +130,7 @@ func classifyComponentExit(kind componentKind) exitDisposition {
 		componentActiveResource,
 		componentLabelIntake:
 		return exitDurableStop
-	case componentHTTP:
+	case componentHTTP, componentPairingControl:
 		return exitRestartSafe
 	case componentPanic:
 		return exitInvoluntary
