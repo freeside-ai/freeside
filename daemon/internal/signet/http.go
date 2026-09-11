@@ -37,6 +37,9 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 		health = configuredHealth[0]
 	}
 	health.Status = "ok"
+	// The contract digest identifies the compiled-in spec and must not be
+	// overridable by a caller, the way Status is forced to "ok".
+	health.ContractDigest = APIContractDigest
 	h := httpHandler{service: service, authorize: authorize, health: health}
 	mux := http.NewServeMux()
 	// GET /health, POST /pairing, and POST /pairing/preview are the
@@ -80,12 +83,14 @@ type httpHandler struct {
 }
 
 // HealthResponse is the deliberately minimal unauthenticated liveness
-// response from plan §5.2. Status is fixed at "ok" by the HTTP boundary;
-// richer operational state remains behind authenticated routes.
+// response from plan §5.2. Status is fixed at "ok" and ContractDigest at
+// the compiled-in APIContractDigest by the HTTP boundary; richer
+// operational state remains behind authenticated routes.
 type HealthResponse struct {
-	Status    string    `json:"status"`
-	Version   string    `json:"version"`
-	StartedAt time.Time `json:"started_at"`
+	Status         string    `json:"status"`
+	ContractDigest string    `json:"contract_digest"`
+	Version        string    `json:"version"`
+	StartedAt      time.Time `json:"started_at"`
 }
 
 func (h httpHandler) getHealth(w http.ResponseWriter, _ *http.Request) {

@@ -112,9 +112,10 @@ func (h productionRigHost) ProbeDaemon(
 		return fmt.Sprintf("process answering HTTP %d", response.StatusCode), true, nil
 	}
 	var health struct {
-		Status    string    `json:"status"`
-		Version   string    `json:"version"`
-		StartedAt time.Time `json:"started_at"`
+		Status         string    `json:"status"`
+		ContractDigest string    `json:"contract_digest"`
+		Version        string    `json:"version"`
+		StartedAt      time.Time `json:"started_at"`
 	}
 	if err := strictjson.DecodeReader(
 		response.Body, &health, strictjson.RejectInvalidUTF8, strictjson.Limit(16<<10),

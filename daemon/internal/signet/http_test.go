@@ -56,10 +56,14 @@ func TestHTTPHealthIsMinimalAndUnauthenticated(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode health: %v", err)
 	}
-	if len(body) != 3 {
-		t.Fatalf("health keys = %v, want exactly status, version, started_at", body)
+	if len(body) != 4 {
+		t.Fatalf("health keys = %v, want exactly status, contract_digest, version, started_at", body)
 	}
-	if string(body["status"]) != `"ok"` || string(body["version"]) != `"v1.2.3"` ||
+	// The handler forces the contract digest to the compiled-in constant, so
+	// no caller can serve a digest that disagrees with the built spec.
+	wantDigest := `"` + signet.APIContractDigest + `"`
+	if string(body["status"]) != `"ok"` || string(body["contract_digest"]) != wantDigest ||
+		string(body["version"]) != `"v1.2.3"` ||
 		string(body["started_at"]) != `"2026-08-10T12:13:14Z"` {
 		t.Fatalf("health = %s", response.Body.String())
 	}
