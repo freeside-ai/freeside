@@ -299,6 +299,7 @@ type integrationTransport struct {
 	laterReturnDir string
 	symlinkTarget  string
 	replaceParent  string
+	noCheckout     bool
 
 	mu                     sync.Mutex
 	fetches                int
@@ -306,6 +307,7 @@ type integrationTransport struct {
 	fetchEntered           chan struct{}
 	fetchRelease           chan struct{}
 	materializeErr         error
+	materializeBaseErr     error
 	pushes                 int
 	lastMessage            string
 	fail                   bool
@@ -322,6 +324,9 @@ func (tr *integrationTransport) RetainWorktree(
 	}
 	tr.mu.Lock()
 	err := tr.materializeErr
+	if headSHA == sealed.baseSHA {
+		err = tr.materializeBaseErr
+	}
 	tr.mu.Unlock()
 	if err != nil {
 		return err
@@ -400,7 +405,11 @@ func (tr *integrationTransport) FetchBase(
 			return nil, err
 		}
 	} else {
-		runGit(tr.t, tr.baseDir, "clone", "-q", "--no-hardlinks", ".", dir)
+		args := []string{"clone", "-q", "--no-hardlinks"}
+		if tr.noCheckout {
+			args = append(args, "--no-checkout")
+		}
+		runGit(tr.t, tr.baseDir, append(args, ".", dir)...)
 		if got := runGit(tr.t, dir, "rev-parse", "HEAD"); got != baseSHA {
 			return nil, fmt.Errorf("cloned base %s, want %s", got, baseSHA)
 		}
@@ -540,6 +549,11 @@ func newPublicationHarness(t *testing.T) *publicationHarness {
 
 func newPublicationHarnessWithRecipe(t *testing.T, recipe []byte) *publicationHarness {
 	t.Helper()
+	return newPublicationHarnessWithBaseFiles(t, recipe, nil)
+}
+
+func newPublicationHarnessWithBaseFiles(t *testing.T, recipe []byte, files map[string]string) *publicationHarness {
+	t.Helper()
 	ctx := t.Context()
 	root := t.TempDir()
 	base := filepath.Join(root, "base")
@@ -548,6 +562,9 @@ func newPublicationHarnessWithRecipe(t *testing.T, recipe []byte) *publicationHa
 	}
 	runGit(t, base, "init", "-q", "-b", "main")
 	writeFile(t, base, "README.md", "base\n")
+	for path, body := range files {
+		writeFile(t, base, path, body)
+	}
 	runGit(t, base, "add", "-A")
 	runGit(t, base, "commit", "-q", "-m", "base")
 	baseSHA := runGit(t, base, "rev-parse", "HEAD")

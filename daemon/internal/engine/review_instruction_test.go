@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -75,7 +76,7 @@ func TestDiscoverCodexReviewInstructionsBoundsAggregateSources(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := discoverCodexReviewInstructions(root); err == nil {
-		t.Fatal("aggregate exact-base instruction budget was not enforced")
+	if _, err := discoverCodexReviewInstructions(root); !errors.Is(err, errReviewInstructionsRefused) {
+		t.Fatalf("aggregate exact-base instruction refusal = %v", err)
 	}
 }
