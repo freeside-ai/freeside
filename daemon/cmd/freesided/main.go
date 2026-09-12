@@ -765,7 +765,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			Global: inference.Limits{
 				Calls: 1_000, ComputeUnits: 10_000_000, AttentionItems: 200, Starvation: 8 * time.Hour,
 			},
-			MaxCallsPerRoot: 20, MaxStarvationPerRoot: 10 * time.Minute,
+			// The ledger reserves each site's full bound per call, so the
+			// per-root allowance is the call ceiling at the largest bound
+			// (20 calls at the adjudicator's 120 seconds) and never parks a
+			// root the ceiling still admits, whatever the mix of sites.
+			MaxCallsPerRoot: 20, MaxStarvationPerRoot: 40 * time.Minute,
 		}
 		judgmentBinding, err := composeRuntimeJudgments(cfg.Claude.Judgments, cfg.Claude.ReviewInputRoot)
 		if err != nil {

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -198,10 +199,88 @@ func decodeCompletion(body []byte, model string, req inference.Request, site inf
 			return inference.Response{}, errCompletion
 		}
 	}
-	if site.ValidateOutput([]byte(result.Result)) != nil {
+	output, ok := selectOutput(site, result.Result)
+	if !ok {
 		return inference.Response{}, errCompletion
 	}
-	return inference.Response{Output: []byte(result.Result), ComputeUnits: *result.Usage.Output}, nil
+	return inference.Response{Output: output, ComputeUnits: *result.Usage.Output}, nil
+}
+
+// selectOutput finds the site's answer inside a completion. The site
+// instructions ask for a bare JSON object, but the first live judgment calls
+// returned the object wrapped in ```json fences (classifier) and after a page
+// of prose reasoning (adjudicator), and the driver refused both as "inference
+// unavailable". The answer is the last JSON object in the text that the site
+// validates: candidates are tried from the last opening brace backwards, so a
+// nested object inside the answer is skipped in favor of the object enclosing
+// it, and prose, fences, or earlier objects that fail the site's strict
+// validation never become output. Nothing here relaxes that validation.
+//
+// Each validation reads its whole candidate, and nested spans overlap, so
+// the bytes validated are bounded to maxSelectionPasses passes over the
+// completion; past that the completion is refused. Spans at one nesting
+// depth are disjoint, so a well-formed answer costs one pass per level it
+// nests, while deeply nested balanced braces would otherwise cost a pass
+// per level, quadratic in the completion size.
+func selectOutput(site inference.Site, text string) ([]byte, bool) {
+	if trimmed := strings.TrimSpace(text); site.ValidateOutput([]byte(trimmed)) == nil {
+		return []byte(trimmed), true
+	}
+	spans := objectSpans(text)
+	budget := maxSelectionPasses * len(text)
+	for i := len(spans) - 1; i >= 0; i-- {
+		candidate := []byte(text[spans[i].start : spans[i].end+1])
+		budget -= len(candidate)
+		if budget < 0 {
+			return nil, false
+		}
+		if site.ValidateOutput(candidate) == nil {
+			return candidate, true
+		}
+	}
+	return nil, false
+}
+
+// maxSelectionPasses is the bound on validated candidate bytes as a multiple
+// of the completion length. The adjudicator answer nests entries and their
+// offered alternatives two levels deep, and a stray brace pair in the prose
+// adds one enclosing span; eight passes leave room for both without letting
+// the bound scale with the untrusted output.
+const maxSelectionPasses = 8
+
+type objectSpan struct{ start, end int }
+
+// objectSpans returns every balanced brace pair outside JSON strings, in
+// order of the opening brace, in one pass over the text; an opening brace
+// the text never closes yields no span. The output is untrusted and can be
+// hundreds of kilobytes, so the scan must stay linear. Whether a span is a
+// valid answer is the site validator's decision, which is the one strict
+// decode the daemon centralizes.
+func objectSpans(text string) []objectSpan {
+	var spans []objectSpan
+	var open []int
+	inString, escaped := false, false
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		switch {
+		case inString && escaped:
+			escaped = false
+		case inString && c == '\\':
+			escaped = true
+		case inString && c == '"':
+			inString = false
+		case inString:
+		case c == '"':
+			inString = true
+		case c == '{':
+			open = append(open, i)
+		case c == '}' && len(open) > 0:
+			spans = append(spans, objectSpan{start: open[len(open)-1], end: i})
+			open = open[:len(open)-1]
+		}
+	}
+	slices.SortFunc(spans, func(a, b objectSpan) int { return a.start - b.start })
+	return spans
 }
 
 func promptFor(req inference.Request) (string, inference.Site, error) {
