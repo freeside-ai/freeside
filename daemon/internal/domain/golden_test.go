@@ -164,7 +164,7 @@ func TestGolden(t *testing.T) {
 	}
 	displayNames := domain.DisplayNames{
 		Project:  domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
-		WorkUnit: domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
+		Task: domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
 	}
 	diffStats := domain.DiffStats{
 		FilesChanged: 12, Additions: 240, Deletions: 31,

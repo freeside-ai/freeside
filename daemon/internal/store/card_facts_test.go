@@ -802,11 +802,11 @@ func storeCardFactItems(t *testing.T) map[string]domain.AttentionItem {
 	invocationID := domain.SpecificationInvocationID(runID, 99)
 	runNames := &domain.DisplayNames{
 		Project:  domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
-		WorkUnit: domain.DisplayName{Text: "#1003", Source: domain.DisplayNameSourceName},
+		Task: domain.DisplayName{Text: "#1003", Source: domain.DisplayNameSourceName},
 	}
 	systemNames := &domain.DisplayNames{
 		Project: domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
-		WorkUnit: domain.DisplayName{
+		Task: domain.DisplayName{
 			Text: "daemon", Source: domain.DisplayNameSourceIdentifier,
 		},
 	}

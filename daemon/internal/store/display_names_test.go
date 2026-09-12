@@ -28,7 +28,7 @@ func TestDisplayNamesForFallsBackToStableIdentifiers(t *testing.T) {
 		Project: domain.DisplayName{
 			Text: "project-missing", Source: domain.DisplayNameSourceIdentifier,
 		},
-		WorkUnit: domain.DisplayName{
+		Task: domain.DisplayName{
 			Text: "run-missing", Source: domain.DisplayNameSourceIdentifier,
 		},
 	}

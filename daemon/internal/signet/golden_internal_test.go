@@ -135,7 +135,7 @@ func TestSignetWireGoldens(t *testing.T) {
 						observation, domain.ConcludeRun(observation), 23,
 						&domain.DisplayNames{
 							Project:  domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
-							WorkUnit: domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
+							Task: domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
 						},
 						facts,
 					),

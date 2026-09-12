@@ -20,7 +20,7 @@ func (tx *ReadTx) DisplayNamesFor(
 		Project: domain.DisplayName{
 			Text: string(projectID), Source: domain.DisplayNameSourceIdentifier,
 		},
-		WorkUnit: domain.DisplayName{
+		Task: domain.DisplayName{
 			Text: string(subject.ID), Source: domain.DisplayNameSourceIdentifier,
 		},
 	}
@@ -37,10 +37,10 @@ func (tx *ReadTx) DisplayNamesFor(
 		if subject.RunID != nil {
 			runID = *subject.RunID
 		}
-		names.WorkUnit.Text = string(runID)
+		names.Task.Text = string(runID)
 		declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, runID)
 		if err == nil && declaration.BoundIssue != nil {
-			names.WorkUnit = domain.DisplayName{
+			names.Task = domain.DisplayName{
 				Text:   fmt.Sprintf("#%d", *declaration.BoundIssue),
 				Source: domain.DisplayNameSourceName,
 			}

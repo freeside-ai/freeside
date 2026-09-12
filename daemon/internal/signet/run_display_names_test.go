@@ -63,7 +63,7 @@ func TestGetRunProjectsStoredDisplayNames(t *testing.T) {
 	}) {
 		t.Errorf("project display name = %#v", got)
 	}
-	if got := snapshot.Run.DisplayNames.WorkUnit; got != (domain.DisplayName{
+	if got := snapshot.Run.DisplayNames.Task; got != (domain.DisplayName{
 		Text: "#724", Source: domain.DisplayNameSourceName,
 	}) {
 		t.Errorf("work-unit display name = %#v", got)
