@@ -1920,14 +1920,54 @@ func TestTransientSpecificationLoadFailureIsNotQuarantined(t *testing.T) {
 func TestSpecificationRequestChangesCarriesFeedbackAndAddressals(t *testing.T) {
 	f := newSpecificationFixture(t, true, 3)
 	driver := f.newDriver(t)
-	firstID := specificationInvocationID("specification-run", 1)
+	spec := f.specWithSource(domain.SpecificationSource{})
+	specificationRunID, err := SpecificationRunIDForImplementation(spec.ImplementationRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	campaignID, err := ProductionCampaignIDForImplementation(spec.ImplementationRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedPolicy, err := domain.NewResolvedPolicy(specificationRunID, f.policy.Keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyArtifact := testSpecificationArtifact(t, "campaign-resolved-policy", domain.ArtifactKindPolicy,
+		resolvedPolicy.Digest, domain.ProducerDaemon, "policy-resolver")
+	policyBody, err := json.Marshal(resolvedPolicy.Keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.blobs.Put(policyArtifact.Digest, bytes.NewReader(policyBody)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.PutArtifact(t.Context(), policyArtifact)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	publicationBytes, err := json.Marshal(spec.Publication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec.SpecificationRunID = specificationRunID
+	spec.PolicyArtifactID = policyArtifact.ID
+	spec.ResolvedPolicy = resolvedPolicy
+	spec.CampaignID = campaignID
+	spec.AttemptNumber = 1
+	spec.PublicationBytes = publicationBytes
+	spec.PublicationDigest = domain.Digest(contentaddr.Sum(publicationBytes))
+	firstID := specificationInvocationID(specificationRunID, 1)
 	if err := specifyfake.Script(driver, firstID, 0, 0, specify.Output{Specification: &specify.Specification{
 		Summary: "First draft.", Body: "# Specification\n\nUse an unbounded request.",
 		Addressals: []specify.Addressal{},
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	f.submit(t)
+	if _, err := SubmitSpecificationRun(t.Context(), f.store, spec); err != nil {
+		t.Fatal(err)
+	}
 	engine := f.newEngine(t, driver)
 	if _, err := engine.Reconcile(t.Context()); err != nil {
 		t.Fatal(err)
@@ -1946,7 +1986,7 @@ func TestSpecificationRequestChangesCarriesFeedbackAndAddressals(t *testing.T) {
 	if _, err := engine.Reconcile(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	secondID := specificationInvocationID("specification-run", 2)
+	secondID := specificationInvocationID(specificationRunID, 2)
 	if err := specifyfake.Script(driver, secondID, 0, 0, specify.Output{Specification: &specify.Specification{
 		Summary: "Revised draft.", Body: "# Specification\n\nLimit the request body to 1 MiB.",
 		Addressals: []specify.Addressal{{CommentID: "revise-spec", Response: "Added an explicit 1 MiB bound."}},
@@ -1965,7 +2005,7 @@ func TestSpecificationRequestChangesCarriesFeedbackAndAddressals(t *testing.T) {
 		{role: "human_feedback", digest: f.artifact(t, "spec-feedback-revise-spec").Digest},
 	}
 	assertSpecificationPriorSnapshot(t, f.blobs, start.StageInputs.PriorArtifactDigests, wantPrior)
-	secondItem, _ := f.item(t, "spec-approval-implementation-run-2")
+	secondItem, secondSnapshot := f.item(t, "spec-approval-implementation-run-2")
 	if secondItem.Reason != "Revised draft." || secondItem.SpecRevision == nil {
 		t.Fatalf("revision item = %+v", secondItem)
 	}
@@ -1988,6 +2028,66 @@ func TestSpecificationRequestChangesCarriesFeedbackAndAddressals(t *testing.T) {
 	}
 	if _, err := f.run("implementation-run"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("implementation run after request_changes = %v", err)
+	}
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "approve-revised-spec", DeviceID: "device-1", ExpectedEntityVersion: secondSnapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: secondItem.ID, Action: domain.ActionApprove,
+			ItemVersion: secondItem.ItemVersion, ArtifactDigests: secondItem.ArtifactDigests,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	implementation, err := f.run(spec.ImplementationRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedDigest := f.artifact(t, "spec-implementation-run-2").Digest
+	if implementation.SpecDigest != approvedDigest || implementation.CampaignID != campaignID || implementation.AttemptNumber != 1 {
+		t.Fatalf("revised implementation = %+v", implementation)
+	}
+	implementationID := productionInvocationID(implementation.ID)
+	var implementationEntry store.QueueEntry
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		attempt, err := tx.GetProductionAttemptByRun(t.Context(), implementation.ID)
+		if err != nil {
+			return err
+		}
+		if attempt.SourceDigest != f.source.Digest || attempt.PublicationDigest != spec.PublicationDigest ||
+			attempt.SpecificationRunID != specificationRunID || attempt.ImplementationRunID != spec.ImplementationRunID ||
+			attempt.ApprovedSpecDigest != approvedDigest {
+			t.Fatalf("revised production attempt = %+v", attempt)
+		}
+		runs, err := tx.ListRuns(t.Context())
+		if err != nil {
+			return err
+		}
+		if len(runs) != 2 {
+			t.Fatalf("runs after approval = %d, want specification and one implementation", len(runs))
+		}
+		implementationEntry, err = tx.GetOutbox(t.Context(), string(implementationID))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	implementationRequest, err := decodeProductionRequest(implementationEntry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := engine.loadProductionBinding(t.Context(), implementationRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, ok := findProductionStage(binding.run)
+	if !ok {
+		t.Fatal("revised implementation has no production stage")
+	}
+	admission, admitted, err := engine.admitAttempt(t.Context(), binding, stage, implementationID)
+	if err != nil || !admitted || admission.SpecDigest != approvedDigest {
+		t.Fatalf("admit revised implementation = %+v, admitted=%t, err=%v", admission, admitted, err)
 	}
 }
 

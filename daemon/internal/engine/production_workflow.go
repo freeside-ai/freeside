@@ -690,7 +690,9 @@ func authenticateProductionAttempt(
 		}
 	}
 	if grant != nil {
-		if len(grant.InputArtifactIDs) != 1 {
+		// Terminal verification authenticates the complete input sequence. Its
+		// first artifact remains the source when revisions add prior work and feedback.
+		if len(grant.InputArtifactIDs) == 0 {
 			return fmt.Errorf("specification grant source inputs: %w", domain.ErrParentKeyMismatch)
 		}
 		sourceArtifact, err := tx.GetArtifact(ctx, grant.InputArtifactIDs[0])
