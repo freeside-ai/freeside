@@ -92,7 +92,7 @@ lists open issues that will change the card.
 | A stale submission swaps in the replacement item and says so (plan §4) | Done |
 | Actions that matter are disabled until current state is confirmed; no offline approvals in Phase 1 (plan §5.14) | Done |
 | A recommendation is rendered only when the contract supplies one; offer order never implies a recommendation | Done: the card reads `AttentionItem.recommendation`, revalidates its source-specific provenance, and renders daemon and project policy as card facts and agent judgment as a labeled proposal; #1002 produces the first one |
-| Consequential stop, decline, and dismiss actions require an explicit destructive confirmation; navigation and loss-risk actions alone use icons | Done |
+| Consequential stop, decline, and dismiss actions require an explicit destructive confirmation; navigation and loss-risk actions alone use icons | Done: the confirmation is a Freeside sheet (`ConsequenceSheet`), not the system dialog. Its serif title asks "Stop this run?", "Decline this proposal?", or "Dismiss this item?", the daemon's consequence sentence follows in callout, and a mono binding line names the subject id and item version that will be submitted, read from the reviewed snapshot. The submit is the wax-outlined destructive pill, never filled; Return submits, Escape or Cancel dismisses, and a snapshot version change while the sheet is up dismisses it. macOS presents it as a 380pt sheet; iPhone as a bottom sheet with a drag indicator at the medium detent, or the large detent at accessibility text sizes, and content that still outgrows the sheet scrolls. The retry-capabilities picker stays a system dialog |
 | Notifications are hints only; a late one for a resolved item opens current state with no stale action (plan §4, §5.14) | Not yet (no push channel until Phase 2) |
 | A fact row stacks its value under its label once the value passes 40 characters (`--fs-fact-row-stack-threshold`), at every Dynamic Type size | Done: one shared `FactRow` covers the decision card and macOS inspector, both pairing detail layouts, and the operational summary, so a digest, an invocation id, or a `file:line` wraps across the row's full width instead of a narrow trailing column; an accessibility size still stacks every row whatever its length; the readiness checklist's rows follow the same rule, so a waiver sentence stacks under its requirement label, and the checklist's verdict line stacks with them |
 
@@ -130,8 +130,7 @@ design decision; record it in a decision note.
   status item image (its badge dot follows the palette).
 - The retry-capabilities picker and every non-destructive dialog.
 - Keyboard, text-selection, share, and paste affordances.
-- Still native pending their own units: the consequential Stop, Decline, and
-  Dismiss confirmation dialog, and the navigation bars of the composer,
+- Still native pending its own unit: the navigation bars of the composer,
   start-with-changes, snooze, specification reader, and attachment sheets
   (`devlog/2026-09-12-0945-chrome-under-design-language.md`).
 
@@ -152,6 +151,7 @@ open until a unit answers them; answering is a design decision.
 10. **Trust-profile review at onboarding.** Answered by plan revision 41: CLI-only; the app never shows it.
 11. **Comprehension-defect capture** for sampled decision audits (plan §8, §9). The daemon records a defect via `freesided comprehension record-defect`; finding them stays manual (a sampled decision-audit workflow is a non-goal), and there is no in-app capture surface.
 12. **Fault-class capture placement.** On the card at resolution, or a follow-up prompt?
+13. **Inline or popover confirmation on macOS.** The consequential confirmation is a sheet on both platforms. An inline or popover confirmation would be lighter on macOS but needs a ruling on whether it still satisfies the explicit-destructive-confirmation rule (`devlog/2026-09-12-0945-chrome-under-design-language.md`).
 
 Search and export of items or evidence are not in the plan at all; they
 are named here only so nobody assumes they are.
