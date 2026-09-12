@@ -231,6 +231,45 @@ func TestPhase1ASummaryPromptContracts(t *testing.T) {
 	if bytes.Contains(specifier, []byte("open owner decision")) {
 		t.Error("specifier prompt still lists owner decisions in the summary instead of returning them")
 	}
+	remediator, err := os.ReadFile(filepath.Join(promptDir, "remediator.md")) //nolint:gosec // fixed repository fixture
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The remediator plays the prior-artifact-rendering role opposite the
+	// implementer, so the composition the driver enforces at startup validates.
+	if err := ValidatePromptPackageRoles(implementer, remediator); err != nil {
+		t.Errorf("ValidatePromptPackageRoles(implementer, remediator): %v", err)
+	}
+	// It carries the implementer's summary, commit-plan, and blocked-outcome
+	// contract verbatim, so their shared required strings hold in the remediator
+	// too. The blocked outcome is the modeled owner-decision interrupt for both
+	// remediation and operator-feedback rounds (#1314); the pushback claim, not
+	// the blocked outcome, is the separate channel for declining a finding.
+	for _, required := range []string{
+		export.SummaryEvidencePath,
+		"State what changed and why, what you left undone or out of scope, and what remains uncertain.",
+		"Assert a verifiable outcome only by naming the command, check, diff, or artifact it comes from",
+		"Together the groups must exactly cover the final change set",
+		export.BlockedEvidencePath,
+		domain.BlockedOutcomeEncodingVersion,
+		"leave no repository changes in the workspace, write no commit plan",
+		"1 to 8 decisions, 2 to 6 options each, 4 KiB per text field",
+	} {
+		if !bytes.Contains(remediator, []byte(required)) {
+			t.Errorf("remediator prompt omits %q", required)
+		}
+	}
+	for _, kind := range domain.AllBlockedKinds {
+		if kind == domain.BlockedKindCommitPlanCollision {
+			if bytes.Contains(remediator, []byte("`"+string(kind)+"`")) {
+				t.Errorf("remediator prompt advertises unusable blocked kind %q", kind)
+			}
+			continue
+		}
+		if !bytes.Contains(remediator, []byte("`"+string(kind)+"`")) {
+			t.Errorf("remediator prompt omits blocked kind %q", kind)
+		}
+	}
 	if summaryFixtureConforms("All tests pass.") {
 		t.Fatal("bare verdict fixture passed the summary composition assertion")
 	}

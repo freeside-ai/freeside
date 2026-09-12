@@ -29,11 +29,17 @@ const (
 	KindRemediationInvocationRequested = string(domain.RemediationInvocationRequestedKind)
 	remediationRequestVersion          = "freeside.remediation-request/v1"
 	remediationInputVersion            = "freeside.remediation-input/v1"
-	remediationInvocationIDPrefix      = "inv-remediate-"
-	remediationStageIDPrefix           = "remediate-"
-	remediatorPushbackLabel            = "freeside.remediator_pushback"
-	remediatorPushbackVersion          = "freeside.remediator-pushback/v1"
-	remediationMarkerQuarantinePrefix  = "remediation-marker-quarantined-"
+	// remediationInstruction is the authorized action the daemon delivers inside
+	// the remediation-input prior artifact. The shipped remediator prompt
+	// (prompts/phase-1a/remediator.md) must describe the same workspace state;
+	// TestRemediationPromptMatchesInstruction keeps the two in agreement. Editing
+	// this literal changes the input digest, so keep it byte-stable.
+	remediationInstruction            = "Decode candidate_patch_base64 using standard base64 and apply the resulting binary patch to the exact-base workspace before remediating the adjudicated findings; preserve all prior candidate changes."
+	remediationInvocationIDPrefix     = "inv-remediate-"
+	remediationStageIDPrefix          = "remediate-"
+	remediatorPushbackLabel           = "freeside.remediator_pushback"
+	remediatorPushbackVersion         = "freeside.remediator-pushback/v1"
+	remediationMarkerQuarantinePrefix = "remediation-marker-quarantined-"
 )
 
 var (
@@ -1048,7 +1054,7 @@ func (w *productionPublicationWorkflow) prepareRemediationIntent(
 	input := remediationInput{
 		Version: remediationInputVersion, RunID: task.RunID, Round: record.Round,
 		BaseSHA: task.Replay.ObservedBaseSHA, HeadSHA: task.HeadSHA,
-		Instruction:          "Decode candidate_patch_base64 using standard base64 and apply the resulting binary patch to the exact-base workspace before remediating the adjudicated findings; preserve all prior candidate changes.",
+		Instruction:          remediationInstruction,
 		CandidatePatchBase64: candidatePatch,
 		Adjudication:         artifact, Findings: findings,
 	}

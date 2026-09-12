@@ -8,7 +8,17 @@ Closing the shell is an interruption, not a request to complete the walkthrough.
 
 ## Start And Verify
 
-Use the harness header's required environment and input files. Before acquiring
+Use the harness header's required environment and input files. The three
+trusted prompt packages ship in the repository, so no operator authors one:
+pass `prompts/phase-1a/implementer.md` as `FREESIDE_REAL_RUN_PROMPT_PACKAGE`,
+`prompts/phase-1a/specifier.md` as
+`FREESIDE_REAL_RUN_SPECIFICATION_PROMPT_PACKAGE`, and
+`prompts/phase-1a/remediator.md` as
+`FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE`, each from the approved
+default-branch commit. The daemon admits the content digest of these exact
+bytes; a workspace copy is never prompt authority.
+
+Before acquiring
 the rig, stop the supervised daemon through the installed Freeside menu. If
 using launchctl for an already registered service, the equivalent suspension is:
 
