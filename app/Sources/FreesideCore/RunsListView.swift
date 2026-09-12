@@ -36,22 +36,32 @@ struct RunsListView: View {
     var body: some View {
         let rows = visibleRuns
         VStack(spacing: 0) {
-            Picker("Scope", selection: $filter.scope) {
-                ForEach(RunListFilter.Scope.allCases) { scope in
-                    Text("\(scope.label) \(filter.count(in: runs, scope: scope))").tag(scope)
-                }
-            }
-            .pickerStyle(.segmented)
+            FreesideSegmentedControl(
+                accessibilityLabel: "Scope",
+                segments: RunListFilter.Scope.allCases.map {
+                    .init(value: $0, label: $0.label, count: filter.count(in: runs, scope: $0))
+                },
+                selection: $filter.scope
+            )
             .padding(.horizontal)
             .padding(.bottom, 8)
 
-            Picker("Project", selection: $filter.projectID) {
-                Text("All projects").tag(String?.none)
-                ForEach(projects, id: \.self) { project in
-                    Text(project).tag(String?.some(project))
+            Menu {
+                Picker("Project", selection: $filter.projectID) {
+                    Text("All projects").tag(String?.none)
+                    ForEach(projects, id: \.self) { project in
+                        Text(project).tag(String?.some(project))
+                    }
                 }
+                .pickerStyle(.inline)
+            } label: {
+                FreesideMenuTriggerLabel(title: filter.projectID ?? "All projects")
             }
-            .pickerStyle(.menu)
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .accessibilityLabel("Project")
+            .accessibilityValue(filter.projectID ?? "All projects")
             .padding(.horizontal)
             .padding(.bottom, 8)
 

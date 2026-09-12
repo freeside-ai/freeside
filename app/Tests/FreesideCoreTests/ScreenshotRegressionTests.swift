@@ -211,6 +211,24 @@
                         ).screenshotContent(now: screenshotNow)
                     ))
             ]
+            // The macOS sidebar chrome in the design language: the section
+            // switcher and scope control as Freeside segments, the project
+            // trigger, and the first rows, by day and by dusk (the size loop
+            // covers the stacked layout from xxxLarge up).
+            for colorScheme in [ColorScheme.light, .dark] {
+                surfaces.append(
+                    Surface(
+                        name: "inbox-sidebar" + (colorScheme == .dark ? "-dark" : ""),
+                        width: 320,
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            InboxView(
+                                store: store,
+                                selection: .constant(inbox.first?.item.id),
+                                launchScope: nil,
+                                launchProjectID: nil
+                            ).screenshotSidebar(now: screenshotNow))))
+            }
             let feedback = DecisionFeedbackModel(
                 announce: { _ in },
                 schedule: { _, _ in Task {} })
@@ -1060,6 +1078,24 @@
                             onSelectItem: { _ in },
                             onShowRuns: {},
                             now: screenshotNow))))
+            // The summary by dusk, on its own ground, with the trailing
+            // values the fact row now right-aligns.
+            surfaces.append(
+                Surface(
+                    name: "operational-summary-dark",
+                    width: 640,
+                    colorScheme: .dark,
+                    view: AnyView(
+                        OperationalSummaryView(
+                            summary: OperationalSummary(
+                                openSnapshots: store.openSnapshots,
+                                runs: runs,
+                                freshness: .fresh),
+                            onSelectItem: { _ in },
+                            onShowRuns: {},
+                            now: screenshotNow
+                        )
+                        .background(Color.ground))))
             // The contract-mismatch state renders distinctly from fresh and
             // the other failure states (#1265).
             surfaces.append(

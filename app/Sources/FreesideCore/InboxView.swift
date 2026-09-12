@@ -84,15 +84,9 @@ struct InboxView: View {
                         .padding(.horizontal)
                         .padding(.bottom, 8)
 
-                    Picker("Project", selection: projectSelection) {
-                        Text("All projects").tag(String?.none)
-                        ForEach(store.projects, id: \.self) { project in
-                            Text(project).tag(String?.some(project))
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
+                    projectMenu
+                        .padding(.horizontal)
+                        .padding(.bottom, 8)
 
                     if store.rows.isEmpty {
                         #if os(macOS)
@@ -218,12 +212,32 @@ struct InboxView: View {
     }
 
     private var scopePicker: some View {
-        Picker("Scope", selection: scopeSelection) {
-            ForEach(InboxStore.Scope.allCases) { scope in
-                Text("\(scope.label) \(store.count(in: scope))").tag(scope)
+        FreesideSegmentedControl(
+            accessibilityLabel: "Scope",
+            segments: InboxStore.Scope.allCases.map {
+                .init(value: $0, label: $0.label, count: store.count(in: $0))
+            },
+            selection: scopeSelection)
+    }
+
+    /// The project filter: a Freeside trigger over the system popup list.
+    private var projectMenu: some View {
+        Menu {
+            Picker("Project", selection: projectSelection) {
+                Text("All projects").tag(String?.none)
+                ForEach(store.projects, id: \.self) { project in
+                    Text(project).tag(String?.some(project))
+                }
             }
+            .pickerStyle(.inline)
+        } label: {
+            FreesideMenuTriggerLabel(title: store.projectID ?? "All projects")
         }
-        .pickerStyle(.segmented)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .accessibilityLabel("Project")
+        .accessibilityValue(store.projectID ?? "All projects")
     }
 
     @ViewBuilder
@@ -300,6 +314,41 @@ struct InboxView: View {
                 .fixedSize(horizontal: false, vertical: true)
             #endif
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The sidebar chrome as the operator sees it on macOS: the section
+    /// switcher, the scope control and urgent chip, the ordering caption,
+    /// the project trigger (its label standing in for the Menu, which
+    /// ImageRenderer cannot open), and the first rows on the sidebar ground.
+    func screenshotSidebar(now: Date) -> some View {
+        VStack(spacing: 0) {
+            FreesideSegmentedControl(
+                accessibilityLabel: "Section",
+                segments: FreesideRootView.sectionSegments,
+                selection: .constant(.inbox)
+            )
+            .padding()
+            scopeBar
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+            orderingCaption
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+            FreesideMenuTriggerLabel(title: store.projectID ?? "All projects")
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+            VStack(spacing: 8) {
+                ForEach(Array(store.rows.prefix(2)), id: \.item.id) { snapshot in
+                    InboxRowView(
+                        item: snapshot.item,
+                        isSelected: selection == snapshot.item.id,
+                        now: now)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.bottom)
+        }
+        .background(Color.sidebarGround)
     }
 
     /// The project-owned caption and rows without List and Picker, whose

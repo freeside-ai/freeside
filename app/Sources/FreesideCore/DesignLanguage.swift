@@ -60,6 +60,9 @@ enum FreesidePalette {
         day: 0x8A2D1C, dusk: 0xD26D4A, dayIC: 0x71230F, duskIC: 0xDC7A57)
     static let waxWash = FreesideColorCuts(day: 0xE8D5C9, dusk: 0x241310)
     static let neutralWash = FreesideColorCuts(day: 0xE8E2CD, dusk: 0x221C11)
+    // The selected segment of the sidebar's segmented control: ground-2 by
+    // day, ground-3 by dusk, so it lifts off the ground container in both.
+    static let segmentSelected = FreesideColorCuts(day: ground2.day, dusk: ground3.dusk)
     static let waterText = FreesideColorCuts(
         day: 0x3E6D72, dusk: 0x7FAAAF, dayIC: 0x33595E, duskIC: 0x9CC3C7)
     static let waterWash = FreesideColorCuts(day: 0xDCE6E4, dusk: 0x17201F)
@@ -140,6 +143,7 @@ extension Color {
     static let accentWashSoft = freeside(FreesidePalette.accentWashSoft)
     static let waxWash = freeside(FreesidePalette.waxWash)
     static let neutralWash = freeside(FreesidePalette.neutralWash)
+    static let segmentSelected = freeside(FreesidePalette.segmentSelected)
     static let waterWash = freeside(FreesidePalette.waterWash)
     static let milestonePrior = freeside(FreesidePalette.milestonePrior)
     static let milestoneConnector = freeside(FreesidePalette.milestoneConnector)
@@ -448,7 +452,13 @@ struct FactRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         } else {
-            LabeledContent(label) {
+            // An explicit trailing column on both platforms: macOS's
+            // LabeledContent set the value inline after the label, so the
+            // summary's values never lined up.
+            HStack(alignment: .firstTextBaseline) {
+                Text(label)
+                    .foregroundStyle(Color.inkDim)
+                Spacer(minLength: 8)
                 valueText
                     .multilineTextAlignment(.trailing)
             }
