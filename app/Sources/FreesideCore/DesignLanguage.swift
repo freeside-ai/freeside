@@ -578,11 +578,15 @@ struct FreesideActionButtonStyle: ButtonStyle {
 }
 
 /// The submit row a sheet ends with: Cancel as a tertiary text button and
-/// the submit as a primary pill, both hugging their labels. Three sheets
-/// draw it, and it carries the Return and Escape bindings the system
-/// toolbar placements used to supply.
+/// the submit as a pill, primary by default and wax-outlined for a
+/// consequential confirmation, both hugging their labels. It carries the
+/// Return and Escape bindings the system toolbar placements used to supply.
 struct FreesideSheetActionRow: View {
     let submitLabel: String
+    var tone: FreesideActionButtonStyle.Tone = .primary
+    /// Read by VoiceOver after the submit label: the consequence sentence
+    /// a destructive submit carries.
+    var submitHint: String? = nil
     var isSubmitEnabled: Bool = true
     let submit: () -> Void
     let cancel: () -> Void
@@ -624,10 +628,11 @@ struct FreesideSheetActionRow: View {
     private func submitButton(expands: Bool) -> some View {
         Button(submitLabel, action: submit)
             .buttonStyle(
-                FreesideActionButtonStyle(tone: .primary, corners: .pill, expands: expands)
+                FreesideActionButtonStyle(tone: tone, corners: .pill, expands: expands)
             )
             .keyboardShortcut(.defaultAction)
             .disabled(!isSubmitEnabled)
+            .accessibilityHint(submitHint ?? "")
     }
 }
 

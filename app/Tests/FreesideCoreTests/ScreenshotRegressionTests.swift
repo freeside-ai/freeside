@@ -1389,6 +1389,26 @@
                             Text("Inbox").padding()
                         })))
 
+            // The consequential confirmation sheet: Stop on a run-scoped item
+            // as the macOS sheet by day, Decline on a proposal as the iPhone
+            // bottom sheet by dusk. The binding line reads the fixture's
+            // subject id and item version.
+            let stopItem = AttentionFixtures.fixture(type: .execution_failure).item
+            let declineItem = AttentionFixtures.fixture(type: .run_proposal).item
+            surfaces.append(
+                Surface(
+                    name: "consequence-sheet-stop",
+                    width: 380,
+                    view: AnyView(
+                        ConsequenceSheet(action: .stop, item: stopItem, submit: {}, cancel: {}))))
+            surfaces.append(
+                Surface(
+                    name: "consequence-sheet-decline-phone-dark",
+                    width: 390,
+                    colorScheme: .dark,
+                    view: AnyView(
+                        ConsequenceSheet(action: .decline, item: declineItem, submit: {}, cancel: {}))))
+
             // The menu-bar panel in the states the chrome handoff pins:
             // healthy by day with the inbox row under the pointer, a
             // contract mismatch after an observed restart by dusk, stopped
