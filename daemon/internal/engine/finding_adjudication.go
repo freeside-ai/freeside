@@ -1213,6 +1213,31 @@ func productionRemediationUndeliverableItemID(runID domain.RunID, round int) dom
 // terminalized a deterministic undeliverable-input refusal for this round. When
 // it has, the caller parks the run rather than re-attempting a preparation that
 // deterministically re-refuses.
+// remediationDispatched reports whether this round's remediation invocation
+// is already queued, which is the durable fact that its intent was committed.
+func (w *productionPublicationWorkflow) remediationDispatched(
+	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord,
+) (bool, error) {
+	dispatched := false
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		entry, err := tx.GetOutbox(ctx, string(remediationInvocationID(task.RunID, record.Round)))
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if entry.Kind != KindRemediationInvocationRequested {
+			return domain.ErrParentKeyMismatch
+		}
+		dispatched = true
+		return nil
+	}); err != nil {
+		return false, err
+	}
+	return dispatched, nil
+}
+
 func (w *productionPublicationWorkflow) remediationUndeliverableRecorded(
 	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord,
 ) (bool, error) {
@@ -1494,6 +1519,19 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 			return productionReviewPending, checkErr
 		}
 		if parked {
+			return productionReviewPending, nil
+		}
+		// A remediate route records no disposition, so this gate is re-entered
+		// on every reconcile until the remediation export arrives. Once the
+		// round's invocation is queued the intent is committed; preparing it
+		// again would re-put the same input artifact with a fresh created_at
+		// and trip the immutable-row guard, which stopped the daemon durably
+		// on the first live remediation round.
+		dispatched, checkErr := w.remediationDispatched(ctx, task, record)
+		if checkErr != nil {
+			return productionReviewPending, checkErr
+		}
+		if dispatched {
 			return productionReviewPending, nil
 		}
 		remediation, err = w.prepareRemediationIntent(
