@@ -1389,6 +1389,62 @@
                             Text("Inbox").padding()
                         })))
 
+            // The menu-bar panel in the states the chrome handoff pins:
+            // healthy by day with the inbox row under the pointer, a
+            // contract mismatch after an observed restart by dusk, stopped
+            // with Start as the one primary, and unreachable with a failed
+            // stop. The start instant is the fixture's fixed creation time.
+            let panelHealth = DaemonHealth(version: "1.0.0", startedAt: AttentionFixtures.createdInstant)
+            let panelMismatch = DaemonHealth(
+                version: "1.0.0", startedAt: AttentionFixtures.createdInstant,
+                contractDigest: "sha256:" + String(repeating: "a", count: 64))
+            let panelActions = DaemonMenuPanel.Actions(
+                openApp: {}, showInbox: {}, start: {}, stop: {}, openApprovalSettings: {}, quit: {})
+            surfaces.append(
+                Surface(
+                    name: "menu-panel-running",
+                    width: 320,
+                    view: AnyView(
+                        DaemonMenuPanel(
+                            state: .running(panelHealth, restartObserved: false),
+                            actionError: nil,
+                            inbox: .init(open: 6, urgent: 2),
+                            actions: panelActions
+                        )
+                        .screenshotHovering(.showInbox))))
+            surfaces.append(
+                Surface(
+                    name: "menu-panel-mismatch-restart-dark",
+                    width: 320,
+                    colorScheme: .dark,
+                    view: AnyView(
+                        DaemonMenuPanel(
+                            state: .running(panelMismatch, restartObserved: true),
+                            actionError: nil,
+                            inbox: .init(open: 6, urgent: 2),
+                            actions: panelActions))))
+            surfaces.append(
+                Surface(
+                    name: "menu-panel-stopped",
+                    width: 320,
+                    view: AnyView(
+                        DaemonMenuPanel(
+                            state: .stopped,
+                            actionError: nil,
+                            inbox: .init(open: 6, urgent: 0),
+                            actions: panelActions))))
+            surfaces.append(
+                Surface(
+                    name: "menu-panel-unreachable-error-dark",
+                    width: 320,
+                    colorScheme: .dark,
+                    view: AnyView(
+                        DaemonMenuPanel(
+                            state: .unreachable,
+                            actionError: "The daemon could not be stopped: launchctl exited 3.",
+                            inbox: .init(open: 6, urgent: 0),
+                            actions: panelActions))))
+
             var due = AttentionFixtures.degradedReady().item
             due.expires_when = screenshotNow.addingTimeInterval(2 * 3_600)
             let waiting = AttentionFixtures.fixture(type: .blocked).item

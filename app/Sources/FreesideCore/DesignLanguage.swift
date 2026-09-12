@@ -147,7 +147,7 @@ extension Color {
 
 #if canImport(AppKit)
     extension NSColor {
-        fileprivate convenience init(hex: UInt32) {
+        convenience init(hex: UInt32) {
             self.init(
                 srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
                 green: CGFloat((hex >> 8) & 0xFF) / 255,
@@ -491,6 +491,9 @@ struct FreesideActionButtonStyle: ButtonStyle {
 
     let tone: Tone
     var corners: Corners = .rounded
+    /// A dense-chrome control (the menu-bar panel): 28pt minimum height in
+    /// place of the 44 a sheet or card control takes, at every type size.
+    var compact: Bool = false
     /// Whether the control fills its row. A tertiary button always hugs its
     /// label: a full-width control with no fill and no border reads as a
     /// row of dead space rather than as a button.
@@ -505,8 +508,8 @@ struct FreesideActionButtonStyle: ButtonStyle {
             .lineLimit(2)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 12)
-            .padding(.vertical, dynamicTypeSize >= .accessibility1 ? 12 : 7)
-            .frame(minHeight: dynamicTypeSize >= .accessibility1 ? 52 : 44)
+            .padding(.vertical, verticalPadding)
+            .frame(minHeight: minHeight)
             .frame(maxWidth: hugsLabel ? nil : .infinity)
             .background(shape.fill(fillColor(isPressed: configuration.isPressed)))
             .overlay(shape.strokeBorder(borderColor, lineWidth: 1))
@@ -515,6 +518,16 @@ struct FreesideActionButtonStyle: ButtonStyle {
 
     private var hugsLabel: Bool {
         tone == .tertiary || !expands
+    }
+
+    private var verticalPadding: CGFloat {
+        if compact { return 4 }
+        return dynamicTypeSize >= .accessibility1 ? 12 : 7
+    }
+
+    private var minHeight: CGFloat {
+        if compact { return 28 }
+        return dynamicTypeSize >= .accessibility1 ? 52 : 44
     }
 
     /// One shape for fill, border, and hit target. A pill is the spec's
