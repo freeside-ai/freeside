@@ -229,7 +229,7 @@ func AdjudicatorSite(budget Budget) Site {
 			{Name: "dissent", Sensitivity: SensitivityRepository},
 			{Name: "conversation_feedback", Sensitivity: SensitivityRepository},
 		},
-		FailSafe: `{"entries":[]}`, Retention: 30 * 24 * time.Hour, Timeout: 30 * time.Second,
+		FailSafe: `{"entries":[]}`, Retention: 30 * 24 * time.Hour, Timeout: 120 * time.Second,
 		MaxInputBytes: 2 << 20, MaxOutputBytes: domain.MaxFindingAdjudicationBytes,
 		MaxComputeUnits: 10_000, Budget: budget, AuditEvery: 10,
 		Adjudication: &AdjudicationContract{

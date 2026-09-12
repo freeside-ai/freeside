@@ -302,7 +302,7 @@ func TestAdjudicatorDeterministicFallbackIsSchemaValidEmptySet(t *testing.T) {
 		t.Fatalf("inference-down fallback = %#v, %v", entries, err)
 	}
 	if site := inference.AdjudicatorSite(testBudget(10)); site.FailSafe != `{"entries":[]}` ||
-		site.Timeout != 30*time.Second {
+		site.Timeout != 120*time.Second {
 		t.Fatalf("fallback site = %#v", site)
 	}
 }
