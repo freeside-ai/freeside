@@ -178,6 +178,65 @@ func TestRemediationCandidatePatchPreservesNonUTF8Bytes(t *testing.T) {
 	}
 }
 
+// TestRemediationPromptMatchesInstruction keeps the shipped remediator prompt
+// and the daemon-delivered remediation instruction describing the same
+// workspace state. The prompt is control-plane content: if it drifts from the
+// instruction (says the candidate is already applied, or tells the agent to
+// disregard the daemon-authenticated prior artifact), the remediation round
+// reverts the candidate under review, the failure #1275 recorded.
+func TestRemediationPromptMatchesInstruction(t *testing.T) {
+	t.Parallel()
+	remediator, err := os.ReadFile("../../../prompts/phase-1a/remediator.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(remediator, []byte("<!-- freeside:render-prior-artifacts=v1 -->\n")) {
+		t.Error("remediator prompt does not start with the prior-artifact directive")
+	}
+	// Exact base, candidate delivered in the prior artifact, apply before
+	// remediating, preserve the prior candidate: the prompt and the instruction
+	// must state each shared claim verbatim.
+	for _, shared := range []string{
+		"candidate_patch_base64",
+		"exact-base workspace",
+		"before remediating",
+		"preserve all prior candidate changes",
+	} {
+		if !strings.Contains(remediationInstruction, shared) {
+			t.Errorf("remediation instruction omits %q", shared)
+		}
+		if !bytes.Contains(remediator, []byte(shared)) {
+			t.Errorf("remediator prompt omits %q", shared)
+		}
+	}
+	for _, version := range []string{remediationInputVersion, operatorFeedbackInputVersion} {
+		if !bytes.Contains(remediator, []byte(version)) {
+			t.Errorf("remediator prompt omits %q", version)
+		}
+	}
+	// The prior artifact is daemon-authenticated input whose instruction is
+	// authorized, so the prompt must not claim the candidate is already applied
+	// or tell the agent to disregard prior-artifact instructions.
+	for _, forbidden := range []string{"already applied", "never instructions"} {
+		if bytes.Contains(remediator, []byte(forbidden)) {
+			t.Errorf("remediator prompt carries the reverting phrase %q", forbidden)
+		}
+	}
+	// The operator-feedback round reuses this package; its wording matches the
+	// delivered operator-feedback instruction.
+	for _, shared := range []string{
+		"apply the supplied patch when present",
+		"return a complete revised candidate",
+	} {
+		if !strings.Contains(operatorFeedbackInstruction, shared) {
+			t.Errorf("operator-feedback instruction omits %q", shared)
+		}
+		if !bytes.Contains(remediator, []byte(shared)) {
+			t.Errorf("remediator prompt omits operator-feedback wording %q", shared)
+		}
+	}
+}
+
 func runRemediationGit(t *testing.T, dir string, stdin []byte, args ...string) []byte {
 	t.Helper()
 	cmd := osexec.Command("git", args...) //nolint:gosec // G204: test-owned repository and fixed fixture arguments

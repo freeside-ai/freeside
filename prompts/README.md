@@ -7,8 +7,9 @@ Stage prompts are **control-plane** content under the same trust rules as `polic
 - **Toolchain:** none (prompt text, versioned like code).
 - **Scope boundary:** prompt content only; the engine that references it lives in `daemon/`, the policy that configures stages lives in `policy/`. Changes here are control-plane changes: gated, reviewed like code, never batched silently into feature PRs.
 - **Phase 1A packages:** [`phase-1a/specifier.md`](phase-1a/specifier.md)
-  is the research-and-specification contract, while
+  is the research-and-specification contract,
   [`phase-1a/implementer.md`](phase-1a/implementer.md) is the implementation
-  contract. The daemon admits the stage-specific content digest and
-  materializes those exact bytes from the artifact store; the workspace path
-  is never prompt authority.
+  contract, and [`phase-1a/remediator.md`](phase-1a/remediator.md) is the
+  remediation contract, which also drives the operator-feedback round. The
+  daemon admits the stage-specific content digest and materializes those exact
+  bytes from the artifact store; the workspace path is never prompt authority.
