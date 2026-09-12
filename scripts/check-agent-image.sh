@@ -30,6 +30,10 @@
 # Environment:
 #   FREESIDE_CHECK_AGENT_IMAGE_RUNTIME_BOUND_SECONDS  wall-clock bound from 1
 #                                                     to 86400 (default: 120)
+#
+# After the bound (or an interrupt) the runtime process group is SIGKILLed;
+# cleanup then re-sends that group KILL for up to about one more second to
+# catch a member the first signal missed (see drain_runtime_group).
 set -euo pipefail
 
 # Duplicated from daemon/internal/ward/conformance.go (fixedContainerPathEnv).
@@ -161,6 +165,60 @@ claim_watchdog_state() { # <state-file> <value>
 	return "$claim_status"
 }
 
+# Live process-group members other than the leader, mirroring
+# real_work_group_members in scripts/real-work-lifecycle.sh. Kept as a copy
+# rather than sourcing that file: #1300's non-goals leave the lifecycle helper
+# alone, this is a standalone operator script, and the helper is copied into
+# sessions. Zombies (Z state) are already dead and do not count. Returns
+# nonzero if the process table cannot be read, so the caller fails closed
+# instead of mistaking an inspection failure for an empty group.
+runtime_group_members() { # <pgid>
+	local pgid=$1 snapshot
+	snapshot=$(ps -A -o pid=,pgid=,stat= 2>/dev/null) || return 2
+	printf '%s\n' "$snapshot" | awk -v pgid="$pgid" '
+		$2 == pgid && $1 != pgid && substr($3, 1, 1) != "Z" { print $1 }'
+}
+
+# Drain a runtime group that was just SIGKILLed, mirroring the post-kill drain
+# in real_work_bounded_rig. On macOS a single group KILL can miss a member
+# being forked at that instant (#1290); at the interrupt site a relay that
+# escaped that way keeps the checker's own stdout or stderr open and hangs a
+# caller capturing this output. Re-send the group KILL until a snapshot taken
+# after a KILL and a settle is empty, for at most ~1s. Always KILL and settle
+# before concluding empty, because the escapee may not be visible the instant
+# the kill returns. Fail closed (message on fd 3, nonzero return) if members
+# remain after the bound or the process table cannot be read.
+#
+# The group id equals the leader pid, which Bash reaps asynchronously, so in
+# principle it could be recycled as an unrelated group's leader and be
+# signalled mid-drain. Reaching that needs the OS to cycle its whole pid space
+# within this ~1s window, which does not happen at the scale this runs; #1290
+# accepts the same residual.
+drain_runtime_group() { # <pgid>
+	local pgid=$1 members probe_ok=1 empty=""
+	for _ in $(seq 1 10); do
+		kill -KILL -- "-$pgid" 2>/dev/null || true
+		sleep 0.1
+		if ! members=$(runtime_group_members "$pgid"); then
+			probe_ok=""
+			break
+		fi
+		[ -n "$members" ] || {
+			empty=1
+			break
+		}
+	done
+	if [ -z "$probe_ok" ]; then
+		echo "check-agent-image: could not inspect process group $pgid" >&3
+		return 1
+	fi
+	if [ -z "$empty" ]; then
+		echo "check-agent-image: process group $pgid still has members after cancellation" >&3
+		return 1
+	fi
+	return 0
+}
+
 bounded_runtime_process() { # <command...>
 	local stdout_fifo stderr_fifo stdout_relay_pid stderr_relay_pid
 	local runtime_status stdout_status stderr_status
@@ -223,6 +281,7 @@ bounded_runtime_call() { # <command...>
 		if claim_watchdog_state "$watchdog_state" timed-out; then
 			echo "check-agent-image: runtime call exceeded ${runtime_bound_seconds}s" >&3
 			kill -KILL -- "-$active_runtime_pid" 2>/dev/null || true
+			drain_runtime_group "$active_runtime_pid" || true
 		fi
 	) &
 	active_watchdog_pid=$!
@@ -258,6 +317,7 @@ interrupt() {
 	if [ -n "$runtime_pid" ]; then
 		kill -TERM -- "-$runtime_pid" 2>/dev/null || true
 		kill -KILL -- "-$runtime_pid" 2>/dev/null || true
+		drain_runtime_group "$runtime_pid" || true
 	fi
 	[ -z "$watchdog_pid" ] || wait "$watchdog_pid" 2>/dev/null || true
 	[ -z "$runtime_pid" ] || wait "$runtime_pid" 2>/dev/null || true
