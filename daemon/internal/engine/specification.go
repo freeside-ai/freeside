@@ -649,6 +649,13 @@ func SubmitSpecificationRun(ctx context.Context, st *store.Store, spec Specifica
 				return err
 			}
 		}
+		sourceRef := spec.Source
+		if sourceRef.Kind == "" {
+			sourceRef = domain.SpecificationSource{Kind: domain.SpecificationSourceWorkItemArtifact, WorkItemArtifactID: spec.SourceArtifactID}
+		}
+		if err := tx.AssignTask(ctx, &want, &sourceRef); err != nil {
+			return err
+		}
 		if err := tx.PutRun(ctx, want); err != nil {
 			return err
 		}
@@ -3464,6 +3471,26 @@ func (e *Engine) startApprovedImplementation(ctx context.Context, request specif
 		return err
 	}); err != nil {
 		return false, err
+	}
+	if !alreadyExists {
+		body, err := e.readArtifactBody(ctx, specArtifactID)
+		if err != nil {
+			return false, err
+		}
+		if title, failure := fallbackSpecificationTitle([]byte(body)); failure == "" {
+			if err := e.store.Write(ctx, func(tx *store.WriteTx) error {
+				verified, err := verifySpecificationTerminal(ctx, &tx.ReadTx, request)
+				if err != nil {
+					return err
+				}
+				if err := authorizeSpecificationImplementation(verified, specArtifactID); err != nil {
+					return err
+				}
+				return tx.SetTaskName(ctx, verified.binding.binding.run.TaskID, domain.DisplayName{Text: title, Source: domain.DisplayNameSourceSpecification})
+			}); err != nil {
+				return false, err
+			}
+		}
 	}
 	implementationPolicy, err := domain.NewResolvedPolicy(request.ImplementationRunID, resolved.Keys)
 	if err != nil {

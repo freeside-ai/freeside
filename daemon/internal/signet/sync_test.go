@@ -321,7 +321,7 @@ func approveAndPersistImplementationRun(t *testing.T, ctx context.Context, f fix
 
 func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
 	ctx := context.Background()
-	f := newFixture(t)
+	f := newRunFixture(t)
 	campaignID, _, run := seedSpecificationCampaign(t, ctx, f, "run-1")
 	approveAndPersistImplementationRun(t, ctx, f, campaignID, run)
 	beforeObservation, err := f.service.Revision(ctx)
@@ -440,7 +440,7 @@ func seedProductionSubmission(t *testing.T, ctx context.Context, f fixture, run 
 // specification run.
 func TestSpecificationRunFinishesWhenImplementationBound(t *testing.T) {
 	ctx := context.Background()
-	f := newFixture(t)
+	f := newRunFixture(t)
 	campaignID, specificationRunID, run := seedSpecificationCampaign(t, ctx, f, "run-1")
 
 	before, err := f.service.GetRun(ctx, specificationRunID)
@@ -507,7 +507,7 @@ func TestSpecificationRunFinishesWhenImplementationBound(t *testing.T) {
 // implementation run, no run left on the active list is a specification run.
 func TestBoundSpecificationRunsLeaveActiveList(t *testing.T) {
 	ctx := context.Background()
-	f := newFixture(t)
+	f := newRunFixture(t)
 	implRunIDs := []domain.RunID{"run-1", "run-2", "run-3"}
 	specificationRuns := map[domain.RunID]bool{}
 	for index, implRunID := range implRunIDs {
@@ -541,7 +541,7 @@ func TestBoundSpecificationRunsLeaveActiveList(t *testing.T) {
 
 func TestRunSummaryAuthenticatesSubmittedReservationBeforeAnAttemptExists(t *testing.T) {
 	ctx := context.Background()
-	f := newFixture(t)
+	f := newRunFixture(t)
 	run := domain.Run{
 		ID: "run-submitted", ProjectID: "proj-1",
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
@@ -580,7 +580,7 @@ func TestRunSummaryAuthenticatesSubmittedReservationBeforeAnAttemptExists(t *tes
 // milestones, distinct from the pending state a submitted run reports.
 func TestUnobservedLegacyRunProjectsWithoutBackfill(t *testing.T) {
 	ctx := context.Background()
-	f := newFixture(t)
+	f := newRunFixture(t)
 	run := domain.Run{
 		ID: "run-legacy", ProjectID: "proj-1",
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",

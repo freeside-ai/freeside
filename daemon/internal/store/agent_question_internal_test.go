@@ -29,7 +29,7 @@ func TestAgentQuestionActionSetAuthentication(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
 		st, item := authenticatedAgentQuestionFixture(t)
-		putItem(t, ctx, st, item)
+		putItem(t, ctx, st, &item)
 
 		item.RequestedDecision = []domain.Action{domain.ActionAnswerWithoutRetry, domain.ActionStop}
 		surface, err := domain.NewDecisionSurface(item)

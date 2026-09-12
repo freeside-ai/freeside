@@ -118,6 +118,22 @@ func (tx *WriteTx) putIntakeOccurrence(ctx context.Context, o domain.IntakeOccur
 // its parents, rejecting a stored binding that does not match (verifyIntake
 // Admission).
 func (tx *ReadTx) scanIntakeOccurrence(ctx context.Context, sc scanner) (domain.IntakeOccurrence, error) {
+	o, err := tx.scanIntakeOccurrenceCoordinates(sc)
+	if err != nil {
+		return domain.IntakeOccurrence{}, err
+	}
+	if o.Admission != nil {
+		if err := tx.verifyIntakeAdmission(ctx, o); err != nil {
+			return domain.IntakeOccurrence{}, err
+		}
+	}
+	return o, nil
+}
+
+// scanIntakeOccurrenceCoordinates checks the stored occurrence's own fields.
+// It confers no authority on an admission; ordinary readers additionally run
+// verifyIntakeAdmission. Task migration needs only these event coordinates.
+func (tx *ReadTx) scanIntakeOccurrenceCoordinates(sc scanner) (domain.IntakeOccurrence, error) {
 	var (
 		repositoryID       int64
 		issueNumber        int
@@ -165,11 +181,6 @@ func (tx *ReadTx) scanIntakeOccurrence(ctx context.Context, sc scanner) (domain.
 	}
 	if err := regateIntakeReasonColumn(o.Supersession != nil, supersessionCause, supersessionReason); err != nil {
 		return domain.IntakeOccurrence{}, err
-	}
-	if o.Admission != nil {
-		if err := tx.verifyIntakeAdmission(ctx, o); err != nil {
-			return domain.IntakeOccurrence{}, err
-		}
 	}
 	return o, nil
 }

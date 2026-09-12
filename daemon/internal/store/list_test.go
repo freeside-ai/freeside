@@ -42,7 +42,7 @@ func TestBootstrapListsOneSnapshot(t *testing.T) {
 	revSeed := revAfter()
 
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
-		if err := tx.PutAttentionItem(ctx, f.item); err != nil {
+		if err := f.putItem(ctx, tx); err != nil {
 			return err
 		}
 		return tx.PutAttentionDelivery(ctx, f.delivery)
@@ -128,7 +128,7 @@ func TestListSnapshotIsolatedFromConcurrentWrite(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
-	seedItem(t, s, f)
+	seedItem(t, s, &f)
 
 	before, err := s.ServerState(ctx)
 	if err != nil {
@@ -207,7 +207,7 @@ func TestListDeterministicOrder(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
-	seedItem(t, s, f)
+	seedItem(t, s, &f)
 
 	for _, id := range []domain.RunID{"run-b", "run-a", "run-c"} {
 		run := domain.Run{ID: id, ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
@@ -256,7 +256,7 @@ func TestListDeterministicOrder(t *testing.T) {
 	for _, r := range runs {
 		gotRuns = append(gotRuns, r.Value.ID)
 	}
-	wantRuns := []domain.RunID{"run-a", "run-b", "run-c"}
+	wantRuns := []domain.RunID{"run-1", "run-a", "run-b", "run-c"}
 	if fmt.Sprint(gotRuns) != fmt.Sprint(wantRuns) {
 		t.Errorf("run order = %v, want %v", gotRuns, wantRuns)
 	}
@@ -327,7 +327,7 @@ func TestListAttentionItemsRegatesEvidence(t *testing.T) {
 		if err := tx.PutConversation(ctx, f.conversation); err != nil {
 			return err
 		}
-		return tx.PutAttentionItem(ctx, f.item)
+		return f.putItem(ctx, tx)
 	})
 	if err != nil {
 		t.Fatalf("seed item with evidence: %v", err)

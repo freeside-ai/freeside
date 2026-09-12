@@ -50,7 +50,12 @@ func (e *Engine) StartFakeRun(ctx context.Context, spec FakeRunSpec) (domain.Run
 				want.ID, domain.ErrImmutableTransition)
 		}
 	case errors.Is(err, store.ErrNotFound):
-		if err := e.store.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, want) }); err != nil {
+		if err := e.store.Write(ctx, func(tx *store.WriteTx) error {
+			if err := tx.AssignTask(ctx, &want, nil); err != nil {
+				return err
+			}
+			return tx.PutRun(ctx, want)
+		}); err != nil {
 			return domain.Run{}, fmt.Errorf("start fake run %q: %w", want.ID, err)
 		}
 		existing = want
@@ -213,7 +218,7 @@ func (e *Engine) ensureFeedbackStage(ctx context.Context, runID domain.RunID) (b
 }
 
 func runSubject(run domain.Run) domain.Subject {
-	return domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID}
+	return domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID, TaskID: &run.TaskID}
 }
 
 func initialItem(run domain.Run, displayNames *domain.DisplayNames) domain.AttentionItem {

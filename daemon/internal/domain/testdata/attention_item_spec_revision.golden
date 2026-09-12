@@ -4,7 +4,8 @@
   "subject": {
     "subject_type": "run",
     "subject_id": "run-1",
-    "run_id": "run-1"
+    "run_id": "run-1",
+    "task_id": null
   },
   "type": "spec_approval",
   "priority": "normal",

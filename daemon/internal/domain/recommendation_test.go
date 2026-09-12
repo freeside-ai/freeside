@@ -377,7 +377,7 @@ func TestRecommendationDerivationRejectsAuthorityMismatches(t *testing.T) {
 
 func TestRecommendationEnumRegistries(t *testing.T) {
 	t.Parallel()
-	if len(domain.AllRecommendationSources) != 3 || len(domain.AllJudgmentSites) != 1 {
+	if len(domain.AllRecommendationSources) != 3 || len(domain.AllJudgmentSites) != 2 {
 		t.Fatalf("registries = %v / %v", domain.AllRecommendationSources, domain.AllJudgmentSites)
 	}
 }

@@ -276,7 +276,7 @@ import Testing
         run.display_names = .init(
             value1: .init(
                 project: .init(text: "proj-1", source: .identifier),
-                work_unit: .init(text: "run-execution_failure", source: .identifier)))
+                task: .init(text: "run-execution_failure", source: .identifier)))
         #expect(
             AttentionDisplay.rowContext(run)
                 == .init(

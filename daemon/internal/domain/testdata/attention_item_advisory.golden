@@ -4,7 +4,8 @@
   "subject": {
     "subject_type": "system",
     "subject_id": "daemon",
-    "run_id": null
+    "run_id": null,
+    "task_id": null
   },
   "type": "system_health",
   "priority": "normal",

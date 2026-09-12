@@ -50,12 +50,10 @@ func TestGetRejectsInconsistentRow(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := db.ExecContext(ctx, `DELETE FROM runs`); err != nil {
+			if _, err := db.ExecContext(ctx, `DELETE FROM task_runs; DELETE FROM runs`); err != nil {
 				t.Fatalf("reset: %v", err)
 			}
-			if _, err := db.ExecContext(ctx,
-				`INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body) VALUES (?, ?, ?, 1, 1, ?)`,
-				tc.id, tc.proj, tc.policy, body); err != nil {
+			if err := insertRawRunFixture(ctx, db, tc.id, tc.proj, tc.policy, 1, 1, body); err != nil {
 				t.Fatalf("insert corrupt row: %v", err)
 			}
 			gets := []struct {
@@ -166,9 +164,7 @@ func TestGetResolvedPolicyRejectsForgedDigest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode run: %v", err)
 	}
-	if _, err := db.ExecContext(ctx,
-		`INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body) VALUES ('run-1', 'proj-1', 'sha256:forged', 1, 1, ?)`,
-		runBody); err != nil {
+	if err := insertRawRunFixture(ctx, db, "run-1", "proj-1", "sha256:forged", 1, 1, runBody); err != nil {
 		t.Fatalf("insert run: %v", err)
 	}
 
@@ -274,6 +270,9 @@ func TestMigrateLegacyTrustProfileRunPolicyIsExact(t *testing.T) {
 	}
 	schedules := []domain.Schedule{armed, fired, resolved, expired}
 	if err := st.Write(ctx, func(tx *WriteTx) error {
+		if err := tx.AssignTask(ctx, &legacy, nil); err != nil {
+			return err
+		}
 		if err := tx.PutRun(ctx, legacy); err != nil {
 			return err
 		}
@@ -287,6 +286,7 @@ func TestMigrateLegacyTrustProfileRunPolicyIsExact(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	updated.TaskID = legacy.TaskID
 	changedSpec := updated
 	changedSpec.SpecDigest = "sha256:changed-spec"
 	if err := st.Write(ctx, func(tx *WriteTx) error {
@@ -482,12 +482,10 @@ func TestGetRejectsForgedMetadata(t *testing.T) {
 	seeds := map[string]func(entityVersion, asOfRevision int64){
 		"run": func(ev, rev int64) {
 			t.Helper()
-			if _, err := db.ExecContext(ctx, `DELETE FROM runs`); err != nil {
+			if _, err := db.ExecContext(ctx, `DELETE FROM task_runs; DELETE FROM runs`); err != nil {
 				t.Fatalf("reset runs: %v", err)
 			}
-			if _, err := db.ExecContext(ctx,
-				`INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body) VALUES ('run-1', 'proj-1', 'sha256:policy', ?, ?, ?)`,
-				ev, rev, runBody); err != nil {
+			if err := insertRawRunFixture(ctx, db, "run-1", "proj-1", "sha256:policy", ev, rev, runBody); err != nil {
 				t.Fatalf("insert run: %v", err)
 			}
 		},
@@ -645,18 +643,22 @@ func TestListRejectsForgedMetadata(t *testing.T) {
 			`DELETE FROM attention_decision_surfaces`,
 			`DELETE FROM attention_items`,
 			`DELETE FROM conversations`,
-			`DELETE FROM runs`,
+			`DELETE FROM task_runs; DELETE FROM runs`,
 		} {
 			if _, err := db.ExecContext(ctx, reset); err != nil {
 				t.Fatalf("%s: %v", reset, err)
 			}
 		}
+		if err := insertRawRunFixture(ctx, db, "run-a", "proj-1", "sha256:policy", ev, rev, bodies["run-a"]); err != nil {
+			t.Fatal(err)
+		}
+		if err := insertRawRunFixture(ctx, db, "run-b", "proj-1", "sha256:policy", 1, 1, bodies["run-b"]); err != nil {
+			t.Fatal(err)
+		}
 		stmts := []struct {
 			sql  string
 			args []any
 		}{
-			{`INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body) VALUES ('run-a', 'proj-1', 'sha256:policy', ?, ?, ?)`, []any{ev, rev, bodies["run-a"]}},
-			{`INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body) VALUES ('run-b', 'proj-1', 'sha256:policy', 1, 1, ?)`, []any{bodies["run-b"]}},
 			{`INSERT INTO conversations (id, entity_version, as_of_revision, body) VALUES ('conv-a', ?, ?, ?)`, []any{ev, rev, bodies["conv-a"]}},
 			{`INSERT INTO conversations (id, entity_version, as_of_revision, body) VALUES ('conv-b', 1, 1, ?)`, []any{bodies["conv-b"]}},
 			{`INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, subject_run_id, entity_version, as_of_revision, body) VALUES ('item-a', 'proj-1', NULL, ?, ?, 'run-a', ?, ?, ?)`, []any{item.Type, item.Status, ev, rev, bodies["item-a"]}},
@@ -805,9 +807,7 @@ func TestListRejectsInconsistentRow(t *testing.T) {
 		{
 			"run project_id column differs from body",
 			func() {
-				if _, err := db.ExecContext(ctx,
-					`INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body) VALUES ('run-1', 'proj-other', 'sha256:policy', 1, 1, ?)`,
-					runBody); err != nil {
+				if err := insertRawRunFixture(ctx, db, "run-1", "proj-other", "sha256:policy", 1, 1, runBody); err != nil {
 					t.Fatalf("insert run: %v", err)
 				}
 			},
@@ -883,7 +883,7 @@ func TestListRejectsInconsistentRow(t *testing.T) {
 			for _, reset := range []string{
 				`DELETE FROM attention_deliveries`,
 				`DELETE FROM attention_items`,
-				`DELETE FROM runs`,
+				`DELETE FROM task_runs; DELETE FROM runs`,
 				`DELETE FROM conversations WHERE id != 'conv-1'`,
 			} {
 				if _, err := db.ExecContext(ctx, reset); err != nil {
@@ -1106,6 +1106,7 @@ func TestPutAttentionItemPreNoticeRowConverges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAttentionItem: %v", err)
 	}
+	bindRawItemTask(t, ctx, db, &item)
 	surface, err := domain.NewDecisionSurface(item)
 	if err != nil {
 		t.Fatalf("NewDecisionSurface: %v", err)
@@ -1120,8 +1121,8 @@ func TestPutAttentionItemPreNoticeRowConverges(t *testing.T) {
 		t.Fatal("legacy strip did not apply")
 	}
 	if _, err := db.ExecContext(ctx,
-		`INSERT INTO attention_items (id, project_id, conversation_id, entity_version, as_of_revision, body) VALUES (?, ?, NULL, 1, 1, ?)`,
-		item.ID, item.ProjectID, legacy); err != nil {
+		`INSERT INTO attention_items (id, project_id, subject_task_id, conversation_id, entity_version, as_of_revision, body) VALUES (?, ?, ?, NULL, 1, 1, ?)`,
+		item.ID, item.ProjectID, item.Subject.TaskID, legacy); err != nil {
 		t.Fatalf("insert legacy row: %v", err)
 	}
 	insertDecisionSurface(t, ctx, db, item)
@@ -1188,6 +1189,7 @@ func TestPutAttentionItemLegacyOffsetExpiresWhenConverges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAttentionItem: %v", err)
 	}
+	bindRawItemTask(t, ctx, db, &item)
 	surface, err := domain.NewDecisionSurface(item)
 	if err != nil {
 		t.Fatalf("NewDecisionSurface: %v", err)
@@ -1208,8 +1210,8 @@ func TestPutAttentionItemLegacyOffsetExpiresWhenConverges(t *testing.T) {
 		t.Fatalf("offset rewrite did not apply; body = %s", body)
 	}
 	if _, err := db.ExecContext(ctx,
-		`INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body) VALUES (?, ?, NULL, ?, ?, 1, 1, ?)`,
-		item.ID, item.ProjectID, item.Type, item.Status, legacy); err != nil {
+		`INSERT INTO attention_items (id, project_id, subject_task_id, conversation_id, item_type, status, entity_version, as_of_revision, body) VALUES (?, ?, ?, NULL, ?, ?, 1, 1, ?)`,
+		item.ID, item.ProjectID, item.Subject.TaskID, item.Type, item.Status, legacy); err != nil {
 		t.Fatalf("insert legacy row: %v", err)
 	}
 	insertDecisionSurface(t, ctx, db, item)

@@ -413,7 +413,7 @@ public enum AttentionFixtures {
             claimProvenance = claimHeadIndependent(key: key)
         default:
             subject = .run(
-                .init(subject_type: .run, subject_id: "run-\(key)", run_id: "run-\(key)"))
+                .init(subject_type: .run, subject_id: "run-\(key)", run_id: "run-\(key)", task_id: "task-run-\(key)"))
             prHeadSHA = "cafebabe"
             provenance = .head_bound(
                 .init(
@@ -764,7 +764,7 @@ public enum AttentionFixtures {
         let displayNames = Components.Schemas.AttentionItem.display_namesPayload(
             value1: .init(
                 project: .init(text: "owner/repo", source: .name),
-                work_unit: .init(text: "#724", source: .name)
+                task: .init(text: "#724", source: .name)
             ))
         let billableCost: Components.Schemas.AttentionItem.billable_cost_so_farPayload? =
             type == .review_diminishing_returns

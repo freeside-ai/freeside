@@ -163,8 +163,8 @@ func TestGolden(t *testing.T) {
 		TerminalOutcome: domain.ReviewClean,
 	}
 	displayNames := domain.DisplayNames{
-		Project:  domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
-		WorkUnit: domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
+		Project: domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
+		Task:    domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
 	}
 	diffStats := domain.DiffStats{
 		FilesChanged: 12, Additions: 240, Deletions: 31,
@@ -764,7 +764,7 @@ func TestGolden(t *testing.T) {
 	attempt := domain.Attempt{ID: "attempt-1", StageID: "stage-1", Number: 1, InvocationID: "inv-1"}
 	stage := domain.Stage{ID: "stage-1", RunID: "run-1", Name: "implementation", Attempts: []domain.Attempt{attempt}}
 	run := domain.Run{
-		ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: resolvedPolicy.Digest,
+		TaskID: "task-1", ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: resolvedPolicy.Digest,
 		CampaignID: "campaign-1", AttemptNumber: 2,
 		AttemptReason: "Retry after repairing the acceptance rig", ParentRunID: "run-0",
 		Stages: []domain.Stage{stage},
@@ -1509,6 +1509,12 @@ func TestGolden(t *testing.T) {
 		{"candidate_authorization_blocked", blockedAuthorization},
 		{"candidate_authorization_advisory", advisoryAuthorization},
 		{"run", run},
+		{"task", domain.Task{
+			ID: "task-1", ProjectID: "proj-1", Source: &intakeSpecSource,
+			Name:      domain.DisplayName{Text: "Improve task navigation", Source: domain.DisplayNameSourceSpecification},
+			CreatedAt: ts, CampaignIDs: []domain.CampaignID{"campaign-1"},
+		}},
+		{"subject_task", domain.Subject{Type: domain.SubjectTask, ID: "task-1", TaskID: new(domain.TaskID("task-1"))}},
 		{"production_attempt", productionAttempt},
 		{"initiator_config", initiator},
 		{"initiator_config_manual", manualInitiator},

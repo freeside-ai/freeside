@@ -185,7 +185,7 @@ import Testing
         snapshot.run.display_names = .init(
             value1: .init(
                 project: .init(text: "owner/repo", source: .name),
-                work_unit: .init(text: "", source: .identifier)))
+                task: .init(text: "", source: .identifier)))
 
         #expect(
             MockContractValidation.runSnapshotBreach(snapshot, serverRevision: 12)

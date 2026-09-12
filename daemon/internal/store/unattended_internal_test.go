@@ -129,11 +129,11 @@ func TestAttentionHealthPostureMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 69 {
-		t.Fatalf("schema version = %d, want 69", got)
+	if got := rawVersion(t, db); got != 70 {
+		t.Fatalf("schema version = %d, want 70", got)
 	}
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id,
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, subject_task_id,
 		        readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body
 		 FROM attention_items WHERE id = ?`, item.ID))
 	if err != nil {
@@ -142,16 +142,16 @@ func TestAttentionHealthPostureMigrationAppliesFromHead(t *testing.T) {
 	if got.Posture == nil || *got.Posture != domain.HealthPostureBlocking {
 		t.Fatalf("backfilled posture = %v, want blocking", got.Posture)
 	}
-	if snapshot != (Snapshot{EntityVersion: 4, AsOfRevision: 8}) {
-		t.Fatalf("backfilled snapshot = %+v, want entity version 4 at revision 8", snapshot)
+	if snapshot != (Snapshot{EntityVersion: 5, AsOfRevision: 9}) {
+		t.Fatalf("backfilled snapshot = %+v, want entity version 5 at revision 9 after task migration", snapshot)
 	}
 	var serverRevision int64
 	if err := db.QueryRowContext(ctx,
 		`SELECT revision FROM server_state WHERE id = 1`).Scan(&serverRevision); err != nil {
 		t.Fatalf("read server revision: %v", err)
 	}
-	if serverRevision != 8 {
-		t.Fatalf("server revision = %d, want 8", serverRevision)
+	if serverRevision != 9 {
+		t.Fatalf("server revision = %d, want 9", serverRevision)
 	}
 }
 
@@ -192,7 +192,7 @@ func TestAttentionHealthPostureReconstructionFailsClosed(t *testing.T) {
 		t.Fatalf("seed malformed item: %v", err)
 	}
 	_, _, err = scanAttentionItemRecord(db.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id,
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, subject_task_id,
 		        readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body
 		 FROM attention_items WHERE id = ?`, item.ID))
 	if !errors.Is(err, domain.ErrHealthPostureInconsistent) {

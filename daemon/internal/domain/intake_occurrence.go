@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"time"
@@ -358,4 +360,11 @@ func NewIntakeOccurrence(
 		return IntakeOccurrence{}, err
 	}
 	return o, nil
+}
+
+// IntakeImplementationRunID preserves the label occurrence's content-addressed
+// implementation identity across intake, migration, and replay.
+func IntakeImplementationRunID(occurrence IntakeOccurrence) RunID {
+	sum := sha256.Sum256([]byte("freeside.label-intake.implementation/v1\x00" + occurrence.UpstreamEventID()))
+	return RunID("run-" + hex.EncodeToString(sum[:]))
 }

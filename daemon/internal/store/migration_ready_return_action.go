@@ -130,7 +130,7 @@ func readyReturnCandidate(
 	// and the shared scanner's column list must still line up.
 	item, snapshot, err := scanAttentionItemRecord(tx.QueryRowContext(ctx,
 		`SELECT id, project_id, conversation_id, item_type, status, health_posture,
-		        subject_run_id, readiness_summary, NULL AS readiness_detail, yield_history,
+		        subject_run_id, NULL AS subject_task_id, readiness_summary, NULL AS readiness_detail, yield_history,
 		        entity_version, as_of_revision, body
 		 FROM attention_items WHERE id = ?`, id))
 	if err != nil {
@@ -144,7 +144,7 @@ func readyReturnCandidate(
 		return readyReturnRewrite{}, false, nil
 	}
 
-	reader := ReadTx{tx: tx}
+	reader := ReadTx{tx: tx, beforeTasks: true}
 	surface, err := reader.DecisionSurface(ctx, id)
 	if err != nil || !surface.Matches(item) ||
 		item.DecisionSurface != (domain.DecisionSurfaceRef{Epoch: surface.Epoch, Digest: surface.Digest}) {
@@ -223,7 +223,7 @@ func readyBindingForMigration(
 		formatTime(binding.RecordedAt) != recordedAt {
 		return domain.ReadyItemPRBinding{}, false, nil
 	}
-	reader := ReadTx{tx: tx}
+	reader := ReadTx{tx: tx, beforeTasks: true}
 	if err := reader.validateReadyItemPRBindingAgainst(ctx, item, binding); err != nil {
 		return domain.ReadyItemPRBinding{}, false, nil
 	}

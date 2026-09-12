@@ -288,6 +288,9 @@ func TestExistingFakePublicationResultReturnsDurableTerminalItem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error { return storetest.BindSubject(ctx, tx, &item) }); err != nil {
+		t.Fatal(err)
+	}
 	if err := attention.PutItem(ctx, item); err != nil {
 		t.Fatal(err)
 	}

@@ -45,8 +45,8 @@ func TestWorkUnitCompletedMilestoneMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 69 {
-		t.Fatalf("schema version = %d, want 69", got)
+	if got := rawVersion(t, db); got != 70 {
+		t.Fatalf("schema version = %d, want 70", got)
 	}
 	var kept int
 	if err := db.QueryRowContext(ctx,
@@ -212,17 +212,12 @@ func TestRunSuccessor(t *testing.T) {
 	}
 	seed := func(run domain.Run, attempt any, parent any) {
 		t.Helper()
-		body, err := encode(run)
-		if err != nil {
+		if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutRun(ctx, run) }); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := st.db.ExecContext(ctx, `INSERT INTO runs
-			(id, project_id, policy_digest, campaign_id, attempt_number, attempt_reason, parent_run_id,
-			 entity_version, as_of_revision, body)
-			VALUES (?, 'proj-1', 'sha256:policy', ?, ?, ?, ?, 1, 1, ?)`,
-			run.ID, nullable(string(run.CampaignID)), attempt, nullable(run.AttemptReason),
-			parent, body); err != nil {
-			t.Fatalf("seed run %s: %v", run.ID, err)
+		// Forge only the selected lineage columns after seeding a valid parent.
+		if _, err := st.db.ExecContext(ctx, `UPDATE runs SET attempt_number = ?, parent_run_id = ? WHERE id = ?`, attempt, parent, run.ID); err != nil {
+			t.Fatal(err)
 		}
 	}
 	retryRun := func(number int) domain.Run {
@@ -283,6 +278,9 @@ func TestRunSuccessor(t *testing.T) {
 	misbound.ID = derivedRetryImplementationRunID(campaignID, 3)
 	misbound.ParentRunID = "run-victim"
 	seed(legacyRun("run-victim"), nil, nil)
+	if err := st.db.QueryRowContext(ctx, `SELECT task_id FROM runs WHERE id = ?`, misbound.ID).Scan(&misbound.TaskID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.db.ExecContext(ctx,
 		`UPDATE runs SET parent_run_id = 'run-victim', body = ? WHERE id = ?`,
 		mustEncode(t, misbound), misbound.ID); err != nil {
@@ -300,11 +298,4 @@ func mustEncode(t *testing.T, run domain.Run) string {
 		t.Fatal(err)
 	}
 	return body
-}
-
-func nullable(value string) any {
-	if value == "" {
-		return nil
-	}
-	return value
 }

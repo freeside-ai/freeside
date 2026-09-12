@@ -514,7 +514,7 @@ enum RunDisplay {
     /// read alike. The submission instant stays on the run timeline.
     static func metaLine(_ run: Components.Schemas.Run, now: Date) -> String {
         var parts = [projectName(run)]
-        if let workUnit = run.display_names?.value1.work_unit.text, !workUnit.isEmpty {
+        if let workUnit = run.display_names?.value1.task.text, !workUnit.isEmpty {
             parts.append(workUnit)
         }
         if let activity = run.last_activity_at {

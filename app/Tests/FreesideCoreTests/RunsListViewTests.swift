@@ -226,10 +226,10 @@ import Testing
         #expect(RunDisplay.metaLine(run, now: now) == "freeside")
         run.display_names = .init(
             value1: .init(
-                project: .init(text: "Project name", source: .name), work_unit: .init(text: "#12", source: .name)))
+                project: .init(text: "Project name", source: .name), task: .init(text: "#12", source: .name)))
         #expect(RunDisplay.metaLine(run, now: now) == "Project name · #12")
         run.display_names?.value1.project.text = ""
-        run.display_names?.value1.work_unit.text = ""
+        run.display_names?.value1.task.text = ""
         #expect(RunDisplay.metaLine(run, now: now) == "freeside")
     }
 

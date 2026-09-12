@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -38,12 +39,13 @@ import (
 
 const putRunSQL = `
 INSERT INTO runs (
-    id, project_id, policy_digest, campaign_id, attempt_number,
+    id, project_id, task_id, policy_digest, campaign_id, attempt_number,
     attempt_reason, parent_run_id, entity_version, as_of_revision, body
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     project_id     = excluded.project_id,
+    task_id        = excluded.task_id,
     policy_digest  = excluded.policy_digest,
     campaign_id    = excluded.campaign_id,
     attempt_number = excluded.attempt_number,
@@ -54,13 +56,6 @@ ON CONFLICT (id) DO UPDATE SET
     body           = excluded.body`
 
 func (tx *WriteTx) PutRun(ctx context.Context, run domain.Run) error {
-	if err := tx.authenticateRunProductionLineage(ctx, run); err != nil {
-		return fmt.Errorf("put run %q: %w", run.ID, err)
-	}
-	body, err := encode(run)
-	if err != nil {
-		return fmt.Errorf("put run %q: %w", run.ID, err)
-	}
 	existing, err := tx.existingBody(ctx, `SELECT body FROM runs WHERE id = ?`, run.ID)
 	if err != nil {
 		return fmt.Errorf("put run %q: %w", run.ID, err)
@@ -70,17 +65,30 @@ func (tx *WriteTx) PutRun(ctx context.Context, run domain.Run) error {
 		if err != nil {
 			return fmt.Errorf("put run %q: %w", run.ID, err)
 		}
+		if run.TaskID == "" {
+			run.TaskID = old.TaskID
+		}
 		if err := domain.ValidateRunTransition(old, run); err != nil {
 			return fmt.Errorf("put run %q: %w", run.ID, mapTransition(err))
 		}
 	}
+	if err := tx.AssignTask(ctx, &run, nil); err != nil {
+		return err
+	}
+	if err := tx.authenticateRunProductionLineage(ctx, run); err != nil {
+		return fmt.Errorf("put run %q: %w", run.ID, err)
+	}
+	body, err := encode(run)
+	if err != nil {
+		return fmt.Errorf("put run %q: %w", run.ID, err)
+	}
 	if _, err := tx.tx.ExecContext(ctx, putRunSQL,
-		run.ID, run.ProjectID, run.PolicyDigest, nullableString(string(run.CampaignID)),
+		run.ID, run.ProjectID, run.TaskID, run.PolicyDigest, nullableString(string(run.CampaignID)),
 		nullableInt(run.AttemptNumber), nullableString(run.AttemptReason),
 		nullableString(string(run.ParentRunID)), tx.asOfRevision, body); err != nil {
 		return fmt.Errorf("put run %q: %w", run.ID, err)
 	}
-	return nil
+	return tx.recordTaskRun(ctx, run)
 }
 
 // MigrateLegacyTrustProfileRunPolicy atomically translates the exact legacy
@@ -180,6 +188,7 @@ func (tx *ReadTx) scanRunSnapshot(ctx context.Context, sc scanner) (domain.Run, 
 		id           string
 		projectID    string
 		policyDigest string
+		taskID       domain.TaskID
 		campaignID   sql.NullString
 		attempt      sql.NullInt64
 		reason       sql.NullString
@@ -188,7 +197,7 @@ func (tx *ReadTx) scanRunSnapshot(ctx context.Context, sc scanner) (domain.Run, 
 		body         []byte
 	)
 	if err := sc.Scan(
-		&id, &projectID, &policyDigest, &campaignID, &attempt, &reason,
+		&id, &projectID, &taskID, &policyDigest, &campaignID, &attempt, &reason,
 		&parentRunID, &snap.EntityVersion, &snap.AsOfRevision, &body,
 	); err != nil {
 		return domain.Run{}, Snapshot{}, err
@@ -197,7 +206,7 @@ func (tx *ReadTx) scanRunSnapshot(ctx context.Context, sc scanner) (domain.Run, 
 	if err != nil {
 		return domain.Run{}, Snapshot{}, err
 	}
-	if run.ID != domain.RunID(id) || run.ProjectID != domain.ProjectID(projectID) ||
+	if (!tx.beforeTasks && run.TaskID == "") || run.TaskID != taskID || run.ID != domain.RunID(id) || run.ProjectID != domain.ProjectID(projectID) ||
 		run.PolicyDigest != domain.Digest(policyDigest) ||
 		!optionalStringEqual(campaignID, string(run.CampaignID)) ||
 		!optionalIntEqual(attempt, run.AttemptNumber) ||
@@ -208,6 +217,11 @@ func (tx *ReadTx) scanRunSnapshot(ctx context.Context, sc scanner) (domain.Run, 
 	}
 	if err := tx.authenticateRunProductionLineage(ctx, run); err != nil {
 		return domain.Run{}, Snapshot{}, err
+	}
+	if !tx.beforeTasks {
+		if err := tx.gateRunTask(ctx, run); err != nil {
+			return domain.Run{}, Snapshot{}, err
+		}
 	}
 	return run, snap, nil
 }
@@ -221,10 +235,13 @@ func (tx *ReadTx) GetRun(ctx context.Context, id domain.RunID) (domain.Run, erro
 // same row. It shares scanRunSnapshot with GetRun and ListRuns so every read
 // re-runs the identical returned-object trust gate.
 func (tx *ReadTx) GetRunSnapshot(ctx context.Context, id domain.RunID) (Snapshotted[domain.Run], error) {
-	run, snapshot, err := tx.scanRunSnapshot(ctx, tx.tx.QueryRowContext(ctx,
-		`SELECT id, project_id, policy_digest, campaign_id, attempt_number, attempt_reason,
+	query := `SELECT id, project_id, task_id, policy_digest, campaign_id, attempt_number, attempt_reason,
                 parent_run_id, entity_version, as_of_revision, body
-         FROM runs WHERE id = ?`, id))
+         FROM runs WHERE id = ?`
+	if tx.beforeTasks {
+		query = strings.Replace(query, "task_id", "'' AS task_id", 1)
+	}
+	run, snapshot, err := tx.scanRunSnapshot(ctx, tx.tx.QueryRowContext(ctx, query, id))
 	if err != nil {
 		return Snapshotted[domain.Run]{}, fmt.Errorf("get run %q: %w", id, notFoundOr(err))
 	}
@@ -249,7 +266,7 @@ func (tx *ReadTx) GetRunSnapshot(ctx context.Context, id domain.RunID) (Snapshot
 // run is served in its own right.
 func (tx *ReadTx) RunSuccessor(ctx context.Context, runID domain.RunID) (domain.RunID, bool, error) {
 	successor, _, err := tx.scanRunSnapshot(ctx, tx.tx.QueryRowContext(ctx,
-		`SELECT id, project_id, policy_digest, campaign_id, attempt_number, attempt_reason,
+		`SELECT id, project_id, task_id, policy_digest, campaign_id, attempt_number, attempt_reason,
                 parent_run_id, entity_version, as_of_revision, body
          FROM runs WHERE parent_run_id = ?
          ORDER BY attempt_number IS NULL, attempt_number, id LIMIT 1`,
@@ -424,8 +441,8 @@ func (tx *ReadTx) GetArtifact(ctx context.Context, id domain.ArtifactID) (domain
 }
 
 const putAttentionItemSQL = `
-INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, subject_task_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     project_id      = excluded.project_id,
     conversation_id = excluded.conversation_id,
@@ -433,6 +450,7 @@ ON CONFLICT (id) DO UPDATE SET
     status          = excluded.status,
     health_posture  = excluded.health_posture,
     subject_run_id  = excluded.subject_run_id,
+    subject_task_id = excluded.subject_task_id,
     entity_version  = attention_items.entity_version + 1,
     as_of_revision  = excluded.as_of_revision,
     body            = excluded.body`
@@ -485,6 +503,15 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 		if err != nil {
 			return fmt.Errorf("put attention item %q: %w", item.ID, err)
 		}
+		if item.Subject.TaskID == nil {
+			item.Subject.TaskID = decoded.Subject.TaskID
+		}
+		if item.ProjectID != decoded.ProjectID || !reflect.DeepEqual(item.Subject, decoded.Subject) {
+			return fmt.Errorf("put attention item %q: %w", item.ID, ErrImmutableConflict)
+		}
+		if err := tx.bindSubjectTask(ctx, item.ProjectID, &item.Subject); err != nil {
+			return err
+		}
 		// Derived fields do not create a version-advance demand. A constructor-
 		// built replay, or a caller trying to substitute either field, is compared
 		// with the stored values normalized back in.
@@ -494,6 +521,13 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 		// erase producer-derived labels already attached to the item.
 		if item.DisplayNames == nil && decoded.DisplayNames != nil {
 			item.DisplayNames = decoded.DisplayNames
+		}
+		// The task name is derived from the task, so it cannot force a
+		// new item version during a read-modify-write replay.
+		if item.DisplayNames != nil && decoded.DisplayNames != nil {
+			names := *item.DisplayNames
+			names.Task = decoded.DisplayNames.Task
+			item.DisplayNames = &names
 		}
 		if item.Type == decoded.Type {
 			if item.BillableCostSoFar == nil && decoded.BillableCostSoFar != nil {
@@ -602,6 +636,12 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	if err := tx.gateAgentQuestionItem(ctx, item); err != nil {
 		return fmt.Errorf("put attention item %q agent question binding: %w", item.ID, err)
 	}
+	if err := tx.bindSubjectTask(ctx, item.ProjectID, &item.Subject); err != nil {
+		return err
+	}
+	if err := tx.projectTaskName(ctx, &item); err != nil {
+		return err
+	}
 	surface, createdSurface, changedSurface, err := tx.prepareDecisionSurface(ctx, item, old)
 	if err != nil {
 		return fmt.Errorf("put attention item %q decision surface: %w", item.ID, err)
@@ -642,7 +682,7 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	}
 	if _, err := tx.tx.ExecContext(ctx, putAttentionItemSQL,
 		item.ID, item.ProjectID, item.ConversationID, item.Type, item.Status,
-		item.Posture, item.Subject.RunID, readinessSummary, readinessDetail, yieldHistory, tx.asOfRevision, body); err != nil {
+		item.Posture, item.Subject.RunID, item.Subject.TaskID, readinessSummary, readinessDetail, yieldHistory, tx.asOfRevision, body); err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
 	}
 	if err := tx.putAttentionItemPRReference(ctx, item); err != nil {
@@ -1212,7 +1252,7 @@ func (tx *ReadTx) getAttentionItemBindingRecord(
 	ctx context.Context, id domain.ItemID,
 ) (domain.AttentionItem, error) {
 	item, _, err := scanAttentionItemRecord(tx.tx.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, subject_task_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
 	if err != nil {
 		return domain.AttentionItem{}, notFoundOr(err)
 	}
@@ -1313,7 +1353,7 @@ func (tx *ReadTx) GetAttentionItem(ctx context.Context, id domain.ItemID) (domai
 // domain content matches, so acceptance needs the store's own version counter.
 func (tx *ReadTx) GetAttentionItemSnapshot(ctx context.Context, id domain.ItemID) (domain.AttentionItem, Snapshot, error) {
 	item, snap, err := tx.scanAttentionItemSnapshot(ctx, tx.tx.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, subject_task_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
 	if err != nil {
 		return domain.AttentionItem{}, Snapshot{}, fmt.Errorf("get attention item %q: %w", id, notFoundOr(err))
 	}
@@ -1329,7 +1369,7 @@ func (tx *ReadTx) GetAttentionItemRecord(
 	id domain.ItemID,
 ) (domain.AttentionItem, error) {
 	item, _, err := tx.scanAttentionItemHistory(ctx, tx.tx.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, subject_task_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
 	if err != nil {
 		return domain.AttentionItem{}, fmt.Errorf("get attention item record %q: %w", id, notFoundOr(err))
 	}
@@ -1350,6 +1390,9 @@ func (tx *ReadTx) GetAttentionItemRecord(
 func (tx *ReadTx) scanAttentionItemHistory(ctx context.Context, sc scanner) (domain.AttentionItem, Snapshot, error) {
 	item, snap, err := scanAttentionItemRecord(sc)
 	if err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	if err := tx.gateSubjectTask(ctx, item.ProjectID, item.Subject); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	if err := tx.gateReviewDisputeItem(ctx, item); err != nil {
@@ -1386,6 +1429,9 @@ func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (do
 	// Reconstruction re-runs the evidence gate: decode's Validate cannot check
 	// recipe approval, so an item carrying evidence under a now-unapproved (or
 	// forged) recipe fails closed rather than reconstructing as valid.
+	if err := tx.gateSubjectTask(ctx, item.ProjectID, item.Subject); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
 	if err := tx.gateEvidence(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
@@ -1414,6 +1460,9 @@ func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (do
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	tx.gateRecommendation(ctx, &item)
+	if err := tx.projectTaskName(ctx, &item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
 	return item, snap, nil
 }
 
@@ -1426,13 +1475,14 @@ func scanAttentionItemRecord(sc scanner) (domain.AttentionItem, Snapshot, error)
 		status         string
 		healthPosture  sql.NullString
 		subjectRunID   sql.NullString
+		subjectTaskID  sql.NullString
 		readinessBody  sql.NullString
 		detailBody     sql.NullString
 		yieldBody      sql.NullString
 		snap           Snapshot
 		body           []byte
 	)
-	if err := sc.Scan(&id, &projectID, &conversationID, &itemType, &status, &healthPosture, &subjectRunID, &readinessBody, &detailBody, &yieldBody, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
+	if err := sc.Scan(&id, &projectID, &conversationID, &itemType, &status, &healthPosture, &subjectRunID, &subjectTaskID, &readinessBody, &detailBody, &yieldBody, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	item, err := decode[domain.AttentionItem](body)
@@ -1463,6 +1513,11 @@ func scanAttentionItemRecord(sc scanner) (domain.AttentionItem, Snapshot, error)
 			*item.Subject.RunID == domain.RunID(subjectRunID.String)
 	} else {
 		consistent = consistent && item.Subject.RunID == nil
+	}
+	if subjectTaskID.Valid {
+		consistent = consistent && item.Subject.TaskID != nil && string(*item.Subject.TaskID) == subjectTaskID.String
+	} else {
+		consistent = consistent && item.Subject.TaskID == nil
 	}
 	if readinessBody.Valid {
 		readiness, err := decode[domain.ReadinessSummary]([]byte(readinessBody.String))

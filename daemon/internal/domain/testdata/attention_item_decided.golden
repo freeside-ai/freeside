@@ -4,7 +4,8 @@
   "subject": {
     "subject_type": "run",
     "subject_id": "run-1",
-    "run_id": "run-1"
+    "run_id": "run-1",
+    "task_id": null
   },
   "type": "ready_for_final_review",
   "priority": "normal",
@@ -152,7 +153,7 @@
       "text": "owner/repo",
       "source": "name"
     },
-    "work_unit": {
+    "task": {
       "text": "#724",
       "source": "name"
     }

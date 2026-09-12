@@ -188,6 +188,13 @@ func ValidateTerminalBinding(task Task, item domain.AttentionItem) (domain.Atten
 		return domain.AttentionItem{}, err
 	}
 	if got != string(want) {
+		beforeTasks, err := TerminalDigestBeforeTasks(task, item)
+		if err != nil {
+			return domain.AttentionItem{}, err
+		}
+		if got == string(beforeTasks) {
+			return item, nil
+		}
 		legacyWant, legacyErr := TerminalDigestBeforePRReference(task, item)
 		if legacyErr != nil {
 			return domain.AttentionItem{}, legacyErr
@@ -201,7 +208,22 @@ func ValidateTerminalBinding(task Task, item domain.AttentionItem) (domain.Atten
 	return item, nil
 }
 
+// BindTerminal commits the publication facts and retains the human reason.
+func BindTerminal(task Task, item domain.AttentionItem) (domain.AttentionItem, error) {
+	item.Reason = strings.TrimRight(item.Reason, "\n")
+	digest, err := TerminalDigest(task, item)
+	if err != nil {
+		return domain.AttentionItem{}, err
+	}
+	item.Reason += "\n\n" + terminalBindingPrefix + string(digest) + terminalBindingSuffix
+	return item, item.Validate()
+}
+
 func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error) {
+	// Task identity is derived from the run and labels are mutable presentation.
+	// Neither changes the publication facts this commitment authenticates.
+	item.Subject.TaskID = nil
+	item.DisplayNames = nil
 	item.ItemVersion = 1
 	item.Status = domain.StatusOpen
 	item.DecidedAt = nil
@@ -232,7 +254,7 @@ func TerminalDigestBeforePRReference(task Task, item domain.AttentionItem) (doma
 	type legacyAttentionItem struct {
 		ID                          domain.ItemID                              `json:"id"`
 		ProjectID                   domain.ProjectID                           `json:"project_id"`
-		Subject                     domain.Subject                             `json:"subject"`
+		Subject                     terminalSubjectBeforeTasks                 `json:"subject"`
 		Type                        domain.AttentionType                       `json:"type"`
 		Priority                    domain.Priority                            `json:"priority"`
 		Reason                      string                                     `json:"reason"`
@@ -261,7 +283,7 @@ func TerminalDigestBeforePRReference(task Task, item domain.AttentionItem) (doma
 	item.DecidedAt = nil
 	item.Timing = domain.TimingSummary{}
 	legacy := legacyAttentionItem{
-		ID: item.ID, ProjectID: item.ProjectID, Subject: item.Subject, Type: item.Type,
+		ID: item.ID, ProjectID: item.ProjectID, Subject: terminalLegacySubject(item.Subject), Type: item.Type,
 		Priority: item.Priority, Reason: item.Reason, RequestedDecision: item.RequestedDecision,
 		EvidenceSnapshot: item.EvidenceSnapshot, AgentClaims: item.AgentClaims,
 		ArtifactDigests: item.ArtifactDigests, PRHeadSHA: item.PRHeadSHA,

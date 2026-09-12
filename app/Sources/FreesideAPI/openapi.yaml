@@ -924,6 +924,7 @@ components:
         - attention_items
         - attention_deliveries
         - runs
+        - tasks
         - conversations
         - schedules
       properties:
@@ -950,6 +951,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/RunSnapshot"
+        tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskSnapshot"
         conversations:
           type: array
           items:
@@ -1079,6 +1084,155 @@ components:
           $ref: "#/components/schemas/EntityVersion"
         delivery:
           $ref: "#/components/schemas/AttentionDelivery"
+
+    TaskSnapshot:
+      type: object
+      description: One task and its derived summary at a single server revision.
+      additionalProperties: false
+      required: [as_of_revision, entity_version, task]
+      properties:
+        as_of_revision:
+          type: integer
+          format: int64
+          minimum: 1
+        entity_version:
+          type: integer
+          format: int64
+          minimum: 1
+        task:
+          $ref: "#/components/schemas/Task"
+
+    Task:
+      type: object
+      description: >
+        Stored work identity and name across specification revisions, campaigns,
+        and retries. Lifecycle summarizes the newest run for display and never
+        determines WIP membership. Source is null only for legacy or demo work
+        without a recoverable intake reference.
+      additionalProperties: false
+      required: [id, project_id, display_names, source, created_at, last_activity_at,
+                 lifecycle, current_position, campaign_ids, run_ids]
+      properties:
+        id:
+          type: string
+          minLength: 1
+        project_id:
+          type: string
+          minLength: 1
+        display_names:
+          $ref: "#/components/schemas/DisplayNames"
+        source:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/SpecificationSource"
+        created_at:
+          type: string
+          format: date-time
+        last_activity_at:
+          type: string
+          format: date-time
+        lifecycle:
+          type: string
+          nullable: true
+          enum: [active, finished, null]
+          description: The newest run's display lifecycle, or null before any run exists.
+        current_position:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskPosition"
+        campaign_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+        run_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+
+    TaskPosition:
+      type: object
+      description: The newest run, its latest stage, and its current review round and hold.
+      additionalProperties: false
+      required: [run_id, stage, round, hold_reason]
+      properties:
+        run_id:
+          type: string
+          minLength: 1
+        stage:
+          type: string
+          minLength: 1
+          nullable: true
+        round:
+          type: integer
+          minimum: 1
+          nullable: true
+        hold_reason:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RunHoldReason"
+
+    SpecificationSource:
+      description: The submitted artifact or stable issue identity that supplied the task.
+      oneOf:
+        - $ref: "#/components/schemas/ArtifactSpecificationSource"
+        - $ref: "#/components/schemas/IssueSpecificationSource"
+      discriminator:
+        propertyName: kind
+        mapping:
+          work_item_artifact: "#/components/schemas/ArtifactSpecificationSource"
+          issue_subject: "#/components/schemas/IssueSpecificationSource"
+
+    ArtifactSpecificationSource:
+      type: object
+      description: A digest-addressed, registered submission artifact.
+      additionalProperties: false
+      required: [kind, work_item_artifact_id, issue_subject]
+      properties:
+        kind:
+          type: string
+          enum: [work_item_artifact]
+        work_item_artifact_id:
+          type: string
+          minLength: 1
+        issue_subject:
+          nullable: true
+          enum: [null]
+
+    IssueSpecificationSource:
+      type: object
+      description: An issue subject identified independently of its observed title and body.
+      additionalProperties: false
+      required: [kind, work_item_artifact_id, issue_subject]
+      properties:
+        kind:
+          type: string
+          enum: [issue_subject]
+        work_item_artifact_id:
+          nullable: true
+          enum: [null]
+        issue_subject:
+          $ref: "#/components/schemas/IssueSubjectRef"
+
+    IssueSubjectRef:
+      type: object
+      description: The repository identity and issue number of an intake subject.
+      additionalProperties: false
+      required: [repo, repository_id, issue_number]
+      properties:
+        repo:
+          type: string
+          minLength: 1
+        repository_id:
+          type: integer
+          format: int64
+          minimum: 1
+        issue_number:
+          type: integer
+          minimum: 1
 
     RunSnapshot:
       type: object
@@ -2645,7 +2799,7 @@ components:
     JudgmentSite:
       type: string
       description: A declared daemon-side judgment site (plan §5.13).
-      enum: [finding_adjudicator]
+      enum: [finding_adjudicator, task_namer]
 
     DaemonPolicyRecommendationProvenance:
       type: object
@@ -2746,7 +2900,7 @@ components:
     DisplayNameSource:
       type: string
       description: Whether a display label is a chosen name or an explicit identifier fallback.
-      enum: [name, identifier]
+      enum: [name, identifier, operator, agent, specification]
 
     DisplayName:
       type: object
@@ -2764,11 +2918,11 @@ components:
       type: object
       description: Human-readable project and work-unit labels for a card or run row.
       additionalProperties: false
-      required: [project, work_unit]
+      required: [project, task]
       properties:
         project:
           $ref: "#/components/schemas/DisplayName"
-        work_unit:
+        task:
           $ref: "#/components/schemas/DisplayName"
 
     CostSoFar:
@@ -3737,6 +3891,7 @@ components:
           subject_type: "run"
           subject_id: "run-1"
           run_id: "run-1"
+          task_id: "task-1"
         type: "ready_for_final_review"
         priority: "normal"
         reason: "checks are green and the diff is ready"
@@ -3845,7 +4000,7 @@ components:
         finding_adjudication: null
         display_names:
           project: {text: "owner/repo", source: "name"}
-          work_unit: {text: "#724", source: "name"}
+          task: {text: "task-1", source: "identifier"}
         billable_cost_so_far: null
         execution_failure: null
         publish_block: null
@@ -3885,11 +4040,13 @@ components:
       oneOf:
         - $ref: "#/components/schemas/RunScopedSubject"
         - $ref: "#/components/schemas/UnscopedSubject"
+        - $ref: "#/components/schemas/TaskSubject"
       discriminator:
         propertyName: subject_type
         mapping:
           run: "#/components/schemas/RunScopedSubject"
           proposal_batch: "#/components/schemas/RunScopedSubject"
+          task: "#/components/schemas/TaskSubject"
           project: "#/components/schemas/UnscopedSubject"
           system: "#/components/schemas/UnscopedSubject"
 
@@ -3898,7 +4055,7 @@ components:
       description: >
         A run or run-scoped proposal batch; run_id is optional context, but
         when present it must carry a real id.
-      required: [subject_type, subject_id, run_id]
+      required: [subject_type, subject_id, run_id, task_id]
       properties:
         subject_type:
           type: string
@@ -3911,12 +4068,18 @@ components:
           minLength: 1
           nullable: true
 
+        task_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: The run's stored task identity, or null for an unscoped proposal batch.
+
     UnscopedSubject:
       type: object
       description: >
         A project- or system-scoped subject; it never carries a run_id
         (domain Subject.Validate rejects one as mis-scoped).
-      required: [subject_type, subject_id, run_id]
+      required: [subject_type, subject_id, run_id, task_id]
       properties:
         subject_type:
           type: string
@@ -3928,6 +4091,30 @@ components:
           nullable: true
           enum: [null]
           description: Always null for a project- or system-scoped subject.
+
+        task_id:
+          nullable: true
+          enum: [null]
+          description: Always null for a project- or system-scoped subject.
+
+    TaskSubject:
+      type: object
+      description: An attention item about a task across its runs.
+      additionalProperties: false
+      required: [subject_type, subject_id, run_id, task_id]
+      properties:
+        subject_type:
+          type: string
+          enum: [task]
+        subject_id:
+          type: string
+          minLength: 1
+        run_id:
+          nullable: true
+          enum: [null]
+        task_id:
+          type: string
+          minLength: 1
 
     AgentClaim:
       type: object
@@ -4610,7 +4797,7 @@ components:
         runs; summary fields are computed from the observation timeline and
         never persisted as workflow authority.
       required:
-        [id, project_id, display_names, created_at, last_activity_at, spec_digest,
+        [id, project_id, task_id, display_names, created_at, last_activity_at, spec_digest,
          policy_digest, campaign_id, attempt_number, attempt_reason,
          parent_run_id, stages, latest_milestone, outcome, hold_reason,
          lifecycle, superseded_by, completion, billable_cost_so_far]
@@ -4621,6 +4808,10 @@ components:
         project_id:
           type: string
           minLength: 1
+        task_id:
+          type: string
+          minLength: 1
+          description: The stable task identity shared by specification, implementation, and retry runs.
         display_names:
           nullable: true
           allOf:
@@ -4707,9 +4898,10 @@ components:
       example:
         id: "run-1"
         project_id: "proj-1"
+        task_id: "task-1"
         display_names:
           project: {text: "owner/repo", source: "name"}
-          work_unit: {text: "#724", source: "name"}
+          task: {text: "task-1", source: "identifier"}
         created_at: "2026-01-02T03:04:05Z"
         last_activity_at: "2026-01-02T03:06:05Z"
         spec_digest: "sha256:spec"

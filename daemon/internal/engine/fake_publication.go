@@ -469,12 +469,22 @@ func (w *fakePublicationWorkflow) start(ctx context.Context, spec FakePublicatio
 		err = errors.Join(err, rollbackFakePublicationHandoff(installedHandoff))
 	}
 	if errors.Is(err, errReplay) {
-		return publicationRun(committed), nil
+		return w.storedPublicationRun(ctx, committed.RunID)
 	}
 	if err != nil {
 		return domain.Run{}, fmt.Errorf("start fake publication: %w", err)
 	}
-	return publicationRun(committed), nil
+	return w.storedPublicationRun(ctx, committed.RunID)
+}
+
+func (w *fakePublicationWorkflow) storedPublicationRun(ctx context.Context, id domain.RunID) (domain.Run, error) {
+	var run domain.Run
+	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(ctx, id)
+		return err
+	})
+	return run, err
 }
 
 func validateNewFakePublicationBindings(
@@ -1011,7 +1021,9 @@ func fakePublicationPolicyState(
 	if err != nil {
 		return false, fmt.Errorf("load publication run %q: %w", task.RunID, err)
 	}
-	if reflect.DeepEqual(run, publicationRun(task)) {
+	expected := publicationRun(task)
+	expected.TaskID = run.TaskID
+	if reflect.DeepEqual(run, expected) {
 		policy, err := reader.GetResolvedPolicy(ctx, task.RunID)
 		if err != nil {
 			return false, fmt.Errorf("load publication resolved policy %q: %w", task.RunID, err)
@@ -1024,7 +1036,9 @@ func fakePublicationPolicyState(
 		}
 		return false, nil
 	}
-	if !reflect.DeepEqual(run, legacyPublicationRun(task)) {
+	legacyRun := legacyPublicationRun(task)
+	legacyRun.TaskID = run.TaskID
+	if !reflect.DeepEqual(run, legacyRun) {
 		return false, fmt.Errorf(
 			"publication run %q disagrees with task: %w",
 			task.RunID, domain.ErrParentKeyMismatch,
@@ -1050,8 +1064,14 @@ func convergeFakePublicationPolicyTx(
 	if err != nil || !legacy {
 		return false, err
 	}
+	stored, err := tx.GetRun(ctx, task.RunID)
+	if err != nil {
+		return false, err
+	}
+	updated := publicationRun(task)
+	updated.TaskID = stored.TaskID
 	if err := tx.MigrateLegacyTrustProfileRunPolicy(
-		ctx, legacyPublicationRun(task), publicationRun(task), publicationPolicy(task),
+		ctx, stored, updated, publicationPolicy(task),
 	); err != nil {
 		return false, err
 	}
@@ -1155,7 +1175,9 @@ func validateFakePublicationRun(
 	if err != nil {
 		return fmt.Errorf("load publication run %q: %w", task.RunID, err)
 	}
-	if !reflect.DeepEqual(run, publicationRun(task)) {
+	expected := publicationRun(task)
+	expected.TaskID = run.TaskID
+	if !reflect.DeepEqual(run, expected) {
 		return fmt.Errorf(
 			"publication run %q disagrees with task: %w",
 			task.RunID, domain.ErrParentKeyMismatch,
@@ -2327,6 +2349,11 @@ func (w *fakePublicationWorkflow) putTerminalItem(
 }
 
 func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
+	// The persisted subject's task was authenticated against its run. It is
+	// derived identity absent from older constructors, not a new replay input.
+	if expected.Subject.TaskID == nil {
+		expected.Subject.TaskID = current.Subject.TaskID
+	}
 	// Creation time is stamped when the item first lands. Recovery rebuilds
 	// the terminal shape, so compare it using the durable original stamp.
 	expected.CreatedAt = current.CreatedAt
@@ -2527,17 +2554,7 @@ func bindFakePublicationTerminalItem(
 	task fakePublicationTask,
 	item domain.AttentionItem,
 ) (domain.AttentionItem, error) {
-	item.Reason = strings.TrimRight(item.Reason, "\n")
-	digest, err := fakePublicationTerminalDigest(task, item)
-	if err != nil {
-		return domain.AttentionItem{}, err
-	}
-	item.Reason += "\n\n" + fakePublicationTerminalBindingPrefix +
-		string(digest) + fakePublicationTerminalBindingSuffix
-	if err := item.Validate(); err != nil {
-		return domain.AttentionItem{}, err
-	}
-	return item, nil
+	return fakepublication.BindTerminal(fakepublication.Task(task), item)
 }
 
 func validateFakePublicationTerminalBinding(

@@ -22,12 +22,12 @@ func displayNames(
 			Project: domain.DisplayName{
 				Text: string(projectID), Source: domain.DisplayNameSourceIdentifier,
 			},
-			WorkUnit: domain.DisplayName{
+			Task: domain.DisplayName{
 				Text: string(subject.ID), Source: domain.DisplayNameSourceIdentifier,
 			},
 		}
 		if subject.Type == domain.SubjectRun && subject.RunID != nil {
-			names.WorkUnit.Text = string(*subject.RunID)
+			names.Task.Text = string(*subject.RunID)
 		}
 		return names, names.Validate()
 	}

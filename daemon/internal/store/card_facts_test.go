@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestGoldenRoundTripCardFacts(t *testing.T) {
@@ -119,7 +120,11 @@ func TestGoldenRoundTripCardFacts(t *testing.T) {
 		if err := tx.PutReviewRecord(ctx, record, []domain.Finding{finding}); err != nil {
 			return err
 		}
-		for _, item := range items {
+		for name, item := range items {
+			if err := storetest.BindSubject(ctx, tx, &item); err != nil {
+				return err
+			}
+			items[name] = item
 			if err := tx.PutAttentionItem(ctx, item); err != nil {
 				return err
 			}
@@ -144,7 +149,7 @@ func TestGoldenRoundTripCardFacts(t *testing.T) {
 			if string(gotJSON) != string(marshalIndent(t, want)) {
 				t.Fatalf("round trip mismatch for %s", name)
 			}
-			golden.Assert(t, "attention_item_card_"+name, gotJSON)
+			golden.Assert(t, "attention_item_card_"+name, marshalIndent(t, fixedTaskGolden(got)))
 		})
 	}
 }
@@ -801,12 +806,12 @@ func storeCardFactItems(t *testing.T) map[string]domain.AttentionItem {
 	posture := domain.HealthPostureAdvisory
 	invocationID := domain.SpecificationInvocationID(runID, 99)
 	runNames := &domain.DisplayNames{
-		Project:  domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
-		WorkUnit: domain.DisplayName{Text: "#1003", Source: domain.DisplayNameSourceName},
+		Project: domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
+		Task:    domain.DisplayName{Text: "#1003", Source: domain.DisplayNameSourceName},
 	}
 	systemNames := &domain.DisplayNames{
 		Project: domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
-		WorkUnit: domain.DisplayName{
+		Task: domain.DisplayName{
 			Text: "daemon", Source: domain.DisplayNameSourceIdentifier,
 		},
 	}
@@ -1091,6 +1096,9 @@ func recordSpecApprovalTerminal(
 	item domain.AttentionItem,
 	iteration int,
 ) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return storetest.BindSubject(ctx, tx, &item) }); err != nil {
+		return err
+	}
 	var specification *domain.AgentClaim
 	var summaryDigest *domain.Digest
 	for index := range item.AgentClaims {

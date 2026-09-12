@@ -9,7 +9,8 @@
       "subject": {
         "subject_type": "run",
         "subject_id": "run-569",
-        "run_id": "run-569"
+        "run_id": "run-569",
+        "task_id": "task-569"
       },
       "type": "spec_approval",
       "priority": "normal",

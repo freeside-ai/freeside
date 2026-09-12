@@ -24,7 +24,10 @@ type ServerState struct {
 // state (and in particular cannot dodge the revision bump) even by mistake.
 // Only valid until the callback returns.
 type ReadTx struct {
-	tx *sql.Tx
+	// beforeTasks is used only by the 0062 data migration, whose existing
+	// producer-authentication pass runs before task columns are installed.
+	beforeTasks bool
+	tx          *sql.Tx
 	// Only Store.Read initializes these caches: write transactions must observe
 	// their own mutations rather than reuse authenticated authority.
 	initialAttemptAuthorities map[initialAttemptAuthorityKey]bool

@@ -269,7 +269,8 @@ func TestProductionTerminalFailureWritesAdvisoryDiagnosticOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	workflow := &Engine{store: st, inference: client}
-	run := domain.Run{ID: "run-1", ProjectID: "project-1"}
+	run := productionOwnershipRun("run-1")
+	seedProductionOwnershipRun(t, ctx, st, run)
 	terminal := productionTerminalRecord{
 		InvocationID: "inv-1", RunID: run.ID, StageID: "stage-1",
 		Status: exec.StatusFailed, Summary: "exit 1",
@@ -1323,6 +1324,7 @@ func TestProductionQuarantineRecursAfterRelease(t *testing.T) {
 	ctx := context.Background()
 	e, st := newQuarantineEngine(t, ctx)
 	runID := domain.RunID("run-recurring")
+	seedProductionOwnershipRun(t, ctx, st, productionOwnershipRun(runID))
 	run := domain.Run{ID: runID, ProjectID: "project-1"}
 	base := productionMarkerQuarantinePrefix
 
@@ -1373,6 +1375,7 @@ func TestProductionQuarantineReleaseConvergesOnADecision(t *testing.T) {
 	ctx := context.Background()
 	e, st := newQuarantineEngine(t, ctx)
 	runID := domain.RunID("run-decided-race")
+	seedProductionOwnershipRun(t, ctx, st, productionOwnershipRun(runID))
 	base := productionMarkerQuarantinePrefix
 	if err := recordProductionQuarantine(
 		ctx, st, e.signet, base, runID, "project-1", productionQuarantineUnreadable,
@@ -1408,12 +1411,16 @@ func TestProductionQuarantineRejectsADivergentConcurrentItem(t *testing.T) {
 	ctx := context.Background()
 	_, st := newQuarantineEngine(t, ctx)
 	runID := domain.RunID("run-divergent")
+	seedProductionOwnershipRun(t, ctx, st, productionOwnershipRun(runID))
 	foreign, err := productionQuarantineItem(
 		productionQuarantineItemID(runID), "run-other", "project-other", "Some other notice.")
 	if err != nil {
 		t.Fatalf("construct foreign item: %v", err)
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := storetest.BindSubject(ctx, tx, &foreign); err != nil {
+			return err
+		}
 		return tx.PutAttentionItem(ctx, foreign)
 	}); err != nil {
 		t.Fatalf("seed foreign item: %v", err)
@@ -1440,6 +1447,7 @@ func TestProductionQuarantineConvergesOnConcurrentCreationTime(t *testing.T) {
 	ctx := context.Background()
 	_, st := newQuarantineEngine(t, ctx)
 	runID := domain.RunID("run-concurrent-created-at")
+	seedProductionOwnershipRun(t, ctx, st, productionOwnershipRun(runID))
 	itemID := productionQuarantineItemID(runID)
 	winner, err := productionQuarantineItem(
 		itemID, runID, "project-1", productionQuarantineUnreadable)
@@ -1449,6 +1457,9 @@ func TestProductionQuarantineConvergesOnConcurrentCreationTime(t *testing.T) {
 	winnerCreatedAt := time.Date(2026, 8, 14, 20, 0, 0, 0, time.UTC)
 	winner.CreatedAt = &winnerCreatedAt
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := storetest.BindSubject(ctx, tx, &winner); err != nil {
+			return err
+		}
 		return tx.PutAttentionItem(ctx, winner)
 	}); err != nil {
 		t.Fatalf("seed winner: %v", err)
@@ -1477,6 +1488,7 @@ func TestProductionQuarantineRefreshesTheOpenNotice(t *testing.T) {
 	ctx := context.Background()
 	e, st := newQuarantineEngine(t, ctx)
 	runID := domain.RunID("run-refreshed")
+	seedProductionOwnershipRun(t, ctx, st, productionOwnershipRun(runID))
 	base := productionMarkerQuarantinePrefix
 	if err := recordProductionQuarantine(
 		ctx, st, e.signet, base, runID, "project-1", productionQuarantineUnsupportedVersion,
@@ -1513,6 +1525,7 @@ func TestProductionQuarantineRejectsADivergentOpenNotice(t *testing.T) {
 	ctx := context.Background()
 	e, st := newQuarantineEngine(t, ctx)
 	runID := domain.RunID("run-divergent-open")
+	seedProductionOwnershipRun(t, ctx, st, productionOwnershipRun(runID))
 	base := productionMarkerQuarantinePrefix
 	foreign, err := productionQuarantineItem(
 		productionQuarantineItemID(runID), "run-other", "project-1", "Some other notice.")
@@ -1520,6 +1533,9 @@ func TestProductionQuarantineRejectsADivergentOpenNotice(t *testing.T) {
 		t.Fatalf("construct foreign item: %v", err)
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := storetest.BindSubject(ctx, tx, &foreign); err != nil {
+			return err
+		}
 		return tx.PutAttentionItem(ctx, foreign)
 	}); err != nil {
 		t.Fatalf("seed foreign item: %v", err)
@@ -1564,6 +1580,7 @@ func TestProductionQuarantineSurvivesADeepNoticeHistory(t *testing.T) {
 	ctx := context.Background()
 	e, st := newQuarantineEngine(t, ctx)
 	runID := domain.RunID("run-deep-history")
+	seedProductionOwnershipRun(t, ctx, st, productionOwnershipRun(runID))
 	for cycle := 1; cycle <= 40; cycle++ {
 		if err := recordProductionQuarantine(
 			ctx, st, e.signet, productionMarkerQuarantinePrefix,
@@ -1617,6 +1634,9 @@ func TestProductionQuarantineReleaseLeavesForeignItemsAlone(t *testing.T) {
 				t.Fatalf("construct item: %v", err)
 			}
 			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				if err := storetest.BindSubject(ctx, tx, &foreign); err != nil {
+					return err
+				}
 				return tx.PutAttentionItem(ctx, foreign)
 			}); err != nil {
 				t.Fatalf("seed item: %v", err)
@@ -1668,6 +1688,9 @@ func TestProductionQuarantineRepairsADriftedNotice(t *testing.T) {
 			}
 			tc.drift(&drifted)
 			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				if err := storetest.BindSubject(ctx, tx, &drifted); err != nil {
+					return err
+				}
 				return tx.PutAttentionItem(ctx, drifted)
 			}); err != nil {
 				t.Fatalf("seed drifted item: %v", err)
@@ -1686,6 +1709,13 @@ func TestProductionQuarantineRepairsADriftedNotice(t *testing.T) {
 				t.Fatalf("construct canonical item: %v", err)
 			}
 			current := requireQuarantineItem(t, ctx, st, tc.runID)
+			if err := st.Read(ctx, func(tx *store.ReadTx) error {
+				var err error
+				canonical.DisplayNames, err = tx.DisplayNamesFor(ctx, canonical.ProjectID, canonical.Subject)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
 			if !sameProductionQuarantineNotice(current, canonical) {
 				t.Fatalf("drifted notice was accepted: %#v", current)
 			}
@@ -1921,6 +1951,9 @@ func TestReconstructProductionReevaluationTaskFailsClosed(t *testing.T) {
 				ArtifactDigests: item.ArtifactDigests, Action: tc.action,
 			})
 			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Write(ctx, func(tx *store.WriteTx) error { return storetest.BindSubject(ctx, tx, &item) }); err != nil {
 				t.Fatal(err)
 			}
 			resolvedItem := item
@@ -2245,6 +2278,9 @@ func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 				RunID: "run-classifier-retry", ProjectID: "project-classifier-retry",
 				HeadSHA: strings.Repeat("a", 40),
 			}
+			run := productionOwnershipRun(task.RunID)
+			run.ProjectID = task.ProjectID
+			seedProductionOwnershipRun(t, ctx, st, run)
 			record := domain.ReviewRecord{Round: 1}
 			if err := w.putReviewAttention(ctx, task, record, tc.firstReason, tc.first); err != nil {
 				t.Fatalf("put first routing decision: %v", err)
@@ -2273,6 +2309,11 @@ func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 		task := productionPublicationTask{
 			RunID: "run-classifier-retry", ProjectID: "project-classifier-retry",
 			HeadSHA: strings.Repeat("a", 40),
+		}
+		if err := st.Write(ctx, func(tx *store.WriteTx) error {
+			return tx.PutRun(ctx, domain.Run{ID: task.RunID, ProjectID: task.ProjectID, SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy", Stages: []domain.Stage{}})
+		}); err != nil {
+			t.Fatal(err)
 		}
 		record := domain.ReviewRecord{Round: 1}
 		if err := w.putReviewAttention(
@@ -2314,6 +2355,9 @@ func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 				InterruptionClass: domain.InterruptionPlannedGate, Status: status,
 			}, nil)
 			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Write(ctx, func(tx *store.WriteTx) error { return storetest.BindSubject(ctx, tx, &legacy) }); err != nil {
 				t.Fatal(err)
 			}
 			if err := attention.PutItem(ctx, legacy); err != nil {

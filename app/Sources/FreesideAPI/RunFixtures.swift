@@ -380,11 +380,12 @@ public enum RunFixtures {
             run: .init(
                 id: id,
                 project_id: projectID,
+                task_id: "task-\(campaignID ?? id)",
                 display_names: workUnit.map {
                     .init(
                         value1: .init(
                             project: .init(text: projectID, source: .name),
-                            work_unit: .init(text: $0, source: .name)))
+                            task: .init(text: $0, source: .name)))
                 },
                 created_at: nil,
                 last_activity_at: nil,

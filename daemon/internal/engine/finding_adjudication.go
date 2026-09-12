@@ -303,7 +303,7 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 	}
 
 	decisionSurfaceDigest, err := prospectiveFindingAdjudicationSurfaceDigest(
-		task, record.Round, 1, entries)
+		task, binding.run.TaskID, record.Round, 1, entries)
 	if err != nil {
 		return productionReviewPending, err
 	}
@@ -432,7 +432,7 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 		ThroughSequence: feedback.ThroughSequence, PrefixDigest: feedback.PrefixDigest,
 	}
 	decisionSurfaceDigest, err := prospectiveFindingAdjudicationSurfaceDigest(
-		task, prior.Round, prior.Revision+1, entries)
+		task, binding.run.TaskID, prior.Round, prior.Revision+1, entries)
 	if err != nil {
 		return prior, err
 	}
@@ -467,11 +467,11 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 			return err
 		}
 		names, err := tx.DisplayNamesFor(ctx, task.ProjectID,
-			findingAdjudicationSurfaceItem(task, successor.Round, successor.Revision, successor.Entries).Subject)
+			findingAdjudicationSurfaceItem(task, binding.run.TaskID, successor.Round, successor.Revision, successor.Entries).Subject)
 		if err != nil {
 			return err
 		}
-		replacement, err := w.newFindingAdjudicationAttentionItem(task, successor, findings, names)
+		replacement, err := w.newFindingAdjudicationAttentionItem(task, binding.run.TaskID, successor, findings, names)
 		if err != nil {
 			return err
 		}
@@ -1064,7 +1064,7 @@ func productionFindingAdjudicationItemID(
 }
 
 func findingAdjudicationSurfaceItem(
-	task productionPublicationTask, round, revision int,
+	task productionPublicationTask, taskID domain.TaskID, round, revision int,
 	entries []domain.FindingAdjudicationEntry,
 ) domain.AttentionItem {
 	actions := []domain.Action{
@@ -1078,18 +1078,18 @@ func findingAdjudicationSurfaceItem(
 	runID := task.RunID
 	return domain.AttentionItem{
 		ID:                productionFindingAdjudicationItemID(task.RunID, round, revision),
-		Subject:           domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Subject:           domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID, TaskID: &taskID},
 		RequestedDecision: actions,
 		PRHeadSHA:         task.HeadSHA,
 	}
 }
 
 func prospectiveFindingAdjudicationSurfaceDigest(
-	task productionPublicationTask, round, revision int,
+	task productionPublicationTask, taskID domain.TaskID, round, revision int,
 	entries []domain.FindingAdjudicationEntry,
 ) (domain.Digest, error) {
 	surface, err := domain.NewDecisionSurface(
-		findingAdjudicationSurfaceItem(task, round, revision, entries))
+		findingAdjudicationSurfaceItem(task, taskID, round, revision, entries))
 	if err != nil {
 		return "", err
 	}
@@ -1097,12 +1097,12 @@ func prospectiveFindingAdjudicationSurfaceDigest(
 }
 
 func (w *productionPublicationWorkflow) newFindingAdjudicationAttentionItem(
-	task productionPublicationTask, artifact domain.FindingAdjudication,
+	task productionPublicationTask, taskID domain.TaskID, artifact domain.FindingAdjudication,
 	findings map[domain.FindingID]domain.Finding, names *domain.DisplayNames,
 ) (domain.AttentionItem, error) {
 	binding := findingAdjudicationBinding(artifact, findings)
 	surfaceItem := findingAdjudicationSurfaceItem(
-		task, artifact.Round, artifact.Revision, artifact.Entries)
+		task, taskID, artifact.Round, artifact.Revision, artifact.Entries)
 	createdAt := w.attentionCreatedAt()
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID:        surfaceItem.ID,
@@ -1145,6 +1145,14 @@ func (w *productionPublicationWorkflow) putFindingAdjudicationAttention(
 	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord,
 	artifact domain.FindingAdjudication,
 ) error {
+	var taskID domain.TaskID
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		run, err := tx.GetRun(ctx, task.RunID)
+		taskID = run.TaskID
+		return err
+	}); err != nil {
+		return err
+	}
 	itemID := productionFindingAdjudicationItemID(task.RunID, record.Round, artifact.Revision)
 	var existing *domain.AttentionItem
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -1177,11 +1185,11 @@ func (w *productionPublicationWorkflow) putFindingAdjudicationAttention(
 		return err
 	}
 	names, err := displayNames(ctx, w.store, task.ProjectID,
-		findingAdjudicationSurfaceItem(task, artifact.Round, artifact.Revision, artifact.Entries).Subject)
+		findingAdjudicationSurfaceItem(task, taskID, artifact.Round, artifact.Revision, artifact.Entries).Subject)
 	if err != nil {
 		return err
 	}
-	item, err := w.newFindingAdjudicationAttentionItem(task, artifact, findings, names)
+	item, err := w.newFindingAdjudicationAttentionItem(task, taskID, artifact, findings, names)
 	if err != nil {
 		return err
 	}

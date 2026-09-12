@@ -817,6 +817,9 @@ func TestPutTerminalItemAcceptsCompatibleLifecycleAdvance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error { return storetest.BindSubject(ctx, tx, &expected) }); err != nil {
+		t.Fatal(err)
+	}
 	if err := attention.PutItem(ctx, expected); err != nil {
 		t.Fatal(err)
 	}

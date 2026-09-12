@@ -234,6 +234,14 @@ func TestReattemptSupersedesEarlierAttemptFailureCards(t *testing.T) {
 		"A stored production marker could not be authenticated.")
 	otherRunID := domain.RunID("run-unrelated")
 	otherCardID := productionFailureCardID(otherRunID)
+	if err := f.store.Write(context.Background(), func(tx *store.WriteTx) error {
+		return tx.PutRun(context.Background(), domain.Run{
+			ID: otherRunID, ProjectID: attemptSweepProject,
+			SpecDigest: "sha256:unrelated-spec", PolicyDigest: "sha256:unrelated-policy", Stages: []domain.Stage{},
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	seedNilFactsFailureCard(t, f, otherCardID, otherRunID,
 		"An unrelated run's stage ended without an accepted result.")
 

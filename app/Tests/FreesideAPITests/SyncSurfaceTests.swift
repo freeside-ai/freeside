@@ -61,6 +61,8 @@ import Testing
         #expect(bootstrap.attention_items == listed)
         #expect(bootstrap.attention_deliveries.isEmpty)
         #expect(bootstrap.runs == runs)
+        #expect(bootstrap.tasks == TaskFixtures.defaultTasks())
+        #expect(Set(bootstrap.tasks.flatMap { $0.task.run_ids }) == Set(runs.map { $0.run.id }))
         #expect(bootstrap.schedules == schedules)
         #expect(bootstrap.conversations == AttentionFixtures.defaultConversations())
 
@@ -259,6 +261,7 @@ import Testing
         let client = APIClientFactory.mock(server: server)
         let before = try await client.getSyncRevision().ok.body.json
         let rowsBefore = try await client.listAttentionItems().ok.body.json
+        let tasksBefore = try await client.getSyncBootstrap().ok.body.json.tasks
 
         await server.rotateEpoch()
 
@@ -268,6 +271,7 @@ import Testing
         #expect(bootstrap.sync_epoch == heartbeat.sync_epoch)
         // A restore replaces the epoch, not the data a client refetches.
         #expect(bootstrap.attention_items == rowsBefore)
+        #expect(bootstrap.tasks == tasksBefore)
     }
 
     @Test func restoreCanRewindTheRevisionUnderTheNewEpoch() async throws {
@@ -285,6 +289,9 @@ import Testing
         let restored = try await client.getSyncRevision().ok.body.json
         #expect(restored.sync_epoch != advanced.sync_epoch)
         #expect(restored.revision < advanced.revision)
+        let bootstrap = try await client.getSyncBootstrap().ok.body.json
+        #expect(!bootstrap.tasks.isEmpty)
+        #expect(bootstrap.tasks.allSatisfy { $0.as_of_revision == restored.revision })
     }
 
     @Test func advanceOpensAGapBetweenHeartbeatAndAFullSnapshot() async throws {

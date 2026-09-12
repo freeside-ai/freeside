@@ -137,6 +137,7 @@ public actor MockServer {
     /// receipt, which advances an existing attempt and never creates one.
     private var deliveriesByKey: [DeliveryKey: Components.Schemas.AttentionDeliverySnapshot] = [:]
     private var runsByID: [String: Components.Schemas.RunSnapshot] = [:]
+    private var tasksByID: [String: Components.Schemas.TaskSnapshot] = [:]
     private var schedulesByID: [String: Components.Schemas.ScheduleSnapshot] = [:]
     private var timelinesByRunID: [String: Components.Schemas.RunTimeline] = [:]
     // Comprehension telemetry (plan §8): the device capability contracts, the
@@ -175,6 +176,7 @@ public actor MockServer {
         conversations: [Components.Schemas.ConversationSnapshot] = AttentionFixtures.defaultConversations(),
         deliveries: [Components.Schemas.AttentionDeliverySnapshot] = [],
         runs: [Components.Schemas.RunSnapshot] = RunFixtures.defaultRuns(),
+        tasks: [Components.Schemas.TaskSnapshot] = TaskFixtures.defaultTasks(),
         schedules: [Components.Schemas.ScheduleSnapshot] = RunFixtures.defaultSchedules(),
         timelines: [Components.Schemas.RunTimeline] = RunFixtures.defaultTimelines(),
         approvedRecipes: Set<String> = [AttentionFixtures.approvedRecipeDigest],
@@ -206,6 +208,9 @@ public actor MockServer {
             runsByID[snapshot.run.id] = RunFixtures.projectingObservationTimes(
                 snapshot, from: timelinesByRunID[snapshot.run.id])
         }
+        for snapshot in tasks {
+            tasksByID[snapshot.task.id] = snapshot
+        }
         // The server revision starts at or beyond every seeded snapshot's
         // as_of_revision, so the heartbeat and the next CommandResult can
         // never run backwards relative to what this mock lists.
@@ -214,6 +219,7 @@ public actor MockServer {
             conversations.map(\.as_of_revision).max() ?? 1,
             deliveries.map(\.as_of_revision).max() ?? 1,
             runs.map(\.as_of_revision).max() ?? 1,
+            tasks.map(\.as_of_revision).max() ?? 1,
             schedules.map(\.as_of_revision).max() ?? 1,
             timelines.map(\.as_of_revision).max() ?? 1)
         // Seeded delivery rows exist only because the daemon's pipeline
@@ -390,6 +396,9 @@ public actor MockServer {
             revision = max(1, restored)
             for id in runsByID.keys {
                 runsByID[id]?.as_of_revision = revision
+            }
+            for id in tasksByID.keys {
+                tasksByID[id]?.as_of_revision = revision
             }
             for id in schedulesByID.keys {
                 schedulesByID[id]?.as_of_revision = revision
@@ -705,6 +714,7 @@ public actor MockServer {
             attention_items: try listAttentionItems(),
             attention_deliveries: try listAttentionDeliveries(),
             runs: try listRuns(),
+            tasks: try listTasks(),
             conversations: conversationsByID.keys.sorted().compactMap { conversationsByID[$0] },
             schedules: listSchedules()
         )
@@ -731,6 +741,23 @@ public actor MockServer {
             throw InvalidRunError(runID: id, reason: reason)
         }
         return snapshot
+    }
+
+    func listTasks() throws -> [Components.Schemas.TaskSnapshot] {
+        try tasksByID.keys.sorted().compactMap { try task(id: $0) }
+    }
+
+    func task(id: String) throws -> Components.Schemas.TaskSnapshot? {
+        guard let snapshot = tasksByID[id] else { return nil }
+        if let reason = MockContractValidation.taskSnapshotBreach(snapshot, serverRevision: revision) {
+            throw InvalidTaskError(taskID: id, reason: reason)
+        }
+        return snapshot
+    }
+
+    struct InvalidTaskError: Error {
+        let taskID: String
+        let reason: String
     }
 
     func runTimeline(id: String) -> Components.Schemas.RunTimeline? {
@@ -1766,7 +1793,7 @@ public actor MockServer {
         let runID: String?
         switch snapshot.item.subject {
         case .run(let run), .proposal_batch(let run): runID = run.run_id
-        case .project, .system: runID = nil
+        case .task, .project, .system: runID = nil
         }
         if let runID {
             let prefix = "spec-approval-\(runID)-"

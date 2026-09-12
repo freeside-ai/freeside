@@ -90,8 +90,8 @@ func TestCardFactValidation(t *testing.T) {
 	valid := []interface{ Validate() error }{
 		domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
 		domain.DisplayNames{
-			Project:  domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
-			WorkUnit: domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
+			Project: domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
+			Task:    domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
 		},
 		domain.CostSoFar{Currency: "USD", Amount: "12.50", Invocations: 2, Complete: true},
 		domain.ExecutionFailureFacts{
@@ -444,8 +444,8 @@ func cardFactInputs() []domain.AttentionItemInput {
 
 	display := validItemInput(domain.AttentionSpecApproval)
 	display.DisplayNames = &domain.DisplayNames{
-		Project:  domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
-		WorkUnit: domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
+		Project: domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
+		Task:    domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
 	}
 	cost := validItemInput(domain.AttentionReviewDiminishing)
 	cost.BillableCostSoFar = &domain.CostSoFar{Currency: "USD", Amount: "1.00", Invocations: 1, Complete: true}

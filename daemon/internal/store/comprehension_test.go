@@ -28,7 +28,7 @@ func seedComprehensionDeps(t *testing.T, ctx context.Context, s *store.Store, f 
 		if err := tx.PutArtifact(ctx, f.artifact); err != nil {
 			return err
 		}
-		if err := tx.PutAttentionItem(ctx, f.item); err != nil {
+		if err := f.putItem(ctx, tx); err != nil {
 			return err
 		}
 		if err := tx.PutDevice(ctx, f.device); err != nil {

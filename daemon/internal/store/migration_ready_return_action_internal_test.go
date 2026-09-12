@@ -39,13 +39,13 @@ func TestReadyReturnActionMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 69 {
-		t.Fatalf("schema version = %d, want 69", got)
+	if got := rawVersion(t, db); got != 70 {
+		t.Fatalf("schema version = %d, want 70", got)
 	}
 
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
 		`SELECT id, project_id, conversation_id, item_type, status, health_posture,
-		        subject_run_id, readiness_summary, readiness_detail, yield_history,
+		        subject_run_id, subject_task_id, readiness_summary, readiness_detail, yield_history,
 		        entity_version, as_of_revision, body
 		 FROM attention_items WHERE id = ?`, production.ID))
 	if err != nil {
@@ -57,8 +57,8 @@ func TestReadyReturnActionMigrationAppliesFromHead(t *testing.T) {
 	if got.ItemVersion != production.ItemVersion+1 {
 		t.Fatalf("item version = %d, want %d", got.ItemVersion, production.ItemVersion+1)
 	}
-	if snapshot != (Snapshot{EntityVersion: 8, AsOfRevision: 12}) {
-		t.Fatalf("snapshot = %+v, want entity version 8 at revision 12", snapshot)
+	if snapshot != (Snapshot{EntityVersion: 9, AsOfRevision: 13}) {
+		t.Fatalf("snapshot = %+v, want entity version 9 at revision 13 after task migration", snapshot)
 	}
 	readTx, err := db.Begin()
 	if err != nil {
@@ -79,7 +79,7 @@ func TestReadyReturnActionMigrationAppliesFromHead(t *testing.T) {
 
 	fakeGot, fakeSnapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
 		`SELECT id, project_id, conversation_id, item_type, status, health_posture,
-		        subject_run_id, readiness_summary, readiness_detail, yield_history,
+		        subject_run_id, subject_task_id, readiness_summary, readiness_detail, yield_history,
 		        entity_version, as_of_revision, body
 		 FROM attention_items WHERE id = ?`, fake.ID))
 	if err != nil {
@@ -99,8 +99,8 @@ func TestReadyReturnActionMigrationAppliesFromHead(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT revision FROM server_state WHERE id = 1`).Scan(&revision); err != nil {
 		t.Fatal(err)
 	}
-	if revision != 12 {
-		t.Fatalf("revision after replay = %d, want 12", revision)
+	if revision != 13 {
+		t.Fatalf("revision after replay = %d, want 13", revision)
 	}
 }
 
@@ -127,14 +127,14 @@ func TestReadyReturnActionMigrationRejectsUnauthenticatedBinding(t *testing.T) {
 	}
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
 		`SELECT id, project_id, conversation_id, item_type, status, health_posture,
-		        subject_run_id, readiness_summary, readiness_detail, yield_history,
+		        subject_run_id, subject_task_id, readiness_summary, readiness_detail, yield_history,
 		        entity_version, as_of_revision, body
 		 FROM attention_items WHERE id = ?`, item.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(got.RequestedDecision, legacyProductionReadyActions) ||
-		got.ItemVersion != item.ItemVersion || snapshot != (Snapshot{EntityVersion: 7, AsOfRevision: 11}) {
+		got.ItemVersion != item.ItemVersion || snapshot != (Snapshot{EntityVersion: 8, AsOfRevision: 12}) {
 		t.Fatalf("unauthenticated ready item migrated: actions %v item version %d snapshot %+v",
 			got.RequestedDecision, got.ItemVersion, snapshot)
 	}
@@ -284,10 +284,26 @@ func seedLegacyReadyBinding(t *testing.T, ctx context.Context, db *sql.DB, item 
 		}},
 		asOfRevision: 11,
 	}
-	if err := writer.PutRun(ctx, run); err != nil {
+	// Seed the historical row shapes: current run and admission writers read
+	// the task columns that do not exist before migration 0070.
+	runBody, err := encode(run)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.RecordExecutionAdmission(ctx, admission); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO runs
+		(id, project_id, policy_digest, entity_version, as_of_revision, body)
+		VALUES (?, ?, ?, 1, 11, ?)`, run.ID, run.ProjectID, run.PolicyDigest, runBody); err != nil {
+		t.Fatal(err)
+	}
+	admissionBody, err := encode(admission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO execution_admissions
+		(invocation_id, id, run_id, stage_id, attempt_id, operating_mode, admitted_at, body)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, admission.InvocationID, admission.ID,
+		admission.RunID, admission.StageID, admission.AttemptID, admission.OperatingMode,
+		formatTime(admission.AdmittedAt), admissionBody); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.RecordExecutionExportRecord(ctx, export); err != nil {

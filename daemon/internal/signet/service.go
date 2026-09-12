@@ -143,6 +143,18 @@ func NewService(st *store.Store, opts ...Option) *Service {
 // Write begins; a rejected item cannot consume a server revision. The store
 // remains responsible for transition, evidence-policy, and persistence gates.
 func (s *Service) PutItem(ctx context.Context, item domain.AttentionItem) error {
+	if err := ValidateItemIntake(item); err != nil {
+		return err
+	}
+	return s.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	})
+}
+
+// ValidateItemIntake checks the public intake policy before a caller starts a
+// transaction. Producers that also create an item's parent can then persist
+// both atomically; store still owns transition and evidence authentication.
+func ValidateItemIntake(item domain.AttentionItem) error {
 	if err := item.Validate(); err != nil {
 		return fmt.Errorf("put item %q: %w", item.ID, err)
 	}
@@ -161,9 +173,7 @@ func (s *Service) PutItem(ctx context.Context, item domain.AttentionItem) error 
 	if item.Type == domain.AttentionRunProposal {
 		return fmt.Errorf("put item %q: %w", item.ID, ErrProposalAdmissionRequired)
 	}
-	return s.store.Write(ctx, func(tx *store.WriteTx) error {
-		return tx.PutAttentionItem(ctx, item)
-	})
+	return nil
 }
 
 // errReplay abandons the Write transaction of an idempotent retry after the

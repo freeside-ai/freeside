@@ -302,19 +302,19 @@ func TestCompatibleTerminalItemIgnoresDisplayNameRenames(t *testing.T) {
 			names.Project = domain.DisplayName{Text: "owner/new", Source: domain.DisplayNameSourceName}
 		}},
 		{"work unit", func(names *domain.DisplayNames) {
-			names.WorkUnit = domain.DisplayName{Text: "#1034", Source: domain.DisplayNameSourceName}
+			names.Task = domain.DisplayName{Text: "#1034", Source: domain.DisplayNameSourceName}
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := watchTestStore(t)
 			current := watchTestItem(t, st, domain.StatusOpen)
 			current.DisplayNames = &domain.DisplayNames{
-				Project:  domain.DisplayName{Text: "project-1", Source: domain.DisplayNameSourceIdentifier},
-				WorkUnit: domain.DisplayName{Text: "run-1", Source: domain.DisplayNameSourceIdentifier},
+				Project: domain.DisplayName{Text: "project-1", Source: domain.DisplayNameSourceIdentifier},
+				Task:    domain.DisplayName{Text: "run-1", Source: domain.DisplayNameSourceIdentifier},
 			}
 			expected := current
 			expected.DisplayNames = &domain.DisplayNames{
-				Project: current.DisplayNames.Project, WorkUnit: current.DisplayNames.WorkUnit,
+				Project: current.DisplayNames.Project, Task: current.DisplayNames.Task,
 			}
 			tc.edit(expected.DisplayNames)
 			if !compatibleTerminalItem(expected, current) {

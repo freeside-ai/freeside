@@ -638,7 +638,23 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		controlJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
 	}
-	if err := c.service.PutItem(r.Context(), item); err != nil {
+	err = signet.ValidateItemIntake(item)
+	if err == nil {
+		err = c.store.Write(r.Context(), func(tx *store.WriteTx) error {
+			if _, err := tx.GetRun(r.Context(), runID); errors.Is(err, store.ErrNotFound) {
+				if err := tx.PutRun(r.Context(), domain.Run{
+					ID: runID, ProjectID: item.ProjectID,
+					SpecDigest: "sha256:convergence", PolicyDigest: "sha256:convergence", Stages: []domain.Stage{},
+				}); err != nil {
+					return err
+				}
+			} else if err != nil {
+				return err
+			}
+			return tx.PutAttentionItem(r.Context(), item)
+		})
+	}
+	if err != nil {
 		// PutItem rejects policy violations before its Write; anything
 		// else (store contention, I/O) is the harness's fault, not the
 		// request's, and must not read as a scripted 400 in a test log.

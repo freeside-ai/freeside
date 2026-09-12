@@ -806,6 +806,8 @@ public enum Components {
             public var attention_deliveries: [Components.Schemas.AttentionDeliverySnapshot]
             /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/runs`.
             public var runs: [Components.Schemas.RunSnapshot]
+            /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/tasks`.
+            public var tasks: [Components.Schemas.TaskSnapshot]
             /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/conversations`.
             public var conversations: [Components.Schemas.ConversationSnapshot]
             /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/schedules`.
@@ -818,6 +820,7 @@ public enum Components {
             ///   - attention_items:
             ///   - attention_deliveries:
             ///   - runs:
+            ///   - tasks:
             ///   - conversations:
             ///   - schedules:
             public init(
@@ -826,6 +829,7 @@ public enum Components {
                 attention_items: [Components.Schemas.AttentionItemSnapshot],
                 attention_deliveries: [Components.Schemas.AttentionDeliverySnapshot],
                 runs: [Components.Schemas.RunSnapshot],
+                tasks: [Components.Schemas.TaskSnapshot],
                 conversations: [Components.Schemas.ConversationSnapshot],
                 schedules: [Components.Schemas.ScheduleSnapshot]
             ) {
@@ -834,6 +838,7 @@ public enum Components {
                 self.attention_items = attention_items
                 self.attention_deliveries = attention_deliveries
                 self.runs = runs
+                self.tasks = tasks
                 self.conversations = conversations
                 self.schedules = schedules
             }
@@ -843,6 +848,7 @@ public enum Components {
                 case attention_items
                 case attention_deliveries
                 case runs
+                case tasks
                 case conversations
                 case schedules
             }
@@ -1209,6 +1215,512 @@ public enum Components {
                 case as_of_revision
                 case entity_version
                 case delivery
+            }
+        }
+        /// One task and its derived summary at a single server revision.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskSnapshot`.
+        public struct TaskSnapshot: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskSnapshot/as_of_revision`.
+            public var as_of_revision: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/TaskSnapshot/entity_version`.
+            public var entity_version: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/TaskSnapshot/task`.
+            public var task: Components.Schemas.Task
+            /// Creates a new `TaskSnapshot`.
+            ///
+            /// - Parameters:
+            ///   - as_of_revision:
+            ///   - entity_version:
+            ///   - task:
+            public init(
+                as_of_revision: Swift.Int64,
+                entity_version: Swift.Int64,
+                task: Components.Schemas.Task
+            ) {
+                self.as_of_revision = as_of_revision
+                self.entity_version = entity_version
+                self.task = task
+            }
+            public enum CodingKeys: String, CodingKey {
+                case as_of_revision
+                case entity_version
+                case task
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.as_of_revision = try container.decode(
+                    Swift.Int64.self,
+                    forKey: .as_of_revision
+                )
+                self.entity_version = try container.decode(
+                    Swift.Int64.self,
+                    forKey: .entity_version
+                )
+                self.task = try container.decode(
+                    Components.Schemas.Task.self,
+                    forKey: .task
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "as_of_revision",
+                    "entity_version",
+                    "task"
+                ])
+            }
+        }
+        /// Stored work identity and name across specification revisions, campaigns, and retries. Lifecycle summarizes the newest run for display and never determines WIP membership. Source is null only for legacy or demo work without a recoverable intake reference.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/Task`.
+        public struct Task: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/Task/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Task/project_id`.
+            public var project_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Task/display_names`.
+            public var display_names: Components.Schemas.DisplayNames
+            /// - Remark: Generated from `#/components/schemas/Task/source`.
+            public struct sourcePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/Task/source/value1`.
+                public var value1: Components.Schemas.SpecificationSource
+                /// Creates a new `sourcePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.SpecificationSource) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/Task/source`.
+            public var source: Components.Schemas.Task.sourcePayload?
+            /// - Remark: Generated from `#/components/schemas/Task/created_at`.
+            public var created_at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/Task/last_activity_at`.
+            public var last_activity_at: Foundation.Date
+            /// The newest run's display lifecycle, or null before any run exists.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Task/lifecycle`.
+            @frozen public enum lifecyclePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case active = "active"
+                case finished = "finished"
+                case _empty = ""
+            }
+            /// The newest run's display lifecycle, or null before any run exists.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Task/lifecycle`.
+            public var lifecycle: Components.Schemas.Task.lifecyclePayload?
+            /// - Remark: Generated from `#/components/schemas/Task/current_position`.
+            public struct current_positionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/Task/current_position/value1`.
+                public var value1: Components.Schemas.TaskPosition
+                /// Creates a new `current_positionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskPosition) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/Task/current_position`.
+            public var current_position: Components.Schemas.Task.current_positionPayload?
+            /// - Remark: Generated from `#/components/schemas/Task/campaign_ids`.
+            public var campaign_ids: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/Task/run_ids`.
+            public var run_ids: [Swift.String]
+            /// Creates a new `Task`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - project_id:
+            ///   - display_names:
+            ///   - source:
+            ///   - created_at:
+            ///   - last_activity_at:
+            ///   - lifecycle: The newest run's display lifecycle, or null before any run exists.
+            ///   - current_position:
+            ///   - campaign_ids:
+            ///   - run_ids:
+            public init(
+                id: Swift.String,
+                project_id: Swift.String,
+                display_names: Components.Schemas.DisplayNames,
+                source: Components.Schemas.Task.sourcePayload? = nil,
+                created_at: Foundation.Date,
+                last_activity_at: Foundation.Date,
+                lifecycle: Components.Schemas.Task.lifecyclePayload? = nil,
+                current_position: Components.Schemas.Task.current_positionPayload? = nil,
+                campaign_ids: [Swift.String],
+                run_ids: [Swift.String]
+            ) {
+                self.id = id
+                self.project_id = project_id
+                self.display_names = display_names
+                self.source = source
+                self.created_at = created_at
+                self.last_activity_at = last_activity_at
+                self.lifecycle = lifecycle
+                self.current_position = current_position
+                self.campaign_ids = campaign_ids
+                self.run_ids = run_ids
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case project_id
+                case display_names
+                case source
+                case created_at
+                case last_activity_at
+                case lifecycle
+                case current_position
+                case campaign_ids
+                case run_ids
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.id = try container.decode(
+                    Swift.String.self,
+                    forKey: .id
+                )
+                self.project_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .project_id
+                )
+                self.display_names = try container.decode(
+                    Components.Schemas.DisplayNames.self,
+                    forKey: .display_names
+                )
+                self.source = try container.decodeIfPresent(
+                    Components.Schemas.Task.sourcePayload.self,
+                    forKey: .source
+                )
+                self.created_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .created_at
+                )
+                self.last_activity_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .last_activity_at
+                )
+                self.lifecycle = try container.decodeIfPresent(
+                    Components.Schemas.Task.lifecyclePayload.self,
+                    forKey: .lifecycle
+                )
+                self.current_position = try container.decodeIfPresent(
+                    Components.Schemas.Task.current_positionPayload.self,
+                    forKey: .current_position
+                )
+                self.campaign_ids = try container.decode(
+                    [Swift.String].self,
+                    forKey: .campaign_ids
+                )
+                self.run_ids = try container.decode(
+                    [Swift.String].self,
+                    forKey: .run_ids
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "id",
+                    "project_id",
+                    "display_names",
+                    "source",
+                    "created_at",
+                    "last_activity_at",
+                    "lifecycle",
+                    "current_position",
+                    "campaign_ids",
+                    "run_ids"
+                ])
+            }
+        }
+        /// The newest run, its latest stage, and its current review round and hold.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskPosition`.
+        public struct TaskPosition: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskPosition/run_id`.
+            public var run_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskPosition/stage`.
+            public var stage: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskPosition/round`.
+            public var round: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/TaskPosition/hold_reason`.
+            public struct hold_reasonPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskPosition/hold_reason/value1`.
+                public var value1: Components.Schemas.RunHoldReason
+                /// Creates a new `hold_reasonPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.RunHoldReason) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskPosition/hold_reason`.
+            public var hold_reason: Components.Schemas.TaskPosition.hold_reasonPayload?
+            /// Creates a new `TaskPosition`.
+            ///
+            /// - Parameters:
+            ///   - run_id:
+            ///   - stage:
+            ///   - round:
+            ///   - hold_reason:
+            public init(
+                run_id: Swift.String,
+                stage: Swift.String? = nil,
+                round: Swift.Int? = nil,
+                hold_reason: Components.Schemas.TaskPosition.hold_reasonPayload? = nil
+            ) {
+                self.run_id = run_id
+                self.stage = stage
+                self.round = round
+                self.hold_reason = hold_reason
+            }
+            public enum CodingKeys: String, CodingKey {
+                case run_id
+                case stage
+                case round
+                case hold_reason
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.run_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .run_id
+                )
+                self.stage = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .stage
+                )
+                self.round = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .round
+                )
+                self.hold_reason = try container.decodeIfPresent(
+                    Components.Schemas.TaskPosition.hold_reasonPayload.self,
+                    forKey: .hold_reason
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "run_id",
+                    "stage",
+                    "round",
+                    "hold_reason"
+                ])
+            }
+        }
+        /// The submitted artifact or stable issue identity that supplied the task.
+        ///
+        /// - Remark: Generated from `#/components/schemas/SpecificationSource`.
+        @frozen public enum SpecificationSource: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SpecificationSource/IssueSpecificationSource`.
+            case issue_subject(Components.Schemas.IssueSpecificationSource)
+            /// - Remark: Generated from `#/components/schemas/SpecificationSource/ArtifactSpecificationSource`.
+            case work_item_artifact(Components.Schemas.ArtifactSpecificationSource)
+            public enum CodingKeys: String, CodingKey {
+                case kind
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                let discriminator = try container.decode(
+                    Swift.String.self,
+                    forKey: .kind
+                )
+                switch discriminator {
+                case "issue_subject":
+                    self = .issue_subject(try .init(from: decoder))
+                case "work_item_artifact":
+                    self = .work_item_artifact(try .init(from: decoder))
+                default:
+                    throw Swift.DecodingError.unknownOneOfDiscriminator(
+                        discriminatorKey: CodingKeys.kind,
+                        discriminatorValue: discriminator,
+                        codingPath: decoder.codingPath
+                    )
+                }
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                switch self {
+                case let .issue_subject(value):
+                    try value.encode(to: encoder)
+                case let .work_item_artifact(value):
+                    try value.encode(to: encoder)
+                }
+            }
+        }
+        /// A digest-addressed, registered submission artifact.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ArtifactSpecificationSource`.
+        public struct ArtifactSpecificationSource: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ArtifactSpecificationSource/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case work_item_artifact = "work_item_artifact"
+            }
+            /// - Remark: Generated from `#/components/schemas/ArtifactSpecificationSource/kind`.
+            public var kind: Components.Schemas.ArtifactSpecificationSource.kindPayload
+            /// - Remark: Generated from `#/components/schemas/ArtifactSpecificationSource/work_item_artifact_id`.
+            public var work_item_artifact_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ArtifactSpecificationSource/issue_subject`.
+            public var issue_subject: OpenAPIRuntime.OpenAPIValueContainer?
+            /// Creates a new `ArtifactSpecificationSource`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - work_item_artifact_id:
+            ///   - issue_subject:
+            public init(
+                kind: Components.Schemas.ArtifactSpecificationSource.kindPayload,
+                work_item_artifact_id: Swift.String,
+                issue_subject: OpenAPIRuntime.OpenAPIValueContainer? = nil
+            ) {
+                self.kind = kind
+                self.work_item_artifact_id = work_item_artifact_id
+                self.issue_subject = issue_subject
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case work_item_artifact_id
+                case issue_subject
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.ArtifactSpecificationSource.kindPayload.self,
+                    forKey: .kind
+                )
+                self.work_item_artifact_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .work_item_artifact_id
+                )
+                self.issue_subject = try container.decodeIfPresent(
+                    OpenAPIRuntime.OpenAPIValueContainer.self,
+                    forKey: .issue_subject
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "work_item_artifact_id",
+                    "issue_subject"
+                ])
+            }
+        }
+        /// An issue subject identified independently of its observed title and body.
+        ///
+        /// - Remark: Generated from `#/components/schemas/IssueSpecificationSource`.
+        public struct IssueSpecificationSource: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/IssueSpecificationSource/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case issue_subject = "issue_subject"
+            }
+            /// - Remark: Generated from `#/components/schemas/IssueSpecificationSource/kind`.
+            public var kind: Components.Schemas.IssueSpecificationSource.kindPayload
+            /// - Remark: Generated from `#/components/schemas/IssueSpecificationSource/work_item_artifact_id`.
+            public var work_item_artifact_id: OpenAPIRuntime.OpenAPIValueContainer?
+            /// - Remark: Generated from `#/components/schemas/IssueSpecificationSource/issue_subject`.
+            public var issue_subject: Components.Schemas.IssueSubjectRef
+            /// Creates a new `IssueSpecificationSource`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - work_item_artifact_id:
+            ///   - issue_subject:
+            public init(
+                kind: Components.Schemas.IssueSpecificationSource.kindPayload,
+                work_item_artifact_id: OpenAPIRuntime.OpenAPIValueContainer? = nil,
+                issue_subject: Components.Schemas.IssueSubjectRef
+            ) {
+                self.kind = kind
+                self.work_item_artifact_id = work_item_artifact_id
+                self.issue_subject = issue_subject
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case work_item_artifact_id
+                case issue_subject
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.IssueSpecificationSource.kindPayload.self,
+                    forKey: .kind
+                )
+                self.work_item_artifact_id = try container.decodeIfPresent(
+                    OpenAPIRuntime.OpenAPIValueContainer.self,
+                    forKey: .work_item_artifact_id
+                )
+                self.issue_subject = try container.decode(
+                    Components.Schemas.IssueSubjectRef.self,
+                    forKey: .issue_subject
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "work_item_artifact_id",
+                    "issue_subject"
+                ])
+            }
+        }
+        /// The repository identity and issue number of an intake subject.
+        ///
+        /// - Remark: Generated from `#/components/schemas/IssueSubjectRef`.
+        public struct IssueSubjectRef: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/IssueSubjectRef/repo`.
+            public var repo: Swift.String
+            /// - Remark: Generated from `#/components/schemas/IssueSubjectRef/repository_id`.
+            public var repository_id: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/IssueSubjectRef/issue_number`.
+            public var issue_number: Swift.Int
+            /// Creates a new `IssueSubjectRef`.
+            ///
+            /// - Parameters:
+            ///   - repo:
+            ///   - repository_id:
+            ///   - issue_number:
+            public init(
+                repo: Swift.String,
+                repository_id: Swift.Int64,
+                issue_number: Swift.Int
+            ) {
+                self.repo = repo
+                self.repository_id = repository_id
+                self.issue_number = issue_number
+            }
+            public enum CodingKeys: String, CodingKey {
+                case repo
+                case repository_id
+                case issue_number
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.repo = try container.decode(
+                    Swift.String.self,
+                    forKey: .repo
+                )
+                self.repository_id = try container.decode(
+                    Swift.Int64.self,
+                    forKey: .repository_id
+                )
+                self.issue_number = try container.decode(
+                    Swift.Int.self,
+                    forKey: .issue_number
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "repo",
+                    "repository_id",
+                    "issue_number"
+                ])
             }
         }
         /// A resource snapshot wrapping one run aggregate (plan §5.14).
@@ -4684,6 +5196,7 @@ public enum Components {
         /// - Remark: Generated from `#/components/schemas/JudgmentSite`.
         @frozen public enum JudgmentSite: String, Codable, Hashable, Sendable, CaseIterable {
             case finding_adjudicator = "finding_adjudicator"
+            case task_namer = "task_namer"
         }
         /// The registered daemon rule and canonical input behind a deterministic recommendation.
         ///
@@ -5071,6 +5584,9 @@ public enum Components {
         @frozen public enum DisplayNameSource: String, Codable, Hashable, Sendable, CaseIterable {
             case name = "name"
             case identifier = "identifier"
+            case _operator = "operator"
+            case agent = "agent"
+            case specification = "specification"
         }
         /// One daemon-authored display label and whether it is a name or identifier fallback.
         ///
@@ -5118,23 +5634,23 @@ public enum Components {
         public struct DisplayNames: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/DisplayNames/project`.
             public var project: Components.Schemas.DisplayName
-            /// - Remark: Generated from `#/components/schemas/DisplayNames/work_unit`.
-            public var work_unit: Components.Schemas.DisplayName
+            /// - Remark: Generated from `#/components/schemas/DisplayNames/task`.
+            public var task: Components.Schemas.DisplayName
             /// Creates a new `DisplayNames`.
             ///
             /// - Parameters:
             ///   - project:
-            ///   - work_unit:
+            ///   - task:
             public init(
                 project: Components.Schemas.DisplayName,
-                work_unit: Components.Schemas.DisplayName
+                task: Components.Schemas.DisplayName
             ) {
                 self.project = project
-                self.work_unit = work_unit
+                self.task = task
             }
             public enum CodingKeys: String, CodingKey {
                 case project
-                case work_unit
+                case task
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -5142,13 +5658,13 @@ public enum Components {
                     Components.Schemas.DisplayName.self,
                     forKey: .project
                 )
-                self.work_unit = try container.decode(
+                self.task = try container.decode(
                     Components.Schemas.DisplayName.self,
-                    forKey: .work_unit
+                    forKey: .task
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "project",
-                    "work_unit"
+                    "task"
                 ])
             }
         }
@@ -7654,6 +8170,8 @@ public enum Components {
             case run(Components.Schemas.RunScopedSubject)
             /// - Remark: Generated from `#/components/schemas/Subject/UnscopedSubject`.
             case system(Components.Schemas.UnscopedSubject)
+            /// - Remark: Generated from `#/components/schemas/Subject/TaskSubject`.
+            case task(Components.Schemas.TaskSubject)
             public enum CodingKeys: String, CodingKey {
                 case subject_type
             }
@@ -7672,6 +8190,8 @@ public enum Components {
                     self = .run(try .init(from: decoder))
                 case "system":
                     self = .system(try .init(from: decoder))
+                case "task":
+                    self = .task(try .init(from: decoder))
                 default:
                     throw Swift.DecodingError.unknownOneOfDiscriminator(
                         discriminatorKey: CodingKeys.subject_type,
@@ -7689,6 +8209,8 @@ public enum Components {
                 case let .run(value):
                     try value.encode(to: encoder)
                 case let .system(value):
+                    try value.encode(to: encoder)
+                case let .task(value):
                     try value.encode(to: encoder)
                 }
             }
@@ -7709,25 +8231,33 @@ public enum Components {
             public var subject_id: Swift.String
             /// - Remark: Generated from `#/components/schemas/RunScopedSubject/run_id`.
             public var run_id: Swift.String?
+            /// The run's stored task identity, or null for an unscoped proposal batch.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunScopedSubject/task_id`.
+            public var task_id: Swift.String?
             /// Creates a new `RunScopedSubject`.
             ///
             /// - Parameters:
             ///   - subject_type:
             ///   - subject_id:
             ///   - run_id:
+            ///   - task_id: The run's stored task identity, or null for an unscoped proposal batch.
             public init(
                 subject_type: Components.Schemas.RunScopedSubject.subject_typePayload,
                 subject_id: Swift.String,
-                run_id: Swift.String? = nil
+                run_id: Swift.String? = nil,
+                task_id: Swift.String? = nil
             ) {
                 self.subject_type = subject_type
                 self.subject_id = subject_id
                 self.run_id = run_id
+                self.task_id = task_id
             }
             public enum CodingKeys: String, CodingKey {
                 case subject_type
                 case subject_id
                 case run_id
+                case task_id
             }
         }
         /// A project- or system-scoped subject; it never carries a run_id (domain Subject.Validate rejects one as mis-scoped).
@@ -7748,25 +8278,99 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/UnscopedSubject/run_id`.
             public var run_id: OpenAPIRuntime.OpenAPIValueContainer?
+            /// Always null for a project- or system-scoped subject.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UnscopedSubject/task_id`.
+            public var task_id: OpenAPIRuntime.OpenAPIValueContainer?
             /// Creates a new `UnscopedSubject`.
             ///
             /// - Parameters:
             ///   - subject_type:
             ///   - subject_id:
             ///   - run_id: Always null for a project- or system-scoped subject.
+            ///   - task_id: Always null for a project- or system-scoped subject.
             public init(
                 subject_type: Components.Schemas.UnscopedSubject.subject_typePayload,
                 subject_id: Swift.String,
-                run_id: OpenAPIRuntime.OpenAPIValueContainer? = nil
+                run_id: OpenAPIRuntime.OpenAPIValueContainer? = nil,
+                task_id: OpenAPIRuntime.OpenAPIValueContainer? = nil
             ) {
                 self.subject_type = subject_type
                 self.subject_id = subject_id
                 self.run_id = run_id
+                self.task_id = task_id
             }
             public enum CodingKeys: String, CodingKey {
                 case subject_type
                 case subject_id
                 case run_id
+                case task_id
+            }
+        }
+        /// An attention item about a task across its runs.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskSubject`.
+        public struct TaskSubject: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskSubject/subject_type`.
+            @frozen public enum subject_typePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case task = "task"
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskSubject/subject_type`.
+            public var subject_type: Components.Schemas.TaskSubject.subject_typePayload
+            /// - Remark: Generated from `#/components/schemas/TaskSubject/subject_id`.
+            public var subject_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskSubject/run_id`.
+            public var run_id: OpenAPIRuntime.OpenAPIValueContainer?
+            /// - Remark: Generated from `#/components/schemas/TaskSubject/task_id`.
+            public var task_id: Swift.String
+            /// Creates a new `TaskSubject`.
+            ///
+            /// - Parameters:
+            ///   - subject_type:
+            ///   - subject_id:
+            ///   - run_id:
+            ///   - task_id:
+            public init(
+                subject_type: Components.Schemas.TaskSubject.subject_typePayload,
+                subject_id: Swift.String,
+                run_id: OpenAPIRuntime.OpenAPIValueContainer? = nil,
+                task_id: Swift.String
+            ) {
+                self.subject_type = subject_type
+                self.subject_id = subject_id
+                self.run_id = run_id
+                self.task_id = task_id
+            }
+            public enum CodingKeys: String, CodingKey {
+                case subject_type
+                case subject_id
+                case run_id
+                case task_id
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.subject_type = try container.decode(
+                    Components.Schemas.TaskSubject.subject_typePayload.self,
+                    forKey: .subject_type
+                )
+                self.subject_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .subject_id
+                )
+                self.run_id = try container.decodeIfPresent(
+                    OpenAPIRuntime.OpenAPIValueContainer.self,
+                    forKey: .run_id
+                )
+                self.task_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .task_id
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "subject_type",
+                    "subject_id",
+                    "run_id",
+                    "task_id"
+                ])
             }
         }
         /// A labeled, digest-bound agent claim; mirrors domain.AgentClaim. Agent-generated evidence appears only here, never in evidence_snapshot (plan §5.15). The provenance is agent-pinned (#173), and extra properties are forbidden here and on both provenance branches: a claim asserting a verifier or daemon producer, or carrying an undeclared trust bit such as publish_eligible, is non-conformant. A text claim (plan §9's renderable summary carrier) additionally inlines its content in text; its digest then binds that content (see ClaimText), so the claim path carries prose under the same digest discipline as every other artifact.
@@ -8871,6 +9475,10 @@ public enum Components {
             public var id: Swift.String
             /// - Remark: Generated from `#/components/schemas/Run/project_id`.
             public var project_id: Swift.String
+            /// The stable task identity shared by specification, implementation, and retry runs.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Run/task_id`.
+            public var task_id: Swift.String
             /// Daemon-derived project and work-unit labels for run rows.
             ///
             /// - Remark: Generated from `#/components/schemas/Run/display_names`.
@@ -9033,6 +9641,7 @@ public enum Components {
             /// - Parameters:
             ///   - id:
             ///   - project_id:
+            ///   - task_id: The stable task identity shared by specification, implementation, and retry runs.
             ///   - display_names: Daemon-derived project and work-unit labels for run rows.
             ///   - created_at: UTC instant of the run_submitted observation. Null only when no run_submitted milestone exists, as for a pre-migration-0024 legacy run; other observation facts may still exist.
             ///   - last_activity_at: Newest UTC instant across milestone, invocation, and current-hold observations. Null only when the run has no observation facts.
@@ -9053,6 +9662,7 @@ public enum Components {
             public init(
                 id: Swift.String,
                 project_id: Swift.String,
+                task_id: Swift.String,
                 display_names: Components.Schemas.Run.display_namesPayload? = nil,
                 created_at: Foundation.Date? = nil,
                 last_activity_at: Foundation.Date? = nil,
@@ -9073,6 +9683,7 @@ public enum Components {
             ) {
                 self.id = id
                 self.project_id = project_id
+                self.task_id = task_id
                 self.display_names = display_names
                 self.created_at = created_at
                 self.last_activity_at = last_activity_at
@@ -9094,6 +9705,7 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case id
                 case project_id
+                case task_id
                 case display_names
                 case created_at
                 case last_activity_at

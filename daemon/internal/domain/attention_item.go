@@ -33,9 +33,10 @@ func ProductionBlockedItemID(runID RunID) ItemID {
 // Subject is what an AttentionItem is about (plan §4). RunID is set only when
 // the subject is a run (or a run-scoped proposal); it is nil otherwise.
 type Subject struct {
-	Type  SubjectType `json:"subject_type"`
-	ID    SubjectID   `json:"subject_id"`
-	RunID *RunID      `json:"run_id"`
+	Type   SubjectType `json:"subject_type"`
+	ID     SubjectID   `json:"subject_id"`
+	RunID  *RunID      `json:"run_id"`
+	TaskID *TaskID     `json:"task_id"`
 }
 
 // Validate reports whether the subject is well-formed.
@@ -45,6 +46,9 @@ func (s Subject) Validate() error {
 	}
 	if s.ID == "" {
 		return fmt.Errorf("subject id: %w", ErrEmptyID)
+	}
+	if s.TaskID != nil && *s.TaskID == "" {
+		return fmt.Errorf("subject task_id: %w", ErrEmptyID)
 	}
 	// run_id is meaningful only for a run or a run-scoped proposal batch; a
 	// project- or system-scoped subject carrying one is mis-scoped. Behaviour
@@ -56,7 +60,14 @@ func (s Subject) Validate() error {
 		if s.RunID != nil && *s.RunID == "" {
 			return fmt.Errorf("subject run_id: %w", ErrEmptyID)
 		}
+	case SubjectTask:
+		if s.RunID != nil || s.TaskID == nil || SubjectID(*s.TaskID) != s.ID {
+			return fmt.Errorf("task subject: %w", ErrParentKeyMismatch)
+		}
 	case SubjectProject, SubjectSystem:
+		if s.TaskID != nil {
+			return fmt.Errorf("unscoped subject task_id: %w", ErrParentKeyMismatch)
+		}
 		if s.RunID != nil {
 			return fmt.Errorf("subject type %q with a run_id: %w", s.Type, ErrSubjectRunIDMismatch)
 		}
@@ -657,6 +668,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 	// action past the gate after the item has been validated.
 	subject := in.Subject
 	subject.RunID = clonePtr(in.Subject.RunID)
+	subject.TaskID = clonePtr(in.Subject.TaskID)
 	item := AttentionItem{
 		ID:                               in.ID,
 		ProjectID:                        in.ProjectID,

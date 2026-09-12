@@ -43,15 +43,15 @@ func (n DisplayName) Validate() error {
 // DisplayNames carries the scanning labels for an item's project and work
 // unit. Both are always present when the aggregate is populated.
 type DisplayNames struct {
-	Project  DisplayName `json:"project"`
-	WorkUnit DisplayName `json:"work_unit"`
+	Project DisplayName `json:"project"`
+	Task    DisplayName `json:"task"`
 }
 
 func (n DisplayNames) Validate() error {
 	if err := n.Project.Validate(); err != nil {
 		return fmt.Errorf("project: %w", err)
 	}
-	if err := n.WorkUnit.Validate(); err != nil {
+	if err := n.Task.Validate(); err != nil {
 		return fmt.Errorf("work unit: %w", err)
 	}
 	return nil

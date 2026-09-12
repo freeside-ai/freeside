@@ -553,6 +553,21 @@ import Testing
         #expect(store.snapshotsByID["item-spec_approval"] == newer)
     }
 
+    @Test func delayedReadCannotRestoreAnUnapprovedTaskName() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        let older = AttentionFixtures.fixture(type: .spec_approval)
+        var approved = older
+        approved.entity_version += 1
+        approved.as_of_revision += 1
+        approved.item.display_names?.value1.task = .init(text: "Approved task name", source: .specification)
+
+        #expect(store.apply(approved))
+        #expect(!store.apply(older))
+        #expect(
+            store.snapshotsByID[older.item.id]?.item.display_names?.value1.task
+                == approved.item.display_names?.value1.task)
+    }
+
     @Test func applyUpsertsAReplacementSnapshotInPlace() async {
         let server = MockServer()
         let store = await makeStore(server: server)

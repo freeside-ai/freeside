@@ -64,6 +64,9 @@ func newConversationFixture(t *testing.T) *convFixture {
 		t.Fatalf("NewAttentionItem: %v", err)
 	}
 	ctx := context.Background()
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error { return storetest.BindSubject(ctx, tx, &item) }); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.service.PutItem(ctx, item); err != nil {
 		t.Fatalf("seed item: %v", err)
 	}

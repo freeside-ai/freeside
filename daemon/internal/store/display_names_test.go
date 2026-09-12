@@ -14,6 +14,15 @@ func TestDisplayNamesForFallsBackToStableIdentifiers(t *testing.T) {
 	s := openStore(t, store.Options{})
 	runID := domain.RunID("run-missing")
 
+	run := domain.Run{ID: runID, ProjectID: "project-missing", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy", Stages: []domain.Stage{}}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.AssignTask(ctx, &run, nil); err != nil {
+			return err
+		}
+		return tx.PutRun(ctx, run)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var got *domain.DisplayNames
 	if err := s.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -28,8 +37,8 @@ func TestDisplayNamesForFallsBackToStableIdentifiers(t *testing.T) {
 		Project: domain.DisplayName{
 			Text: "project-missing", Source: domain.DisplayNameSourceIdentifier,
 		},
-		WorkUnit: domain.DisplayName{
-			Text: "run-missing", Source: domain.DisplayNameSourceIdentifier,
+		Task: domain.DisplayName{
+			Text: string(run.TaskID), Source: domain.DisplayNameSourceIdentifier,
 		},
 	}
 	if got == nil || *got != *want {

@@ -97,7 +97,7 @@ func migrationAdjudicationDigest(component string) domain.Digest {
 }
 
 func seedMigrationAdjudication(
-	t *testing.T, ctx context.Context, st *Store,
+	t *testing.T, ctx context.Context, st *Store, legacy bool,
 ) domain.FindingAdjudication {
 	t.Helper()
 	at := time.Date(2026, 8, 25, 13, 0, 0, 0, time.UTC)
@@ -139,7 +139,19 @@ func seedMigrationAdjudication(
 		t.Fatalf("adjudication: %v", err)
 	}
 	if err := st.Write(ctx, func(tx *WriteTx) error {
-		if err := tx.PutRun(ctx, run); err != nil {
+		if legacy {
+			// Migration fixtures must use the pre-0070 run columns.
+			body, err := encode(run)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.tx.ExecContext(ctx, `INSERT INTO runs
+				(id, project_id, policy_digest, entity_version, as_of_revision, body)
+				VALUES (?, ?, ?, 1, ?, ?)`, run.ID, run.ProjectID, run.PolicyDigest,
+				tx.asOfRevision, body); err != nil {
+				return err
+			}
+		} else if err := tx.PutRun(ctx, run); err != nil {
 			return err
 		}
 		return tx.PutReviewRecord(ctx, record, []domain.Finding{finding})
@@ -168,7 +180,7 @@ func TestMigrateFindingAdjudicationRevisionsPreservesInitialRows(t *testing.T) {
 	}
 	st := newStore(db, Options{}, domain.CurrentVerificationFloorRegistryGeneration, requirementSets)
 	t.Cleanup(func() { _ = st.Close() })
-	artifact := seedMigrationAdjudication(t, ctx, st)
+	artifact := seedMigrationAdjudication(t, ctx, st, true)
 	body, err := encode(artifact)
 	if err != nil {
 		t.Fatalf("encode legacy body: %v", err)
@@ -224,7 +236,7 @@ func TestFindingAdjudicationRevisionColumnsAreCrossChecked(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
-	artifact := seedMigrationAdjudication(t, ctx, st)
+	artifact := seedMigrationAdjudication(t, ctx, st, false)
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		return tx.PutFindingAdjudication(ctx, artifact)
 	}); err != nil {

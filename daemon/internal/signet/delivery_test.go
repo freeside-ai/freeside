@@ -336,6 +336,9 @@ func TestReportDeliveryOpenedRegatesItemOnReplay(t *testing.T) {
 		t.Fatalf("seed device: %v", err)
 	}
 	svc := newService(approving)
+	if err := approving.Write(ctx, func(tx *store.WriteTx) error { return storetest.BindSubject(ctx, tx, &item) }); err != nil {
+		t.Fatal(err)
+	}
 	if err := svc.PutItem(ctx, item); err != nil {
 		t.Fatalf("seed item: %v", err)
 	}

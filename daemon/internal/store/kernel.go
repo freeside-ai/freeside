@@ -31,7 +31,11 @@ var ErrNotFound = errors.New("not found")
 // divergent body would be trusted domain data with unenforced keys.
 // Reconstruction paths with both representations cross-check them and fail
 // loudly instead of returning a divergent body.
-var errRowInconsistent = errors.New("stored row body inconsistent with its key columns")
+var errRowInconsistent = ErrRowInconsistent
+
+// ErrRowInconsistent distinguishes a corrupt persisted representation from a
+// failed database operation at read-projection boundaries.
+var ErrRowInconsistent = errors.New("stored row body inconsistent with its key columns")
 
 // ErrImmutableConflict is returned (wrapped, with the entity and id) when a
 // write-once entity is re-put with different content under an existing key.

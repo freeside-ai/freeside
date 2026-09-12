@@ -110,8 +110,8 @@ VALUES (?, 'proj-1', NULL, 'blocked', 'open', NULL, 1, 1, ?)`, row.id, row.body)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 69 {
-		t.Fatalf("schema version = %d, want 69", got)
+	if got := rawVersion(t, db); got != 70 {
+		t.Fatalf("schema version = %d, want 70", got)
 	}
 	bindings := map[string]sql.NullString{}
 	for _, id := range []string{"run-item", "system-item", "malformed-item"} {
@@ -146,7 +146,7 @@ func TestAttentionSubjectRunBindingWriteAndRead(t *testing.T) {
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	item := attentionItemForRun(t, "selected-item", "run-selected")
-	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
+	if err := st.Write(ctx, func(tx *WriteTx) error { return putTestAttentionItem(ctx, tx, &item) }); err != nil {
 		t.Fatalf("PutAttentionItem: %v", err)
 	}
 
@@ -197,7 +197,7 @@ func TestListOpenAttentionItemsForRunIsolatesUnrelatedRows(t *testing.T) {
 	malformed := attentionItemForRun(t, "malformed-item", "run-malformed")
 	if err := approving.Write(ctx, func(tx *WriteTx) error {
 		for _, item := range []domain.AttentionItem{selected, stale, malformed} {
-			if err := tx.PutAttentionItem(ctx, item); err != nil {
+			if err := putTestAttentionItem(ctx, tx, &item); err != nil {
 				return err
 			}
 		}
@@ -287,7 +287,7 @@ func TestListOpenAttentionItemsForRunRejectsSelectedCorruption(t *testing.T) {
 			t.Parallel()
 			st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 			item := attentionItemForRun(t, "selected-item", "run-selected")
-			if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
+			if err := st.Write(ctx, func(tx *WriteTx) error { return putTestAttentionItem(ctx, tx, &item) }); err != nil {
 				t.Fatalf("PutAttentionItem: %v", err)
 			}
 			tc.mutate(t, ctx, st, item)
@@ -377,7 +377,7 @@ func TestListOpenAttentionItemsForRunRejectsAmbiguousSelectedBody(t *testing.T) 
 			st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 			item := attentionItemForRun(t, "selected-item", "run-selected")
 			if err := st.Write(ctx, func(tx *WriteTx) error {
-				return tx.PutAttentionItem(ctx, item)
+				return putTestAttentionItem(ctx, tx, &item)
 			}); err != nil {
 				t.Fatalf("PutAttentionItem: %v", err)
 			}
@@ -409,7 +409,7 @@ func TestListOpenAttentionItemsForRunRejectsSQLiteInvalidBodyRetargetedFromRun(t
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	item := attentionItemForRun(t, "selected-item", "run-selected")
-	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
+	if err := st.Write(ctx, func(tx *WriteTx) error { return putTestAttentionItem(ctx, tx, &item) }); err != nil {
 		t.Fatalf("PutAttentionItem: %v", err)
 	}
 	body, err := encode(item)
@@ -438,7 +438,7 @@ func TestAttentionSubjectRunBindingReconstructionRejectsRetargetedBody(t *testin
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	item := attentionItemForRun(t, "selected-item", "run-selected")
-	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
+	if err := st.Write(ctx, func(tx *WriteTx) error { return putTestAttentionItem(ctx, tx, &item) }); err != nil {
 		t.Fatalf("PutAttentionItem: %v", err)
 	}
 	other := domain.RunID("run-other")
@@ -466,7 +466,7 @@ func TestListOpenAttentionItemsChecksSubjectRunBinding(t *testing.T) {
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	item := attentionItemForRun(t, "selected-item", "run-selected")
-	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
+	if err := st.Write(ctx, func(tx *WriteTx) error { return putTestAttentionItem(ctx, tx, &item) }); err != nil {
 		t.Fatalf("PutAttentionItem: %v", err)
 	}
 	if _, err := st.db.ExecContext(ctx,

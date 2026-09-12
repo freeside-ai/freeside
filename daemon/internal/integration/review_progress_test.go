@@ -75,13 +75,18 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			// Remove the request table and replay its migration plus subsequent
-			// migrations, retaining only the in-flight provider journal.
+			// Undo the request and task schemas before replaying their migrations,
+			// retaining the in-flight provider journal and original run records.
 			raw, err := sql.Open("sqlite", p.dbPath)
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, query := range []string{"DROP TABLE review_requests", "DELETE FROM schema_migrations WHERE version >= 67"} {
+			for _, query := range []string{
+				"DROP TRIGGER runs_task_insert", "DROP TRIGGER runs_task_update", "DROP INDEX runs_task",
+				"ALTER TABLE attention_items DROP COLUMN subject_task_id", "ALTER TABLE runs DROP COLUMN task_id",
+				"DROP TABLE task_runs", "DROP TABLE task_intake_keys", "DROP TABLE tasks",
+				"DROP TABLE review_requests", "DELETE FROM schema_migrations WHERE version >= 67",
+			} {
 				if _, err := raw.ExecContext(p.ctx, query); err != nil {
 					_ = raw.Close()
 					t.Fatal(err)

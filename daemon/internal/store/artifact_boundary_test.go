@@ -7,6 +7,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // forgedEligibleArtifact is a verifier artifact carrying publish_eligible=true
@@ -136,6 +137,9 @@ func TestHeadIndependentEvidenceRoundTrips(t *testing.T) {
 		if err := tx.PutConversation(ctx, f.conversation); err != nil {
 			return err
 		}
+		if err := storetest.BindSubject(ctx, tx, &item); err != nil {
+			return err
+		}
 		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
 		t.Fatalf("persist item with head-independent evidence: %v", err)
@@ -195,7 +199,7 @@ func TestPutAttentionItemRejectsUnapprovedEvidence(t *testing.T) {
 	ctx := context.Background()
 	f := newFixtures(t) // f.item carries evidence under fixtureRecipe
 	s := openStore(t, store.Options{})
-	err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, f.item) })
+	err := s.Write(ctx, func(tx *store.WriteTx) error { return f.putItem(ctx, tx) })
 	if !errors.Is(err, domain.ErrUnapprovedRecipe) {
 		t.Fatalf("PutAttentionItem under empty policy error = %v, want ErrUnapprovedRecipe", err)
 	}
@@ -216,7 +220,7 @@ func TestGetAttentionItemRejectsUnapprovedEvidence(t *testing.T) {
 		if err := tx.PutConversation(ctx, f.conversation); err != nil {
 			return err
 		}
-		return tx.PutAttentionItem(ctx, f.item)
+		return f.putItem(ctx, tx)
 	})
 	if err != nil {
 		t.Fatalf("seed item with evidence: %v", err)

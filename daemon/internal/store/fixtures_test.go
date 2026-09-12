@@ -1,11 +1,69 @@
 package store_test
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+// putItem supplies the run and task parents required by the task contract.
+// It updates only the fixture's new derived fields before testing persistence.
+func (f *fixtures) putItem(ctx context.Context, tx *store.WriteTx) error {
+	run, err := tx.GetRun(ctx, f.run.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		f.run.TaskID = ""
+		if err := tx.AssignTask(ctx, &f.run, nil); err != nil {
+			return err
+		}
+		if err := tx.PutRun(ctx, f.run); err != nil {
+			return err
+		}
+		run = f.run
+	} else if err != nil {
+		return err
+	}
+	f.run.TaskID = run.TaskID
+	if f.item.Subject.Type == domain.SubjectRun && f.item.Subject.ID == domain.SubjectID(run.ID) {
+		f.item.Subject.TaskID = &f.run.TaskID
+		f.item.DisplayNames, err = tx.DisplayNamesFor(ctx, f.item.ProjectID, f.item.Subject)
+		if err != nil {
+			return err
+		}
+		surface, err := domain.NewDecisionSurface(f.item)
+		if err != nil {
+			return err
+		}
+		f.item.DecisionSurface = domain.DecisionSurfaceRef{Epoch: surface.Epoch, Digest: surface.Digest}
+	}
+	return tx.PutAttentionItem(ctx, f.item)
+}
+
+// Round-trip comparisons use the actual random identity. Only the subsequent
+// wire golden normalizes it to a fixed fixture value.
+func fixedTaskGolden(value any) any {
+	switch value := value.(type) {
+	case domain.Run:
+		value.TaskID = "task-1"
+		return value
+	case domain.AttentionItem:
+		if value.Subject.TaskID != nil {
+			value.Subject.TaskID = new(domain.TaskID("task-1"))
+			if value.DisplayNames != nil {
+				names := *value.DisplayNames
+				if names.Task.Source == domain.DisplayNameSourceIdentifier {
+					names.Task.Text = "task-1"
+				}
+				value.DisplayNames = &names
+			}
+		}
+		return value
+	}
+	return value
+}
 
 // evidenceMetaTime is the fixed timestamp every test's evidence metadata is
 // stamped with, matching the fixtures' other UTC-fixed times.
@@ -109,8 +167,8 @@ func newFixtures(t *testing.T) fixtures {
 		Content:   "All checks green; the diff touches only docs.",
 	}
 	displayNames := domain.DisplayNames{
-		Project:  domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
-		WorkUnit: domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
+		Project: domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
+		Task:    domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
 	}
 	diffStats := domain.DiffStats{
 		FilesChanged: 12, Additions: 240, Deletions: 31,

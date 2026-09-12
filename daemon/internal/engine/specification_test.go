@@ -949,6 +949,29 @@ func TestSpecificationResearchApprovalStartsDigestBoundImplementation(t *testing
 	if implementation.SpecDigest != item.ArtifactDigests[0] {
 		t.Fatalf("implementation spec digest = %s, approved = %s", implementation.SpecDigest, item.ArtifactDigests[0])
 	}
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		specification, err := tx.GetRun(t.Context(), "specification-run")
+		if err != nil {
+			return err
+		}
+		if implementation.TaskID == "" || implementation.TaskID != specification.TaskID || item.Subject.TaskID == nil || *item.Subject.TaskID != implementation.TaskID {
+			t.Fatalf("task identity changed across approval: specification=%q implementation=%q item=%+v", specification.TaskID, implementation.TaskID, item.Subject)
+		}
+		task, err := tx.GetTask(t.Context(), implementation.TaskID)
+		if err != nil {
+			return err
+		}
+		if task.Name.Text != "Approved Specification" || task.Name.Source != domain.DisplayNameSourceSpecification {
+			t.Fatalf("approved task name = %+v", task.Name)
+		}
+		runs, err := tx.TaskRunIDs(t.Context(), task.ID)
+		if err == nil && !slices.Equal(runs, []domain.RunID{specification.ID, implementation.ID}) {
+			t.Fatalf("task history = %v", runs)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if got := f.validationPrompts.snapshot(); !slices.Equal(got, []domain.Digest{
 		f.specificationPrompt, f.specificationPrompt, f.specificationPrompt, f.implementationPrompt,
 		f.specificationPrompt, f.specificationPrompt, f.implementationPrompt,

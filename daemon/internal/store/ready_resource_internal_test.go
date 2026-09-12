@@ -65,7 +65,7 @@ func migrationsBeforeReadyResource(t *testing.T) fs.FS {
 			entry.Name() == "0066_work_unit_completed_milestone.sql" ||
 			entry.Name() == "0067_review_requests.sql" ||
 			entry.Name() == "0068_declared_publication_branch.sql" ||
-			entry.Name() == "0069_successor_publication.sql" || entry.IsDir() {
+			entry.Name() == "0069_successor_publication.sql" || entry.Name() == "0070_tasks.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())
@@ -154,11 +154,11 @@ func TestAttentionPRReferenceMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 69 {
-		t.Fatalf("schema version = %d, want 69", got)
+	if got := rawVersion(t, db); got != 70 {
+		t.Fatalf("schema version = %d, want 70", got)
 	}
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id,
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, subject_task_id,
 		        readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body
 		 FROM attention_items WHERE id = ?`, item.ID))
 	if err != nil {
@@ -345,7 +345,7 @@ func TestAttentionPRReferenceMigrationBackfillsLegacyFakePublication(t *testing.
 		t.Fatalf("migrate to head: %v", err)
 	}
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id,
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, subject_task_id,
 		        readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body
 		 FROM attention_items WHERE id = ?`, item.ID))
 	if err != nil {
@@ -407,7 +407,7 @@ func TestReadyItemPRReferenceAnchorRegatesWithoutProductionBinding(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
+	if err := st.Write(ctx, func(tx *WriteTx) error { return putTestAttentionItem(ctx, tx, &item) }); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Read(ctx, func(tx *ReadTx) error {
@@ -512,7 +512,7 @@ func testReadyItemBranchBinding(t *testing.T, branch string) {
 		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
 			return err
 		}
-		return tx.PutAttentionItem(ctx, item)
+		return putTestAttentionItem(ctx, tx, &item)
 	}); err != nil {
 		t.Fatal(err)
 	}

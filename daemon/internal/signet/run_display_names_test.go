@@ -10,7 +10,7 @@ import (
 
 func TestGetRunProjectsStoredDisplayNames(t *testing.T) {
 	ctx := context.Background()
-	f := newFixture(t)
+	f := newRunFixture(t)
 	project, err := domain.NewProject("proj-1", "owner/freeside", 724)
 	if err != nil {
 		t.Fatal(err)
@@ -63,9 +63,9 @@ func TestGetRunProjectsStoredDisplayNames(t *testing.T) {
 	}) {
 		t.Errorf("project display name = %#v", got)
 	}
-	if got := snapshot.Run.DisplayNames.WorkUnit; got != (domain.DisplayName{
-		Text: "#724", Source: domain.DisplayNameSourceName,
+	if got := snapshot.Run.DisplayNames.Task; got != (domain.DisplayName{
+		Text: string(snapshot.Run.TaskID), Source: domain.DisplayNameSourceIdentifier,
 	}) {
-		t.Errorf("work-unit display name = %#v", got)
+		t.Errorf("task display name = %#v", got)
 	}
 }

@@ -11,7 +11,8 @@
         "subject": {
           "subject_type": "run",
           "subject_id": "run-569",
-          "run_id": "run-569"
+          "run_id": "run-569",
+          "task_id": "task-569"
         },
         "type": "spec_approval",
         "priority": "normal",
@@ -92,15 +93,16 @@
       "entity_version": 2,
       "run": {
         "id": "run-569",
+        "task_id": "task-569",
         "project_id": "project-569",
         "display_names": {
           "project": {
             "text": "owner/repo",
             "source": "name"
           },
-          "work_unit": {
-            "text": "#724",
-            "source": "name"
+          "task": {
+            "text": "Improve navigation",
+            "source": "specification"
           }
         },
         "created_at": "2026-08-10T12:34:56Z",
@@ -129,6 +131,44 @@
           "invocations": 1,
           "complete": true
         }
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "as_of_revision": 23,
+      "entity_version": 23,
+      "task": {
+        "id": "task-569",
+        "project_id": "project-569",
+        "display_names": {
+          "project": {
+            "text": "owner/repo",
+            "source": "name"
+          },
+          "task": {
+            "text": "Improve navigation",
+            "source": "specification"
+          }
+        },
+        "source": {
+          "kind": "work_item_artifact",
+          "work_item_artifact_id": "source-569",
+          "issue_subject": null
+        },
+        "created_at": "2026-08-10T12:34:56Z",
+        "last_activity_at": "2026-08-10T15:34:56Z",
+        "lifecycle": "finished",
+        "current_position": {
+          "run_id": "run-569",
+          "stage": null,
+          "round": null,
+          "hold_reason": null
+        },
+        "campaign_ids": [],
+        "run_ids": [
+          "run-569"
+        ]
       }
     }
   ],

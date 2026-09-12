@@ -2,8 +2,10 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -41,7 +43,7 @@ func TestGoldenRoundTrip(t *testing.T) {
 		if err := tx.PutArtifact(ctx, f.artifact); err != nil {
 			return err
 		}
-		if err := tx.PutAttentionItem(ctx, f.item); err != nil {
+		if err := f.putItem(ctx, tx); err != nil {
 			return err
 		}
 		if err := tx.PutAttentionDelivery(ctx, f.delivery); err != nil {
@@ -111,7 +113,7 @@ func TestGoldenRoundTrip(t *testing.T) {
 			if string(gotJSON) != string(wantJSON) {
 				t.Fatalf("round-trip mismatch:\ngot:  %s\nwant: %s", gotJSON, wantJSON)
 			}
-			golden.Assert(t, tc.name, gotJSON)
+			golden.Assert(t, tc.name, marshalIndent(t, fixedTaskGolden(got)))
 		})
 	}
 }
@@ -240,7 +242,7 @@ func TestCommandIdempotentAndStale(t *testing.T) {
 			if err := tx.PutConversation(ctx, f.conversation); err != nil {
 				return err
 			}
-			if err := tx.PutAttentionItem(ctx, f.item); err != nil {
+			if err := f.putItem(ctx, tx); err != nil {
 				return err
 			}
 			return tx.PutCommand(ctx, f.command)
@@ -392,7 +394,7 @@ func TestCommandIdempotentAndStale(t *testing.T) {
 			if err := tx.PutConversation(ctx, f.conversation); err != nil {
 				return err
 			}
-			return tx.PutAttentionItem(ctx, f.item)
+			return f.putItem(ctx, tx)
 		}); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
@@ -582,7 +584,7 @@ func TestAttentionItemFixedBindings(t *testing.T) {
 			if err := tx.PutConversation(ctx, f.conversation); err != nil {
 				return err
 			}
-			return tx.PutAttentionItem(ctx, f.item)
+			return f.putItem(ctx, tx)
 		})
 		if err != nil {
 			t.Fatalf("seed: %v", err)
@@ -652,14 +654,29 @@ func TestAttentionItemCardFactReplayPreservesStoredRepresentation(t *testing.T) 
 		{"stored facts survive legacy read-modify-write replay", f.item, legacy, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+			path := filepath.Join(t.TempDir(), "replay.db")
+			s := openStoreAt(t, path, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 			if err := s.Write(ctx, func(tx *store.WriteTx) error {
 				if err := tx.PutConversation(ctx, f.conversation); err != nil {
+					return err
+				}
+				if err := tx.PutRun(ctx, f.run); err != nil {
 					return err
 				}
 				return tx.PutAttentionItem(ctx, tc.stored)
 			}); err != nil {
 				t.Fatal(err)
+			}
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+			// Reproduce the stored null from before task labels were derived.
+			if !tc.named {
+				if _, err := db.ExecContext(ctx, `UPDATE attention_items SET body = json_set(body, '$.display_names', NULL) WHERE id = ?`, tc.stored.ID); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if err := s.Write(ctx, func(tx *store.WriteTx) error {
 				return tx.PutAttentionItem(ctx, tc.replay)
@@ -674,8 +691,15 @@ func TestAttentionItemCardFactReplayPreservesStoredRepresentation(t *testing.T) 
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if (got.DisplayNames != nil) != tc.named {
-				t.Fatalf("display_names = %#v, named = %v", got.DisplayNames, tc.named)
+			var storedNames bool
+			if err := db.QueryRowContext(ctx, `SELECT json_type(body, '$.display_names') != 'null' FROM attention_items WHERE id = ?`, tc.stored.ID).Scan(&storedNames); err != nil {
+				t.Fatal(err)
+			}
+			if storedNames != tc.named {
+				t.Fatalf("stored display_names populated = %v, want %v", storedNames, tc.named)
+			}
+			if got.DisplayNames == nil || got.Subject.TaskID == nil || got.DisplayNames.Task.Text != string(*got.Subject.TaskID) {
+				t.Fatalf("read did not project the stored task name: %#v", got.DisplayNames)
 			}
 			if (got.DiffStats != nil) != tc.named {
 				t.Fatalf("diff_stats = %#v, populated = %v", got.DiffStats, tc.named)
@@ -701,7 +725,7 @@ func TestAttentionItemStaleWriteRejected(t *testing.T) {
 		if err := tx.PutConversation(ctx, f.conversation); err != nil {
 			return err
 		}
-		if err := tx.PutAttentionItem(ctx, f.item); err != nil {
+		if err := f.putItem(ctx, tx); err != nil {
 			return err
 		}
 		return tx.PutAttentionItem(ctx, resolved) // v1 -> v2 transition
@@ -713,7 +737,7 @@ func TestAttentionItemStaleWriteRejected(t *testing.T) {
 	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, resolved) }); err != nil {
 		t.Fatalf("identical replay errored, want silent convergence: %v", err)
 	}
-	err = s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, f.item) }) // stale v1
+	err = s.Write(ctx, func(tx *store.WriteTx) error { return f.putItem(ctx, tx) }) // stale v1
 	if !errors.Is(err, store.ErrStaleWrite) {
 		t.Fatalf("stale v1 write error = %v, want ErrStaleWrite", err)
 	}
@@ -743,7 +767,7 @@ func TestDeliveryLifecycleForwardOnly(t *testing.T) {
 		if err := tx.PutConversation(ctx, f.conversation); err != nil {
 			return err
 		}
-		if err := tx.PutAttentionItem(ctx, f.item); err != nil {
+		if err := f.putItem(ctx, tx); err != nil {
 			return err
 		}
 		return tx.PutAttentionDelivery(ctx, submitted)
@@ -773,7 +797,7 @@ func TestDeliveryLifecycleForwardOnly(t *testing.T) {
 		if err := tx.PutConversation(ctx, f.conversation); err != nil {
 			return err
 		}
-		if err := tx.PutAttentionItem(ctx, f.item); err != nil {
+		if err := f.putItem(ctx, tx); err != nil {
 			return err
 		}
 		return tx.PutAttentionDelivery(ctx, submitted)
@@ -870,7 +894,7 @@ func TestForeignKeysEnforced(t *testing.T) {
 			return tx.PutResolvedPolicy(ctx, f.policy)
 		}},
 		{"item with dangling conversation", func(tx *store.WriteTx) error {
-			return tx.PutAttentionItem(ctx, f.item) // conversation_id conv-1 never inserted
+			return f.putItem(ctx, tx) // conversation_id conv-1 never inserted
 		}},
 	}
 	for _, tc := range cases {
@@ -931,7 +955,7 @@ func TestDecisionInstantsSurviveReopen(t *testing.T) {
 		if err := tx.PutArtifact(ctx, f.artifact); err != nil {
 			return err
 		}
-		if err := tx.PutAttentionItem(ctx, f.item); err != nil {
+		if err := f.putItem(ctx, tx); err != nil {
 			return err
 		}
 		if err := tx.PutAttentionDelivery(ctx, f.delivery); err != nil {

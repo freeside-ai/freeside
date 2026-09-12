@@ -16,6 +16,7 @@ import (
 
 type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 // seedDecisionSurface writes item's epoch-1 decision surface and its item-body
@@ -27,6 +28,7 @@ type execer interface {
 // the rewritten row first otherwise.
 func seedDecisionSurface(t *testing.T, ctx context.Context, db execer, item domain.AttentionItem) {
 	t.Helper()
+	bindRawItemTask(t, ctx, db, &item)
 	surface := insertDecisionSurface(t, ctx, db, item)
 	item.DecisionSurface = domain.DecisionSurfaceRef{Epoch: surface.Epoch, Digest: surface.Digest}
 	item.Recommendation = nil
@@ -36,6 +38,11 @@ func seedDecisionSurface(t *testing.T, ctx context.Context, db execer, item doma
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE attention_items SET body = ? WHERE id = ?`, itemBody, item.ID); err != nil {
 		t.Fatalf("seed attention item decision surface: %v", err)
+	}
+	if item.Subject.TaskID != nil {
+		if _, err := db.ExecContext(ctx, `UPDATE attention_items SET subject_task_id = ? WHERE id = ?`, *item.Subject.TaskID, item.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -143,9 +150,14 @@ func openTestStore(t *testing.T) *Store {
 	return openTemplateStore(t, Options{})
 }
 
-func putItem(t *testing.T, ctx context.Context, st *Store, item domain.AttentionItem) {
+func putItem(t *testing.T, ctx context.Context, st *Store, item *domain.AttentionItem) {
 	t.Helper()
-	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		if err := bindTestSubject(ctx, tx, item); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, *item)
+	}); err != nil {
 		t.Fatalf("PutAttentionItem: %v", err)
 	}
 }
@@ -161,7 +173,7 @@ func TestPutAttentionItemMaintainsDecisionSurface(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)
 	item := decisionSurfaceItem(t, "item-1")
-	putItem(t, ctx, st, item)
+	putItem(t, ctx, st, &item)
 
 	want, err := domain.NewDecisionSurface(item)
 	if err != nil {
@@ -179,7 +191,7 @@ func TestPutAttentionItemMaintainsDecisionSurface(t *testing.T) {
 	}
 	decided.Status = domain.StatusResolved
 	decided.ItemVersion = 2
-	putItem(t, ctx, st, decided)
+	putItem(t, ctx, st, &decided)
 	if epoch, digest, body := rawSurfaceRow(t, ctx, st.db, item.ID); epoch != 1 || digest != string(want.Digest) || body != createdBody {
 		t.Fatalf("telemetry transition rewrote the surface row: epoch %d digest %s", epoch, digest)
 	}
@@ -191,7 +203,7 @@ func TestPutAttentionItemMaintainsDecisionSurface(t *testing.T) {
 	if err != nil || !advanced {
 		t.Fatalf("NextDecisionSurface = %v, advanced %v", err, advanced)
 	}
-	putItem(t, ctx, st, prospective)
+	putItem(t, ctx, st, &prospective)
 	admitted := readSurface(t, ctx, st, item.ID)
 	if admitted.Epoch != 2 || admitted.Digest != precommitted.Digest {
 		t.Fatalf("admitted surface = %d/%s, want 2/%s", admitted.Epoch, admitted.Digest, precommitted.Digest)
@@ -205,7 +217,7 @@ func TestPutAttentionItemMaintainsDecisionSurface(t *testing.T) {
 
 	// A replay of the current body converges without touching the row.
 	_, _, before := rawSurfaceRow(t, ctx, st.db, item.ID)
-	putItem(t, ctx, st, prospective)
+	putItem(t, ctx, st, &prospective)
 	if _, _, after := rawSurfaceRow(t, ctx, st.db, item.ID); after != before {
 		t.Fatal("idempotent replay rewrote the surface row")
 	}
@@ -215,7 +227,7 @@ func TestPutAttentionItemMaintainsDecisionSurface(t *testing.T) {
 	claimed.ItemVersion = 4
 	claimed.AgentClaims = []domain.AgentClaim{surfaceClaim()}
 	claimed.ArtifactDigests = domain.PresentedArtifactDigests(claimed)
-	putItem(t, ctx, st, claimed)
+	putItem(t, ctx, st, &claimed)
 	third := readSurface(t, ctx, st, item.ID)
 	if third.Epoch != 3 || third.Digest == admitted.Digest ||
 		!slices.Contains(third.PresentedArtifactDigests, claimed.AgentClaims[0].Digest) {
@@ -233,7 +245,7 @@ func TestDecisionSurfaceReconstructionFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)
 	item := decisionSurfaceItem(t, "item-1")
-	putItem(t, ctx, st, item)
+	putItem(t, ctx, st, &item)
 	_, _, honest := rawSurfaceRow(t, ctx, st.db, item.ID)
 
 	// Both the single-entity and the list reconstruction paths share the gate.
@@ -406,6 +418,7 @@ func TestAttentionDecisionSurfacesMigrationAppliesFromHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	legacy := decisionSurfaceItem(t, "item-legacy")
+	legacy.Subject = domain.Subject{Type: domain.SubjectProject, ID: "proj-1"}
 	body, err := encode(legacy)
 	if err != nil {
 		t.Fatal(err)
@@ -417,7 +430,7 @@ func TestAttentionDecisionSurfacesMigrationAppliesFromHead(t *testing.T) {
 	} {
 		if _, err := db.ExecContext(ctx, `INSERT INTO attention_items
 			(id, project_id, conversation_id, item_type, status, subject_run_id, entity_version, as_of_revision, body)
-			VALUES (?, 'proj-1', NULL, 'blocked', 'open', 'run-1', 1, 1, ?)`, row.id, row.body); err != nil {
+			VALUES (?, 'proj-1', NULL, 'blocked', 'open', NULL, 1, 1, ?)`, row.id, row.body); err != nil {
 			t.Fatalf("seed %s: %v", row.id, err)
 		}
 	}
@@ -431,8 +444,8 @@ func TestAttentionDecisionSurfacesMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 69 {
-		t.Fatalf("schema version = %d, want 69", got)
+	if got := rawVersion(t, db); got != 70 {
+		t.Fatalf("schema version = %d, want 70", got)
 	}
 	want, err := domain.NewDecisionSurface(legacy)
 	if err != nil {
@@ -495,6 +508,7 @@ func TestAttentionDecisionSurfacesMigrationRetiresLegacyAdjudicate(t *testing.T)
 		t.Fatal(err)
 	}
 	legacy := decisionSurfaceItem(t, "item-legacy-adjudicate")
+	legacy.Subject = domain.Subject{Type: domain.SubjectProject, ID: "proj-1"}
 	legacy.Type = domain.AttentionReviewDispute
 	body, err := encode(legacy)
 	if err != nil {
@@ -622,6 +636,7 @@ func TestAttentionDecisionSurfaceBodiesMigrationAppliesFromHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	item := decisionSurfaceItem(t, "item-body-backfill")
+	item.Subject = domain.Subject{Type: domain.SubjectProject, ID: "proj-1"}
 	body, err := encode(item)
 	if err != nil {
 		t.Fatal(err)
@@ -648,8 +663,8 @@ func TestAttentionDecisionSurfaceBodiesMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 69 {
-		t.Fatalf("schema version = %d, want 69", got)
+	if got := rawVersion(t, db); got != 70 {
+		t.Fatalf("schema version = %d, want 70", got)
 	}
 	var (
 		storedBody    []byte
@@ -659,8 +674,8 @@ func TestAttentionDecisionSurfaceBodiesMigrationAppliesFromHead(t *testing.T) {
 		Scan(&storedBody, &entityVersion); err != nil {
 		t.Fatal(err)
 	}
-	if entityVersion != 7 {
-		t.Fatalf("entity_version = %d, want unchanged 7", entityVersion)
+	if entityVersion != 8 {
+		t.Fatalf("entity_version = %d, want 8 after task projection migration", entityVersion)
 	}
 	stored, err := decode[domain.AttentionItem](storedBody)
 	if err != nil {
