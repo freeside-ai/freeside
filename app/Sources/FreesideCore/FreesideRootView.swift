@@ -2,6 +2,12 @@ import FreesideAPI
 import SwiftUI
 
 public struct FreesideRootView: View {
+    /// The macOS sidebar's section switcher; iOS keeps its tab bar.
+    static let sectionSegments: [FreesideSegmentedControl<LaunchInputs.Screen>.Segment] = [
+        .init(value: .inbox, label: "Inbox"),
+        .init(value: .runs, label: "Runs"),
+    ]
+
     @Environment(\.dynamicTypeSize) private var systemDynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
     @State private var session: AppSession
@@ -167,12 +173,11 @@ public struct FreesideRootView: View {
         #else
             NavigationSplitView {
                 VStack(spacing: 0) {
-                    Picker("Section", selection: selectedTab) {
-                        Label("Inbox", systemImage: "tray.full").tag(LaunchInputs.Screen.inbox)
-                        Label("Runs", systemImage: "point.3.connected.trianglepath.dotted")
-                            .tag(LaunchInputs.Screen.runs)
-                    }
-                    .pickerStyle(.segmented)
+                    FreesideSegmentedControl(
+                        accessibilityLabel: "Section",
+                        segments: Self.sectionSegments,
+                        selection: selectedTab
+                    )
                     .padding()
                     switch selectedTab.wrappedValue {
                     case .inbox:
@@ -351,7 +356,12 @@ public struct FreesideRootView: View {
                             runs: coordinator.runs,
                             freshness: coordinator.store.freshness),
                         onSelectItem: { navigation.route(to: .attentionItem($0)) },
-                        onShowRuns: { navigation.showActiveRuns() })
+                        onShowRuns: { navigation.showActiveRuns() }
+                    )
+                    // Pinned to the column's top-leading corner, where the
+                    // decision card it stands in for begins, instead of
+                    // floating at its center.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
             case .runs:
                 if let runSelection,
