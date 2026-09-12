@@ -12,13 +12,13 @@ import (
 
 // seedItem writes the fixture conversation and item so command tests start
 // from the same referential state TestCommandIdempotentAndStale uses.
-func seedItem(t *testing.T, s *store.Store, f fixtures) {
+func seedItem(t *testing.T, s *store.Store, f *fixtures) {
 	t.Helper()
 	err := s.Write(context.Background(), func(tx *store.WriteTx) error {
 		if err := tx.PutConversation(context.Background(), f.conversation); err != nil {
 			return err
 		}
-		return tx.PutAttentionItem(context.Background(), f.item)
+		return f.putItem(context.Background(), tx)
 	})
 	if err != nil {
 		t.Fatalf("seed: %v", err)
@@ -34,7 +34,7 @@ func TestAttentionItemSnapshotMetadata(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
-	seedItem(t, s, f)
+	seedItem(t, s, &f)
 
 	afterSeed, err := s.ServerState(ctx)
 	if err != nil {
@@ -104,6 +104,9 @@ func TestItemSnapshotDistinguishesEntityVersionFromBindings(t *testing.T) {
 		if err := tx.PutConversation(ctx, f.conversation); err != nil {
 			return err
 		}
+		if err := tx.PutRun(ctx, f.run); err != nil {
+			return err
+		}
 		return tx.PutAttentionItem(ctx, born)
 	})
 	if err != nil {
@@ -149,7 +152,7 @@ func TestCommandSnapshotOriginalRevision(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
-	seedItem(t, s, f)
+	seedItem(t, s, &f)
 
 	var inTx store.Snapshot
 	err := s.Write(ctx, func(tx *store.WriteTx) error {
@@ -305,7 +308,7 @@ func TestCommandSnapshotReplayInsideWrite(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
-	seedItem(t, s, f)
+	seedItem(t, s, &f)
 
 	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutCommand(ctx, f.command) }); err != nil {
 		t.Fatalf("accept command: %v", err)

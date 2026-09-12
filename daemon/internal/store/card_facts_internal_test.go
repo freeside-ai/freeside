@@ -31,13 +31,13 @@ func TestPutAttentionItemRegatesRestoredSpecRevision(t *testing.T) {
 				return err
 			}
 		}
-		if err := tx.PutAttentionItem(ctx, priorItem); err != nil {
+		if err := putTestAttentionItem(ctx, tx, &priorItem); err != nil {
 			return err
 		}
 		if err := tx.PutCommand(ctx, command); err != nil {
 			return err
 		}
-		return tx.PutAttentionItem(ctx, item)
+		return putTestAttentionItem(ctx, tx, &item)
 	}); err != nil {
 		t.Fatalf("seed revision: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestPutAttentionItemRegatesRestoredSpecRevision(t *testing.T) {
 	updated.ItemVersion++
 	updated.Status = domain.StatusSuperseded
 	updated.SpecRevision = nil
-	err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, updated) })
+	err := st.Write(ctx, func(tx *WriteTx) error { return putTestAttentionItem(ctx, tx, &updated) })
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("update carrying restored forged revision = %v, want ErrParentKeyMismatch", err)
 	}
@@ -76,13 +76,13 @@ func TestPutAttentionItemRestoresValidSpecRevision(t *testing.T) {
 				return err
 			}
 		}
-		if err := tx.PutAttentionItem(ctx, priorItem); err != nil {
+		if err := putTestAttentionItem(ctx, tx, &priorItem); err != nil {
 			return err
 		}
 		if err := tx.PutCommand(ctx, command); err != nil {
 			return err
 		}
-		return tx.PutAttentionItem(ctx, item)
+		return putTestAttentionItem(ctx, tx, &item)
 	}); err != nil {
 		t.Fatalf("seed revision: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestPutAttentionItemRestoresValidSpecRevision(t *testing.T) {
 	updated.ItemVersion++
 	updated.Status = domain.StatusSuperseded
 	updated.SpecRevision = nil
-	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, updated) }); err != nil {
+	if err := st.Write(ctx, func(tx *WriteTx) error { return putTestAttentionItem(ctx, tx, &updated) }); err != nil {
 		t.Fatalf("update carrying restored revision: %v", err)
 	}
 }
@@ -227,6 +227,9 @@ func recordInternalSpecApprovalTerminal(
 	item domain.AttentionItem,
 	iteration int,
 ) error {
+	if err := st.Write(ctx, func(tx *WriteTx) error { return bindTestSubject(ctx, tx, &item) }); err != nil {
+		return err
+	}
 	var specification *domain.AgentClaim
 	var summaryDigest *domain.Digest
 	for index := range item.AgentClaims {
@@ -308,7 +311,7 @@ func TestAttentionItemReadAuthenticatesReviewDisputeBinding(t *testing.T) {
 		if err := tx.PutReviewRecord(ctx, record, []domain.Finding{finding}); err != nil {
 			return err
 		}
-		return tx.PutAttentionItem(ctx, item)
+		return putTestAttentionItem(ctx, tx, &item)
 	}); err != nil {
 		t.Fatalf("seed item: %v", err)
 	}
@@ -428,10 +431,10 @@ func TestAttentionItemReadAuthenticatesBlockedWait(t *testing.T) {
 		if err := tx.PutArtifact(ctx, specification); err != nil {
 			return err
 		}
-		if err := tx.PutAttentionItem(ctx, approval); err != nil {
+		if err := putTestAttentionItem(ctx, tx, &approval); err != nil {
 			return err
 		}
-		return tx.PutAttentionItem(ctx, blocked)
+		return putTestAttentionItem(ctx, tx, &blocked)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -556,7 +559,7 @@ func TestAttentionItemReadAuthenticatesBlockedWait(t *testing.T) {
 	successor := blocked
 	successor.ItemVersion++
 	successor.BlockedOn = nil
-	err = st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, successor) })
+	err = st.Write(ctx, func(tx *WriteTx) error { return putTestAttentionItem(ctx, tx, &successor) })
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("restored blocked wait put = %v, want ErrParentKeyMismatch", err)
 	}
@@ -683,7 +686,7 @@ func TestAttentionItemReadAuthenticatesExecutionFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.Write(ctx, func(tx *WriteTx) error {
-		return tx.PutAttentionItem(ctx, item)
+		return putTestAttentionItem(ctx, tx, &item)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -728,7 +731,7 @@ func TestAttentionItemSuccessorReauthenticatesRestoredExecutionFailure(t *testin
 		t.Fatal(err)
 	}
 	if err := st.Write(ctx, func(tx *WriteTx) error {
-		return tx.PutAttentionItem(ctx, item)
+		return putTestAttentionItem(ctx, tx, &item)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -740,7 +743,7 @@ func TestAttentionItemSuccessorReauthenticatesRestoredExecutionFailure(t *testin
 	successor := item
 	successor.ItemVersion++
 	successor.ExecutionFailure = nil
-	err = st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, successor) })
+	err = st.Write(ctx, func(tx *WriteTx) error { return putTestAttentionItem(ctx, tx, &successor) })
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("restored execution failure put = %v, want ErrParentKeyMismatch", err)
 	}

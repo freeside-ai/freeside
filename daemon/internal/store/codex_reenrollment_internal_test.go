@@ -248,8 +248,8 @@ func TestCodexReenrollmentMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 69 {
-		t.Fatalf("schema version = %d, want 69", got)
+	if got := rawVersion(t, db); got != 70 {
+		t.Fatalf("schema version = %d, want 70", got)
 	}
 	for _, table := range []string{
 		"codex_reenrollment_operations", "codex_reenrollment_recovery_transitions",
@@ -338,8 +338,8 @@ func TestCodexReenrollmentMigrationNormalizesOnlyAuthenticatedLegacyMarkers(t *t
 	if err := db.QueryRowContext(ctx, `SELECT revision FROM server_state WHERE id = 1`).Scan(&afterRevision); err != nil {
 		t.Fatal(err)
 	}
-	if afterRevision != beforeRevision+1 {
-		t.Fatalf("server revision = %d, want %d", afterRevision, beforeRevision+1)
+	if afterRevision != beforeRevision+2 {
+		t.Fatalf("server revision = %d, want %d", afterRevision, beforeRevision+2)
 	}
 	for _, want := range []domain.AttentionItem{first, second} {
 		var entityVersion, asOfRevision int64
@@ -348,8 +348,8 @@ func TestCodexReenrollmentMigrationNormalizesOnlyAuthenticatedLegacyMarkers(t *t
 			FROM attention_items WHERE id = ?`, want.ID).Scan(&entityVersion, &asOfRevision, &body); err != nil {
 			t.Fatal(err)
 		}
-		if entityVersion != 2 || asOfRevision != afterRevision {
-			t.Errorf("marker %s metadata = (%d, %d), want (2, %d)", want.ID, entityVersion, asOfRevision, afterRevision)
+		if entityVersion != 3 || asOfRevision != afterRevision {
+			t.Errorf("marker %s metadata = (%d, %d), want (3, %d) after task migration", want.ID, entityVersion, asOfRevision, afterRevision)
 		}
 		var got domain.AttentionItem
 		if err := decodeMigrationJSON(body, &got); err != nil {
@@ -395,8 +395,8 @@ func TestCodexReenrollmentMigrationNormalizesOnlyAuthenticatedLegacyMarkers(t *t
 		}
 		got.Recommendation = nil
 		got.DecisionSurface = domain.DecisionSurfaceRef{}
-		if entityVersion != 1 || asOfRevision != beforeRevision || !reflect.DeepEqual(got, prior) {
-			t.Errorf("near-match marker %s changed beyond the 0059 daemon projection", id)
+		if entityVersion != 2 || asOfRevision != afterRevision || !reflect.DeepEqual(got, prior) {
+			t.Errorf("near-match marker %s changed beyond the daemon and task projections", id)
 		}
 	}
 

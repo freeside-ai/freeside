@@ -117,6 +117,20 @@ type initialAttemptAuthorityKey struct {
 }
 
 func (tx *ReadTx) authenticateInitialAttemptAuthorityUncached(ctx context.Context, attempt domain.ProductionAttempt) error {
+	present, err := tx.authenticateInitialAttemptSource(ctx, attempt)
+	if err != nil || !present {
+		return err
+	}
+	if attempt.ApprovedSpecDigest != "" {
+		return tx.authenticateInitialApprovedSpec(ctx, attempt)
+	}
+	return nil
+}
+
+// authenticateInitialAttemptSource binds the original source and run identities
+// to the immutable dispatch. Migration uses this before task reconstruction is
+// available; approval authentication remains a separate authority check.
+func (tx *ReadTx) authenticateInitialAttemptSource(ctx context.Context, attempt domain.ProductionAttempt) (bool, error) {
 	entry, err := tx.GetOutbox(ctx, string(domain.SpecificationInvocationID(attempt.SpecificationRunID, 1)))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -127,17 +141,17 @@ func (tx *ReadTx) authenticateInitialAttemptAuthorityUncached(ctx context.Contex
 			var exists int
 			err := tx.tx.QueryRowContext(ctx, `SELECT 1 FROM runs WHERE id = ?`, attempt.ImplementationRunID).Scan(&exists)
 			if errors.Is(err, sql.ErrNoRows) {
-				return nil
+				return false, nil
 			}
 			if err != nil {
-				return err
+				return false, err
 			}
-			return domain.ErrParentKeyMismatch
+			return false, domain.ErrParentKeyMismatch
 		}
-		return err
+		return false, err
 	}
 	if entry.Kind != string(domain.SpecificationInvocationRequestedKind) {
-		return domain.ErrParentKeyMismatch
+		return false, domain.ErrParentKeyMismatch
 	}
 	var root struct {
 		SpecificationRunID  domain.RunID        `json:"specification_run_id"`
@@ -151,16 +165,16 @@ func (tx *ReadTx) authenticateInitialAttemptAuthorityUncached(ctx context.Contex
 		root.SpecificationRunID != attempt.SpecificationRunID || root.ImplementationRunID != attempt.ImplementationRunID ||
 		root.CampaignID != attempt.CampaignID || root.AttemptNumber != 1 ||
 		root.PublicationDigest != attempt.PublicationDigest || len(root.InputArtifactIDs) != 1 {
-		return domain.ErrParentKeyMismatch
+		return false, domain.ErrParentKeyMismatch
 	}
 	source, err := tx.GetArtifact(ctx, root.InputArtifactIDs[0])
-	if err != nil || source.Digest != attempt.SourceDigest {
-		return domain.ErrParentKeyMismatch
+	if err != nil {
+		return false, errors.Join(domain.ErrParentKeyMismatch, err)
 	}
-	if attempt.ApprovedSpecDigest != "" {
-		return tx.authenticateInitialApprovedSpec(ctx, attempt)
+	if source.Digest != attempt.SourceDigest {
+		return false, domain.ErrParentKeyMismatch
 	}
-	return nil
+	return true, nil
 }
 
 // authenticateInitialApprovedSpec reconstructs the specification terminal that

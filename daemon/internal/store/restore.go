@@ -181,9 +181,9 @@ func (s *Store) restoreFromSource(
 	}
 
 	// Suspend foreign-key enforcement for the wholesale table-by-table copy so
-	// it needs no dependency ordering; the checkpoint is an internally
-	// consistent VACUUM INTO snapshot, so the restored state is consistent by
-	// construction. foreign_keys is a no-op inside a transaction and must be
+	// only the task-before-run insert-trigger dependency needs ordering. The
+	// checkpoint is an internally consistent VACUUM INTO snapshot, so the
+	// restored state is consistent by construction. foreign_keys is a no-op inside a transaction and must be
 	// toggled here, before BEGIN, and restored (above) before the pooled
 	// connection is reused.
 	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
@@ -421,7 +421,7 @@ func restorableTablesFromDatabase(ctx context.Context, source *sql.Conn) ([]stri
 	rows, err := source.QueryContext(ctx,
 		`SELECT name FROM sqlite_master
 		 WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations'
-		 ORDER BY name`)
+		 ORDER BY CASE WHEN name = 'tasks' THEN 0 ELSE 1 END, name`)
 	if err != nil {
 		return nil, fmt.Errorf("restore: list checkpoint tables: %w", err)
 	}
@@ -503,7 +503,7 @@ func restorableTables(ctx context.Context, conn *sql.Conn) ([]string, error) {
 	rows, err := conn.QueryContext(ctx,
 		`SELECT name FROM main.sqlite_master
 		 WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations'
-		 ORDER BY name`)
+		 ORDER BY CASE WHEN name = 'tasks' THEN 0 ELSE 1 END, name`)
 	if err != nil {
 		return nil, fmt.Errorf("restore: list tables: %w", err)
 	}

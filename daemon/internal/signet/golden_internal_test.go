@@ -16,12 +16,13 @@ func TestSignetWireGoldens(t *testing.T) {
 	acceptedAt := createdAt.Add(time.Minute)
 	expiresAt := createdAt.Add(24 * time.Hour)
 	runID := domain.RunID("run-569")
+	taskID := domain.TaskID("task-569")
 	conversationID := domain.ConversationID("conversation-569")
 	intervalSeconds := int64(3600)
 
 	item := domain.AttentionItem{
 		ID: "item-569", ProjectID: "project-569",
-		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-569", RunID: &runID},
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-569", RunID: &runID, TaskID: &taskID},
 		Type:    domain.AttentionSpecApproval, Priority: domain.PriorityNormal,
 		Reason:            "the implementation plan awaits approval",
 		RequestedDecision: []domain.Action{domain.ActionApprove, domain.ActionDiscuss},
@@ -39,7 +40,7 @@ func TestSignetWireGoldens(t *testing.T) {
 		Status: domain.DeliveryChannelAccepted,
 	}
 	run := domain.Run{
-		ID: runID, ProjectID: item.ProjectID,
+		ID: runID, TaskID: taskID, ProjectID: item.ProjectID,
 		SpecDigest:   domain.Digest("sha256:" + strings.Repeat("2", 64)),
 		PolicyDigest: domain.Digest("sha256:" + strings.Repeat("3", 64)),
 	}
@@ -129,13 +130,20 @@ func TestSignetWireGoldens(t *testing.T) {
 				AttentionDeliveries: []AttentionDeliverySnapshot{
 					deliverySnapshot(delivery, store.Snapshot{AsOfRevision: 19, EntityVersion: 1}),
 				},
+				Tasks: []TaskSnapshot{{AsOfRevision: 23, EntityVersion: 23, Task: Task{
+					ID: taskID, ProjectID: item.ProjectID, CreatedAt: createdAt, LastActivityAt: mergedAt,
+					DisplayNames: domain.DisplayNames{Project: domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName}, Task: domain.DisplayName{Text: "Improve navigation", Source: domain.DisplayNameSourceSpecification}},
+					Source:       projectTaskSource(&domain.SpecificationSource{Kind: domain.SpecificationSourceWorkItemArtifact, WorkItemArtifactID: "source-569"}),
+					Lifecycle:    new(domain.RunLifecycleFinished), CurrentPosition: &TaskPosition{RunID: runID},
+					CampaignIDs: []domain.CampaignID{}, RunIDs: []domain.RunID{runID},
+				}}},
 				Runs: []RunSnapshot{
 					runSnapshot(
 						run, store.Snapshot{AsOfRevision: 20, EntityVersion: 2},
 						observation, domain.ConcludeRun(observation), 23,
 						&domain.DisplayNames{
-							Project:  domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
-							Task: domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
+							Project: domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
+							Task:    domain.DisplayName{Text: "Improve navigation", Source: domain.DisplayNameSourceSpecification},
 						},
 						facts,
 					),

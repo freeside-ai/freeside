@@ -13,3 +13,6 @@ c115f4548366d03fe0cd7af5e56d9c3c8cd35f08
 
 # Rename the elaboration vocabulary to specification (#986)
 fb0f5607b2f836c5727a22d9a638144c91f90330
+
+# Rename the task display-name field in Go (#1203)
+6e1a5a4843c833f1c8fe93f3249ed17b0d0dfbea

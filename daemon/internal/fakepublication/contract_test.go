@@ -87,6 +87,11 @@ func TestTerminalDigestIgnoresAttentionCreationTime(t *testing.T) {
 	item.DecisionSurface = domain.DecisionSurfaceRef{
 		Epoch: 2, Digest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 	}
+	item.Subject.TaskID = new(domain.TaskID("task-derived"))
+	item.DisplayNames = &domain.DisplayNames{
+		Project: domain.DisplayName{Text: "Project label", Source: domain.DisplayNameSourceName},
+		Task:    domain.DisplayName{Text: "Approved task label", Source: domain.DisplayNameSourceSpecification},
+	}
 	projectedDigest, err := TerminalDigest(Task{RunID: "run-terminal"}, item)
 	if err != nil {
 		t.Fatal(err)

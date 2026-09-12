@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -32,21 +31,16 @@ func (tx *ReadTx) DisplayNamesFor(
 	} else if !errors.Is(err, ErrNotFound) {
 		return nil, err
 	}
-	if subject.Type == domain.SubjectRun {
-		runID := domain.RunID(subject.ID)
-		if subject.RunID != nil {
-			runID = *subject.RunID
-		}
-		names.Task.Text = string(runID)
-		declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, runID)
-		if err == nil && declaration.BoundIssue != nil {
-			names.Task = domain.DisplayName{
-				Text:   fmt.Sprintf("#%d", *declaration.BoundIssue),
-				Source: domain.DisplayNameSourceName,
-			}
-		} else if err != nil && !errors.Is(err, ErrNotFound) {
+	id, err := tx.subjectTask(ctx, projectID, subject)
+	if err != nil {
+		return nil, err
+	}
+	if id != nil {
+		task, err := tx.GetTask(ctx, *id)
+		if err != nil {
 			return nil, err
 		}
+		names.Task = task.Name
 	}
 	if err := names.Validate(); err != nil {
 		return nil, err

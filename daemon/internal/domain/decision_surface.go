@@ -84,19 +84,29 @@ func (r DecisionSurfaceRef) Validate() error {
 // decisionSurfacePreimage is the digest preimage. Field order is part of the
 // contract and is pinned by the decision_surface_preimage golden; it must never
 // gain an artifact digest (the non-cyclic invariant, plan §4).
+// TaskID is derived from the immutable run binding, or equals Subject.ID for
+// a task subject. Keep it out of the authority preimage so migrating those
+// redundant coordinates preserves existing approval and recommendation hashes.
+// The full stored Subject still participates in Matches and store re-gating.
+type decisionSubjectPreimage struct {
+	Type  SubjectType `json:"subject_type"`
+	ID    SubjectID   `json:"subject_id"`
+	RunID *RunID      `json:"run_id"`
+}
+
 type decisionSurfacePreimage struct {
-	ItemID            ItemID   `json:"item_id"`
-	Epoch             int      `json:"epoch"`
-	Subject           Subject  `json:"subject"`
-	RequestedDecision []Action `json:"requested_decision"`
-	PRHeadSHA         string   `json:"pr_head_sha"`
+	ItemID            ItemID                  `json:"item_id"`
+	Epoch             int                     `json:"epoch"`
+	Subject           decisionSubjectPreimage `json:"subject"`
+	RequestedDecision []Action                `json:"requested_decision"`
+	PRHeadSHA         string                  `json:"pr_head_sha"`
 }
 
 func (s DecisionSurface) preimage() ([]byte, error) {
 	body, err := json.Marshal(decisionSurfacePreimage{
 		ItemID:            s.ItemID,
 		Epoch:             s.Epoch,
-		Subject:           s.Subject,
+		Subject:           decisionSubjectPreimage{Type: s.Subject.Type, ID: s.Subject.ID, RunID: s.Subject.RunID},
 		RequestedDecision: canonicalActions(s.RequestedDecision),
 		PRHeadSHA:         s.PRHeadSHA,
 	})
@@ -254,6 +264,7 @@ func sameSubject(a, b Subject) bool {
 func decisionSurfaceAt(item AttentionItem, epoch int) (DecisionSurface, error) {
 	subject := item.Subject
 	subject.RunID = clonePtr(subject.RunID)
+	subject.TaskID = clonePtr(subject.TaskID)
 	s := DecisionSurface{
 		ItemID:                   item.ID,
 		Epoch:                    epoch,

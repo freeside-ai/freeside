@@ -13,6 +13,47 @@ import Foundation
 /// actor's bridge can pass its own policy set. `MockContractValidationTests`
 /// pins each in isolation.
 enum MockContractValidation {
+    static func taskSnapshotBreach(
+        _ snapshot: Components.Schemas.TaskSnapshot, serverRevision: Int64
+    ) -> String? {
+        if snapshot.entity_version < 1 { return "non-positive entity_version" }
+        if snapshot.as_of_revision < 1 || snapshot.as_of_revision > serverRevision {
+            return "as_of_revision outside the server revision"
+        }
+        let task = snapshot.task
+        if task.id.isEmpty || task.project_id.isEmpty { return "empty task identity" }
+        if let breach = displayNamesBreach(task.display_names) { return breach }
+        if task.display_names.task.source == .name { return "invalid task name source" }
+        if task.created_at > task.last_activity_at { return "task activity precedes creation" }
+        if task.run_ids.contains(where: \.isEmpty) || Set(task.run_ids).count != task.run_ids.count {
+            return "invalid task run history"
+        }
+        if task.campaign_ids.contains(where: \.isEmpty) || Set(task.campaign_ids).count != task.campaign_ids.count {
+            return "invalid task campaign history"
+        }
+        if let position = task.current_position?.value1 {
+            if position.run_id != task.run_ids.last || task.lifecycle == nil { return "invalid task position" }
+            if let stage = position.stage, stage.isEmpty { return "empty task stage" }
+            if let round = position.round, round < 1 { return "non-positive task round" }
+        } else if !task.run_ids.isEmpty || task.lifecycle != nil {
+            return "missing task position"
+        }
+        if let source = task.source?.value1 {
+            switch source {
+            case .work_item_artifact(let artifact):
+                if artifact.issue_subject != nil { return "mixed task source arms" }
+                if artifact.work_item_artifact_id.isEmpty { return "empty task source artifact" }
+            case .issue_subject(let source):
+                if source.work_item_artifact_id != nil { return "mixed task source arms" }
+                let issue = source.issue_subject
+                if issue.repo.isEmpty || issue.repository_id < 1 || issue.issue_number < 1 {
+                    return "invalid task issue source"
+                }
+            }
+        }
+        return nil
+    }
+
     static func runSnapshotBreach(
         _ snapshot: Components.Schemas.RunSnapshot, serverRevision: Int64
     ) -> String? {
@@ -21,7 +62,7 @@ enum MockContractValidation {
             return "as_of_revision outside the server revision"
         }
         let run = snapshot.run
-        if run.id.isEmpty || run.project_id.isEmpty { return "empty run identity" }
+        if run.id.isEmpty || run.project_id.isEmpty || run.task_id.isEmpty { return "empty run identity" }
         if run.spec_digest.isEmpty || run.policy_digest.isEmpty { return "empty run digest" }
         if let names = run.display_names?.value1,
             let breach = displayNamesBreach(names)
@@ -138,11 +179,25 @@ enum MockContractValidation {
         if item.id.isEmpty { return "empty id" }
         if item.project_id.isEmpty { return "empty project_id" }
         switch item.subject {
-        case .run(let scoped), .proposal_batch(let scoped):
+        case .run(let scoped):
             if scoped.subject_id.isEmpty { return "empty subject_id" }
             if let runID = scoped.run_id, runID.isEmpty { return "empty run_id" }
+            if scoped.task_id?.isEmpty != false { return "invalid run task_id" }
+        case .proposal_batch(let scoped):
+            if scoped.subject_id.isEmpty { return "empty subject_id" }
+            if let runID = scoped.run_id, runID.isEmpty { return "empty run_id" }
+            if scoped.run_id != nil {
+                if scoped.task_id?.isEmpty != false { return "invalid run-scoped proposal task_id" }
+            } else if scoped.task_id != nil {
+                return "unscoped task_id"
+            }
         case .project(let unscoped), .system(let unscoped):
             if unscoped.subject_id.isEmpty { return "empty subject_id" }
+            if unscoped.task_id != nil { return "unscoped task_id" }
+        case .task(let task):
+            if task.task_id.isEmpty || task.subject_id != task.task_id || task.run_id != nil {
+                return "invalid task subject"
+            }
         }
         if let conversation = item.conversation_id, conversation.isEmpty {
             return "empty conversation_id"
@@ -1117,7 +1172,7 @@ enum MockContractValidation {
     }
 
     private static func displayNamesBreach(_ names: Components.Schemas.DisplayNames) -> String? {
-        if names.project.text.isEmpty || names.work_unit.text.isEmpty {
+        if names.project.text.isEmpty || names.task.text.isEmpty {
             return "empty display name"
         }
         return nil

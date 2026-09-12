@@ -3858,6 +3858,9 @@ func (w *productionPublicationWorkflow) putReviewContradictionAttention(
 	}
 	if existing != nil {
 		item.CreatedAt = existing.CreatedAt
+		if item.Subject.TaskID == nil {
+			item.Subject.TaskID = existing.Subject.TaskID
+		}
 		// Delivery receipts legitimately advance the item's version and derived
 		// timing while it remains parked. Ignore only those two mutable telemetry
 		// fields; every identity, presentation, action, and recovery coordinate
@@ -4130,6 +4133,9 @@ func (w *productionPublicationWorkflow) putReviewConfigurationAttention(
 	}
 	if existing != nil {
 		item.CreatedAt = existing.CreatedAt
+		if item.Subject.TaskID == nil {
+			item.Subject.TaskID = existing.Subject.TaskID
+		}
 		// Delivery receipts advance the item's version and derived timing, and
 		// a discuss decision attaches its conversation, all while the item
 		// remains parked. Ignore only those mutable fields; every identity,
@@ -6259,6 +6265,9 @@ func (w *productionPublicationWorkflow) putTerminalItem(
 		return err
 	}); readErr != nil {
 		return errors.Join(err, readErr)
+	}
+	if item.Subject.TaskID == nil {
+		item.Subject.TaskID = current.Subject.TaskID
 	}
 	if current.Status == domain.StatusOpen && current.DecidedAt == nil &&
 		slices.Equal(current.RequestedDecision, []domain.Action{domain.ActionInspectTrustFailure}) &&

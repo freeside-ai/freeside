@@ -2,6 +2,7 @@ package signet_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1478,7 +1479,7 @@ func TestRunObservationCorpusForges(t *testing.T) {
 			// different project than the run it claims: the project recheck
 			// rejects it.
 			item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-				ID: domain.ProductionBlockedItemID(runID), ProjectID: "proj-other",
+				ID: domain.ProductionBlockedItemID(runID), ProjectID: "proj-1",
 				Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
 				Type:    domain.AttentionPublishBlocked, Priority: domain.PriorityHigh,
 				Reason:            domain.PublicationBlockTrust,
@@ -1489,6 +1490,14 @@ func TestRunObservationCorpusForges(t *testing.T) {
 				t.Fatalf("NewAttentionItem: %v", err)
 			}
 			f.seedItem(t, item)
+			db, err := sql.Open("sqlite", f.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+			if _, err := db.ExecContext(ctx, `UPDATE attention_items SET project_id = 'proj-other', body = json_set(body, '$.project_id', 'proj-other') WHERE id = ?`, item.ID); err != nil {
+				t.Fatal(err)
+			}
 			f.appendMilestone(t, domain.RunMilestone{
 				RunID: runID, Kind: domain.MilestonePublicationBlocked, InvocationID: ptr(publicationInvocation(runID)),
 				Reason: ptr(domain.HoldTrustBlocked), RecordedAt: f.at.Add(3 * time.Hour),

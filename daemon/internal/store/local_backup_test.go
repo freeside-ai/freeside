@@ -529,7 +529,7 @@ func TestLocalCheckpointHealthRetainsExternalCommandBindings(t *testing.T) {
 		if err := tx.PutDevice(ctx, f.device); err != nil {
 			return err
 		}
-		if err := tx.PutAttentionItem(ctx, f.item); err != nil {
+		if err := f.putItem(ctx, tx); err != nil {
 			return err
 		}
 		return tx.PutCommand(ctx, f.command)
@@ -635,7 +635,7 @@ func TestLocalCheckpointHealthRejectsDivergentClosureRows(t *testing.T) {
 				if err := tx.PutDevice(ctx, f.device); err != nil {
 					return err
 				}
-				if err := tx.PutAttentionItem(ctx, f.item); err != nil {
+				if err := f.putItem(ctx, tx); err != nil {
 					return err
 				}
 				return tx.PutCommand(ctx, f.command)

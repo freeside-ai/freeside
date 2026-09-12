@@ -152,19 +152,25 @@ func (p HealthPosture) valid() bool {
 type DisplayNameSource string
 
 const (
-	DisplayNameSourceName       DisplayNameSource = "name"
-	DisplayNameSourceIdentifier DisplayNameSource = "identifier"
+	DisplayNameSourceName          DisplayNameSource = "name"
+	DisplayNameSourceIdentifier    DisplayNameSource = "identifier"
+	DisplayNameSourceOperator      DisplayNameSource = "operator"
+	DisplayNameSourceAgent         DisplayNameSource = "agent"
+	DisplayNameSourceSpecification DisplayNameSource = "specification"
 )
 
 // AllDisplayNameSources lists every valid DisplayNameSource.
 var AllDisplayNameSources = []DisplayNameSource{
 	DisplayNameSourceName,
 	DisplayNameSourceIdentifier,
+	DisplayNameSourceOperator,
+	DisplayNameSourceAgent,
+	DisplayNameSourceSpecification,
 }
 
 func (s DisplayNameSource) valid() bool {
 	switch s {
-	case DisplayNameSourceName, DisplayNameSourceIdentifier:
+	case DisplayNameSourceName, DisplayNameSourceIdentifier, DisplayNameSourceOperator, DisplayNameSourceAgent, DisplayNameSourceSpecification:
 		return true
 	default:
 		return false
@@ -317,17 +323,18 @@ type SubjectType string
 
 const (
 	SubjectRun           SubjectType = "run"
+	SubjectTask          SubjectType = "task"
 	SubjectProposalBatch SubjectType = "proposal_batch"
 	SubjectProject       SubjectType = "project"
 	SubjectSystem        SubjectType = "system"
 )
 
 // AllSubjectTypes lists every valid SubjectType.
-var AllSubjectTypes = []SubjectType{SubjectRun, SubjectProposalBatch, SubjectProject, SubjectSystem}
+var AllSubjectTypes = []SubjectType{SubjectRun, SubjectTask, SubjectProposalBatch, SubjectProject, SubjectSystem}
 
 func (t SubjectType) valid() bool {
 	switch t {
-	case SubjectRun, SubjectProposalBatch, SubjectProject, SubjectSystem:
+	case SubjectRun, SubjectTask, SubjectProposalBatch, SubjectProject, SubjectSystem:
 		return true
 	default:
 		return false
@@ -889,14 +896,17 @@ func (s RecommendationSource) valid() bool {
 // Phase 1 registers only the finding adjudicator.
 type JudgmentSite string
 
-const JudgmentSiteFindingAdjudicator JudgmentSite = "finding_adjudicator"
+const (
+	JudgmentSiteFindingAdjudicator JudgmentSite = "finding_adjudicator"
+	JudgmentSiteTaskNamer          JudgmentSite = "task_namer"
+)
 
 // AllJudgmentSites is the single registration point for judgment sites.
-var AllJudgmentSites = []JudgmentSite{JudgmentSiteFindingAdjudicator}
+var AllJudgmentSites = []JudgmentSite{JudgmentSiteFindingAdjudicator, JudgmentSiteTaskNamer}
 
 func (s JudgmentSite) valid() bool {
 	switch s {
-	case JudgmentSiteFindingAdjudicator:
+	case JudgmentSiteFindingAdjudicator, JudgmentSiteTaskNamer:
 		return true
 	default:
 		return false

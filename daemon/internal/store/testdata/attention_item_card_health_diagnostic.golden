@@ -4,7 +4,8 @@
   "subject": {
     "subject_type": "system",
     "subject_id": "daemon",
-    "run_id": null
+    "run_id": null,
+    "task_id": null
   },
   "type": "system_health",
   "priority": "normal",
@@ -38,7 +39,7 @@
       "text": "owner/repo",
       "source": "name"
     },
-    "work_unit": {
+    "task": {
       "text": "daemon",
       "source": "identifier"
     }

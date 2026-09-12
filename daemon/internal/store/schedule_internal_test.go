@@ -155,7 +155,7 @@ VALUES (?, 1, ?, 'consumed', ?, ?, 'condition_no_longer_applies')`,
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.SyncEpoch != before.SyncEpoch || after.Revision != before.Revision+1 {
+	if after.SyncEpoch != before.SyncEpoch || after.Revision != before.Revision+2 {
 		t.Fatalf("migration server state = %+v, before %+v", after, before)
 	}
 	if err := st.Read(ctx, func(tx *ReadTx) error {
@@ -198,9 +198,9 @@ SELECT entity_version, as_of_revision FROM schedules ORDER BY id`)
 			if err := rows.Scan(&entityVersion, &asOfRevision); err != nil {
 				return err
 			}
-			if entityVersion != 2 || asOfRevision != after.Revision {
+			if entityVersion != 2 || asOfRevision != before.Revision+1 {
 				t.Fatalf("migrated sync metadata = v%d/r%d, want v2/r%d",
-					entityVersion, asOfRevision, after.Revision)
+					entityVersion, asOfRevision, before.Revision+1)
 			}
 		}
 		if err := rows.Err(); err != nil {
@@ -428,7 +428,7 @@ func migrationsBeforeScheduleAuthority(t *testing.T) fs.FS {
 			entry.Name() == "0066_work_unit_completed_milestone.sql" ||
 			entry.Name() == "0067_review_requests.sql" ||
 			entry.Name() == "0068_declared_publication_branch.sql" ||
-			entry.Name() == "0069_successor_publication.sql" || entry.IsDir() {
+			entry.Name() == "0069_successor_publication.sql" || entry.Name() == "0070_tasks.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())
@@ -459,16 +459,7 @@ func TestGetScheduleRejectsOneShotExpiry(t *testing.T) {
 		ID: "run-1", ProjectID: "project-1",
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
 	}
-	runBody, err := json.Marshal(run)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `
-INSERT INTO runs
-    (id, project_id, policy_digest, entity_version, as_of_revision, body)
-VALUES (?, ?, ?, 1, 1, ?)`,
-		run.ID, run.ProjectID, run.PolicyDigest, string(runBody),
-	); err != nil {
+	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutRun(ctx, run) }); err != nil {
 		t.Fatal(err)
 	}
 

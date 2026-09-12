@@ -265,11 +265,10 @@ func itemVersion(t *testing.T, s *store.Store, id domain.ItemID) int64 {
 // domain ItemVersion so an advance is a real transition.
 func newItem(t *testing.T, id domain.ItemID, conv *domain.ConversationID, itemVersion int) domain.AttentionItem {
 	t.Helper()
-	runID := domain.RunID("run-1")
 	expires := time.Date(2026, 1, 3, 3, 4, 5, 0, time.UTC)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: id, ProjectID: "proj-1",
-		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
+		Subject: domain.Subject{Type: domain.SubjectProject, ID: "proj-1"},
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason:            "checks are green and the diff is ready",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionStop, domain.ActionDismiss},

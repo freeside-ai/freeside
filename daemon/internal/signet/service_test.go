@@ -49,6 +49,15 @@ var testPairingKey = []byte("signet-test-pairing-key")
 var testTopicKey = []byte("0123456789abcdef0123456789abcdef")
 
 func newFixture(t *testing.T) fixture {
+	return newServiceFixture(t, true)
+}
+
+// Run projection tests supply their own run graph and attention items.
+func newRunFixture(t *testing.T) fixture {
+	return newServiceFixture(t, false)
+}
+
+func newServiceFixture(t *testing.T, seedItem bool) fixture {
 	t.Helper()
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/signet.db"
@@ -89,9 +98,15 @@ func newFixture(t *testing.T) fixture {
 			ClickBaseURL: "https://daemon.example",
 		}),
 	)
-	if err := service.PutItem(ctx, item); err != nil {
-		t.Fatalf("seed item: %v", err)
+	if seedItem {
+		if err := s.Write(ctx, func(tx *store.WriteTx) error { return storetest.BindSubject(ctx, tx, &item) }); err != nil {
+			t.Fatal(err)
+		}
+		if err := service.PutItem(ctx, item); err != nil {
+			t.Fatalf("seed item: %v", err)
+		}
 	}
+
 	device := domain.Device{
 		ID: "device-1", DisplayName: "Ben's iPhone",
 		Status: domain.DeviceActive, PairedAt: start,

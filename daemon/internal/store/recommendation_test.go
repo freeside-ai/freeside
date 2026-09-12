@@ -56,12 +56,14 @@ func TestRecommendationSourceDerivesAtCreationAndSuppressesOnCollision(t *testin
 	uncommittedItem := adjudicationItem(
 		t, "item-recommendation", bindingFromAdjudication(uncommittedArtifact, finding),
 	)
+	bindTestItemSubject(t, st, &uncommittedItem)
 	surface, err := domain.NewDecisionSurface(uncommittedItem)
 	if err != nil {
 		t.Fatal(err)
 	}
 	artifact := modelAdjudication(t, runID, 1, finding.ID, surface.Digest, at)
 	item := adjudicationItem(t, "item-recommendation", bindingFromAdjudication(artifact, finding))
+	item.Subject = uncommittedItem.Subject
 	committedSurface, err := domain.NewDecisionSurface(item)
 	if err != nil {
 		t.Fatal(err)
@@ -224,12 +226,14 @@ func TestRecommendationSourceStalesOnStructuralTransition(t *testing.T) {
 	uncommittedItem := adjudicationItem(
 		t, "item-recommendation-stale", bindingFromAdjudication(uncommittedArtifact, finding),
 	)
+	bindTestItemSubject(t, st, &uncommittedItem)
 	surface, err := domain.NewDecisionSurface(uncommittedItem)
 	if err != nil {
 		t.Fatal(err)
 	}
 	artifact := modelAdjudication(t, runID, 1, finding.ID, surface.Digest, at)
 	item := adjudicationItem(t, "item-recommendation-stale", bindingFromAdjudication(artifact, finding))
+	item.Subject = uncommittedItem.Subject
 	committedSurface, err := domain.NewDecisionSurface(item)
 	if err != nil {
 		t.Fatal(err)
@@ -288,7 +292,12 @@ func TestAttentionItemDerivedFieldReplayDoesNotAdvanceVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := storetest.BindSubject(ctx, tx, &item); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	var before store.Snapshot

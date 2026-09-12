@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func modelAdjudication(
@@ -164,6 +165,9 @@ func TestPutAttentionItemRegatesFindingAdjudicationBinding(t *testing.T) {
 			test.mutate(&binding)
 			item := adjudicationItem(t, domain.ItemID(fmt.Sprintf("item-mismatch-%d", index)), binding)
 			err := st.Write(ctx, func(tx *store.WriteTx) error {
+				if err := storetest.BindSubject(ctx, tx, &item); err != nil {
+					return err
+				}
 				return tx.PutAttentionItem(ctx, item)
 			})
 			if !errors.Is(err, domain.ErrParentKeyMismatch) {
@@ -448,6 +452,9 @@ func TestAttentionItemReadsRegateOfferedAlternatives(t *testing.T) {
 		if err := tx.PutFindingAdjudication(ctx, artifact); err != nil {
 			return err
 		}
+		if err := storetest.BindSubject(ctx, tx, &item); err != nil {
+			return err
+		}
 		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
 		t.Fatalf("put fixture: %v", err)
@@ -512,6 +519,9 @@ func TestAttentionItemReadsRegateFindingAdjudicationBinding(t *testing.T) {
 		bindingFromAdjudication(artifact, adjudicationFinding(findingID, runID, "daemon/a.go", at)))
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutFindingAdjudication(ctx, artifact); err != nil {
+			return err
+		}
+		if err := storetest.BindSubject(ctx, tx, &item); err != nil {
 			return err
 		}
 		return tx.PutAttentionItem(ctx, item)
@@ -579,6 +589,9 @@ func TestAttentionItemReadsRejectFindingAdjudicationReviewHeadMismatch(t *testin
 		bindingFromAdjudication(artifact, adjudicationFinding(findingID, runID, "daemon/a.go", at)))
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutFindingAdjudication(ctx, artifact); err != nil {
+			return err
+		}
+		if err := storetest.BindSubject(ctx, tx, &item); err != nil {
 			return err
 		}
 		return tx.PutAttentionItem(ctx, item)

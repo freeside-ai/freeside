@@ -36,7 +36,7 @@ type Snapshotted[T any] struct {
 //     empty, non-nil slice, so a direct JSON projection emits [] not null.
 
 const listRunsSQL = `
-SELECT id, project_id, policy_digest, campaign_id, attempt_number, attempt_reason,
+SELECT id, project_id, task_id, policy_digest, campaign_id, attempt_number, attempt_reason,
        parent_run_id, entity_version, as_of_revision, body
 FROM runs ORDER BY id`
 
@@ -67,7 +67,7 @@ func (tx *ReadTx) ListConversations(ctx context.Context) ([]Snapshotted[domain.C
 }
 
 const listAttentionItemsSQL = `
-SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body
+SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, subject_task_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body
 FROM attention_items ORDER BY id`
 
 // ListAttentionItems enumerates every persisted attention item (List

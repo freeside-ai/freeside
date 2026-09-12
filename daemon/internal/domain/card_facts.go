@@ -44,7 +44,7 @@ func (n DisplayName) Validate() error {
 // unit. Both are always present when the aggregate is populated.
 type DisplayNames struct {
 	Project DisplayName `json:"project"`
-	Task    DisplayName `json:"work_unit"`
+	Task    DisplayName `json:"task"`
 }
 
 func (n DisplayNames) Validate() error {

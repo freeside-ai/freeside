@@ -377,6 +377,13 @@ func submitProductionRun(
 		if err := authenticateProductionAttempt(ctx, tx, spec, specArtifact.Digest, specificationGrant); err != nil {
 			return err
 		}
+		if specificationGrant != nil {
+			parent, err := tx.GetRun(ctx, specificationGrant.SpecificationRunID)
+			if err != nil {
+				return err
+			}
+			want.TaskID = parent.TaskID
+		}
 		// A later attempt's admission retires the open recovery cards its
 		// earlier attempts left behind: the campaign has moved past those runs
 		// (contract #1127). Placed inside this transaction so the supersession
@@ -461,6 +468,10 @@ func submitProductionRun(
 			}
 			run = existing
 		case errors.Is(err, store.ErrNotFound):
+			sourceRef := domain.SpecificationSource{Kind: domain.SpecificationSourceWorkItemArtifact, WorkItemArtifactID: spec.SpecArtifactID}
+			if err := tx.AssignTask(ctx, &want, &sourceRef); err != nil {
+				return err
+			}
 			if err := tx.PutRun(ctx, want); err != nil {
 				return err
 			}
@@ -2117,6 +2128,8 @@ func sameProductionQuarantineBinding(current, want domain.AttentionItem) bool {
 // the whole shape is what makes this check closed: a subset check can only
 // ever authenticate the fields someone thought to list.
 func sameProductionQuarantineNotice(current, want domain.AttentionItem) bool {
+	// The stored task binding is derived from the run, not a constructor fact.
+	want.Subject.TaskID = current.Subject.TaskID
 	normalized := current
 	normalized.Status = want.Status
 	normalized.ItemVersion = want.ItemVersion

@@ -1,0 +1,311 @@
+[
+  {
+    "Task": {
+      "version": "freeside.engine.fake-publication/v1",
+      "run_id": "run-0",
+      "project_id": "project",
+      "store_epoch": "",
+      "workspace_dir": "",
+      "handoff_dir": "",
+      "handoff_digest": "",
+      "repo": "",
+      "base_ref": "",
+      "base_sha": "",
+      "allowed_paths": [
+        "daemon/"
+      ],
+      "recipe_digest": "",
+      "recipe_path": "",
+      "trust_profile_digest": "",
+      "verification_invocation_id": "",
+      "publication_invocation_id": "",
+      "title": "Task 0",
+      "body": "",
+      "commit_date": "0001-01-01T00:00:00Z",
+      "commit_date_explicit": false,
+      "started_at": "0001-01-01T00:00:00Z",
+      "operating_mode": ""
+    },
+    "Item": {
+      "id": "item-0",
+      "project_id": "project",
+      "subject": {
+        "subject_type": "run",
+        "subject_id": "run-0",
+        "run_id": "run-0"
+      },
+      "type": "",
+      "priority": "",
+      "reason": "Publication 0: \"quoted\" & Unicode \u2192",
+      "requested_decision": [
+        "open_pr"
+      ],
+      "recommendation": null,
+      "decision_surface": {
+        "epoch": 0,
+        "digest": ""
+      },
+      "evidence_snapshot": null,
+      "agent_claims": null,
+      "artifact_digests": [
+        "sha256:first",
+        "sha256:second"
+      ],
+      "pr_head_sha": "",
+      "pr_reference": {
+        "repo": "owner/repo",
+        "number": 1
+      },
+      "readiness": null,
+      "readiness_detail": null,
+      "yield_history": null,
+      "commit_plan_notice": null,
+      "scope_decision": null,
+      "base_freshness": null,
+      "readiness_invalidation": null,
+      "review_recovery_binding": null,
+      "codex_reenrollment_recovery_binding": null,
+      "review_configuration_recovery": null,
+      "finding_adjudication": null,
+      "display_names": null,
+      "billable_cost_so_far": null,
+      "execution_failure": null,
+      "publish_block": null,
+      "diff_stats": null,
+      "blocked_on": null,
+      "health_diagnostic": null,
+      "review_dispute": null,
+      "spec_revision": null,
+      "agent_question": null,
+      "item_version": 1,
+      "interruption_class": "",
+      "conversation_id": null,
+      "timing": {
+        "delivery_count": 0,
+        "first_submitted_at": null,
+        "first_accepted_at": null,
+        "first_opened_at": null,
+        "submit_to_first_open": null
+      },
+      "created_at": "2026-09-01T12:00:00Z",
+      "expires_when": null,
+      "decided_at": null,
+      "posture": null,
+      "blocking_supersession": null,
+      "status": ""
+    },
+    "BeforeTasks": "sha256:51b85ac1c5fca6841488c274981fd046fd7223b2dccc61e2137425d14a8636d6",
+    "BeforePRReference": "sha256:e6bfd2ef9a7321f51b51d14b892d6d1cbc140ff60ecb628eff5574da4d9160b8"
+  },
+  {
+    "Task": {
+      "version": "freeside.engine.fake-publication/v1",
+      "run_id": "run-1",
+      "project_id": "project",
+      "store_epoch": "",
+      "workspace_dir": "",
+      "handoff_dir": "",
+      "handoff_digest": "",
+      "repo": "",
+      "base_ref": "",
+      "base_sha": "",
+      "allowed_paths": [
+        "daemon/"
+      ],
+      "recipe_digest": "",
+      "recipe_path": "",
+      "trust_profile_digest": "",
+      "verification_invocation_id": "",
+      "publication_invocation_id": "",
+      "title": "Task 1",
+      "body": "",
+      "commit_date": "0001-01-01T00:00:00Z",
+      "commit_date_explicit": false,
+      "started_at": "0001-01-01T00:00:00Z",
+      "operating_mode": ""
+    },
+    "Item": {
+      "id": "item-1",
+      "project_id": "project",
+      "subject": {
+        "subject_type": "run",
+        "subject_id": "run-1",
+        "run_id": "run-1"
+      },
+      "type": "",
+      "priority": "",
+      "reason": "Publication 1: \"quoted\" & Unicode \u2192",
+      "requested_decision": [
+        "open_pr"
+      ],
+      "recommendation": null,
+      "decision_surface": {
+        "epoch": 0,
+        "digest": ""
+      },
+      "evidence_snapshot": null,
+      "agent_claims": null,
+      "artifact_digests": null,
+      "pr_head_sha": "",
+      "pr_reference": {
+        "repo": "owner/repo",
+        "number": 2
+      },
+      "readiness": null,
+      "readiness_detail": null,
+      "yield_history": null,
+      "commit_plan_notice": null,
+      "scope_decision": null,
+      "base_freshness": null,
+      "readiness_invalidation": null,
+      "review_recovery_binding": null,
+      "codex_reenrollment_recovery_binding": null,
+      "review_configuration_recovery": null,
+      "finding_adjudication": null,
+      "display_names": {
+        "project": {
+          "text": "Example project",
+          "source": "name"
+        },
+        "work_unit": {
+          "text": "Original label 1",
+          "source": "name"
+        }
+      },
+      "billable_cost_so_far": null,
+      "execution_failure": null,
+      "publish_block": null,
+      "diff_stats": null,
+      "blocked_on": null,
+      "health_diagnostic": null,
+      "review_dispute": null,
+      "spec_revision": null,
+      "agent_question": null,
+      "item_version": 2,
+      "interruption_class": "",
+      "conversation_id": null,
+      "timing": {
+        "delivery_count": 0,
+        "first_submitted_at": null,
+        "first_accepted_at": null,
+        "first_opened_at": null,
+        "submit_to_first_open": null
+      },
+      "created_at": "2026-09-01T12:00:01Z",
+      "expires_when": null,
+      "decided_at": null,
+      "posture": null,
+      "blocking_supersession": null,
+      "status": ""
+    },
+    "BeforeTasks": "sha256:9a6fc4645b0a98e65de40946316bbe6c5631cb36e5a66300e9d064a4adb68ff3",
+    "BeforePRReference": "sha256:3a1d89a6bab66e2edba76d202c31a483873374a6a14523b6b23fbcc630dbec23"
+  },
+  {
+    "Task": {
+      "version": "freeside.engine.fake-publication/v1",
+      "run_id": "run-2",
+      "project_id": "project",
+      "store_epoch": "",
+      "workspace_dir": "",
+      "handoff_dir": "",
+      "handoff_digest": "",
+      "repo": "",
+      "base_ref": "",
+      "base_sha": "",
+      "allowed_paths": [
+        "daemon/"
+      ],
+      "recipe_digest": "",
+      "recipe_path": "",
+      "trust_profile_digest": "",
+      "verification_invocation_id": "",
+      "publication_invocation_id": "",
+      "title": "Task 2",
+      "body": "",
+      "commit_date": "0001-01-01T00:00:00Z",
+      "commit_date_explicit": false,
+      "started_at": "0001-01-01T00:00:00Z",
+      "operating_mode": ""
+    },
+    "Item": {
+      "id": "item-2",
+      "project_id": "project",
+      "subject": {
+        "subject_type": "run",
+        "subject_id": "run-2",
+        "run_id": "run-2"
+      },
+      "type": "",
+      "priority": "",
+      "reason": "Publication 2: \"quoted\" & Unicode \u2192",
+      "requested_decision": [
+        "open_pr"
+      ],
+      "recommendation": null,
+      "decision_surface": {
+        "epoch": 0,
+        "digest": ""
+      },
+      "evidence_snapshot": null,
+      "agent_claims": null,
+      "artifact_digests": [
+        "sha256:first",
+        "sha256:second"
+      ],
+      "pr_head_sha": "",
+      "pr_reference": {
+        "repo": "owner/repo",
+        "number": 3
+      },
+      "readiness": null,
+      "readiness_detail": null,
+      "yield_history": null,
+      "commit_plan_notice": null,
+      "scope_decision": null,
+      "base_freshness": null,
+      "readiness_invalidation": null,
+      "review_recovery_binding": null,
+      "codex_reenrollment_recovery_binding": null,
+      "review_configuration_recovery": null,
+      "finding_adjudication": null,
+      "display_names": {
+        "project": {
+          "text": "Example project",
+          "source": "name"
+        },
+        "work_unit": {
+          "text": "Original label 2",
+          "source": "name"
+        }
+      },
+      "billable_cost_so_far": null,
+      "execution_failure": null,
+      "publish_block": null,
+      "diff_stats": null,
+      "blocked_on": null,
+      "health_diagnostic": null,
+      "review_dispute": null,
+      "spec_revision": null,
+      "agent_question": null,
+      "item_version": 3,
+      "interruption_class": "",
+      "conversation_id": null,
+      "timing": {
+        "delivery_count": 0,
+        "first_submitted_at": null,
+        "first_accepted_at": null,
+        "first_opened_at": null,
+        "submit_to_first_open": null
+      },
+      "created_at": "2026-09-01T12:00:02Z",
+      "expires_when": null,
+      "decided_at": null,
+      "posture": null,
+      "blocking_supersession": null,
+      "status": ""
+    },
+    "BeforeTasks": "sha256:49eb5e74cfa953c6a7ed101e5a917cda3625402857d4e3fcbc14627b943e12d5",
+    "BeforePRReference": "sha256:b2476b1a543cb11236e946010a3c13758d5d5310fe74f1f369c7e57985a2acb0"
+  }
+]

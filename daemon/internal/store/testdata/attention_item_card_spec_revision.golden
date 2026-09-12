@@ -4,7 +4,8 @@
   "subject": {
     "subject_type": "run",
     "subject_id": "run-1",
-    "run_id": "run-1"
+    "run_id": "run-1",
+    "task_id": "task-1"
   },
   "type": "spec_approval",
   "priority": "normal",
@@ -107,7 +108,16 @@
   "codex_reenrollment_recovery_binding": null,
   "review_configuration_recovery": null,
   "finding_adjudication": null,
-  "display_names": null,
+  "display_names": {
+    "project": {
+      "text": "proj-1",
+      "source": "identifier"
+    },
+    "task": {
+      "text": "task-1",
+      "source": "identifier"
+    }
+  },
   "billable_cost_so_far": null,
   "execution_failure": null,
   "publish_block": null,

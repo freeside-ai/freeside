@@ -96,6 +96,8 @@ struct ConsequenceSheet: View {
             subjectID = scoped.subject_id
         case .project(let unscoped), .system(let unscoped):
             subjectID = unscoped.subject_id
+        case .task(let task):
+            subjectID = task.subject_id
         }
         return "\(subjectID) · item version \(item.item_version)"
     }

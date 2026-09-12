@@ -183,7 +183,7 @@ public final class DecisionModel {
     private static func runID(of subject: Components.Schemas.Subject) -> String? {
         switch subject {
         case .run(let run), .proposal_batch(let run): return run.run_id
-        case .project, .system: return nil
+        case .task, .project, .system: return nil
         }
     }
 

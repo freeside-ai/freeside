@@ -94,6 +94,9 @@ func TestSyncProjectsEvidenceAvailability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAttentionItem: %v", err)
 	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return storetest.BindSubject(ctx, tx, &item) }); err != nil {
+		t.Fatal(err)
+	}
 	if err := service.PutItem(ctx, item); err != nil {
 		t.Fatalf("PutItem: %v", err)
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func seedFindingAdjudicationItem(t *testing.T, f fixture) domain.AttentionItem {
@@ -110,6 +111,9 @@ func seedFindingAdjudicationItem(t *testing.T, f fixture) domain.AttentionItem {
 	}, nil)
 	if err != nil {
 		t.Fatalf("new item: %v", err)
+	}
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error { return storetest.BindSubject(ctx, tx, &item) }); err != nil {
+		t.Fatal(err)
 	}
 	if err := f.service.PutItem(ctx, item); err != nil {
 		t.Fatalf("put item: %v", err)

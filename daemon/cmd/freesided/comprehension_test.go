@@ -32,7 +32,12 @@ func TestComprehensionCommandRecordDefectAndMeasures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := storetest.BindSubject(ctx, tx, &item); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Close(); err != nil {

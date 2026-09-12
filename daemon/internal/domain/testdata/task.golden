@@ -1,0 +1,17 @@
+{
+  "id": "task-1",
+  "project_id": "proj-1",
+  "source": {
+    "kind": "work_item_artifact",
+    "work_item_artifact_id": "spec-art-1",
+    "issue_subject": null
+  },
+  "name": {
+    "text": "Improve task navigation",
+    "source": "specification"
+  },
+  "created_at": "2026-01-02T03:04:05Z",
+  "campaign_ids": [
+    "campaign-1"
+  ]
+}

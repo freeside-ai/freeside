@@ -95,6 +95,7 @@ type RunSnapshot struct {
 // progress pulse. The summary is presentation, never workflow authority.
 type Run struct {
 	ID              domain.RunID             `json:"id"`
+	TaskID          domain.TaskID            `json:"task_id"`
 	ProjectID       domain.ProjectID         `json:"project_id"`
 	DisplayNames    *domain.DisplayNames     `json:"display_names"`
 	CreatedAt       *time.Time               `json:"created_at"`
@@ -183,6 +184,7 @@ type BootstrapSnapshot struct {
 	AttentionItems      []AttentionItemSnapshot     `json:"attention_items"`
 	AttentionDeliveries []AttentionDeliverySnapshot `json:"attention_deliveries"`
 	Runs                []RunSnapshot               `json:"runs"`
+	Tasks               []TaskSnapshot              `json:"tasks"`
 	Conversations       []ConversationSnapshot      `json:"conversations"`
 	Schedules           []ScheduleSnapshot          `json:"schedules"`
 }
@@ -217,6 +219,10 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 		if err != nil {
 			return err
 		}
+		tasks, err := tx.ListTasks(ctx)
+		if err != nil {
+			return err
+		}
 		conversations, err := tx.ListConversations(ctx)
 		if err != nil {
 			return err
@@ -231,6 +237,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 			AttentionItems:      make([]AttentionItemSnapshot, 0, len(items)),
 			AttentionDeliveries: make([]AttentionDeliverySnapshot, 0, len(deliveries)),
 			Runs:                make([]RunSnapshot, 0, len(runs)),
+			Tasks:               make([]TaskSnapshot, 0, len(tasks)),
 			Conversations:       make([]ConversationSnapshot, 0, len(conversations)),
 			Schedules:           make([]ScheduleSnapshot, 0, len(schedules)),
 		}
@@ -275,6 +282,24 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 				return err
 			}
 			out.Runs = append(out.Runs, snapshot)
+		}
+		projectedRuns := make(map[domain.RunID]Run, len(out.Runs))
+		for _, run := range out.Runs {
+			projectedRuns[run.Run.ID] = run.Run
+		}
+		for _, task := range tasks {
+			if err := validateSnapshot(state, task.Snapshot); err != nil {
+				return err
+			}
+			snapshot, err := projectTaskSnapshot(ctx, tx, state, task.Value, projectedRuns)
+			if errors.Is(err, ErrRunObservationIntegrity) {
+				s.logger.Warn("task projection integrity failure; excluding task from bootstrap", "task_id", task.Value.ID, "error", err)
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			out.Tasks = append(out.Tasks, snapshot)
 		}
 		for _, conversation := range conversations {
 			if err := validateSnapshot(state, conversation.Snapshot); err != nil {
@@ -812,7 +837,7 @@ func runSnapshot(
 ) RunSnapshot {
 	normalized := normalizeRun(run)
 	projection := Run{
-		ID: normalized.ID, ProjectID: normalized.ProjectID,
+		ID: normalized.ID, TaskID: normalized.TaskID, ProjectID: normalized.ProjectID,
 		DisplayNames: displayNames,
 		SpecDigest:   normalized.SpecDigest, PolicyDigest: normalized.PolicyDigest,
 		Stages:            normalized.Stages,

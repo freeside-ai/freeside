@@ -155,6 +155,9 @@ func newFindingAdjudicationFixtureWithNote(
 		}); err != nil {
 			return err
 		}
+		if err := tx.AssignTask(ctx, &run, nil); err != nil {
+			return err
+		}
 		if err := tx.PutRun(ctx, run); err != nil {
 			return err
 		}
@@ -235,7 +238,7 @@ func putFindingAdjudicationRecommendationCase(
 		modelRouteEntry(t, f.finding.ID, domain.RouteParkRevision, domain.ConfidenceHigh),
 	}
 	surfaceDigest, err := prospectiveFindingAdjudicationSurfaceDigest(
-		f.task, f.record.Round, 1, entries)
+		f.task, f.binding.run.TaskID, f.record.Round, 1, entries)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,12 +253,12 @@ func putFindingAdjudicationRecommendationCase(
 		t.Fatal(err)
 	}
 	names, err := displayNames(t.Context(), f.workflow.store, f.task.ProjectID,
-		findingAdjudicationSurfaceItem(f.task, artifact.Round, artifact.Revision, artifact.Entries).Subject)
+		findingAdjudicationSurfaceItem(f.task, f.binding.run.TaskID, artifact.Round, artifact.Revision, artifact.Entries).Subject)
 	if err != nil {
 		t.Fatal(err)
 	}
 	item, err := f.workflow.newFindingAdjudicationAttentionItem(
-		f.task, artifact, map[domain.FindingID]domain.Finding{f.finding.ID: f.finding}, names)
+		f.task, f.binding.run.TaskID, artifact, map[domain.FindingID]domain.Finding{f.finding.ID: f.finding}, names)
 	if err != nil {
 		t.Fatal(err)
 	}

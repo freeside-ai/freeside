@@ -470,6 +470,8 @@ enum AttentionDisplay {
             return SubjectLine(lead: item.project_id, identifier: run.subject_id)
         case .project(let unscoped), .system(let unscoped):
             return SubjectLine(lead: unscoped.subject_id, identifier: nil)
+        case .task(let task):
+            return SubjectLine(lead: item.project_id, identifier: task.subject_id)
         }
     }
 
@@ -486,11 +488,15 @@ enum AttentionDisplay {
         switch item.subject {
         case .run(let run), .proposal_batch(let run):
             workUnit = .init(
-                value: nonempty(names?.work_unit.text) ?? run.subject_id,
-                isIdentifier: names.map { $0.work_unit.source == .identifier } ?? true
+                value: nonempty(names?.task.text) ?? run.subject_id,
+                isIdentifier: names.map { $0.task.source == .identifier } ?? true
             )
         case .project, .system:
             workUnit = nil
+        case .task(let task):
+            workUnit = .init(
+                value: nonempty(names?.task.text) ?? task.task_id,
+                isIdentifier: names.map { $0.task.source == .identifier } ?? true)
         }
         return .init(project: project, workUnit: workUnit)
     }
@@ -503,6 +509,8 @@ enum AttentionDisplay {
             return .init(label: "Copy run reference", value: run.subject_id)
         case .proposal_batch(let batch):
             return .init(label: "Copy proposal batch reference", value: batch.subject_id)
+        case .task(let task):
+            return .init(label: "Copy task reference", value: task.task_id)
         case .project, .system:
             return nil
         }
@@ -625,7 +633,7 @@ enum AttentionDisplay {
         switch item.subject {
         case .project(let unscoped), .system(let unscoped):
             rows.append(.init(label: "Subject", value: unscoped.subject_id))
-        case .run, .proposal_batch:
+        case .run, .proposal_batch, .task:
             break
         }
         if let wait = item.blocked_on?.value1 {
@@ -830,6 +838,7 @@ enum AttentionDisplay {
     static func label(_ site: Components.Schemas.JudgmentSite) -> String {
         switch site {
         case .finding_adjudicator: return "Finding adjudicator"
+        case .task_namer: return "Task namer"
         }
     }
 

@@ -707,6 +707,11 @@ func assertDiminishingFinish(
 // structural fields no longer match its record (plan §4).
 func forgeDecisionSurface(t *testing.T, db *sql.DB, item domain.AttentionItem) {
 	t.Helper()
+	var taskID domain.TaskID
+	if err := db.QueryRow(`SELECT task_id FROM runs WHERE id = ?`, item.Subject.RunID).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	item.Subject.TaskID = &taskID
 	surface, err := domain.NewDecisionSurface(item)
 	if err != nil {
 		t.Fatalf("NewDecisionSurface: %v", err)
@@ -720,8 +725,8 @@ func forgeDecisionSurface(t *testing.T, db *sql.DB, item domain.AttentionItem) {
 		t.Fatalf("forge decision surface: %v", err)
 	}
 	if _, err := db.Exec(`UPDATE attention_items SET body = json_set(body,
-'$.decision_surface.epoch', ?, '$.decision_surface.digest', ?) WHERE id = ?`,
-		surface.Epoch, surface.Digest, surface.ItemID); err != nil {
+'$.decision_surface.epoch', ?, '$.decision_surface.digest', ?, '$.subject.task_id', ?), subject_task_id = ? WHERE id = ?`,
+		surface.Epoch, surface.Digest, taskID, taskID, surface.ItemID); err != nil {
 		t.Fatalf("forge item decision-surface projection: %v", err)
 	}
 }

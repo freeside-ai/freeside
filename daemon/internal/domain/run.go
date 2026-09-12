@@ -6,6 +6,7 @@ import "fmt"
 // digest-addressed; stages and their attempts hold the execution structure.
 type Run struct {
 	ID            RunID      `json:"id"`
+	TaskID        TaskID     `json:"task_id,omitempty"`
 	ProjectID     ProjectID  `json:"project_id"`
 	SpecDigest    Digest     `json:"spec_digest"`
 	PolicyDigest  Digest     `json:"policy_digest"`

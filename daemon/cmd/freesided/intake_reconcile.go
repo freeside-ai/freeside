@@ -317,6 +317,13 @@ func (r *intakeReconciler) admit(
 		}); err != nil {
 			return err
 		}
+		taskSource := domain.SpecificationSource{
+			Kind:         domain.SpecificationSourceIssueSubject,
+			IssueSubject: &domain.IssueSubjectRef{Repo: occurrence.Repo, RepositoryID: occurrence.RepositoryID, IssueNumber: occurrence.IssueNumber},
+		}
+		if err := tx.AssignTask(ctx, &reservedRun, &taskSource); err != nil {
+			return err
+		}
 		if err := tx.PutRun(ctx, reservedRun); err != nil {
 			return err
 		}
@@ -851,8 +858,7 @@ func (r *intakeReconciler) launchDecidedDeparture(
 // always resolves to the same run and the admission converges. The specification
 // run id derives from this (SpecificationRunIDForImplementation).
 func intakeImplementationRunID(occurrence domain.IntakeOccurrence) domain.RunID {
-	sum := sha256.Sum256([]byte("freeside.label-intake.implementation/v1\x00" + occurrence.UpstreamEventID()))
-	return domain.RunID("run-" + hex.EncodeToString(sum[:]))
+	return domain.IntakeImplementationRunID(occurrence)
 }
 
 // intakeProposalBatchID derives a stable proposal-batch identity from the

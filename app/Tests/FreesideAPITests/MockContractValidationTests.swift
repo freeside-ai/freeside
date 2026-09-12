@@ -11,6 +11,79 @@ import Testing
 /// for a valid input), so a regression that trips the wrong invariant, or
 /// silently accepts a bad one, is caught at its source.
 @Suite struct MockContractValidationTests {
+    @Test func taskIdentityNameHistoryAndSourcesMatchDaemon() throws {
+        let baseline = try #require(TaskFixtures.defaultTasks().first)
+        for task in TaskFixtures.defaultTasks() {
+            #expect(MockContractValidation.taskSnapshotBreach(task, serverRevision: 12) == nil)
+        }
+        var malformed = baseline
+        malformed.task.display_names.task.source = .name
+        #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12) == "invalid task name source")
+        malformed = baseline
+        malformed.task.run_ids.append(malformed.task.run_ids[0])
+        #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12) == "invalid task run history")
+        malformed = baseline
+        malformed.task.current_position?.value1.run_id = "other-run"
+        #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12) == "invalid task position")
+        malformed = baseline
+        malformed.task.source = .init(
+            value1: .work_item_artifact(.init(kind: .work_item_artifact, work_item_artifact_id: "source-1")))
+        #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12) == nil)
+        malformed.task.source = .init(
+            value1: .work_item_artifact(.init(kind: .work_item_artifact, work_item_artifact_id: "")))
+        #expect(
+            MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12) == "empty task source artifact")
+        malformed.task.source = .init(
+            value1: .issue_subject(
+                .init(
+                    kind: .issue_subject, issue_subject: .init(repo: "owner/repo", repository_id: 123, issue_number: 42)
+                )))
+        #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12) == nil)
+        malformed.task.source = .init(
+            value1: .issue_subject(
+                .init(
+                    kind: .issue_subject, issue_subject: .init(repo: "owner/repo", repository_id: 0, issue_number: 42)))
+        )
+        #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12) == "invalid task issue source")
+    }
+
+    @Test func taskSubjectBindsItsIdentity() {
+        var item = AttentionFixtures.fixture(type: .spec_approval).item
+        item.subject = .task(.init(subject_type: .task, subject_id: "task-1", task_id: "task-1"))
+        #expect(MockContractValidation.itemValidityBreach(item) == nil)
+        item.subject = .task(.init(subject_type: .task, subject_id: "task-1", task_id: "task-2"))
+        #expect(MockContractValidation.itemValidityBreach(item) == "invalid task subject")
+    }
+
+    @Test func runSubjectRequiresTaskIdentityEvenWithoutRedundantRunID() {
+        var item = AttentionFixtures.fixture(type: .spec_approval).item
+        for runID: String? in [nil, "run-1"] {
+            for taskID: String? in [nil, "", "task-1"] {
+                item.subject = .run(
+                    .init(subject_type: .run, subject_id: "run-1", run_id: runID, task_id: taskID))
+                #expect(
+                    MockContractValidation.itemValidityBreach(item)
+                        == (taskID == "task-1" ? nil : "invalid run task_id"))
+            }
+        }
+    }
+
+    @Test func proposalSubjectCarriesTaskIdentityOnlyWhenRunScoped() {
+        var item = AttentionFixtures.fixture(type: .spec_approval).item
+        for taskID: String? in [nil, "", "task-1"] {
+            item.subject = .proposal_batch(
+                .init(subject_type: .proposal_batch, subject_id: "batch-1", run_id: "run-1", task_id: taskID))
+            #expect(
+                MockContractValidation.itemValidityBreach(item)
+                    == (taskID == "task-1" ? nil : "invalid run-scoped proposal task_id"))
+            item.subject = .proposal_batch(
+                .init(subject_type: .proposal_batch, subject_id: "batch-1", task_id: taskID))
+            #expect(
+                MockContractValidation.itemValidityBreach(item)
+                    == (taskID == nil ? nil : "unscoped task_id"))
+        }
+    }
+
     @Test func runAttemptLineageMatchesDaemonValidation() {
         let snapshot = RunFixtures.defaultRuns().first {
             $0.run.id == RunFixtures.activeRunID

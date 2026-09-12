@@ -4,7 +4,8 @@
   "subject": {
     "subject_type": "run",
     "subject_id": "run-1",
-    "run_id": "run-1"
+    "run_id": "run-1",
+    "task_id": "task-1"
   },
   "type": "execution_failure",
   "priority": "urgent",
@@ -38,9 +39,9 @@
       "text": "owner/repo",
       "source": "name"
     },
-    "work_unit": {
-      "text": "#1003",
-      "source": "name"
+    "task": {
+      "text": "task-1",
+      "source": "identifier"
     }
   },
   "billable_cost_so_far": null,
