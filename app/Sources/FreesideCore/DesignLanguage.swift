@@ -577,10 +577,41 @@ struct FreesideActionButtonStyle: ButtonStyle {
     }
 }
 
+/// The title a sheet opens with in place of a navigation bar: the serif
+/// section title over an optional prompt, 16pt in from the edge.
+struct FreesideSheetHeader: View {
+    let title: String
+    var prompt: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Two lines at most: an attachment sheet's title is the agent's
+            // claim label, which the contract admits at any length, and this
+            // header never compresses vertically, so an unbounded title would
+            // push the sheet body and its Done footer off-screen. The system
+            // navigation title this header replaces truncated to one line.
+            Text(title)
+                .font(FreesideFont.sectionTitle)
+                .foregroundStyle(Color.ink)
+                .lineLimit(2)
+                .accessibilityAddTraits(.isHeader)
+            if let prompt {
+                Text(prompt)
+                    .font(FreesideFont.callout)
+                    .foregroundStyle(Color.inkDim)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+    }
+}
+
 /// The submit row a sheet ends with: Cancel as a tertiary text button and
 /// the submit as a pill, primary by default and wax-outlined for a
 /// consequential confirmation, both hugging their labels. It carries the
 /// Return and Escape bindings the system toolbar placements used to supply.
+/// A reader's footer (`done`) has the one secondary pill and no Cancel.
 struct FreesideSheetActionRow: View {
     let submitLabel: String
     var tone: FreesideActionButtonStyle.Tone = .primary
@@ -589,8 +620,16 @@ struct FreesideSheetActionRow: View {
     var submitHint: String? = nil
     var isSubmitEnabled: Bool = true
     let submit: () -> Void
-    let cancel: () -> Void
+    /// `nil` for a reader's single dismiss: no Cancel is drawn and Escape
+    /// routes to `submit`, so both keys close the sheet.
+    let cancel: (() -> Void)?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    /// A reader or attachment sheet's footer: one secondary Done pill on
+    /// the right, dismissed by Return and Escape alike.
+    static func done(_ dismiss: @escaping () -> Void) -> FreesideSheetActionRow {
+        FreesideSheetActionRow(submitLabel: "Done", tone: .secondary, submit: dismiss, cancel: nil)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -602,24 +641,42 @@ struct FreesideSheetActionRow: View {
     }
 
     @ViewBuilder private var content: some View {
-        // Side by side the two labels cannot both hug their text at an
-        // accessibility size without wrapping mid-word, so they stack and
-        // the submit takes the full width, keeping the pill a pill.
-        if dynamicTypeSize.isAccessibilitySize {
-            VStack(spacing: 12) {
-                submitButton(expands: true)
-                cancelButton.frame(maxWidth: .infinity)
+        if let cancel {
+            // Side by side the two labels cannot both hug their text at an
+            // accessibility size without wrapping mid-word, so they stack
+            // and the submit takes the full width, keeping the pill a pill.
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(spacing: 12) {
+                    submitButton(expands: true)
+                    cancelButton(cancel).frame(maxWidth: .infinity)
+                }
+            } else {
+                HStack(spacing: 12) {
+                    cancelButton(cancel)
+                    Spacer(minLength: 12)
+                    submitButton(expands: false)
+                }
             }
         } else {
-            HStack(spacing: 12) {
-                cancelButton
-                Spacer(minLength: 12)
-                submitButton(expands: false)
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                submitButton(expands: dynamicTypeSize.isAccessibilitySize)
             }
+            // Escape reaches the dismiss through a button that exists for
+            // its shortcut alone; one button cannot carry both key
+            // equivalents.
+            .background(
+                Button("", action: submit)
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+                    .accessibilityHidden(true)
+            )
         }
     }
 
-    private var cancelButton: some View {
+    private func cancelButton(_ cancel: @escaping () -> Void) -> some View {
         Button("Cancel", action: cancel)
             .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
             .keyboardShortcut(.cancelAction)
@@ -637,6 +694,16 @@ struct FreesideSheetActionRow: View {
 }
 
 extension View {
+    /// The iOS sheet chrome the design language keeps: a visible drag
+    /// indicator. A no-op on macOS, where a sheet has none.
+    func freesideSheetPresentation() -> some View {
+        #if os(iOS)
+            presentationDragIndicator(.visible)
+        #else
+            self
+        #endif
+    }
+
     /// A card: ground-2 on ground, 1px rule border, 8pt radius.
     func freesideCard(border: Color = .rule, dashed: Bool = false, cornerRadius: CGFloat = 8) -> some View {
         background(RoundedRectangle(cornerRadius: cornerRadius).fill(Color.ground2))
