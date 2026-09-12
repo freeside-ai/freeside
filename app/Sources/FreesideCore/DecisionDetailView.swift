@@ -30,9 +30,14 @@ struct DecisionDetailView: View {
         case technicalDetails
     }
 
-    private struct PendingConfirmation {
+    /// A consequential action awaiting its seal. Identified by action and
+    /// item version, so the sheet it presents is bound to one reviewed
+    /// snapshot and a version change replaces rather than reuses it.
+    private struct PendingConfirmation: Identifiable {
         let action: Components.Schemas.Action
         let reviewedSnapshot: Components.Schemas.AttentionItemSnapshot
+
+        var id: String { "\(action.rawValue)@\(reviewedSnapshot.item.item_version)" }
     }
 
     private enum ProposalEditor: String, Identifiable {
@@ -272,30 +277,19 @@ struct DecisionDetailView: View {
                 }
             #endif
             .navigationTitle(model.snapshot.map { AttentionDisplay.title($0.item) } ?? "Decision")
-            .confirmationDialog(
-                confirmationTitle,
-                isPresented: confirmationIsPresented,
-                titleVisibility: .visible
-            ) {
-                if let confirmation = pendingConfirmation {
-                    Button(AttentionDisplay.label(confirmation.action), role: .destructive) {
+            .sheet(item: $pendingConfirmation) { confirmation in
+                ConsequenceSheet(
+                    action: confirmation.action,
+                    item: confirmation.reviewedSnapshot.item,
+                    submit: {
                         pendingConfirmation = nil
                         Task {
                             await model.submitConfirmed(
                                 confirmation.action,
                                 reviewedSnapshot: confirmation.reviewedSnapshot)
                         }
-                    }
-                }
-                Button("Cancel", role: .cancel) { pendingConfirmation = nil }
-            } message: {
-                if let confirmation = pendingConfirmation,
-                    let consequence = AttentionDisplay.confirmationConsequence(
-                        confirmation.action,
-                        for: confirmation.reviewedSnapshot.item)
-                {
-                    Text(consequence)
-                }
+                    },
+                    cancel: { pendingConfirmation = nil })
             }
             .onChange(of: model.snapshot?.item.item_version) {
                 pendingConfirmation = nil
@@ -435,25 +429,12 @@ struct DecisionDetailView: View {
         #endif
     }
 
-    private var confirmationIsPresented: Binding<Bool> {
-        Binding(
-            get: { pendingConfirmation != nil },
-            set: { presented in
-                if !presented { pendingConfirmation = nil }
-            })
-    }
-
     private var capabilityRetryIsPresented: Binding<Bool> {
         Binding(
             get: { capabilityRetrySnapshot != nil },
             set: { presented in
                 if !presented { capabilityRetrySnapshot = nil }
             })
-    }
-
-    private var confirmationTitle: String {
-        guard let pendingConfirmation else { return "Confirm action" }
-        return "Confirm \(AttentionDisplay.label(pendingConfirmation.action).lowercased())?"
     }
 
     @ViewBuilder
