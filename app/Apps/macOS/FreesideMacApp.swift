@@ -25,7 +25,6 @@ struct FreesideMacApp: App {
                 #if DEBUG
                     if UserDefaults.standard.string(forKey: "FreesideDaemonMenuDemo") != nil {
                         DaemonMenu(model: daemon, session: session, navigation: navigation)
-                            .frame(width: 280)
                             .padding()
                     } else {
                         FreesideRootView(
@@ -66,6 +65,7 @@ struct FreesideMacApp: App {
                     await coordinator.heartbeatLoop(every: SyncCoordinator.heartbeatInterval)
                 }
         }
+        .menuBarExtraStyle(.window)
 
         Settings {
             DecisionFlowSettingsView(preferences: flowPreferences)
@@ -110,10 +110,10 @@ struct FreesideMacApp: App {
     }
 }
 
-/// Standard menu items, arranged per the §15 menu-bar spec: a bold state
-/// line, its explanation and facts directly under it, the last action's
-/// error under a section header, and the actions grouped at the bottom
-/// with Quit. The bar and menu stay system chrome.
+/// The menu-bar panel bound to the live daemon model and session. The
+/// panel itself is `DaemonMenuPanel` in FreesideCore, so the screenshot
+/// suite renders every daemon state; this wrapper supplies the counts and
+/// the handlers.
 private struct DaemonMenu: View {
     let model: DaemonMenuModel
     let session: AppSession
@@ -121,64 +121,24 @@ private struct DaemonMenu: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("Open Freeside") { showApp() }
-        Button("Show Inbox · \(coordinator?.store.openSnapshots.count ?? 0)") {
-            navigation.selectTab(.inbox)
-            showApp()
-        }
-        if let urgentCount = coordinator?.store.urgentOpenCount, urgentCount > 0 {
-            Label("\(urgentCount) urgent", systemImage: "exclamationmark.circle.fill")
-        }
-        Divider()
-        Section("Daemon") {
-            daemonSection
-        }
-        Divider()
-        Button("Quit Freeside") { NSApplication.shared.terminate(nil) }
-    }
-
-    @ViewBuilder
-    private var daemonSection: some View {
-        switch model.state {
-        case .checking:
-            Text("Checking daemon…").bold()
-            lastAction
-        case .stopped:
-            Label("Daemon stopped", systemImage: "stop.circle").bold()
-            lastAction
-            Button("Start") { Task { await model.start() } }
-        case .needsApproval:
-            Label("Approval needed", systemImage: "exclamationmark.triangle.fill").bold()
-            Text("Allow Freeside in Login Items to start the daemon.")
-            Button("Open Login Items…") { model.openApprovalSettings() }
-            lastAction
-            Button("Stop") { Task { await model.stop() } }
-        case .unavailable:
-            Label("LaunchAgent unavailable", systemImage: "xmark.circle.fill").bold()
-            lastAction
-            Button("Start") { Task { await model.start() } }
-        case .unreachable:
-            Label("Daemon unreachable", systemImage: "xmark.circle.fill").bold()
-            Text("launchd is keeping the service enabled, but health is not answering.")
-            lastAction
-            Button("Stop") { Task { await model.stop() } }
-        case .running(let health, let restartObserved):
-            Label("Daemon running", systemImage: "checkmark.circle.fill").bold()
-            Text("Version \(health.version)")
-            Text("Started \(health.startedAt.formatted(date: .abbreviated, time: .standard))")
-            if !health.contractMatchesClient {
-                Label("Contract mismatch", systemImage: "exclamationmark.triangle.fill")
-                Text(
-                    "Daemon contract \(ContractDigestDisplay.short(health.contractDigest)), "
-                        + "app built for \(ContractDigestDisplay.shortClient) — "
-                        + "update the daemon or the app.")
-            }
-            if restartObserved {
-                Label("Restart observed", systemImage: "arrow.clockwise")
-            }
-            lastAction
-            Button("Stop") { Task { await model.stop() } }
-        }
+        DaemonMenuPanel(
+            state: model.state,
+            actionError: model.actionError,
+            inbox: coordinator.map {
+                DaemonMenuPanel.InboxCounts(
+                    open: $0.store.openSnapshots.count,
+                    urgent: $0.store.urgentOpenCount)
+            },
+            actions: DaemonMenuPanel.Actions(
+                openApp: showApp,
+                showInbox: {
+                    navigation.selectTab(.inbox)
+                    showApp()
+                },
+                start: { Task { await model.start() } },
+                stop: { Task { await model.stop() } },
+                openApprovalSettings: { model.openApprovalSettings() },
+                quit: { NSApplication.shared.terminate(nil) }))
     }
 
     private var coordinator: SyncCoordinator? {
@@ -193,16 +153,6 @@ private struct DaemonMenu: View {
             openWindow(id: "main")
         }
         NSApplication.shared.activate()
-    }
-
-    @ViewBuilder
-    private var lastAction: some View {
-        if let error = model.actionError {
-            Divider()
-            Section("Last action") {
-                Text(error)
-            }
-        }
     }
 }
 
@@ -262,36 +212,6 @@ private struct FreesideAppCommands: Commands {
             decisionActions?.takeRecommendation()
         case .cancelPendingAction:
             decisionActions?.cancelPendingAction()
-        }
-    }
-}
-
-extension DaemonMenuState {
-    fileprivate var menuBadgeColor: NSColor? {
-        switch self {
-        case .checking, .running:
-            nil
-        case .stopped, .needsApproval:
-            .systemOrange
-        case .unavailable, .unreachable:
-            .systemRed
-        }
-    }
-
-    fileprivate var accessibilityDescription: String {
-        switch self {
-        case .checking:
-            "checking daemon"
-        case .stopped:
-            "daemon stopped"
-        case .needsApproval:
-            "approval needed"
-        case .unavailable:
-            "LaunchAgent unavailable"
-        case .unreachable:
-            "daemon unreachable"
-        case .running:
-            "daemon running"
         }
     }
 }
