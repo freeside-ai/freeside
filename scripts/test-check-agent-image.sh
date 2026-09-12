@@ -45,6 +45,9 @@ trap 'rm -rf "$TMP"' EXIT
 #                      distinct process group
 #   orphan-inspect-<id>-<n> starts a same-group helper with checker-facing
 #                      descriptors closed, then returns the normal fixture
+#   record-pgid        when present, a hanging inspect records its process
+#                      group id (the drained group) to runtime-pgid before
+#                      hanging, for run_checker_with_ps_stub's member mode
 #   hang-delete        when present, delete never returns after logging
 #   delete_fail        when present, delete exits 1 after logging
 #   run_output         output for a `container run` preflight
@@ -91,7 +94,15 @@ inspect)
   count_file=$dir/inspect-count-$id
   n=$(($(cat "$count_file" 2>/dev/null || echo 0) + 1))
   printf '%s' "$n" >"$count_file"
-  [ ! -f "$dir/hang-inspect-$id-$n" ] || exec sleep 30
+  if [ -f "$dir/hang-inspect-$id-$n" ]; then
+    # Record this inspect's process group before hanging. It runs inside the
+    # bounded runtime job, so its pgid is the group the checker will drain; the
+    # ps stub (run_checker_with_ps_stub) replays it. Use a real ps, not the
+    # stub that may be on PATH.
+    [ ! -f "$dir/record-pgid" ] ||
+      "${REAL_PS:-ps}" -o pgid= -p "$$" | tr -d '[:space:]' >"$dir/runtime-pgid"
+    exec sleep 30
+  fi
   if [ -f "$dir/ignore-term-inspect-$id-$n" ]; then
     trap '' TERM
     while :; do :; done
@@ -215,6 +226,37 @@ run_checker_then_term() {
   RC=$?
   set -e
   OUT=$(cat "$checker_output")
+}
+
+# Exercise the post-kill drain's failure path deterministically. Prepends a
+# `ps` stub for the checker's process only, so the suite's own ps (used by
+# assert_helper_stopped) is untouched. Mode `member` always reports one live
+# member of the drained group (its pgid replayed from runtime-pgid, which a
+# record-pgid hanging inspect writes), so the drain never empties. Mode `fail`
+# makes ps exit nonzero, so the group probe fails. REAL_PS lets the stand-in
+# record its real pgid without hitting this stub.
+run_checker_with_ps_stub() { # <member|fail>
+  ps_stub_dir=$CASE_DIR/ps-bin
+  mkdir -p "$ps_stub_dir"
+  printf '%s' "${1:?}" >"$CASE_DIR/ps-stub-mode"
+  cat >"$ps_stub_dir/ps" <<'PS_STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+dir=${STUB_DIR:?}
+case "$(cat "$dir/ps-stub-mode")" in
+member) printf '999999 %s S\n' "$(cat "$dir/runtime-pgid" 2>/dev/null || echo 0)" ;;
+fail) exit 1 ;;
+esac
+PS_STUB
+  chmod +x "$ps_stub_dir/ps"
+  real_ps=$(command -v ps)
+  set +e
+  OUT=$(env \
+    PATH="$ps_stub_dir:$PATH" \
+    REAL_PS="$real_ps" \
+    "$CHECKER" example.test/agent:1 "$STUB" 2>&1)
+  RC=$?
+  set -e
 }
 
 run_real_work() {
@@ -1158,6 +1200,8 @@ assert_rc 1
 assert_contains "runtime call exceeded 1s"
 assert_contains "could not capture the probe inspection"
 assert_deletes "--force probe-1"
+assert_lacks "still has members after cancellation"
+assert_lacks "could not inspect process group"
 
 begin_case "34 a hung cleanup deletion fails closed within the configured bound"
 compliant_report probe-1 >"$CASE_DIR/inspect-probe-1.json"
@@ -1179,6 +1223,8 @@ assert_contains "runtime call exceeded 1s"
 assert_contains "could not capture the probe inspection"
 assert_deletes "--force probe-1"
 assert_helper_stopped
+assert_lacks "still has members after cancellation"
+assert_lacks "could not inspect process group"
 
 begin_case "36 TERM reaches a runtime descendant during capture"
 printf '' >"$CASE_DIR/fork-hang-inspect-probe-1-1"
@@ -1187,6 +1233,8 @@ run_checker_then_term
 assert_rc 130
 assert_deletes "--force probe-1"
 assert_helper_stopped
+assert_lacks "still has members after cancellation"
+assert_lacks "could not inspect process group"
 
 begin_case "37 a detached descendant cannot hold the capture open"
 printf '' >"$CASE_DIR/detach-hang-inspect-probe-1-1"
@@ -1197,6 +1245,8 @@ assert_rc 1
 assert_contains "runtime call exceeded 1s"
 assert_contains "could not capture the probe inspection"
 assert_deletes "--force probe-1"
+assert_lacks "still has members after cancellation"
+assert_lacks "could not inspect process group"
 detached_helper_pid=$(cat "$CASE_DIR/helper-pid" 2>/dev/null || true)
 [ -z "$detached_helper_pid" ] || kill "$detached_helper_pid" 2>/dev/null || true
 
@@ -1229,6 +1279,30 @@ if grep -qv '^0\.1$' "$CASE_DIR/sleeps.log" 2>/dev/null; then
 else
   pass=$((pass + 1))
 fi
+assert_deletes "--force probe-1"
+assert_lacks "still has members after cancellation"
+assert_lacks "could not inspect process group"
+
+begin_case "39a a group that never empties after the timeout is reported"
+printf '' >"$CASE_DIR/hang-inspect-probe-1-1"
+printf '' >"$CASE_DIR/record-pgid"
+compliant_report probe-1 >"$CASE_DIR/inspect-probe-1-2.json"
+export FREESIDE_CHECK_AGENT_IMAGE_RUNTIME_BOUND_SECONDS=1
+run_checker_with_ps_stub member
+assert_rc 1
+assert_contains "runtime call exceeded 1s"
+assert_contains "still has members after cancellation"
+assert_deletes "--force probe-1"
+
+begin_case "39b an uninspectable process table after the timeout is reported"
+printf '' >"$CASE_DIR/hang-inspect-probe-1-1"
+printf '' >"$CASE_DIR/record-pgid"
+compliant_report probe-1 >"$CASE_DIR/inspect-probe-1-2.json"
+export FREESIDE_CHECK_AGENT_IMAGE_RUNTIME_BOUND_SECONDS=1
+run_checker_with_ps_stub fail
+assert_rc 1
+assert_contains "runtime call exceeded 1s"
+assert_contains "could not inspect process group"
 assert_deletes "--force probe-1"
 
 # ------------------------------- #797: immutable-composition preflight
