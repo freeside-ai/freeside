@@ -1180,16 +1180,16 @@ struct DecisionDetailView: View {
             _ reader: SpecApprovalReader,
             item: Components.Schemas.AttentionItem
         ) -> some View {
-            NavigationStack {
+            VStack(spacing: 0) {
+                FreesideSheetHeader(
+                    title: reader == .specification ? "Specification" : "Specification changes")
                 specApprovalReaderContent(reader, item: item)
-                    .padding()
-                    .navigationTitle(reader == .specification ? "Specification" : "Specification changes")
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { specApprovalReader = nil }
-                        }
-                    }
+                    .padding(.horizontal)
+                    .padding(.bottom)
+                FreesideSheetActionRow.done { specApprovalReader = nil }
             }
+            .background(Color.ground2)
+            .freesideSheetPresentation()
         }
     #endif
 
@@ -2465,7 +2465,8 @@ struct DecisionDetailView: View {
         @State private var committedOffset: CGSize = .zero
 
         var body: some View {
-            NavigationStack {
+            VStack(spacing: 0) {
+                FreesideSheetHeader(title: label)
                 GeometryReader { _ in
                     platformImage(image)
                         .resizable()
@@ -2478,13 +2479,10 @@ struct DecisionDetailView: View {
                         .accessibilityLabel("\(label) attachment preview")
                 }
                 .background(Color.ground)
-                .navigationTitle(label)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
-                    }
-                }
+                FreesideSheetActionRow.done { dismiss() }
             }
+            .background(Color.ground2)
+            .freesideSheetPresentation()
             #if os(macOS)
                 .frame(
                     minWidth: 480, idealWidth: 720,
@@ -2525,13 +2523,17 @@ struct DecisionDetailView: View {
         }
     }
 
-    private struct NonImageAttachmentSheet: View {
+    struct NonImageAttachmentSheet: View {
         let label: String
         let preview: NonImagePreview
+        /// The screenshot composition lays the text out in place of the
+        /// scroll view, whose height ImageRenderer cannot settle.
+        var rendersScrollableContent = true
         @Environment(\.dismiss) private var dismiss
 
         var body: some View {
-            NavigationStack {
+            VStack(spacing: 0) {
+                FreesideSheetHeader(title: label)
                 Group {
                     if let text = preview.text {
                         VStack(alignment: .leading, spacing: 8) {
@@ -2543,12 +2545,12 @@ struct DecisionDetailView: View {
                                 .foregroundStyle(Color.inkDim)
                                 .padding(.horizontal)
                             }
-                            ScrollView {
-                                Text(text)
-                                    .font(.system(.body, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding()
+                            if rendersScrollableContent {
+                                ScrollView {
+                                    previewText(text)
+                                }
+                            } else {
+                                previewText(text)
                             }
                         }
                     } else {
@@ -2558,18 +2560,24 @@ struct DecisionDetailView: View {
                             description: "This \(byteCount(preview.byteCount)) attachment is not text.")
                     }
                 }
-                .navigationTitle(label)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
-                    }
-                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                FreesideSheetActionRow.done { dismiss() }
             }
+            .background(Color.ground2)
+            .freesideSheetPresentation()
             #if os(macOS)
                 .frame(
                     minWidth: 480, idealWidth: 720,
                     minHeight: 360, idealHeight: 600)
             #endif
+        }
+
+        private func previewText(_ text: String) -> some View {
+            Text(text)
+                .font(.system(.body, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
         }
 
         private func byteCount(_ count: Int) -> String {
@@ -2955,46 +2963,45 @@ struct RunProposalRevisionSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                Form {
-                    LabeledContent("Intent", value: "Implement subject")
-                        .listRowBackground(Color.ground2)
-                    LabeledContent("Expected cost (units)") {
-                        expectedCostField
-                    }
+        VStack(spacing: 0) {
+            FreesideSheetHeader(title: "Start with changes")
+            Form {
+                LabeledContent("Intent", value: "Implement subject")
                     .listRowBackground(Color.ground2)
-                    Stepper("Components: \(componentCount)", value: $componentCount, in: 1...32)
-                        .listRowBackground(Color.ground2)
-                    LabeledContent(
-                        "Declared paths", value: "\(originalFacts.scope.declared_path_count)"
-                    )
-                    .listRowBackground(Color.ground2)
-                    Toggle("Touches control plane", isOn: $touchesControlPlane)
-                        .listRowBackground(Color.ground2)
+                LabeledContent("Expected cost (units)") {
+                    expectedCostField
                 }
-                .formStyle(.grouped)
-                .font(FreesideFont.body)
-                .foregroundStyle(Color.ink)
-                .navigationTitle("Start with changes")
-                .tint(.accentText)
-                .scrollContentBackground(.hidden)
-
-                // The submit is a body control in the primary recipe, not a
-                // toolbar item; Return and Escape still reach it.
-                FreesideSheetActionRow(
-                    submitLabel: "Submit",
-                    isSubmitEnabled: revision != nil,
-                    submit: {
-                        if let revision {
-                            submit(revision)
-                            dismiss()
-                        }
-                    },
-                    cancel: { dismiss() })
+                .listRowBackground(Color.ground2)
+                Stepper("Components: \(componentCount)", value: $componentCount, in: 1...32)
+                    .listRowBackground(Color.ground2)
+                LabeledContent(
+                    "Declared paths", value: "\(originalFacts.scope.declared_path_count)"
+                )
+                .listRowBackground(Color.ground2)
+                Toggle("Touches control plane", isOn: $touchesControlPlane)
+                    .listRowBackground(Color.ground2)
             }
-            .background(Color.ground)
+            .formStyle(.grouped)
+            .font(FreesideFont.body)
+            .foregroundStyle(Color.ink)
+            .tint(.accentText)
+            .scrollContentBackground(.hidden)
+
+            // The submit is a body control in the primary recipe, not a
+            // toolbar item; Return and Escape still reach it.
+            FreesideSheetActionRow(
+                submitLabel: "Submit",
+                isSubmitEnabled: revision != nil,
+                submit: {
+                    if let revision {
+                        submit(revision)
+                        dismiss()
+                    }
+                },
+                cancel: { dismiss() })
         }
+        .background(Color.ground)
+        .freesideSheetPresentation()
         .frame(minWidth: 380, minHeight: 280)
     }
 
@@ -3003,7 +3010,7 @@ struct RunProposalRevisionSheet: View {
     func screenshotContent() -> some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Start with changes")
-                .font(FreesideFont.largeTitle)
+                .font(FreesideFont.sectionTitle)
             VStack(alignment: .leading, spacing: 8) {
                 KeywordLabel(text: "Intent")
                 Text("Implement subject")
@@ -3033,6 +3040,9 @@ struct RunProposalRevisionSheet: View {
         .padding(24)
         .frame(maxWidth: 560, alignment: .leading)
         .foregroundStyle(Color.ink)
+        // The sheet's own ground, so the dusk composition reads dusk ink on
+        // dusk ground rather than on the harness's light canvas.
+        .background(Color.ground)
     }
 
     @ViewBuilder private var expectedCostField: some View {
@@ -3081,38 +3091,37 @@ struct RunProposalSnoozeSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                Form {
-                    DatePicker(
-                        "Snooze until", selection: $until, in: now...,
-                        displayedComponents: [.date, .hourAndMinute]
-                    )
-                    .listRowBackground(Color.ground2)
-                }
-                .formStyle(.grouped)
-                .font(FreesideFont.body)
-                .foregroundStyle(Color.ink)
-                .navigationTitle("Snooze proposal")
-                .tint(.accentText)
-                .scrollContentBackground(.hidden)
-
-                FreesideSheetActionRow(
-                    submitLabel: "Snooze",
-                    // Against the current time, not the sheet's opening one:
-                    // a chosen moment that has since passed is no longer a
-                    // snooze. The screenshot composition uses the injected
-                    // `now` instead, so its golden stays deterministic.
-                    isSubmitEnabled: Self.isValidSnooze(until: until, now: Date()),
-                    submit: {
-                        guard Self.isValidSnooze(until: until, now: Date()) else { return }
-                        submit(until)
-                        dismiss()
-                    },
-                    cancel: { dismiss() })
+        VStack(spacing: 0) {
+            FreesideSheetHeader(title: "Snooze proposal")
+            Form {
+                DatePicker(
+                    "Snooze until", selection: $until, in: now...,
+                    displayedComponents: [.date, .hourAndMinute]
+                )
+                .listRowBackground(Color.ground2)
             }
-            .background(Color.ground)
+            .formStyle(.grouped)
+            .font(FreesideFont.body)
+            .foregroundStyle(Color.ink)
+            .tint(.accentText)
+            .scrollContentBackground(.hidden)
+
+            FreesideSheetActionRow(
+                submitLabel: "Snooze",
+                // Against the current time, not the sheet's opening one:
+                // a chosen moment that has since passed is no longer a
+                // snooze. The screenshot composition uses the injected
+                // `now` instead, so its golden stays deterministic.
+                isSubmitEnabled: Self.isValidSnooze(until: until, now: Date()),
+                submit: {
+                    guard Self.isValidSnooze(until: until, now: Date()) else { return }
+                    submit(until)
+                    dismiss()
+                },
+                cancel: { dismiss() })
         }
+        .background(Color.ground)
+        .freesideSheetPresentation()
         .frame(minWidth: 380, minHeight: 220)
     }
 
@@ -3121,7 +3130,7 @@ struct RunProposalSnoozeSheet: View {
     func screenshotContent() -> some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Snooze proposal")
-                .font(FreesideFont.largeTitle)
+                .font(FreesideFont.sectionTitle)
             VStack(alignment: .leading, spacing: 8) {
                 KeywordLabel(text: "Snooze until")
                 Text(formattedScreenshotUntil)
@@ -3140,6 +3149,9 @@ struct RunProposalSnoozeSheet: View {
         .padding(24)
         .frame(maxWidth: 560, alignment: .leading)
         .foregroundStyle(Color.ink)
+        // The sheet's own ground, so the dusk composition reads dusk ink on
+        // dusk ground rather than on the harness's light canvas.
+        .background(Color.ground)
     }
 }
 

@@ -1389,6 +1389,42 @@
                             Text("Inbox").padding()
                         })))
 
+            // The non-image attachment reader as a sheet: inline serif title,
+            // the mono text preview laid out in place of its scroll view,
+            // and the single Done pill.
+            let readerPreview = DecisionDetailView.NonImagePreview(
+                bytes: Data("verify: 3 checks passed\nlint: clean\nbuild: ok\n".utf8))
+            surfaces.append(
+                Surface(
+                    name: "attachment-reader-sheet",
+                    width: 480,
+                    view: AnyView(
+                        DecisionDetailView.NonImageAttachmentSheet(
+                            label: "verify_log", preview: readerPreview,
+                            rendersScrollableContent: false))))
+            surfaces.append(
+                Surface(
+                    name: "attachment-reader-sheet-phone-dark",
+                    width: 390,
+                    colorScheme: .dark,
+                    view: AnyView(
+                        DecisionDetailView.NonImageAttachmentSheet(
+                            label: "verify_log", preview: readerPreview,
+                            rendersScrollableContent: false))))
+            // A claim label the contract admits at any length: the header
+            // clamps the title to two lines so the preview and Done pill
+            // stay on the sheet.
+            surfaces.append(
+                Surface(
+                    name: "attachment-reader-sheet-long-title",
+                    width: 480,
+                    view: AnyView(
+                        DecisionDetailView.NonImageAttachmentSheet(
+                            label: String(
+                                repeating: "verify_log for the release candidate build\n", count: 6),
+                            preview: readerPreview,
+                            rendersScrollableContent: false))))
+
             // The consequential confirmation sheet: Stop on a run-scoped item
             // as the macOS sheet by day, Decline on a proposal as the iPhone
             // bottom sheet by dusk. The binding line reads the fixture's
