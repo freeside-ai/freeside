@@ -495,15 +495,49 @@ enum RunDisplay {
         return "Round \(stage.attempts.count)"
     }
 
-    /// The row title: the current stage and its round. A run that has no
-    /// stage yet is titled by its project so the row is never blank.
-    static func title(_ run: Components.Schemas.Run) -> String {
-        guard let stage = run.stages.last else { return projectName(run) }
-        var parts = [stageLabel(stage.name)]
-        if let round = round(stage) {
-            parts.append(round)
+    struct WorkflowPhase {
+        let stage: Components.Schemas.StageName
+        let round: String?
+        let completed: Set<Components.Schemas.StageName>
+    }
+
+    /// Production runs append implementation passes without recording review
+    /// or verification stages. Publication progress supplies that position;
+    /// Review is completed by position, never shown as a live review round.
+    static func workflowPhase(_ run: Components.Schemas.Run) -> WorkflowPhase? {
+        guard let stage = run.stages.last, canonicalStageName(stage.name) == "implementation" else { return nil }
+        let milestone = run.latest_milestone?.value1
+        let completed = run.outcome == .completed || milestone == .work_unit_completed
+        let published = run.outcome == .published || milestone == .publication_ready
+        // Publication-cycle holds: daemon/internal/domain/observation.go.
+        let publicationHolds: Set<Components.Schemas.RunHoldReason> = [
+            .verification_findings, .trust_blocked, .base_advanced, .recipe_revoked,
+            .scope_conflict, .publication_environment, .external_conflict,
+        ]
+        let publicationHold = run.hold_reason.map { publicationHolds.contains($0.value1) } ?? false
+        if completed || published || publicationHold || milestone == .publication_blocked || run.outcome == .blocked {
+            let passes = run.stages.filter { canonicalStageName($0.name) == "implementation" }.count
+            return WorkflowPhase(
+                stage: .verification, round: "Round \(passes)",
+                completed: completed || published
+                    ? [.implementation, .review, .verification] : [.implementation, .review])
         }
-        return parts.joined(separator: " · ")
+        return WorkflowPhase(stage: .implementation, round: round(stage), completed: [])
+    }
+
+    /// Shared by the row title and timeline header so their phase and round agree.
+    static func stageHeading(_ run: Components.Schemas.Run) -> (label: String, round: String?)? {
+        if let phase = workflowPhase(run) {
+            return (AttentionDisplay.label(phase.stage), phase.round)
+        }
+        guard let stage = run.stages.last else { return nil }
+        return (stageLabel(stage.name), round(stage))
+    }
+
+    /// A run that has no stage yet is titled by its project so the row is never blank.
+    static func title(_ run: Components.Schemas.Run) -> String {
+        guard let heading = stageHeading(run) else { return projectName(run) }
+        return [heading.label, heading.round].compactMap { $0 }.joined(separator: " · ")
     }
 
     /// The row's meta line: project, work unit when named, and when the run
@@ -563,9 +597,9 @@ enum RunDisplay {
     }
 
     /// The four workflow stages in order, then any stage the daemon
-    /// recorded under another name. A stage that exists and is not the
-    /// last one has been left behind, so it reads completed; the last
-    /// existing stage carries the run's outcome and lifecycle; the rest are pending.
+    /// recorded under another name. Production uses its derived workflow
+    /// phase; other runs use the last recorded stage. Stages left behind read
+    /// completed, the current stage carries outcome and lifecycle, and the rest are pending.
     static func stageRail(_ run: Components.Schemas.Run) -> DecisionStageRailPresentation {
         var names = Components.Schemas.StageName.allCases.map {
             (name: $0.rawValue, label: AttentionDisplay.label($0))
@@ -574,10 +608,14 @@ enum RunDisplay {
         for name in recorded where !names.contains(where: { $0.name == name }) {
             names.append((name: name, label: stageLabel(name)))
         }
-        let current = recorded.last
+        let phase = workflowPhase(run)
+        let current = phase?.stage.rawValue ?? recorded.last
+        let completed = phase?.completed.map(\.rawValue) ?? []
         let entries = names.map { name, label in
             let state: DecisionStageRailPresentation.State =
-                if name == current {
+                if completed.contains(name) {
+                    .completed
+                } else if name == current {
                     currentStageState(run)
                 } else if recorded.contains(name) {
                     .completed

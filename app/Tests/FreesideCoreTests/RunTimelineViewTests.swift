@@ -36,6 +36,20 @@ import Testing
         #expect(RunDisplay.round(stage) == nil)
     }
 
+    @Test func timelineHeaderPhaseAndRoundMatchTheRowTitle() throws {
+        for run in RunFixtures.defaultRuns().map(\.run) + [RunFixtures.refreshedHistoryRun().run] {
+            let heading = try #require(RunDisplay.stageHeading(run))
+            #expect([heading.label, heading.round].compactMap { $0 }.joined(separator: " · ") == RunDisplay.title(run))
+            if run.id == RunFixtures.activeRunID {
+                #expect(heading.label == "Verification")
+                #expect(heading.round == "Round 1")
+            }
+        }
+        var run = RunFixtures.defaultRuns()[0].run
+        run.stages = []
+        #expect(RunDisplay.stageHeading(run) == nil)
+    }
+
     @Test func timelineTitleIsTheAttemptNumberOrTheRunID() throws {
         var run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
         #expect(try #require(run.campaign_id).count == 73)
