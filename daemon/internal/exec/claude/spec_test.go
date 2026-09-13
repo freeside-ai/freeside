@@ -223,6 +223,15 @@ func TestPhase1ASummaryPromptContracts(t *testing.T) {
 		"8 decisions, 2 to 6 options each, 4 KiB per text field",
 		"`recommendation` equals one option `label` exactly",
 		"return `decisions` instead of a specification",
+		// The sketch rule (#1329): a source that leaves outcome, scope, or
+		// non-goals unresolved gets a clarification round before any research
+		// or specification, so a later edit cannot drop it silently.
+		"gets `decisions` before requesting research or a specification",
+		// The first-turn/resume exit from the sketch round (#1329): the ask
+		// fires only with no answering human_feedback, so the answered retry
+		// proceeds to the specification instead of re-asking to the iteration
+		// limit. Pinned so a later edit cannot silently drop the exit.
+		"with no answering `human_feedback`",
 	} {
 		if !bytes.Contains(specifier, []byte(required)) {
 			t.Errorf("specifier prompt omits %q", required)
