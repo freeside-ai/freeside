@@ -13,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/observe"
 	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // runResumeMain reattaches observation to one exact non-terminal run. It
@@ -37,7 +38,8 @@ func runResumeCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 	flags := flag.NewFlagSet("freesided resume", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	dbPath := flags.String("db", "", "SQLite database path (required)")
-	runID := flags.String("run", "", "exact live run id to resume (required)")
+	runID := flags.String("run", "", "exact live run id to resume")
+	taskID := flags.String("task", "", "task whose newest recorded run to resume")
 	interval := flags.Duration("interval", observe.DefaultInterval, "observation read cadence")
 	window := flags.Duration("freshness-window", domain.DefaultObservationFreshnessWindow,
 		"age past which the last observation reads as an observation gap")
@@ -50,12 +52,36 @@ func runResumeCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 		return fmt.Errorf("%w: unexpected positional arguments: %v", observe.ErrUsage, flags.Args())
 	case *dbPath == "":
 		return fmt.Errorf("%w: -db is required", observe.ErrUsage)
-	case *runID == "":
-		return fmt.Errorf("%w: -run is required", observe.ErrUsage)
+	case (*taskID == "") == (*runID == ""):
+		return fmt.Errorf("%w: exactly one of -task or -run is required", observe.ErrUsage)
 	case *interval <= 0:
 		return fmt.Errorf("%w: -interval must be positive, got %s", observe.ErrUsage, *interval)
 	case *window <= 0:
 		return fmt.Errorf("%w: -freshness-window must be positive, got %s", observe.ErrUsage, *window)
+	}
+	if *taskID != "" {
+		st, _, err := openStoreWithTopicKey(ctx, *dbPath, store.Options{})
+		if err != nil {
+			return err
+		}
+		readErr := st.Read(ctx, func(tx *store.ReadTx) error {
+			task, err := tx.GetTask(ctx, domain.TaskID(*taskID))
+			if err != nil {
+				return fmt.Errorf("task %q: %w", *taskID, err)
+			}
+			runs, err := tx.TaskRunIDs(ctx, task.ID)
+			if err != nil {
+				return err
+			}
+			if len(runs) == 0 {
+				return fmt.Errorf("%w: task %q has no runs", observe.ErrUsage, task.ID)
+			}
+			*runID = string(runs[len(runs)-1])
+			return nil
+		})
+		if err := errors.Join(readErr, st.Close()); err != nil {
+			return err
+		}
 	}
 	st, err := observedb.Open(ctx, *dbPath)
 	if err != nil {

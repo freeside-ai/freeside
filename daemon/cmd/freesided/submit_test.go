@@ -67,23 +67,23 @@ func (r fixedProductionCommitAuthorResolver) Revalidate(
 	return r.identity, r.err
 }
 
-func writeSubmissionInputs(t *testing.T, root string) (workItemPath, policyPath, publicationPath string) {
+func writeSubmissionInputs(t *testing.T, root string) (taskPath, policyPath, publicationPath string) {
 	t.Helper()
-	workItemPath = filepath.Join(root, "spec.md")
+	taskPath = filepath.Join(root, "spec.md")
 	policyPath = filepath.Join(root, "policy.json")
 	publicationPath = filepath.Join(root, "publication.json")
-	if err := os.WriteFile(workItemPath, []byte("# Work item\n\nImplement the thing.\n"), 0o600); err != nil {
+	if err := os.WriteFile(taskPath, []byte("# Task\n\nImplement the thing.\n"), 0o600); err != nil {
 		t.Fatalf("write spec: %v", err)
 	}
 	policy := submissionPolicyBody("daemon/**", strings.Repeat("ab", 32))
 	if err := os.WriteFile(policyPath, []byte(policy), 0o600); err != nil {
 		t.Fatalf("write policy: %v", err)
 	}
-	publication := `{"title":"Test the work item","body":"## Why\n\nCloses #123.\n","commit_author":{"app_slug":"freeside-test","bot_user_id":12345}}`
+	publication := `{"title":"Test the task","body":"## Why\n\nCloses #123.\n","commit_author":{"app_slug":"freeside-test","bot_user_id":12345}}`
 	if err := os.WriteFile(publicationPath, []byte(publication), 0o600); err != nil {
 		t.Fatalf("write publication metadata: %v", err)
 	}
-	return workItemPath, policyPath, publicationPath
+	return taskPath, policyPath, publicationPath
 }
 
 func submissionPolicyBody(paths, digestHex string) string {
@@ -149,14 +149,14 @@ func TestSubmitCommandBindsCompositionManifest(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	root := t.TempDir()
-	workItemPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
-	manifest, identity := submissionCompositionManifest(t, "proj-submit", workItemPath, policyPath, publicationPath)
+	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	manifest, identity := submissionCompositionManifest(t, "proj-submit", taskPath, policyPath, publicationPath)
 	manifestPath := filepath.Join(root, "composition.json")
 	if err := os.WriteFile(manifestPath, manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := submitCommandConfig{
-		DBPath: filepath.Join(root, "freeside.db"), WorkItemPath: workItemPath,
+		DBPath: filepath.Join(root, "freeside.db"), TaskPath: taskPath,
 		PolicyPath: policyPath, PublicationPath: publicationPath,
 		CompositionPath: manifestPath, RequireComposition: true,
 		ProjectID: "proj-submit",
@@ -215,10 +215,10 @@ func TestSubmitCommandRejectsCompositionRunOverride(t *testing.T) {
 }
 
 func submissionCompositionManifest(
-	t *testing.T, projectID domain.ProjectID, workItemPath, policyPath, publicationPath string,
+	t *testing.T, projectID domain.ProjectID, taskPath, policyPath, publicationPath string,
 ) ([]byte, compositionIdentity) {
 	t.Helper()
-	spec, err := readSubmissionFile(workItemPath)
+	spec, err := readSubmissionFile(taskPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,10 +273,10 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
-	workItemPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	cfg := submitCommandConfig{
-		DBPath:       filepath.Join(root, "freeside.db"),
-		WorkItemPath: workItemPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		DBPath:   filepath.Join(root, "freeside.db"),
+		TaskPath: taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
 		ProjectID: "proj-submit",
 	}
 
@@ -457,7 +457,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		SpecArtifactID: first.SourceArtifactID, PolicyArtifactID: first.SpecificationPolicyArtifactID,
 		ResolvedPolicy: authorityPolicy,
 		Publication: engine.ProductionPublication{
-			Title: "Test the work item", Body: "## Why\n\nCloses #123.\n",
+			Title: "Test the task", Body: "## Why\n\nCloses #123.\n",
 			CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
 		},
 	})
@@ -807,13 +807,13 @@ func TestSubmitCommandReplaysMatchingPreSpecificationProductionRun(t *testing.T)
 	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
-	workItemPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	cfg := submitCommandConfig{
-		DBPath:       filepath.Join(root, "freeside.db"),
-		WorkItemPath: workItemPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		DBPath:   filepath.Join(root, "freeside.db"),
+		TaskPath: taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
 		ProjectID: "proj-submit",
 	}
-	spec, err := readSubmissionFile(workItemPath)
+	spec, err := readSubmissionFile(taskPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -830,7 +830,7 @@ func TestSubmitCommandReplaysMatchingPreSpecificationProductionRun(t *testing.T)
 		t.Fatal(err)
 	}
 	publication := engine.ProductionPublication{
-		Title: "Test the work item", Body: "## Why\n\nCloses #123.\n",
+		Title: "Test the task", Body: "## Why\n\nCloses #123.\n",
 		CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
 	}
 	publicationBody, err := json.Marshal(publication)
@@ -939,9 +939,9 @@ func TestStoreAdmissionAuthorityDerivesFallbackCommitMessage(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	root := t.TempDir()
-	workItemPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	cfg := submitCommandConfig{
-		DBPath: filepath.Join(root, "freeside.db"), WorkItemPath: workItemPath,
+		DBPath: filepath.Join(root, "freeside.db"), TaskPath: taskPath,
 		PolicyPath: policyPath, PublicationPath: publicationPath,
 		ProjectID: "proj-submit-message",
 	}
@@ -973,7 +973,7 @@ func TestStoreAdmissionAuthorityDerivesFallbackCommitMessage(t *testing.T) {
 		PolicyArtifactID: submitted.SpecificationPolicyArtifactID,
 		ResolvedPolicy:   productionPolicy,
 		Publication: engine.ProductionPublication{
-			Title: "Test the work item", Body: "## Why\n\nCloses #123.\n",
+			Title: "Test the task", Body: "## Why\n\nCloses #123.\n",
 			CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
 		},
 	})
@@ -988,8 +988,8 @@ func TestStoreAdmissionAuthorityDerivesFallbackCommitMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if subject, _, _ := strings.Cut(got, "\n"); subject != "Work item" {
-		t.Fatalf("undeclared subject = %q, want %q", subject, "Work item")
+	if subject, _, _ := strings.Cut(got, "\n"); subject != "Task" {
+		t.Fatalf("undeclared subject = %q, want %q", subject, "Task")
 	}
 
 	issue := 123
@@ -1010,8 +1010,8 @@ func TestStoreAdmissionAuthorityDerivesFallbackCommitMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if subject, _, _ := strings.Cut(got, "\n"); subject != "Work item (#123)" {
-		t.Fatalf("issue-bound subject = %q, want %q", subject, "Work item (#123)")
+	if subject, _, _ := strings.Cut(got, "\n"); subject != "Task (#123)" {
+		t.Fatalf("issue-bound subject = %q, want %q", subject, "Task (#123)")
 	}
 	reconstructed, err := authority.fallbackCommitMessage(ctx, admission, importer.Policy{})
 	if err != nil || reconstructed != got {
@@ -1023,7 +1023,7 @@ func TestSubmitRefusesAnExistingStoreWithoutItsTopicKey(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
-	workItemPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	dbPath := filepath.Join(root, "freeside.db")
 	st, err := store.Open(ctx, dbPath, store.Options{})
 	if err != nil {
@@ -1034,7 +1034,7 @@ func TestSubmitRefusesAnExistingStoreWithoutItsTopicKey(t *testing.T) {
 	}
 
 	_, err = runSubmitCommand(ctx, submitCommandConfig{
-		DBPath: dbPath, WorkItemPath: workItemPath, PolicyPath: policyPath,
+		DBPath: dbPath, TaskPath: taskPath, PolicyPath: policyPath,
 		PublicationPath: publicationPath,
 		ProjectID:       "proj-submit",
 	})
@@ -1047,22 +1047,22 @@ func TestSubmitCommandRefusesBadInputs(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
-	workItemPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	base := submitCommandConfig{
-		DBPath:       filepath.Join(root, "freeside.db"),
-		WorkItemPath: workItemPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		DBPath:   filepath.Join(root, "freeside.db"),
+		TaskPath: taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
 		ProjectID: "proj-submit",
 	}
 
 	missing := base
-	missing.WorkItemPath = filepath.Join(root, "absent.md")
+	missing.TaskPath = filepath.Join(root, "absent.md")
 	if _, err := runSubmitCommand(ctx, missing); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing spec error = %v, want ErrNotExist", err)
 	}
 
 	empty := base
-	empty.WorkItemPath = filepath.Join(root, "empty.md")
-	if err := os.WriteFile(empty.WorkItemPath, nil, 0o600); err != nil {
+	empty.TaskPath = filepath.Join(root, "empty.md")
+	if err := os.WriteFile(empty.TaskPath, nil, 0o600); err != nil {
 		t.Fatalf("write empty spec: %v", err)
 	}
 	if _, err := runSubmitCommand(ctx, empty); err == nil {
@@ -1126,8 +1126,8 @@ func TestSubmitCommandRefusesBadInputs(t *testing.T) {
 		t.Fatalf("pinned submit: %v", err)
 	}
 	changed := pinned
-	changed.WorkItemPath = filepath.Join(root, "changed.md")
-	if err := os.WriteFile(changed.WorkItemPath, []byte("# Different work item\n"), 0o600); err != nil {
+	changed.TaskPath = filepath.Join(root, "changed.md")
+	if err := os.WriteFile(changed.TaskPath, []byte("# Different task\n"), 0o600); err != nil {
 		t.Fatalf("write changed spec: %v", err)
 	}
 	if _, err := runSubmitCommand(ctx, changed); !errors.Is(err, domain.ErrImmutableTransition) {
@@ -1186,15 +1186,15 @@ func TestSubmitCommandCapturesWorkUnitDeclaration(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
-	workItemPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	workUnitPath := filepath.Join(root, "work-unit.json")
 	declaration := `{"completion_criterion":"bound_issue_closed_by_merged_pr","bound_issue":443,"depends_on_issues":[442,440,442],"contract_serialized":true}`
 	if err := os.WriteFile(workUnitPath, []byte(declaration), 0o600); err != nil {
 		t.Fatalf("write work-unit declaration: %v", err)
 	}
 	cfg := submitCommandConfig{
-		DBPath:       filepath.Join(root, "freeside.db"),
-		WorkItemPath: workItemPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		DBPath:   filepath.Join(root, "freeside.db"),
+		TaskPath: taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
 		WorkUnitPath: workUnitPath,
 		ProjectID:    "proj-submit",
 	}
@@ -1286,15 +1286,15 @@ func TestSubmitCommandEmptyDependencyDeclarationConverges(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
-	workItemPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	workUnitPath := filepath.Join(root, "work-unit.json")
 	declaration := `{"completion_criterion":"bound_pr_merged","depends_on_issues":[]}`
 	if err := os.WriteFile(workUnitPath, []byte(declaration), 0o600); err != nil {
 		t.Fatalf("write work-unit declaration: %v", err)
 	}
 	cfg := submitCommandConfig{
-		DBPath:       filepath.Join(root, "freeside.db"),
-		WorkItemPath: workItemPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		DBPath:   filepath.Join(root, "freeside.db"),
+		TaskPath: taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
 		WorkUnitPath: workUnitPath,
 		ProjectID:    "proj-submit",
 	}

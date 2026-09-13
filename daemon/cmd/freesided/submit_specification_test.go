@@ -41,18 +41,18 @@ func TestSubmitCommandSpecifiesBeforeCreatingProductionRun(t *testing.T) {
 	}{
 		{
 			name:             "byte-identical specification",
-			acceptedBody:     "# Work item\n\nImplement the thing.",
+			acceptedBody:     "# Task\n\nImplement the thing.",
 			wantSameDigest:   true,
 			preallocateRetry: true,
 		},
 		{
 			name:           "revised specification",
-			acceptedBody:   "# Work item\n\nImplement the improved thing.",
+			acceptedBody:   "# Task\n\nImplement the improved thing.",
 			wantSameDigest: false,
 		},
 		{
 			name:                  "allocated retry run identity collision",
-			acceptedBody:          "# Work item\n\nImplement the thing.",
+			acceptedBody:          "# Task\n\nImplement the thing.",
 			wantSameDigest:        true,
 			preallocateRetry:      true,
 			preallocateForeignRun: true,
@@ -74,7 +74,7 @@ func testSubmitCommandSpecificationDigest(
 ) {
 	t.Helper()
 	root := t.TempDir()
-	workItemPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	manifest, err := domain.NewCapabilityManifest("Provider web read", domain.EgressProviderWebRead)
 	if err != nil {
 		t.Fatal(err)
@@ -102,12 +102,12 @@ func testSubmitCommandSpecificationDigest(
 	if err := os.WriteFile(policyPath, policyBody, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sourceBody := "# Work item\n\nImplement the thing."
-	if err := os.WriteFile(workItemPath, []byte(sourceBody), 0o600); err != nil {
+	sourceBody := "# Task\n\nImplement the thing."
+	if err := os.WriteFile(taskPath, []byte(sourceBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := submitCommandConfig{
-		DBPath: filepath.Join(root, "state.db"), WorkItemPath: workItemPath,
+		DBPath: filepath.Join(root, "state.db"), TaskPath: taskPath,
 		PolicyPath: policyPath, PublicationPath: publicationPath,
 		ProjectID: "project-submit-specification", RunID: "implementation-from-submit",
 	}
@@ -139,7 +139,7 @@ func testSubmitCommandSpecificationDigest(
 	}); err != nil {
 		t.Fatal(err)
 	}
-	promptBody := []byte("Specify the submitted work item.\n")
+	promptBody := []byte("Specify the submitted task.\n")
 	promptDigest := domain.Digest(contentaddr.Sum(promptBody))
 	if _, err := blobs.Put(promptDigest, bytes.NewReader(promptBody)); err != nil {
 		t.Fatal(err)

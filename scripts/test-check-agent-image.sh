@@ -1640,7 +1640,7 @@ begin_case "retained restart authenticates history without submission"
 run_real_work lifecycle current ok ok success ok ok clean resume
 assert_rc 0
 assert_contains "Retained endpoint restored"
-assert_lacks "submitting the work item"
+assert_lacks "submitting the task"
 assert_not_exists "$CASE_DIR/submit.args"
 [[ "$(cat "$CASE_DIR/old/status")" == completed ]] || report_failure "old session changed"
 

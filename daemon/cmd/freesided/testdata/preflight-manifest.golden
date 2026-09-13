@@ -40,11 +40,11 @@
   "claude_auth_volume": "claude-auth-volume",
   "codex_auth_identity": "codex-1",
   "identity": {
-    "source_digest": "sha256:98f7ecbbe8aa0b856e2af4856e0d6ed099ac777be5cada07dc9026a9f37bdb62",
+    "source_digest": "sha256:0ac82fec44c225e7fc5d01b8a9cb91c61b4e86b3676e342c1747fa65a6bfcf8c",
     "policy_digest": "sha256:34e4283fd67b0809b8807b6e2e1af628e0f204ff0d7485f3b71c8a8d8578f745",
-    "publication_digest": "sha256:f3c794222955e37bcacd199d0da87ea4f0cb721edd5a2d57b67ce9d86402219a",
-    "implementation_run_id": "run-0db57024c4bc1a8ea01f738034c5f3cc7bcb0b7f885b00b316b4e918f1f23c55",
-    "implementation_invocation_id": "inv-implement-run-0db57024c4bc1a8ea01f738034c5f3cc7bcb0b7f885b00b316b4e918f1f23c55"
+    "publication_digest": "sha256:42c2f198e6c55f95ade5d73a58cdbe5dda3284093619020f0ca6a0a3135947c1",
+    "implementation_run_id": "run-f802c7b6c24fe8e529b1fdc5d0354afa8540597c9d1180556a50f93b9fd3a82e",
+    "implementation_invocation_id": "inv-implement-run-f802c7b6c24fe8e529b1fdc5d0354afa8540597c9d1180556a50f93b9fd3a82e"
   },
   "images": [
     {
@@ -117,7 +117,7 @@
     {
       "name": "source_implementation_identity",
       "status": "passed",
-      "evidence": "source sha256:98f7ecbbe8aa0b856e2af4856e0d6ed099ac777be5cada07dc9026a9f37bdb62 deterministically reserves run run-0db57024c4bc1a8ea01f738034c5f3cc7bcb0b7f885b00b316b4e918f1f23c55 and invocation inv-implement-run-0db57024c4bc1a8ea01f738034c5f3cc7bcb0b7f885b00b316b4e918f1f23c55"
+      "evidence": "source sha256:0ac82fec44c225e7fc5d01b8a9cb91c61b4e86b3676e342c1747fa65a6bfcf8c deterministically reserves run run-f802c7b6c24fe8e529b1fdc5d0354afa8540597c9d1180556a50f93b9fd3a82e and invocation inv-implement-run-f802c7b6c24fe8e529b1fdc5d0354afa8540597c9d1180556a50f93b9fd3a82e"
     },
     {
       "name": "review_instructions",

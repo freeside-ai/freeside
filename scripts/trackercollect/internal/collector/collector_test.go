@@ -401,7 +401,7 @@ func TestContainingTrackerRequiresTrackerStructureAndValidEntries(t *testing.T) 
 		body string
 		code string
 	}{
-		{name: "ordinary work item", body: "## Acceptance\n- [ ] #935", code: "tracker-structure"},
+		{name: "ordinary task", body: "## Acceptance\n- [ ] #935", code: "tracker-structure"},
 		{name: "duplicate order sections", body: "- [ ] #935\n\n## Implementation Order\nFirst\n\n## Implementation Order\nSecond", code: "tracker-structure"},
 		{name: "checkbox number exceeds forge Int", body: "- [ ] #935\n- [ ] #2147483648\n\n## Implementation Order\nPending", code: "malformed-tracker-entry"},
 	}
