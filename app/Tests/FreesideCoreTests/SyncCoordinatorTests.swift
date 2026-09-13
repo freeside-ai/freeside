@@ -452,6 +452,68 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         #expect(coordinator.timelinesByRunID[RunFixtures.activeRunID] == nil)
     }
 
+    @Test func bootstrapCarriesTasksAndDropsUnlistedTaskTimelines() async throws {
+        let server = MockServer()
+        let cache = InMemoryCacheStore()
+        let coordinator = makeCoordinator(server: server, cache: cache)
+        await coordinator.bootstrap()
+        #expect(coordinator.tasks == TaskFixtures.defaultTasks())
+        let taskID = try #require(
+            coordinator.tasks.first { $0.task.run_ids.contains(RunFixtures.activeRunID) }
+        ).task.id
+
+        await coordinator.refreshTaskTimeline(for: taskID)
+        #expect(coordinator.taskTimelinesByTaskID[taskID]?.task_id == taskID)
+        #expect(coordinator.taskTimelineLoadStates[taskID] == .loaded)
+        #expect(cache.load()?.taskTimelines.map(\.task_id) == [taskID])
+
+        // A same-epoch bootstrap replaces the task list and keeps only the
+        // timelines of tasks it still lists, the rule the run timelines follow.
+        await server.setBootstrapTransform { snapshot in
+            var snapshot = snapshot
+            snapshot.tasks = snapshot.tasks.filter { $0.task.id != taskID }
+            return snapshot
+        }
+        await server.advance(itemID: AttentionFixtures.defaultInbox()[0].item.id)
+        await coordinator.heartbeat()
+
+        #expect(!coordinator.tasks.contains { $0.task.id == taskID })
+        #expect(coordinator.tasks.count == TaskFixtures.defaultTasks().count - 1)
+        #expect(coordinator.taskTimelinesByTaskID[taskID] == nil)
+        #expect(coordinator.taskTimelineLoadStates[taskID] == nil)
+        #expect(cache.load()?.taskTimelines.isEmpty == true)
+    }
+
+    @Test func relaunchRestoresTasksAndTaskTimelinesFromTheCache() async throws {
+        let server = MockServer()
+        let cache = InMemoryCacheStore()
+        let coordinator = makeCoordinator(server: server, cache: cache)
+        await coordinator.bootstrap()
+        let taskID = try #require(
+            coordinator.tasks.first { $0.task.run_ids.contains(RunFixtures.activeRunID) }
+        ).task.id
+        await coordinator.refreshTaskTimeline(for: taskID)
+
+        let relaunched = makeCoordinator(server: server, cache: cache)
+
+        #expect(relaunched.tasks == coordinator.tasks)
+        #expect(relaunched.taskTimelinesByTaskID == coordinator.taskTimelinesByTaskID)
+        #expect(relaunched.taskTimelineLoadStates.isEmpty)
+    }
+
+    @Test func taskTimelineNotFoundStopsLoading() async throws {
+        let server = MockServer(tasks: [])
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        #expect(coordinator.tasks.isEmpty)
+        let taskID = try #require(TaskFixtures.defaultTasks().first).task.id
+
+        await coordinator.refreshTaskTimeline(for: taskID)
+
+        #expect(coordinator.taskTimelinesByTaskID[taskID] == nil)
+        #expect(coordinator.taskTimelineLoadStates[taskID] == .unavailable)
+    }
+
     @Test func aTimelineResponseDroppedByABootstrapIsNotLeftLoading() async {
         let server = MockServer()
         let coordinator = makeCoordinator(server: server)
@@ -539,6 +601,10 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         await coordinator.bootstrap()
         #expect(!coordinator.store.rows.isEmpty)
 
+        let taskID = try #require(coordinator.tasks.first).task.id
+        await coordinator.refreshTaskTimeline(for: taskID)
+        #expect(coordinator.taskTimelinesByTaskID[taskID] != nil)
+
         await server.rotateEpoch()
         await server.setBeforeRespond { operationID in
             if operationID == "getSyncBootstrap" { throw MockOutage() }
@@ -549,6 +615,8 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         #expect(coordinator.runs.isEmpty)
         #expect(coordinator.schedules.isEmpty)
         #expect(coordinator.timelinesByRunID.isEmpty)
+        #expect(coordinator.tasks.isEmpty)
+        #expect(coordinator.taskTimelinesByTaskID.isEmpty)
         #expect(coordinator.cursors == nil)
         #expect(cache.load() == nil)
         #expect(coordinator.store.freshness == .unreachable)
