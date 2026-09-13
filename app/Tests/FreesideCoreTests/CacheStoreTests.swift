@@ -19,7 +19,9 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
             highestObservedServerRevision: revision
         ),
         attentionItems: [AttentionFixtures.fixture(type: .spec_approval)],
-        conversations: AttentionFixtures.defaultConversations()
+        conversations: AttentionFixtures.defaultConversations(),
+        tasks: TaskFixtures.defaultTasks(),
+        taskTimelines: TaskFixtures.defaultTimelines()
     )
 }
 
@@ -112,6 +114,56 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(migrated.schedules.isEmpty)
         #expect(migrated.runTimelines.isEmpty)
         #expect(migrated.pendingCommands == state.pendingCommands)
+    }
+
+    @Test func aPreTasksFormatFourCacheKeepsTheLedgerAndTelemetrySections() throws {
+        // Format 4 predates task snapshots and task timelines. Its cursors
+        // must not make an upgraded client consider an empty task list
+        // current; the ledger and the telemetry sections are epoch-independent
+        // client state and survive, so a queued event drains rather than
+        // vanishing with the upgrade.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        state.comprehensionQueue = [
+            .init(
+                eventID: "event-1",
+                input: .init(
+                    item_id: "item-a", kind: .card_opened,
+                    item_decision_surface_digest: "sha256:" + String(repeating: "a", count: 64),
+                    occurred_at: Date(timeIntervalSince1970: 1_700_000_000), sequence: 1))
+        ]
+        state.comprehensionSequence = 1
+        state.registeredCapabilityFingerprint = "fingerprint-1"
+        state.comprehensionDeviceID = "device-1"
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var legacyState = try #require(object["state"] as? [String: Any])
+        legacyState.removeValue(forKey: "tasks")
+        legacyState.removeValue(forKey: "taskTimelines")
+        object["format"] = 4
+        object["state"] = legacyState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.cursors == nil)
+        #expect(migrated.attentionItems.isEmpty)
+        #expect(migrated.conversations.isEmpty)
+        #expect(migrated.runs.isEmpty)
+        #expect(migrated.runTimelines.isEmpty)
+        #expect(migrated.tasks.isEmpty)
+        #expect(migrated.taskTimelines.isEmpty)
+        #expect(migrated.pendingCommands == state.pendingCommands)
+        #expect(migrated.comprehensionQueue == state.comprehensionQueue)
+        #expect(migrated.comprehensionSequence == 1)
+        #expect(migrated.registeredCapabilityFingerprint == "fingerprint-1")
+        #expect(migrated.comprehensionDeviceID == "device-1")
     }
 
     @Test func aPreRunsFormatTwoCachePreservesOnlyTheCommandLedger() throws {
