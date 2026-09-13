@@ -1721,3 +1721,16 @@ Revision 56 ("Retain Failed Writer Diagnostics"):
    the diagnostic gap without accepting partial edits or rerunning a provider.
    (User assignment; implementation decision for #1286;
    devlog 2026-09-10-1219-failed-writer-transcripts.md.)
+
+Revision 57 ("API Contract Digest on /health"):
+
+1. **`GET /health` carries a spec-derived contract digest for client/daemon
+   skew detection.** The daemon reports `contract_digest` (`sha256:` of
+   `api/openapi.yaml`'s exact bytes) beside the build `version`, compiled into
+   a daemon constant and a Swift client constant that cannot drift from the
+   spec. On a sync read that fails as reachable-but-failing, the client probes
+   `/health` and, when the reported digest differs from its own, reports a
+   contract-skew state instead of a generic sync failure. Whole-contract
+   detection; per-feature gating (#1266), version tolerance, and proactive
+   skew polling are non-goals. (User assignment; implementation decision for
+   #1265; devlog 2026-09-11-1012-contract-digest-skew.md.)
