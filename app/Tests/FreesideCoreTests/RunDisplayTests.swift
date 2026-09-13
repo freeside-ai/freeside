@@ -62,11 +62,11 @@ import Testing
             return RunDisplay.metaLine(run, now: now)
         }
 
-        #expect(try shown(30 * 60) == "freeside · #724 · last active 30m ago")
-        #expect(try shown(86_400 - 60) == "freeside · #724 · last active 23h ago")
+        #expect(try shown(30 * 60) == "freeside · \(RunFixtures.retryTaskName.text) · last active 30m ago")
+        #expect(try shown(86_400 - 60) == "freeside · \(RunFixtures.retryTaskName.text) · last active 23h ago")
         // The dated form's text is locale-dependent, so assert its shape.
         let dated = try shown(86_400)
-        #expect(dated.hasPrefix("freeside · #724 · last active "))
+        #expect(dated.hasPrefix("freeside · \(RunFixtures.retryTaskName.text) · last active "))
         #expect(!dated.hasSuffix(" ago"))
     }
 
@@ -85,7 +85,7 @@ import Testing
         var run = try MetaLineClock.run()
         run.last_activity_at = nil
 
-        #expect(RunDisplay.metaLine(run, now: now) == "freeside · #724")
+        #expect(RunDisplay.metaLine(run, now: now) == "freeside · \(RunFixtures.retryTaskName.text)")
         #expect(RunDisplay.exactActivityTimestamp(run) == nil)
     }
 

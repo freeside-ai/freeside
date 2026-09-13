@@ -57,7 +57,9 @@ import Testing
 
         let now = RunFixtures.screenshotInstant
         #expect(RunDisplay.title(active) == "Verification · Round 1")
-        #expect(RunDisplay.metaLine(active, now: now).hasPrefix("freeside · #724 · last active "))
+        #expect(
+            RunDisplay.metaLine(active, now: now).hasPrefix(
+                "freeside · \(RunFixtures.retryTaskName.text) · last active "))
         #expect(RunDisplay.metaLine(legacy, now: now) == "freeside")
         #expect(RunDisplay.secondaryLine(active) == .hold("Verification Findings"))
         #expect(RunDisplay.secondaryLine(ready) == .milestone("Publication Ready"))
