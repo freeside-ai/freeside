@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/migrations"
@@ -76,6 +77,100 @@ func TestProductionAttemptMigrationAppliesFromHead(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestProductionAttemptRevisionLinkGate refutes forged revision links at the
+// write boundary (#1083 D2): the revised run must exist as a terminal
+// implementation run in another campaign.
+func TestProductionAttemptRevisionLinkGate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	revisionAttempt := func(revises domain.RunID) domain.ProductionAttempt {
+		implRun := domain.RunID("run-rev")
+		command := "cmd-answer"
+		return domain.ProductionAttempt{
+			CampaignID: derivedInitialCampaignID(implRun), AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
+			SourceDigest: "sha256:source", PublicationDigest: "sha256:publication",
+			SpecificationRunID:  domain.SpecificationRunIDForImplementation(implRun),
+			ImplementationRunID: implRun,
+			RevisesRunID:        &revises, RevisionCommandID: &command,
+		}
+	}
+	t.Run("unknown revised run", func(t *testing.T) {
+		t.Parallel()
+		st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+		err := st.Write(ctx, func(tx *WriteTx) error {
+			return tx.PutProductionAttempt(ctx, revisionAttempt("run-missing"))
+		})
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("unknown revised run = %v, want ErrNotFound", err)
+		}
+	})
+	t.Run("revised run not terminal", func(t *testing.T) {
+		t.Parallel()
+		st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+		blocked := testInitialProductionAttempt() // implementation run "run-1", no terminal milestone
+		if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutProductionAttempt(ctx, blocked) }); err != nil {
+			t.Fatal(err)
+		}
+		err := st.Write(ctx, func(tx *WriteTx) error {
+			return tx.PutProductionAttempt(ctx, revisionAttempt(blocked.ImplementationRunID))
+		})
+		if !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Fatalf("non-terminal revised run = %v, want ErrParentKeyMismatch", err)
+		}
+	})
+}
+
+// TestRevisionSuccessorRequiresMarker proves the reverse superseded_by
+// projection fails closed against an inconsistent revision row: a committed
+// revision attempt whose specification run has no dispatch marker is not
+// projected as the blocked run's successor (#1083).
+func TestRevisionSuccessorRequiresMarker(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	blocked := testInitialProductionAttempt() // implementation run "run-1"
+	inv := domain.InvocationID("inv-1")
+	blockedStatus := domain.ObservedStatusBlocked
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		if err := tx.PutProductionAttempt(ctx, blocked); err != nil {
+			return err
+		}
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: blocked.ImplementationRunID, Kind: domain.MilestoneTerminalRecorded,
+			InvocationID: &inv, Terminal: &blockedStatus, RecordedAt: time.Unix(1, 0).UTC(),
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	implRun := domain.RunID("run-rev")
+	revises := blocked.ImplementationRunID
+	command := "cmd-answer"
+	revision := domain.ProductionAttempt{
+		CampaignID: derivedInitialCampaignID(implRun), AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
+		SourceDigest: "sha256:source", PublicationDigest: "sha256:publication",
+		SpecificationRunID:  domain.SpecificationRunIDForImplementation(implRun),
+		ImplementationRunID: implRun,
+		RevisesRunID:        &revises, RevisionCommandID: &command,
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutProductionAttempt(ctx, revision) }); err != nil {
+		t.Fatal(err)
+	}
+	var (
+		specRun   domain.RunID
+		projected bool
+	)
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		specRun, projected, err = tx.RevisionSpecificationRunFor(ctx, blocked.ImplementationRunID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if projected {
+		t.Fatalf("marker-less revision projected as successor %q", specRun)
 	}
 }
 
