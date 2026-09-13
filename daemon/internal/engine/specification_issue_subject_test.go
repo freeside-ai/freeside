@@ -22,6 +22,7 @@ import (
 // work-item Specification artifact whose digest is the run's SpecDigest. The
 // issue-subject arm of SubmitSpecificationRun adopts exactly this state.
 type issueSubjectReservation struct {
+	blobs              *signet.BlobStore
 	store              *store.Store
 	spec               SpecificationRunSpec
 	specificationRunID domain.RunID
@@ -56,7 +57,7 @@ func newIssueSubjectReservation(t *testing.T, stageAttempts ...domain.Attempt) i
 		{Key: specify.PolicyStageActiveTime, Value: "1m", Provenance: provenance},
 		{Key: specify.PolicyApprovalWait, Value: "1m", Provenance: provenance},
 		{Key: specify.PolicyResearchAllowlist, Value: "https://api.github.com", Provenance: provenance},
-		{Key: specify.PolicyResearchMaxBytes, Value: "1024", Provenance: provenance},
+		{Key: specify.PolicyResearchMaxBytes, Value: "131072", Provenance: provenance},
 		{Key: "paths", Value: "src/", Provenance: provenance},
 	})
 	if err != nil {
@@ -98,6 +99,12 @@ func newIssueSubjectReservation(t *testing.T, stageAttempts ...domain.Attempt) i
 	if err != nil {
 		t.Fatal(err)
 	}
+	taskSource := domain.SpecificationSource{
+		Kind: domain.SpecificationSourceIssueSubject,
+		IssueSubject: &domain.IssueSubjectRef{
+			Repo: "freeasinbird/freeside", RepositoryID: 42, IssueNumber: 7,
+		},
+	}
 	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
 		if err := tx.PutArtifact(t.Context(), workItem); err != nil {
 			return err
@@ -111,6 +118,9 @@ func newIssueSubjectReservation(t *testing.T, stageAttempts ...domain.Attempt) i
 			SpecificationRunID:  specificationRunID,
 			ImplementationRunID: implementationRunID,
 		}); err != nil {
+			return err
+		}
+		if err := tx.AssignTask(t.Context(), &reservedRun, &taskSource); err != nil {
 			return err
 		}
 		if err := tx.PutRun(t.Context(), reservedRun); err != nil {
@@ -135,15 +145,10 @@ func newIssueSubjectReservation(t *testing.T, stageAttempts ...domain.Attempt) i
 		},
 		PublicationDigest: "sha256:publication",
 		WorkUnit:          &specWorkUnit,
-		Source: domain.SpecificationSource{
-			Kind: domain.SpecificationSourceIssueSubject,
-			IssueSubject: &domain.IssueSubjectRef{
-				Repo: "freeasinbird/freeside", RepositoryID: 42, IssueNumber: 7,
-			},
-		},
+		Source:            taskSource,
 	}
 	return issueSubjectReservation{
-		store: st, spec: spec, specificationRunID: specificationRunID, workItemArtifact: workItem.ID,
+		store: st, blobs: blobs, spec: spec, specificationRunID: specificationRunID, workItemArtifact: workItem.ID,
 	}
 }
 

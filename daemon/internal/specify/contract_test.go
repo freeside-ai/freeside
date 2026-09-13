@@ -12,6 +12,24 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
+func TestSpecificationTitle(t *testing.T) {
+	out, err := specify.DecodeOutput([]byte(`{"specification":{"title":"  Bound requests  ","summary":"Summary","body":"# Bound requests","addressals":[]}}`))
+	if err != nil || out.Specification == nil || out.Specification.Title == nil || *out.Specification.Title != "Bound requests" {
+		t.Fatalf("title decode = %+v, %v", out, err)
+	}
+	for _, title := range []string{"", " untrimmed ", "two\nlines", "two\rlines", "\xff", strings.Repeat("x", 4<<10+1)} {
+		out.Specification.Title = &title
+		if err := out.Validate(); !errors.Is(err, specify.ErrInvalidOutput) {
+			t.Fatalf("invalid title accepted: %q, %v", title, err)
+		}
+	}
+	long := strings.Repeat("界", 61)
+	out.Specification.Title = &long
+	if _, err := specify.EncodeOutput(out); err != nil {
+		t.Fatalf("long title rejected the entire specification: %v", err)
+	}
+}
+
 func TestOutputGolden(t *testing.T) {
 	out := specify.Output{Specification: &specify.Specification{
 		Summary: "Add the missing lifecycle gate.",

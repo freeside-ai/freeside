@@ -10,6 +10,7 @@
       }
     ],
     "body": "# Objective\n\nRequire approval before implementation.",
-    "summary": "Add the missing lifecycle gate."
+    "summary": "Add the missing lifecycle gate.",
+    "title": null
   }
 }
