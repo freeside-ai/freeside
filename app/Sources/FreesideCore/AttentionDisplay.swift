@@ -36,6 +36,9 @@ enum AttentionDisplay {
         struct Segment: Equatable {
             let value: String
             let isIdentifier: Bool
+            /// An agent-proposed task name: the row labels it as the
+            /// agent's claim (plan §9), as the task row does.
+            var isAgentClaim = false
         }
 
         let project: Segment
@@ -489,14 +492,16 @@ enum AttentionDisplay {
         case .run(let run), .proposal_batch(let run):
             workUnit = .init(
                 value: nonempty(names?.task.text) ?? run.subject_id,
-                isIdentifier: names.map { $0.task.source == .identifier } ?? true
+                isIdentifier: names.map { $0.task.source == .identifier } ?? true,
+                isAgentClaim: names?.task.source == .agent
             )
         case .project, .system:
             workUnit = nil
         case .task(let task):
             workUnit = .init(
                 value: nonempty(names?.task.text) ?? task.task_id,
-                isIdentifier: names.map { $0.task.source == .identifier } ?? true)
+                isIdentifier: names.map { $0.task.source == .identifier } ?? true,
+                isAgentClaim: names?.task.source == .agent)
         }
         return .init(project: project, workUnit: workUnit)
     }
