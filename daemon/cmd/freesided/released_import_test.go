@@ -25,7 +25,7 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 	root := t.TempDir()
 	work, policyFile, publicationFile := writeSubmissionInputs(t, root)
 	cfg := submitCommandConfig{
-		DBPath: filepath.Join(root, "freeside.db"), WorkItemPath: work,
+		DBPath: filepath.Join(root, "freeside.db"), TaskPath: work,
 		PolicyPath: policyFile, PublicationPath: publicationFile, ProjectID: "released-import",
 	}
 	submitted, err := runSubmitCommand(ctx, cfg)

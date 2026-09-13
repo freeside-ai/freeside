@@ -26,7 +26,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-// freesided submit (plan §5.12, §10): registers the source work item and
+// freesided submit (plan §5.12, §10): registers the task source and
 // resolved policy as digest-addressed artifacts, creates its pre-approval
 // specification run, and reserves the future implementation identity.
 // Registration only: execution preconditions stay with the dispatch gates,
@@ -34,7 +34,7 @@ import (
 
 // maxSubmissionFileBytes bounds one submitted input file. Specifications and
 // policies are prose and configuration; a larger file is far more likely a
-// mistaken path than a real work item.
+// mistaken path than a real task.
 const maxSubmissionFileBytes = 4 << 20
 
 const submitResultHelp = `
@@ -76,7 +76,7 @@ func runSubmitMain(args []string) {
 	flags.SetOutput(os.Stderr)
 	configureSubmitUsage(flags)
 	dbPath := flags.String("db", "", "SQLite database path (required)")
-	workItemPath := flags.String("work-item", "", "source work-item file (required)")
+	taskPath := flags.String("task", "", "task source file (required)")
 	policyPath := flags.String("policy", "", "resolved per-run policy-key JSON array (required)")
 	publicationPath := flags.String("publication", "", "reviewer-facing pull-request metadata JSON file (required)")
 	compositionPath := flags.String("composition-manifest", "", "passing production-composition manifest bound to the submitted inputs")
@@ -90,7 +90,7 @@ func runSubmitMain(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	result, err := runSubmitCommand(ctx, submitCommandConfig{
-		DBPath: *dbPath, WorkItemPath: *workItemPath, PolicyPath: *policyPath,
+		DBPath: *dbPath, TaskPath: *taskPath, PolicyPath: *policyPath,
 		PublicationPath: *publicationPath, WorkUnitPath: *workUnitPath,
 		CompositionPath:    *compositionPath,
 		RequireComposition: *requireComposition,
@@ -108,7 +108,7 @@ func runSubmitMain(args []string) {
 
 type submitCommandConfig struct {
 	DBPath             string
-	WorkItemPath       string
+	TaskPath           string
 	PolicyPath         string
 	PublicationPath    string
 	WorkUnitPath       string
@@ -195,8 +195,8 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, errors.New("submit: --run-id cannot override production composition identity")
 	case cfg.DBPath == "":
 		return submitResult{}, errors.New("submit: -db is required")
-	case cfg.WorkItemPath == "":
-		return submitResult{}, errors.New("submit: --work-item is required")
+	case cfg.TaskPath == "":
+		return submitResult{}, errors.New("submit: --task is required")
 	case cfg.PolicyPath == "":
 		return submitResult{}, errors.New("submit: --policy is required")
 	case cfg.PublicationPath == "":
@@ -207,7 +207,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, errors.New("submit: --project is required")
 	}
 
-	spec, err := readSubmissionFile(cfg.WorkItemPath)
+	spec, err := readSubmissionFile(cfg.TaskPath)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: read specification: %w", err)
 	}
@@ -305,7 +305,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		// resubmission converges; shared specification bytes in another
 		// project, under another policy, with different reviewer-facing
 		// metadata, or under a different work-unit declaration remain
-		// distinct work items. An undeclared submission keeps the
+		// distinct implementation runs. An undeclared submission keeps the
 		// pre-capture derivation byte-for-byte.
 		implementationRunID = defaultSubmissionRunID(
 			cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest, workUnitDigest)
@@ -338,7 +338,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	// The declared-path boundary is what the runner enforces, and it is
 	// refused at start when it is absent or not an explicit allowlist. Refuse
 	// it here instead: submission is the operator's door and can still say
-	// no, while a run durable without one is a work item the daemon holds
+	// no, while a run durable without one is a task the daemon holds
 	// with no configuration change that could ever release it.
 	if err := submittedPathBoundary(resolvedPolicy); err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
@@ -354,7 +354,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, fmt.Errorf("submit: open store: %w", err)
 	}
 	defer func() { _ = st.Close() }()
-	// A database written before the rename holds this work item's intake
+	// A database written before the rename holds this task's intake
 	// state under the legacy specification identity; converge on it instead
 	// of minting a second specification run for the same implementation.
 	if resolved, err := engine.ResolveSpecificationRunID(ctx, st, implementationRunID); err != nil {

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-**Freeside** is an agent control plane: a local, durable workflow controller that grants agents the autonomy to turn work items into evidence-backed pull requests and interrupts a human only when judgment is required. The spec, architecture, and roadmap live in [`docs/plan.md`](docs/plan.md); read it first and argue changes against it. This file holds the conventions that apply to every session: decision notes, branch, PR, and commit discipline, and the monorepo's scope rules.
+**Freeside** is an agent control plane: a local, durable workflow controller that grants agents the autonomy to turn tasks into evidence-backed pull requests and interrupts a human only when judgment is required. The spec, architecture, and roadmap live in [`docs/plan.md`](docs/plan.md); read it first and argue changes against it. This file holds the conventions that apply to every session: decision notes, branch, PR, and commit discipline, and the monorepo's scope rules.
 
 Freeside is a monorepo. A component directory holds only a `README.md` stating its purpose until the roadmap phase that fills it (`docs/plan.md` §11 and the README name the phase). Do not scaffold a component ahead of its phase. The API schema is provisional (plan §11 Wave 0; decision record in `docs/history/decisions.md`).
 

@@ -5,9 +5,9 @@
 #        run-real-work.sh --resume-session <completed-session-directory>
 # Resume keeps the existing run and starts no submission or client command.
 #
-# Submits one source work item through `freesided submit`, runs the daemon with
-# the production Claude driver, and pauses at the human specification-approval
-# gate. After an operator approves the spec in a Freeside client, the daemon
+# Submits one task's source specification through `freesided submit`, runs
+# the daemon with the production Claude driver, and pauses at the human
+# specification-approval gate. After approval in a Freeside client, the daemon
 # runs implementation to a ready-for-review outcome and the script verifies
 # the durable export, networkless verification evidence, publication outcome,
 # and exact published head with the real-run harness test. A durable
@@ -121,7 +121,7 @@
 # `freesided submit -work-unit` captures (completion criterion, bound issue,
 # dependencies). It is operator input like the other three: its canonical
 # digest joins the run-identity derivation, so a declared submission is a
-# distinct work item from an undeclared submission of the same spec,
+# distinct implementation run from an undeclared submission of the same spec,
 # policy, and publication bytes.
 set -euo pipefail
 umask 077
@@ -539,7 +539,7 @@ preflight_args=(
 	-publication-state-dir "$FREESIDE_REAL_RUN_APP_STATE"
 	-publication-credentials-dir "$FREESIDE_REAL_RUN_APP_CREDS"
 	-allowed-paths "$FREESIDE_REAL_RUN_ALLOWED_PATHS"
-	-work-item "$spec_file"
+	-task "$spec_file"
 	-policy "$policy_file"
 	-publication "$publication_file"
 	-project "$FREESIDE_REAL_RUN_PROJECT"
@@ -667,12 +667,12 @@ fi
 if [[ -n "$retained_session" ]]; then
   echo "reattaching retained implementation run=$implementation_run_id; no submission or client command" >&2
 else
-echo "submitting the work item" >&2
+echo "submitting the task" >&2
 require_live_rig
 submit_log="$workdir/submit.json"
 submit_args=(
   -db "$db_path"
-  --work-item "$spec_file"
+  --task "$spec_file"
   --policy "$policy_file"
   --publication "$publication_file"
   --project "$FREESIDE_REAL_RUN_PROJECT"
