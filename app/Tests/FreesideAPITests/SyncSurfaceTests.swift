@@ -511,7 +511,7 @@ import Testing
         #expect(run["created_at"] is NSNull)
         #expect(run.keys.contains("last_activity_at"))
         #expect(run["last_activity_at"] is NSNull)
-        for key in ["campaign_id", "attempt_number", "attempt_reason", "parent_run_id"] {
+        for key in ["campaign_id", "attempt_number", "attempt_reason", "parent_run_id", "revises_run_id"] {
             #expect(run.keys.contains(key))
             #expect(run[key] is NSNull)
         }
