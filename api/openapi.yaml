@@ -64,6 +64,8 @@ tags:
     description: Attention items and their deliveries, read surface (plan §4).
   - name: runs
     description: Run, stage, and attempt state, read surface.
+  - name: tasks
+    description: Task history across campaigns and runs, read surface.
   - name: schedules
     description: >
       Durable scheduler state, read surface (plan §5.16): the synchronized
@@ -355,6 +357,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RunSnapshot"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /tasks/{task_id}/timeline:
+    get:
+      operationId: getTaskTimeline
+      tags: [tasks]
+      summary: Get one task timeline
+      description: >
+        Returns recorded task events and campaign and run sections, newest
+        first at every level, from one store read. The current name is a
+        source-labeled claim in the header. A partial fetch; it never marks
+        the whole cache current (plan §5.14).
+      parameters:
+        - $ref: "#/components/parameters/TaskID"
+      responses:
+        "200":
+          description: The task timeline snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskTimeline"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -849,6 +873,14 @@ components:
       schema:
         type: string
         minLength: 1
+    TaskID:
+      name: task_id
+      in: path
+      required: true
+      description: The task's identifier.
+      schema:
+        type: string
+        minLength: 1
     RunID:
       name: run_id
       in: path
@@ -1245,6 +1277,207 @@ components:
           $ref: "#/components/schemas/EntityVersion"
         run:
           $ref: "#/components/schemas/Run"
+
+    TaskTimeline:
+      type: object
+      description: >
+        Recorded task history computed under one server revision. The current
+        name appears once as a source-labeled claim; no name history is inferred.
+        Invocation detail, review facts, and cost remain on the run timeline.
+      additionalProperties: false
+      required: [as_of_revision, as_of, task_id, project_id, name, events, sections]
+      properties:
+        as_of_revision:
+          $ref: "#/components/schemas/AsOfRevision"
+        as_of:
+          type: string
+          format: date-time
+          description: The daemon-clock instant at which this timeline was projected.
+        task_id:
+          type: string
+          minLength: 1
+        project_id:
+          type: string
+          minLength: 1
+        name:
+          $ref: "#/components/schemas/DisplayName"
+        events:
+          type: array
+          description: Task-level events, newest first.
+          items:
+            $ref: "#/components/schemas/TaskEvent"
+        sections:
+          type: array
+          description: >
+            Campaign sections ordered by allocation instant, newest first.
+            Legacy runs share a null-campaign section ordered by its newest
+            submission; runs without a submission sort last. Equal instants
+            are ordered by campaign identifier descending, with null last.
+          items:
+            $ref: "#/components/schemas/TaskTimelineSection"
+      example:
+        as_of_revision: 42
+        as_of: "2026-09-12T12:00:00Z"
+        task_id: task-1
+        project_id: project-1
+        name: {text: Improve navigation, source: specification}
+        events:
+          - kind: task_created
+            recorded_at: "2026-09-12T10:00:00Z"
+            campaign_id: null
+            run_id: null
+            approved_spec_digest: null
+            specification_run_id: null
+            pr_number: null
+            merge_commit_sha: null
+        sections: []
+
+    TaskTimelineSection:
+      type: object
+      description: A campaign's recorded events and runs, or the legacy run group.
+      additionalProperties: false
+      required: [campaign_id, events, runs]
+      properties:
+        campaign_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: Null groups legacy runs without a campaign.
+        events:
+          type: array
+          description: Campaign-level events, newest first.
+          items:
+            $ref: "#/components/schemas/TaskEvent"
+        runs:
+          type: array
+          description: >
+            Run sections ordered by submission instant, newest first, with
+            missing legacy instants last and equal instants by run id descending.
+          items:
+            $ref: "#/components/schemas/TaskTimelineRun"
+      example: {campaign_id: null, events: [], runs: []}
+
+    TaskTimelineRun:
+      type: object
+      description: >
+        A run header and its daemon observations. The run id opens the full
+        run timeline. Lineage and role are null for legacy runs without a campaign.
+      additionalProperties: false
+      required: [run_id, role, attempt_number, attempt_reason, parent_run_id, superseded_by, milestones, hold, events]
+      properties:
+        run_id:
+          type: string
+          minLength: 1
+        role:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskRunRole"
+        attempt_number:
+          type: integer
+          minimum: 1
+          nullable: true
+        attempt_reason:
+          type: string
+          minLength: 1
+          nullable: true
+        parent_run_id:
+          type: string
+          minLength: 1
+          nullable: true
+        superseded_by:
+          type: string
+          minLength: 1
+          nullable: true
+        milestones:
+          type: array
+          description: Run milestones, newest first (the run timeline uses oldest first).
+          items:
+            $ref: "#/components/schemas/RunMilestone"
+        hold:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RunHold"
+        events:
+          type: array
+          description: Run-level events, newest first.
+          items:
+            $ref: "#/components/schemas/TaskEvent"
+      example:
+        run_id: run-1
+        role: null
+        attempt_number: null
+        attempt_reason: null
+        parent_run_id: null
+        superseded_by: null
+        milestones: []
+        hold: null
+        events: []
+
+    TaskEvent:
+      type: object
+      description: >
+        A recorded fact and its instant, with kind-scoped details. task_created
+        has no details. campaign_allocated requires campaign_id and
+        specification_run_id. specification_approved also requires run_id
+        (the initial implementation) and approved_spec_digest; its instant is
+        that run's submission, committed with approval. Retries reuse approval
+        and emit no new approval event. pr_opened requires run_id and pr_number
+        and uses the daemon's PR binding instant. pr_merged also requires
+        merge_commit_sha and uses the re-gated completion record's instant.
+        All other details are null. Events are observations, never authority.
+      additionalProperties: false
+      required: [kind, recorded_at, campaign_id, run_id, approved_spec_digest, specification_run_id, pr_number, merge_commit_sha]
+      properties:
+        kind:
+          $ref: "#/components/schemas/TaskEventKind"
+        recorded_at:
+          type: string
+          format: date-time
+        campaign_id:
+          type: string
+          minLength: 1
+          nullable: true
+        run_id:
+          type: string
+          minLength: 1
+          nullable: true
+        approved_spec_digest:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Digest"
+        specification_run_id:
+          type: string
+          minLength: 1
+          nullable: true
+        pr_number:
+          type: integer
+          minimum: 1
+          nullable: true
+        merge_commit_sha:
+          type: string
+          minLength: 1
+          nullable: true
+      example:
+        kind: task_created
+        recorded_at: "2026-09-12T10:00:00Z"
+        campaign_id: null
+        run_id: null
+        approved_spec_digest: null
+        specification_run_id: null
+        pr_number: null
+        merge_commit_sha: null
+
+    TaskEventKind:
+      type: string
+      description: Closed vocabulary of recorded task history.
+      enum: [task_created, campaign_allocated, specification_approved, pr_opened, pr_merged]
+      example: task_created
+
+    TaskRunRole:
+      type: string
+      description: The run's role in its production attempt.
+      enum: [specification, implementation]
+      example: specification
 
     RunTimeline:
       type: object
