@@ -215,7 +215,8 @@ func (tx *WriteTx) updateTask(ctx context.Context, task domain.Task) error {
 }
 
 // SetTaskName applies the task-name source order. Approval can replace an
-// identifier or agent name once; an operator or approved name is permanent.
+// identifier or agent name; an operator or approved name is permanent. The
+// engine limits agent refinement to the task's first accepted specification.
 func (tx *WriteTx) SetTaskName(ctx context.Context, id domain.TaskID, name domain.DisplayName) error {
 	task, err := tx.GetTask(ctx, id)
 	if err != nil {
@@ -223,9 +224,6 @@ func (tx *WriteTx) SetTaskName(ctx context.Context, id domain.TaskID, name domai
 	}
 	if task.Name == name || task.Name.Source == domain.DisplayNameSourceOperator || task.Name.Source == domain.DisplayNameSourceSpecification {
 		return nil
-	}
-	if task.Name.Source == domain.DisplayNameSourceAgent && name.Source != domain.DisplayNameSourceSpecification {
-		return domain.ErrImmutableTransition
 	}
 	if name.Source == domain.DisplayNameSourceIdentifier {
 		return domain.ErrImmutableTransition

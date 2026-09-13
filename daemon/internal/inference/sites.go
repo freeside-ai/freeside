@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -18,7 +19,85 @@ const (
 	ClassifierSiteID          = "finding_classifier"
 	DiagnosticSiteID          = "execution_diagnostic"
 	AttentionDiscussionSiteID = "attention_discussion"
+	TaskNamerSiteID           = "task_namer"
 )
+
+type taskNamerOutput struct {
+	Name string `json:"name"`
+}
+
+// TaskNamerSite produces a display claim, never an input to workflow policy.
+func TaskNamerSite(budget Budget) Site {
+	return Site{
+		ID: TaskNamerSiteID, Authority: AuthorityExplain,
+		Fields: []FieldPolicy{
+			{Name: "source_kind", Sensitivity: SensitivityOperational},
+			{Name: "repository", Sensitivity: SensitivityOperational},
+			{Name: "issue_number", Sensitivity: SensitivityOperational},
+			{Name: "source_text", Sensitivity: SensitivityRepository},
+			{Name: "issue_title", Sensitivity: SensitivityRepository},
+			{Name: "issue_body", Sensitivity: SensitivityRepository},
+		},
+		FailSafe: `{"name":""}`, Retention: 14 * 24 * time.Hour, Timeout: 30 * time.Second,
+		MaxInputBytes: 64 << 10, MaxOutputBytes: 1 << 10, MaxComputeUnits: 10_000,
+		Budget: budget, AuditEvery: 10,
+		ValidateOutput: func(data []byte) error {
+			var output taskNamerOutput
+			if err := decodeStrictObject(data, &output, 1<<10); err != nil {
+				return err
+			}
+			if output.Name == "" || output.Name != strings.TrimSpace(output.Name) ||
+				utf8.RuneCountInString(output.Name) > 60 || strings.ContainsAny(output.Name, "\r\n") ||
+				importer.ContainsSecret([]byte(output.Name)) {
+				return errors.New("invalid task name claim")
+			}
+			return nil
+		},
+	}
+}
+
+// TaskNamerInput carries source evidence and daemon-owned budget attribution.
+// Unused source fields remain empty so every call supplies the full allowlist.
+type TaskNamerInput struct {
+	Project     string
+	RootLineage string
+	SourceKind  string
+	Repository  string
+	IssueNumber string
+	SourceText  string
+	IssueTitle  string
+	IssueBody   string
+}
+
+// NameTask retains the producer-labeled advisory claim before returning a name
+// for display. A fallback leaves the task's identifier name in place.
+func (c *Client) NameTask(ctx context.Context, input TaskNamerInput) (string, bool, error) {
+	result, err := c.Call(ctx, TaskNamerSiteID, input.Project, input.RootLineage, map[string]InputField{
+		"source_kind":  {Value: input.SourceKind, Sensitivity: SensitivityOperational},
+		"repository":   {Value: input.Repository, Sensitivity: SensitivityOperational},
+		"issue_number": {Value: input.IssueNumber, Sensitivity: SensitivityOperational},
+		"source_text":  {Value: input.SourceText, Sensitivity: SensitivityRepository},
+		"issue_title":  {Value: input.IssueTitle, Sensitivity: SensitivityRepository},
+		"issue_body":   {Value: input.IssueBody, Sensitivity: SensitivityRepository},
+	})
+	if err != nil || result.Fallback {
+		return "", result.Fallback, err
+	}
+	var output taskNamerOutput
+	if err := json.Unmarshal(result.Output, &output); err != nil {
+		return "", false, err
+	}
+	created := c.now().UTC()
+	id := contentaddr.Sum([]byte("task_name_claim\x00" + TaskNamerSiteID + "\x00" + result.InputDigest + "\x00" + created.Format(time.RFC3339Nano)))
+	if err := c.advisory.Append(ctx, advisory.Entry{
+		ID: id, RootLineage: input.RootLineage, Site: TaskNamerSiteID,
+		Producer: result.Producer, Kind: "task_name_claim", InputDigest: result.InputDigest,
+		Body: output.Name, CreatedAt: created, RetainUntil: created.Add(c.sites[TaskNamerSiteID].Retention),
+	}); err != nil {
+		return "", false, err
+	}
+	return output.Name, false, nil
+}
 
 // Ordinal is the landed materiality and confidence vocabulary (§7).
 type Ordinal string

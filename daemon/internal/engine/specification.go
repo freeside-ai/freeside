@@ -152,6 +152,8 @@ type SpecificationRunSpec struct {
 	WorkUnit            *domain.WorkUnitDeclarationInput
 	CampaignID          domain.CampaignID
 	AttemptNumber       int
+	// SourceBytes is the submitted document, used only for its operator heading.
+	SourceBytes []byte
 	// Source optionally names what this run specifies from as a typed union
 	// (plan §5.12, #720). SubmitSpecificationRun executes only the spec_artifact
 	// arm and requires it to agree with SourceArtifactID; the issue_subject arm
@@ -655,6 +657,11 @@ func SubmitSpecificationRun(ctx context.Context, st *store.Store, spec Specifica
 		}
 		if err := tx.AssignTask(ctx, &want, &sourceRef); err != nil {
 			return err
+		}
+		if title, failure := taskHeadingName(spec.SourceBytes); failure == "" {
+			if err := tx.SetTaskName(ctx, want.TaskID, domain.DisplayName{Text: title, Source: domain.DisplayNameSourceOperator}); err != nil {
+				return err
+			}
 		}
 		if err := tx.PutRun(ctx, want); err != nil {
 			return err
@@ -2652,6 +2659,12 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 				return err
 			}
 		}
+		if title := specification.Title; title != nil && request.PriorSpecArtifactID == nil &&
+			utf8.RuneCountInString(*title) <= 60 && !importer.ContainsSecret([]byte(*title)) {
+			if err := tx.SetTaskName(ctx, run.TaskID, domain.DisplayName{Text: *title, Source: domain.DisplayNameSourceAgent}); err != nil && !errors.Is(err, domain.ErrImmutableTransition) {
+				return err
+			}
+		}
 		return nil
 	})
 	if errors.Is(err, errReplay) {
@@ -3477,7 +3490,7 @@ func (e *Engine) startApprovedImplementation(ctx context.Context, request specif
 		if err != nil {
 			return false, err
 		}
-		if title, failure := fallbackSpecificationTitle([]byte(body)); failure == "" {
+		if title, failure := taskHeadingName([]byte(body)); failure == "" {
 			if err := e.store.Write(ctx, func(tx *store.WriteTx) error {
 				verified, err := verifySpecificationTerminal(ctx, &tx.ReadTx, request)
 				if err != nil {

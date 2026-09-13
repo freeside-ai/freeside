@@ -217,6 +217,14 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 	}
 
 	started := 0
+	var namingRuns []domain.Run
+	defer func() {
+		// Dispatch all starts before queuing advisory calls. A later hold or error must
+		// not skip naming for tasks whose dispatch already became durable.
+		for _, run := range namingRuns {
+			e.enqueueTaskName(run)
+		}
+	}()
 	for _, entry := range pending {
 		request, binding, err := e.loadInvocationRequest(ctx, entry)
 		if err != nil {
@@ -333,6 +341,9 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		}
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)
+		if err == nil && !hold {
+			namingRuns = append(namingRuns, binding.run)
+		}
 		if err != nil {
 			if reason, ok := dispatchHoldReason(err); ok {
 				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason); obsErr != nil {
@@ -563,6 +574,9 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		}
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)
+		if err == nil && !hold {
+			namingRuns = append(namingRuns, binding.run)
+		}
 		if err != nil {
 			if errors.Is(err, ErrProductionInputUndeliverable) {
 				if failureErr := e.recordProductionDeliveryRefusal(

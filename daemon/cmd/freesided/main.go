@@ -782,6 +782,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			Sites: []inference.Site{
 				inference.ClassifierSite(judgmentBudget), inference.AdjudicatorSite(judgmentBudget),
 				inference.DiagnosticSite(judgmentBudget), inference.DiscussionSite(judgmentBudget),
+				inference.TaskNamerSite(judgmentBudget),
 			},
 			Advisory: advisoryWriter, Now: func() time.Time { return time.Now().UTC() },
 		})

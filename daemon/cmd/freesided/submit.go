@@ -417,7 +417,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 
 	submitted, err := engine.SubmitSpecificationRun(ctx, st, engine.SpecificationRunSpec{
 		SpecificationRunID: specificationRunID, ImplementationRunID: implementationRunID,
-		ProjectID: cfg.ProjectID, SourceArtifactID: specArtifact.ID,
+		ProjectID: cfg.ProjectID, SourceArtifactID: specArtifact.ID, SourceBytes: spec.body,
 		PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: resolvedPolicy, Publication: publication,
 		PublicationDigest: publicationDigest,
 		WorkUnit:          workUnit, CampaignID: campaignID, AttemptNumber: 1,

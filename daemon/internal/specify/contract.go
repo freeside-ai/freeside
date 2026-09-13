@@ -66,6 +66,7 @@ type legacyOutput struct {
 
 // Specification is the terminal specifier output.
 type Specification struct {
+	Title      *string     `json:"title"`
 	Summary    string      `json:"summary"`
 	Body       string      `json:"body"`
 	Addressals []Addressal `json:"addressals"`
@@ -160,6 +161,10 @@ func (o *Output) trimProse() {
 		return
 	}
 	o.Specification.Summary = strings.TrimSpace(o.Specification.Summary)
+	if o.Specification.Title != nil {
+		title := strings.TrimSpace(*o.Specification.Title)
+		o.Specification.Title = &title
+	}
 	o.Specification.Body = strings.TrimSpace(o.Specification.Body)
 	for i := range o.Specification.Addressals {
 		o.Specification.Addressals[i].Response = strings.TrimSpace(o.Specification.Addressals[i].Response)
@@ -281,6 +286,10 @@ func (r FetchRequest) validate() error {
 }
 
 func (s Specification) validate() error {
+	if s.Title != nil && (*s.Title == "" || *s.Title != strings.TrimSpace(*s.Title) ||
+		strings.ContainsAny(*s.Title, "\r\n") || !utf8.ValidString(*s.Title) || len(*s.Title) > 4<<10) {
+		return fmt.Errorf("%w: specification title must be single-line trimmed UTF-8 within 4 KiB", ErrInvalidOutput)
+	}
 	if s.Summary == "" || len(s.Summary) > MaxSummaryBytes || s.Summary != strings.TrimSpace(s.Summary) ||
 		s.Body == "" || s.Body != strings.TrimSpace(s.Body) ||
 		!utf8.ValidString(s.Summary) || !utf8.ValidString(s.Body) {
