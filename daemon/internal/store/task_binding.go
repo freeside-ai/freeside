@@ -73,6 +73,30 @@ func (tx *ReadTx) campaignTask(ctx context.Context, run domain.Run) (domain.Task
 		}
 		expected = taskID
 	}
+	// A revision campaign's runs share the task of the blocked run they revise
+	// but not its campaign (#1083 D2), so the same-campaign check above cannot
+	// derive the task from it. Derive it from the revised run directly instead,
+	// binding both the new specification and implementation runs to the task the
+	// blocked run carried.
+	if attempt.RevisesRunID != nil {
+		var projectID domain.ProjectID
+		var taskID domain.TaskID
+		var body []byte
+		if err := tx.tx.QueryRowContext(ctx, `SELECT project_id, task_id, body FROM runs WHERE id = ?`, *attempt.RevisesRunID).Scan(&projectID, &taskID, &body); err != nil {
+			return "", "", notFoundOr(err)
+		}
+		revised, err := decode[domain.Run](body)
+		if err != nil {
+			return "", "", err
+		}
+		if revised.ID != *attempt.RevisesRunID || revised.ProjectID != projectID || revised.TaskID != taskID || taskID == "" {
+			return "", "", errRowInconsistent
+		}
+		if projectID != run.ProjectID || (expected != "" && expected != taskID) {
+			return "", "", domain.ErrParentKeyMismatch
+		}
+		expected = taskID
+	}
 	return expected, attempt.SourceDigest, nil
 }
 
