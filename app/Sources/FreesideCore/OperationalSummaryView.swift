@@ -20,12 +20,12 @@ struct OperationalSummary: Equatable {
     /// The item itself, so the row can show the same time text its inbox
     /// row does: a deadline first, else the wait from the row's origin.
     let waitingLongestItem: Components.Schemas.AttentionItem?
-    let activeRunCount: Int
+    let activeTaskCount: Int
     let daemonState: DaemonState
 
     init(
         openSnapshots: some Sequence<Components.Schemas.AttentionItemSnapshot>,
-        runs: some Sequence<Components.Schemas.RunSnapshot>,
+        tasks: some Sequence<Components.Schemas.TaskSnapshot>,
         freshness: InboxStore.Freshness
     ) {
         let openItems = openSnapshots.map(\.item)
@@ -55,7 +55,7 @@ struct OperationalSummary: Equatable {
         waitingLongestID = waitingLongest?.id
         waitingLongestTitle = waitingLongest.map(AttentionDisplay.title)
         waitingLongestItem = waitingLongest
-        activeRunCount = runs.count { $0.run.lifecycle == .active }
+        activeTaskCount = tasks.count { TaskDisplay.isActive($0.task) }
         daemonState =
             switch freshness {
             case .unvalidated: .checking
@@ -88,12 +88,12 @@ struct OperationalSummary: Equatable {
 }
 
 /// The macOS detail column while nothing is selected. Every row that
-/// names something opens it: an item in the detail column, the run count
-/// on the Runs screen. A row with nothing to name stays a plain fact.
+/// names something opens it: an item in the detail column, the task count
+/// on the Tasks screen. A row with nothing to name stays a plain fact.
 struct OperationalSummaryView: View {
     let summary: OperationalSummary
     let onSelectItem: (String) -> Void
-    let onShowRuns: () -> Void
+    let onShowTasks: () -> Void
     /// Nil samples the clock each minute, as the inbox row does; a fixed
     /// value keeps the waiting-longest duration stable for screenshots.
     var now: Date? = nil
@@ -131,7 +131,7 @@ struct OperationalSummaryView: View {
                     "Waiting longest",
                     value: summary.waitingLongestValue(now: now),
                     itemID: summary.waitingLongestID)
-                navigableRow("Active runs", value: "\(summary.activeRunCount)", action: onShowRuns)
+                navigableRow("Active tasks", value: "\(summary.activeTaskCount)", action: onShowTasks)
                 summaryRow(
                     "Daemon", value: summary.daemonState.rawValue,
                     valueColor: daemonStateColor)

@@ -969,22 +969,28 @@
             guard let activeRun = runs.first(where: { $0.run.id == RunFixtures.activeRunID }) else {
                 throw ScreenshotError.missingActiveRun
             }
+            let tasks = TaskFixtures.defaultTasks()
+            guard let retryTask = tasks.first(where: { $0.task.id == TaskFixtures.retryTaskID }) else {
+                throw ScreenshotError.missingRetryTask
+            }
             surfaces.append(
                 Surface(
-                    name: "runs-list",
+                    name: "tasks-list",
                     view: AnyView(
-                        RunsListView(
+                        TasksListView(
+                            tasks: tasks,
                             runs: runs,
                             schedules: schedules,
-                            selection: .constant(activeRun.run.id)
+                            selection: .constant(retryTask.task.id)
                         ).screenshotContent(now: RunFixtures.screenshotInstant)
                     )))
-            for scope in [RunListFilter.Scope.finished, .all] {
+            for scope in [TaskListFilter.Scope.finished, .all] {
                 surfaces.append(
                     Surface(
-                        name: "runs-list-\(scope.rawValue)",
+                        name: "tasks-list-\(scope.rawValue)",
                         view: AnyView(
-                            RunsListView(
+                            TasksListView(
+                                tasks: tasks,
                                 runs: runs,
                                 schedules: schedules,
                                 selection: .constant(nil),
@@ -992,26 +998,26 @@
                             ).screenshotContent(now: RunFixtures.screenshotInstant)
                         )))
             }
-            let handoffRows =
-                [RunFixtures.handedOffSpecificationRun()]
-                + runs.filter { $0.run.id == "run-freeside-656" }
+            // The three name sources side by side: an operator name, an
+            // agent-proposed name with its claim mark, and the identifier
+            // fallback, in every scheme and contrast.
+            let namedRows = ["task-campaign-freeside-ready", TaskFixtures.retryTaskID, TaskFixtures.legacyTaskID]
+                .compactMap { id in tasks.first { $0.task.id == id } }
             for colorScheme in [ColorScheme.light, .dark] {
                 for contrast in [LaunchInputs.Contrast.standard, .increased] {
                     surfaces.append(
                         Surface(
-                            name: "runs-handoff-\(colorScheme)-\(contrast)",
+                            name: "tasks-names-\(colorScheme)-\(contrast)",
                             width: 640,
                             colorScheme: colorScheme,
                             contrast: contrast,
                             view: AnyView(
                                 VStack(spacing: 12) {
-                                    ForEach(handoffRows, id: \.run.id) { snapshot in
-                                        RunRowView(
-                                            run: snapshot.run,
-                                            identityLine: RunDisplay.identityLine(snapshot.run, runs: runs),
-                                            secondaryLine: RunDisplay.secondaryLine(snapshot.run, runs: runs),
-                                            spendLine: nil,
-                                            schedules: [],
+                                    ForEach(namedRows, id: \.task.id) { snapshot in
+                                        TaskRowView(
+                                            task: snapshot.task,
+                                            position: TaskDisplay.position(snapshot.task, runs: runs),
+                                            schedules: TaskDisplay.armedSchedules(for: snapshot.task, in: schedules),
                                             isSelected: false,
                                             now: RunFixtures.screenshotInstant)
                                     }
@@ -1023,22 +1029,17 @@
             for colorScheme in [ColorScheme.light, .dark] {
                 surfaces.append(
                     Surface(
-                        name: "runs-selected-differentiate-without-color"
+                        name: "tasks-selected-differentiate-without-color"
                             + (colorScheme == .dark ? "-dark" : ""),
                         width: 560,
                         colorScheme: colorScheme,
                         view: AnyView(
                             VStack(spacing: 8) {
                                 ForEach([false, true], id: \.self) { isSelected in
-                                    RunRowView(
-                                        run: activeRun.run,
-                                        identityLine: RunDisplay.identityLine(activeRun.run, runs: runs),
-                                        secondaryLine: RunDisplay.secondaryLine(activeRun.run, runs: runs),
-                                        spendLine: RunDisplay.spendLine(activeRun.run),
-                                        schedules: schedules.filter {
-                                            $0.schedule.run_id == activeRun.run.id
-                                                && $0.schedule.status == .armed
-                                        },
+                                    TaskRowView(
+                                        task: retryTask.task,
+                                        position: TaskDisplay.position(retryTask.task, runs: runs),
+                                        schedules: TaskDisplay.armedSchedules(for: retryTask.task, in: schedules),
                                         isSelected: isSelected,
                                         now: RunFixtures.screenshotInstant,
                                         differentiateWithoutColorOverride: true)
@@ -1049,22 +1050,39 @@
             }
             surfaces.append(
                 Surface(
-                    name: "runs-row-sidebar",
+                    name: "tasks-row-sidebar",
                     width: 320,
                     view: AnyView(
-                        RunRowView(
-                            run: activeRun.run,
-                            identityLine: RunDisplay.identityLine(activeRun.run, runs: runs),
-                            secondaryLine: RunDisplay.secondaryLine(activeRun.run, runs: runs),
-                            spendLine: RunDisplay.spendLine(activeRun.run),
-                            schedules: schedules.filter {
-                                $0.schedule.run_id == activeRun.run.id
-                                    && $0.schedule.status == .armed
-                            },
+                        TaskRowView(
+                            task: retryTask.task,
+                            position: TaskDisplay.position(retryTask.task, runs: runs),
+                            schedules: TaskDisplay.armedSchedules(for: retryTask.task, in: schedules),
                             isSelected: true,
                             now: RunFixtures.screenshotInstant
                         )
                         .padding()
+                    )))
+            guard
+                let retryTimeline = TaskFixtures.defaultTimelines().first(where: {
+                    $0.task_id == TaskFixtures.retryTaskID
+                })
+            else {
+                throw ScreenshotError.missingRetryTask
+            }
+            surfaces.append(
+                Surface(
+                    name: "task-timeline",
+                    view: AnyView(
+                        TaskTimelineView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
+                            .screenshotContent(retryTimeline)
+                    )))
+            surfaces.append(
+                Surface(
+                    name: "task-timeline-390",
+                    width: 390,
+                    view: AnyView(
+                        TaskTimelineView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
+                            .screenshotContent(retryTimeline)
                     )))
             surfaces.append(
                 Surface(
@@ -1074,10 +1092,10 @@
                         OperationalSummaryView(
                             summary: OperationalSummary(
                                 openSnapshots: store.openSnapshots,
-                                runs: runs,
+                                tasks: tasks,
                                 freshness: .fresh),
                             onSelectItem: { _ in },
-                            onShowRuns: {},
+                            onShowTasks: {},
                             now: screenshotNow))))
             // The summary by dusk, on its own ground, with the trailing
             // values the fact row now right-aligns.
@@ -1090,10 +1108,10 @@
                         OperationalSummaryView(
                             summary: OperationalSummary(
                                 openSnapshots: store.openSnapshots,
-                                runs: runs,
+                                tasks: tasks,
                                 freshness: .fresh),
                             onSelectItem: { _ in },
-                            onShowRuns: {},
+                            onShowTasks: {},
                             now: screenshotNow
                         )
                         .background(Color.ground))))
@@ -1107,11 +1125,11 @@
                         OperationalSummaryView(
                             summary: OperationalSummary(
                                 openSnapshots: store.openSnapshots,
-                                runs: runs,
+                                tasks: tasks,
                                 freshness: .contractMismatch(
                                     daemonContract: "sha256:" + String(repeating: "a", count: 64))),
                             onSelectItem: { _ in },
-                            onShowRuns: {},
+                            onShowTasks: {},
                             now: screenshotNow))))
             guard
                 let timeline = RunFixtures.defaultTimelines().first(where: {
@@ -1920,6 +1938,7 @@
         case bitmapContextFailed
         case missingActiveRun
         case missingActiveTimeline
+        case missingRetryTask
         case missingGMT
         case missingManifest
         case missingSeededImage

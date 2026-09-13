@@ -5,7 +5,7 @@ public struct FreesideRootView: View {
     /// The macOS sidebar's section switcher; iOS keeps its tab bar.
     static let sectionSegments: [FreesideSegmentedControl<LaunchInputs.Screen>.Segment] = [
         .init(value: .inbox, label: "Inbox"),
-        .init(value: .runs, label: "Runs"),
+        .init(value: .tasks, label: "Tasks"),
     ]
 
     @Environment(\.dynamicTypeSize) private var systemDynamicTypeSize
@@ -96,9 +96,9 @@ public struct FreesideRootView: View {
                 coordinator,
                 selectedTab: operatorSelectedTabBinding,
                 inboxPath: operatorInboxPathBinding,
-                runsPath: $navigation.runsPath,
+                tasksPath: operatorTasksPathBinding,
                 attentionSelection: rawAttentionSelectionBinding,
-                runSelection: $navigation.runSelection)
+                taskSelection: operatorTaskSelectionBinding)
         }
         // The heartbeat is the loss detector (plan §5.14); its first
         // round trip also bootstraps a session with no cursors yet.
@@ -129,9 +129,9 @@ public struct FreesideRootView: View {
         _ coordinator: SyncCoordinator,
         selectedTab: Binding<LaunchInputs.Screen>,
         inboxPath: Binding<[String]>,
-        runsPath: Binding<[String]>,
+        tasksPath: Binding<[String]>,
         attentionSelection: Binding<String?>,
-        runSelection: Binding<String?>
+        taskSelection: Binding<String?>
     ) -> some View {
         #if os(iOS)
             if #available(iOS 18.0, *) {
@@ -144,11 +144,8 @@ public struct FreesideRootView: View {
                     }
                     .badge(coordinator.store.urgentOpenCount)
 
-                    Tab(
-                        "Runs", systemImage: "point.3.connected.trianglepath.dotted",
-                        value: LaunchInputs.Screen.runs
-                    ) {
-                        runsStack(coordinator, path: runsPath, selection: runSelection)
+                    Tab("Tasks", systemImage: "checklist", value: LaunchInputs.Screen.tasks) {
+                        tasksStack(coordinator, path: tasksPath)
                     }
                 }
                 .tabViewStyle(.sidebarAdaptable)
@@ -163,11 +160,9 @@ public struct FreesideRootView: View {
                     .tag(LaunchInputs.Screen.inbox)
                     .badge(coordinator.store.urgentOpenCount)
 
-                    runsStack(coordinator, path: runsPath, selection: runSelection)
-                        .tabItem {
-                            Label("Runs", systemImage: "point.3.connected.trianglepath.dotted")
-                        }
-                        .tag(LaunchInputs.Screen.runs)
+                    tasksStack(coordinator, path: tasksPath)
+                        .tabItem { Label("Tasks", systemImage: "checklist") }
+                        .tag(LaunchInputs.Screen.tasks)
                 }
             }
         #else
@@ -193,11 +188,12 @@ public struct FreesideRootView: View {
                             lastUpdatedAt: coordinator.lastUpdatedAt,
                             onRefresh: coordinator.refresh,
                             onRevealTechnicalDetails: revealTechnicalDetails)
-                    case .runs:
-                        RunsListView(
+                    case .tasks:
+                        TasksListView(
+                            tasks: coordinator.tasks,
                             runs: coordinator.runs,
                             schedules: coordinator.schedules,
-                            selection: runSelection,
+                            selection: taskSelection,
                             onRefresh: coordinator.refresh)
                     }
                 }
@@ -212,7 +208,8 @@ public struct FreesideRootView: View {
                         coordinator,
                         screen: selectedTab.wrappedValue,
                         attentionSelection: attentionSelection.wrappedValue,
-                        runSelection: runSelection.wrappedValue
+                        taskSelection: taskSelection.wrappedValue,
+                        runSelection: navigation.runSelection
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.ground)
@@ -280,27 +277,34 @@ public struct FreesideRootView: View {
             }
         }
 
-        private func runsStack(
+        /// The stack is rooted at a task and may hold that task's run above
+        /// it, so one destination resolves either id: task ids and run ids
+        /// never collide.
+        private func tasksStack(
             _ coordinator: SyncCoordinator,
-            path: Binding<[String]>,
-            selection: Binding<String?>
+            path: Binding<[String]>
         ) -> some View {
             NavigationStack(path: path) {
-                RunsListView(
+                TasksListView(
+                    tasks: coordinator.tasks,
                     runs: coordinator.runs,
                     schedules: coordinator.schedules,
-                    selection: selection,
-                    navigationPath: path,
+                    selection: rawTaskSelectionBinding,
+                    navigationPath: rawTasksPathBinding,
                     onRefresh: coordinator.refresh
                 )
-                .navigationDestination(for: String.self) { runID in
-                    if let run = coordinator.runs.first(where: { $0.run.id == runID }) {
+                .navigationDestination(for: String.self) { id in
+                    if let task = coordinator.tasks.first(where: { $0.task.id == id }) {
+                        TaskTimelineView(
+                            coordinator: coordinator, snapshot: task,
+                            onOpenRun: { navigation.route(to: .run(taskID: task.task.id, runID: $0)) })
+                    } else if let run = coordinator.runs.first(where: { $0.run.id == id }) {
                         RunTimelineView(coordinator: coordinator, snapshot: run)
                     } else {
                         UnavailableStateView(
-                            title: "Run unavailable",
+                            title: "Not available",
                             systemImage: "questionmark.circle",
-                            description: "This run is no longer available.")
+                            description: "This task or run is no longer available.")
                     }
                 }
             }
@@ -327,6 +331,7 @@ public struct FreesideRootView: View {
             _ coordinator: SyncCoordinator,
             screen: LaunchInputs.Screen,
             attentionSelection: String?,
+            taskSelection: String?,
             runSelection: String?
         ) -> some View {
             switch screen {
@@ -353,28 +358,62 @@ public struct FreesideRootView: View {
                     OperationalSummaryView(
                         summary: OperationalSummary(
                             openSnapshots: coordinator.store.openSnapshots,
-                            runs: coordinator.runs,
+                            tasks: coordinator.tasks,
                             freshness: coordinator.store.freshness),
                         onSelectItem: { navigation.route(to: .attentionItem($0)) },
-                        onShowRuns: { navigation.showActiveRuns() }
+                        onShowTasks: { navigation.showActiveTasks() }
                     )
                     // Pinned to the column's top-leading corner, where the
                     // decision card it stands in for begins, instead of
                     // floating at its center.
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
-            case .runs:
-                if let runSelection,
-                    let run = coordinator.runs.first(where: { $0.run.id == runSelection })
+            case .tasks:
+                if let runSelection {
+                    // A run opened under its task: the column has no stack to
+                    // pop, so a return row leads back to the task.
+                    VStack(spacing: 0) {
+                        runReturnRow
+                        if let run = coordinator.runs.first(where: { $0.run.id == runSelection }) {
+                            RunTimelineView(coordinator: coordinator, snapshot: run)
+                        } else {
+                            UnavailableStateView(
+                                title: "Run unavailable", systemImage: "questionmark.circle",
+                                description: "This run is no longer available.")
+                        }
+                    }
+                    .id(runSelection)
+                } else if let taskSelection,
+                    let task = coordinator.tasks.first(where: { $0.task.id == taskSelection })
                 {
-                    RunTimelineView(coordinator: coordinator, snapshot: run)
-                        .id(runSelection)
+                    TaskTimelineView(
+                        coordinator: coordinator, snapshot: task,
+                        onOpenRun: { navigation.route(to: .run(taskID: task.task.id, runID: $0)) }
+                    )
+                    .id(taskSelection)
                 } else {
                     UnavailableStateView(
-                        title: "Runs", systemImage: "point.3.connected.trianglepath.dotted",
-                        description: "Select a run to inspect its timeline.")
+                        title: "Tasks", systemImage: "checklist",
+                        description: "Select a task to inspect its history.")
                 }
             }
+        }
+
+        private var runReturnRow: some View {
+            HStack {
+                Button {
+                    navigation.closeRun()
+                } label: {
+                    Label("Back to task", systemImage: "chevron.left")
+                        .font(FreesideFont.callout)
+                        .foregroundStyle(Color.accentText)
+                }
+                .buttonStyle(.plain)
+                .help("Back to task")
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 16)
         }
     #endif
 
@@ -421,6 +460,32 @@ public struct FreesideRootView: View {
         Binding(
             get: { navigation.inboxPath },
             set: { navigation.inboxPath = $0 })
+    }
+
+    private var operatorTasksPathBinding: Binding<[String]> {
+        Binding(
+            get: { navigation.tasksPath },
+            set: { navigation.setTasksPath($0) })
+    }
+
+    private var rawTasksPathBinding: Binding<[String]> {
+        Binding(
+            get: { navigation.tasksPath },
+            set: { navigation.applyTasksPath($0) })
+    }
+
+    private var operatorTaskSelectionBinding: Binding<String?> {
+        Binding(
+            get: { navigation.taskSelection },
+            set: { navigation.selectTask($0) })
+    }
+
+    /// The iOS list's selection binding: the stack carries the selection
+    /// there, so the list's own writes need no routing.
+    private var rawTaskSelectionBinding: Binding<String?> {
+        Binding(
+            get: { navigation.taskSelection },
+            set: { navigation.taskSelection = $0 })
     }
 
     private var rawAttentionSelectionBinding: Binding<String?> {

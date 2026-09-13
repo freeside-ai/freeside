@@ -14,13 +14,18 @@ public final class NavigationModel {
 
     public enum Destination: Equatable {
         case attentionItem(String)
-        case run(String)
+        case task(String)
+        /// A run is reached through its task: routing selects the task and
+        /// pushes the run timeline over it.
+        case run(taskID: String, runID: String)
     }
 
     public var selectedTab: LaunchInputs.Screen
     public var inboxPath: [String]
-    public var runsPath: [String]
+    /// The tasks stack: the selected task, then the run opened under it.
+    public var tasksPath: [String]
     public var attentionSelection: String?
+    public var taskSelection: String?
     public var runSelection: String?
     public var inspectorPresented: Bool
     public private(set) var operatorNavigationRevision = 0
@@ -28,17 +33,26 @@ public final class NavigationModel {
     public init(launchInputs: LaunchInputs) {
         selectedTab = launchInputs.screen
         inboxPath = []
-        runsPath = []
+        tasksPath = []
         attentionSelection = nil
+        taskSelection = nil
         runSelection = nil
         inspectorPresented = launchInputs.detailsExpanded
 
-        guard let selection = launchInputs.selection else { return }
         switch launchInputs.screen {
         case .inbox:
-            route(to: .attentionItem(selection))
-        case .runs:
-            route(to: .run(selection))
+            if let selection = launchInputs.selection {
+                route(to: .attentionItem(selection))
+            }
+        case .tasks:
+            switch launchInputs.taskSelection {
+            case .task(let taskID)?:
+                route(to: .task(taskID))
+            case .run(let taskID, let runID)?:
+                route(to: .run(taskID: taskID, runID: runID))
+            case nil:
+                break
+            }
         }
     }
 
@@ -53,10 +67,16 @@ public final class NavigationModel {
             selectedTab = .inbox
             attentionSelection = itemID
             inboxPath = [itemID]
-        case .run(let runID):
-            selectedTab = .runs
+        case .task(let taskID):
+            selectedTab = .tasks
+            taskSelection = taskID
+            runSelection = nil
+            tasksPath = [taskID]
+        case .run(let taskID, let runID):
+            selectedTab = .tasks
+            taskSelection = taskID
             runSelection = runID
-            runsPath = [runID]
+            tasksPath = [taskID, runID]
         }
     }
 
@@ -66,15 +86,53 @@ public final class NavigationModel {
         selectedTab = screen
     }
 
-    /// Open the Runs screen on its active list. A run selection kept from
-    /// an earlier visit is dropped first, because the list reveals its
-    /// selected run's scope on appear and a finished run would open the
-    /// Finished list under a link that named the active count.
-    public func showActiveRuns() {
+    /// Open the Tasks screen on its active list. A selection kept from an
+    /// earlier visit is dropped first, because the list reveals its selected
+    /// task's scope on appear and a finished task would open the Finished
+    /// list under a link that named the active count.
+    public func showActiveTasks() {
         operatorNavigationRevision += 1
-        selectedTab = .runs
+        selectedTab = .tasks
+        taskSelection = nil
         runSelection = nil
-        runsPath = []
+        tasksPath = []
+    }
+
+    /// The iOS tasks stack as the operator drives it (a push, a pop). The
+    /// selections follow the path, so popping the run clears its selection.
+    public func setTasksPath(_ path: [String]) {
+        guard tasksPath != path else { return }
+        operatorNavigationRevision += 1
+        applyTasksPath(path)
+    }
+
+    /// A list repair after a filter change or a data update, not operator
+    /// navigation: it must not count as such against a pending inbox
+    /// conclusion advance.
+    public func applyTasksPath(_ path: [String]) {
+        tasksPath = path
+        taskSelection = path.first
+        runSelection = path.count > 1 ? path[1] : nil
+    }
+
+    /// The macOS sidebar selection. Choosing another task drops a run opened
+    /// under the previous one; a repair that clears the selection drops it
+    /// too, so the detail column never shows a run of a task no longer listed.
+    public func selectTask(_ taskID: String?) {
+        guard taskSelection != taskID else { return }
+        operatorNavigationRevision += 1
+        taskSelection = taskID
+        runSelection = nil
+        tasksPath = taskID.map { [$0] } ?? []
+    }
+
+    /// Returns from a run timeline to its task on macOS, which has no stack
+    /// to pop.
+    public func closeRun() {
+        guard runSelection != nil else { return }
+        operatorNavigationRevision += 1
+        runSelection = nil
+        tasksPath = taskSelection.map { [$0] } ?? []
     }
 
     public func setInboxPath(_ path: [String]) {

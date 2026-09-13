@@ -18,10 +18,18 @@ public struct LaunchInputs {
 
     public enum Screen: String, Hashable {
         case inbox
-        case runs
+        case tasks
     }
 
-    /// `-FreesideScreen inbox|runs`; defaults to the attention inbox.
+    /// What `-FreesideSelect` names on the tasks screen: a task, or a run
+    /// reached through its task, so a run link opens the task with the run
+    /// timeline pushed.
+    public enum TaskSelection: Equatable {
+        case task(String)
+        case run(taskID: String, runID: String)
+    }
+
+    /// `-FreesideScreen inbox|tasks`; defaults to the attention inbox.
     public let screen: Screen
 
     /// `-FreesideColorScheme light|dark`; unset or unrecognized
@@ -36,12 +44,18 @@ public struct LaunchInputs {
     /// system. The accepted names mirror the documented screenshot inputs.
     public let dynamicTypeSize: DynamicTypeSize?
 
-    /// `-FreesideSelect <item-id>`: the inbox item selected at launch.
-    /// `AttentionFixtures.defaultInboxItemIDs()` is the canonical value
-    /// list. An unknown id is ignored with a stderr note, never a
-    /// crash: the capture recipe's content check catches the typo, and
-    /// a stray persisted default must not take the app down.
+    /// `-FreesideSelect <id>`: the inbox item selected at launch, or on
+    /// the tasks screen the task or run opened at launch.
+    /// `AttentionFixtures.defaultInboxItemIDs()`,
+    /// `TaskFixtures.defaultTaskIDs()`, and `RunFixtures.defaultRunIDs()` are
+    /// the canonical value lists. An unknown id is ignored with a stderr
+    /// note, never a crash: the capture recipe's content check catches the
+    /// typo, and a stray persisted default must not take the app down.
     public let selection: String?
+
+    /// The tasks-screen reading of `selection`: nil on the inbox screen or
+    /// when nothing valid was selected.
+    public let taskSelection: TaskSelection?
 
     /// Optional deterministic inbox presentation for screenshot launches.
     public let inboxScope: InboxStore.Scope?
@@ -63,19 +77,37 @@ public struct LaunchInputs {
             }
         contrast = Contrast(rawValue: contrastRaw ?? "")
         dynamicTypeSize = Self.dynamicTypeSize(rawValue: dynamicTypeSizeRaw)
-        let knownSelections =
-            screen == .runs
-            ? RunFixtures.defaultRunIDs() : AttentionFixtures.defaultInboxItemIDs()
-        if let selectionRaw, !knownSelections.contains(selectionRaw) {
+        let resolved = Self.resolveSelection(selectionRaw, screen: screen)
+        selection = resolved.selection
+        taskSelection = resolved.taskSelection
+        if selectionRaw != nil, selection == nil {
             FileHandle.standardError.write(
-                Data("FreesideSelect ignored: unknown item id \(selectionRaw)\n".utf8))
-            selection = nil
-        } else {
-            selection = selectionRaw
+                Data("FreesideSelect ignored: unknown item id \(selectionRaw ?? "")\n".utf8))
         }
         inboxScope = inboxScopeRaw.flatMap(InboxStore.Scope.init(rawValue:))
         projectID = projectIDRaw
         self.detailsExpanded = detailsExpanded
+    }
+
+    /// The screen decides which fixture ids a selection may name. On the
+    /// tasks screen a run id resolves to its task, from the run fixtures,
+    /// so the launch routes to the task with that run pushed.
+    private static func resolveSelection(
+        _ raw: String?, screen: Screen
+    ) -> (selection: String?, taskSelection: TaskSelection?) {
+        guard let raw else { return (nil, nil) }
+        switch screen {
+        case .inbox:
+            return AttentionFixtures.defaultInboxItemIDs().contains(raw) ? (raw, nil) : (nil, nil)
+        case .tasks:
+            if TaskFixtures.defaultTaskIDs().contains(raw) {
+                return (raw, .task(raw))
+            }
+            if let run = RunFixtures.defaultRuns().first(where: { $0.run.id == raw })?.run {
+                return (raw, .run(taskID: run.task_id, runID: run.id))
+            }
+            return (nil, nil)
+        }
     }
 
     /// The process's launch arguments, via the UserDefaults argument

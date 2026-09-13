@@ -565,3 +565,26 @@ struct InvocationPresentation {
         }
     }
 }
+
+/// Ready is quiet in hue but full contrast (a neutral tick in the text
+/// color, never green or the accent), in progress is water, blocked is
+/// the accent, failed and lost are wax, not observed is a dashed faint.
+struct RunOutcomeBadge: View {
+    let outcome: Components.Schemas.RunOutcome
+
+    var body: some View {
+        StateChip(
+            label: RunDisplay.label(outcome), color: color, dashed: outcome == .unobserved,
+            glyph: outcome == .published ? "✓" : nil)
+    }
+
+    private var color: Color {
+        switch outcome {
+        case .unobserved: .inkDim
+        case .pending: .waterText
+        case .published, .completed: .ink
+        case .blocked: .accentText
+        case .failed, .lost: .waxText
+        }
+    }
+}

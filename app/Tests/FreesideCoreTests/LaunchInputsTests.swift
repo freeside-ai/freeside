@@ -77,14 +77,30 @@ import Testing
                 .inboxScope == nil)
     }
 
-    @Test func runsScreenAcceptsOnlyRunFixtureSelections() {
+    @Test func tasksScreenAcceptsTaskAndRunFixtureSelections() {
+        let task = LaunchInputs(
+            colorSchemeRaw: nil, selectionRaw: TaskFixtures.retryTaskID, screenRaw: "tasks")
+        #expect(task.screen == .tasks)
+        #expect(task.selection == TaskFixtures.retryTaskID)
+        #expect(task.taskSelection == .task(TaskFixtures.retryTaskID))
+
+        // A run id opens the run's task with the run pushed.
         let run = LaunchInputs(
-            colorSchemeRaw: nil, selectionRaw: RunFixtures.activeRunID, screenRaw: "runs")
-        #expect(run.screen == .runs)
+            colorSchemeRaw: nil, selectionRaw: RunFixtures.activeRunID, screenRaw: "tasks")
         #expect(run.selection == RunFixtures.activeRunID)
+        #expect(run.taskSelection == .run(taskID: TaskFixtures.retryTaskID, runID: RunFixtures.activeRunID))
 
         let item = LaunchInputs(
-            colorSchemeRaw: nil, selectionRaw: "item-spec_approval", screenRaw: "runs")
+            colorSchemeRaw: nil, selectionRaw: "item-spec_approval", screenRaw: "tasks")
         #expect(item.selection == nil)
+        #expect(item.taskSelection == nil)
+
+        // The inbox screen does not take a task or run id, and never
+        // carries a task selection.
+        let inbox = LaunchInputs(colorSchemeRaw: nil, selectionRaw: TaskFixtures.retryTaskID)
+        #expect(inbox.screen == .inbox)
+        #expect(inbox.selection == nil)
+        #expect(inbox.taskSelection == nil)
+        #expect(LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, screenRaw: "runs").screen == .inbox)
     }
 }
