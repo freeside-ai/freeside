@@ -7,5 +7,7 @@
   "source_digest": "sha256:source",
   "approved_spec_digest": "sha256:spec",
   "specification_run_id": "run-specification-1",
-  "implementation_run_id": "run-1"
+  "implementation_run_id": "run-1",
+  "revises_run_id": null,
+  "revision_command_id": null
 }

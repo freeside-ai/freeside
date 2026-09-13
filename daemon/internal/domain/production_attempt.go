@@ -55,6 +55,16 @@ type ProductionAttempt struct {
 	OperatorCommandID        *string         `json:"operator_command_id,omitempty"`
 	RetryOfInvocationID      *InvocationID   `json:"retry_of_invocation_id,omitempty"`
 	CapabilityManifestDigest *Digest         `json:"capability_manifest_digest,omitempty"`
+	// RevisesRunID and RevisionCommandID link a fresh campaign's initial attempt
+	// back to the blocked implementation run whose agent_question was answered
+	// with revise_specification, and to the answer_and_retry command that did so
+	// (plan §5.12; #1083 D2). They are set together or not at all, and only on an
+	// initial attempt. ParentRunID keeps its retry-only meaning: a revision is a
+	// new campaign, not a retry within the blocked one. The store gate binds the
+	// revised run to the same task and requires it to be a terminal
+	// implementation run.
+	RevisesRunID      *RunID  `json:"revises_run_id"`
+	RevisionCommandID *string `json:"revision_command_id"`
 }
 
 // Validate reports whether the attempt's identity and lineage are coherent.
@@ -109,6 +119,37 @@ func (a ProductionAttempt) Validate() error {
 		if bindingCount != 0 && bindingCount != 3 {
 			return fmt.Errorf("retry carries partial operator bindings: %w", ErrProductionAttemptInconsistent)
 		}
+	}
+	if err := validateRevisionLink(a.Kind, a.ImplementationRunID, a.RevisesRunID, a.RevisionCommandID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateRevisionLink checks the optional revise_specification link (#1083 D2).
+// RevisesRunID and RevisionCommandID are set together or not at all, appear only
+// on an initial attempt (a revision is a new campaign, not a retry), and the
+// revised run differs from this attempt's implementation run. The store gate
+// binds the revised run to the same task and to a terminal implementation run;
+// those are cross-row checks that live there, not in this pure predicate.
+func validateRevisionLink(kind ProductionAttemptKind, implementationRunID RunID, revisesRunID *RunID, revisionCommandID *string) error {
+	if revisesRunID == nil && revisionCommandID == nil {
+		return nil
+	}
+	if revisesRunID == nil || revisionCommandID == nil {
+		return fmt.Errorf("revision link requires both revises_run_id and revision_command_id: %w", ErrProductionAttemptInconsistent)
+	}
+	if kind != ProductionAttemptInitial {
+		return fmt.Errorf("revision link on %s attempt: %w", kind, ErrProductionAttemptInconsistent)
+	}
+	if *revisesRunID == "" {
+		return fmt.Errorf("revises_run_id: %w", ErrEmptyID)
+	}
+	if *revisionCommandID == "" {
+		return fmt.Errorf("revision_command_id: %w", ErrEmptyID)
+	}
+	if *revisesRunID == implementationRunID {
+		return fmt.Errorf("revises_run_id equals implementation run id: %w", ErrProductionAttemptInconsistent)
 	}
 	return nil
 }

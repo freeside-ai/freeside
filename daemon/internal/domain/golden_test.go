@@ -776,6 +776,19 @@ func TestGolden(t *testing.T) {
 		SpecificationRunID: "run-specification-1", ImplementationRunID: "run-1",
 	}
 
+	// A fresh campaign's initial attempt that revises a blocked implementation
+	// run: the typed link back to the blocked run and the answering command
+	// (#1083 D2). ParentRunID stays empty because a revision is a new campaign,
+	// not a retry.
+	revisesRunID := domain.RunID("run-blocked")
+	revisionCommandID := "cmd-answer-1"
+	productionRevisionAttempt := domain.ProductionAttempt{
+		CampaignID: "campaign-2", AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
+		SourceDigest:       "sha256:source",
+		SpecificationRunID: "run-specification-2", ImplementationRunID: "run-2",
+		RevisesRunID: &revisesRunID, RevisionCommandID: &revisionCommandID,
+	}
+
 	// The provider identity the stage below runs under, and a live lease on
 	// its auth store. The identity carries the narrowed §5.4 shape: account
 	// and operator fields on the identity, the interim client facts under
@@ -1516,6 +1529,7 @@ func TestGolden(t *testing.T) {
 		}},
 		{"subject_task", domain.Subject{Type: domain.SubjectTask, ID: "task-1", TaskID: new(domain.TaskID("task-1"))}},
 		{"production_attempt", productionAttempt},
+		{"production_attempt_revision", productionRevisionAttempt},
 		{"initiator_config", initiator},
 		{"initiator_config_manual", manualInitiator},
 		{"stage", stage},
