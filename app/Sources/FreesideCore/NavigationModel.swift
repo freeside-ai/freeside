@@ -145,4 +145,12 @@ public final class NavigationModel {
         guard let routedID = path.last, !availableIDs.contains(routedID) else { return path }
         return Array(path.dropLast())
     }
+
+    /// The tasks stack is rooted at a task and may hold that task's run
+    /// above it, so it stands or falls with its root: a task that left the
+    /// visible rows takes the run pushed over it along.
+    static func repairedTaskPath(_ path: [String], availableTaskIDs: Set<String>) -> [String] {
+        guard let taskID = path.first, !availableTaskIDs.contains(taskID) else { return path }
+        return []
+    }
 }

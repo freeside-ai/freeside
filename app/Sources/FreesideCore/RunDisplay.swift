@@ -101,7 +101,7 @@ enum RunDisplay {
         return parts.joined(separator: " · ")
     }
 
-    private static func lastActiveSegment(_ activity: Date, now: Date) -> String {
+    static func lastActiveSegment(_ activity: Date, now: Date) -> String {
         guard now.timeIntervalSince(activity) < 86_400 else {
             return "last active \(activity.formatted(date: .abbreviated, time: .shortened))"
         }
