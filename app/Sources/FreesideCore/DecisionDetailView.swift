@@ -205,7 +205,7 @@ struct DecisionDetailView: View {
                         title: "Discuss",
                         prompt: "Send a message to the agent. The item stays open while it replies.",
                         submitLabel: "Send"
-                    ) { message in
+                    ) { message, _ in
                         await model.submitDiscuss(message: message)
                     }
                 case .requestChanges:
@@ -214,25 +214,27 @@ struct DecisionDetailView: View {
                         prompt: "Describe the revision the specification needs.",
                         submitLabel: "Request changes",
                         byteLimit: 8192
-                    ) { message in
+                    ) { message, _ in
                         await model.submitRequestChanges(message: message)
                     }
                 case .answerAndRetry:
                     MessageComposerSheet(
                         title: "Answer and retry",
-                        prompt: "Answer the agent's question and retry the blocked work.",
-                        submitLabel: "Answer and retry", byteLimit: 8192
-                    ) { message in
+                        prompt: "Answer the agent's question and choose what to do next.",
+                        submitLabel: "Answer and retry", byteLimit: 8192,
+                        routeOptions: AgentQuestionPresentation.answerRoutes(for: model.snapshot?.item)
+                    ) { message, route in
                         await model.submitAnswer(
                             .answer_and_retry, message: message,
-                            answerRoute: AgentQuestionPresentation.answerRoute(for: model.snapshot?.item))
+                            answerRoute: route
+                                ?? AgentQuestionPresentation.answerRoute(for: model.snapshot?.item))
                     }
                 case .answerWithoutRetry:
                     MessageComposerSheet(
                         title: "Answer without retry",
                         prompt: "Record the answer and conclude the question without restarting work.",
                         submitLabel: "Record answer", byteLimit: 8192
-                    ) { message in
+                    ) { message, _ in
                         await model.submitAnswer(.answer_without_retry, message: message)
                     }
                 case .returnToAgent:
@@ -240,7 +242,7 @@ struct DecisionDetailView: View {
                         title: "Return to agent",
                         prompt: "Describe what the agent should change before the work returns for review.",
                         submitLabel: "Return to agent", byteLimit: 8192
-                    ) { message in
+                    ) { message, _ in
                         await model.submitReturnToAgent(message: message)
                     }
                 }

@@ -93,8 +93,17 @@ struct MessageComposerSheet: View {
     let submitLabel: String
     var byteLimit: Int?
     var rendersInteractiveControls = true
-    let submit: (String) async -> Bool
+    /// The answer routes this composer lets the operator choose between, in
+    /// display order; empty for a composer that carries no route (#1083). The
+    /// first is the default selection.
+    var routeOptions: [Components.Schemas.AnswerRoute] = []
+    let submit: (String, Components.Schemas.AnswerRoute?) async -> Bool
     @State private var isSubmitting = false
+    @State private var chosenRoute: Components.Schemas.AnswerRoute?
+
+    private var selectedRoute: Components.Schemas.AnswerRoute? {
+        chosenRoute ?? routeOptions.first
+    }
 
     private var trimmedMessage: String {
         message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -135,6 +144,20 @@ struct MessageComposerSheet: View {
                         .foregroundStyle(byteCount > byteLimit ? Color.waxText : Color.inkDim)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
+                if routeOptions.count > 1 {
+                    Picker(
+                        "Then",
+                        selection: Binding(
+                            get: { selectedRoute ?? routeOptions.first ?? .retry_implementation },
+                            set: { chosenRoute = $0 })
+                    ) {
+                        ForEach(routeOptions, id: \.self) { route in
+                            Text(AgentQuestionPresentation.answerRouteLabel(route)).tag(route)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityLabel("What to do with the answer")
+                }
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 16)
@@ -156,9 +179,10 @@ struct MessageComposerSheet: View {
 
     private func performSubmit() {
         let draft = trimmedMessage
+        let route = selectedRoute
         isSubmitting = true
         Task {
-            let didClaimCommand = await submit(draft)
+            let didClaimCommand = await submit(draft, route)
             isSubmitting = false
             if didClaimCommand {
                 dismiss()
