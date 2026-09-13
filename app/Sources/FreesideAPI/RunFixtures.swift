@@ -26,7 +26,7 @@ public enum RunFixtures {
                 campaignAttempt: 2, attemptReason: "Retry after repairing the acceptance rig",
                 parentRunID: "run-freeside-656", cost: activeCost, workUnit: "#724"),
             snapshot(
-                id: readyRunID, projectID: "freeside", stage: "publication",
+                id: readyRunID, projectID: "freeside", stage: "implementation",
                 attempt: 1, milestone: .publication_ready, outcome: .published,
                 lifecycle: .active, campaignID: "campaign-freeside-ready", campaignAttempt: 1,
                 workUnit: "#654"),
@@ -58,7 +58,7 @@ public enum RunFixtures {
     public static func completedRun() -> Components.Schemas.RunSnapshot {
         projectingObservationTimes(
             snapshot(
-                id: completedRunID, projectID: "freeside", stage: "publication",
+                id: completedRunID, projectID: "freeside", stage: "implementation",
                 attempt: 1, milestone: .work_unit_completed, outcome: .completed,
                 lifecycle: .finished, campaignID: "campaign-freeside-completed", campaignAttempt: 1,
                 completion: completedFacts, cost: completedCost, workUnit: "#80"),

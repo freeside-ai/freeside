@@ -117,9 +117,9 @@ struct RunTimelineView: View {
                 RunOutcomeBadge(outcome: snapshot.run.outcome)
             }
             HStack(spacing: 14) {
-                if let stage = snapshot.run.stages.last {
-                    Label(RunDisplay.stageLabel(stage.name), systemImage: "square.stack.3d.up")
-                    if let round = RunDisplay.round(stage) {
+                if let heading = RunDisplay.stageHeading(snapshot.run) {
+                    Label(heading.label, systemImage: "square.stack.3d.up")
+                    if let round = heading.round {
                         Label(round, systemImage: "arrow.triangle.2.circlepath")
                     }
                 }
