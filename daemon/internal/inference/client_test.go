@@ -44,15 +44,17 @@ func testClientWithCredential(
 	adjudicator := inference.AdjudicatorSite(testBudget(calls))
 	diagnostic := inference.DiagnosticSite(testBudget(calls))
 	discussion := inference.DiscussionSite(testBudget(calls))
+	namer := inference.TaskNamerSite(testBudget(calls))
 	classifier.AuditEvery = 1
 	adjudicator.AuditEvery = 1
 	diagnostic.AuditEvery = 1
 	discussion.AuditEvery = 1
+	namer.AuditEvery = 1
 	statePath := filepath.Join(dir, "ledger.json")
 	client, err := inference.New(inference.Config{
 		StatePath: statePath,
 		Binding:   inference.Binding{Provider: "fake", Model: "test", Credential: inference.Secret(credential), Driver: driver},
-		Sites:     []inference.Site{classifier, adjudicator, diagnostic, discussion}, Advisory: store,
+		Sites:     []inference.Site{classifier, adjudicator, diagnostic, discussion, namer}, Advisory: store,
 		Now: now,
 	})
 	if err != nil {
@@ -75,6 +77,7 @@ func TestClientReportsRegisteredSites(t *testing.T) {
 		inference.AdjudicatorSiteID,
 		inference.DiagnosticSiteID,
 		inference.AttentionDiscussionSiteID,
+		inference.TaskNamerSiteID,
 	} {
 		if !client.SupportsSite(siteID) {
 			t.Fatalf("SupportsSite(%q) = false", siteID)

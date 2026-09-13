@@ -207,6 +207,34 @@ func TestTaskNameAdvancesAttentionSnapshots(t *testing.T) {
 	}
 }
 
+func TestTaskNameAgentRefinementAdvancesAttentionSnapshots(t *testing.T) {
+	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+	f := newFixtures(t)
+	seedItem(t, s, &f)
+	var previous store.Snapshot
+	for _, text := range []string{"Name the task", "Refine the task"} {
+		name := domain.DisplayName{Text: text, Source: domain.DisplayNameSourceAgent}
+		if err := s.Write(t.Context(), func(tx *store.WriteTx) error { return tx.SetTaskName(t.Context(), f.run.TaskID, name) }); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Read(t.Context(), func(tx *store.ReadTx) error {
+			item, snapshot, err := tx.GetAttentionItemSnapshot(t.Context(), f.item.ID)
+			if err == nil && (item.DisplayNames.Task != name || snapshot.EntityVersion <= previous.EntityVersion || snapshot.AsOfRevision <= previous.AsOfRevision) {
+				t.Fatalf("name=%+v snapshot=%+v previous=%+v", item.DisplayNames.Task, snapshot, previous)
+			}
+			previous = snapshot
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.SetTaskName(t.Context(), f.run.TaskID, domain.DisplayName{Text: "identifier", Source: domain.DisplayNameSourceIdentifier})
+	}); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("identifier downgrade = %v", err)
+	}
+}
+
 func TestTaskNamePreservesOperatorChoice(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

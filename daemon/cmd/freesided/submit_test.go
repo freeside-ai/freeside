@@ -389,6 +389,13 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 			t.Errorf("specification run attempt = %q/%d, want %q/1",
 				run.CampaignID, run.AttemptNumber, first.CampaignID)
 		}
+		task, err := tx.GetTask(ctx, run.TaskID)
+		if err != nil {
+			return err
+		}
+		if task.Name != (domain.DisplayName{Text: "Work item", Source: domain.DisplayNameSourceOperator}) {
+			t.Errorf("submitted heading name = %+v", task.Name)
+		}
 		attempt, err := tx.GetProductionAttempt(ctx, first.CampaignID, 1)
 		if err != nil {
 			return err

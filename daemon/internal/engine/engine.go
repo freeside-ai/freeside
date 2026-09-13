@@ -56,6 +56,7 @@ type Engine struct {
 	productionDeliveryValidator func(context.Context, exec.StartSpec) error
 	specification               *specificationWorkflow
 	inference                   *inference.Client
+	taskNames                   chan domain.Run
 	// artifacts reads persisted agent evidence by digest (a blocked
 	// implementer's decisions). It is the blob store the configured
 	// workflows already share; the first workflow option that carries one
@@ -163,6 +164,7 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 	}
 	e := &Engine{
 		store: st, signet: attention, driver: driver,
+		taskNames:             make(chan domain.Run, taskNameQueueCapacity),
 		fakePublicationPolicy: &fakePublicationPolicyRecovery{store: st},
 		logger:                slog.New(slog.DiscardHandler),
 	}
@@ -361,10 +363,22 @@ func (e *Engine) ReconcileFakePublication(
 // Run reconciles immediately and then on interval until ctx is canceled. A
 // correctness error stops the loop instead of being hidden by retries; a
 // caller may restart after repairing the durable state or driver boundary.
+// Run also owns the advisory task-name worker and joins it before returning;
+// direct Reconcile calls only queue names and do not advance that worker.
 //
 // It does not advance the production publication lane; a composition that
 // configured one runs RunProductionPublications beside this loop.
 func (e *Engine) Run(ctx context.Context, interval time.Duration) error {
+	ctx, cancel := context.WithCancel(ctx)
+	namingDone := make(chan struct{})
+	go func() {
+		defer close(namingDone)
+		e.runTaskNames(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-namingDone
+	}()
 	return runReconcileLoop(ctx, e.logger, "run engine", interval, func(ctx context.Context) error {
 		_, err := e.Reconcile(ctx)
 		return err

@@ -584,8 +584,8 @@ Security limitations, stated for the operator surface:
 
 ### Subscription-Backed Daemon Judgments
 
-The production classifier and finding adjudicator can use the existing Claude
-subscription setup-token mechanism. Configure all four flags together:
+The production classifier, finding adjudicator, and task namer can use the
+existing Claude subscription setup-token mechanism. Configure all four flags together:
 
 ```text
 -judgment-claude-bin /absolute/path/to/claude
@@ -597,7 +597,11 @@ subscription setup-token mechanism. Configure all four flags together:
 Use the existing private setup-token snapshot, with the same ownership and
 permissions required for Claude shadow review. No new API key or login is
 needed. The default, with all four flags absent, keeps inference unavailable
-and preserves the existing conservative fallback behavior. Diagnostic and
+and preserves the existing conservative fallback behavior. The task namer keeps
+the identifier name when judgments are unbound or naming fails. Naming uses a
+separate serial worker after durable dispatch, so a slow provider does not
+delay reconciliation. Its 32-entry in-memory queue keeps the identifier
+fallback when full or lost on restart. Diagnostic and
 Discussion sites continue to use their fallback outputs with this adapter.
 
 The adapter pins and privately copies the native CLI, supplies allowlisted
@@ -607,8 +611,12 @@ the model a repository workspace. It rejects incomplete responses, missing or
 contradictory usage, model substitution, and invalid judgment JSON. Calls have
 one turn, the site's deadline and output-token limit, and one shared in-flight
 slot across judgment sites. Compute units mean generated tokens; input bytes
-have their own site limit. The existing ledger reserves each call's full
-allowance before dispatch. Account-lineup attribution remains the separate
+have their own site limit. Classifier and adjudicator calls can cancel an
+active task namer, then wait within their own deadline for its process and
+private-directory cleanup before taking the slot. Naming never preempts
+another call; overlapping workflow judgments still fail immediately. The
+existing ledger reserves each call's full allowance before dispatch.
+Account-lineup attribution remains the separate
 #900 design decision; this binding does not represent it as implemented.
 
 Preflight reports `judgment_configuration` and a secret-free
