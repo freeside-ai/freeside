@@ -56,7 +56,7 @@ import Testing
         }!.run
 
         let now = RunFixtures.screenshotInstant
-        #expect(RunDisplay.title(active) == "Implementation · Round 2")
+        #expect(RunDisplay.title(active) == "Verification · Round 1")
         #expect(RunDisplay.metaLine(active, now: now).hasPrefix("freeside · #724 · last active "))
         #expect(RunDisplay.metaLine(legacy, now: now) == "freeside")
         #expect(RunDisplay.secondaryLine(active) == .hold("Verification Findings"))
@@ -222,7 +222,7 @@ import Testing
         run.created_at = nil
         run.last_activity_at = nil
         run.display_names = nil
-        #expect(RunDisplay.title(run) == "Implementation · Round 2")
+        #expect(RunDisplay.title(run) == "Verification · Round 1")
         #expect(RunDisplay.metaLine(run, now: now) == "freeside")
         run.display_names = .init(
             value1: .init(
@@ -351,18 +351,22 @@ import Testing
 
         let active = try rail(RunFixtures.activeRunID)
         #expect(active.map(\.0) == known)
-        #expect(active.map(\.1) == [.pending, .current, .pending, .pending])
+        #expect(active.map(\.1) == [.pending, .completed, .completed, .current])
 
         let ready = try rail(RunFixtures.readyRunID)
-        #expect(ready.map(\.0) == known + ["Publication"])
-        #expect(ready.map(\.1) == [.pending, .pending, .pending, .pending, .completed])
+        #expect(ready.map(\.0) == known)
+        #expect(ready.map(\.1) == [.pending, .completed, .completed, .completed])
+        #expect(
+            RunDisplay.title(try #require(runs.first { $0.run.id == RunFixtures.readyRunID }).run)
+                == "Verification · Round 1")
 
         let failed = try rail("run-oriole-121")
         #expect(failed.map(\.1) == [.pending, .pending, .pending, .failed])
 
         let completed = try rail(RunFixtures.completedRunID)
-        #expect(completed.map(\.0) == known + ["Publication"])
-        #expect(completed.map(\.1) == [.pending, .pending, .pending, .pending, .completed])
+        #expect(completed.map(\.0) == known)
+        #expect(completed.map(\.1) == [.pending, .completed, .completed, .completed])
+        #expect(RunDisplay.title(RunFixtures.completedRun().run) == "Verification · Round 1")
 
         let legacy = try rail(RunFixtures.legacyRunID)
         #expect(legacy.map(\.1) == [.pending, .pending, .pending, .pending])
@@ -376,10 +380,10 @@ import Testing
             return stage
         }
 
-        #expect(RunDisplay.title(run) == "Implementation · Round 2")
+        #expect(RunDisplay.title(run) == "Verification · Round 1")
         let rail = RunDisplay.stageRail(run)
         #expect(rail.entries.map(\.title) == ["Specification", "Implementation", "Review", "Verification"])
-        #expect(rail.entries.map(\.state) == [.pending, .current, .pending, .pending])
+        #expect(rail.entries.map(\.state) == [.pending, .completed, .completed, .current])
     }
 
     @Test func stageRailMarksEarlierStagesCompletedAndSummarizesEveryDot() throws {
@@ -388,10 +392,83 @@ import Testing
             .init(id: "stage-spec", run_id: run.id, name: "specification", attempts: []), at: 0)
         let rail = RunDisplay.stageRail(run)
 
-        #expect(rail.entries.map(\.state) == [.completed, .current, .pending, .pending])
+        #expect(rail.entries.map(\.state) == [.completed, .completed, .completed, .current])
         #expect(
             rail.summary
-                == "Specification completed, Implementation current, Review pending, Verification pending")
+                == "Specification completed, Implementation completed, Review completed, Verification current")
+    }
+
+    @Test(arguments: [
+        Components.Schemas.RunHoldReason.verification_findings, .trust_blocked, .base_advanced,
+        .recipe_revoked, .scope_conflict, .publication_environment, .external_conflict,
+    ])
+    func publicationCycleHoldsAdvanceToVerification(hold: Components.Schemas.RunHoldReason) {
+        var run = RunFixtures.defaultRuns()[0].run
+        run.hold_reason = .init(value1: hold)
+
+        #expect(RunDisplay.title(run) == "Verification · Round 1")
+        #expect(RunDisplay.stageRail(run).entries.map(\.state) == [.pending, .completed, .completed, .current])
+    }
+
+    @Test(arguments: [
+        Components.Schemas.RunHoldReason.operation_stopped, .admission_policy_refused,
+        .input_unavailable, .identity_parallelism,
+    ])
+    func preImplementationHoldsKeepImplementationCurrent(hold: Components.Schemas.RunHoldReason) {
+        var run = RunFixtures.defaultRuns()[0].run
+        run.hold_reason = .init(value1: hold)
+
+        #expect(RunDisplay.title(run) == "Implementation · Round 2")
+        #expect(RunDisplay.stageRail(run).entries.map(\.state) == [.pending, .current, .pending, .pending])
+    }
+
+    @Test func publicationSignalsTakePrecedenceOverEarlierHolds() {
+        let cases:
+            [(
+                Components.Schemas.RunOutcome, Components.Schemas.RunMilestoneKind,
+                DecisionStageRailPresentation.State
+            )] = [
+                (.completed, .invocation_started, .completed),
+                (.published, .publication_blocked, .completed),
+                (.pending, .work_unit_completed, .completed),
+                (.pending, .publication_ready, .completed),
+                (.failed, .publication_ready, .completed),
+                (.pending, .publication_blocked, .current),
+                (.blocked, .invocation_started, .current),
+            ]
+        for (outcome, milestone, state) in cases {
+            var run = RunFixtures.defaultRuns()[0].run
+            run.hold_reason = .init(value1: .admission_policy_refused)
+            run.outcome = outcome
+            run.latest_milestone = .init(value1: milestone)
+
+            #expect(RunDisplay.title(run) == "Verification · Round 1")
+            #expect(RunDisplay.stageRail(run).entries.map(\.state) == [.pending, .completed, .completed, state])
+        }
+    }
+
+    @Test func verificationRoundsCountImplementationPassesInsteadOfAttempts() {
+        var run = RunFixtures.refreshedHistoryRun().run
+        run.stages[0].name = "implementation"
+        run.stages.insert(.init(id: "spec", run_id: run.id, name: "specification", attempts: []), at: 0)
+
+        #expect(RunDisplay.title(run) == "Verification · Round 2")
+        run.latest_milestone = .init(value1: .invocation_started)
+        #expect(RunDisplay.title(run) == "Implementation · Round 1")
+        run.stages[run.stages.count - 1].attempts = []
+        #expect(RunDisplay.title(run) == "Implementation")
+    }
+
+    @Test func nonProductionStagesKeepTheirRecordedPosition() {
+        var run = RunFixtures.defaultRuns()[0].run
+        run.stages[0].name = "publication"
+
+        #expect(RunDisplay.workflowPhase(run) == nil)
+        #expect(RunDisplay.title(run) == "Publication · Round 2")
+        #expect(RunDisplay.stageRail(run).entries.map(\.state) == [.pending, .pending, .pending, .pending, .current])
+        let specification = RunFixtures.handedOffSpecificationRun().run
+        #expect(RunDisplay.workflowPhase(specification) == nil)
+        #expect(RunDisplay.title(specification) == "Specification · Round 1")
     }
 
     @Test func attemptIdentityResolvesSuccessorAndSuppressesStaleHold() throws {
@@ -479,17 +556,21 @@ import Testing
                 let expected: DecisionStageRailPresentation.State =
                     specification && outcome == .pending ? .completed : finishedState
                 let rail = RunDisplay.stageRail(run)
-                let index = specification ? 0 : 1
-                #expect(rail.entries[index].state == expected)
+                let expectedStates: [DecisionStageRailPresentation.State] =
+                    specification
+                    ? [expected, .pending, .pending, .pending] : [.pending, .completed, .completed, expected]
+                #expect(rail.entries.map(\.state) == expectedStates)
                 #expect(!rail.entries.contains { $0.state == .current })
                 #expect(!rail.summary.contains("current"))
-                #expect(rail.entries.enumerated().allSatisfy { $0.offset == index || $0.element.state == .pending })
 
                 run.lifecycle = .active
                 run.superseded_by = nil
                 let activeState: DecisionStageRailPresentation.State =
                     outcome == .pending || outcome == .blocked ? .current : finishedState
-                #expect(RunDisplay.stageRail(run).entries[index].state == activeState)
+                let activeStates: [DecisionStageRailPresentation.State] =
+                    specification
+                    ? [activeState, .pending, .pending, .pending] : [.pending, .completed, .completed, activeState]
+                #expect(RunDisplay.stageRail(run).entries.map(\.state) == activeStates)
             }
         }
     }
