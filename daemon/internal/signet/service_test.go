@@ -1122,30 +1122,37 @@ func putTestItem(t *testing.T, f fixture, item domain.AttentionItem) error {
 
 // TestSubmitAnswerRoutePolicy: answer_and_retry on an implementation-stage
 // question must name where the answer goes; retry_implementation is accepted,
-// revise_specification is refused as pending, and no other command may carry
-// a route.
+// revise_specification is route-valid but additionally requires a
+// campaign-backed run (#1083), and no other command may carry a route.
 func TestSubmitAnswerRoutePolicy(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
 	kind := domain.BlockedKindOwnerDecision
-	implementation := mustAgentQuestionItem(t, "question-implementation")
-	implementation.AgentQuestion = &domain.AgentQuestionFacts{
-		Stage: domain.StageNameImplementation, InvocationID: "inv-implement-1",
-		Kind: &kind, Decisions: decisionsFixture(),
+	// Each accepted answer_and_retry supersedes its question, so the two accepted
+	// routes (retry and revise) need distinct implementation-stage items.
+	base := mustAgentQuestionItem(t, "question-implementation")
+	buildImpl := func(itemID domain.ItemID, invocationID domain.InvocationID) domain.AttentionItem {
+		question := &domain.AgentQuestionFacts{
+			Stage: domain.StageNameImplementation, InvocationID: invocationID,
+			Kind: &kind, Decisions: decisionsFixture(),
+		}
+		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+			ID: itemID, ProjectID: base.ProjectID, Subject: base.Subject,
+			Type: base.Type, Priority: base.Priority, Reason: base.Reason,
+			RequestedDecision: base.RequestedDecision,
+			AgentClaims:       []domain.AgentClaim{questionClaimFixture(question)},
+			AgentQuestion:     question, ItemVersion: 1,
+			InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return item
 	}
-	implementation.AgentClaims = []domain.AgentClaim{questionClaimFixture(implementation.AgentQuestion)}
-	rebuilt, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: "question-inv-implement-1", ProjectID: implementation.ProjectID, Subject: implementation.Subject,
-		Type: implementation.Type, Priority: implementation.Priority, Reason: implementation.Reason,
-		RequestedDecision: implementation.RequestedDecision, AgentClaims: implementation.AgentClaims,
-		AgentQuestion: implementation.AgentQuestion, ItemVersion: 1,
-		InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	rebuilt := buildImpl("question-inv-implement-1", "inv-implement-1")
+	reviseTarget := buildImpl("question-inv-implement-2", "inv-implement-2")
 	specification := mustAgentQuestionItem(t, "question-specification")
-	for _, item := range []domain.AttentionItem{rebuilt, specification} {
+	for _, item := range []domain.AttentionItem{rebuilt, reviseTarget, specification} {
 		if err := putTestItem(t, f, item); err != nil {
 			t.Fatal(err)
 		}
@@ -1160,7 +1167,11 @@ func TestSubmitAnswerRoutePolicy(t *testing.T) {
 		want   error
 	}{
 		{"implementation without route", rebuilt, domain.ActionAnswerAndRetry, nil, signet.ErrAnswerRouteRequired},
-		{"implementation revise pending", rebuilt, domain.ActionAnswerAndRetry, &revise, signet.ErrUnsupportedAction},
+		// revise_specification is route-valid but requires a campaign-backed run
+		// (#1083); this fixture's run has no production attempt, so the accept
+		// boundary refuses it. The accepted case is covered by the engine's
+		// campaign-backed TestBlockedImplementationAnswerRevisesSpecification.
+		{"implementation revise needs a campaign", reviseTarget, domain.ActionAnswerAndRetry, &revise, store.ErrNotFound},
 		{"specification with route", specification, domain.ActionAnswerAndRetry, &retry, signet.ErrContentNotAllowed},
 		{"stop with route", specification, domain.ActionStop, &retry, signet.ErrContentNotAllowed},
 		{"implementation retry", rebuilt, domain.ActionAnswerAndRetry, &retry, nil},
@@ -1191,8 +1202,8 @@ func TestSubmitAnswerRoutePolicy(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Submit: %v", err)
 			}
-			if result.Record.AnswerRoute == nil || *result.Record.AnswerRoute != retry {
-				t.Fatalf("recorded answer route = %v, want %s", result.Record.AnswerRoute, retry)
+			if result.Record.AnswerRoute == nil || *result.Record.AnswerRoute != *test.route {
+				t.Fatalf("recorded answer route = %v, want %s", result.Record.AnswerRoute, *test.route)
 			}
 		})
 	}
