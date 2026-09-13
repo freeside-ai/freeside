@@ -86,6 +86,7 @@ func TestHTTPOnlyHealthAndPairingAreUnauthenticated(t *testing.T) {
 		{http.MethodGet, "/runs"},
 		{http.MethodGet, "/runs/run-1"},
 		{http.MethodGet, "/runs/run-1/timeline"},
+		{http.MethodGet, "/tasks/task-1/timeline"},
 		{http.MethodGet, "/schedules"},
 		{http.MethodGet, "/conversations/conversation-1"},
 		{http.MethodPost, "/commands"},
