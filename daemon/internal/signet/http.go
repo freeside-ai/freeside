@@ -61,6 +61,7 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 	mux.Handle("GET /schedules", h.authenticated(h.listSchedules))
 	mux.Handle("GET /runs/{run_id}", h.authenticated(h.getRun))
 	mux.Handle("GET /runs/{run_id}/timeline", h.authenticated(h.getRunTimeline))
+	mux.Handle("GET /tasks/{task_id}/timeline", h.authenticated(h.getTaskTimeline))
 	mux.Handle("GET /runs/{run_id}/review/{round}/evidence", h.authenticated(h.getReviewEvidence))
 	mux.Handle("GET /conversations/{conversation_id}", h.authenticated(h.getConversation))
 	mux.Handle("POST /commands", h.authenticated(h.submitCommand))
@@ -219,6 +220,19 @@ func (h httpHandler) getRun(w http.ResponseWriter, r *http.Request, _ domain.Dev
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
+}
+
+func (h httpHandler) getTaskTimeline(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
+	timeline, err := h.service.GetTaskTimeline(r.Context(), domain.TaskID(r.PathValue("task_id")))
+	if errors.Is(err, ErrRunObservationIntegrity) {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Message: "internal server error"})
+		return
+	}
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, timeline)
 }
 
 func (h httpHandler) getRunTimeline(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {

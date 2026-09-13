@@ -134,6 +134,14 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /runs/{run_id}`.
     /// - Remark: Generated from `#/paths//runs/{run_id}/get(getRun)`.
     func getRun(_ input: Operations.getRun.Input) async throws -> Operations.getRun.Output
+    /// Get one task timeline
+    ///
+    /// Returns recorded task events and campaign and run sections, newest first at every level, from one store read. The current name is a source-labeled claim in the header. A partial fetch; it never marks the whole cache current (plan §5.14).
+    ///
+    ///
+    /// - Remark: HTTP `GET /tasks/{task_id}/timeline`.
+    /// - Remark: Generated from `#/paths//tasks/{task_id}/timeline/get(getTaskTimeline)`.
+    func getTaskTimeline(_ input: Operations.getTaskTimeline.Input) async throws -> Operations.getTaskTimeline.Output
     /// Get one run timeline
     ///
     /// Returns the daemon-derived milestone, hold, and invocation-observation timeline for one run. The snapshot is computed in one store read and carries the revision that bounds every fact. A partial fetch; it never marks the whole cache current (plan §5.14).
@@ -477,6 +485,22 @@ extension APIProtocol {
         headers: Operations.getRun.Input.Headers = .init()
     ) async throws -> Operations.getRun.Output {
         try await getRun(Operations.getRun.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Get one task timeline
+    ///
+    /// Returns recorded task events and campaign and run sections, newest first at every level, from one store read. The current name is a source-labeled claim in the header. A partial fetch; it never marks the whole cache current (plan §5.14).
+    ///
+    ///
+    /// - Remark: HTTP `GET /tasks/{task_id}/timeline`.
+    /// - Remark: Generated from `#/paths//tasks/{task_id}/timeline/get(getTaskTimeline)`.
+    public func getTaskTimeline(
+        path: Operations.getTaskTimeline.Input.Path,
+        headers: Operations.getTaskTimeline.Input.Headers = .init()
+    ) async throws -> Operations.getTaskTimeline.Output {
+        try await getTaskTimeline(Operations.getTaskTimeline.Input(
             path: path,
             headers: headers
         ))
@@ -1753,6 +1777,467 @@ public enum Components {
                 case entity_version
                 case run
             }
+        }
+        /// Recorded task history computed under one server revision. The current name appears once as a source-labeled claim; no name history is inferred. Invocation detail, review facts, and cost remain on the run timeline.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskTimeline`.
+        public struct TaskTimeline: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskTimeline/as_of_revision`.
+            public var as_of_revision: Components.Schemas.AsOfRevision
+            /// The daemon-clock instant at which this timeline was projected.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskTimeline/as_of`.
+            public var as_of: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/TaskTimeline/task_id`.
+            public var task_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskTimeline/project_id`.
+            public var project_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskTimeline/name`.
+            public var name: Components.Schemas.DisplayName
+            /// Task-level events, newest first.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskTimeline/events`.
+            public var events: [Components.Schemas.TaskEvent]
+            /// Campaign sections ordered by allocation instant, newest first. Legacy runs share a null-campaign section ordered by its newest submission; runs without a submission sort last. Equal instants are ordered by campaign identifier descending, with null last.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskTimeline/sections`.
+            public var sections: [Components.Schemas.TaskTimelineSection]
+            /// Creates a new `TaskTimeline`.
+            ///
+            /// - Parameters:
+            ///   - as_of_revision:
+            ///   - as_of: The daemon-clock instant at which this timeline was projected.
+            ///   - task_id:
+            ///   - project_id:
+            ///   - name:
+            ///   - events: Task-level events, newest first.
+            ///   - sections: Campaign sections ordered by allocation instant, newest first. Legacy runs share a null-campaign section ordered by its newest submission; runs without a submission sort last. Equal instants are ordered by campaign identifier descending, with null last.
+            public init(
+                as_of_revision: Components.Schemas.AsOfRevision,
+                as_of: Foundation.Date,
+                task_id: Swift.String,
+                project_id: Swift.String,
+                name: Components.Schemas.DisplayName,
+                events: [Components.Schemas.TaskEvent],
+                sections: [Components.Schemas.TaskTimelineSection]
+            ) {
+                self.as_of_revision = as_of_revision
+                self.as_of = as_of
+                self.task_id = task_id
+                self.project_id = project_id
+                self.name = name
+                self.events = events
+                self.sections = sections
+            }
+            public enum CodingKeys: String, CodingKey {
+                case as_of_revision
+                case as_of
+                case task_id
+                case project_id
+                case name
+                case events
+                case sections
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.as_of_revision = try container.decode(
+                    Components.Schemas.AsOfRevision.self,
+                    forKey: .as_of_revision
+                )
+                self.as_of = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .as_of
+                )
+                self.task_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .task_id
+                )
+                self.project_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .project_id
+                )
+                self.name = try container.decode(
+                    Components.Schemas.DisplayName.self,
+                    forKey: .name
+                )
+                self.events = try container.decode(
+                    [Components.Schemas.TaskEvent].self,
+                    forKey: .events
+                )
+                self.sections = try container.decode(
+                    [Components.Schemas.TaskTimelineSection].self,
+                    forKey: .sections
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "as_of_revision",
+                    "as_of",
+                    "task_id",
+                    "project_id",
+                    "name",
+                    "events",
+                    "sections"
+                ])
+            }
+        }
+        /// A campaign's recorded events and runs, or the legacy run group.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskTimelineSection`.
+        public struct TaskTimelineSection: Codable, Hashable, Sendable {
+            /// Null groups legacy runs without a campaign.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineSection/campaign_id`.
+            public var campaign_id: Swift.String?
+            /// Campaign-level events, newest first.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineSection/events`.
+            public var events: [Components.Schemas.TaskEvent]
+            /// Run sections ordered by submission instant, newest first, with missing legacy instants last and equal instants by run id descending.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineSection/runs`.
+            public var runs: [Components.Schemas.TaskTimelineRun]
+            /// Creates a new `TaskTimelineSection`.
+            ///
+            /// - Parameters:
+            ///   - campaign_id: Null groups legacy runs without a campaign.
+            ///   - events: Campaign-level events, newest first.
+            ///   - runs: Run sections ordered by submission instant, newest first, with missing legacy instants last and equal instants by run id descending.
+            public init(
+                campaign_id: Swift.String? = nil,
+                events: [Components.Schemas.TaskEvent],
+                runs: [Components.Schemas.TaskTimelineRun]
+            ) {
+                self.campaign_id = campaign_id
+                self.events = events
+                self.runs = runs
+            }
+            public enum CodingKeys: String, CodingKey {
+                case campaign_id
+                case events
+                case runs
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.campaign_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .campaign_id
+                )
+                self.events = try container.decode(
+                    [Components.Schemas.TaskEvent].self,
+                    forKey: .events
+                )
+                self.runs = try container.decode(
+                    [Components.Schemas.TaskTimelineRun].self,
+                    forKey: .runs
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "campaign_id",
+                    "events",
+                    "runs"
+                ])
+            }
+        }
+        /// A run header and its daemon observations. The run id opens the full run timeline. Lineage and role are null for legacy runs without a campaign.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskTimelineRun`.
+        public struct TaskTimelineRun: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/run_id`.
+            public var run_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/role`.
+            public struct rolePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/role/value1`.
+                public var value1: Components.Schemas.TaskRunRole
+                /// Creates a new `rolePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskRunRole) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/role`.
+            public var role: Components.Schemas.TaskTimelineRun.rolePayload?
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/attempt_number`.
+            public var attempt_number: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/attempt_reason`.
+            public var attempt_reason: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/parent_run_id`.
+            public var parent_run_id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/superseded_by`.
+            public var superseded_by: Swift.String?
+            /// Run milestones, newest first (the run timeline uses oldest first).
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/milestones`.
+            public var milestones: [Components.Schemas.RunMilestone]
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/hold`.
+            public struct holdPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/hold/value1`.
+                public var value1: Components.Schemas.RunHold
+                /// Creates a new `holdPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.RunHold) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/hold`.
+            public var hold: Components.Schemas.TaskTimelineRun.holdPayload?
+            /// Run-level events, newest first.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/events`.
+            public var events: [Components.Schemas.TaskEvent]
+            /// Creates a new `TaskTimelineRun`.
+            ///
+            /// - Parameters:
+            ///   - run_id:
+            ///   - role:
+            ///   - attempt_number:
+            ///   - attempt_reason:
+            ///   - parent_run_id:
+            ///   - superseded_by:
+            ///   - milestones: Run milestones, newest first (the run timeline uses oldest first).
+            ///   - hold:
+            ///   - events: Run-level events, newest first.
+            public init(
+                run_id: Swift.String,
+                role: Components.Schemas.TaskTimelineRun.rolePayload? = nil,
+                attempt_number: Swift.Int? = nil,
+                attempt_reason: Swift.String? = nil,
+                parent_run_id: Swift.String? = nil,
+                superseded_by: Swift.String? = nil,
+                milestones: [Components.Schemas.RunMilestone],
+                hold: Components.Schemas.TaskTimelineRun.holdPayload? = nil,
+                events: [Components.Schemas.TaskEvent]
+            ) {
+                self.run_id = run_id
+                self.role = role
+                self.attempt_number = attempt_number
+                self.attempt_reason = attempt_reason
+                self.parent_run_id = parent_run_id
+                self.superseded_by = superseded_by
+                self.milestones = milestones
+                self.hold = hold
+                self.events = events
+            }
+            public enum CodingKeys: String, CodingKey {
+                case run_id
+                case role
+                case attempt_number
+                case attempt_reason
+                case parent_run_id
+                case superseded_by
+                case milestones
+                case hold
+                case events
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.run_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .run_id
+                )
+                self.role = try container.decodeIfPresent(
+                    Components.Schemas.TaskTimelineRun.rolePayload.self,
+                    forKey: .role
+                )
+                self.attempt_number = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .attempt_number
+                )
+                self.attempt_reason = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .attempt_reason
+                )
+                self.parent_run_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .parent_run_id
+                )
+                self.superseded_by = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .superseded_by
+                )
+                self.milestones = try container.decode(
+                    [Components.Schemas.RunMilestone].self,
+                    forKey: .milestones
+                )
+                self.hold = try container.decodeIfPresent(
+                    Components.Schemas.TaskTimelineRun.holdPayload.self,
+                    forKey: .hold
+                )
+                self.events = try container.decode(
+                    [Components.Schemas.TaskEvent].self,
+                    forKey: .events
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "run_id",
+                    "role",
+                    "attempt_number",
+                    "attempt_reason",
+                    "parent_run_id",
+                    "superseded_by",
+                    "milestones",
+                    "hold",
+                    "events"
+                ])
+            }
+        }
+        /// A recorded fact and its instant, with kind-scoped details. task_created has no details. campaign_allocated requires campaign_id and specification_run_id. specification_approved also requires run_id (the initial implementation) and approved_spec_digest; its instant is that run's submission, committed with approval. Retries reuse approval and emit no new approval event. pr_opened requires run_id and pr_number and uses the daemon's PR binding instant. pr_merged also requires merge_commit_sha and uses the re-gated completion record's instant. All other details are null. Events are observations, never authority.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskEvent`.
+        public struct TaskEvent: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/kind`.
+            public var kind: Components.Schemas.TaskEventKind
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/recorded_at`.
+            public var recorded_at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/campaign_id`.
+            public var campaign_id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/run_id`.
+            public var run_id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/approved_spec_digest`.
+            public struct approved_spec_digestPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskEvent/approved_spec_digest/value1`.
+                public var value1: Components.Schemas.Digest
+                /// Creates a new `approved_spec_digestPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.Digest) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/approved_spec_digest`.
+            public var approved_spec_digest: Components.Schemas.TaskEvent.approved_spec_digestPayload?
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/specification_run_id`.
+            public var specification_run_id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/pr_number`.
+            public var pr_number: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/merge_commit_sha`.
+            public var merge_commit_sha: Swift.String?
+            /// Creates a new `TaskEvent`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - recorded_at:
+            ///   - campaign_id:
+            ///   - run_id:
+            ///   - approved_spec_digest:
+            ///   - specification_run_id:
+            ///   - pr_number:
+            ///   - merge_commit_sha:
+            public init(
+                kind: Components.Schemas.TaskEventKind,
+                recorded_at: Foundation.Date,
+                campaign_id: Swift.String? = nil,
+                run_id: Swift.String? = nil,
+                approved_spec_digest: Components.Schemas.TaskEvent.approved_spec_digestPayload? = nil,
+                specification_run_id: Swift.String? = nil,
+                pr_number: Swift.Int? = nil,
+                merge_commit_sha: Swift.String? = nil
+            ) {
+                self.kind = kind
+                self.recorded_at = recorded_at
+                self.campaign_id = campaign_id
+                self.run_id = run_id
+                self.approved_spec_digest = approved_spec_digest
+                self.specification_run_id = specification_run_id
+                self.pr_number = pr_number
+                self.merge_commit_sha = merge_commit_sha
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case recorded_at
+                case campaign_id
+                case run_id
+                case approved_spec_digest
+                case specification_run_id
+                case pr_number
+                case merge_commit_sha
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.TaskEventKind.self,
+                    forKey: .kind
+                )
+                self.recorded_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .recorded_at
+                )
+                self.campaign_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .campaign_id
+                )
+                self.run_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .run_id
+                )
+                self.approved_spec_digest = try container.decodeIfPresent(
+                    Components.Schemas.TaskEvent.approved_spec_digestPayload.self,
+                    forKey: .approved_spec_digest
+                )
+                self.specification_run_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .specification_run_id
+                )
+                self.pr_number = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .pr_number
+                )
+                self.merge_commit_sha = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .merge_commit_sha
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "recorded_at",
+                    "campaign_id",
+                    "run_id",
+                    "approved_spec_digest",
+                    "specification_run_id",
+                    "pr_number",
+                    "merge_commit_sha"
+                ])
+            }
+        }
+        /// Closed vocabulary of recorded task history.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskEventKind`.
+        @frozen public enum TaskEventKind: String, Codable, Hashable, Sendable, CaseIterable {
+            case task_created = "task_created"
+            case campaign_allocated = "campaign_allocated"
+            case specification_approved = "specification_approved"
+            case pr_opened = "pr_opened"
+            case pr_merged = "pr_merged"
+        }
+        /// The run's role in its production attempt.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskRunRole`.
+        @frozen public enum TaskRunRole: String, Codable, Hashable, Sendable, CaseIterable {
+            case specification = "specification"
+            case implementation = "implementation"
         }
         /// A computed, typed daemon-observation timeline for one run. Review facts are separate from retained reviewer output, which has its own authenticated route. Stage labels come from the Run aggregate.
         ///
@@ -10848,6 +11333,10 @@ public enum Components {
         ///
         /// - Remark: Generated from `#/components/parameters/ItemID`.
         public typealias ItemID = Swift.String
+        /// The task's identifier.
+        ///
+        /// - Remark: Generated from `#/components/parameters/TaskID`.
+        public typealias TaskID = Swift.String
         /// The run's identifier.
         ///
         /// - Remark: Generated from `#/components/parameters/RunID`.
@@ -12371,6 +12860,162 @@ public enum Operations {
             /// No entity exists under the identifier.
             ///
             /// - Remark: Generated from `#/paths//runs/{run_id}/get(getRun)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Get one task timeline
+    ///
+    /// Returns recorded task events and campaign and run sections, newest first at every level, from one store read. The current name is a source-labeled claim in the header. A partial fetch; it never marks the whole cache current (plan §5.14).
+    ///
+    ///
+    /// - Remark: HTTP `GET /tasks/{task_id}/timeline`.
+    /// - Remark: Generated from `#/paths//tasks/{task_id}/timeline/get(getTaskTimeline)`.
+    public enum getTaskTimeline {
+        public static let id: Swift.String = "getTaskTimeline"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/tasks/{task_id}/timeline/GET/path`.
+            public struct Path: Sendable, Hashable {
+                /// The task's identifier.
+                ///
+                /// - Remark: Generated from `#/paths/tasks/{task_id}/timeline/GET/path/task_id`.
+                public var task_id: Components.Parameters.TaskID
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - task_id: The task's identifier.
+                public init(task_id: Components.Parameters.TaskID) {
+                    self.task_id = task_id
+                }
+            }
+            public var path: Operations.getTaskTimeline.Input.Path
+            /// - Remark: Generated from `#/paths/tasks/{task_id}/timeline/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getTaskTimeline.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getTaskTimeline.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.getTaskTimeline.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            public init(
+                path: Operations.getTaskTimeline.Input.Path,
+                headers: Operations.getTaskTimeline.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/tasks/{task_id}/timeline/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/tasks/{task_id}/timeline/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.TaskTimeline)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.TaskTimeline {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.getTaskTimeline.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.getTaskTimeline.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// The task timeline snapshot.
+            ///
+            /// - Remark: Generated from `#/paths//tasks/{task_id}/timeline/get(getTaskTimeline)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.getTaskTimeline.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.getTaskTimeline.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No entity exists under the identifier.
+            ///
+            /// - Remark: Generated from `#/paths//tasks/{task_id}/timeline/get(getTaskTimeline)/responses/404`.
             ///
             /// HTTP response code: `404 notFound`.
             case notFound(Components.Responses.NotFound)

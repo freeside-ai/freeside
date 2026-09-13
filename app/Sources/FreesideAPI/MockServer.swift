@@ -764,6 +764,48 @@ public actor MockServer {
         timelinesByRunID[id]
     }
 
+    func taskTimeline(id: String) throws -> Components.Schemas.TaskTimeline? {
+        guard let snapshot = try task(id: id) else { return nil }
+        let snapshots: [Components.Schemas.RunSnapshot] = try runsByID.keys.sorted().compactMap { runID in
+            guard runsByID[runID]?.run.task_id == id else { return nil }
+            return try run(id: runID)
+        }
+        guard Set(snapshots.map(\.run.id)) == Set(snapshot.task.run_ids),
+            snapshots.allSatisfy({ $0.run.project_id == snapshot.task.project_id })
+        else {
+            throw InvalidTaskError(taskID: id, reason: "Task history disagrees with its run membership")
+        }
+        let snapshotsByID = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.run.id, $0) })
+        var campaigns: [String] = []
+        for runID in snapshot.task.run_ids {
+            if let campaign = snapshotsByID[runID]?.run.campaign_id, !campaigns.contains(campaign) {
+                campaigns.append(campaign)
+            }
+        }
+        guard campaigns == snapshot.task.campaign_ids else {
+            throw InvalidTaskError(taskID: id, reason: "Task campaign order disagrees with its run history")
+        }
+        for snapshot in snapshots {
+            let timeline = timelinesByRunID[snapshot.run.id]
+            if let timeline,
+                let breach = MockContractValidation.taskTimelineObservationsBreach(timeline)
+            {
+                throw InvalidRunError(runID: snapshot.run.id, reason: breach)
+            }
+            if snapshot.run.campaign_id != nil,
+                timeline?.milestones.contains(where: { $0.kind == .run_submitted }) != true
+            {
+                throw InvalidRunError(runID: snapshot.run.id, reason: "Campaign run has no submission evidence")
+            }
+        }
+        let runs = snapshots.map {
+            RunFixtures.projectingObservationTimes($0, from: timelinesByRunID[$0.run.id]).run
+        }
+        return TaskFixtures.timeline(
+            for: snapshot.task, runs: runs, timelines: timelinesByRunID,
+            revision: revision, asOf: currentTime)
+    }
+
     func listSchedules() -> [Components.Schemas.ScheduleSnapshot] {
         schedulesByID.keys.sorted().compactMap { schedulesByID[$0] }
     }

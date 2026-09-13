@@ -24,6 +24,7 @@ enum MockContractValidation {
         if task.id.isEmpty || task.project_id.isEmpty { return "empty task identity" }
         if let breach = displayNamesBreach(task.display_names) { return breach }
         if task.display_names.task.source == .name { return "invalid task name source" }
+        if task.created_at == daemonZeroInstant { return "zero task creation instant" }
         if task.created_at > task.last_activity_at { return "task activity precedes creation" }
         if task.run_ids.contains(where: \.isEmpty) || Set(task.run_ids).count != task.run_ids.count {
             return "invalid task run history"
@@ -50,6 +51,47 @@ enum MockContractValidation {
                     return "invalid task issue source"
                 }
             }
+        }
+        return nil
+    }
+
+    /// Validate the observation fields copied into task history, mirroring
+    /// RunMilestone, RunHoldObservation, and the completion projection gate.
+    static func taskTimelineObservationsBreach(_ timeline: Components.Schemas.RunTimeline) -> String? {
+        for milestone in timeline.milestones {
+            if milestone.run_id != timeline.run_id { return "milestone names another run" }
+            if milestone.invocation_id?.isEmpty != false { return "missing milestone invocation" }
+            if milestone.recorded_at == daemonZeroInstant { return "zero milestone instant" }
+            if (milestone.terminal != nil) != (milestone.kind == .terminal_recorded)
+                || (milestone.outcome != nil) != (milestone.kind == .execution_outcome_recorded)
+                || (milestone.reason != nil) != (milestone.kind == .publication_blocked)
+            {
+                return "milestone details disagree with kind"
+            }
+            if let terminal = milestone.terminal?.value1, terminal == .pending || terminal == .running {
+                return "milestone terminal is not concluded or gone"
+            }
+        }
+        if let hold = timeline.hold?.value1 {
+            if hold.run_id != timeline.run_id { return "hold names another run" }
+            if hold.invocation_id?.isEmpty == true { return "empty hold invocation" }
+            if hold.first_observed_at == daemonZeroInstant || hold.last_observed_at == daemonZeroInstant {
+                return "zero hold instant"
+            }
+            if hold.last_observed_at < hold.first_observed_at { return "hold span reads backwards" }
+        }
+        let completed = timeline.milestones.filter { $0.kind == .work_unit_completed }
+        if let completion = timeline.completion?.value1 {
+            if completion.pr_number < 1 || completion.merge_commit_sha.isEmpty
+                || completion.recorded_at == daemonZeroInstant
+            {
+                return "invalid task completion fact"
+            }
+            if completed.isEmpty || completed.contains(where: { $0.recorded_at != completion.recorded_at }) {
+                return "completion fact disagrees with milestones"
+            }
+        } else if !completed.isEmpty {
+            return "completion milestone has no fact"
         }
         return nil
     }
