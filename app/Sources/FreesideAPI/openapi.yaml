@@ -2347,9 +2347,10 @@ components:
             agent_question whose facts name the implementation stage, and
             absent for every other command. retry_implementation re-invokes
             the implementer with the answer as operator feedback against the
-            unchanged specification; revise_specification is part of the
-            contract but the daemon refuses it as not yet available until a
-            revised specification can mint a fresh implementation identity.
+            unchanged specification; revise_specification files the answer as
+            specification feedback and starts a fresh campaign under the same
+            task, whose revised specification, once approved, begins a new
+            implementation run.
         attachments:
           type: array
           items:
@@ -5032,7 +5033,7 @@ components:
       required:
         [id, project_id, task_id, display_names, created_at, last_activity_at, spec_digest,
          policy_digest, campaign_id, attempt_number, attempt_reason,
-         parent_run_id, stages, latest_milestone, outcome, hold_reason,
+         parent_run_id, revises_run_id, stages, latest_milestone, outcome, hold_reason,
          lifecycle, superseded_by, completion, billable_cost_so_far]
       properties:
         id:
@@ -5089,6 +5090,15 @@ components:
           minLength: 1
           nullable: true
           description: Exact terminal run retried by this attempt; null for attempt 1.
+        revises_run_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: >
+            The blocked implementation run this run's campaign revises, set on
+            both runs of a specification-revision campaign; null everywhere
+            else. The forward half of the same link whose reverse half is the
+            blocked run's superseded_by.
         stages:
           type: array
           items:
@@ -5110,10 +5120,11 @@ components:
           minLength: 1
           nullable: true
           description: >
-            The id of the run that now owns this run's work: either a later
-            implementation attempt that retried it, or the implementation
-            run taking over an approved specification run's work in the same
-            campaign attempt. Null when neither successor exists.
+            The id of the run that now owns this run's work: a later
+            implementation attempt that retried it, the implementation run
+            taking over an approved specification run's work in the same
+            campaign attempt, or the specification run of a revision campaign
+            that revises this blocked run. Null when no successor exists.
         completion:
           nullable: true
           allOf:
@@ -5143,6 +5154,7 @@ components:
         attempt_number: 2
         attempt_reason: "Retry after correcting the acceptance rig"
         parent_run_id: "run-0"
+        revises_run_id: null
         latest_milestone: "invocation_started"
         outcome: "pending"
         hold_reason: null

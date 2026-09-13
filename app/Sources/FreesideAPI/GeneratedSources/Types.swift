@@ -4180,7 +4180,7 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/capability_manifest_digest`.
             public var capability_manifest_digest: Components.Schemas.DecisionPayload.capability_manifest_digestPayload?
-            /// Where the answer goes. Required for answer_and_retry on an agent_question whose facts name the implementation stage, and absent for every other command. retry_implementation re-invokes the implementer with the answer as operator feedback against the unchanged specification; revise_specification is part of the contract but the daemon refuses it as not yet available until a revised specification can mint a fresh implementation identity.
+            /// Where the answer goes. Required for answer_and_retry on an agent_question whose facts name the implementation stage, and absent for every other command. retry_implementation re-invokes the implementer with the answer as operator feedback against the unchanged specification; revise_specification files the answer as specification feedback and starts a fresh campaign under the same task, whose revised specification, once approved, begins a new implementation run.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/answer_route`.
@@ -4201,7 +4201,7 @@ public enum Components {
                     try encoder.encodeToSingleValueContainer(self.value1)
                 }
             }
-            /// Where the answer goes. Required for answer_and_retry on an agent_question whose facts name the implementation stage, and absent for every other command. retry_implementation re-invokes the implementer with the answer as operator feedback against the unchanged specification; revise_specification is part of the contract but the daemon refuses it as not yet available until a revised specification can mint a fresh implementation identity.
+            /// Where the answer goes. Required for answer_and_retry on an agent_question whose facts name the implementation stage, and absent for every other command. retry_implementation re-invokes the implementer with the answer as operator feedback against the unchanged specification; revise_specification files the answer as specification feedback and starts a fresh campaign under the same task, whose revised specification, once approved, begins a new implementation run.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/answer_route`.
@@ -4262,7 +4262,7 @@ public enum Components {
             ///   - artifact_digests: The canonical (sorted, deduplicated) binding set: exactly the digests rendered in the item's evidence_snapshot and agent_claims.
             ///   - message: Human-authored text for message-carrying decisions. Required for discuss, request_changes, answer_and_retry, answer_without_retry, and return_to_agent; absent for pure decisions. The daemon binds it to the versioned command and applies each action's size and attachment policy.
             ///   - capability_manifest_digest: The offered capability manifest selected by retry_with_capabilities. Required only for that action; the daemon re-derives the manifest from the run's current resolved policy.
-            ///   - answer_route: Where the answer goes. Required for answer_and_retry on an agent_question whose facts name the implementation stage, and absent for every other command. retry_implementation re-invokes the implementer with the answer as operator feedback against the unchanged specification; revise_specification is part of the contract but the daemon refuses it as not yet available until a revised specification can mint a fresh implementation identity.
+            ///   - answer_route: Where the answer goes. Required for answer_and_retry on an agent_question whose facts name the implementation stage, and absent for every other command. retry_implementation re-invokes the implementer with the answer as operator feedback against the unchanged specification; revise_specification files the answer as specification feedback and starts a fresh campaign under the same task, whose revised specification, once approved, begins a new implementation run.
             ///   - attachments: Digest addresses of attachments already uploaded via PUT /attachments/{digest}, referenced by the appended message. Unlike artifact_digests this is ordered message content, not a binding set: order is preserved, never canonicalized.
             ///   - run_proposal_revision: Typed replacement parameters, present only for start_with_changes. The daemon preserves the current opaque subject handle, re-resolves its declaration and policy, and computes the revised digest inside the accepting transaction.
             ///   - snooze_until: Typed UTC deferral instant, present only for snooze. The daemon requires a future canonical instant and records it in the proposal ledger.
@@ -10018,6 +10018,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Run/parent_run_id`.
             public var parent_run_id: Swift.String?
+            /// The blocked implementation run this run's campaign revises, set on both runs of a specification-revision campaign; null everywhere else. The forward half of the same link whose reverse half is the blocked run's superseded_by.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/Run/revises_run_id`.
+            public var revises_run_id: Swift.String?
             /// - Remark: Generated from `#/components/schemas/Run/stages`.
             public var stages: [Components.Schemas.Stage]
             /// - Remark: Generated from `#/components/schemas/Run/latest_milestone`.
@@ -10064,7 +10069,7 @@ public enum Components {
             public var hold_reason: Components.Schemas.Run.hold_reasonPayload?
             /// - Remark: Generated from `#/components/schemas/Run/lifecycle`.
             public var lifecycle: Components.Schemas.RunLifecycle
-            /// The id of the run that now owns this run's work: either a later implementation attempt that retried it, or the implementation run taking over an approved specification run's work in the same campaign attempt. Null when neither successor exists.
+            /// The id of the run that now owns this run's work: a later implementation attempt that retried it, the implementation run taking over an approved specification run's work in the same campaign attempt, or the specification run of a revision campaign that revises this blocked run. Null when no successor exists.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/Run/superseded_by`.
@@ -10136,12 +10141,13 @@ public enum Components {
             ///   - attempt_number: Monotonic campaign attempt number allocated by the daemon.
             ///   - attempt_reason: Operator reason for a retry; null for attempt 1.
             ///   - parent_run_id: Exact terminal run retried by this attempt; null for attempt 1.
+            ///   - revises_run_id: The blocked implementation run this run's campaign revises, set on both runs of a specification-revision campaign; null everywhere else. The forward half of the same link whose reverse half is the blocked run's superseded_by.
             ///   - stages:
             ///   - latest_milestone:
             ///   - outcome:
             ///   - hold_reason:
             ///   - lifecycle:
-            ///   - superseded_by: The id of the run that now owns this run's work: either a later implementation attempt that retried it, or the implementation run taking over an approved specification run's work in the same campaign attempt. Null when neither successor exists.
+            ///   - superseded_by: The id of the run that now owns this run's work: a later implementation attempt that retried it, the implementation run taking over an approved specification run's work in the same campaign attempt, or the specification run of a revision campaign that revises this blocked run. Null when no successor exists.
             ///   - completion: The work unit's completion facts once the outcome is completed; null otherwise.
             ///   - billable_cost_so_far: The run's billable spend so far, computed the same way attention cards compute theirs; null before any billable observation.
             public init(
@@ -10157,6 +10163,7 @@ public enum Components {
                 attempt_number: Swift.Int? = nil,
                 attempt_reason: Swift.String? = nil,
                 parent_run_id: Swift.String? = nil,
+                revises_run_id: Swift.String? = nil,
                 stages: [Components.Schemas.Stage],
                 latest_milestone: Components.Schemas.Run.latest_milestonePayload? = nil,
                 outcome: Components.Schemas.RunOutcome,
@@ -10178,6 +10185,7 @@ public enum Components {
                 self.attempt_number = attempt_number
                 self.attempt_reason = attempt_reason
                 self.parent_run_id = parent_run_id
+                self.revises_run_id = revises_run_id
                 self.stages = stages
                 self.latest_milestone = latest_milestone
                 self.outcome = outcome
@@ -10200,6 +10208,7 @@ public enum Components {
                 case attempt_number
                 case attempt_reason
                 case parent_run_id
+                case revises_run_id
                 case stages
                 case latest_milestone
                 case outcome
