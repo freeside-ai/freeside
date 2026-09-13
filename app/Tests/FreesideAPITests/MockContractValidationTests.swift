@@ -55,6 +55,102 @@ import Testing
         #expect(MockContractValidation.itemValidityBreach(item) == "invalid task subject")
     }
 
+    @Test func taskTimelineMilestonesMatchDaemonValidation() throws {
+        for source in RunFixtures.defaultTimelines() {
+            #expect(MockContractValidation.taskTimelineObservationsBreach(source) == nil)
+        }
+        let source = try #require(RunFixtures.defaultTimelines().first { $0.run_id == RunFixtures.activeRunID })
+        var invalid = source
+        invalid.milestones[0].run_id = "another-run"
+        #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == "milestone names another run")
+        for invocation: String? in [nil, ""] {
+            invalid = source
+            invalid.milestones[0].invocation_id = invocation
+            #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == "missing milestone invocation")
+        }
+        invalid = source
+        invalid.milestones[0].recorded_at = daemonZeroInstant
+        #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == "zero milestone instant")
+        invalid = source
+        invalid.milestones[0].terminal = .init(value1: .completed)
+        #expect(
+            MockContractValidation.taskTimelineObservationsBreach(invalid) == "milestone details disagree with kind")
+        for kind: Components.Schemas.RunMilestoneKind in [
+            .terminal_recorded, .execution_outcome_recorded, .publication_blocked,
+        ] {
+            invalid = source
+            invalid.milestones[0].kind = kind
+            #expect(
+                MockContractValidation.taskTimelineObservationsBreach(invalid) == "milestone details disagree with kind"
+            )
+        }
+        for status in Components.Schemas.ObservedInvocationStatus.allCases {
+            invalid = source
+            invalid.milestones[0].kind = .terminal_recorded
+            invalid.milestones[0].terminal = .init(value1: status)
+            let expected =
+                status == .pending || status == .running ? "milestone terminal is not concluded or gone" : nil
+            #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == expected)
+        }
+    }
+
+    @Test func taskTimelineHoldSpansMatchDaemonValidation() throws {
+        let source = try #require(RunFixtures.defaultTimelines().first { $0.hold != nil })
+        var invalid = source
+        invalid.hold?.value1.run_id = "another-run"
+        #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == "hold names another run")
+        invalid = source
+        invalid.hold?.value1.invocation_id = ""
+        #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == "empty hold invocation")
+        invalid.hold?.value1.invocation_id = nil
+        #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == nil)
+        for first in [true, false] {
+            invalid = source
+            if first {
+                invalid.hold?.value1.first_observed_at = daemonZeroInstant
+            } else {
+                invalid.hold?.value1.last_observed_at = daemonZeroInstant
+            }
+            #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == "zero hold instant")
+        }
+        invalid = source
+        invalid.hold?.value1.last_observed_at = try #require(source.hold).value1.first_observed_at.addingTimeInterval(
+            -1)
+        #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == "hold span reads backwards")
+    }
+
+    @Test func taskTimelineCompletionRequiresRecordedMilestone() throws {
+        let source = try #require(RunFixtures.defaultTimelines().first { $0.completion != nil })
+        var invalid = source
+        invalid.completion?.value1.pr_number = 0
+        #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == "invalid task completion fact")
+        invalid = source
+        invalid.completion?.value1.merge_commit_sha = ""
+        #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == "invalid task completion fact")
+        invalid = source
+        invalid.completion?.value1.recorded_at = daemonZeroInstant
+        #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == "invalid task completion fact")
+        invalid = source
+        invalid.completion?.value1.recorded_at += 1
+        #expect(
+            MockContractValidation.taskTimelineObservationsBreach(invalid)
+                == "completion fact disagrees with milestones")
+        invalid = source
+        invalid.milestones.removeAll { $0.kind == .work_unit_completed }
+        #expect(
+            MockContractValidation.taskTimelineObservationsBreach(invalid)
+                == "completion fact disagrees with milestones")
+        invalid = source
+        invalid.completion = nil
+        #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == "completion milestone has no fact")
+    }
+
+    @Test func taskCreationInstantMatchesDaemonValidation() throws {
+        var invalid = try #require(TaskFixtures.defaultTasks().first)
+        invalid.task.created_at = daemonZeroInstant
+        #expect(MockContractValidation.taskSnapshotBreach(invalid, serverRevision: 12) == "zero task creation instant")
+    }
+
     @Test func runSubjectRequiresTaskIdentityEvenWithoutRedundantRunID() {
         var item = AttentionFixtures.fixture(type: .spec_approval).item
         for runID: String? in [nil, "run-1"] {

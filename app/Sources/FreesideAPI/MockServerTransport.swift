@@ -202,7 +202,7 @@ public struct MockServerTransport: ClientTransport {
                 )
             }
         case "getRunTimeline":
-            guard let runID = Self.runID(inTimelinePath: request.path),
+            guard let runID = Self.resourceID(inTimelinePath: request.path),
                 let timeline = await server.runTimeline(id: runID)
             else {
                 return try Self.json(
@@ -211,6 +211,28 @@ public struct MockServerTransport: ClientTransport {
                         message: "no entity exists under the identifier"))
             }
             return try Self.json(status: .ok, body: timeline)
+        case "getTaskTimeline":
+            do {
+                guard let taskID = Self.resourceID(inTimelinePath: request.path),
+                    let timeline = try await server.taskTimeline(id: taskID)
+                else {
+                    return try Self.json(
+                        status: .notFound,
+                        body: Components.Schemas._Error(
+                            message: "no entity exists under the identifier"))
+                }
+                return try Self.json(status: .ok, body: timeline)
+            } catch let invalid as MockServer.InvalidTaskError {
+                return try Self.json(
+                    status: .internalServerError,
+                    body: Components.Schemas._Error(
+                        message: "reconstruction failed: task \(invalid.taskID): \(invalid.reason)"))
+            } catch let invalid as MockServer.InvalidRunError {
+                return try Self.json(
+                    status: .internalServerError,
+                    body: Components.Schemas._Error(
+                        message: "reconstruction failed: run \(invalid.runID): \(invalid.reason)"))
+            }
         case "getReviewEvidence":
             let parts = (request.path ?? "").split(separator: "/")
             guard parts.count == 5, parts[0] == "runs", parts[2] == "review", parts[4] == "evidence",
@@ -599,7 +621,7 @@ public struct MockServerTransport: ClientTransport {
         return String(parts[parts.count - 2]).removingPercentEncoding
     }
 
-    private static func runID(inTimelinePath path: String?) -> String? {
+    private static func resourceID(inTimelinePath path: String?) -> String? {
         guard let path else { return nil }
         let parts = path.split(separator: "/")
         guard parts.count >= 3, parts.last == "timeline" else { return nil }
@@ -626,27 +648,53 @@ public struct MockServerTransport: ClientTransport {
             status: status,
             headerFields: [.contentType: "application/json"]
         )
-        let data = try requiredNullableMembersPresent(in: encoder.encode(body))
+        let data = try requiredNullableMembersPresent(
+            in: encoder.encode(body), taskTimeline: body is Components.Schemas.TaskTimeline)
         return (response, HTTPBody(data))
     }
 
     /// Swift's synthesized Encodable omits nil optionals even when OpenAPI
     /// declares them required and nullable. Patch the affected mock responses
     /// so their raw JSON exercises the production wire contract.
-    private static func requiredNullableMembersPresent(in data: Data) throws -> Data {
+    private static func requiredNullableMembersPresent(in data: Data, taskTimeline: Bool) throws -> Data {
         let object = try JSONSerialization.jsonObject(with: data)
         return try JSONSerialization.data(
-            withJSONObject: insertingRequiredNullableMembers(in: object),
+            withJSONObject: insertingRequiredNullableMembers(in: object, taskTimeline: taskTimeline),
             options: [.sortedKeys])
     }
 
-    private static func insertingRequiredNullableMembers(in value: Any) -> Any {
+    private static func insertingRequiredNullableMembers(
+        in value: Any, taskTimeline: Bool, member: String? = nil
+    ) -> Any {
         if let values = value as? [Any] {
-            return values.map(insertingRequiredNullableMembers)
+            return values.map { insertingRequiredNullableMembers(in: $0, taskTimeline: taskTimeline, member: member) }
         }
         guard var object = value as? [String: Any] else { return value }
         for (key, nested) in object {
-            object[key] = insertingRequiredNullableMembers(in: nested)
+            object[key] = insertingRequiredNullableMembers(in: nested, taskTimeline: taskTimeline, member: key)
+        }
+        if taskTimeline {
+            let keys: [String]
+            switch member {
+            case "events":
+                keys = [
+                    "campaign_id", "run_id", "approved_spec_digest", "specification_run_id", "pr_number",
+                    "merge_commit_sha",
+                ]
+            case "sections":
+                keys = ["campaign_id"]
+            case "runs":
+                keys = ["role", "attempt_number", "attempt_reason", "parent_run_id", "superseded_by", "hold"]
+            case "milestones":
+                keys = ["invocation_id", "terminal", "outcome", "reason"]
+            case "hold":
+                keys = ["invocation_id"]
+            default:
+                keys = []
+            }
+            for key in keys where !object.keys.contains(key) {
+                object[key] = NSNull()
+            }
         }
         if var run = object["run"] as? [String: Any] {
             for key in [
