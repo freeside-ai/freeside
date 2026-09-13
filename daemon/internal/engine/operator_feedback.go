@@ -351,11 +351,22 @@ func (e *Engine) reconcileOperatorFeedbackActions(
 				}
 				continue
 			}
-			// An implementation-stage answer names its route at submit; only
-			// retry_implementation re-invokes the implementer here. A revision
-			// route never reaches this dispatcher until the campaign identity
-			// decision lands, so anything else is a malformed command.
-			if command.AnswerRoute == nil || *command.AnswerRoute != domain.AnswerRouteRetryImplementation {
+			// An implementation-stage answer names its route at submit.
+			// revise_specification files the answer as specification feedback and
+			// starts a fresh campaign under the same task (#1083); only
+			// retry_implementation re-invokes the implementer, below.
+			switch {
+			case command.AnswerRoute != nil && *command.AnswerRoute == domain.AnswerRouteReviseSpecification:
+				made, err := e.enqueueSpecificationRevisionCampaign(ctx, run, item, command)
+				created += boolCount(made)
+				if err != nil {
+					joined = errors.Join(joined, fmt.Errorf(
+						"operator feedback command %q: %w", command.CommandID, err))
+				}
+				continue
+			case command.AnswerRoute != nil && *command.AnswerRoute == domain.AnswerRouteRetryImplementation:
+				// Retry the implementer through enqueueImplementationFeedback below.
+			default:
 				joined = errors.Join(joined, fmt.Errorf(
 					"operator feedback command %q has no implementation answer route: %w",
 					command.CommandID, domain.ErrParentKeyMismatch))
@@ -433,7 +444,7 @@ func (e *Engine) enqueueSpecificationAnswer(
 	if err != nil {
 		return false, err
 	}
-	if request.Iteration >= settings.MaxIterations {
+	if request.Iteration-request.firstIteration()+1 >= settings.MaxIterations {
 		return false, e.recordSpecificationRevisionFailure(
 			ctx, run, request, exec.StatusFailed, ErrSpecificationIterationsExhausted.Error())
 	}
@@ -528,6 +539,183 @@ func (e *Engine) enqueueSpecificationAnswer(
 		return false, err
 	}
 	return inserted, nil
+}
+
+// enqueueSpecificationRevisionCampaign starts a fresh campaign under the same
+// task when an implementation-stage agent_question is answered with
+// revise_specification (#1083). It files the answer as a daemon-authored
+// feedback artifact and creates a new specification run rooted at the revision
+// (iteration 2): its first request carries the blocked campaign's approved
+// specification as the prior spec and the feedback as the change request, and
+// its initial attempt links back to the blocked run and the answering command.
+// The blocked run is untouched. The new run's identity is deterministic from
+// the command, so an outbox redelivery converges instead of minting a twin.
+func (e *Engine) enqueueSpecificationRevisionCampaign(
+	ctx context.Context, blockedRun domain.Run, item domain.AttentionItem, command domain.Command,
+) (bool, error) {
+	if e.specification == nil || item.AgentQuestion == nil ||
+		item.AgentQuestion.Stage != domain.StageNameImplementation ||
+		!operatorFeedbackCommandMatchesItem(command, item) ||
+		command.Action != domain.ActionAnswerAndRetry || command.AnswerRoute == nil ||
+		*command.AnswerRoute != domain.AnswerRouteReviseSpecification ||
+		item.Subject.RunID == nil || *item.Subject.RunID != blockedRun.ID {
+		return false, domain.ErrParentKeyMismatch
+	}
+	answer := strings.TrimSpace(command.Message)
+	if answer == "" {
+		return false, domain.ErrParentKeyMismatch
+	}
+	// Signet has already superseded the question by the time this reconcile runs,
+	// so if the revision request cannot be built the operator has no way to retry
+	// the decision. A prior pass may have recorded that as an undeliverable
+	// failure item; treat it as handled instead of rebuilding (mirrors the retry
+	// route's idempotence guard in enqueueImplementationFeedback).
+	if parked, err := e.operatorFeedbackUndeliverableRecorded(ctx, item, command); err != nil || parked {
+		return false, err
+	}
+	newImplRunID := derivedRevisionImplementationRunID(command.CommandID)
+	newSpecRunID, err := SpecificationRunIDForImplementation(newImplRunID)
+	if err != nil {
+		return false, err
+	}
+	newCampaignID, err := ProductionCampaignIDForImplementation(newImplRunID)
+	if err != nil {
+		return false, err
+	}
+	feedbackBody := specificationRevisionFeedbackBody(*item.AgentQuestion, answer)
+	if len(feedbackBody) > domain.MaxSpecRevisionCommentBytes {
+		return false, fmt.Errorf(
+			"specification revision feedback exceeds the comment bound: %w", domain.ErrParentKeyMismatch)
+	}
+	feedbackDigest := domain.Digest(contentaddr.Sum([]byte(feedbackBody)))
+	feedbackID := domain.ArtifactID("spec-feedback-" + command.CommandID)
+	feedback, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: feedbackID, Type: domain.ArtifactKindResearch, Digest: feedbackDigest,
+		Provenance: domain.Provenance{
+			ProducerClass:        domain.ProducerDaemon,
+			ProducerInvocationID: specificationInvocationID(newSpecRunID, 2),
+			HeadBinding:          domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaTextPlain, SizeBytes: int64(len(feedbackBody)),
+			CreatedAt: e.specification.now().UTC(), Source: domain.EvidenceSourceRun,
+			Availability: domain.EvidenceAvailable,
+		},
+	}, nil)
+	if err != nil {
+		return false, err
+	}
+	if _, err := e.specification.blobs.Put(feedbackDigest, strings.NewReader(feedbackBody)); err != nil {
+		return false, err
+	}
+	inserted := false
+	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
+		currentItem, err := tx.GetAttentionItem(ctx, item.ID)
+		if err != nil {
+			return err
+		}
+		storedCommand, err := tx.GetCommand(ctx, command.CommandID)
+		if err != nil || !reflect.DeepEqual(currentItem, item) || !reflect.DeepEqual(storedCommand, command) ||
+			!operatorFeedbackCommandMatchesItem(storedCommand, currentItem) {
+			return errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+		// Recover the blocked campaign's durable inputs. loadReattemptInputs binds
+		// against the blocked spec run's first dispatch marker, so a blocked run
+		// that is itself a revision campaign (root at iteration 2) is handled too:
+		// a second revision reads that run's iteration-2 root the same way.
+		var (
+			parentRun      domain.Run
+			parentPolicy   domain.ResolvedPolicy
+			blockedRequest specificationRequest
+			sourceArtifact domain.Artifact
+			policyArtifact domain.Artifact
+		)
+		if err := loadReattemptInputs(ctx, tx, blockedRun.ID, &parentRun, &parentPolicy,
+			&blockedRequest, &sourceArtifact, &policyArtifact); err != nil {
+			return err
+		}
+		if parentRun.TaskID == "" {
+			return fmt.Errorf("blocked run %q carries no task: %w", blockedRun.ID, domain.ErrParentKeyMismatch)
+		}
+		blockedInvocation, err := tx.GetAgentInvocation(ctx, productionInvocationID(blockedRun.ID))
+		if err != nil {
+			return err
+		}
+		if len(blockedInvocation.InputIDs) == 0 {
+			return domain.ErrParentKeyMismatch
+		}
+		priorSpecID := blockedInvocation.InputIDs[0]
+		newSpecPolicy, err := domain.NewResolvedPolicy(newSpecRunID, parentPolicy.Keys)
+		if err != nil {
+			return err
+		}
+		spec := SpecificationRunSpec{
+			SpecificationRunID: newSpecRunID, ImplementationRunID: newImplRunID,
+			ProjectID: parentRun.ProjectID, SourceArtifactID: blockedRequest.InputArtifactIDs[0],
+			PolicyArtifactID: blockedRequest.PolicyArtifactID, ResolvedPolicy: newSpecPolicy,
+			Publication: blockedRequest.Publication, PublicationDigest: blockedRequest.PublicationDigest,
+			WorkUnit:   cloneSpecificationWorkUnit(blockedRequest.WorkUnit),
+			CampaignID: newCampaignID, AttemptNumber: 1,
+		}
+		seed := specificationRunSeed{
+			taskID: parentRun.TaskID, priorSpecArtifactID: priorSpecID,
+			feedbackArtifactIDs: []domain.ArtifactID{feedbackID}, startIteration: 2,
+			revisesRunID: blockedRun.ID, revisionCommandID: command.CommandID,
+		}
+		request, _ := specificationFirstRequest(spec, &seed)
+		payload, err := encodeSpecificationRequest(request)
+		if err != nil {
+			return err
+		}
+		invocation, err := domain.NewAgentInvocation(request.InvocationID, request.InputArtifactIDs, nil, 0)
+		if err != nil {
+			return err
+		}
+		if err := putArtifactIdempotent(ctx, tx, feedback); err != nil {
+			return err
+		}
+		_, getErr := tx.GetRun(ctx, newSpecRunID)
+		existed := getErr == nil
+		if getErr != nil && !errors.Is(getErr, store.ErrNotFound) {
+			return getErr
+		}
+		if _, err := submitSpecificationRunTx(ctx, tx, spec, request, invocation, payload, &seed); err != nil {
+			return err
+		}
+		inserted = !existed
+		return nil
+	})
+	if errors.Is(err, domain.ErrClaimTextTooLarge) {
+		// The composed revision request exceeds maxSpecificationContractBytes.
+		// A near-limit original contract can legally reach that size, and the
+		// revision adds the prior-spec, feedback, and link fields on top. Because
+		// the answer already superseded the question, returning the raw error
+		// would poison-loop the reconcile with no operator recovery; surface an
+		// undeliverable failure item instead, as the retry route does for an
+		// oversize operator-feedback input.
+		return e.recordSpecificationRevisionUndeliverable(ctx, item, command)
+	}
+	if err != nil {
+		return false, err
+	}
+	return inserted, nil
+}
+
+// recordSpecificationRevisionUndeliverable surfaces an operator-visible failure
+// when a revise_specification answer cannot start a revision campaign because
+// the composed request would exceed the specification contract size limit
+// (#1083). It reuses the shared undeliverable-feedback item so the reconcile
+// converges instead of retrying the same oversize build forever.
+func (e *Engine) recordSpecificationRevisionUndeliverable(
+	ctx context.Context, source domain.AttentionItem, command domain.Command,
+) (bool, error) {
+	if e.productionPublication == nil || !operatorFeedbackCommandMatchesItem(command, source) ||
+		source.Subject.RunID == nil {
+		return false, domain.ErrParentKeyMismatch
+	}
+	return e.recordOperatorFeedbackFailure(ctx, source, command, domain.AttentionExecutionFailure,
+		"The revised specification request exceeds the specification contract size "+
+			"limit, so a revision campaign cannot be started from this answer.")
 }
 
 func (e *Engine) enqueueImplementationFeedback(

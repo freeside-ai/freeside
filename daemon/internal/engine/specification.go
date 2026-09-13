@@ -180,6 +180,14 @@ type specificationRequest struct {
 	WorkUnit            *domain.WorkUnitDeclarationInput `json:"work_unit,omitempty"`
 	CampaignID          domain.CampaignID                `json:"campaign_id,omitempty"`
 	AttemptNumber       int                              `json:"attempt_number,omitempty"`
+	// FirstIteration is the run's first specification iteration. It is absent
+	// (treated as 1) for every ordinary run, whose specification starts at
+	// iteration 1. A specification-revision campaign's run (#1083) has no
+	// iteration-1 marker: its first request is the revision itself at iteration
+	// 2, so FirstIteration is 2 there and the MaxIterations budget counts the
+	// revision run's own iterations from it. It is a run-constant carried across
+	// every iteration and checked as a root field.
+	FirstIteration int `json:"first_iteration,omitempty"`
 	// IssueSubject marks the label-intake issue-subject arm and pins the
 	// occurrence-bound issue the run specifies (plan §5.12, #659). Nil on the
 	// spec-artifact arm (freesided submit). It carries only issue coordinates,
@@ -337,6 +345,17 @@ func ProductionCampaignIDForImplementation(implementationRunID domain.RunID) (do
 	}
 	sum := sha256.Sum256([]byte("freeside.production-campaign/v1\x00" + string(implementationRunID)))
 	return domain.CampaignID("campaign-" + hex.EncodeToString(sum[:])), nil
+}
+
+// derivedRevisionImplementationRunID mints the fresh campaign's implementation
+// run identity deterministically from the answer_and_retry command that chose
+// revise_specification (#1083 D6). Keying on the immutable command means an
+// outbox redelivery reproduces the same run, campaign, and specification run
+// and converges on the store's idempotent-replay path rather than minting a
+// twin. Its own version string keeps it distinct from the retry derivation.
+func derivedRevisionImplementationRunID(commandID string) domain.RunID {
+	sum := sha256.Sum256([]byte("freeside.specification-revision-run/v1\x00" + commandID))
+	return domain.RunID("run-" + hex.EncodeToString(sum[:]))
 }
 
 // ProductionAttemptRunID derives retry run identities from the stable
@@ -534,16 +553,7 @@ func SubmitSpecificationRun(ctx context.Context, st *store.Store, spec Specifica
 	if spec.Source.Kind == domain.SpecificationSourceIssueSubject {
 		return submitIssueSubjectSpecificationRun(ctx, st, spec)
 	}
-	invocationID := specificationInvocationID(spec.SpecificationRunID, 1)
-	request := specificationRequest{
-		Version: specificationRequestVersion, SpecificationRunID: spec.SpecificationRunID,
-		ImplementationRunID: spec.ImplementationRunID, ProjectID: spec.ProjectID,
-		InvocationID: invocationID, Iteration: 1,
-		InputArtifactIDs: []domain.ArtifactID{spec.SourceArtifactID},
-		PolicyArtifactID: spec.PolicyArtifactID, Publication: spec.Publication, PublicationDigest: spec.PublicationDigest,
-		WorkUnit: cloneSpecificationWorkUnit(spec.WorkUnit), CampaignID: spec.CampaignID,
-		AttemptNumber: spec.AttemptNumber,
-	}
+	request, invocationID := specificationFirstRequest(spec, nil)
 	payload, err := encodeSpecificationRequest(request)
 	if err != nil {
 		return SpecificationRun{}, err
@@ -554,150 +564,9 @@ func SubmitSpecificationRun(ctx context.Context, st *store.Store, spec Specifica
 	}
 	var run domain.Run
 	err = st.Write(ctx, func(tx *store.WriteTx) error {
-		source, err := tx.GetArtifact(ctx, spec.SourceArtifactID)
-		if err != nil {
-			return err
-		}
-		if source.Type != domain.ArtifactKindSpecification {
-			return fmt.Errorf("specification source %q has type %q: %w", source.ID, source.Type, domain.ErrParentKeyMismatch)
-		}
-		policyArtifact, err := tx.GetArtifact(ctx, spec.PolicyArtifactID)
-		if err != nil {
-			return err
-		}
-		if policyArtifact.Type != domain.ArtifactKindPolicy || policyArtifact.Digest != spec.ResolvedPolicy.Digest {
-			return fmt.Errorf("specification policy artifact disagrees with resolved policy: %w", domain.ErrParentKeyMismatch)
-		}
-		want := domain.Run{
-			ID: spec.SpecificationRunID, ProjectID: spec.ProjectID,
-			SpecDigest: source.Digest, PolicyDigest: spec.ResolvedPolicy.Digest,
-			CampaignID: spec.CampaignID, AttemptNumber: spec.AttemptNumber,
-			Stages: []domain.Stage{{
-				ID: specificationStageID(spec.SpecificationRunID), RunID: spec.SpecificationRunID,
-				Name: specificationStageName, Attempts: []domain.Attempt{},
-			}},
-		}
-		if existing, err := tx.GetRun(ctx, want.ID); err == nil {
-			expectedPayload := payload
-			legacyCampaignReplay := existing.CampaignID == "" && existing.AttemptNumber == 0 &&
-				spec.CampaignID != ""
-			if legacyCampaignReplay {
-				legacyRequest := request
-				legacyRequest.CampaignID = ""
-				legacyRequest.AttemptNumber = 0
-				legacyRequest.PublicationDigest = ""
-				expectedPayload, err = encodeSpecificationRequest(legacyRequest)
-				if err != nil {
-					return err
-				}
-			}
-			stored, markerErr := tx.GetOutbox(ctx, string(invocationID))
-			claim, claimErr := tx.GetOutbox(ctx,
-				specificationImplementationClaimKey(spec.SpecificationRunID, spec.ImplementationRunID))
-			storedPolicy, policyErr := tx.GetResolvedPolicy(ctx, want.ID)
-			storedInvocation, invocationErr := tx.GetAgentInvocation(ctx, invocationID)
-			lineageDisagrees := !legacyCampaignReplay &&
-				(existing.CampaignID != want.CampaignID || existing.AttemptNumber != want.AttemptNumber)
-			if existing.ProjectID != want.ProjectID || existing.SpecDigest != want.SpecDigest ||
-				existing.PolicyDigest != want.PolicyDigest || lineageDisagrees ||
-				markerErr != nil || stored.Kind != KindSpecificationInvocationRequested ||
-				!bytes.Equal(stored.Payload, expectedPayload) ||
-				claimErr != nil || claim.Kind != KindSpecificationImplementationClaim ||
-				!claim.Dispatched() || !bytes.Equal(claim.Payload, expectedPayload) ||
-				policyErr != nil || storedPolicy.Digest != spec.ResolvedPolicy.Digest ||
-				!slices.Equal(storedPolicy.Keys, spec.ResolvedPolicy.Keys) || invocationErr != nil ||
-				storedInvocation.ConversationID != nil ||
-				!slices.Equal(storedInvocation.InputIDs, invocation.InputIDs) ||
-				storedInvocation.ThroughSequence != invocation.ThroughSequence {
-				return fmt.Errorf("stored specification run disagrees: %w", domain.ErrImmutableTransition)
-			}
-			if _, ok := findSpecificationStage(existing); !ok {
-				return fmt.Errorf("stored specification stage disagrees: %w", domain.ErrImmutableTransition)
-			}
-			if len(existing.Stages) != 1 {
-				return fmt.Errorf("stored specification run has foreign stages: %w", domain.ErrImmutableTransition)
-			}
-			if spec.CampaignID != "" && !legacyCampaignReplay {
-				attempt, attemptErr := tx.GetProductionAttempt(ctx, spec.CampaignID, spec.AttemptNumber)
-				if attemptErr != nil || attempt.SourceDigest != source.Digest ||
-					attempt.SpecificationRunID != spec.SpecificationRunID ||
-					attempt.ImplementationRunID != spec.ImplementationRunID {
-					return fmt.Errorf("stored production attempt disagrees: %w", domain.ErrImmutableTransition)
-				}
-			} else if legacyCampaignReplay {
-				if _, attemptErr := tx.GetProductionAttemptByRun(ctx, spec.ImplementationRunID); !errors.Is(attemptErr, store.ErrNotFound) {
-					return fmt.Errorf("legacy specification replay has campaign attempt state: %w",
-						domain.ErrImmutableTransition)
-				}
-			}
-			run = existing
-			return nil
-		} else if !errors.Is(err, store.ErrNotFound) {
-			return err
-		}
-		if _, err := tx.GetRun(ctx, spec.ImplementationRunID); err == nil {
-			return fmt.Errorf("implementation run %q already exists: %w",
-				spec.ImplementationRunID, domain.ErrImmutableTransition)
-		} else if !errors.Is(err, store.ErrNotFound) {
-			return err
-		}
-		if spec.CampaignID != "" {
-			if err := tx.PutProductionAttempt(ctx, domain.ProductionAttempt{
-				CampaignID: spec.CampaignID, AttemptNumber: spec.AttemptNumber,
-				Kind: domain.ProductionAttemptInitial, SourceDigest: source.Digest, PublicationDigest: spec.PublicationDigest,
-				SpecificationRunID:  spec.SpecificationRunID,
-				ImplementationRunID: spec.ImplementationRunID,
-			}); err != nil {
-				return err
-			}
-		}
-		sourceRef := spec.Source
-		if sourceRef.Kind == "" {
-			sourceRef = domain.SpecificationSource{Kind: domain.SpecificationSourceWorkItemArtifact, WorkItemArtifactID: spec.SourceArtifactID}
-		}
-		if err := tx.AssignTask(ctx, &want, &sourceRef); err != nil {
-			return err
-		}
-		if title, failure := taskHeadingName(spec.SourceBytes); failure == "" {
-			if err := tx.SetTaskName(ctx, want.TaskID, domain.DisplayName{Text: title, Source: domain.DisplayNameSourceOperator}); err != nil {
-				return err
-			}
-		}
-		if err := tx.PutRun(ctx, want); err != nil {
-			return err
-		}
-		run = want
-		if err := tx.PutResolvedPolicy(ctx, spec.ResolvedPolicy); err != nil {
-			return err
-		}
-		if err := tx.PutAgentInvocation(ctx, invocation); err != nil {
-			return err
-		}
-		entry, inserted, err := tx.EnqueueOutbox(ctx, string(invocationID), KindSpecificationInvocationRequested, payload)
-		if err != nil {
-			return err
-		}
-		if !inserted || entry.Kind != KindSpecificationInvocationRequested || !bytes.Equal(entry.Payload, payload) {
-			return fmt.Errorf("create specification marker: %w", domain.ErrImmutableTransition)
-		}
-		claim, claimed, err := tx.EnqueueOutbox(ctx,
-			specificationImplementationClaimKey(spec.SpecificationRunID, spec.ImplementationRunID),
-			KindSpecificationImplementationClaim, payload)
-		if err != nil {
-			return err
-		}
-		if !claimed || claim.Kind != KindSpecificationImplementationClaim || !bytes.Equal(claim.Payload, payload) {
-			return fmt.Errorf("claim implementation run %q: %w",
-				spec.ImplementationRunID, domain.ErrImmutableTransition)
-		}
-		if err := tx.MarkOutboxDispatched(ctx, claim.IdempotencyKey); err != nil {
-			return err
-		}
-		observedInvocation := invocationID
-		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
-			RunID: spec.SpecificationRunID, Kind: domain.MilestoneRunSubmitted,
-			InvocationID: &observedInvocation, RecordedAt: time.Now().UTC(),
-		})
+		var writeErr error
+		run, writeErr = submitSpecificationRunTx(ctx, tx, spec, request, invocation, payload, nil)
+		return writeErr
 	})
 	if err != nil {
 		return SpecificationRun{}, err
@@ -709,6 +578,227 @@ func SubmitSpecificationRun(ctx context.Context, st *store.Store, spec Specifica
 		ImplementationInvocationID: productionInvocationID(spec.ImplementationRunID),
 		ImplementationStageID:      productionStageID(spec.ImplementationRunID),
 	}, nil
+}
+
+// specificationRunSeed carries the specification-revision extras a fresh
+// campaign's first request needs (#1083 D2, D3): the task it continues, the
+// prior approved specification and the answer feedback that seed the first
+// request, the iteration to continue from, and the typed link back to the
+// blocked run.
+type specificationRunSeed struct {
+	taskID              domain.TaskID
+	priorSpecArtifactID domain.ArtifactID
+	feedbackArtifactIDs []domain.ArtifactID
+	startIteration      int
+	revisesRunID        domain.RunID
+	revisionCommandID   string
+}
+
+// specificationFirstRequest builds a specification run's first request. Without
+// a seed it is the ordinary iteration-1, source-only request, so the operator
+// and issue-subject arms keep their exact payload. With a seed it is a revision
+// campaign's first request: the iteration continues the prior campaign's count
+// and the inputs carry the prior specification and answer feedback in
+// role-canonical order (source, prior specification, feedback).
+func specificationFirstRequest(
+	spec SpecificationRunSpec, seed *specificationRunSeed,
+) (specificationRequest, domain.InvocationID) {
+	iteration := 1
+	firstIteration := 0
+	var priorSpec *domain.ArtifactID
+	var feedback []domain.ArtifactID
+	if seed != nil {
+		iteration = seed.startIteration
+		firstIteration = seed.startIteration
+		priorSpec = &seed.priorSpecArtifactID
+		feedback = seed.feedbackArtifactIDs
+	}
+	invocationID := specificationInvocationID(spec.SpecificationRunID, iteration)
+	request := specificationRequest{
+		Version: specificationRequestVersion, SpecificationRunID: spec.SpecificationRunID,
+		ImplementationRunID: spec.ImplementationRunID, ProjectID: spec.ProjectID,
+		InvocationID: invocationID, Iteration: iteration, FirstIteration: firstIteration,
+		InputArtifactIDs:    specificationInputs(spec.SourceArtifactID, nil, priorSpec, feedback, nil),
+		PriorSpecArtifactID: priorSpec, FeedbackArtifactIDs: feedback,
+		PolicyArtifactID: spec.PolicyArtifactID, Publication: spec.Publication, PublicationDigest: spec.PublicationDigest,
+		WorkUnit: cloneSpecificationWorkUnit(spec.WorkUnit), CampaignID: spec.CampaignID,
+		AttemptNumber: spec.AttemptNumber,
+	}
+	return request, invocationID
+}
+
+// submitSpecificationRunTx performs the create-or-converge write for a
+// specification run inside a caller-owned transaction: the transaction-scoped
+// variant of SubmitSpecificationRun the contract calls for (#1083).
+// SubmitSpecificationRun wraps it in its own store.Write with seed nil, keeping
+// its behaviour unchanged. The specification-revision path calls it inside the
+// operator-feedback transaction with a seed so the fresh campaign's attempt
+// carries the revision link and its first request carries the prior
+// specification and answer feedback.
+func submitSpecificationRunTx(
+	ctx context.Context, tx *store.WriteTx, spec SpecificationRunSpec,
+	request specificationRequest, invocation domain.AgentInvocation, payload []byte,
+	seed *specificationRunSeed,
+) (domain.Run, error) {
+	invocationID := request.InvocationID
+	source, err := tx.GetArtifact(ctx, spec.SourceArtifactID)
+	if err != nil {
+		return domain.Run{}, err
+	}
+	if source.Type != domain.ArtifactKindSpecification {
+		return domain.Run{}, fmt.Errorf("specification source %q has type %q: %w", source.ID, source.Type, domain.ErrParentKeyMismatch)
+	}
+	policyArtifact, err := tx.GetArtifact(ctx, spec.PolicyArtifactID)
+	if err != nil {
+		return domain.Run{}, err
+	}
+	if policyArtifact.Type != domain.ArtifactKindPolicy || policyArtifact.Digest != spec.ResolvedPolicy.Digest {
+		return domain.Run{}, fmt.Errorf("specification policy artifact disagrees with resolved policy: %w", domain.ErrParentKeyMismatch)
+	}
+	want := domain.Run{
+		ID: spec.SpecificationRunID, ProjectID: spec.ProjectID,
+		SpecDigest: source.Digest, PolicyDigest: spec.ResolvedPolicy.Digest,
+		CampaignID: spec.CampaignID, AttemptNumber: spec.AttemptNumber,
+		Stages: []domain.Stage{{
+			ID: specificationStageID(spec.SpecificationRunID), RunID: spec.SpecificationRunID,
+			Name: specificationStageName, Attempts: []domain.Attempt{},
+		}},
+	}
+	if seed != nil {
+		want.TaskID = seed.taskID
+	}
+	if existing, err := tx.GetRun(ctx, want.ID); err == nil {
+		expectedPayload := payload
+		legacyCampaignReplay := existing.CampaignID == "" && existing.AttemptNumber == 0 &&
+			spec.CampaignID != ""
+		if legacyCampaignReplay {
+			legacyRequest := request
+			legacyRequest.CampaignID = ""
+			legacyRequest.AttemptNumber = 0
+			legacyRequest.PublicationDigest = ""
+			expectedPayload, err = encodeSpecificationRequest(legacyRequest)
+			if err != nil {
+				return domain.Run{}, err
+			}
+		}
+		stored, markerErr := tx.GetOutbox(ctx, string(invocationID))
+		claim, claimErr := tx.GetOutbox(ctx,
+			specificationImplementationClaimKey(spec.SpecificationRunID, spec.ImplementationRunID))
+		storedPolicy, policyErr := tx.GetResolvedPolicy(ctx, want.ID)
+		storedInvocation, invocationErr := tx.GetAgentInvocation(ctx, invocationID)
+		lineageDisagrees := !legacyCampaignReplay &&
+			(existing.CampaignID != want.CampaignID || existing.AttemptNumber != want.AttemptNumber)
+		if existing.ProjectID != want.ProjectID || existing.SpecDigest != want.SpecDigest ||
+			existing.PolicyDigest != want.PolicyDigest || lineageDisagrees ||
+			markerErr != nil || stored.Kind != KindSpecificationInvocationRequested ||
+			!bytes.Equal(stored.Payload, expectedPayload) ||
+			claimErr != nil || claim.Kind != KindSpecificationImplementationClaim ||
+			!claim.Dispatched() || !bytes.Equal(claim.Payload, expectedPayload) ||
+			policyErr != nil || storedPolicy.Digest != spec.ResolvedPolicy.Digest ||
+			!slices.Equal(storedPolicy.Keys, spec.ResolvedPolicy.Keys) || invocationErr != nil ||
+			storedInvocation.ConversationID != nil ||
+			!slices.Equal(storedInvocation.InputIDs, invocation.InputIDs) ||
+			storedInvocation.ThroughSequence != invocation.ThroughSequence {
+			return domain.Run{}, fmt.Errorf("stored specification run disagrees: %w", domain.ErrImmutableTransition)
+		}
+		if _, ok := findSpecificationStage(existing); !ok {
+			return domain.Run{}, fmt.Errorf("stored specification stage disagrees: %w", domain.ErrImmutableTransition)
+		}
+		if len(existing.Stages) != 1 {
+			return domain.Run{}, fmt.Errorf("stored specification run has foreign stages: %w", domain.ErrImmutableTransition)
+		}
+		if spec.CampaignID != "" && !legacyCampaignReplay {
+			attempt, attemptErr := tx.GetProductionAttempt(ctx, spec.CampaignID, spec.AttemptNumber)
+			if attemptErr != nil || attempt.SourceDigest != source.Digest ||
+				attempt.SpecificationRunID != spec.SpecificationRunID ||
+				attempt.ImplementationRunID != spec.ImplementationRunID {
+				return domain.Run{}, fmt.Errorf("stored production attempt disagrees: %w", domain.ErrImmutableTransition)
+			}
+		} else if legacyCampaignReplay {
+			if _, attemptErr := tx.GetProductionAttemptByRun(ctx, spec.ImplementationRunID); !errors.Is(attemptErr, store.ErrNotFound) {
+				return domain.Run{}, fmt.Errorf("legacy specification replay has campaign attempt state: %w",
+					domain.ErrImmutableTransition)
+			}
+		}
+		return existing, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return domain.Run{}, err
+	}
+	if _, err := tx.GetRun(ctx, spec.ImplementationRunID); err == nil {
+		return domain.Run{}, fmt.Errorf("implementation run %q already exists: %w",
+			spec.ImplementationRunID, domain.ErrImmutableTransition)
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return domain.Run{}, err
+	}
+	if spec.CampaignID != "" {
+		attempt := domain.ProductionAttempt{
+			CampaignID: spec.CampaignID, AttemptNumber: spec.AttemptNumber,
+			Kind: domain.ProductionAttemptInitial, SourceDigest: source.Digest, PublicationDigest: spec.PublicationDigest,
+			SpecificationRunID:  spec.SpecificationRunID,
+			ImplementationRunID: spec.ImplementationRunID,
+		}
+		if seed != nil {
+			attempt.RevisesRunID = &seed.revisesRunID
+			attempt.RevisionCommandID = &seed.revisionCommandID
+		}
+		if err := tx.PutProductionAttempt(ctx, attempt); err != nil {
+			return domain.Run{}, err
+		}
+	}
+	sourceRef := spec.Source
+	if sourceRef.Kind == "" {
+		sourceRef = domain.SpecificationSource{Kind: domain.SpecificationSourceWorkItemArtifact, WorkItemArtifactID: spec.SourceArtifactID}
+	}
+	if err := tx.AssignTask(ctx, &want, &sourceRef); err != nil {
+		return domain.Run{}, err
+	}
+	// A revision campaign adopts the blocked run's existing task, which already
+	// carries its name; only the ordinary first submission names the task from
+	// the submitted document's heading.
+	if seed == nil {
+		if title, failure := taskHeadingName(spec.SourceBytes); failure == "" {
+			if err := tx.SetTaskName(ctx, want.TaskID, domain.DisplayName{Text: title, Source: domain.DisplayNameSourceOperator}); err != nil {
+				return domain.Run{}, err
+			}
+		}
+	}
+	if err := tx.PutRun(ctx, want); err != nil {
+		return domain.Run{}, err
+	}
+	if err := tx.PutResolvedPolicy(ctx, spec.ResolvedPolicy); err != nil {
+		return domain.Run{}, err
+	}
+	if err := tx.PutAgentInvocation(ctx, invocation); err != nil {
+		return domain.Run{}, err
+	}
+	entry, inserted, err := tx.EnqueueOutbox(ctx, string(invocationID), KindSpecificationInvocationRequested, payload)
+	if err != nil {
+		return domain.Run{}, err
+	}
+	if !inserted || entry.Kind != KindSpecificationInvocationRequested || !bytes.Equal(entry.Payload, payload) {
+		return domain.Run{}, fmt.Errorf("create specification marker: %w", domain.ErrImmutableTransition)
+	}
+	claim, claimed, err := tx.EnqueueOutbox(ctx,
+		specificationImplementationClaimKey(spec.SpecificationRunID, spec.ImplementationRunID),
+		KindSpecificationImplementationClaim, payload)
+	if err != nil {
+		return domain.Run{}, err
+	}
+	if !claimed || claim.Kind != KindSpecificationImplementationClaim || !bytes.Equal(claim.Payload, payload) {
+		return domain.Run{}, fmt.Errorf("claim implementation run %q: %w",
+			spec.ImplementationRunID, domain.ErrImmutableTransition)
+	}
+	if err := tx.MarkOutboxDispatched(ctx, claim.IdempotencyKey); err != nil {
+		return domain.Run{}, err
+	}
+	observedInvocation := invocationID
+	if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
+		RunID: spec.SpecificationRunID, Kind: domain.MilestoneRunSubmitted,
+		InvocationID: &observedInvocation, RecordedAt: time.Now().UTC(),
+	}); err != nil {
+		return domain.Run{}, err
+	}
+	return want, nil
 }
 
 // submitIssueSubjectSpecificationRun executes the label-intake issue-subject arm
@@ -953,6 +1043,16 @@ func (r specificationRequest) validate() error {
 	return r.validateWithPublication(ProductionPublication.Validate)
 }
 
+// firstIteration is the run's first specification iteration: 1 for an ordinary
+// run and the recorded value (2) for a specification-revision campaign's run,
+// which has no iteration-1 marker (#1083). Absent (0) means 1.
+func (r specificationRequest) firstIteration() int {
+	if r.FirstIteration <= 0 {
+		return 1
+	}
+	return r.FirstIteration
+}
+
 func (r specificationRequest) validateWithPublication(validatePublication func(ProductionPublication) error) error {
 	if r.Version != specificationRequestVersion || r.SpecificationRunID == "" ||
 		r.ImplementationRunID == "" || r.SpecificationRunID == r.ImplementationRunID ||
@@ -960,6 +1060,15 @@ func (r specificationRequest) validateWithPublication(validatePublication func(P
 		r.PolicyArtifactID == "" || len(r.InputArtifactIDs) == 0 ||
 		r.InvocationID != specificationInvocationID(r.SpecificationRunID, r.Iteration) {
 		return fmt.Errorf("invalid specification request identity: %w", domain.ErrParentKeyMismatch)
+	}
+	// FirstIteration is absent (1) for ordinary runs and exactly 2 for a
+	// revision run's root (#1083). A revision campaign always roots at
+	// iteration 2 (enqueueSpecificationRevisionCampaign seeds startIteration: 2,
+	// and a revision of a revision re-roots at 2, not 3), so no other value has
+	// a legitimate producer; a decoded FirstIteration outside {absent, 2} is a
+	// forged marker and fails closed at this reconstruction boundary.
+	if (r.FirstIteration != 0 && r.FirstIteration != 2) || r.Iteration < r.firstIteration() {
+		return fmt.Errorf("invalid specification request first iteration: %w", domain.ErrParentKeyMismatch)
 	}
 	if err := validatePublication(r.Publication); err != nil {
 		return err
@@ -1179,7 +1288,8 @@ func SpecificationImplementationClaimBackupPayloadDigests(entry store.QueueEntry
 func authenticateSpecificationRoot(
 	ctx context.Context, tx *store.ReadTx, request specificationRequest,
 ) error {
-	rootEntry, err := tx.GetOutbox(ctx, string(specificationInvocationID(request.SpecificationRunID, 1)))
+	firstIteration := request.firstIteration()
+	rootEntry, err := tx.GetOutbox(ctx, string(specificationInvocationID(request.SpecificationRunID, firstIteration)))
 	if err != nil {
 		return err
 	}
@@ -1191,20 +1301,157 @@ func authenticateSpecificationRoot(
 	if err != nil {
 		return err
 	}
-	if root.Iteration != 1 || len(root.InputArtifactIDs) != 1 || root.PriorSpecArtifactID != nil ||
-		len(root.FeedbackArtifactIDs) != 0 || claim.Kind != KindSpecificationImplementationClaim ||
+	// The root shape differs by run kind. An ordinary run roots at a source-only
+	// iteration 1. A specification-revision campaign's run has no iteration-1
+	// marker: its root is the revision itself at iteration 2, whose prior
+	// specification and feedback are authorized by the RevisesRunID link (#1083).
+	if firstIteration == 1 {
+		if root.Iteration != 1 || len(root.InputArtifactIDs) != 1 || root.PriorSpecArtifactID != nil ||
+			len(root.FeedbackArtifactIDs) != 0 {
+			return fmt.Errorf("specification request disagrees with initial claim: %w", domain.ErrParentKeyMismatch)
+		}
+	} else {
+		src, priorSpec, feedback, revErr := verifyRevisionRoot(ctx, tx, root)
+		if revErr != nil {
+			return fmt.Errorf("specification revision root: %w", revErr)
+		}
+		if root.Iteration != firstIteration || root.PriorSpecArtifactID == nil ||
+			*root.PriorSpecArtifactID != priorSpec || len(root.FeedbackArtifactIDs) != 1 ||
+			root.FeedbackArtifactIDs[0] != feedback || len(root.AnswerArtifactIDs) != 0 ||
+			!slices.Equal(root.InputArtifactIDs,
+				specificationInputs(src, nil, &priorSpec, []domain.ArtifactID{feedback}, nil)) {
+			return fmt.Errorf("specification request disagrees with revision root: %w", domain.ErrParentKeyMismatch)
+		}
+	}
+	if claim.Kind != KindSpecificationImplementationClaim ||
 		!claim.Dispatched() || !bytes.Equal(claim.Payload, rootEntry.Payload) ||
 		request.SpecificationRunID != root.SpecificationRunID ||
 		request.ImplementationRunID != root.ImplementationRunID ||
 		request.ProjectID != root.ProjectID || request.PolicyArtifactID != root.PolicyArtifactID ||
 		request.Publication != root.Publication || request.PublicationDigest != root.PublicationDigest || request.CampaignID != root.CampaignID ||
-		request.AttemptNumber != root.AttemptNumber ||
+		request.AttemptNumber != root.AttemptNumber || request.FirstIteration != root.FirstIteration ||
 		!sameSpecificationWorkUnit(request.WorkUnit, root.WorkUnit) ||
 		!sameIssueSubject(request.IssueSubject, root.IssueSubject) ||
 		len(request.InputArtifactIDs) == 0 || request.InputArtifactIDs[0] != root.InputArtifactIDs[0] {
 		return fmt.Errorf("specification request disagrees with initial claim: %w", domain.ErrParentKeyMismatch)
 	}
 	return nil
+}
+
+// specificationRevisionFeedbackBody composes the daemon-authored feedback a
+// specification-revision campaign delivers to the specifier and shows as the
+// revision comment (#1083 D7). It carries the blocking decision(s) the
+// implementation stopped on and the operator's answer, so the specifier knows
+// what to revise. It is the single source of that text: both the enqueue that
+// writes the feedback artifact and the card build that reconstructs the comment
+// compute it identically, and the chain authorization binds the artifact digest
+// to it. The answer is already trimmed by the caller; the result is trimmed.
+//
+// The body must fit the revision-comment bound, but the operator's answer alone
+// may already fill it (MaxAnswerMessageBytes equals MaxSpecRevisionCommentBytes):
+// when the decision framing would push it over, drop the framing and deliver the
+// answer alone, which always fits and matches the in-run request_changes comment
+// shape. This is deterministic on the same inputs, so every recomputation agrees.
+func specificationRevisionFeedbackBody(question domain.AgentQuestionFacts, answer string) string {
+	var b strings.Builder
+	b.WriteString("The implementation stopped for an operator decision, answered by revising the specification.\n")
+	for index, decision := range question.Decisions {
+		fmt.Fprintf(&b, "\nDecision %d: %s\n", index+1, strings.TrimSpace(decision.Question))
+		if why := strings.TrimSpace(decision.WhyBlocking); why != "" {
+			fmt.Fprintf(&b, "Why blocking: %s\n", why)
+		}
+	}
+	fmt.Fprintf(&b, "\nOperator's answer:\n%s", answer)
+	body := strings.TrimSpace(b.String())
+	if len(body) > domain.MaxSpecRevisionCommentBytes {
+		return answer
+	}
+	return body
+}
+
+// verifyRevisionRoot authorizes a specification-revision campaign's iteration-2
+// root against the production attempt's RevisesRunID link (#1083), the way the
+// ordinary chain authorizes a revision iteration against a preceding
+// request_changes. It returns the source, the prior specification, and the
+// feedback artifact ids the root must name. The prior specification is the
+// blocked campaign's approved specification, bound by digest to the blocked
+// attempt so the link cannot point at a foreign spec; the feedback is the
+// daemon-authored answer artifact whose digest matches the composed body of the
+// blocked run's agent_question and the operator's answer. Returned rows are
+// never trusted: every binding is reconstructed here.
+func verifyRevisionRoot(
+	ctx context.Context, tx *store.ReadTx, request specificationRequest,
+) (source, priorSpec, feedback domain.ArtifactID, err error) {
+	if request.CampaignID == "" {
+		return "", "", "", domain.ErrParentKeyMismatch
+	}
+	attempt, err := tx.GetProductionAttempt(ctx, request.CampaignID, request.AttemptNumber)
+	if err != nil {
+		return "", "", "", err
+	}
+	if attempt.RevisesRunID == nil || attempt.RevisionCommandID == nil ||
+		attempt.SpecificationRunID != request.SpecificationRunID ||
+		attempt.ImplementationRunID != request.ImplementationRunID {
+		return "", "", "", domain.ErrParentKeyMismatch
+	}
+	blocked, err := tx.GetProductionAttemptByRun(ctx, *attempt.RevisesRunID)
+	if err != nil {
+		return "", "", "", err
+	}
+	if blocked.ApprovedSpecDigest == "" || blocked.ImplementationRunID != *attempt.RevisesRunID {
+		return "", "", "", domain.ErrParentKeyMismatch
+	}
+	blockedInvocation, err := tx.GetAgentInvocation(ctx, productionInvocationID(*attempt.RevisesRunID))
+	if err != nil {
+		return "", "", "", err
+	}
+	if len(blockedInvocation.InputIDs) == 0 {
+		return "", "", "", domain.ErrParentKeyMismatch
+	}
+	priorSpec = blockedInvocation.InputIDs[0]
+	priorSpecArtifact, err := tx.GetArtifact(ctx, priorSpec)
+	if err != nil {
+		return "", "", "", err
+	}
+	if priorSpecArtifact.Type != domain.ArtifactKindSpecification ||
+		priorSpecArtifact.Digest != blocked.ApprovedSpecDigest {
+		return "", "", "", domain.ErrParentKeyMismatch
+	}
+	command, err := tx.GetCommand(ctx, *attempt.RevisionCommandID)
+	if err != nil {
+		return "", "", "", err
+	}
+	item, err := tx.GetAttentionItemRecord(ctx, command.ItemID)
+	if err != nil {
+		return "", "", "", err
+	}
+	if command.Action != domain.ActionAnswerAndRetry || command.AnswerRoute == nil ||
+		*command.AnswerRoute != domain.AnswerRouteReviseSpecification ||
+		item.Type != domain.AttentionAgentQuestion || item.AgentQuestion == nil ||
+		item.AgentQuestion.Stage != domain.StageNameImplementation ||
+		item.Subject.RunID == nil || *item.Subject.RunID != *attempt.RevisesRunID ||
+		!operatorFeedbackCommandMatchesItem(command, item) {
+		return "", "", "", domain.ErrParentKeyMismatch
+	}
+	feedback = domain.ArtifactID("spec-feedback-" + *attempt.RevisionCommandID)
+	feedbackArtifact, err := tx.GetArtifact(ctx, feedback)
+	if err != nil {
+		return "", "", "", err
+	}
+	// Pin the full daemon-minted provenance tuple, not a subset: the feedback
+	// artifact is minted with the same output provenance every specification
+	// artifact carries (producer daemon, the iteration-2 dispatch invocation,
+	// head-independent, no source head, no recipe, normal sensitivity), so a
+	// forged row that differs in any of those fields must fail closed here.
+	if err := requireSpecificationOutputProvenance(feedbackArtifact, domain.ArtifactKindResearch,
+		domain.ProducerDaemon, specificationInvocationID(request.SpecificationRunID, request.firstIteration())); err != nil {
+		return "", "", "", err
+	}
+	body := specificationRevisionFeedbackBody(*item.AgentQuestion, strings.TrimSpace(command.Message))
+	if feedbackArtifact.Digest != domain.Digest(contentaddr.Sum([]byte(body))) {
+		return "", "", "", domain.ErrParentKeyMismatch
+	}
+	return request.InputArtifactIDs[0], priorSpec, feedback, nil
 }
 
 // sameIssueSubject reports whether two optional issue-subject references are the
@@ -1274,6 +1521,7 @@ func sameSpecificationRequest(left, right specificationRequest) bool {
 		left.ProjectID == right.ProjectID &&
 		left.InvocationID == right.InvocationID &&
 		left.Iteration == right.Iteration &&
+		left.FirstIteration == right.FirstIteration &&
 		slices.Equal(left.InputArtifactIDs, right.InputArtifactIDs) &&
 		sameArtifactID(left.PriorSpecArtifactID, right.PriorSpecArtifactID) &&
 		slices.Equal(left.FeedbackArtifactIDs, right.FeedbackArtifactIDs) &&
@@ -1290,6 +1538,7 @@ func sameSpecificationRoot(left, right specificationRequest) bool {
 		left.SpecificationRunID == right.SpecificationRunID &&
 		left.ImplementationRunID == right.ImplementationRunID &&
 		left.ProjectID == right.ProjectID &&
+		left.FirstIteration == right.FirstIteration &&
 		left.PolicyArtifactID == right.PolicyArtifactID &&
 		left.Publication == right.Publication &&
 		left.PublicationDigest == right.PublicationDigest &&
@@ -1661,7 +1910,11 @@ func verifySpecificationChain(
 	if err := authenticateSpecificationRoot(ctx, tx, current); err != nil {
 		return verifiedSpecificationBinding{}, err
 	}
-	rootEntry, err := tx.GetOutbox(ctx, string(specificationInvocationID(current.SpecificationRunID, 1)))
+	// A specification-revision campaign's run has no iteration-1 marker; its root
+	// is the revision at iteration 2 (#1083). The walk therefore starts at the
+	// run's first iteration rather than a fixed 1.
+	firstIteration := current.firstIteration()
+	rootEntry, err := tx.GetOutbox(ctx, string(specificationInvocationID(current.SpecificationRunID, firstIteration)))
 	if err != nil {
 		return verifiedSpecificationBinding{}, err
 	}
@@ -1689,7 +1942,9 @@ func verifySpecificationChain(
 	if err != nil {
 		return verifiedSpecificationBinding{}, fmt.Errorf("%w: %w", errSpecificationMarkerUnreadable, err)
 	}
-	if current.Iteration > settings.MaxIterations {
+	// Count the run's own iterations from its first, so a revision run starting
+	// at iteration 2 gets the same budget as an ordinary run, not one fewer.
+	if current.Iteration-firstIteration+1 > settings.MaxIterations {
 		return verifiedSpecificationBinding{}, fmt.Errorf(
 			"specification iteration %d exceeds the policy maximum %d: %w",
 			current.Iteration, settings.MaxIterations, domain.ErrParentKeyMismatch)
@@ -1718,7 +1973,14 @@ func verifySpecificationChain(
 	var priorSpec *domain.ArtifactID
 	var legacyPostRevisionResearch []domain.ArtifactID
 	var currentInvocation domain.AgentInvocation
-	for iteration := 1; iteration <= current.Iteration; iteration++ {
+	// A revision run's root already carries the prior specification and feedback,
+	// authorized by verifyRevisionRoot in authenticateSpecificationRoot; seed the
+	// reconstruction state with them so the walk's first iteration matches.
+	if firstIteration > 1 {
+		priorSpec = root.PriorSpecArtifactID
+		feedback = slices.Clone(root.FeedbackArtifactIDs)
+	}
+	for iteration := firstIteration; iteration <= current.Iteration; iteration++ {
 		invocationID := specificationInvocationID(run.ID, iteration)
 		entry, err := tx.GetOutbox(ctx, string(invocationID))
 		if err != nil {
@@ -2039,8 +2301,16 @@ func (e *Engine) ownsSpecificationRun(ctx context.Context, run domain.Run) (bool
 	}
 	var entry store.QueueEntry
 	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		entry, err = tx.GetOutbox(ctx, string(specificationInvocationID(run.ID, 1)))
+		// A revision run has no iteration-1 marker; bind against its first
+		// dispatch marker (iteration 2 for a revision run, 1 otherwise, #1083).
+		key, present, err := tx.FirstSpecificationMarkerKey(ctx, run.ID)
+		if err != nil {
+			return err
+		}
+		if !present {
+			return store.ErrNotFound
+		}
+		entry, err = tx.GetOutbox(ctx, key)
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
@@ -2161,13 +2431,13 @@ func (e *Engine) acceptSpecificationAttempt(ctx context.Context, run domain.Run,
 		return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed, err.Error())
 	}
 	if len(output.FetchRequests) > 0 {
-		if request.Iteration >= settings.MaxIterations {
+		if request.Iteration-request.firstIteration()+1 >= settings.MaxIterations {
 			return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed, ErrSpecificationIterationsExhausted.Error())
 		}
 		return e.acceptResearchRequests(ctx, run, request, output.FetchRequests, settings)
 	}
 	if len(output.Decisions) > 0 {
-		if request.Iteration >= settings.MaxIterations {
+		if request.Iteration-request.firstIteration()+1 >= settings.MaxIterations {
 			return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed, ErrSpecificationIterationsExhausted.Error())
 		}
 		return e.acceptSpecificationDecisions(ctx, run, request, output.Decisions)
@@ -2963,17 +3233,58 @@ func (e *Engine) readSpecRevisionComment(
 	}); err != nil {
 		return domain.SpecRevisionComment{}, err
 	}
-	iteration, err := specApprovalIteration(command.ItemID, implementationRunID)
-	if err != nil || command.CommandID != commentID || command.Action != domain.ActionRequestChanges ||
-		strings.TrimSpace(command.Message) != body {
+	if command.CommandID != commentID {
 		return domain.SpecRevisionComment{}, fmt.Errorf(
-			"feedback artifact %q disagrees with its request_changes command: %w",
-			artifactID, domain.ErrParentKeyMismatch)
+			"feedback artifact %q disagrees with its command: %w", artifactID, domain.ErrParentKeyMismatch)
 	}
-	return domain.SpecRevisionComment{
-		CommentID: commentID, ArtifactID: artifactID, Digest: artifact.Digest,
-		RaisedOnItemID: command.ItemID, Iteration: iteration, Body: body,
-	}, nil
+	switch command.Action {
+	case domain.ActionRequestChanges:
+		// The in-run revision path (#920): a request_changes on a spec_approval.
+		iteration, err := specApprovalIteration(command.ItemID, implementationRunID)
+		if err != nil || strings.TrimSpace(command.Message) != body {
+			return domain.SpecRevisionComment{}, fmt.Errorf(
+				"feedback artifact %q disagrees with its request_changes command: %w",
+				artifactID, domain.ErrParentKeyMismatch)
+		}
+		return domain.SpecRevisionComment{
+			CommentID: commentID, ArtifactID: artifactID, Digest: artifact.Digest,
+			RaisedOnItemID: command.ItemID, Iteration: iteration, Body: body,
+		}, nil
+	case domain.ActionAnswerAndRetry:
+		// The cross-campaign revision seed (#1083): an implementation-stage
+		// agent_question answered with revise_specification. The comment is raised
+		// on that question at the adopted baseline (conceptual revision 1, one
+		// below the revision run's first iteration of 2); its body is the composed
+		// decision-and-answer the specifier received.
+		if command.AnswerRoute == nil || *command.AnswerRoute != domain.AnswerRouteReviseSpecification {
+			return domain.SpecRevisionComment{}, fmt.Errorf(
+				"feedback artifact %q answer command carries no revision route: %w",
+				artifactID, domain.ErrParentKeyMismatch)
+		}
+		var item domain.AttentionItem
+		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			item, err = tx.GetAttentionItemRecord(ctx, command.ItemID)
+			return err
+		}); err != nil {
+			return domain.SpecRevisionComment{}, err
+		}
+		if item.Type != domain.AttentionAgentQuestion || item.AgentQuestion == nil ||
+			item.AgentQuestion.Stage != domain.StageNameImplementation ||
+			specificationRevisionFeedbackBody(*item.AgentQuestion, strings.TrimSpace(command.Message)) != body {
+			return domain.SpecRevisionComment{}, fmt.Errorf(
+				"feedback artifact %q disagrees with its answer command: %w",
+				artifactID, domain.ErrParentKeyMismatch)
+		}
+		return domain.SpecRevisionComment{
+			CommentID: commentID, ArtifactID: artifactID, Digest: artifact.Digest,
+			RaisedOnItemID: command.ItemID, Iteration: 1, Body: body,
+		}, nil
+	default:
+		return domain.SpecRevisionComment{}, fmt.Errorf(
+			"feedback artifact %q command action %q cannot raise a revision comment: %w",
+			artifactID, command.Action, domain.ErrParentKeyMismatch)
+	}
 }
 
 func specApprovalIteration(itemID domain.ItemID, implementationRunID domain.RunID) (int, error) {
@@ -3368,7 +3679,7 @@ func (e *Engine) reconcileSpecificationGates(ctx context.Context) (int, int, err
 			if revisionFailed {
 				continue
 			}
-			if request.Iteration >= settings.MaxIterations {
+			if request.Iteration-request.firstIteration()+1 >= settings.MaxIterations {
 				names, err := displayNames(ctx, e.store, run.ProjectID, domain.Subject{
 					Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,
 				})

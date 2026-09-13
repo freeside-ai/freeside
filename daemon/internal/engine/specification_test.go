@@ -3194,6 +3194,44 @@ func TestSpecificationRequestCampaignIdentityIsDerived(t *testing.T) {
 	}
 }
 
+// TestSpecificationRequestFirstIterationDomain pins the revision-root first
+// iteration to exactly {absent, 2} (#1083). A revision campaign always roots at
+// iteration 2, so a decoded FirstIteration of 1 or 3 is a forged marker and must
+// fail closed at this reconstruction boundary.
+func TestSpecificationRequestFirstIterationDomain(t *testing.T) {
+	implementationRunID := domain.RunID("implementation-first-iteration")
+	specificationRunID, err := SpecificationRunIDForImplementation(implementationRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	campaignID, err := ProductionCampaignIDForImplementation(implementationRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := specificationRequest{
+		Version: specificationRequestVersion, SpecificationRunID: specificationRunID,
+		ImplementationRunID: implementationRunID, ProjectID: "project-1",
+		InvocationID: specificationInvocationID(specificationRunID, 2), Iteration: 2,
+		FirstIteration:   2,
+		InputArtifactIDs: []domain.ArtifactID{"source-1"}, PolicyArtifactID: "policy-1",
+		Publication: ProductionPublication{
+			Title: "Implement", Body: "approved specification",
+			CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 1},
+		},
+		CampaignID: campaignID, AttemptNumber: 1,
+	}
+	if err := request.validate(); err != nil {
+		t.Fatalf("iteration-2 revision root request = %v", err)
+	}
+	for _, first := range []int{1, 3, 4} {
+		forged := request
+		forged.FirstIteration = first
+		if err := forged.validate(); !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Fatalf("first iteration %d = %v, want ErrParentKeyMismatch", first, err)
+		}
+	}
+}
+
 func TestProductionAttemptReconstructionReauthenticatesApprovedDigest(t *testing.T) {
 	f := newSpecificationFixture(t, true, 2)
 	driver := f.newDriver(t)
