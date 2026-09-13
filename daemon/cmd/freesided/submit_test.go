@@ -393,7 +393,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if task.Name != (domain.DisplayName{Text: "Work item", Source: domain.DisplayNameSourceOperator}) {
+		if task.Name != (domain.DisplayName{Text: "Task", Source: domain.DisplayNameSourceOperator}) {
 			t.Errorf("submitted heading name = %+v", task.Name)
 		}
 		attempt, err := tx.GetProductionAttempt(ctx, first.CampaignID, 1)
