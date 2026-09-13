@@ -274,16 +274,7 @@ struct RunTimelineView: View {
     }
 
     private func milestoneDetail(_ milestone: Components.Schemas.RunMilestone) -> String? {
-        if let terminal = milestone.terminal?.value1 {
-            return terminal.rawValue.capitalized
-        }
-        if let outcome = milestone.outcome?.value1 {
-            return outcome.rawValue.capitalized
-        }
-        if let reason = milestone.reason?.value1 {
-            return RunDisplay.label(reason)
-        }
-        return nil
+        RunHistoryPresentation.detail(milestone)
     }
 }
 
@@ -313,6 +304,22 @@ enum RunHistoryPresentation {
                 state: index == milestones.count - 1 ? .current : .completed)
         }
         return Array(ordered.reversed())
+    }
+
+    /// A milestone's detail: the terminal state, else the outcome, else
+    /// the hold reason it recorded. Shared with the task timeline's run
+    /// sections so both read a milestone the same way.
+    static func detail(_ milestone: Components.Schemas.RunMilestone) -> String? {
+        if let terminal = milestone.terminal?.value1 {
+            return terminal.rawValue.capitalized
+        }
+        if let outcome = milestone.outcome?.value1 {
+            return outcome.rawValue.capitalized
+        }
+        if let reason = milestone.reason?.value1 {
+            return RunDisplay.label(reason)
+        }
+        return nil
     }
 
     /// Review rounds newest round first. The daemon supplies them ascending,
