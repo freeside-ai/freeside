@@ -80,6 +80,18 @@ enum TaskDisplay {
             hold: position.hold_reason.map { RunDisplay.label($0.value1) })
     }
 
+    /// The task name a run's timeline shows: the task snapshot's current
+    /// name when the coordinator lists the task, else the name the run
+    /// itself carries, else the task id as an identifier fallback, so a run
+    /// reached before its task loaded still names its work.
+    static func name(
+        for run: Components.Schemas.Run, tasks: [Components.Schemas.TaskSnapshot]
+    ) -> Components.Schemas.DisplayName {
+        tasks.first { $0.task.id == run.task_id }?.task.display_names.task
+            ?? run.display_names?.value1.task
+            ?? .init(text: run.task_id, source: .identifier)
+    }
+
     /// The armed watches and deadlines attached to any of the task's runs
     /// (plan §11: the tasks list shows attached watches and deadlines). A
     /// schedule belongs to a run, so the task shows the union over its runs.

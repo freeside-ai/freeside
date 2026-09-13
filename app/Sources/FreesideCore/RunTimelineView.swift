@@ -154,18 +154,23 @@ struct RunTimelineView: View {
         }
     }
 
-    /// The eyebrow names the screen and the run. The id sits beside the
-    /// keyword in the same face but outside its uppercase transform, so a
-    /// selection copies the id as the daemon spells it. The separator
-    /// travels with the id so its spacing scales with the type size.
+    /// The eyebrow names the screen and the task the run belongs to, in the
+    /// task's own label style (mono for an identifier fallback, the Agent
+    /// keyword after an agent-proposed name). The run id stays in the copy
+    /// context menu and, for a run outside a campaign, in the title.
     private var eyebrow: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             KeywordLabel(text: "Run timeline")
-            Text(" · \(snapshot.run.id)")
+            Text("·")
                 .font(FreesideFont.keyword)
-                .tracking(0.8)
                 .foregroundStyle(Color.inkDim)
-                .textSelection(.enabled)
+                .accessibilityHidden(true)
+            TaskNameLabel(
+                name: TaskDisplay.name(for: snapshot.run, tasks: coordinator.tasks),
+                font: FreesideFont.subheadline,
+                monoFont: FreesideFont.monoCaption,
+                color: .inkDim,
+                lineLimit: 1)
         }
         .contextMenu {
             Button("Copy run ID") {

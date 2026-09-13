@@ -962,7 +962,8 @@
                     // defaultTimelines) so its own run-timeline surface resolves
                     // review labels the way the app does, without churning the
                     // runs-list digests that defaultTimelines feeds.
-                    runTimelines: RunFixtures.defaultTimelines() + [RunFixtures.refreshedHistoryTimeline()]
+                    runTimelines: RunFixtures.defaultTimelines() + [RunFixtures.refreshedHistoryTimeline()],
+                    tasks: TaskFixtures.defaultTasks()
                 ))
             let coordinator = SyncCoordinator(client: client, cache: cache)
             guard let activeRun = runs.first(where: { $0.run.id == RunFixtures.activeRunID }) else {

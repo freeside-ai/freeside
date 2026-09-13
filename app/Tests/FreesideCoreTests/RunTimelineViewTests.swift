@@ -365,6 +365,28 @@ import Testing
         #expect(RunHistoryPresentation.rounds(nil).isEmpty)
     }
 
+    @Test func eyebrowNamesTheTaskFromTheSnapshotThenTheRunThenTheIdentifier() throws {
+        let run = try #require(
+            RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }
+        ).run
+        let tasks = TaskFixtures.defaultTasks()
+
+        #expect(TaskDisplay.name(for: run, tasks: tasks) == RunFixtures.retryTaskName)
+
+        // The task snapshot wins over the run's own copy of the name.
+        var renamed = try #require(tasks.first { $0.task.id == run.task_id })
+        renamed.task.display_names.task = .init(text: "Renamed by the operator", source: ._operator)
+        #expect(TaskDisplay.name(for: run, tasks: [renamed]).text == "Renamed by the operator")
+
+        // Without the task listed, the run's name; without that, the id.
+        #expect(TaskDisplay.name(for: run, tasks: []) == RunFixtures.retryTaskName)
+        var unnamed = run
+        unnamed.display_names = nil
+        #expect(
+            TaskDisplay.name(for: unnamed, tasks: [])
+                == .init(text: run.task_id, source: .identifier))
+    }
+
     @Test func timelineRequestKeyChangesOnBootstrapAndEpochRotation() throws {
         let snapshot = try #require(
             RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID })
