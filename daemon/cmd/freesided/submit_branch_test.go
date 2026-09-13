@@ -13,7 +13,7 @@ func TestSubmitDeclaredBranchPersistsAndChangesRunIdentity(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	work, policy, publicationPath := writeSubmissionInputs(t, root)
-	cfg := submitCommandConfig{DBPath: filepath.Join(root, "freeside.db"), WorkItemPath: work, PolicyPath: policy, PublicationPath: publicationPath, ProjectID: "proj-submit"}
+	cfg := submitCommandConfig{DBPath: filepath.Join(root, "freeside.db"), TaskPath: work, PolicyPath: policy, PublicationPath: publicationPath, ProjectID: "proj-submit"}
 	initial, err := runSubmitCommand(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)

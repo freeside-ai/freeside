@@ -1682,7 +1682,7 @@ func composeClaudeDriver(
 			HostPath: cfg.VendorInstructions,
 		},
 		// Base and Workspace are per-attempt and supplied by derive below;
-		// the static values here would be wrong the moment a second work item
+		// the static values here would be wrong the moment a second task
 		// is submitted.
 		AuthIdentityID: &identity,
 	}

@@ -150,7 +150,7 @@ type preflightConfig struct {
 	ShadowReviewCostOwner       string
 	ShadowReviewWorkspaceSizeMB int64
 	ShadowReviewRate            float64
-	WorkItemPath                string
+	TaskPath                    string
 	PolicyPath                  string
 	PublicationPath             string
 	WorkUnitPath                string
@@ -329,7 +329,7 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 	flags.StringVar(&cfg.ShadowReviewCostOwner, "shadow-review-cost-owner", "", "Claude shadow review cost owner")
 	flags.Int64Var(&cfg.ShadowReviewWorkspaceSizeMB, "shadow-review-workspace-size-mb", 8192, "Claude shadow review workspace size")
 	flags.Float64Var(&cfg.ShadowReviewRate, "shadow-review-rate", 0.2, "fallback Claude shadow review rate in [0,1]")
-	flags.StringVar(&cfg.WorkItemPath, "work-item", "", "source work-item file (required)")
+	flags.StringVar(&cfg.TaskPath, "task", "", "task source file (required)")
 	flags.StringVar(&cfg.PolicyPath, "policy", "", "resolved policy file (required)")
 	flags.StringVar(&cfg.PublicationPath, "publication", "", "publication metadata file (required)")
 	flags.StringVar(&cfg.WorkUnitPath, "work-unit", "", "work-unit declaration file (optional)")
@@ -355,7 +355,7 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 		cfg.PublicationStateDir == "" || cfg.PublicationCredentialsDir == "" ||
 		cfg.ReviewModel == "" ||
 		cfg.ReviewReasoningEffort == "" || cfg.ReviewCostOwner == "" ||
-		cfg.ReviewWorkspaceSizeMB <= 0 || cfg.WorkItemPath == "" || cfg.PolicyPath == "" ||
+		cfg.ReviewWorkspaceSizeMB <= 0 || cfg.TaskPath == "" || cfg.PolicyPath == "" ||
 		cfg.PublicationPath == "" || cfg.ProjectID == "" {
 		return preflightConfig{}, errors.New("all production composition flags except -work-unit and -build-proxy are required")
 	}
@@ -747,7 +747,7 @@ func evaluateDaemonConflict(
 }
 
 func inspectCompositionIdentity(cfg preflightConfig) (compositionIdentity, error) {
-	spec, err := readSubmissionFile(cfg.WorkItemPath)
+	spec, err := readSubmissionFile(cfg.TaskPath)
 	if err != nil {
 		return compositionIdentity{}, err
 	}

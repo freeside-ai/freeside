@@ -534,7 +534,7 @@ func TestResolvedPathAllowlistBindsTheAdmittedPolicy(t *testing.T) {
 	// other refusal compares the durable policy against this daemon's own
 	// -allowed-paths, so it must be a mutable policy verdict the engine holds
 	// on: dispatch returns the error up to Engine.Run, and a fatal one there
-	// ends the reconcile loop, so a single mismatched work item would exit
+	// ends the reconcile loop, so a single mismatched task would exit
 	// the daemon on every restart with no way to reconfigure out of it.
 	tests := []struct {
 		name       string

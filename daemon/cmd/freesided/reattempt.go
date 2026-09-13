@@ -40,6 +40,7 @@ func parseReattemptCommand(args []string, stderr io.Writer) (reattemptCommandCon
 	flags := flag.NewFlagSet("freesided reattempt", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	dbPath := flags.String("db", "", "SQLite database path (required)")
+	task := flags.String("task", "", "task whose newest campaign's latest terminal run to retry")
 	parentRun := flags.String("parent-run", "", "terminal campaign run to retry")
 	campaign := flags.String("campaign", "", "campaign whose latest terminal run to retry")
 	reason := flags.String("reason", "", "operator reason for the deliberate new attempt (required)")
@@ -50,7 +51,7 @@ func parseReattemptCommand(args []string, stderr io.Writer) (reattemptCommandCon
 		return reattemptCommandConfig{}, fmt.Errorf("unexpected positional arguments: %v", flags.Args())
 	}
 	cfg := reattemptCommandConfig{
-		DBPath: *dbPath, ParentRunID: domain.RunID(*parentRun),
+		DBPath: *dbPath, TaskID: domain.TaskID(*task), ParentRunID: domain.RunID(*parentRun),
 		CampaignID: domain.CampaignID(*campaign), Reason: *reason,
 	}
 	if err := validateReattemptConfig(cfg); err != nil {
@@ -61,6 +62,7 @@ func parseReattemptCommand(args []string, stderr io.Writer) (reattemptCommandCon
 
 type reattemptCommandConfig struct {
 	DBPath      string
+	TaskID      domain.TaskID
 	ParentRunID domain.RunID
 	CampaignID  domain.CampaignID
 	Reason      string
@@ -75,6 +77,34 @@ func runReattemptCommand(ctx context.Context, cfg reattemptCommandConfig) (submi
 		return submitResult{}, fmt.Errorf("reattempt: open store: %w", err)
 	}
 	defer func() { _ = st.Close() }()
+	if cfg.TaskID != "" {
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			task, err := tx.GetTask(ctx, cfg.TaskID)
+			if err != nil {
+				return fmt.Errorf("reattempt: task %q: %w", cfg.TaskID, err)
+			}
+			if len(task.CampaignIDs) == 0 {
+				return fmt.Errorf("reattempt: task %q has no campaign yet; approve its specification first", cfg.TaskID)
+			}
+			cfg.CampaignID = task.CampaignIDs[len(task.CampaignIDs)-1]
+			initial, err := tx.GetProductionAttempt(ctx, cfg.CampaignID, 1)
+			if err != nil {
+				return err
+			}
+			root, err := tx.GetRun(ctx, initial.SpecificationRunID)
+			if err != nil {
+				return err
+			}
+			// Campaign ownership follows this immutable specification root;
+			// the task's decoded campaign list alone cannot authorize a retry.
+			if root.TaskID != task.ID || root.ProjectID != task.ProjectID {
+				return fmt.Errorf("reattempt: task %q campaign %q: %w", task.ID, cfg.CampaignID, domain.ErrParentKeyMismatch)
+			}
+			return nil
+		}); err != nil {
+			return submitResult{}, err
+		}
+	}
 	created, err := engine.ReattemptProductionRun(ctx, st, engine.ProductionReattemptSpec{
 		ParentRunID: cfg.ParentRunID, CampaignID: cfg.CampaignID, Reason: cfg.Reason,
 	})
@@ -108,11 +138,17 @@ func runReattemptCommand(ctx context.Context, cfg reattemptCommandConfig) (submi
 }
 
 func validateReattemptConfig(cfg reattemptCommandConfig) error {
+	selectors := 0
+	for _, id := range []string{string(cfg.TaskID), string(cfg.ParentRunID), string(cfg.CampaignID)} {
+		if id != "" {
+			selectors++
+		}
+	}
 	switch {
 	case cfg.DBPath == "":
 		return errors.New("-db is required")
-	case (cfg.ParentRunID == "") == (cfg.CampaignID == ""):
-		return errors.New("exactly one of -parent-run or -campaign is required")
+	case selectors != 1:
+		return errors.New("exactly one of -task, -parent-run, or -campaign is required")
 	case cfg.Reason == "" || cfg.Reason != strings.TrimSpace(cfg.Reason):
 		return errors.New("-reason must be non-empty and trimmed")
 	default:

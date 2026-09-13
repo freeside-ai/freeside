@@ -12,7 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
-// TestSubmitCommandReplaysPreRenameDatabase re-submits the exact work item
+// TestSubmitCommandReplaysPreRenameDatabase re-submits the exact task
 // a pre-rename daemon accepted (the store package's frozen dump) and expects
 // the replay to converge on the legacy specification run instead of minting
 // a second one for the same implementation identity.
@@ -41,8 +41,9 @@ func TestSubmitCommandReplaysPreRenameDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The same submission inputs the capture used, byte for byte.
-	workItemPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	// The historical input bytes must match the frozen capture, including
+	// its original vocabulary; the ordinary fixtures now use task.
+	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	manifest, err := domain.NewCapabilityManifest("Provider web read", domain.EgressProviderWebRead)
 	if err != nil {
 		t.Fatal(err)
@@ -78,11 +79,15 @@ func TestSubmitCommandReplaysPreRenameDatabase(t *testing.T) {
 	if err := os.WriteFile(policyPath, policyBody, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(workItemPath, []byte("# Work item\n\nImplement the thing."), 0o600); err != nil {
+	if err := os.WriteFile(taskPath, []byte("# Work item\n\nImplement the thing."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	publication := `{"title":"Test the work item","body":"## Why\n\nCloses #123.\n","commit_author":{"app_slug":"freeside-test","bot_user_id":12345}}`
+	if err := os.WriteFile(publicationPath, []byte(publication), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := submitCommandConfig{
-		DBPath: dbPath, WorkItemPath: workItemPath,
+		DBPath: dbPath, TaskPath: taskPath,
 		PolicyPath: policyPath, PublicationPath: publicationPath,
 		ProjectID: "project-submit-elaboration", RunID: "implementation-from-submit",
 	}
