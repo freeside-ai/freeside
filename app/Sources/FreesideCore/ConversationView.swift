@@ -144,19 +144,15 @@ struct MessageComposerSheet: View {
                         .foregroundStyle(byteCount > byteLimit ? Color.waxText : Color.inkDim)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
-                if routeOptions.count > 1 {
-                    Picker(
-                        "Then",
+                if routeOptions.count > 1, let defaultRoute = routeOptions.first {
+                    FreesideSegmentedControl(
+                        accessibilityLabel: "What to do with the answer",
+                        segments: routeOptions.map {
+                            .init(value: $0, label: AgentQuestionPresentation.answerRouteLabel($0))
+                        },
                         selection: Binding(
-                            get: { selectedRoute ?? routeOptions.first ?? .retry_implementation },
-                            set: { chosenRoute = $0 })
-                    ) {
-                        ForEach(routeOptions, id: \.self) { route in
-                            Text(AgentQuestionPresentation.answerRouteLabel(route)).tag(route)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityLabel("What to do with the answer")
+                            get: { selectedRoute ?? defaultRoute },
+                            set: { chosenRoute = $0 }))
                 }
             }
             .padding(.horizontal, 16)
