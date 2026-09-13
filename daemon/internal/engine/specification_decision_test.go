@@ -360,3 +360,214 @@ func TestSpecifierFixtureDistinguishesAssumptionFromOwnerDecision(t *testing.T) 
 		})
 	}
 }
+
+func (f specificationFixture) assertItemAbsent(t *testing.T, id domain.ItemID) {
+	t.Helper()
+	err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		_, _, err := tx.GetAttentionItemSnapshot(t.Context(), id)
+		return err
+	})
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("attention item %s = %v, want ErrNotFound", id, err)
+	}
+}
+
+func (f specificationFixture) assertArtifactAbsent(t *testing.T, id domain.ArtifactID) {
+	t.Helper()
+	err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		_, err := tx.GetArtifact(t.Context(), id)
+		return err
+	})
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("artifact %s = %v, want ErrNotFound", id, err)
+	}
+}
+
+// sketchDecisionsFixture is the first-turn clarification a sketch produces: one
+// question each for the task's outcome, scope, and non-goals, every one with a
+// recommendation. It stands in for a source that leaves those three unresolved,
+// which is what makes the round a sketch round; the scripted fake never reads
+// the source body.
+func sketchDecisionsFixture() []domain.Decision {
+	return []domain.Decision{
+		{
+			Question:    "What outcome must the task achieve?",
+			WhyBlocking: "The specification cannot fix behavior without the target outcome.",
+			Options: []domain.DecisionOption{
+				{Label: "Ship the importer", Tradeoffs: "Delivers the flow; more surface."},
+				{Label: "Ship a stub", Tradeoffs: "Less code; defers the flow."},
+			},
+			Recommendation: "Ship the importer",
+		},
+		{
+			Question:    "What scope does the task cover?",
+			WhyBlocking: "The specification cannot bound the work without its scope.",
+			Options: []domain.DecisionOption{
+				{Label: "Daemon only", Tradeoffs: "Narrow; no client change."},
+				{Label: "Daemon and app", Tradeoffs: "Wider; couples two components."},
+			},
+			Recommendation: "Daemon only",
+		},
+		{
+			Question:    "What is explicitly out of scope?",
+			WhyBlocking: "The specification cannot pin non-goals without them.",
+			Options: []domain.DecisionOption{
+				{Label: "No new API field", Tradeoffs: "Guidance only; no contract."},
+				{Label: "Add an API field", Tradeoffs: "Explicit; a contract change."},
+			},
+			Recommendation: "No new API field",
+		},
+	}
+}
+
+// TestSpecificationSketchRoundAsksThenSpecifiesUnderBudgetOfTwo pins the sketch
+// clarification round (#1329): a first-turn decisions result asks about the
+// task's outcome, scope, and non-goals before any specification, the operator's
+// answer returns as human_feedback, and the answered retry produces the
+// specification and its approval item under a budget that allows no research.
+//
+// Iteration budget: the first-turn question is iteration 1 and the answered
+// retry is iteration 2, so a budget of 2 covers the whole round without an
+// iterations-exhausted failure. TestSpecificationNeedsDecisionAtIterationLimitRecordsFailure
+// pins the opposite end, where a budget of 1 records that failure instead of
+// asking; neither the engine's iteration counting nor specification.go changes.
+//
+// This test scripts the fake's second output directly, so it cannot observe
+// what makes the retry proceed rather than re-ask: that the specifier's
+// first-turn/resume rule fires only with no answering human_feedback. That
+// prompt-driven exit is pinned by the "with no answering `human_feedback`"
+// required phrase in exec/claude's TestPhase1ASummaryPromptContracts.
+func TestSpecificationSketchRoundAsksThenSpecifiesUnderBudgetOfTwo(t *testing.T) {
+	t.Run("answer_and_retry", func(t *testing.T) {
+		f := newSpecificationFixture(t, true, 2)
+		driver := f.newDriver(t)
+		materializer, err := exec.NewMaterializer(f.blobs, exec.MaterializerOptions{
+			MaxInputBytes: exec.ProductionMaxInputBytes, MaxTotalBytes: exec.ProductionMaxTotalInputBytes,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		capturing := &capturingSpecificationDriver{
+			StageDriver: driver, materializer: materializer,
+			prompts: make(map[domain.InvocationID]capturedSpecificationPrompt),
+		}
+		firstID := specificationInvocationID("specification-run", 1)
+		secondID := specificationInvocationID("specification-run", 2)
+		if err := specifyfake.Script(driver, firstID, 0, 0, specify.Output{
+			Decisions: sketchDecisionsFixture(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := specifyfake.Script(driver, secondID, 0, 0, specify.Output{Specification: &specify.Specification{
+			Summary: "The implementation plan is ready.", Body: "# Specification\n\nShip the importer, daemon only.",
+			Addressals: []specify.Addressal{},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		f.submit(t)
+		engine := f.newEngine(t, capturing)
+
+		// First turn: the sketch produces exactly one clarification item, and no
+		// specification artifact or approval item exists before the answer.
+		if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+			t.Fatalf("first reconcile = %+v, %v", result, err)
+		}
+		if items := f.questionItemsForRun(t, "specification-run"); len(items) != 1 {
+			t.Fatalf("agent_question items = %d, want 1", len(items))
+		}
+		approvalID := domain.ItemID("spec-approval-implementation-run-2")
+		f.assertItemAbsent(t, approvalID)
+		f.assertArtifactAbsent(t, "spec-implementation-run-2")
+
+		// The operator's answer returns as human_feedback on the second turn.
+		questionID := domain.ItemID("question-" + string(firstID))
+		questionItem, _ := f.item(t, questionID)
+		const answer = "Ship the importer, daemon only, no new API field."
+		f.answerQuestion(t, questionID, "answer-sketch", answer)
+		if created, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || created != 1 {
+			t.Fatalf("reconcileOperatorFeedback = %d, %v", created, err)
+		}
+		if pending := f.pendingSpecificationIntents(t); len(pending) != 1 || pending[0].IdempotencyKey != string(secondID) {
+			t.Fatalf("pending specification intents = %+v, want the second iteration", pending)
+		}
+		if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+			t.Fatalf("second reconcile = %+v, %v", result, err)
+		}
+		prompt, ok := capturing.prompt(secondID)
+		if !ok {
+			t.Fatal("second specification provider inputs were not captured")
+		}
+		answerArtifact := f.artifact(t, "answer-answer-sketch")
+		answerBody, err := json.Marshal(specificationAnswerInput{
+			Version:  specificationAnswerInputVersion,
+			Question: *questionItem.AgentQuestion,
+			Answer:   answer,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertSpecificationPriorArtifacts(t, prompt, []expectedSpecificationPriorArtifact{{
+			role: "human_feedback", digest: answerArtifact.Digest, body: string(answerBody),
+		}})
+
+		// The answered retry yields the specification and opens its approval
+		// item; the spec-approval gate holds implementation, and no
+		// iterations-exhausted failure is recorded for either invocation.
+		item, _ := f.item(t, approvalID)
+		if item.Type != domain.AttentionSpecApproval || item.Status != domain.StatusOpen {
+			t.Fatalf("approval item = %#v, want an open spec_approval", item)
+		}
+		f.assertItemAbsent(t, domain.ItemID("execution-failure-"+string(firstID)))
+		f.assertItemAbsent(t, domain.ItemID("execution-failure-"+string(secondID)))
+		if _, err := f.run("implementation-run"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("implementation run before approval = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("stop", func(t *testing.T) {
+		f := newSpecificationFixture(t, true, 2)
+		driver := f.newDriver(t)
+		firstID := specificationInvocationID("specification-run", 1)
+		if err := specifyfake.Script(driver, firstID, 0, 0, specify.Output{
+			Decisions: sketchDecisionsFixture(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		f.submit(t)
+		engine := f.newEngine(t, driver)
+		if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+			t.Fatalf("reconcile = %+v, %v", result, err)
+		}
+		questionID := domain.ItemID("question-" + string(firstID))
+		snapshot, err := f.signet.GetAttentionItem(t.Context(), questionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+			CommandID: "stop-sketch", DeviceID: "device-1", ExpectedEntityVersion: snapshot.EntityVersion,
+			Payload: signet.DecisionPayload{
+				ItemID: questionID, Action: domain.ActionStop,
+				ItemVersion: snapshot.Item.ItemVersion, ArtifactDigests: snapshot.Item.ArtifactDigests,
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if stopped, err := f.signet.GetAttentionItem(t.Context(), questionID); err != nil ||
+			stopped.Item.Status != domain.StatusResolved {
+			t.Fatalf("stopped question = %+v, %v, want resolved", stopped.Item.Status, err)
+		}
+		if created, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || created != 0 {
+			t.Fatalf("stop reconciliation = %d, %v", created, err)
+		}
+		if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 0 {
+			t.Fatalf("reconcile after stop = %+v, %v", result, err)
+		}
+		if pending := f.pendingSpecificationIntents(t); len(pending) != 0 {
+			t.Fatalf("pending specification intents = %d, want none", len(pending))
+		}
+		f.assertItemAbsent(t, domain.ItemID("spec-approval-implementation-run-2"))
+		if _, err := f.run("implementation-run"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("implementation run after stop = %v, want ErrNotFound", err)
+		}
+	})
+}
