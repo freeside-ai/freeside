@@ -158,6 +158,7 @@ func TestSignetWireGoldens(t *testing.T) {
 		},
 		{name: "server-revision", value: ServerRevision{SyncEpoch: "sync-epoch-569", Revision: 23}},
 		{name: "run-timeline", value: runTimeline(observation, 23, acceptedAt, facts)},
+		{name: "task-timeline", value: taskTimelineFixture(t)},
 		{name: "pairing-facts", value: pairingFacts},
 		{
 			name: "pairing-grant",
