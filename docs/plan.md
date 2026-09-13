@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 57
+revision: 58
 status: active
-updated: 2026-09-11
+updated: 2026-09-12
 ---
 
 # Freeside
@@ -175,9 +175,11 @@ and API name the entity `Task` and reference it by `task_id`.
 
 ### The End-to-End Workflow
 
-1. A manual submission, labeled issue, or scanner proposal creates a task.
+1. A manual submission from the CLI or a paired client, a labeled issue, or
+   a scanner proposal creates a task.
 2. A specifier turns it into a specification using research artifacts fetched
-   by the daemon.
+   by the daemon. When the submission is a sketch, the specifier asks me
+   first.
 3. I approve the specification in the attention inbox.
 4. An agent implements it in an isolated workspace with no GitHub credentials.
 5. After the agent exits, a proven workspace handoff carries the result into
@@ -2194,6 +2196,59 @@ Additional rules:
   identity as separate lanes. The approval claim, and
   then the created run, carries the approved implementation specification
   digest.
+- **A paired client may submit a task.** The clients are a decision surface
+  and also the ordinary way to start work. A `submit_task` command on the
+  Section [5.14](#514-client-synchronization-and-conversations) command surface, the second `ClientCommand` type,
+  names a project, a source text, and an optional operator name. It is the
+  same intake path as `freesided submit`, not a parallel one. The daemon
+  registers the source as a digest-addressed artifact, creates or fetches the
+  task by the same project-scoped intake key, starts the specification
+  workflow idempotently, and reserves the implementation identity, all in the
+  transaction that records the command result. The client supplies none of
+  the other immutable run inputs. The daemon resolves the project's
+  configured policy at submission, as Section [3.2](#32-the-interruption-budget) says for any run
+  creation, and composes the reviewer-facing publication metadata itself;
+  their digests bind into the reserved implementation identity beside the
+  project and source digest, and the task records them at creation. A fetch
+  of an existing task reuses what it recorded, so a configuration change
+  after creation moves no existing identity and a retry re-resolves nothing.
+  The exact composition is #1328's. The daemon also records a
+  `bound_pr_merged` work-unit declaration for the task, with declared paths
+  from the resolved policy and no bound issue, so a merged PR completes it
+  and releases its WIP slot; an operator-authored declaration stays a CLI
+  input. The command binds to no entity. It carries no `expected_entity_version` or `expected_bindings`, and
+  nothing rejects it for replacement state. The project-scoped intake key is
+  its only concurrency control (test 17). Making those envelope fields
+  conditional on command type is #1328's work. Idempotency is layered: a
+  retried `command_id` returns the recorded result, and a distinct
+  `command_id` carrying the same source in the same project returns the same
+  committed task. An operator name applies only when the command creates the
+  task. A command that fetches an existing task ignores its name, and the
+  recorded result carries the task's stored name. Device authority is the
+  command surface's; a revoked device cannot submit. The composer offers the
+  projects the client already knows from synced entities. A project's first
+  task comes from `freesided submit` on the host until the configured-project
+  list lands in `/sync/bootstrap` (#1332). Attachments on submission wait
+  until the composer can upload them. (#1328; the composer is #1330.)
+- **A sketch gets a clarification round before a specification.** A
+  submission that leaves the task's outcome, scope, or non-goals unresolved
+  is a sketch: an idea, not a work contract, and the usual shape of what a
+  client composer produces. The specifier judges that from the source
+  itself; length and section headings are not the test. On a sketch, the
+  specifier's first turn asks the owner what the task must settle about
+  outcome, scope, and non-goals, with a recommendation for each. It uses its
+  existing `decisions` form, which the daemon shows as the Section [4](#4-the-attention-model)
+  `agent_question` card. It does this before requesting research or writing
+  a specification. Answering continues the normal loop through
+  `human_feedback`. Stopping ends the specification run with nothing built
+  or fetched. The task keeps its WIP slot until the operator abandons it, as
+  for any stopped specification run; the recorded abandonment fact is
+  #1318's. A source that settles outcome, scope, and non-goals, whether a
+  full document or an unambiguous sentence, keeps the existing rules and may
+  receive a specification on the first turn. This is prompt guidance under
+  the specifier's output contract, not a new flag, field, or attention type.
+  The sanity check is the specification stage; there is no pre-task
+  conversation outside a task. (#1329.)
 - **Task identity and intake idempotency are separate.** A task receives an
   opaque minted ID at creation. Its deterministic intake key is scoped to the
   project: `(project_id, source_digest)` for submit, or
@@ -2534,6 +2589,9 @@ steering wait until Phase 3.
 15. A revoked device cannot submit a prepared but uncommitted command.
 16. Retrying a previously recorded command after revocation may return its
     recorded result but causes no new side effect.
+17. Two concurrent `submit_task` commands carrying one source in one project
+    create one task, and a retried `command_id` returns the committed task
+    without a second specification run.
 
 ### 5.15 Evidence and Images
 
@@ -3755,7 +3813,7 @@ Build the installer only after the underlying interfaces survive real use. The
 | `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If the installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls. A callback or `--resume` reopens the same review after approval. |
 | `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe); the probe rules follow the table. |
 | `freesided auth add`, `auth adopt`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided identity and enrollment lifecycle (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); each subcommand's rules follow the table. |
-| `freesided submit` | Creates or fetches a task from its project-scoped source key, starts its specification workflow idempotently, and reserves its future implementation run. |
+| `freesided submit` | Creates or fetches a task from its project-scoped source key, starts its specification workflow idempotently, and reserves its future implementation run. The `submit_task` client command (Section [5.11](#511-github-integration-reconciliation-plus-intake)) is the same path under the same key. |
 | `freesided reattempt --task <task>`, `--parent-run <run>`, or `--campaign <campaign>` | Requires an operator reason and allocates the campaign's next attempt from an already approved specification. The task selector resolves to the task's current campaign and its exact parent run; it refuses a live parent. |
 | `freesided resume --task <task>` or `--run <run>` | Reattaches observation to one exact non-terminal run without creating any identity. The task selector resolves to its current run. It refuses terminal runs and points to `reattempt`. |
 
@@ -4037,7 +4095,7 @@ conversation feedback → fake invocation → workflow transition`
 
 Exit requires:
 
-- All sixteen sync and device tests;
+- All seventeen sync and device tests;
 - Idempotent command retry;
 - Kill-before and kill-after recovery with fakes; and
 - No dependency on containers, Claude, publication, or backup complexity.
@@ -4085,7 +4143,7 @@ Exit requires:
 #### Phase 1A Build Order
 
 1. Domain, synchronization, devices, and fakes.
-2. Clients and the sixteen permanent tests.
+2. Clients and the seventeen permanent tests.
 3. Export, gauntlet, and verifier with fake candidates; artifact store with
    checkpoint and provenance rules.
 4. Publication, reconciliation, and kill tests.
@@ -4407,18 +4465,31 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 57 ("API Contract Digest on /health"):
+Revision 58 ("Client Task Submission and the Sketch Round"):
 
-1. **`GET /health` carries a spec-derived contract digest for client/daemon
-   skew detection.** The daemon reports `contract_digest` (`sha256:` of
-   `api/openapi.yaml`'s exact bytes) beside the build `version`, compiled into
-   a daemon constant and a Swift client constant that cannot drift from the
-   spec. On a sync read that fails as reachable-but-failing, the client probes
-   `/health` and, when the reported digest differs from its own, reports a
-   contract-skew state instead of a generic sync failure. Whole-contract
-   detection; per-feature gating (#1266), version tolerance, and proactive
-   skew polling are non-goals. (User assignment; implementation decision for
-   #1265; devlog 2026-09-11-1012-contract-digest-skew.md.)
+1. **A paired client may submit a task through the command surface.** The
+   clients become the ordinary way to start work: a `submit_task`
+   `ClientCommand` that reuses `freesided submit`'s intake path and key, so a
+   task typed on the phone has the same identity, idempotency, and
+   specification workflow as one submitted from the host. The command binds
+   to no entity and carries no version envelope; the intake key is its only
+   concurrency control. The daemon supplies the resolved policy and
+   publication metadata the CLI takes as files, recorded at creation, and a
+   `bound_pr_merged` work-unit declaration with declared paths from the
+   resolved policy; the client supplies none of them. The composer offers the projects the client already
+   knows; a project's first task stays on the host CLI until #1332 lists
+   configured projects in the bootstrap. Rejected: a new endpoint outside
+   `/commands`, and a conversation before a task exists. (User decision;
+   Section [5.11](#511-github-integration-reconciliation-plus-intake), Section [5.14](#514-client-synchronization-and-conversations) test 17; #1328,
+   #1330; devlog 2026-09-12-1950-client-task-submission.md.)
+2. **A sketch gets a clarification round before a specification.** On a
+   submission that leaves outcome, scope, or non-goals unresolved, judged
+   from the source rather than its length or headings, the specifier's
+   first turn returns owner decisions on the `agent_question` card before
+   research or a specification, so a rough idea costs one short inference
+   to sanity-check and builds nothing. Prompt guidance under the existing
+   output contract; no flag, field, or attention type. (User decision;
+   Section [5.11](#511-github-integration-reconciliation-plus-intake); #1329; same devlog.)
 
 ## 14. Risks
 
@@ -4438,7 +4509,7 @@ Revision 57 ("API Contract Digest on /health"):
 | Review saturation | Bound work by review bandwidth and use yield policy; the Section [7](#7-review-policy) drift audit stops a loop that converges finding by finding into an over-built change. |
 | Interruption creep | Measure exceptional interruptions and treat a rising rate as a defect. |
 | Setup and upkeep burden | Make operational simplicity a Phase 1A exit criterion. |
-| Synchronization complexity creep | Keep the daemon authoritative and clients disposable; test the sixteen permanent cases. |
+| Synchronization complexity creep | Keep the daemon authoritative and clients disposable; test the seventeen permanent cases. |
 | Image handling | Enforce provenance and opaque-blob handling; defer OCR to Phase 2. |
 | Backup confidentiality | Require encryption policy and exclude credentials by default. |
 | Large Phase 1A scope | Order it into three internal exits. |
