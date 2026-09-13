@@ -178,7 +178,7 @@ private struct FreesideAppCommands: Commands {
 
     private func isDisabled(_ action: FreesideCommandAction) -> Bool {
         switch action {
-        case .showInbox, .showRuns, .toggleInspector:
+        case .showInbox, .showTasks, .toggleInspector:
             false
         case .refresh:
             coordinator == nil
@@ -195,8 +195,8 @@ private struct FreesideAppCommands: Commands {
         switch action {
         case .showInbox:
             navigation.selectTab(.inbox)
-        case .showRuns:
-            navigation.selectTab(.runs)
+        case .showTasks:
+            navigation.selectTab(.tasks)
         case .refresh:
             guard let coordinator else { return }
             Task { await coordinator.refresh() }

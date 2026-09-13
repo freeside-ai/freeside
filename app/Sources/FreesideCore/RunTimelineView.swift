@@ -154,18 +154,23 @@ struct RunTimelineView: View {
         }
     }
 
-    /// The eyebrow names the screen and the run. The id sits beside the
-    /// keyword in the same face but outside its uppercase transform, so a
-    /// selection copies the id as the daemon spells it. The separator
-    /// travels with the id so its spacing scales with the type size.
+    /// The eyebrow names the screen and the task the run belongs to, in the
+    /// task's own label style (mono for an identifier fallback, the Agent
+    /// keyword after an agent-proposed name). The run id stays in the copy
+    /// context menu and, for a run outside a campaign, in the title.
     private var eyebrow: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             KeywordLabel(text: "Run timeline")
-            Text(" · \(snapshot.run.id)")
+            Text("·")
                 .font(FreesideFont.keyword)
-                .tracking(0.8)
                 .foregroundStyle(Color.inkDim)
-                .textSelection(.enabled)
+                .accessibilityHidden(true)
+            TaskNameLabel(
+                name: TaskDisplay.name(for: snapshot.run, tasks: coordinator.tasks),
+                font: FreesideFont.subheadline,
+                monoFont: FreesideFont.monoCaption,
+                color: .inkDim,
+                lineLimit: 1)
         }
         .contextMenu {
             Button("Copy run ID") {
@@ -274,16 +279,7 @@ struct RunTimelineView: View {
     }
 
     private func milestoneDetail(_ milestone: Components.Schemas.RunMilestone) -> String? {
-        if let terminal = milestone.terminal?.value1 {
-            return terminal.rawValue.capitalized
-        }
-        if let outcome = milestone.outcome?.value1 {
-            return outcome.rawValue.capitalized
-        }
-        if let reason = milestone.reason?.value1 {
-            return RunDisplay.label(reason)
-        }
-        return nil
+        RunHistoryPresentation.detail(milestone)
     }
 }
 
@@ -313,6 +309,22 @@ enum RunHistoryPresentation {
                 state: index == milestones.count - 1 ? .current : .completed)
         }
         return Array(ordered.reversed())
+    }
+
+    /// A milestone's detail: the terminal state, else the outcome, else
+    /// the hold reason it recorded. Shared with the task timeline's run
+    /// sections so both read a milestone the same way.
+    static func detail(_ milestone: Components.Schemas.RunMilestone) -> String? {
+        if let terminal = milestone.terminal?.value1 {
+            return terminal.rawValue.capitalized
+        }
+        if let outcome = milestone.outcome?.value1 {
+            return outcome.rawValue.capitalized
+        }
+        if let reason = milestone.reason?.value1 {
+            return RunDisplay.label(reason)
+        }
+        return nil
     }
 
     /// Review rounds newest round first. The daemon supplies them ascending,
@@ -550,6 +562,29 @@ struct InvocationPresentation {
                 color = .inkDim
                 glyph = invocation.live ? "●" : "○"
             }
+        }
+    }
+}
+
+/// Ready is quiet in hue but full contrast (a neutral tick in the text
+/// color, never green or the accent), in progress is water, blocked is
+/// the accent, failed and lost are wax, not observed is a dashed faint.
+struct RunOutcomeBadge: View {
+    let outcome: Components.Schemas.RunOutcome
+
+    var body: some View {
+        StateChip(
+            label: RunDisplay.label(outcome), color: color, dashed: outcome == .unobserved,
+            glyph: outcome == .published ? "✓" : nil)
+    }
+
+    private var color: Color {
+        switch outcome {
+        case .unobserved: .inkDim
+        case .pending: .waterText
+        case .published, .completed: .ink
+        case .blocked: .accentText
+        case .failed, .lost: .waxText
         }
     }
 }

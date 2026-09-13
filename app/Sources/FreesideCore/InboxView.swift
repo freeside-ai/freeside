@@ -427,6 +427,9 @@ struct InboxRowView: View {
                     if let workUnit = context.workUnit {
                         separator
                         contextSegment(workUnit)
+                        if workUnit.isAgentClaim {
+                            KeywordLabel(text: "Agent")
+                        }
                     }
                     if let relativeTime = AttentionDisplay.relativeRowTime(item, now: now) {
                         Spacer(minLength: 8)

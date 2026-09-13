@@ -103,7 +103,7 @@ Items…** from the app and approve Freeside.
    if it is stopped.
 2. The app reads the local daemon's readiness file and prefills its pairing
    code. Check the displayed host details and choose **Pair this device**.
-3. Open **Inbox** and **Runs**. A fresh installation has no tasks and shows a
+3. Open **Inbox** and **Tasks**. A fresh installation has no tasks and shows a
    setup notice explaining that agent execution is not configured. The daemon
    serves pairing, stored state, and backups without running agents or
    simulating work. Follow the real-run setup below when you are ready.
@@ -143,13 +143,13 @@ In a configured real workflow:
    described below; installing the client does not configure intake.
 2. Read the generated specification in **Inbox**. Approve it or request
    changes before implementation begins.
-3. Follow progress in **Runs**. Return to **Inbox** for agent questions,
-   execution failures, or review decisions. Read the card's evidence and use
-   the actions it offers.
+3. Follow progress in **Tasks**; a task's timeline lists its runs. Return to
+   **Inbox** for agent questions, execution failures, or review decisions.
+   Read the card's evidence and use the actions it offers.
 4. Review the resulting pull request and its verification evidence before
    deciding whether to merge.
 
-On Mac, **⌘1** opens Inbox, **⌘2** opens Runs, **⌘R** refreshes, and **⌥⌘I**
+On Mac, **⌘1** opens Inbox, **⌘2** opens Tasks, **⌘R** refreshes, and **⌥⌘I**
 toggles the inspector. The app shows its last-updated state; refresh and check
 the connection if the information looks stale. The [client guide](app/README.md)
 describes keyboard commands and connection modes in more detail.

@@ -12,7 +12,7 @@ import Testing
         urgent.item.created_at = Date(timeIntervalSince1970: 20)
         let summary = OperationalSummary(
             openSnapshots: [older, urgent],
-            runs: RunFixtures.defaultRuns(),
+            tasks: TaskFixtures.defaultTasks(),
             freshness: .fresh)
 
         #expect(summary.openCount == 2)
@@ -22,14 +22,14 @@ import Testing
         #expect(summary.waitingLongestID == older.item.id)
         #expect(summary.waitingLongestTitle == AttentionDisplay.title(older.item))
         #expect(summary.waitingLongestItem == older.item)
-        #expect(summary.activeRunCount == 3)
+        #expect(summary.activeTaskCount == 3)
         #expect(summary.daemonState == .connected)
     }
 
     @Test func contractMismatchFreshnessMapsToItsDaemonState() {
         let summary = OperationalSummary(
             openSnapshots: [],
-            runs: [],
+            tasks: [],
             freshness: .contractMismatch(daemonContract: "sha256:" + String(repeating: "a", count: 64)))
         #expect(summary.daemonState == .contractMismatch)
     }
@@ -44,7 +44,7 @@ import Testing
                 kind: .spec_approval, since: Date(timeIntervalSince1970: 5),
                 item_id: older.item.id))
         let summary = OperationalSummary(
-            openSnapshots: [older, blocked], runs: [], freshness: .fresh)
+            openSnapshots: [older, blocked], tasks: [], freshness: .fresh)
 
         #expect(summary.waitingLongestID == blocked.item.id)
         let now = Date(timeIntervalSince1970: 3_605)
@@ -58,33 +58,36 @@ import Testing
         due.item.created_at = Date(timeIntervalSince1970: 10)
         due.item.expires_when = Date(timeIntervalSince1970: 7_210)
         let now = Date(timeIntervalSince1970: 10)
-        let summary = OperationalSummary(openSnapshots: [due], runs: [], freshness: .fresh)
+        let summary = OperationalSummary(openSnapshots: [due], tasks: [], freshness: .fresh)
 
         #expect(summary.waitingLongestValue(now: now) == "\(AttentionDisplay.title(due.item)) · due 2h")
     }
 
     @Test func emptyInboxNamesNoItems() {
-        let summary = OperationalSummary(openSnapshots: [], runs: [], freshness: .fresh)
+        let summary = OperationalSummary(openSnapshots: [], tasks: [], freshness: .fresh)
 
         #expect(summary.highestPriorityID == nil)
         #expect(summary.waitingLongestID == nil)
         #expect(summary.waitingLongestValue(now: Date()) == nil)
     }
 
-    @Test func activeCountUsesLifecycleIncludingPublishedAndExcludingSupersededPending() throws {
-        var superseded = RunFixtures.defaultRuns()[0]
-        superseded.run.superseded_by = "successor"
-        superseded.run.lifecycle = .finished
-        let runs = RunFixtures.defaultRuns() + [superseded]
-        let summary = OperationalSummary(openSnapshots: [], runs: runs, freshness: .fresh)
-        #expect(summary.activeRunCount == RunListFilter().count(in: runs, scope: .active))
-        #expect(summary.activeRunCount == 3)
+    @Test func activeCountUsesTaskLifecycleAndCountsANullLifecycleAsActive() throws {
+        var unstarted = try #require(TaskFixtures.defaultTasks().first)
+        unstarted.task.id = "task-unstarted"
+        unstarted.task.lifecycle = nil
+        unstarted.task.current_position = nil
+        unstarted.task.run_ids = []
+        unstarted.task.campaign_ids = []
+        let tasks = TaskFixtures.defaultTasks() + [unstarted]
+        let summary = OperationalSummary(openSnapshots: [], tasks: tasks, freshness: .fresh)
+        #expect(summary.activeTaskCount == TaskListFilter().count(in: tasks, scope: .active))
+        #expect(summary.activeTaskCount == 4)
 
-        let published = try #require(runs.first { $0.run.outcome == .published })
-        let publishedOnly = OperationalSummary(openSnapshots: [], runs: [published], freshness: .fresh)
-        let supersededOnly = OperationalSummary(openSnapshots: [], runs: [superseded], freshness: .fresh)
-        #expect(publishedOnly.activeRunCount == 1)
-        #expect(supersededOnly.activeRunCount == 0)
+        let finished = try #require(tasks.first { $0.task.lifecycle == .finished })
+        let finishedOnly = OperationalSummary(openSnapshots: [], tasks: [finished], freshness: .fresh)
+        let unstartedOnly = OperationalSummary(openSnapshots: [], tasks: [unstarted], freshness: .fresh)
+        #expect(finishedOnly.activeTaskCount == 0)
+        #expect(unstartedOnly.activeTaskCount == 1)
     }
 
     @Test func retainedOpenProjectionDoesNotReapplyLiveStatus() {
@@ -93,7 +96,7 @@ import Testing
 
         let summary = OperationalSummary(
             openSnapshots: [retained],
-            runs: [],
+            tasks: [],
             freshness: .fresh)
 
         #expect(summary.openCount == 1)

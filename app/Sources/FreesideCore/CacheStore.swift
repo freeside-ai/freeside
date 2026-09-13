@@ -42,6 +42,8 @@ public struct CachedState: Codable, Equatable, Sendable {
     public var runs: [Components.Schemas.RunSnapshot]
     public var schedules: [Components.Schemas.ScheduleSnapshot]
     public var runTimelines: [Components.Schemas.RunTimeline]
+    public var tasks: [Components.Schemas.TaskSnapshot]
+    public var taskTimelines: [Components.Schemas.TaskTimeline]
     /// The persisted ledger by item id; nil when absent or unreadable.
     /// The ledger is client mutation state, not readable cache, so it
     /// degrades independently: a corrupt section costs the retry
@@ -68,6 +70,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         runs: [Components.Schemas.RunSnapshot] = [],
         schedules: [Components.Schemas.ScheduleSnapshot] = [],
         runTimelines: [Components.Schemas.RunTimeline] = [],
+        tasks: [Components.Schemas.TaskSnapshot] = [],
+        taskTimelines: [Components.Schemas.TaskTimeline] = [],
         pendingCommands: [String: InboxStore.PendingCommandEntry]? = nil,
         comprehensionQueue: [InboxStore.QueuedComprehensionEvent]? = nil,
         comprehensionSequence: Int? = nil,
@@ -80,6 +84,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         self.runs = runs
         self.schedules = schedules
         self.runTimelines = runTimelines
+        self.tasks = tasks
+        self.taskTimelines = taskTimelines
         self.pendingCommands = pendingCommands
         self.comprehensionQueue = comprehensionQueue
         self.comprehensionSequence = comprehensionSequence
@@ -104,6 +110,12 @@ public struct CachedState: Codable, Equatable, Sendable {
         runTimelines =
             try container.decodeIfPresent(
                 [Components.Schemas.RunTimeline].self, forKey: .runTimelines) ?? []
+        tasks =
+            try container.decodeIfPresent(
+                [Components.Schemas.TaskSnapshot].self, forKey: .tasks) ?? []
+        taskTimelines =
+            try container.decodeIfPresent(
+                [Components.Schemas.TaskTimeline].self, forKey: .taskTimelines) ?? []
         // The ledger section is forgiving on its own: an undecodable
         // section loads as absent without failing the whole file.
         pendingCommands = try? container.decodeIfPresent(
@@ -142,13 +154,14 @@ public protocol CacheStore: Sendable {
 /// discard is `rm`; a database earns nothing here.
 public struct DiskCacheStore: CacheStore {
     /// Bumped when persisted snapshots change incompatibly. A pre-ledger
-    /// file loads absent; formats 2 and 3 preserve their independent ledger
-    /// while invalidating snapshots and forcing a bootstrap. 2: cursors
-    /// became optional and the pending-command ledger joined (#115). 3:
-    /// run and schedule snapshots joined. 4: conversation snapshots joined.
-    /// A pre-current cache cannot claim freshness while durable rows from a
+    /// file loads absent; formats 2 to 4 preserve their independent ledger
+    /// and telemetry sections while invalidating snapshots and forcing a
+    /// bootstrap. 2: cursors became optional and the pending-command ledger
+    /// joined (#115). 3: run and schedule snapshots joined. 4: conversation
+    /// snapshots joined. 5: task snapshots and task timelines joined. A
+    /// pre-current cache cannot claim freshness while durable rows from a
     /// newer client surface are absent.
-    static let format = 4
+    static let format = 5
 
     private struct CacheFile: Codable {
         var format: Int
@@ -168,16 +181,22 @@ public struct DiskCacheStore: CacheStore {
         switch file.format {
         case Self.format:
             return file.state
-        case 2, 3:
-            // Formats 2 and 3 already carried retryable commands, but
-            // predate later durable read surfaces. Keep only that independent
-            // ledger: their cursors cannot scope an incomplete cache, while
-            // losing a command ID could duplicate an operator decision after
-            // relaunch.
+        case 2, 3, 4:
+            // Formats 2 to 4 already carried retryable commands, but predate
+            // later durable read surfaces. Keep only the epoch-independent
+            // client state: the ledger, because losing a command ID could
+            // duplicate an operator decision after relaunch, and the
+            // telemetry queue and its registration (absent before format 4),
+            // because a queued event should drain rather than vanish. Their
+            // cursors cannot scope an incomplete cache.
             return CachedState(
                 cursors: nil,
                 attentionItems: [],
-                pendingCommands: file.state.pendingCommands
+                pendingCommands: file.state.pendingCommands,
+                comprehensionQueue: file.state.comprehensionQueue,
+                comprehensionSequence: file.state.comprehensionSequence,
+                registeredCapabilityFingerprint: file.state.registeredCapabilityFingerprint,
+                comprehensionDeviceID: file.state.comprehensionDeviceID
             )
         default:
             return nil

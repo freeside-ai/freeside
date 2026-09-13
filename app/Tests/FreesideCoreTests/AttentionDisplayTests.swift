@@ -298,6 +298,24 @@ import Testing
         #expect(AttentionDisplay.rowContext(system).workUnit == nil)
     }
 
+    @Test func rowContextMarksAnAgentProposedTaskNameAsAClaim() {
+        var run = AttentionFixtures.fixture(type: .execution_failure).item
+        #expect(AttentionDisplay.rowContext(run).workUnit?.isAgentClaim == false)
+
+        run.display_names = .init(
+            value1: .init(
+                project: .init(text: "owner/repo", source: .name),
+                task: RunFixtures.readyTaskName))
+        #expect(
+            AttentionDisplay.rowContext(run).workUnit
+                == .init(value: RunFixtures.readyTaskName.text, isIdentifier: false, isAgentClaim: true))
+
+        // A system item has no task, so nothing to mark.
+        var system = AttentionFixtures.fixture(type: .system_health).item
+        system.display_names = run.display_names
+        #expect(AttentionDisplay.rowContext(system).workUnit == nil)
+    }
+
     @Test func copyableSubjectReferencesMatchTheirContractSubject() {
         let run = AttentionFixtures.fixture(type: .execution_failure).item
         #expect(

@@ -60,6 +60,25 @@ public enum TaskFixtures {
             events: [.init(kind: .task_created, recorded_at: task.created_at)], sections: sections)
     }
 
+    /// The task holding the retry campaign (`run-freeside-656` and
+    /// `run-freeside-657`), the one row the Tasks list shows for both attempts.
+    public static let retryTaskID = "task-\(RunFixtures.retryCampaignID)"
+    public static let legacyTaskID = "task-\(RunFixtures.legacyRunID)"
+
+    /// The intake issue behind the named demo tasks, keyed by task id. The
+    /// legacy and oriole tasks have none: `Task.source` is null for demo work
+    /// without a recoverable intake reference.
+    private static let issueNumbers: [String: Int] = [
+        retryTaskID: 724,
+        "task-campaign-freeside-ready": 654,
+        "task-run-freeside-specification": 731,
+        "task-campaign-freeside-completed": 80,
+    ]
+
+    public static func defaultTaskIDs() -> [String] {
+        defaultTasks().map(\.task.id)
+    }
+
     public static func defaultTasks() -> [Components.Schemas.TaskSnapshot] {
         let groups = Dictionary(grouping: RunFixtures.defaultRuns(), by: { $0.run.task_id })
         return groups.keys.sorted().compactMap { id in
@@ -79,14 +98,24 @@ public enum TaskFixtures {
                     campaigns.append(campaign)
                 }
             }
+            // The runs carry the task's current name, as the daemon copies it;
+            // a run without display names belongs to an identifier-only task.
             let names = Components.Schemas.DisplayNames(
                 project: newest.display_names?.value1.project ?? .init(text: newest.project_id, source: .identifier),
-                task: .init(text: id, source: .identifier))
+                task: newest.display_names?.value1.task ?? .init(text: id, source: .identifier))
+            let source: Components.Schemas.Task.sourcePayload? = issueNumbers[id].map { number in
+                .init(
+                    value1: .issue_subject(
+                        .init(
+                            kind: .issue_subject,
+                            issue_subject: .init(
+                                repo: "freeside-ai/freeside", repository_id: 1, issue_number: number))))
+            }
             return .init(
                 as_of_revision: snapshots.map(\.as_of_revision).max() ?? 1,
                 entity_version: snapshots.map(\.entity_version).max() ?? 1,
                 task: .init(
-                    id: id, project_id: newest.project_id, display_names: names,
+                    id: id, project_id: newest.project_id, display_names: names, source: source,
                     created_at: created, last_activity_at: lastActivity,
                     lifecycle: .init(rawValue: newest.lifecycle.rawValue),
                     current_position: .init(

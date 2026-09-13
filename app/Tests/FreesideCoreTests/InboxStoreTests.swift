@@ -248,7 +248,7 @@ import Testing
         #expect(
             OperationalSummary(
                 openSnapshots: store.openSnapshots,
-                runs: [],
+                tasks: [],
                 freshness: .fresh
             ).openCount == store.count(in: .open))
         store.scope = .resolved

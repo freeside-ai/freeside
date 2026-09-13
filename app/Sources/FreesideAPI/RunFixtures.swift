@@ -8,6 +8,27 @@ public enum RunFixtures {
     public static let legacyRunID = "run-freeside-540"
     public static let completedRunID = "run-freeside-640"
     public static let refreshedRunID = "run-freeside-refreshed"
+    public static let retryCampaignID =
+        "campaign-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+    /// The demo tasks' names, carried on their runs' `display_names` the way
+    /// the daemon copies a task's current name onto its runs. A task's name
+    /// source is never `name` (daemon/internal/domain/task.go): an operator
+    /// named the retry and completed tasks, the agent proposed the ready
+    /// task's name (its claim stays labeled in the clients), and the
+    /// approved specification supplied the specification task's. The legacy
+    /// and oriole runs carry no names, so their tasks fall back to the
+    /// identifier.
+    public static let retryTaskName = Components.Schemas.DisplayName(
+        text: "Repair the acceptance rig", source: ._operator)
+    public static let readyTaskName = Components.Schemas.DisplayName(
+        text: "Summarize review rounds on the card", source: .agent)
+    public static let specificationTaskName = Components.Schemas.DisplayName(
+        text: "Time grammar for inbox rows", source: .specification)
+    public static let completedTaskName = Components.Schemas.DisplayName(
+        text: "Drain failed startups on launch", source: ._operator)
+    public static let refreshedTaskName = Components.Schemas.DisplayName(
+        text: "Order invocation history by attempt", source: ._operator)
 
     /// A fixed capture clock: five minutes past the newest fixture
     /// observation, so run cards render their relative last-active text
@@ -22,14 +43,14 @@ public enum RunFixtures {
                 id: activeRunID, projectID: "freeside", stage: "implementation",
                 attempt: 2, milestone: .invocation_started, outcome: .pending,
                 lifecycle: .active, hold: .verification_findings,
-                campaignID: "campaign-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                campaignID: retryCampaignID,
                 campaignAttempt: 2, attemptReason: "Retry after repairing the acceptance rig",
-                parentRunID: "run-freeside-656", cost: activeCost, workUnit: "#724"),
+                parentRunID: "run-freeside-656", cost: activeCost, taskName: retryTaskName),
             snapshot(
                 id: readyRunID, projectID: "freeside", stage: "implementation",
                 attempt: 1, milestone: .publication_ready, outcome: .published,
                 lifecycle: .active, campaignID: "campaign-freeside-ready", campaignAttempt: 1,
-                workUnit: "#654"),
+                taskName: readyTaskName),
             snapshot(
                 id: "run-oriole-121", projectID: "oriole", stage: "verification",
                 attempt: 1, milestone: .terminal_recorded, outcome: .failed, lifecycle: .finished),
@@ -41,13 +62,13 @@ public enum RunFixtures {
             snapshot(
                 id: "run-freeside-656", projectID: "freeside", stage: "implementation",
                 attempt: 1, milestone: .terminal_recorded, outcome: .failed, lifecycle: .finished,
-                campaignID: "campaign-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                campaignID: retryCampaignID,
                 campaignAttempt: 1,
-                supersededBy: activeRunID, workUnit: "#724"),
+                supersededBy: activeRunID, taskName: retryTaskName),
             snapshot(
                 id: "run-freeside-specification", projectID: "freeside", stage: "specification",
                 attempt: 1, milestone: .execution_export_recorded, outcome: .pending,
-                lifecycle: .active, workUnit: "#724"),
+                lifecycle: .active, taskName: specificationTaskName),
             completedRun(),
         ].map { projectingObservationTimes($0, from: timelines[$0.run.id]) }
     }
@@ -61,7 +82,7 @@ public enum RunFixtures {
                 id: completedRunID, projectID: "freeside", stage: "implementation",
                 attempt: 1, milestone: .work_unit_completed, outcome: .completed,
                 lifecycle: .finished, campaignID: "campaign-freeside-completed", campaignAttempt: 1,
-                completion: completedFacts, cost: completedCost, workUnit: "#80"),
+                completion: completedFacts, cost: completedCost, taskName: completedTaskName),
             from: completedTimeline())
     }
 
@@ -72,7 +93,7 @@ public enum RunFixtures {
             id: "run-freeside-specification-bound", projectID: "freeside", stage: "specification",
             attempt: 1, milestone: .run_submitted, outcome: .pending,
             lifecycle: .finished, campaignID: "campaign-freeside-ready", campaignAttempt: 1,
-            supersededBy: readyRunID, workUnit: "#654")
+            supersededBy: readyRunID, taskName: readyTaskName)
     }
 
     /// A run that exercises attempt-ordered invocation history (#1263): two
@@ -84,7 +105,7 @@ public enum RunFixtures {
         var snapshot = snapshot(
             id: refreshedRunID, projectID: "freeside", stage: "implement",
             attempt: 2, milestone: .publication_ready, outcome: .pending,
-            lifecycle: .active, workUnit: "#1263")
+            lifecycle: .active, taskName: refreshedTaskName)
         // The completed attempt is the daemon's remediation `implement` stage,
         // appended after the first two attempts (creation order), so it holds
         // the newest attempt position under one Implementation heading.
@@ -371,7 +392,7 @@ public enum RunFixtures {
         supersededBy: String? = nil,
         completion: Components.Schemas.WorkUnitCompletionFacts? = nil,
         cost: Components.Schemas.CostSoFar? = nil,
-        workUnit: String? = nil
+        taskName: Components.Schemas.DisplayName? = nil
     ) -> Components.Schemas.RunSnapshot {
         let stageID = "stage-\(id)"
         return .init(
@@ -381,11 +402,11 @@ public enum RunFixtures {
                 id: id,
                 project_id: projectID,
                 task_id: "task-\(campaignID ?? id)",
-                display_names: workUnit.map {
+                display_names: taskName.map {
                     .init(
                         value1: .init(
                             project: .init(text: projectID, source: .name),
-                            task: .init(text: $0, source: .name)))
+                            task: $0))
                 },
                 created_at: nil,
                 last_activity_at: nil,

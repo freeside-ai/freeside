@@ -7,14 +7,70 @@ import Testing
     @Test func launchSelectionStartsInsideItsRequestedStack() {
         let inputs = LaunchInputs(
             colorSchemeRaw: nil,
-            selectionRaw: RunFixtures.activeRunID,
-            screenRaw: "runs")
+            selectionRaw: TaskFixtures.retryTaskID,
+            screenRaw: "tasks")
 
         let navigation = NavigationModel(launchInputs: inputs)
 
-        #expect(navigation.selectedTab == .runs)
-        #expect(navigation.runsPath == [RunFixtures.activeRunID])
+        #expect(navigation.selectedTab == .tasks)
+        #expect(navigation.tasksPath == [TaskFixtures.retryTaskID])
+        #expect(navigation.taskSelection == TaskFixtures.retryTaskID)
+        #expect(navigation.runSelection == nil)
         #expect(navigation.inboxPath.isEmpty)
+    }
+
+    @Test func aRunLaunchLinkOpensItsTaskWithTheRunPushed() {
+        let inputs = LaunchInputs(
+            colorSchemeRaw: nil,
+            selectionRaw: RunFixtures.activeRunID,
+            screenRaw: "tasks")
+
+        let navigation = NavigationModel(launchInputs: inputs)
+
+        #expect(navigation.selectedTab == .tasks)
+        #expect(navigation.tasksPath == [TaskFixtures.retryTaskID, RunFixtures.activeRunID])
+        #expect(navigation.taskSelection == TaskFixtures.retryTaskID)
+        #expect(navigation.runSelection == RunFixtures.activeRunID)
+    }
+
+    @Test func theTasksStackDrivesBothSelectionsAndARepairIsNotOperatorNavigation() {
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, screenRaw: "tasks"))
+        let revision = navigation.operatorNavigationRevision
+
+        navigation.setTasksPath([TaskFixtures.retryTaskID, RunFixtures.activeRunID])
+        #expect(navigation.taskSelection == TaskFixtures.retryTaskID)
+        #expect(navigation.runSelection == RunFixtures.activeRunID)
+        #expect(navigation.operatorNavigationRevision == revision + 1)
+
+        // Popping the run clears its selection; the task stays.
+        navigation.setTasksPath([TaskFixtures.retryTaskID])
+        #expect(navigation.runSelection == nil)
+        #expect(navigation.taskSelection == TaskFixtures.retryTaskID)
+
+        navigation.applyTasksPath([])
+        #expect(navigation.taskSelection == nil)
+        #expect(navigation.operatorNavigationRevision == revision + 2)
+    }
+
+    @Test func macTaskSelectionDropsTheRunAndCloseRunReturnsToTheTask() {
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, screenRaw: "tasks"))
+        navigation.route(to: .run(taskID: TaskFixtures.retryTaskID, runID: RunFixtures.activeRunID))
+
+        navigation.closeRun()
+        #expect(navigation.runSelection == nil)
+        #expect(navigation.taskSelection == TaskFixtures.retryTaskID)
+        #expect(navigation.tasksPath == [TaskFixtures.retryTaskID])
+
+        navigation.route(to: .run(taskID: TaskFixtures.retryTaskID, runID: RunFixtures.activeRunID))
+        navigation.selectTask(TaskFixtures.retryTaskID)
+        #expect(navigation.runSelection == RunFixtures.activeRunID, "reselecting the same task keeps its run")
+        navigation.selectTask(TaskFixtures.legacyTaskID)
+        #expect(navigation.runSelection == nil)
+        #expect(navigation.tasksPath == [TaskFixtures.legacyTaskID])
+        navigation.selectTask(nil)
+        #expect(navigation.tasksPath.isEmpty)
     }
 
     @Test func launchExpandedDetailsAlsoOpensTheSharedInspector() {
@@ -33,33 +89,35 @@ import Testing
                 colorSchemeRaw: nil,
                 selectionRaw: "item-spec_approval"))
 
-        navigation.route(to: .run(RunFixtures.activeRunID))
+        navigation.route(to: .run(taskID: TaskFixtures.retryTaskID, runID: RunFixtures.activeRunID))
 
-        #expect(navigation.selectedTab == .runs)
-        #expect(navigation.runsPath == [RunFixtures.activeRunID])
+        #expect(navigation.selectedTab == .tasks)
+        #expect(navigation.tasksPath == [TaskFixtures.retryTaskID, RunFixtures.activeRunID])
         #expect(navigation.inboxPath == ["item-spec_approval"])
 
         navigation.route(to: .attentionItem("item-blocked"))
 
         #expect(navigation.selectedTab == .inbox)
         #expect(navigation.inboxPath == ["item-blocked"])
-        #expect(navigation.runsPath == [RunFixtures.activeRunID])
+        #expect(navigation.tasksPath == [TaskFixtures.retryTaskID, RunFixtures.activeRunID])
     }
 
-    @Test func showingActiveRunsDropsARetainedRunSelection() {
+    @Test func showingActiveTasksDropsARetainedSelection() {
         let navigation = NavigationModel(
             launchInputs: LaunchInputs(
                 colorSchemeRaw: nil,
                 selectionRaw: "item-spec_approval"))
-        navigation.route(to: .run(RunFixtures.completedRunID))
+        navigation.route(
+            to: .run(taskID: "task-campaign-freeside-completed", runID: RunFixtures.completedRunID))
         navigation.selectTab(.inbox)
         let revision = navigation.operatorNavigationRevision
 
-        navigation.showActiveRuns()
+        navigation.showActiveTasks()
 
-        #expect(navigation.selectedTab == .runs)
+        #expect(navigation.selectedTab == .tasks)
+        #expect(navigation.taskSelection == nil)
         #expect(navigation.runSelection == nil)
-        #expect(navigation.runsPath.isEmpty)
+        #expect(navigation.tasksPath.isEmpty)
         #expect(navigation.operatorNavigationRevision == revision + 1)
         #expect(navigation.inboxPath == ["item-spec_approval"])
     }
@@ -69,17 +127,18 @@ import Testing
             launchInputs: LaunchInputs(
                 colorSchemeRaw: nil,
                 selectionRaw: "item-spec_approval"))
-        navigation.route(to: .run(RunFixtures.activeRunID))
+        navigation.route(to: .run(taskID: TaskFixtures.retryTaskID, runID: RunFixtures.activeRunID))
 
         navigation.inboxPath = NavigationModel.repairedPath(
             navigation.inboxPath,
             availableIDs: ["item-blocked"])
-        navigation.runsPath = NavigationModel.repairedPath(
-            navigation.runsPath,
-            availableIDs: [RunFixtures.activeRunID])
+        navigation.applyTasksPath(
+            NavigationModel.repairedTaskPath(
+                navigation.tasksPath,
+                availableTaskIDs: [TaskFixtures.retryTaskID]))
 
         #expect(navigation.inboxPath.isEmpty)
-        #expect(navigation.runsPath == [RunFixtures.activeRunID])
+        #expect(navigation.tasksPath == [TaskFixtures.retryTaskID, RunFixtures.activeRunID])
     }
 
     @Test func conclusionAdvancesByInboxPriorityThenRendersInboxClear() async throws {
@@ -164,14 +223,14 @@ import Testing
         #expect(navigation.attentionSelection == "item-blocked")
 
         let runExpectedRevision = navigation.operatorNavigationRevision
-        navigation.route(to: .run(RunFixtures.activeRunID))
+        navigation.route(to: .run(taskID: TaskFixtures.retryTaskID, runID: RunFixtures.activeRunID))
         #expect(
             navigation.advanceAfterConclusion(
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: runExpectedRevision,
                 advancesToNextItem: false,
                 store: store) == .cancelled)
-        #expect(navigation.selectedTab == .runs)
+        #expect(navigation.selectedTab == .tasks)
     }
 
     @Test func macSelectionSynchronizesItsPathBeforeConclusionAdvance() async {

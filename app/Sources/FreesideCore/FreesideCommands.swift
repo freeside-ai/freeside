@@ -18,7 +18,7 @@ enum DecisionKeyboardGate {
 
 public enum FreesideCommandAction: String, CaseIterable, Identifiable, Sendable {
     case showInbox
-    case showRuns
+    case showTasks
     case refresh
     case toggleInspector
     case nextItem
@@ -36,7 +36,7 @@ public struct FreesideCommandDescriptor: Identifiable {
 
     @MainActor public static let all: [Self] = [
         .init(id: .showInbox, title: "Show Inbox", shortcut: .init("1", modifiers: .command)),
-        .init(id: .showRuns, title: "Show Runs", shortcut: .init("2", modifiers: .command)),
+        .init(id: .showTasks, title: "Show Tasks", shortcut: .init("2", modifiers: .command)),
         .init(id: .refresh, title: "Refresh", shortcut: .init("r", modifiers: .command)),
         .init(
             id: .toggleInspector, title: "Toggle Inspector",

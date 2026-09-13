@@ -41,6 +41,9 @@ public final class SyncCoordinator {
     public private(set) var schedules: [Components.Schemas.ScheduleSnapshot] = []
     public private(set) var timelinesByRunID: [String: Components.Schemas.RunTimeline] = [:]
     public private(set) var timelineLoadStates: [String: TimelineLoadState] = [:]
+    public private(set) var tasks: [Components.Schemas.TaskSnapshot] = []
+    public private(set) var taskTimelinesByTaskID: [String: Components.Schemas.TaskTimeline] = [:]
+    public private(set) var taskTimelineLoadStates: [String: TimelineLoadState] = [:]
     public private(set) var lastUpdatedAt: Date?
 
     private let cache: CacheStore
@@ -58,6 +61,7 @@ public final class SyncCoordinator {
     private var cacheGeneration = 0
     private var runListGeneration = 0
     private var timelineGenerations: [String: Int] = [:]
+    private var taskTimelineGenerations: [String: Int] = [:]
     private var heartbeatTask: Task<Void, Never>?
     private var heartbeatToken: UUID?
     private var refreshTask: Task<Void, Never>?
@@ -86,6 +90,10 @@ public final class SyncCoordinator {
                 schedules = cached.schedules
                 timelinesByRunID = cached.runTimelines.reduce(into: [:]) { timelines, timeline in
                     timelines[timeline.run_id] = timeline
+                }
+                tasks = cached.tasks
+                taskTimelinesByTaskID = cached.taskTimelines.reduce(into: [:]) { timelines, timeline in
+                    timelines[timeline.task_id] = timeline
                 }
             }
             // The ledger restores even without cursors: an epoch discard
@@ -458,73 +466,120 @@ public final class SyncCoordinator {
         }
     }
 
-    /// Fetches one computed timeline on navigation. A cached same-epoch value
-    /// remains available while unreachable; a successful partial read replaces
-    /// it and advances only the observed cursor.
+    /// Fetches one computed run timeline on navigation. A cached same-epoch
+    /// value remains available while unreachable; a successful partial read
+    /// replaces it and advances only the observed cursor.
     public func refreshTimeline(for runID: String) async {
-        let requestGeneration = (timelineGenerations[runID] ?? 0) + 1
-        timelineGenerations[runID] = requestGeneration
+        await refreshComputedTimeline(
+            id: runID,
+            generations: \.timelineGenerations,
+            loadStates: \.timelineLoadStates,
+            read: {
+                switch try await store.client.getRunTimeline(path: .init(run_id: runID)) {
+                case .ok(let ok): .ok(try ok.body.json)
+                case .notFound: .notFound
+                case .undocumented(let statusCode, _): .undocumented(status: statusCode)
+                }
+            },
+            binds: { $0.run_id == runID },
+            adopt: { timelinesByRunID[runID] = $0 },
+            revision: \.as_of_revision)
+    }
+
+    /// The task counterpart of `refreshTimeline(for:)`, keyed by task id and
+    /// held under the same cache-generation rules.
+    public func refreshTaskTimeline(for taskID: String) async {
+        await refreshComputedTimeline(
+            id: taskID,
+            generations: \.taskTimelineGenerations,
+            loadStates: \.taskTimelineLoadStates,
+            read: {
+                switch try await store.client.getTaskTimeline(path: .init(task_id: taskID)) {
+                case .ok(let ok): .ok(try ok.body.json)
+                case .notFound: .notFound
+                case .undocumented(let statusCode, _): .undocumented(status: statusCode)
+                }
+            },
+            binds: { $0.task_id == taskID },
+            adopt: { taskTimelinesByTaskID[taskID] = $0 },
+            revision: \.as_of_revision)
+    }
+
+    /// One computed-timeline read's outcome, the shape both operations
+    /// reduce their generated output to.
+    private enum TimelineRead<Timeline> {
+        case ok(Timeline)
+        case notFound
+        case undocumented(status: Int)
+    }
+
+    /// The generation and load-state discipline the run and task timelines
+    /// share. The newest request per id wins; a result issued against a
+    /// cache that a bootstrap replaced mid-flight is dropped; and whenever
+    /// this newest request produces nothing, the load state returns to
+    /// `.idle` rather than staying `.loading` with no request in flight,
+    /// which is what let the spinner stick after a bootstrap. The view's
+    /// refetch, keyed on the new full-snapshot revision, issues the fresh
+    /// request. `binds` rejects an answer for the wrong entity: the daemon
+    /// responded, so that is a reachable-but-failing read, not silence.
+    private func refreshComputedTimeline<Timeline>(
+        id: String,
+        generations: ReferenceWritableKeyPath<SyncCoordinator, [String: Int]>,
+        loadStates: ReferenceWritableKeyPath<SyncCoordinator, [String: TimelineLoadState]>,
+        read: () async throws -> TimelineRead<Timeline>,
+        binds: (Timeline) -> Bool,
+        adopt: (Timeline) -> Void,
+        revision: KeyPath<Timeline, Int64>
+    ) async {
+        let requestGeneration = (self[keyPath: generations][id] ?? 0) + 1
+        self[keyPath: generations][id] = requestGeneration
         let requestCacheGeneration = cacheGeneration
-        timelineLoadStates[runID] = .loading
+        self[keyPath: loadStates][id] = .loading
         do {
-            let output = try await store.client.getRunTimeline(
-                path: .init(run_id: runID))
-            guard timelineGenerations[runID] == requestGeneration else { return }
+            let output = try await read()
+            guard self[keyPath: generations][id] == requestGeneration else { return }
             guard requestCacheGeneration == cacheGeneration else {
-                // A bootstrap replaced the cache while this read was in
-                // flight, so its result is stale and must be dropped. This is
-                // still the newest request for the run, so nothing else will
-                // clear the `.loading` set on entry; return to `.idle` and let
-                // the view's refetch (keyed on the new full-snapshot revision)
-                // issue a fresh request. Leaving it `.loading` with no request
-                // in flight is what let the spinner stick after a bootstrap.
-                timelineLoadStates[runID] = .idle
+                self[keyPath: loadStates][id] = .idle
                 return
             }
             switch output {
-            case .ok(let ok):
-                let timeline = try ok.body.json
-                guard timeline.run_id == runID else {
-                    // The daemon answered, just with the wrong run's
-                    // timeline: a reachable-but-failing read, not silence.
-                    timelineLoadStates[runID] = .unavailable
+            case .ok(let timeline):
+                guard binds(timeline) else {
+                    self[keyPath: loadStates][id] = .unavailable
                     let diagnosed = await diagnoseSyncFailure()
-                    guard timelineGenerations[runID] == requestGeneration,
+                    guard self[keyPath: generations][id] == requestGeneration,
                         requestCacheGeneration == cacheGeneration
                     else { return }
                     store.freshness = diagnosed
                     return
                 }
-                timelinesByRunID[runID] = timeline
-                timelineLoadStates[runID] = .loaded
-                observe(revision: timeline.as_of_revision)
+                adopt(timeline)
+                self[keyPath: loadStates][id] = .loaded
+                observe(revision: timeline[keyPath: revision])
                 persist()
             case .notFound:
-                timelineLoadStates[runID] = .unavailable
-            case .undocumented(let statusCode, _):
-                timelineLoadStates[runID] = .unavailable
+                self[keyPath: loadStates][id] = .unavailable
+            case .undocumented(let statusCode):
+                self[keyPath: loadStates][id] = .unavailable
                 let diagnosed = await failureFreshness(status: statusCode)
-                guard timelineGenerations[runID] == requestGeneration,
+                guard self[keyPath: generations][id] == requestGeneration,
                     requestCacheGeneration == cacheGeneration
                 else { return }
                 store.freshness = diagnosed
             }
         } catch {
-            guard timelineGenerations[runID] == requestGeneration else { return }
+            guard self[keyPath: generations][id] == requestGeneration else { return }
             guard requestCacheGeneration == cacheGeneration else {
-                // Same as the success path: a mid-flight bootstrap dropped
-                // this result, and this is still the newest request, so
-                // return to `.idle` rather than leaving a stuck spinner.
-                timelineLoadStates[runID] = .idle
+                self[keyPath: loadStates][id] = .idle
                 return
             }
             if error is CancellationError || Task.isCancelled {
-                timelineLoadStates[runID] = .idle
+                self[keyPath: loadStates][id] = .idle
                 return
             }
-            timelineLoadStates[runID] = .unavailable
+            self[keyPath: loadStates][id] = .unavailable
             let diagnosed = await diagnosedReadFreshness(error)
-            guard timelineGenerations[runID] == requestGeneration,
+            guard self[keyPath: generations][id] == requestGeneration,
                 requestCacheGeneration == cacheGeneration
             else { return }
             store.freshness = diagnosed
@@ -553,6 +608,7 @@ public final class SyncCoordinator {
         store.replaceAllConversations(with: snapshot.conversations)
         runs = snapshot.runs
         schedules = snapshot.schedules
+        tasks = snapshot.tasks
         // Timelines are not in the bootstrap payload, so a same-epoch
         // bootstrap can neither replace nor invalidate a cached one: keep
         // every timeline whose run the snapshot still lists and drop the
@@ -568,6 +624,9 @@ public final class SyncCoordinator {
         let listedRunIDs = Set(snapshot.runs.map(\.run.id))
         timelinesByRunID = timelinesByRunID.filter { listedRunIDs.contains($0.key) }
         timelineLoadStates = timelineLoadStates.filter { listedRunIDs.contains($0.key) }
+        let listedTaskIDs = Set(snapshot.tasks.map(\.task.id))
+        taskTimelinesByTaskID = taskTimelinesByTaskID.filter { listedTaskIDs.contains($0.key) }
+        taskTimelineLoadStates = taskTimelineLoadStates.filter { listedTaskIDs.contains($0.key) }
         cursors = SyncCursors(
             syncEpoch: snapshot.sync_epoch,
             lastFullSnapshotRevision: snapshot.revision,
@@ -665,6 +724,9 @@ public final class SyncCoordinator {
         schedules = []
         timelinesByRunID = [:]
         timelineLoadStates = [:]
+        tasks = []
+        taskTimelinesByTaskID = [:]
+        taskTimelineLoadStates = [:]
         cursors = nil
         persist()
     }
@@ -701,6 +763,9 @@ public final class SyncCoordinator {
                     schedules: cursors == nil ? [] : schedules,
                     runTimelines: cursors == nil
                         ? [] : timelinesByRunID.keys.sorted().compactMap { timelinesByRunID[$0] },
+                    tasks: cursors == nil ? [] : tasks,
+                    taskTimelines: cursors == nil
+                        ? [] : taskTimelinesByTaskID.keys.sorted().compactMap { taskTimelinesByTaskID[$0] },
                     pendingCommands: pending,
                     comprehensionQueue: comprehensionQueue,
                     comprehensionSequence: store.comprehensionSequence,
