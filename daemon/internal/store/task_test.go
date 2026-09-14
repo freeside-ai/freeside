@@ -6,12 +6,104 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
+
+func TestTaskLifecycleFactReplayAndAbandon(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	ts := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	var id domain.TaskID
+	// A campaign-less run: RecordTaskStart records a start with no campaign, which
+	// the re-gate accepts (a campaign is corroborated only when present).
+	started := domain.TaskLifecycleFact{Kind: domain.TaskLifecycleStarted, RunID: "run-1", SourceID: "start:run-1", RecordedAt: ts}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		task, err := tx.GetOrCreateTask(ctx, "project", taskIssueSource())
+		if err != nil {
+			return err
+		}
+		id = task.ID
+		// The fact's run must be one of the task's runs: RecordTaskStart records a
+		// fact only for a run it read from the store, and reconstruction re-gates
+		// each fact against task_runs (issue #1318 D1/G3).
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: "run-1", ProjectID: "project", TaskID: id,
+			SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy", Stages: []domain.Stage{},
+		}); err != nil {
+			return err
+		}
+		if err := tx.RecordTaskLifecycleFact(ctx, id, started); err != nil {
+			return err
+		}
+		return tx.RecordTaskLifecycleFact(ctx, id, started) // replay is idempotent
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		task, err := tx.GetTask(ctx, id)
+		if err != nil {
+			return err
+		}
+		if len(task.LifecycleFacts) != 1 {
+			t.Fatalf("replay minted %d facts, want 1", len(task.LifecycleFacts))
+		}
+		if got := task.LifecycleFacts[0]; got.Ordinal != 1 || got.Kind != domain.TaskLifecycleStarted {
+			t.Fatalf("loaded fact = %+v", got)
+		}
+		if !domain.TaskWIP(task) {
+			t.Fatal("started task is not WIP")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		held, err := tx.AbandonTask(ctx, id, ts.Add(time.Hour))
+		if err != nil {
+			return err
+		}
+		if !held {
+			t.Fatal("abandon did not release a held slot")
+		}
+		held2, err := tx.AbandonTask(ctx, id, ts.Add(2*time.Hour))
+		if err != nil {
+			return err
+		}
+		if held2 {
+			t.Fatal("re-abandon of the same episode reported a second release")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		task, err := tx.GetTask(ctx, id)
+		if err != nil {
+			return err
+		}
+		if domain.TaskWIP(task) {
+			t.Fatal("abandoned task is still WIP")
+		}
+		abandoned := 0
+		for _, f := range task.LifecycleFacts {
+			if f.Kind == domain.TaskLifecycleAbandoned {
+				abandoned++
+			}
+		}
+		if abandoned != 1 {
+			t.Fatalf("abandoned facts = %d, want 1 (idempotent re-abandon)", abandoned)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func bindTestItemSubject(t *testing.T, s *store.Store, item *domain.AttentionItem) {
 	t.Helper()

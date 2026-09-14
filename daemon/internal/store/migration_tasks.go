@@ -114,6 +114,221 @@ func backfillTasks(ctx context.Context, tx *sql.Tx) error {
 	return err
 }
 
+// backfillTaskLifecycleFacts seeds the lifecycle log for existing tasks so the
+// WIP cap does not resurrect dead legacy work after the upgrade (issue #1318
+// D7). A task with a non-final run is WIP (started); one with a recorded
+// work-unit completion is not (started then completed); one whose runs are all
+// concluded with no completion is not (started then abandoned, source
+// "migration"). A task with only unstarted or snoozed proposals has no run and
+// gets no fact. Run finality is the durable terminal_recorded milestone (the
+// store-level signal; the engine's authenticated conclusion is unavailable
+// here).
+func backfillTaskLifecycleFacts(ctx context.Context, tx *sql.Tx) error {
+	var taskCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks`).Scan(&taskCount); err != nil {
+		return err
+	}
+	if taskCount == 0 {
+		return nil
+	}
+	// Seed facts with raw inserts and no revision or entity-version bump: this
+	// is a one-time transformation that adds a side table, not a body rewrite,
+	// and clients re-bootstrap after a schema upgrade.
+	r := &ReadTx{tx: tx}
+
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM tasks ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	var taskIDs []domain.TaskID
+	for rows.Next() {
+		var id domain.TaskID
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		taskIDs = append(taskIDs, id)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+
+	now := formatTime(time.Now().UTC())
+	for _, id := range taskIDs {
+		runIDs, err := r.TaskRunIDs(ctx, id)
+		if err != nil {
+			return err
+		}
+		if len(runIDs) == 0 {
+			continue // only unstarted/snoozed proposals: no slot, no fact.
+		}
+		// A run counts as launched only when it was actually started: it has a
+		// run_submitted milestone, or it reached a terminal (which implies it was
+		// submitted). A reserved-but-unstarted run has neither, holds no slot, and
+		// records no start, mirroring the runtime submission-milestone rule (issue
+		// #1318 D2; docs/plan.md §5.11): equating every non-concluded run with a
+		// start would let a reserved proposal consume WIP capacity.
+		var launched []launchedRun
+		for _, runID := range runIDs {
+			concluded, err := runConcluded(ctx, r, runID)
+			if err != nil {
+				return err
+			}
+			submitted, err := runSubmitted(ctx, r, runID)
+			if err != nil {
+				return err
+			}
+			if !submitted && !concluded {
+				continue // reserved but never launched.
+			}
+			campaign, err := runCampaign(ctx, tx, runID)
+			if err != nil {
+				return err
+			}
+			launched = append(launched, launchedRun{id: runID, campaign: campaign, concluded: concluded})
+		}
+		if len(launched) == 0 {
+			continue // every run is reserved-but-unstarted: no slot, no fact.
+		}
+		// The current work episode is the newest launched run's campaign, not the
+		// last of CampaignIDs: a reserved-but-unstarted proposal appends a campaign
+		// there but records no start, and it must not shift currency (issue #1318
+		// G2; docs/plan.md §5.11). The started fact and completion currency use it.
+		start := launched[len(launched)-1]
+		currentCampaign := start.campaign
+		// A specification run never records terminal_recorded (only production runs
+		// do), so run non-finality alone does not mean the task is active. Finality
+		// is the newest launched run's state (the current episode), not any run
+		// sharing its campaign: an earlier attempt in the same campaign may have
+		// reached terminal while a newer retry is still live, and that live task
+		// must stay WIP (issue #1318 H2). A concluded newest run means the
+		// implementation finished, which is a completion or an abandonment.
+		currentConcluded := start.concluded
+		completedRun, completedCampaign, binding, completedFound, err := taskCompletionBinding(ctx, tx, id, currentCampaign)
+		if err != nil {
+			return err
+		}
+		if err := insertMigrationFact(ctx, tx, id, domain.TaskLifecycleStarted, start.id, currentCampaign, nil, "migration:start", now); err != nil {
+			return err
+		}
+		switch {
+		case completedFound:
+			// A completion on the current campaign released the slot (D4).
+			if err := insertMigrationFact(ctx, tx, id, domain.TaskLifecycleCompleted, completedRun, completedCampaign, &binding, "migration:complete", now); err != nil {
+				return err
+			}
+		case currentConcluded:
+			// The current campaign's implementation concluded with no completion:
+			// abandoned, so a dead legacy task (or a superseded prior-campaign
+			// completion) does not leave the synthetic start holding a slot.
+			if err := insertMigrationFact(ctx, tx, id, domain.TaskLifecycleAbandoned, start.id, nil, nil, "migration", now); err != nil {
+				return err
+			}
+		default:
+			// The current campaign is still in progress: started only (WIP).
+		}
+	}
+	return nil
+}
+
+// insertMigrationFact appends one backfill fact with the store's ordinal and
+// idempotency rules but no revision or version bump.
+func insertMigrationFact(ctx context.Context, tx *sql.Tx, taskID domain.TaskID, kind domain.TaskLifecycleFactKind, run domain.RunID, campaign *domain.CampaignID, bindingUnit *domain.WorkUnitID, source, recordedAt string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO task_lifecycle_facts
+		(task_id, ordinal, kind, run_id, campaign_id, binding_unit_id, source_id, recorded_at)
+		SELECT ?, COALESCE(MAX(ordinal), 0) + 1, ?, ?, ?, ?, ?, ?
+		FROM task_lifecycle_facts WHERE task_id = ?
+		ON CONFLICT (task_id, source_id) DO NOTHING`,
+		taskID, kind, run, nullableCampaign(campaign), nullableBinding(bindingUnit), source, recordedAt, taskID)
+	return err
+}
+
+// runCampaign returns a run's campaign as a pointer, nil when the run carries
+// none (a legacy campaign-less run).
+func runCampaign(ctx context.Context, tx *sql.Tx, runID domain.RunID) (*domain.CampaignID, error) {
+	var campaign sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT campaign_id FROM runs WHERE id = ?`, runID).Scan(&campaign); err != nil {
+		return nil, err
+	}
+	if !campaign.Valid || campaign.String == "" {
+		return nil, nil
+	}
+	c := domain.CampaignID(campaign.String)
+	return &c, nil
+}
+
+// runConcluded reports whether a run reached a committed terminal class,
+// mirroring the production-attempt terminal check (production_attempt.go).
+func runConcluded(ctx context.Context, tx *ReadTx, runID domain.RunID) (bool, error) {
+	milestones, err := tx.ListRunMilestones(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	for _, milestone := range milestones {
+		if milestone.Kind == domain.MilestoneTerminalRecorded &&
+			milestone.Terminal != nil && milestone.Terminal.Concluded() {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// runSubmitted reports whether a run recorded a submission milestone, the
+// durable signal that it was actually launched (issue #1318 D2). A
+// reserved-but-unstarted proposal run has none.
+func runSubmitted(ctx context.Context, tx *ReadTx, runID domain.RunID) (bool, error) {
+	milestones, err := tx.ListRunMilestones(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	for _, milestone := range milestones {
+		if milestone.Kind == domain.MilestoneRunSubmitted {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// launchedRun is a task run that was actually started (submitted or concluded),
+// carrying the two facts the backfill classification needs: its campaign and
+// whether it reached a committed terminal.
+type launchedRun struct {
+	id        domain.RunID
+	campaign  *domain.CampaignID
+	concluded bool
+}
+
+// taskCompletionBinding finds a recorded work-unit completion on the task's
+// current campaign, returning the completed run, its campaign, and the binding.
+// Selecting the current campaign (not the earliest completion by row order)
+// keeps a superseded prior-campaign completion out of the backfill, so a
+// revised task whose current campaign never completed is abandoned rather than
+// left holding a slot (issue #1318 D4; docs/plan.md §5.11). A nil current
+// campaign matches a campaign-less legacy run.
+func taskCompletionBinding(ctx context.Context, tx *sql.Tx, taskID domain.TaskID, currentCampaign *domain.CampaignID) (domain.RunID, *domain.CampaignID, domain.WorkUnitID, bool, error) {
+	var unit domain.WorkUnitID
+	var run domain.RunID
+	var campaign sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT c.unit_id, r.id, r.campaign_id
+		FROM work_unit_completions c
+		JOIN runs r ON c.unit_id = 'workunit-' || r.id
+		JOIN task_runs tr ON tr.run_id = r.id
+		WHERE tr.task_id = ? AND COALESCE(r.campaign_id, '') = COALESCE(?, '')
+		ORDER BY tr.ordinal DESC LIMIT 1`, taskID, nullableCampaign(currentCampaign)).Scan(&unit, &run, &campaign)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil, "", false, nil
+	}
+	if err != nil {
+		return "", nil, "", false, err
+	}
+	var camp *domain.CampaignID
+	if campaign.Valid && campaign.String != "" {
+		c := domain.CampaignID(campaign.String)
+		camp = &c
+	}
+	return run, camp, unit, true, nil
+}
+
 func backfillTaskSubjects(ctx context.Context, tx *WriteTx) error {
 	rows, err := tx.tx.QueryContext(ctx, `SELECT i.id, i.body, s.epoch, s.digest, s.body
 		FROM attention_items i LEFT JOIN attention_decision_surfaces s ON s.item_id = i.id ORDER BY i.id`)
