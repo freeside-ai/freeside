@@ -337,7 +337,7 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 	flags.StringVar(&cfg.BuildProxy, "build-proxy", "", "optional supported image-build proxy URL")
 	flags.StringVar(&cfg.LaunchAgentLabel, "launch-agent-label", defaultRigLaunchAgentLabel, "supervised daemon label")
 	flags.Func("allowed-paths", "comma-separated explicit production path allowlist (required)", func(raw string) error {
-		cfg.AllowedPaths = splitNonEmpty(raw)
+		cfg.AllowedPaths = engine.SplitNonEmpty(raw)
 		return nil
 	})
 	if err := flags.Parse(args); err != nil {
@@ -816,7 +816,7 @@ func inspectCompositionIdentity(cfg preflightConfig) (compositionIdentity, error
 			CompletionCriterion: declared.CompletionCriterion,
 			BoundIssue:          declared.BoundIssue,
 			DependsOnIssues:     declared.DependsOnIssues,
-			DeclaredPaths:       declaredPathScope(keys),
+			DeclaredPaths:       engine.DeclaredPathScope(keys),
 			ContractSerialized:  declared.ContractSerialized,
 		}
 		canonicalBody, err := json.Marshal(declared)
@@ -825,7 +825,7 @@ func inspectCompositionIdentity(cfg preflightConfig) (compositionIdentity, error
 		}
 		workUnitDigest = submissionBytes(canonicalBody).digest
 	}
-	runID := defaultSubmissionRunID(
+	runID := engine.SubmissionRunID(
 		cfg.ProjectID, spec.digest, policyDigest, publicationIdentityDigest, workUnitDigest,
 	)
 	specificationRunID, err := engine.SpecificationRunIDForImplementation(runID)
@@ -836,7 +836,7 @@ func inspectCompositionIdentity(cfg preflightConfig) (compositionIdentity, error
 	if err != nil {
 		return compositionIdentity{}, err
 	}
-	if err := submittedPathBoundary(resolvedPolicy); err != nil {
+	if err := engine.SubmittedPathBoundary(resolvedPolicy); err != nil {
 		return compositionIdentity{}, err
 	}
 	if _, err := resolvedPathAllowlist(resolvedPolicy, resolvedPolicy.Digest, cfg.AllowedPaths); err != nil {

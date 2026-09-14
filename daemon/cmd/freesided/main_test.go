@@ -583,7 +583,7 @@ func TestSubmittedPathBoundaryRefusesAnUnenforceablePolicy(t *testing.T) {
 		}
 		return policy
 	}
-	if err := submittedPathBoundary(key(t, "paths", "daemon/**, docs/**")); err != nil {
+	if err := engine.SubmittedPathBoundary(key(t, "paths", "daemon/**, docs/**")); err != nil {
 		t.Fatalf("explicit declared paths: %v", err)
 	}
 	for _, tc := range []struct{ name, keyName, value string }{
@@ -595,10 +595,10 @@ func TestSubmittedPathBoundaryRefusesAnUnenforceablePolicy(t *testing.T) {
 		{"parent escape", "paths", "../outside/**"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := submittedPathBoundary(
+			if err := engine.SubmittedPathBoundary(
 				key(t, tc.keyName, tc.value),
 			); !errors.Is(err, domain.ErrPathBoundaryMismatch) {
-				t.Errorf("submittedPathBoundary(%q) = %v, want ErrPathBoundaryMismatch",
+				t.Errorf("engine.SubmittedPathBoundary(%q) = %v, want ErrPathBoundaryMismatch",
 					tc.value, err)
 			}
 		})

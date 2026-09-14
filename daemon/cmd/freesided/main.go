@@ -304,7 +304,7 @@ func main() {
 			Repo:                           *repo, RepositoryID: id,
 			BaseRef: *baseRef, BaseSHA: *baseSHA,
 			AuthIdentityID: domain.AuthIdentityID(*authIdentity),
-			AllowedPaths:   splitNonEmpty(*allowedPaths),
+			AllowedPaths:   engine.SplitNonEmpty(*allowedPaths),
 			RunConformance: *runConformance,
 			StateRoot:      *publicationStateDir, CredentialsDir: *publicationCredentialsDir,
 			OperatingMode: mode,
@@ -366,18 +366,6 @@ func serve(ctx context.Context, stop func(), h *daemon) error {
 	waitErr := h.Wait(ctx)
 	stop()
 	return errors.Join(waitErr, h.Close())
-}
-
-// splitNonEmpty splits a comma-separated flag into its non-empty members,
-// so an unset flag yields no members rather than one empty one.
-func splitNonEmpty(value string) []string {
-	out := []string{}
-	for _, part := range strings.Split(value, ",") {
-		if trimmed := strings.TrimSpace(part); trimmed != "" {
-			out = append(out, trimmed)
-		}
-	}
-	return out
 }
 
 type config struct {

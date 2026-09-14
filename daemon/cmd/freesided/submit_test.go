@@ -254,7 +254,7 @@ func submissionCompositionManifest(
 	identity := compositionIdentity{
 		SourceDigest: spec.digest, PolicyDigest: policyDigest, PublicationDigest: publication.digest,
 	}
-	identity.ImplementationRunID = defaultSubmissionRunID(
+	identity.ImplementationRunID = engine.SubmissionRunID(
 		projectID, spec.digest, policyDigest, submissionBytes(publicationBody).digest, "",
 	)
 	identity.ImplementationInvocationID = domain.InvocationID(
@@ -845,7 +845,7 @@ func TestSubmitCommandReplaysMatchingPreSpecificationProductionRun(t *testing.T)
 		t.Fatal(err)
 	}
 	publicationDigest := submissionBytes(publicationBody).digest
-	runID := defaultSubmissionRunID(cfg.ProjectID, spec.digest, policyDigest, publicationDigest, "")
+	runID := engine.SubmissionRunID(cfg.ProjectID, spec.digest, policyDigest, publicationDigest, "")
 	resolved, err := domain.NewResolvedPolicy(runID, keys)
 	if err != nil {
 		t.Fatal(err)
@@ -855,11 +855,11 @@ func TestSubmitCommandReplaysMatchingPreSpecificationProductionRun(t *testing.T)
 		t.Fatal(err)
 	}
 	policy := submissionBytes(policyBody)
-	specArtifact, err := submissionArtifact(domain.ArtifactKindSpecification, spec.digest, domain.EvidenceMediaTextMarkdown, int64(len(spec.body)))
+	specArtifact, err := engine.SubmissionArtifact(domain.ArtifactKindSpecification, spec.digest, domain.EvidenceMediaTextMarkdown, int64(len(spec.body)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	policyArtifact, err := submissionArtifact(domain.ArtifactKindPolicy, policy.digest, domain.EvidenceMediaApplicationJSON, int64(len(policy.body)))
+	policyArtifact, err := engine.SubmissionArtifact(domain.ArtifactKindPolicy, policy.digest, domain.EvidenceMediaApplicationJSON, int64(len(policy.body)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -921,7 +921,7 @@ func TestSubmitCommandReplaysMatchingPreSpecificationProductionRun(t *testing.T)
 	workUnit := &domain.WorkUnitDeclarationInput{
 		CompletionCriterion: domain.CompletionBoundIssueClosedByMergedPR,
 		BoundIssue:          &issue,
-		DeclaredPaths:       declaredPathScope(keys),
+		DeclaredPaths:       engine.DeclaredPathScope(keys),
 	}
 	declaration, err := domain.NewWorkUnitDeclaration(*workUnit, runID, cfg.ProjectID, time.Now().UTC())
 	if err != nil {
@@ -1159,11 +1159,11 @@ func TestSubmissionArtifactIdentityRetainsFullDigest(t *testing.T) {
 	prefix := strings.Repeat("ab", 6)
 	firstDigest := domain.Digest("sha256:" + prefix + strings.Repeat("1", 52))
 	secondDigest := domain.Digest("sha256:" + prefix + strings.Repeat("2", 52))
-	first, err := submissionArtifact(domain.ArtifactKindSpecification, firstDigest, domain.EvidenceMediaTextMarkdown, 1)
+	first, err := engine.SubmissionArtifact(domain.ArtifactKindSpecification, firstDigest, domain.EvidenceMediaTextMarkdown, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := submissionArtifact(domain.ArtifactKindSpecification, secondDigest, domain.EvidenceMediaTextMarkdown, 1)
+	second, err := engine.SubmissionArtifact(domain.ArtifactKindSpecification, secondDigest, domain.EvidenceMediaTextMarkdown, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

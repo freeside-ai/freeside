@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -559,15 +560,15 @@ func TestClaudeDriverConfigRejectsUnscopedAllowlistGlobs(t *testing.T) {
 		"**", "**/*", "**/**", "*/**", "?*", "[a-z]*", "/daemon/**", "../daemon/**",
 	} {
 		t.Run(pattern, func(t *testing.T) {
-			if explicitAllowedPaths([]string{pattern}) {
-				t.Fatalf("explicitAllowedPaths(%q) = true", pattern)
+			if engine.ExplicitAllowedPaths([]string{pattern}) {
+				t.Fatalf("engine.ExplicitAllowedPaths(%q) = true", pattern)
 			}
 		})
 	}
 	for _, pattern := range []string{"daemon/**", "docs/*.md", "README.md"} {
 		t.Run("accept "+pattern, func(t *testing.T) {
-			if !explicitAllowedPaths([]string{pattern}) {
-				t.Fatalf("explicitAllowedPaths(%q) = false", pattern)
+			if !engine.ExplicitAllowedPaths([]string{pattern}) {
+				t.Fatalf("engine.ExplicitAllowedPaths(%q) = false", pattern)
 			}
 		})
 	}

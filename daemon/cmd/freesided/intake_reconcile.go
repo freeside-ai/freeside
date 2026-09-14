@@ -267,7 +267,7 @@ func (r *intakeReconciler) admit(
 		return domain.IntakeOccurrence{}, fmt.Errorf("resolve policy: %w", err)
 	}
 	workItemBody := intakeWorkItemDocument(occurrence)
-	workItem, err := submissionArtifact(domain.ArtifactKindSpecification,
+	workItem, err := engine.SubmissionArtifact(domain.ArtifactKindSpecification,
 		domain.Digest(contentaddr.Sum(workItemBody)), domain.EvidenceMediaTextMarkdown, int64(len(workItemBody)))
 	if err != nil {
 		return domain.IntakeOccurrence{}, err
@@ -276,7 +276,7 @@ func (r *intakeReconciler) admit(
 	if err != nil {
 		return domain.IntakeOccurrence{}, fmt.Errorf("encode policy keys: %w", err)
 	}
-	policyArtifact, err := submissionArtifact(domain.ArtifactKindPolicy,
+	policyArtifact, err := engine.SubmissionArtifact(domain.ArtifactKindPolicy,
 		resolvedPolicy.Digest, domain.EvidenceMediaApplicationJSON, int64(len(policyBody)))
 	if err != nil {
 		return domain.IntakeOccurrence{}, err
@@ -304,10 +304,10 @@ func (r *intakeReconciler) admit(
 	reservedRun.CampaignID = campaignID
 	reservedRun.AttemptNumber = 1
 	if err := r.store.Write(ctx, func(tx *store.WriteTx) error {
-		if err := registerSubmissionArtifact(ctx, tx, workItem); err != nil {
+		if err := engine.RegisterSubmissionArtifact(ctx, tx, workItem); err != nil {
 			return err
 		}
-		if err := registerSubmissionArtifact(ctx, tx, policyArtifact); err != nil {
+		if err := engine.RegisterSubmissionArtifact(ctx, tx, policyArtifact); err != nil {
 			return err
 		}
 		if err := tx.PutProductionAttempt(ctx, domain.ProductionAttempt{
@@ -580,7 +580,7 @@ func (r *intakeReconciler) startSpec(
 		return engine.SpecificationRunSpec{}, err
 	}
 	workItemDoc := intakeWorkItemDocument(occurrence)
-	workItem, err := submissionArtifact(domain.ArtifactKindSpecification,
+	workItem, err := engine.SubmissionArtifact(domain.ArtifactKindSpecification,
 		domain.Digest(contentaddr.Sum(workItemDoc)), domain.EvidenceMediaTextMarkdown, int64(len(workItemDoc)))
 	if err != nil {
 		return engine.SpecificationRunSpec{}, err
@@ -703,7 +703,7 @@ func (r *intakeReconciler) subjectInputStatus(
 ) (missing, stale bool, err error) {
 	specificationRunID := occurrence.Admission.Subject.SpecificationRunID
 	workItemDoc := intakeWorkItemDocument(occurrence)
-	workItem, err := submissionArtifact(domain.ArtifactKindSpecification,
+	workItem, err := engine.SubmissionArtifact(domain.ArtifactKindSpecification,
 		domain.Digest(contentaddr.Sum(workItemDoc)), domain.EvidenceMediaTextMarkdown, int64(len(workItemDoc)))
 	if err != nil {
 		return false, false, err

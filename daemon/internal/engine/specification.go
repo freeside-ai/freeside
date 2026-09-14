@@ -493,10 +493,55 @@ func HasSpecificationDispatchMarker(
 }
 
 func SubmitSpecificationRun(ctx context.Context, st *store.Store, spec SpecificationRunSpec) (SpecificationRun, error) {
-	if st == nil || spec.SpecificationRunID == "" || spec.ImplementationRunID == "" ||
+	if st == nil {
+		return SpecificationRun{}, errors.New("submit specification run: distinct run IDs, project, source, and policy are required")
+	}
+	if err := validateSpecificationRunSpec(spec); err != nil {
+		return SpecificationRun{}, err
+	}
+	// The issue-subject arm (label-intake, #659) adopts the reserved run the
+	// admission persisted rather than creating one; the shared validation above
+	// applies to both arms, so branch only the write here.
+	if spec.Source.Kind == domain.SpecificationSourceIssueSubject {
+		return submitIssueSubjectSpecificationRun(ctx, st, spec)
+	}
+	var sr SpecificationRun
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		var e error
+		sr, e = submitSpecArtifactRunTx(ctx, tx, spec)
+		return e
+	}); err != nil {
+		return SpecificationRun{}, err
+	}
+	return sr, nil
+}
+
+// SubmitSpecificationRunTx is the transaction-scoped spec-artifact entry the
+// client task-submission path uses: it runs the same validation and
+// create-or-converge write as SubmitSpecificationRun's spec-artifact arm, but
+// inside a caller-owned transaction so the whole submit_task command (device
+// gate, task record, and this run) commits atomically. The issue-subject arm
+// keeps its own store handling in SubmitSpecificationRun and is refused here.
+func SubmitSpecificationRunTx(ctx context.Context, tx *store.WriteTx, spec SpecificationRunSpec) (SpecificationRun, error) {
+	if err := validateSpecificationRunSpec(spec); err != nil {
+		return SpecificationRun{}, err
+	}
+	if spec.Source.Kind == domain.SpecificationSourceIssueSubject {
+		return SpecificationRun{}, fmt.Errorf(
+			"submit specification run: issue-subject source requires SubmitSpecificationRun: %w",
+			domain.ErrParentKeyMismatch)
+	}
+	return submitSpecArtifactRunTx(ctx, tx, spec)
+}
+
+// validateSpecificationRunSpec runs the shared, store-independent validation
+// both SubmitSpecificationRun and SubmitSpecificationRunTx apply before the
+// write. The caller checks store availability separately.
+func validateSpecificationRunSpec(spec SpecificationRunSpec) error {
+	if spec.SpecificationRunID == "" || spec.ImplementationRunID == "" ||
 		spec.SpecificationRunID == spec.ImplementationRunID || spec.ProjectID == "" ||
 		spec.SourceArtifactID == "" || spec.PolicyArtifactID == "" {
-		return SpecificationRun{}, errors.New("submit specification run: distinct run IDs, project, source, and policy are required")
+		return errors.New("submit specification run: distinct run IDs, project, source, and policy are required")
 	}
 	// A named source must be well-formed and consistent with SourceArtifactID.
 	// The spec-artifact arm's Source names that same artifact; the issue-subject
@@ -506,53 +551,55 @@ func SubmitSpecificationRun(ctx context.Context, st *store.Store, spec Specifica
 	// the legacy spec-artifact behaviour so existing callers are unaffected.
 	if spec.Source.Kind != "" {
 		if err := spec.Source.Validate(); err != nil {
-			return SpecificationRun{}, fmt.Errorf("submit specification run source: %w", err)
+			return fmt.Errorf("submit specification run source: %w", err)
 		}
 		if spec.Source.Kind == domain.SpecificationSourceWorkItemArtifact &&
 			spec.Source.WorkItemArtifactID != spec.SourceArtifactID {
-			return SpecificationRun{}, fmt.Errorf(
+			return fmt.Errorf(
 				"submit specification run: source spec artifact %q differs from source artifact %q: %w",
 				spec.Source.WorkItemArtifactID, spec.SourceArtifactID, domain.ErrParentKeyMismatch)
 		}
 	}
 	if spec.ResolvedPolicy.RunID != spec.SpecificationRunID {
-		return SpecificationRun{}, fmt.Errorf("submit specification run: policy run %q differs from %q: %w",
+		return fmt.Errorf("submit specification run: policy run %q differs from %q: %w",
 			spec.ResolvedPolicy.RunID, spec.SpecificationRunID, domain.ErrParentKeyMismatch)
 	}
 	if spec.CampaignID == "" {
 		if spec.AttemptNumber != 0 {
-			return SpecificationRun{}, errors.New("submit specification run: attempt number requires a campaign")
+			return errors.New("submit specification run: attempt number requires a campaign")
 		}
 	} else {
 		wantCampaign, err := ProductionCampaignIDForImplementation(spec.ImplementationRunID)
 		if err != nil {
-			return SpecificationRun{}, err
+			return err
 		}
 		if spec.AttemptNumber != 1 || spec.CampaignID != wantCampaign ||
 			!domain.SpecificationRunIDMatchesImplementation(spec.SpecificationRunID, spec.ImplementationRunID) {
-			return SpecificationRun{}, fmt.Errorf(
+			return fmt.Errorf(
 				"submit specification run: initial campaign identity disagrees: %w",
 				domain.ErrParentKeyMismatch)
 		}
 	}
 	if _, err := specify.ParsePolicy(spec.ResolvedPolicy); err != nil {
-		return SpecificationRun{}, fmt.Errorf("submit specification run: %w", err)
+		return fmt.Errorf("submit specification run: %w", err)
 	}
 	if err := spec.Publication.Validate(); err != nil {
-		return SpecificationRun{}, fmt.Errorf("submit specification run: %w", err)
+		return fmt.Errorf("submit specification run: %w", err)
 	}
 	if spec.WorkUnit != nil {
 		if _, err := domain.NewWorkUnitDeclaration(
 			*spec.WorkUnit, spec.ImplementationRunID, spec.ProjectID, time.Unix(1, 0)); err != nil {
-			return SpecificationRun{}, fmt.Errorf("submit specification run work unit: %w", err)
+			return fmt.Errorf("submit specification run work unit: %w", err)
 		}
 	}
-	// The issue-subject arm (label-intake, #659) adopts the reserved run the
-	// admission persisted rather than creating one; the shared validation above
-	// applies to both arms, so branch only the write here.
-	if spec.Source.Kind == domain.SpecificationSourceIssueSubject {
-		return submitIssueSubjectSpecificationRun(ctx, st, spec)
-	}
+	return nil
+}
+
+// submitSpecArtifactRunTx builds the spec-artifact run's first request and
+// performs the create-or-converge write inside the caller's transaction, then
+// wraps the resulting run in the SpecificationRun the callers return. The
+// shared validation has already run.
+func submitSpecArtifactRunTx(ctx context.Context, tx *store.WriteTx, spec SpecificationRunSpec) (SpecificationRun, error) {
 	request, invocationID := specificationFirstRequest(spec, nil)
 	payload, err := encodeSpecificationRequest(request)
 	if err != nil {
@@ -562,12 +609,7 @@ func SubmitSpecificationRun(ctx context.Context, st *store.Store, spec Specifica
 	if err != nil {
 		return SpecificationRun{}, err
 	}
-	var run domain.Run
-	err = st.Write(ctx, func(tx *store.WriteTx) error {
-		var writeErr error
-		run, writeErr = submitSpecificationRunTx(ctx, tx, spec, request, invocation, payload, nil)
-		return writeErr
-	})
+	run, err := submitSpecificationRunTx(ctx, tx, spec, request, invocation, payload, nil)
 	if err != nil {
 		return SpecificationRun{}, err
 	}
