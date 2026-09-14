@@ -218,8 +218,10 @@ func ReattemptProductionRun(
 	}
 	return ProductionReattempt{
 		Created: created || resumed, Run: run, Attempt: attempt, SourceArtifactID: sourceArtifact.ID,
-		RootSourceArtifactID:      request.InputArtifactIDs[0],
-		SpecificationInvocationID: specificationInvocationID(attempt.SpecificationRunID, 1),
+		RootSourceArtifactID: request.InputArtifactIDs[0],
+		// request is the run's first dispatch (iteration 2 for a revision
+		// campaign, 1 otherwise, #1083), so its invocation is the run's root.
+		SpecificationInvocationID: request.InvocationID,
 		SpecificationStageID:      specificationStageID(attempt.SpecificationRunID),
 		PolicyArtifactID:          policyArtifact.ID, PolicyDigest: policyArtifact.Digest,
 		Publication: request.Publication, HasWorkUnit: request.WorkUnit != nil,
@@ -304,8 +306,18 @@ func loadReattemptInputs(
 		return fmt.Errorf("parent run %q publication metadata unavailable: %w",
 			parentRunID, errors.Join(err, domain.ErrParentKeyMismatch))
 	}
-	specificationMarker, err := tx.GetOutbox(ctx,
-		string(specificationInvocationID(parentAttempt.SpecificationRunID, 1)))
+	// A revision campaign's specification run roots at iteration 2, so bind
+	// against its first dispatch marker rather than a fixed iteration 1 (#1083).
+	// The root fields checked below are invariant across a run's iterations.
+	specKey, present, err := tx.FirstSpecificationMarkerKey(ctx, parentAttempt.SpecificationRunID)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return fmt.Errorf("parent run %q specification marker missing: %w",
+			parentRunID, domain.ErrParentKeyMismatch)
+	}
+	specificationMarker, err := tx.GetOutbox(ctx, specKey)
 	if err != nil {
 		return err
 	}

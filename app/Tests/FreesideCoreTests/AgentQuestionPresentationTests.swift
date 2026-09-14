@@ -10,6 +10,7 @@ struct AgentQuestionPresentationTests {
         #expect(presentation.scopeConflict?.paths == ["AGENTS.md"])
         #expect(presentation.scopeConflict?.declared_paths == ["devlog/*.md", "src/*.ts"])
         #expect(AgentQuestionPresentation.answerRoute(for: item) == nil)
+        #expect(AgentQuestionPresentation.answerRoutes(for: item) == [])
         #expect(item.requested_decision == [.answer_without_retry, .stop])
         #expect(AttentionFixtures.scopeKeptReady().item.scope_decision?.value1.paths == ["AGENTS.md"])
     }
@@ -25,6 +26,12 @@ struct AgentQuestionPresentationTests {
         #expect(decision.options.map(\.recommended) == [true, false])
         #expect(decision.options.map(\.label) == ["Store first, then API", "API first, then store"])
         #expect(AgentQuestionPresentation.answerRoute(for: item) == .retry_implementation)
+        // An implementation-stage question offers both routes, retry first (#1083).
+        #expect(
+            AgentQuestionPresentation.answerRoutes(for: item)
+                == [.retry_implementation, .revise_specification])
+        #expect(AgentQuestionPresentation.answerRouteLabel(.retry_implementation) == "Retry the implementer")
+        #expect(AgentQuestionPresentation.answerRouteLabel(.revise_specification) == "Revise the specification")
     }
 
     @Test func specificationStageCarriesNoKindAndNoRoute() throws {
@@ -38,6 +45,7 @@ struct AgentQuestionPresentationTests {
         #expect(presentation.stage == .specification)
         #expect(presentation.kindLabel == nil)
         #expect(AgentQuestionPresentation.answerRoute(for: item) == nil)
+        #expect(AgentQuestionPresentation.answerRoutes(for: item) == [])
     }
 
     @Test func otherTypesAndMissingFactsPresentNothing() {
@@ -45,5 +53,7 @@ struct AgentQuestionPresentationTests {
         #expect(AgentQuestionPresentation(approval) == nil)
         #expect(AgentQuestionPresentation.answerRoute(for: approval) == nil)
         #expect(AgentQuestionPresentation.answerRoute(for: nil) == nil)
+        #expect(AgentQuestionPresentation.answerRoutes(for: approval) == [])
+        #expect(AgentQuestionPresentation.answerRoutes(for: nil) == [])
     }
 }

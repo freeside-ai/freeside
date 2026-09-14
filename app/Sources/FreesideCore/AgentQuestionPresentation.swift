@@ -61,17 +61,33 @@ public struct AgentQuestionPresentation: Equatable, Sendable {
         }
     }
 
-    /// The answer_route an answer_and_retry on this item must carry: the
-    /// implementer retry on an implementation-stage question, nothing on a
-    /// specification-stage one. The daemon refuses revise_specification until
-    /// a revised specification can mint a fresh implementation identity, so
-    /// the app offers no route choice yet; this is where a picker plugs in.
+    /// The answer_route choices an answer_and_retry on this item offers: an
+    /// implementation-stage question without a scope conflict lets the operator
+    /// retry the implementer or revise the specification (#1083); every other
+    /// item offers none, so its answer carries no route. The order is the
+    /// display order, and the first entry is the default.
+    public static func answerRoutes(
+        for item: Components.Schemas.AttentionItem?
+    ) -> [Components.Schemas.AnswerRoute] {
+        guard let item, let presentation = AgentQuestionPresentation(item),
+            presentation.stage == .implementation, presentation.scopeConflict == nil
+        else { return [] }
+        return [.retry_implementation, .revise_specification]
+    }
+
+    /// The default route an answer_and_retry on this item carries when the
+    /// operator does not choose otherwise, or nil when the item offers none.
     public static func answerRoute(
         for item: Components.Schemas.AttentionItem?
     ) -> Components.Schemas.AnswerRoute? {
-        guard let item, let presentation = AgentQuestionPresentation(item),
-            presentation.stage == .implementation, presentation.scopeConflict == nil
-        else { return nil }
-        return .retry_implementation
+        answerRoutes(for: item).first
+    }
+
+    /// The operator-facing label for an answer route.
+    public static func answerRouteLabel(_ route: Components.Schemas.AnswerRoute) -> String {
+        switch route {
+        case .retry_implementation: return "Retry the implementer"
+        case .revise_specification: return "Revise the specification"
+        }
     }
 }

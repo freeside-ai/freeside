@@ -278,6 +278,18 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 			if err := validateAnswerRoute(command, item); err != nil {
 				return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 			}
+			// revise_specification starts a fresh campaign under the blocked run's
+			// task, so the run must be campaign-backed; refuse it here rather than
+			// supersede the question and then wedge when no campaign can be found
+			// (#1083). A campaign-less run can still answer with retry_implementation.
+			if command.Action == domain.ActionAnswerAndRetry && command.AnswerRoute != nil &&
+				*command.AnswerRoute == domain.AnswerRouteReviseSpecification && item.Subject.RunID != nil {
+				if _, err := tx.GetProductionAttemptByRun(ctx, *item.Subject.RunID); err != nil {
+					return fmt.Errorf(
+						"submit command %q: revise_specification requires a campaign-backed run: %w",
+						command.CommandID, err)
+				}
+			}
 			if (command.Action == domain.ActionReturnToAgent ||
 				(command.Action == domain.ActionApprove && strings.HasPrefix(string(item.ID), domain.PublicationContinuationItemPrefix))) && item.Subject.RunID != nil {
 				if err := tx.RequireIncompletePublication(ctx, *item.Subject.RunID); err != nil {

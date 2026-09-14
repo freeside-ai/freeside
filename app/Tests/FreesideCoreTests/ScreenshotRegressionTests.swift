@@ -267,7 +267,7 @@
                             submitLabel: "Request changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
-                            submit: { _ in true }))))
+                            submit: { _, _ in true }))))
             surfaces.append(
                 Surface(
                     name: "message-composer-phone",
@@ -279,7 +279,7 @@
                             submitLabel: "Request changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
-                            submit: { _ in true }))))
+                            submit: { _, _ in true }))))
             surfaces.append(
                 Surface(
                     name: "message-composer-dark",
@@ -292,7 +292,7 @@
                             submitLabel: "Request changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
-                            submit: { _ in true }))))
+                            submit: { _, _ in true }))))
             surfaces.append(
                 Surface(
                     name: "message-composer-phone-dark",
@@ -305,7 +305,35 @@
                             submitLabel: "Request changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
-                            submit: { _ in true }))))
+                            submit: { _, _ in true }))))
+
+            // The Answer-and-retry composer with the route picker (#1083): the
+            // operator answers and chooses whether to retry the implementer or
+            // revise the specification. Captured on Mac and phone, light and dark.
+            let routedComposer: [Components.Schemas.AnswerRoute] = [
+                .retry_implementation, .revise_specification,
+            ]
+            for (name, width, scheme) in [
+                ("answer-retry-composer", CGFloat(480), ColorScheme.light),
+                ("answer-retry-composer-phone", CGFloat(390), ColorScheme.light),
+                ("answer-retry-composer-dark", CGFloat(480), ColorScheme.dark),
+                ("answer-retry-composer-phone-dark", CGFloat(390), ColorScheme.dark),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: name,
+                        width: width,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            MessageComposerSheet(
+                                title: "Answer and retry",
+                                prompt: "Answer the agent's question and choose what to do next.",
+                                submitLabel: "Answer and retry",
+                                byteLimit: 8192,
+                                rendersInteractiveControls: false,
+                                routeOptions: routedComposer,
+                                submit: { _, _ in true }))))
+            }
 
             let awaitingStore = InboxStore(client: client)
             let awaitingItem = AttentionFixtures.fixture(type: .spec_approval)

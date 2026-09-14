@@ -1360,20 +1360,17 @@ public actor MockServer {
             }
         }
         // The daemon's answer_route policy (signet validateAnswerRoute): an
-        // implementation-stage question must name where the answer goes;
-        // revise_specification is refused as not yet available; no other
-        // command may carry a route.
+        // implementation-stage question must name where the answer goes, and
+        // both retry_implementation and revise_specification are accepted
+        // (#1083); no other command may carry a route.
         let routedAnswer =
             payload.action == .answer_and_retry && current.item._type == .agent_question
             && current.item.agent_question?.value1.stage == .implementation
         if routedAnswer {
-            guard let route = payload.answer_route?.value1 else {
+            if payload.answer_route?.value1 == nil {
                 throw MalformedCommandError(
                     commandID: command.command_id,
                     reason: "answer_and_retry on an implementation-stage question requires answer_route")
-            }
-            if route == .revise_specification {
-                throw UnsupportedActionError(commandID: command.command_id, action: payload.action)
             }
         } else if payload.answer_route != nil {
             throw MalformedCommandError(
@@ -1430,6 +1427,34 @@ public actor MockServer {
             itemsByID[payload.item_id] = concluded(current, as: status)
             if payload.action == .request_changes {
                 pendingSpecificationReplacements[command.command_id] = current
+                pendingSpecificationComments[command.command_id] = payload.message
+            }
+            if payload.action == .answer_and_retry
+                && payload.answer_route?.value1 == .revise_specification,
+                let provenance = current.item.agent_claims.first?.provenance
+            {
+                // Mirror the daemon route (#1083 D8): the answer files as
+                // specification feedback and a revised spec_approval supersedes
+                // the conceptual baseline. The fixture synthesizes that baseline
+                // (a prior approved specification) shaped like a spec_approval and
+                // keyed on the question, so the existing replacement path mints
+                // the revised card whose spec_revision names the question and
+                // whose prior_comments carries the answer. The mock does not mint
+                // a new campaign or run; #1209 owns those fixtures.
+                let baselineBody = "# Specification\n\nThe blocked implementation's approved specification."
+                var baseline = current
+                baseline.item._type = .spec_approval
+                baseline.item.agent_question = nil
+                baseline.item.spec_revision = nil
+                baseline.item.agent_claims = [
+                    AttentionFixtures.agentClaim(
+                        label: "Specification",
+                        artifactID: "spec-revision-baseline-\(command.command_id)",
+                        digest: MockContractValidation.sha256Digest(of: baselineBody),
+                        provenance: provenance,
+                        text: .init(media_type: .text_sol_markdown, content: baselineBody))
+                ]
+                pendingSpecificationReplacements[command.command_id] = baseline
                 pendingSpecificationComments[command.command_id] = payload.message
             }
         case .discusses:

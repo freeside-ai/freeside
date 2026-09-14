@@ -94,18 +94,23 @@ type RunSnapshot struct {
 // Run is the synchronized run aggregate plus its current daemon-derived
 // progress pulse. The summary is presentation, never workflow authority.
 type Run struct {
-	ID              domain.RunID             `json:"id"`
-	TaskID          domain.TaskID            `json:"task_id"`
-	ProjectID       domain.ProjectID         `json:"project_id"`
-	DisplayNames    *domain.DisplayNames     `json:"display_names"`
-	CreatedAt       *time.Time               `json:"created_at"`
-	LastActivityAt  *time.Time               `json:"last_activity_at"`
-	SpecDigest      domain.Digest            `json:"spec_digest"`
-	PolicyDigest    domain.Digest            `json:"policy_digest"`
-	CampaignID      *domain.CampaignID       `json:"campaign_id"`
-	AttemptNumber   *int                     `json:"attempt_number"`
-	AttemptReason   *string                  `json:"attempt_reason"`
-	ParentRunID     *domain.RunID            `json:"parent_run_id"`
+	ID             domain.RunID         `json:"id"`
+	TaskID         domain.TaskID        `json:"task_id"`
+	ProjectID      domain.ProjectID     `json:"project_id"`
+	DisplayNames   *domain.DisplayNames `json:"display_names"`
+	CreatedAt      *time.Time           `json:"created_at"`
+	LastActivityAt *time.Time           `json:"last_activity_at"`
+	SpecDigest     domain.Digest        `json:"spec_digest"`
+	PolicyDigest   domain.Digest        `json:"policy_digest"`
+	CampaignID     *domain.CampaignID   `json:"campaign_id"`
+	AttemptNumber  *int                 `json:"attempt_number"`
+	AttemptReason  *string              `json:"attempt_reason"`
+	ParentRunID    *domain.RunID        `json:"parent_run_id"`
+	// RevisesRunID names the blocked implementation run this run's campaign
+	// revises, on both runs of a specification-revision campaign, or null
+	// (#1083 D4). It is the forward half of the same link whose reverse half is
+	// the blocked run's SupersededBy.
+	RevisesRunID    *domain.RunID            `json:"revises_run_id"`
 	Stages          []domain.Stage           `json:"stages"`
 	LatestMilestone *domain.RunMilestoneKind `json:"latest_milestone"`
 	Outcome         domain.RunOutcome        `json:"outcome"`
@@ -844,6 +849,7 @@ func runSnapshot(
 		Outcome:           conclusion.Outcome,
 		Lifecycle:         domain.LifecycleOf(conclusion, facts.supersededBy != nil),
 		SupersededBy:      facts.supersededBy,
+		RevisesRunID:      facts.revisesRunID,
 		Completion:        facts.completion,
 		BillableCostSoFar: facts.cost,
 	}
@@ -903,6 +909,7 @@ type runProjectionFacts struct {
 	review       *RunReviewFacts
 	completion   *WorkUnitCompletionFacts
 	supersededBy *domain.RunID
+	revisesRunID *domain.RunID
 	cost         *domain.CostSoFar
 }
 
@@ -954,6 +961,27 @@ func runProjectionFactsFor(
 		}
 		if implementationRun, bound := boundImplementationRun(run, attempt); bound {
 			facts.supersededBy = &implementationRun
+		}
+	}
+	// A specification-revision campaign carries the forward link on its initial
+	// attempt, projected onto every run of that campaign (#1083 D4).
+	if run.CampaignID != "" {
+		initial, err := tx.GetProductionAttempt(ctx, run.CampaignID, 1)
+		if err != nil {
+			return runProjectionFacts{}, err
+		}
+		facts.revisesRunID = initial.RevisesRunID
+	}
+	// The reverse half: a run a later revision campaign revises is superseded by
+	// that campaign's specification run. A retry successor and the spec-to-impl
+	// hand-off keep precedence, so this only fills an otherwise-empty successor.
+	if facts.supersededBy == nil {
+		revisionSpec, revised, err := tx.RevisionSpecificationRunFor(ctx, run.ID)
+		if err != nil {
+			return runProjectionFacts{}, err
+		}
+		if revised {
+			facts.supersededBy = &revisionSpec
 		}
 	}
 	facts.cost, err = tx.BillableCostSoFar(ctx, run.ID)

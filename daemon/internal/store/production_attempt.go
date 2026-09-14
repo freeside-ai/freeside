@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -131,6 +133,9 @@ func (tx *ReadTx) authenticateInitialAttemptAuthorityUncached(ctx context.Contex
 // to the immutable dispatch. Migration uses this before task reconstruction is
 // available; approval authentication remains a separate authority check.
 func (tx *ReadTx) authenticateInitialAttemptSource(ctx context.Context, attempt domain.ProductionAttempt) (bool, error) {
+	if attempt.RevisesRunID != nil {
+		return tx.authenticateRevisionAttemptSource(ctx, attempt)
+	}
 	entry, err := tx.GetOutbox(ctx, string(domain.SpecificationInvocationID(attempt.SpecificationRunID, 1)))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -172,6 +177,188 @@ func (tx *ReadTx) authenticateInitialAttemptSource(ctx context.Context, attempt 
 		return false, errors.Join(domain.ErrParentKeyMismatch, err)
 	}
 	if source.Digest != attempt.SourceDigest {
+		return false, domain.ErrParentKeyMismatch
+	}
+	return true, nil
+}
+
+// FirstSpecificationMarkerKey returns the minimum-iteration specification
+// dispatch marker for a run, or present=false when none is written yet. A
+// revision campaign's specification run has no iteration-1 marker (its first
+// request is the revision at iteration 2, #1083), so every root-marker lookup
+// binds against this first marker rather than a fixed iteration 1.
+func (tx *ReadTx) FirstSpecificationMarkerKey(
+	ctx context.Context, specificationRunID domain.RunID,
+) (string, bool, error) {
+	prefix := domain.SpecificationInvocationIDPrefix(specificationRunID)
+	rows, err := tx.tx.QueryContext(ctx, `
+SELECT idempotency_key FROM outbox
+WHERE kind IN (?, ?) AND idempotency_key LIKE ?`,
+		string(domain.SpecificationInvocationRequestedKind),
+		queueKindAlias(string(domain.SpecificationInvocationRequestedKind)), prefix+"%")
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = rows.Close() }()
+	var (
+		bestKey       string
+		bestIteration int
+		found         bool
+	)
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return "", false, err
+		}
+		suffix := strings.TrimPrefix(key, prefix)
+		if suffix == key {
+			continue
+		}
+		iteration, convErr := strconv.Atoi(suffix)
+		if convErr != nil || iteration < 1 {
+			continue
+		}
+		if !found || iteration < bestIteration {
+			bestKey, bestIteration, found = key, iteration, true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", false, err
+	}
+	return bestKey, found, nil
+}
+
+// authenticateRevisionAttemptSource authenticates a revision campaign's initial
+// attempt against its first specification dispatch marker (#1083 D2, D3). Its
+// first request seeds three inputs in role-canonical order (the original
+// source, then the revised campaign's approved specification, then the answer's
+// feedback artifact) at an iteration that continues the prior campaign's count.
+// The marker must name exactly those seeded inputs, and each is bound to
+// durable evidence: the source by digest, the prior specification by digest to
+// the revised campaign's approved spec, and the feedback to the daemon-produced
+// artifact of the linked command.
+func (tx *ReadTx) authenticateRevisionAttemptSource(
+	ctx context.Context, attempt domain.ProductionAttempt,
+) (bool, error) {
+	firstKey, present, err := tx.FirstSpecificationMarkerKey(ctx, attempt.SpecificationRunID)
+	if err != nil {
+		return false, err
+	}
+	if !present {
+		// No marker yet: a revision campaign writes its attempt and run before
+		// its iteration-2 marker within one transaction, so this pre-dispatch
+		// state is legitimate while the implementation run is still absent
+		// (matching the ordinary initial path). Once the implementation run
+		// exists the immutable authority must too, so a marker-less attempt then
+		// is inconsistent. The reverse projection additionally requires the
+		// marker before treating a revision as a successor.
+		var exists int
+		err := tx.tx.QueryRowContext(ctx, `SELECT 1 FROM runs WHERE id = ?`, attempt.ImplementationRunID).Scan(&exists)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return false, domain.ErrParentKeyMismatch
+	}
+	entry, err := tx.GetOutbox(ctx, firstKey)
+	if err != nil {
+		return false, err
+	}
+	if entry.Kind != string(domain.SpecificationInvocationRequestedKind) {
+		return false, domain.ErrParentKeyMismatch
+	}
+	var root struct {
+		SpecificationRunID  domain.RunID        `json:"specification_run_id"`
+		ImplementationRunID domain.RunID        `json:"implementation_run_id"`
+		CampaignID          domain.CampaignID   `json:"campaign_id"`
+		AttemptNumber       int                 `json:"attempt_number"`
+		PublicationDigest   domain.Digest       `json:"publication_digest"`
+		InputArtifactIDs    []domain.ArtifactID `json:"input_artifact_ids"`
+		PriorSpecArtifactID *domain.ArtifactID  `json:"prior_spec_artifact_id"`
+		FeedbackArtifactIDs []domain.ArtifactID `json:"feedback_artifact_ids"`
+	}
+	if err := json.Unmarshal(entry.Payload, &root); err != nil ||
+		root.SpecificationRunID != attempt.SpecificationRunID || root.ImplementationRunID != attempt.ImplementationRunID ||
+		root.CampaignID != attempt.CampaignID || root.AttemptNumber != 1 ||
+		root.PublicationDigest != attempt.PublicationDigest || root.PriorSpecArtifactID == nil ||
+		len(root.FeedbackArtifactIDs) != 1 || len(root.InputArtifactIDs) != 3 {
+		return false, domain.ErrParentKeyMismatch
+	}
+	feedbackID := domain.ArtifactID("spec-feedback-" + *attempt.RevisionCommandID)
+	if root.FeedbackArtifactIDs[0] != feedbackID ||
+		root.InputArtifactIDs[1] != *root.PriorSpecArtifactID || root.InputArtifactIDs[2] != feedbackID {
+		return false, domain.ErrParentKeyMismatch
+	}
+	source, err := tx.GetArtifact(ctx, root.InputArtifactIDs[0])
+	if err != nil {
+		return false, errors.Join(domain.ErrParentKeyMismatch, err)
+	}
+	if source.Digest != attempt.SourceDigest {
+		return false, domain.ErrParentKeyMismatch
+	}
+	// Read the revised run's attempt without re-entering full reconstruction:
+	// the cross-campaign revision link is not bounded by decreasing attempt
+	// numbers the way the parent chain is, so recursing here would let mutually
+	// referencing (corrupted) rows exhaust the stack instead of failing closed
+	// (#1083). The scan still validates the row; the revised run authenticates
+	// its own ancestry when it is read.
+	revised, err := tx.productionAttemptByRun(ctx, *attempt.RevisesRunID)
+	if err != nil {
+		return false, err
+	}
+	priorSpec, err := tx.GetArtifact(ctx, *root.PriorSpecArtifactID)
+	if err != nil {
+		return false, errors.Join(domain.ErrParentKeyMismatch, err)
+	}
+	if revised.ApprovedSpecDigest == "" || priorSpec.Type != domain.ArtifactKindSpecification ||
+		priorSpec.Digest != revised.ApprovedSpecDigest {
+		return false, domain.ErrParentKeyMismatch
+	}
+	feedback, err := tx.GetArtifact(ctx, feedbackID)
+	if err != nil {
+		return false, errors.Join(domain.ErrParentKeyMismatch, err)
+	}
+	// Pin the full daemon-minted provenance tuple, mirroring the engine's
+	// requireSpecificationOutputProvenance: the feedback artifact is minted at
+	// the revision run's iteration-2 dispatch invocation, head-independent, with
+	// no source head, no verification recipe, and normal sensitivity. A forged
+	// row differing in any of those fields fails closed. The body-digest binding
+	// stays with the engine, which owns the composition (see the note below).
+	if feedback.Type != domain.ArtifactKindResearch ||
+		feedback.Provenance.ProducerClass != domain.ProducerDaemon ||
+		feedback.Provenance.ProducerInvocationID != domain.SpecificationInvocationID(attempt.SpecificationRunID, 2) ||
+		feedback.Provenance.HeadBinding != domain.HeadIndependent ||
+		feedback.Provenance.SourceHeadSHA != "" ||
+		feedback.Provenance.VerificationRecipeDigest != nil ||
+		feedback.Provenance.SensitivityClass != domain.SensitivityNormal {
+		return false, domain.ErrParentKeyMismatch
+	}
+	// Bind the answering command as the blocked question's effective decision
+	// (#1083, the store twin of the engine's verifyRevisionRoot re-gate): the
+	// revision command must be an answer_and_retry that chose revise_specification
+	// on the blocked run's implementation-stage agent_question, and be that item's
+	// superseding decision. Fails closed so a reconstructed attempt cannot project
+	// a revision the answer never authorized. The feedback body's digest binding
+	// to the composed decision-and-answer stays with the engine, which owns the
+	// composition; here the structural command and item bindings are the boundary.
+	command, err := tx.GetCommand(ctx, *attempt.RevisionCommandID)
+	if err != nil {
+		return false, errors.Join(domain.ErrParentKeyMismatch, err)
+	}
+	item, err := tx.GetAttentionItemRecord(ctx, command.ItemID)
+	if err != nil {
+		return false, errors.Join(domain.ErrParentKeyMismatch, err)
+	}
+	if command.Action != domain.ActionAnswerAndRetry || command.AnswerRoute == nil ||
+		*command.AnswerRoute != domain.AnswerRouteReviseSpecification ||
+		item.Type != domain.AttentionAgentQuestion || item.AgentQuestion == nil ||
+		item.AgentQuestion.Stage != domain.StageNameImplementation ||
+		item.Subject.RunID == nil || *item.Subject.RunID != *attempt.RevisesRunID ||
+		command.ItemVersion+1 != item.ItemVersion || command.PRHeadSHA != item.PRHeadSHA ||
+		!slices.Equal(command.ArtifactDigests, item.ArtifactDigests) ||
+		item.Status != domain.StatusSuperseded || item.DecidedAt == nil {
 		return false, domain.ErrParentKeyMismatch
 	}
 	return true, nil
@@ -457,6 +644,10 @@ func (tx *WriteTx) PutProductionAttempt(ctx context.Context, attempt domain.Prod
 		return fmt.Errorf("put production attempt %s/%d capability retry: %w",
 			attempt.CampaignID, attempt.AttemptNumber, err)
 	}
+	if err := tx.gateRevisionRevisedRun(ctx, attempt); err != nil {
+		return fmt.Errorf("put production attempt %s/%d revision link: %w",
+			attempt.CampaignID, attempt.AttemptNumber, err)
+	}
 	body, err := encode(attempt)
 	if err != nil {
 		return fmt.Errorf("put production attempt %s/%d: %w", attempt.CampaignID, attempt.AttemptNumber, err)
@@ -474,7 +665,58 @@ INSERT INTO production_attempts (
 	if err != nil {
 		return fmt.Errorf("put production attempt %s/%d: %w", attempt.CampaignID, attempt.AttemptNumber, err)
 	}
+	// Mirror the revision link into its reverse index. A revision attempt exists
+	// only after the column's migration, so the update is skipped for the
+	// ordinary attempts that legacy backfills reconstruct, keeping the base
+	// insert schema-agnostic.
+	if attempt.RevisesRunID != nil {
+		if _, err := tx.tx.ExecContext(ctx,
+			`UPDATE production_attempts SET revises_run_id = ? WHERE campaign_id = ? AND attempt_number = ?`,
+			string(*attempt.RevisesRunID), attempt.CampaignID, attempt.AttemptNumber); err != nil {
+			return fmt.Errorf("put production attempt %s/%d revision index: %w",
+				attempt.CampaignID, attempt.AttemptNumber, err)
+		}
+	}
 	return nil
+}
+
+// gateRevisionRevisedRun binds a revision campaign's initial attempt to the
+// blocked implementation run it revises (#1083 D2). The revised run must be a
+// terminal implementation run carrying its own recorded production attempt, and
+// in a different campaign than the one being written. Task equality is not
+// checked here: at write time the new run's task is not yet assigned, so
+// campaignTask enforces it when the new specification and implementation runs
+// are gated, deriving their expected task from this link. Returned rows are
+// never trusted: the revised run's attempt is reconstructed through
+// GetProductionAttemptByRun and its terminal through the run's own milestones.
+func (tx *ReadTx) gateRevisionRevisedRun(ctx context.Context, attempt domain.ProductionAttempt) error {
+	if attempt.RevisesRunID == nil {
+		return nil
+	}
+	// Read the revised run's attempt without re-entering full reconstruction:
+	// the cross-campaign revision link is not bounded by decreasing attempt
+	// numbers the way the parent chain is, so recursing here would let mutually
+	// referencing (corrupted) rows exhaust the stack instead of failing closed
+	// (#1083). The scan still validates the row; the revised run authenticates
+	// its own ancestry when it is read.
+	revised, err := tx.productionAttemptByRun(ctx, *attempt.RevisesRunID)
+	if err != nil {
+		return err
+	}
+	if revised.ImplementationRunID != *attempt.RevisesRunID || revised.CampaignID == attempt.CampaignID {
+		return domain.ErrParentKeyMismatch
+	}
+	milestones, err := tx.ListRunMilestones(ctx, *attempt.RevisesRunID)
+	if err != nil {
+		return err
+	}
+	for _, milestone := range milestones {
+		if milestone.Kind == domain.MilestoneTerminalRecorded &&
+			milestone.Terminal != nil && milestone.Terminal.Concluded() {
+			return nil
+		}
+	}
+	return domain.ErrParentKeyMismatch
 }
 
 // ApproveProductionAttempt fills the one field unavailable at initial submit.
@@ -539,6 +781,12 @@ func (tx *ReadTx) scanProductionAttempt(sc scanner) (domain.ProductionAttempt, e
 	if err != nil {
 		return domain.ProductionAttempt{}, err
 	}
+	// RevisesRunID/RevisionCommandID stay in the body only, like the operator
+	// retry bindings. The revises_run_id column is an unread reverse index that
+	// PutProductionAttempt mirrors from the body; RevisionSpecificationRunFor
+	// re-reads and re-verifies the body, so the scan needs no column cross-check
+	// here and the shared scanner stays migration-safe for the version-70
+	// backfill that predates the column.
 	if attempt.CampaignID != domain.CampaignID(campaignID) || attempt.AttemptNumber != number ||
 		attempt.Kind != domain.ProductionAttemptKind(kind) ||
 		!optionalStringEqual(parentRunID, string(attempt.ParentRunID)) ||
@@ -586,6 +834,9 @@ func (tx *ReadTx) GetProductionAttempt(
 
 func (tx *ReadTx) authenticateReconstructedProductionAttempt(ctx context.Context, attempt domain.ProductionAttempt) error {
 	if attempt.AttemptNumber == 1 {
+		if err := tx.gateRevisionRevisedRun(ctx, attempt); err != nil {
+			return err
+		}
 		return tx.authenticateInitialAttemptAuthority(ctx, attempt)
 	}
 	if attempt.AttemptNumber < 2 {
@@ -677,6 +928,50 @@ func (tx *ReadTx) productionAttemptByRun(
 		return domain.ProductionAttempt{}, fmt.Errorf("get production attempt for run %q: %w", runID, notFoundOr(err))
 	}
 	return attempt, nil
+}
+
+// RevisionSpecificationRunFor returns the specification run of the revision
+// campaign that revises the given implementation run, if one exists (#1083 D4).
+// The link lives on the revision campaign's initial attempt; the attempt is
+// re-authenticated through GetProductionAttempt (returned-object trust
+// boundary), so a forged row cannot fabricate a successor.
+func (tx *ReadTx) RevisionSpecificationRunFor(
+	ctx context.Context, revisedRunID domain.RunID,
+) (domain.RunID, bool, error) {
+	var (
+		campaignID domain.CampaignID
+		number     int
+	)
+	err := tx.tx.QueryRowContext(ctx,
+		`SELECT campaign_id, attempt_number FROM production_attempts WHERE revises_run_id = ?`,
+		string(revisedRunID)).Scan(&campaignID, &number)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	attempt, err := tx.GetProductionAttempt(ctx, campaignID, number)
+	if err != nil {
+		return "", false, err
+	}
+	if attempt.RevisesRunID == nil || *attempt.RevisesRunID != revisedRunID {
+		return "", false, errRowInconsistent
+	}
+	// Only project a materialized revision as a successor. GetProductionAttempt
+	// accepts a pre-dispatch attempt (marker not yet written), which is a
+	// legitimate transient during creation but, on a committed row, means an
+	// inconsistent revision whose specification run was never dispatched. Require
+	// the marker so a corrupt marker-less row is not projected as a nonexistent
+	// superseded_by (#1083).
+	_, present, err := tx.FirstSpecificationMarkerKey(ctx, attempt.SpecificationRunID)
+	if err != nil {
+		return "", false, err
+	}
+	if !present {
+		return "", false, nil
+	}
+	return attempt.SpecificationRunID, true, nil
 }
 
 func (tx *ReadTx) LatestProductionAttempt(

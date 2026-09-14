@@ -428,7 +428,8 @@ func migrationsBeforeScheduleAuthority(t *testing.T) fs.FS {
 			entry.Name() == "0066_work_unit_completed_milestone.sql" ||
 			entry.Name() == "0067_review_requests.sql" ||
 			entry.Name() == "0068_declared_publication_branch.sql" ||
-			entry.Name() == "0069_successor_publication.sql" || entry.Name() == "0070_tasks.sql" || entry.IsDir() {
+			entry.Name() == "0069_successor_publication.sql" || entry.Name() == "0070_tasks.sql" ||
+			entry.Name() == "0071_production_attempt_revision_link.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())

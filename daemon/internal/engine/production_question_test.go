@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +54,22 @@ func newBlockedImplementationFixtureWithDecisions(
 func newBlockedImplementationFixtureWith(
 	t *testing.T, kind domain.BlockedKind, summary string, decisions []domain.Decision,
 ) blockedImplementationFixture {
+	return newBlockedImplementationFixtureCore(t, kind, summary, decisions, false)
+}
+
+// newBlockedImplementationCampaignFixture is the campaign variant: the blocked
+// implementation run belongs to a §5.12 campaign with a recorded production
+// attempt and approved specification, which the specification-revision path
+// (#1083) requires. The ordinary variant submits a legacy (campaign-less) run.
+func newBlockedImplementationCampaignFixture(
+	t *testing.T, kind domain.BlockedKind, summary string,
+) blockedImplementationFixture {
+	return newBlockedImplementationFixtureCore(t, kind, summary, decisionsFixture(), true)
+}
+
+func newBlockedImplementationFixtureCore(
+	t *testing.T, kind domain.BlockedKind, summary string, decisions []domain.Decision, campaign bool,
+) blockedImplementationFixture {
 	t.Helper()
 	f := newSpecificationFixture(t, false, 4)
 	driver := f.newDriver(t)
@@ -64,7 +81,14 @@ func newBlockedImplementationFixtureWith(
 		t.Fatal(err)
 	}
 	digest := domain.Digest(contentaddr.Sum(body))
-	if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 1), 0, 0,
+	specRunID := domain.RunID("specification-run")
+	if campaign {
+		specRunID, err = SpecificationRunIDForImplementation("implementation-run")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := specifyfake.Script(driver, specificationInvocationID(specRunID, 1), 0, 0,
 		specify.Output{Specification: &specify.Specification{
 			Summary: "The implementation plan is ready.", Body: "# Specification\n\nImplement the bounded workflow.",
 			Addressals: []specify.Addressal{},
@@ -76,7 +100,11 @@ func newBlockedImplementationFixtureWith(
 		Outcome: execfake.OutcomeBlocked,
 		Result:  exec.StageResult{Artifacts: []domain.Digest{digest}, Summary: summary},
 	})
-	f.submit(t)
+	if campaign {
+		submitBlockedCampaign(t, f, specRunID)
+	} else {
+		f.submit(t)
+	}
 	engine := f.newEngine(t, driver)
 	// Pass one accepts the auto-approved specification and submits the
 	// implementation run, which creates the invocation row the claim set
@@ -178,6 +206,53 @@ func newBlockedImplementationFixtureWith(
 	return blockedImplementationFixture{
 		specificationFixture: f, engine: engine, driver: driver, run: run,
 		attempt: stage.Attempts[0], blocked: blocked, blockedRaw: body,
+	}
+}
+
+// submitBlockedCampaign submits the fixture's specification run as attempt 1 of
+// a campaign (a resolved policy bound to the derived specification run id plus
+// the publication bytes the campaign attempt records), so the resulting
+// implementation run carries a production attempt and approved specification.
+func submitBlockedCampaign(t *testing.T, f specificationFixture, specRunID domain.RunID) {
+	t.Helper()
+	campaignID, err := ProductionCampaignIDForImplementation("implementation-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedPolicy, err := domain.NewResolvedPolicy(specRunID, f.policy.Keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyArtifact := testSpecificationArtifact(t, "campaign-resolved-policy", domain.ArtifactKindPolicy,
+		resolvedPolicy.Digest, domain.ProducerDaemon, "policy-resolver")
+	policyBody, err := json.Marshal(resolvedPolicy.Keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.blobs.Put(policyArtifact.Digest, strings.NewReader(string(policyBody))); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.PutArtifact(t.Context(), policyArtifact)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	publication := ProductionPublication{
+		Title: "Implement approved work item", Body: "Implements the operator-approved specification.",
+		CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
+	}
+	publicationBytes, err := json.Marshal(publication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SubmitSpecificationRun(t.Context(), f.store, SpecificationRunSpec{
+		SpecificationRunID: specRunID, ImplementationRunID: "implementation-run",
+		ProjectID: "project-1", SourceArtifactID: f.source.ID, PolicyArtifactID: policyArtifact.ID,
+		ResolvedPolicy: resolvedPolicy, Publication: publication,
+		PublicationBytes: publicationBytes, PublicationDigest: domain.Digest(contentaddr.Sum(publicationBytes)),
+		CampaignID: campaignID, AttemptNumber: 1,
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -396,5 +471,204 @@ func TestBlockedImplementationAnswerRetriesImplementer(t *testing.T) {
 	}
 	if replay, err := f.engine.reconcileOperatorFeedback(t.Context()); err != nil || replay != 0 {
 		t.Fatalf("replayed feedback reconciliation = %d, %v", replay, err)
+	}
+}
+
+// TestBlockedImplementationAnswerRevisesSpecification: answering a blocked
+// implementation question with revise_specification files the answer as
+// specification feedback and starts a fresh campaign under the same task, at a
+// specification run rooted at the revision (iteration 2), linked back to the
+// blocked run. The blocked run is untouched and a redelivery converges (#1083).
+func TestBlockedImplementationAnswerRevisesSpecification(t *testing.T) {
+	f := newBlockedImplementationCampaignFixture(t, domain.BlockedKindOwnerDecision, decisionsFixture()[0].Question)
+	if _, err := f.engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	f.assertQuestion(t)
+	blockedRunID := f.run.ID
+	blockedSpecBefore := f.run.SpecDigest
+	blockedSpecRunID, err := SpecificationRunIDForImplementation("implementation-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Recover the blocked campaign's source and task for later assertions.
+	var (
+		blockedMarker store.QueueEntry
+		blockedTask   domain.TaskID
+	)
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		blockedMarker, err = tx.GetOutbox(t.Context(), string(specificationInvocationID(blockedSpecRunID, 1)))
+		if err != nil {
+			return err
+		}
+		run, err := tx.GetRun(t.Context(), blockedRunID)
+		if err != nil {
+			return err
+		}
+		blockedTask = run.TaskID
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	blockedRequest, err := decodeSpecificationRequest(blockedMarker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceID := blockedRequest.InputArtifactIDs[0]
+	oldCampaign, err := ProductionCampaignIDForImplementation("implementation-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := f.signet.GetAttentionItem(t.Context(), f.questionID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := domain.AnswerRouteReviseSpecification
+	const answer = "Narrow the scope to the current adapter only."
+	const commandID = "answer-revise"
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: commandID, DeviceID: "device-1", ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: f.questionID(), Action: domain.ActionAnswerAndRetry,
+			ItemVersion: snapshot.Item.ItemVersion, ArtifactDigests: snapshot.Item.ArtifactDigests,
+			Message: answer, AnswerRoute: &route,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	created, err := f.engine.reconcileOperatorFeedback(t.Context())
+	if err != nil || created != 1 {
+		t.Fatalf("reconcileOperatorFeedback = %d, %v", created, err)
+	}
+
+	newImpl := derivedRevisionImplementationRunID(commandID)
+	newSpec, err := SpecificationRunIDForImplementation(newImpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newCampaign, err := ProductionCampaignIDForImplementation(newImpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	feedbackID := domain.ArtifactID("spec-feedback-" + commandID)
+	priorSpecID := domain.ArtifactID("spec-implementation-run-1")
+
+	var (
+		revisionMarker store.QueueEntry
+		attempt        domain.ProductionAttempt
+		feedback       domain.Artifact
+		task           domain.Task
+		blockedRun     domain.Run
+	)
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		if revisionMarker, err = tx.GetOutbox(t.Context(), string(specificationInvocationID(newSpec, 2))); err != nil {
+			return err
+		}
+		if attempt, err = tx.GetProductionAttempt(t.Context(), newCampaign, 1); err != nil {
+			return err
+		}
+		if feedback, err = tx.GetArtifact(t.Context(), feedbackID); err != nil {
+			return err
+		}
+		if task, err = tx.GetTask(t.Context(), blockedTask); err != nil {
+			return err
+		}
+		blockedRun, err = tx.GetRun(t.Context(), blockedRunID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// D4 reverse link: the blocked run resolves to the revision specification
+	// run that supersedes it (the store half of the superseded_by projection).
+	var (
+		reverseSpec domain.RunID
+		revised     bool
+	)
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		reverseSpec, revised, err = tx.RevisionSpecificationRunFor(t.Context(), blockedRunID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !revised || reverseSpec != newSpec {
+		t.Fatalf("revision specification for blocked run = %q, %t, want %q", reverseSpec, revised, newSpec)
+	}
+
+	// The revision link and campaign identity.
+	if attempt.RevisesRunID == nil || *attempt.RevisesRunID != blockedRunID ||
+		attempt.RevisionCommandID == nil || *attempt.RevisionCommandID != commandID ||
+		attempt.SpecificationRunID != newSpec || attempt.ImplementationRunID != newImpl ||
+		attempt.Kind != domain.ProductionAttemptInitial {
+		t.Fatalf("revision attempt = %#v", attempt)
+	}
+	// The seeded first request roots the revision at iteration 2.
+	request, err := decodeSpecificationRequest(revisionMarker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Iteration != 2 || request.FirstIteration != 2 || request.CampaignID != newCampaign ||
+		request.PriorSpecArtifactID == nil || *request.PriorSpecArtifactID != priorSpecID ||
+		!slices.Equal(request.FeedbackArtifactIDs, []domain.ArtifactID{feedbackID}) ||
+		!slices.Equal(request.InputArtifactIDs, []domain.ArtifactID{sourceID, priorSpecID, feedbackID}) {
+		t.Fatalf("revision request = %#v", request)
+	}
+	// The feedback artifact is daemon-authored and carries the answer.
+	if feedback.Type != domain.ArtifactKindResearch || feedback.Provenance.ProducerClass != domain.ProducerDaemon {
+		t.Fatalf("feedback artifact = %#v", feedback)
+	}
+	// The new campaign hangs off the blocked run's task, after the prior one.
+	if !slices.Equal(task.CampaignIDs, []domain.CampaignID{oldCampaign, newCampaign}) {
+		t.Fatalf("task campaigns = %v, want [%s %s]", task.CampaignIDs, oldCampaign, newCampaign)
+	}
+	// The blocked run is untouched.
+	if blockedRun.SpecDigest != blockedSpecBefore || len(blockedRun.Stages) != len(f.run.Stages) {
+		t.Fatalf("blocked run changed: spec %s, stages %d", blockedRun.SpecDigest, len(blockedRun.Stages))
+	}
+	// A redelivery of the same command converges: no new run, campaign, or attempt.
+	if replay, err := f.engine.reconcileOperatorFeedback(t.Context()); err != nil || replay != 0 {
+		t.Fatalf("replayed revision reconciliation = %d, %v", replay, err)
+	}
+
+	// Drive the revised specification to acceptance: the specifier produces the
+	// revised spec at the run's first iteration (2), and the auto-approve
+	// reconcile must start a new implementation run under the new campaign. This
+	// is the central acceptance criterion; it is unreachable if any root-marker
+	// lookup on the acceptance path still assumes iteration 1 (#1083).
+	if err := specifyfake.Script(f.driver, specificationInvocationID(newSpec, 2), 0, 0,
+		specify.Output{Specification: &specify.Specification{
+			Summary: "The revised implementation plan is ready.",
+			Body:    "# Specification\n\nImplement the narrowed workflow.",
+			// The specifier addresses the operator's answer, whose comment id is
+			// the answering command; buildSpecRevision requires the addressal to
+			// name a prior comment.
+			Addressals: []specify.Addressal{
+				{CommentID: commandID, Response: "Narrowed the scope to the current adapter per the answer."},
+			},
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("revision reconcile: %v", err)
+	}
+	var newImplRun domain.Run
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		newImplRun, err = tx.GetRun(t.Context(), newImpl)
+		return err
+	}); err != nil {
+		t.Fatalf("revised specification did not start a new implementation run: %v", err)
+	}
+	if newImplRun.CampaignID != newCampaign || newImplRun.AttemptNumber != 1 {
+		t.Fatalf("new implementation run campaign = %s/%d, want %s/1",
+			newImplRun.CampaignID, newImplRun.AttemptNumber, newCampaign)
+	}
+	if _, ok := findProductionStage(newImplRun); !ok {
+		t.Fatalf("new implementation run has no production stage: %+v", newImplRun.Stages)
 	}
 }

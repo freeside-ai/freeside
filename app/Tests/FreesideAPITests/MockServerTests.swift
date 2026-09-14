@@ -1324,7 +1324,7 @@ import Testing
 }
 
 extension MockServerTests {
-    @Test func implementationAnswerRequiresARouteAndRefusesRevision() async throws {
+    @Test func implementationAnswerRequiresARouteAndRevisesTheSpecification() async throws {
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
         let before = try await client.getAttentionItem(path: .init(item_id: "item-agent_question")).ok.body.json
@@ -1339,14 +1339,6 @@ extension MockServerTests {
         }
         #expect(missingStatus == 422)
 
-        command.command_id = "cmd-route-revise"
-        command.payload.answer_route = .init(value1: .revise_specification)
-        let revise = try await client.submitCommand(body: .json(command))
-        guard case .undocumented = revise else {
-            Issue.record("expected revise_specification to be refused as pending, got \(revise)")
-            return
-        }
-
         // A route on any other command is refused while the item is still
         // open, before the accepted answer supersedes it.
         var stop = Self.command(id: "cmd-route-stop", against: before, action: .stop)
@@ -1358,9 +1350,26 @@ extension MockServerTests {
         }
         #expect(stopStatus == 422)
 
-        command.command_id = "cmd-route-retry"
-        command.payload.answer_route = .init(value1: .retry_implementation)
+        // revise_specification is now accepted (#1083): it files the answer as
+        // feedback, supersedes the question, and a revised spec_approval names
+        // the question with the answer as its prior comment.
+        command.command_id = "cmd-route-revise"
+        command.payload.answer_route = .init(value1: .revise_specification)
         let accepted = try await client.submitCommand(body: .json(command)).ok.body.json
-        #expect(accepted.record.answer_route?.value1 == .retry_implementation)
+        #expect(accepted.record.answer_route?.value1 == .revise_specification)
+        let concluded = try await client.getAttentionItem(path: .init(item_id: "item-agent_question")).ok.body.json
+        #expect(concluded.item.status == .superseded)
+
+        await server.completePendingAgentWork()
+        let items = try await client.listAttentionItems().ok.body.json
+        let revised = try #require(
+            items.first {
+                $0.item._type == .spec_approval
+                    && $0.item.spec_revision?.value1.prior_item_id == "item-agent_question"
+            })
+        let revision = try #require(revised.item.spec_revision?.value1)
+        #expect(revised.item.status == .open)
+        #expect(revision.prior_comments.last?.body == "Store first.")
+        #expect(revision.prior_comments.last?.raised_on_item_id == "item-agent_question")
     }
 }

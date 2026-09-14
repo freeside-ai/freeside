@@ -1,0 +1,11 @@
+{
+  "campaign_id": "campaign-2",
+  "attempt_number": 1,
+  "kind": "initial",
+  "reason": "",
+  "source_digest": "sha256:source",
+  "specification_run_id": "run-specification-2",
+  "implementation_run_id": "run-2",
+  "revises_run_id": "run-blocked",
+  "revision_command_id": "cmd-answer-1"
+}

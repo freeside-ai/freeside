@@ -313,11 +313,10 @@ func findingAdjudicationCompletionPending(
 
 // validateAnswerRoute is the per-item half of the answer_and_retry content
 // policy. The route is meaningful only where two consumers could take the
-// answer, an implementation-stage agent_question: there it is required.
-// revise_specification is accepted by the contract but not yet by this
-// boundary: the revised specification needs a fresh implementation identity
-// the §5.12 campaign model does not mint yet, so it is refused as pending
-// rather than accepted with no effect.
+// answer, an implementation-stage agent_question: there it is required and both
+// routes are accepted. retry_implementation re-invokes the implementer;
+// revise_specification files the answer as specification feedback and starts a
+// fresh campaign under the same task (#1083, §5.12).
 func validateAnswerRoute(command domain.Command, item domain.AttentionItem) error {
 	routed := command.Action == domain.ActionAnswerAndRetry &&
 		item.Type == domain.AttentionAgentQuestion && item.AgentQuestion != nil &&
@@ -330,9 +329,6 @@ func validateAnswerRoute(command domain.Command, item domain.AttentionItem) erro
 	}
 	if command.AnswerRoute == nil {
 		return fmt.Errorf("action %q: %w", command.Action, ErrAnswerRouteRequired)
-	}
-	if *command.AnswerRoute == domain.AnswerRouteReviseSpecification {
-		return fmt.Errorf("action %q answer_route %q: %w", command.Action, *command.AnswerRoute, ErrUnsupportedAction)
 	}
 	return nil
 }

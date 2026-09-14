@@ -644,6 +644,27 @@ import Testing
         #expect(model.snapshot?.item.status == .superseded)
     }
 
+    @Test func answerAndRetryRevisesTheSpecification() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-agent_question")
+        await model.validate()
+
+        // The operator picks the revise route offered on the implementation
+        // question (#1083); the answer files as specification feedback.
+        let routes = AgentQuestionPresentation.answerRoutes(for: model.snapshot?.item)
+        #expect(routes == [.retry_implementation, .revise_specification])
+        let claimed = await model.submitAnswer(
+            .answer_and_retry, message: "  Narrow the scope to the current adapter.  ",
+            answerRoute: .revise_specification)
+
+        #expect(claimed)
+        #expect(model.appliedRecord?.action == .answer_and_retry)
+        #expect(model.appliedRecord?.message == "Narrow the scope to the current adapter.")
+        #expect(model.appliedRecord?.answer_route?.value1 == .revise_specification)
+        #expect(model.snapshot?.item.status == .superseded)
+    }
+
     @Test func implementationAnswerWithoutARouteIsRefusedByTheDaemon() async {
         let server = MockServer()
         let store = await makeStore(server: server)
