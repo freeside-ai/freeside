@@ -114,6 +114,9 @@ func main() {
 		case "reattempt":
 			runReattemptMain(os.Args[2:])
 			return
+		case "abandon":
+			runAbandonMain(os.Args[2:])
+			return
 		case "resume":
 			runResumeMain(os.Args[2:])
 			return

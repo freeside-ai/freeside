@@ -323,7 +323,11 @@ func (c mergeCapture) observe(
 		if err := tx.RecordWorkUnitCompletion(ctx, persistedCompletion); err != nil {
 			return err
 		}
-		return appendWorkUnitCompletedMilestone(ctx, tx, persistedDeclaration.RunID, persistedCompletion)
+		if err := appendWorkUnitCompletedMilestone(ctx, tx, persistedDeclaration.RunID, persistedCompletion); err != nil {
+			return err
+		}
+		// Record the completion as a task lifecycle fact (issue #1318 D3).
+		return tx.RecordTaskCompletion(ctx, persistedDeclaration.RunID, persistedCompletion.UnitID, time.Now().UTC())
 	}, nil
 }
 

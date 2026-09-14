@@ -356,6 +356,138 @@ func TestIntakeAutoStartWIPCapRefusesBeyondAndSerializes(t *testing.T) {
 	}
 }
 
+// TestIntakeAutoStartReleasesWIPWhenDecisionDoesNotTake covers the cap-gate
+// ordering (issue #1318): the auto_start write records the task's start under
+// the atomic WIP-cap check, but if the start decision does not take (the card
+// was declined or superseded between the cap gate and the decision), no run
+// launches, so the recorded start must be released rather than strand the slot.
+func TestIntakeAutoStartReleasesWIPWhenDecisionDoesNotTake(t *testing.T) {
+	t.Parallel()
+	f := newIntakeFixture(t)
+	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
+	// Pass 1 (propose): admit an open proposal and reserve its run; no start yet.
+	f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	o := f.latestOccurrence(t, 7)
+	if o.Admission == nil {
+		t.Fatal("occurrence was not admitted")
+	}
+	// The proposal departs while still open and undecided: the reconciler
+	// supersedes the card, so the start decision below cannot take (a non-start
+	// decision, exactly the decline/supersession race the cap gate must survive).
+	f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: "open"}).reconcile(t.Context(), nil)
+	superseded := f.latestOccurrence(t, 7)
+	if item := f.proposalItem(t, superseded); item.Status == domain.StatusOpen {
+		t.Fatal("proposal card should have been superseded by the departure")
+	}
+
+	runID := superseded.Admission.Subject.SpecificationRunID
+	var policy intake.IntakePolicy
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		resolved, err := tx.GetResolvedPolicy(t.Context(), runID)
+		if err != nil {
+			return err
+		}
+		policy, err = intake.ParseIntakePolicy(resolved)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Drive autoStart directly: its cap write records the start (claiming a slot),
+	// then StartRunProposalUnattended finds the card no longer open and records no
+	// start, so the compensating release must free the slot.
+	r := f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: "open"})
+	if err := r.autoStart(t.Context(), init, superseded, policy); err != nil {
+		t.Fatalf("autoStart: %v", err)
+	}
+
+	if f.started(t, runID) {
+		t.Fatal("a superseded proposal must not launch a run")
+	}
+	var kinds []domain.TaskLifecycleFactKind
+	var wip int
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		run, err := tx.GetRun(t.Context(), runID)
+		if err != nil {
+			return err
+		}
+		task, err := tx.GetTask(t.Context(), run.TaskID)
+		if err != nil {
+			return err
+		}
+		for _, fact := range task.LifecycleFacts {
+			kinds = append(kinds, fact.Kind)
+		}
+		wip, err = countProjectWIPTasks(t.Context(), tx, intakeTestProj, "")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if wip != 0 {
+		t.Fatalf("WIP tasks = %d, want 0 (the stranded start must be released)", wip)
+	}
+	if !slices.Equal(kinds, []domain.TaskLifecycleFactKind{domain.TaskLifecycleStarted, domain.TaskLifecycleAbandoned}) {
+		t.Fatalf("lifecycle facts = %v, want started then abandoned (start recorded, then released)", kinds)
+	}
+}
+
+// TestCountProjectWIPTasksCountsTasksNotRuns covers issue #1318: the WIP cap
+// counts tasks holding a slot, not runs, so several runs of one task use one
+// slot. A second, unstarted task holds none; the admitted task is excluded.
+func TestCountProjectWIPTasksCountsTasksNotRuns(t *testing.T) {
+	t.Parallel()
+	f := newIntakeFixture(t)
+	ctx := t.Context()
+	ts := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	source := func(issue int) domain.SpecificationSource {
+		return domain.SpecificationSource{Kind: domain.SpecificationSourceIssueSubject, IssueSubject: &domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 123, IssueNumber: issue}}
+	}
+	var wipTask domain.TaskID
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		task, err := tx.GetOrCreateTask(ctx, "project", source(1))
+		if err != nil {
+			return err
+		}
+		wipTask = task.ID
+		for _, run := range []domain.RunID{"run-a", "run-b"} {
+			// The runs must be the task's own runs: RecordTaskStart records a fact
+			// only for a run it read from the store, and reconstruction re-gates each
+			// fact against task_runs (issue #1318 D1).
+			if err := tx.PutRun(ctx, domain.Run{
+				ID: run, ProjectID: "project", TaskID: task.ID,
+				SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy", Stages: []domain.Stage{},
+			}); err != nil {
+				return err
+			}
+			if err := tx.RecordTaskLifecycleFact(ctx, task.ID, domain.TaskLifecycleFact{
+				Kind: domain.TaskLifecycleStarted, RunID: run, SourceID: "start:" + string(run), RecordedAt: ts,
+			}); err != nil {
+				return err
+			}
+		}
+		_, err = tx.GetOrCreateTask(ctx, "project", source(2))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var all, excludingWIP int
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		if all, err = countProjectWIPTasks(ctx, tx, "project", ""); err != nil {
+			return err
+		}
+		excludingWIP, err = countProjectWIPTasks(ctx, tx, "project", wipTask)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if all != 1 {
+		t.Fatalf("WIP tasks = %d, want 1 (two runs of one task use one slot)", all)
+	}
+	if excludingWIP != 0 {
+		t.Fatalf("WIP tasks excluding the admitted task = %d, want 0", excludingWIP)
+	}
+}
+
 // TestIntakeWorkItemCarriesNoIssueContent covers acceptance #4 / §5.13: the
 // daemon-authored work-item document delivered in the specification role is a
 // pure function of the occurrence coordinates and carries no observed issue

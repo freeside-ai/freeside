@@ -1,7 +1,9 @@
 // Package intake holds the label-initiator intake contract surface: the typed
-// view over the run-level WIP-cap and initiator-mode resolved-policy keys, and
-// the pure gates a start decision composes (issue #720, plan §5.12). The
-// reconciliation loop that counts live runs, calls these gates under the store
+// view over the WIP-cap and initiator-mode resolved-policy keys, and the pure
+// gates a start decision composes (issue #720, plan §5.12). The cap bounds
+// concurrent work-in-progress tasks, counted from recorded task lifecycle
+// facts (issue #1318), not runs: two runs of one task use one slot. The
+// reconciliation loop that counts WIP tasks, calls these gates under the store
 // write lock, and authors the start command or the durable refusal is start
 // execution and lands with #659; this package is only the decidable contract
 // those calls stand on.
@@ -17,11 +19,13 @@ import (
 )
 
 const (
-	// PolicyRunWIPCap is the resolved-policy key whose value is the run-level
-	// WIP cap: the maximum number of concurrently active, non-terminal runs a
-	// project's label intake may drive at once. A distinct axis from
-	// AuthIdentity.MaxParallelExecutions, which caps an inference identity's
-	// parallel executions, not a project's runs (issue #720 non-goal). Value: a
+	// PolicyRunWIPCap is the resolved-policy key whose value is the WIP cap: the
+	// maximum number of a project's tasks that may concurrently hold a
+	// work-in-progress admission slot (counted from recorded lifecycle facts,
+	// issue #1318; two runs of one task use one slot). The key name is retained
+	// for policy compatibility though the cap is now task-level. A distinct axis
+	// from AuthIdentity.MaxParallelExecutions, which caps an inference identity's
+	// parallel executions, not a project's tasks (issue #720 non-goal). Value: a
 	// positive integer.
 	PolicyRunWIPCap = "budgets.run_wip_cap"
 	// PolicyInitiatorMode is the resolved-policy key whose value is the
@@ -123,11 +127,11 @@ func (p IntakePolicy) Downgraded() bool {
 	return p.Mode == domain.InitiatorModeAutoStart && !p.AutoStartAuthorized()
 }
 
-// WIPCapExhausted reports whether an active-run count is at or over the cap, so
+// WIPCapExhausted reports whether a WIP-task count is at or over the cap, so
 // an authorized auto_start must be refused (IntakeRefusalWIPCapExhausted) and
-// the admitted item left an ordinary proposal. The caller derives activeRuns
+// the admitted item left an ordinary proposal. The caller derives wipTasks
 // under the store write lock, in the same decision that records the refusal or
 // authors the start (#659), so the count and its consequence serialize.
-func (p IntakePolicy) WIPCapExhausted(activeRuns int) bool {
-	return activeRuns >= p.WIPCap
+func (p IntakePolicy) WIPCapExhausted(wipTasks int) bool {
+	return wipTasks >= p.WIPCap
 }

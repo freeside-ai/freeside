@@ -991,6 +991,10 @@ func (r activeResourceReconciler) commit(ctx context.Context, observation active
 			if err := appendWorkUnitCompletedMilestone(ctx, tx, declaration.RunID, persisted); err != nil {
 				return err
 			}
+			// Record the completion as a task lifecycle fact (issue #1318 D3).
+			if err := tx.RecordTaskCompletion(ctx, declaration.RunID, persisted.UnitID, time.Now().UTC()); err != nil {
+				return err
+			}
 		}
 		if observation.completionOnly {
 			return nil
