@@ -30,6 +30,27 @@ type Task struct {
 	CurrentPosition *TaskPosition        `json:"current_position"`
 	CampaignIDs     []domain.CampaignID  `json:"campaign_ids"`
 	RunIDs          []domain.RunID       `json:"run_ids"`
+	// WIP is the authoritative admission-slot state, derived from LifecycleFacts
+	// (never from the newest run); Lifecycle above is display only (#1318).
+	WIP            bool                `json:"wip"`
+	LifecycleFacts []TaskLifecycleFact `json:"lifecycle_facts"`
+}
+
+// TaskLifecycleFact renders one recorded lifecycle event for display. The
+// task's wip flag is derived from these server-side; a client reads wip.
+type TaskLifecycleFact struct {
+	Kind          domain.TaskLifecycleFactKind `json:"kind"`
+	RunID         domain.RunID                 `json:"run_id"`
+	BindingUnitID *domain.WorkUnitID           `json:"binding_unit_id"`
+	RecordedAt    time.Time                    `json:"recorded_at"`
+}
+
+func projectTaskLifecycleFacts(facts []domain.TaskLifecycleFact) []TaskLifecycleFact {
+	out := make([]TaskLifecycleFact, 0, len(facts))
+	for _, f := range facts {
+		out = append(out, TaskLifecycleFact{Kind: f.Kind, RunID: f.RunID, BindingUnitID: f.BindingUnitID, RecordedAt: f.RecordedAt})
+	}
+	return out
 }
 
 type TaskPosition struct {
@@ -70,6 +91,7 @@ func projectTaskSnapshot(ctx context.Context, tx *store.ReadTx, state store.Serv
 	value := Task{
 		ID: task.ID, ProjectID: task.ProjectID, DisplayNames: *names, Source: projectTaskSource(task.Source),
 		CreatedAt: task.CreatedAt, LastActivityAt: task.CreatedAt, CampaignIDs: task.CampaignIDs, RunIDs: ids,
+		WIP: domain.TaskWIP(task), LifecycleFacts: projectTaskLifecycleFacts(task.LifecycleFacts),
 	}
 	campaigns := []domain.CampaignID{}
 	for _, id := range ids {

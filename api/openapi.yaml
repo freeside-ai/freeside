@@ -1139,11 +1139,12 @@ components:
       description: >
         Stored work identity and name across specification revisions, campaigns,
         and retries. Lifecycle summarizes the newest run for display and never
-        determines WIP membership. Source is null only for legacy or demo work
-        without a recoverable intake reference.
+        determines WIP membership; wip is the authoritative slot state, derived
+        from the recorded lifecycle facts. Source is null only for legacy or demo
+        work without a recoverable intake reference.
       additionalProperties: false
       required: [id, project_id, display_names, source, created_at, last_activity_at,
-                 lifecycle, current_position, campaign_ids, run_ids]
+                 lifecycle, current_position, campaign_ids, run_ids, wip, lifecycle_facts]
       properties:
         id:
           type: string
@@ -1184,6 +1185,42 @@ components:
           items:
             type: string
             minLength: 1
+        wip:
+          type: boolean
+          description: >
+            Whether the task holds a work-in-progress admission slot, derived
+            from its lifecycle facts (an admitted start with no later
+            current-campaign completion and no later abandonment), never from
+            the newest run.
+        lifecycle_facts:
+          type: array
+          description: >
+            The task's recorded lifecycle log in order: admitted starts,
+            work-unit completions, and explicit abandonments. A display record;
+            wip is the derived slot state clients should read.
+          items:
+            $ref: "#/components/schemas/TaskLifecycleFact"
+
+    TaskLifecycleFact:
+      type: object
+      description: One recorded task lifecycle event.
+      additionalProperties: false
+      required: [kind, run_id, binding_unit_id, recorded_at]
+      properties:
+        kind:
+          type: string
+          enum: [started, completed, abandoned]
+        run_id:
+          type: string
+          minLength: 1
+        binding_unit_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: The completed work unit's binding; present only on a completed fact.
+        recorded_at:
+          type: string
+          format: date-time
 
     TaskPosition:
       type: object
