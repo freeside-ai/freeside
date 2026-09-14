@@ -29,6 +29,7 @@ var (
 	ErrInvalidCredentialKind            = errors.New("invalid device credential kind")
 	ErrInvalidInterruptionClass         = errors.New("invalid interruption class")
 	ErrInvalidAction                    = errors.New("invalid action")
+	ErrInvalidCommandKind               = errors.New("invalid command kind")
 	ErrInvalidPriority                  = errors.New("invalid priority")
 	ErrInvalidItemStatus                = errors.New("invalid item status")
 	ErrInvalidSensitivityClass          = errors.New("invalid sensitivity class")
