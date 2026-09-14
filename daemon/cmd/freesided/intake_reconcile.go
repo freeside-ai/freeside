@@ -450,20 +450,28 @@ func (r *intakeReconciler) autoStart(
 	case stale:
 		return r.refuse(ctx, occurrence, domain.IntakeRefusalSubjectInputStale)
 	}
-	// The WIP count and its consequence run under one write so they cannot race
-	// another writer. The occurrence's own reserved run is always active here
-	// (just admitted), so the cap bounds the count of OTHER active project runs.
+	// The WIP count, the cap decision, and the start record run under one write
+	// so they cannot race another writer. WIP membership counts tasks that hold
+	// an admission slot (issue #1318 D2), not runs, so two runs of one task use
+	// one slot; the task being admitted is excluded and takes its slot only when
+	// the cap admits it, recorded as a start under this same write (D3).
 	start := false
 	if err := r.store.Write(ctx, func(tx *store.WriteTx) error {
-		active, err := countActiveProjectRuns(ctx, &tx.ReadTx, occurrence.Admission.Subject.ProjectID)
+		reserved, err := tx.GetRun(ctx, occurrence.Admission.Subject.SpecificationRunID)
 		if err != nil {
 			return err
 		}
-		others := max(active-1, 0)
+		others, err := countProjectWIPTasks(ctx, &tx.ReadTx, occurrence.Admission.Subject.ProjectID, reserved.TaskID)
+		if err != nil {
+			return err
+		}
 		if policy.WIPCapExhausted(others) {
 			_, err := tx.RecordIntakeRefusal(ctx,
 				occurrence.RepositoryID, occurrence.IssueNumber, occurrence.Label, occurrence.Ordinal,
 				domain.IntakeRefusalWIPCapExhausted, r.now())
+			return err
+		}
+		if err := tx.RecordTaskStart(ctx, reserved.ID, r.now()); err != nil {
 			return err
 		}
 		start = true
@@ -484,37 +492,58 @@ func (r *intakeReconciler) autoStart(
 		return fmt.Errorf("record auto_start decision: %w", err)
 	}
 	if !started {
+		// The cap write above already recorded this task's start, holding its WIP
+		// slot, but this call recorded no start: the proposal was decided between
+		// the cap gate and here. If it was decided start, the reconciler's
+		// already-decided path relaunches it and the slot is legitimately held. If
+		// it was declined, snoozed, or superseded, no run will ever launch, so the
+		// recorded start would strand the slot until a manual abandon; release it
+		// now (AbandonTask is idempotent, keyed on the recorded start's episode).
+		decidedStart, err := r.proposalDecidedStart(ctx,
+			occurrence.Admission.ProposalInstanceID, occurrence.Admission.ProposalDigest)
+		if err != nil {
+			return err
+		}
+		if decidedStart {
+			return nil
+		}
+		if err := r.store.Write(ctx, func(tx *store.WriteTx) error {
+			reserved, err := tx.GetRun(ctx, occurrence.Admission.Subject.SpecificationRunID)
+			if err != nil {
+				return err
+			}
+			_, err = tx.AbandonTask(ctx, reserved.TaskID, r.now())
+			return err
+		}); err != nil {
+			return fmt.Errorf("release WIP slot after non-start: %w", err)
+		}
 		return nil
 	}
 	return r.launch(ctx, init, occurrence)
 }
 
-func countActiveProjectRuns(
-	ctx context.Context, tx *store.ReadTx, projectID domain.ProjectID,
+// countProjectWIPTasks counts the project's tasks that hold a WIP admission
+// slot, derived from their recorded lifecycle facts (issue #1318 D2), never
+// from run finality. The task being admitted is excluded so re-admitting a
+// task that already holds its slot does not count against itself.
+func countProjectWIPTasks(
+	ctx context.Context, tx *store.ReadTx, projectID domain.ProjectID, exclude domain.TaskID,
 ) (int, error) {
-	runs, err := tx.ListRuns(ctx)
+	tasks, err := tx.ListTasks(ctx)
 	if err != nil {
 		return 0, err
 	}
-	active := 0
-	for _, snapshot := range runs {
-		run := snapshot.Value
-		if run.ProjectID != projectID {
+	count := 0
+	for _, snapshot := range tasks {
+		task := snapshot.Value
+		if task.ProjectID != projectID || task.ID == exclude {
 			continue
 		}
-		observation, err := tx.ObserveRun(ctx, run.ID)
-		if err != nil {
-			return 0, err
-		}
-		conclusion, err := engine.AuthenticatedProductionRunConclusion(ctx, tx, run, observation)
-		if err != nil {
-			return 0, err
-		}
-		if !conclusion.Final {
-			active++
+		if domain.TaskWIP(task) {
+			count++
 		}
 	}
-	return active, nil
+	return count, nil
 }
 
 func (r *intakeReconciler) launch(ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence) error {

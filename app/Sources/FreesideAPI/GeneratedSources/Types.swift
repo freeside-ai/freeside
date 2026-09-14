@@ -1292,7 +1292,7 @@ public enum Components {
                 ])
             }
         }
-        /// Stored work identity and name across specification revisions, campaigns, and retries. Lifecycle summarizes the newest run for display and never determines WIP membership. Source is null only for legacy or demo work without a recoverable intake reference.
+        /// Stored work identity and name across specification revisions, campaigns, and retries. Lifecycle summarizes the newest run for display and never determines WIP membership; wip is the authoritative slot state, derived from the recorded lifecycle facts. Source is null only for legacy or demo work without a recoverable intake reference.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/Task`.
@@ -1363,6 +1363,16 @@ public enum Components {
             public var campaign_ids: [Swift.String]
             /// - Remark: Generated from `#/components/schemas/Task/run_ids`.
             public var run_ids: [Swift.String]
+            /// Whether the task holds a work-in-progress admission slot, derived from its lifecycle facts (an admitted start with no later current-campaign completion and no later abandonment), never from the newest run.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/Task/wip`.
+            public var wip: Swift.Bool
+            /// The task's recorded lifecycle log in order: admitted starts, work-unit completions, and explicit abandonments. A display record; wip is the derived slot state clients should read.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/Task/lifecycle_facts`.
+            public var lifecycle_facts: [Components.Schemas.TaskLifecycleFact]
             /// Creates a new `Task`.
             ///
             /// - Parameters:
@@ -1376,6 +1386,8 @@ public enum Components {
             ///   - current_position:
             ///   - campaign_ids:
             ///   - run_ids:
+            ///   - wip: Whether the task holds a work-in-progress admission slot, derived from its lifecycle facts (an admitted start with no later current-campaign completion and no later abandonment), never from the newest run.
+            ///   - lifecycle_facts: The task's recorded lifecycle log in order: admitted starts, work-unit completions, and explicit abandonments. A display record; wip is the derived slot state clients should read.
             public init(
                 id: Swift.String,
                 project_id: Swift.String,
@@ -1386,7 +1398,9 @@ public enum Components {
                 lifecycle: Components.Schemas.Task.lifecyclePayload? = nil,
                 current_position: Components.Schemas.Task.current_positionPayload? = nil,
                 campaign_ids: [Swift.String],
-                run_ids: [Swift.String]
+                run_ids: [Swift.String],
+                wip: Swift.Bool,
+                lifecycle_facts: [Components.Schemas.TaskLifecycleFact]
             ) {
                 self.id = id
                 self.project_id = project_id
@@ -1398,6 +1412,8 @@ public enum Components {
                 self.current_position = current_position
                 self.campaign_ids = campaign_ids
                 self.run_ids = run_ids
+                self.wip = wip
+                self.lifecycle_facts = lifecycle_facts
             }
             public enum CodingKeys: String, CodingKey {
                 case id
@@ -1410,6 +1426,8 @@ public enum Components {
                 case current_position
                 case campaign_ids
                 case run_ids
+                case wip
+                case lifecycle_facts
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -1453,6 +1471,14 @@ public enum Components {
                     [Swift.String].self,
                     forKey: .run_ids
                 )
+                self.wip = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .wip
+                )
+                self.lifecycle_facts = try container.decode(
+                    [Components.Schemas.TaskLifecycleFact].self,
+                    forKey: .lifecycle_facts
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "id",
                     "project_id",
@@ -1463,7 +1489,79 @@ public enum Components {
                     "lifecycle",
                     "current_position",
                     "campaign_ids",
-                    "run_ids"
+                    "run_ids",
+                    "wip",
+                    "lifecycle_facts"
+                ])
+            }
+        }
+        /// One recorded task lifecycle event.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskLifecycleFact`.
+        public struct TaskLifecycleFact: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskLifecycleFact/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case started = "started"
+                case completed = "completed"
+                case abandoned = "abandoned"
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskLifecycleFact/kind`.
+            public var kind: Components.Schemas.TaskLifecycleFact.kindPayload
+            /// - Remark: Generated from `#/components/schemas/TaskLifecycleFact/run_id`.
+            public var run_id: Swift.String
+            /// The completed work unit's binding; present only on a completed fact.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskLifecycleFact/binding_unit_id`.
+            public var binding_unit_id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskLifecycleFact/recorded_at`.
+            public var recorded_at: Foundation.Date
+            /// Creates a new `TaskLifecycleFact`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - run_id:
+            ///   - binding_unit_id: The completed work unit's binding; present only on a completed fact.
+            ///   - recorded_at:
+            public init(
+                kind: Components.Schemas.TaskLifecycleFact.kindPayload,
+                run_id: Swift.String,
+                binding_unit_id: Swift.String? = nil,
+                recorded_at: Foundation.Date
+            ) {
+                self.kind = kind
+                self.run_id = run_id
+                self.binding_unit_id = binding_unit_id
+                self.recorded_at = recorded_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case run_id
+                case binding_unit_id
+                case recorded_at
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.TaskLifecycleFact.kindPayload.self,
+                    forKey: .kind
+                )
+                self.run_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .run_id
+                )
+                self.binding_unit_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .binding_unit_id
+                )
+                self.recorded_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .recorded_at
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "run_id",
+                    "binding_unit_id",
+                    "recorded_at"
                 ])
             }
         }

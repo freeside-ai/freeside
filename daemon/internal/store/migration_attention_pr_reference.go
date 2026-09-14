@@ -36,6 +36,8 @@ func applyDataMigration(
 		return backfillAttentionDecisionSurfaceBodies(ctx, tx)
 	case version == 70 && name == "0070_tasks.sql":
 		return backfillTasks(ctx, tx)
+	case version == 72 && name == "0072_task_lifecycle_facts.sql":
+		return backfillTaskLifecycleFacts(ctx, tx)
 	case version == 62 && name == readyReturnActionMigration:
 		return addReturnActionToProductionReadyItems(ctx, tx)
 	default:

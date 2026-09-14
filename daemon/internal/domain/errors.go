@@ -186,6 +186,7 @@ var (
 	ErrReadinessInvalidationNotDivergent  = errors.New("readiness invalidation bound and observed coordinates do not diverge")
 	ErrWorkUnitInconsistent               = errors.New("work-unit declaration fields do not match the criterion's contract")
 	ErrCompletionInconsistent             = errors.New("work-unit completion fields do not match the criterion's contract")
+	ErrInvalidTaskLifecycleFact           = errors.New("task lifecycle fact kind or binding is invalid")
 	ErrMergeFactInconsistent              = errors.New("pull merge fact fields are internally inconsistent")
 	ErrIssueFactInconsistent              = errors.New("issue state fact fields are internally inconsistent")
 	ErrNativeReviewInconsistent           = errors.New("native review observation fields are internally inconsistent")

@@ -798,6 +798,11 @@ func submitSpecificationRunTx(
 	}); err != nil {
 		return domain.Run{}, err
 	}
+	// An admitted spec-run submission is a task start unless the task already
+	// holds its WIP slot (issue #1318 D3).
+	if err := tx.RecordTaskStart(ctx, spec.SpecificationRunID, time.Now().UTC()); err != nil {
+		return domain.Run{}, err
+	}
 	return want, nil
 }
 
@@ -974,10 +979,14 @@ func submitIssueSubjectSpecificationRun(
 			return err
 		}
 		observedInvocation := invocationID
-		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+		if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
 			RunID: spec.SpecificationRunID, Kind: domain.MilestoneRunSubmitted,
 			InvocationID: &observedInvocation, RecordedAt: time.Now().UTC(),
-		})
+		}); err != nil {
+			return err
+		}
+		// An admitted spec-run submission is a task start (issue #1318 D3).
+		return tx.RecordTaskStart(ctx, spec.SpecificationRunID, time.Now().UTC())
 	})
 	if err != nil {
 		return SpecificationRun{}, err

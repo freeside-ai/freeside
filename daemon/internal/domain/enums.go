@@ -2032,3 +2032,31 @@ func (t DispatchThreshold) rank() int {
 	}
 	return 0
 }
+
+// TaskLifecycleFactKind is the kind of a recorded task lifecycle fact
+// (issue #1318). WIP admission counting rests on these recorded facts, never
+// on the newest run: started marks an admitted workflow start, completed a
+// work-unit completion bound to a campaign, and abandoned an explicit
+// task abandonment. The zero value is invalid.
+type TaskLifecycleFactKind string
+
+const (
+	TaskLifecycleStarted   TaskLifecycleFactKind = "started"
+	TaskLifecycleCompleted TaskLifecycleFactKind = "completed"
+	TaskLifecycleAbandoned TaskLifecycleFactKind = "abandoned"
+)
+
+// AllTaskLifecycleFactKinds lists every valid kind; it is the single
+// registration point and drives table-driven tests.
+var AllTaskLifecycleFactKinds = []TaskLifecycleFactKind{
+	TaskLifecycleStarted, TaskLifecycleCompleted, TaskLifecycleAbandoned,
+}
+
+func (k TaskLifecycleFactKind) valid() bool {
+	switch k {
+	case TaskLifecycleStarted, TaskLifecycleCompleted, TaskLifecycleAbandoned:
+		return true
+	default:
+		return false
+	}
+}

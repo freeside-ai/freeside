@@ -111,6 +111,23 @@ public enum TaskFixtures {
                             issue_subject: .init(
                                 repo: "freeside-ai/freeside", repository_id: 1, issue_number: number))))
             }
+            // A started fact opens the task's log; a finished task adds a
+            // completion bound to the newest run, so wip reads false. Active
+            // tasks hold their slot (#1318).
+            var lifecycleFacts: [Components.Schemas.TaskLifecycleFact] = [
+                .init(kind: .started, run_id: runs.first?.id ?? newest.id, recorded_at: created)
+            ]
+            let wip: Bool
+            switch newest.lifecycle {
+            case .finished:
+                lifecycleFacts.append(
+                    .init(
+                        kind: .completed, run_id: newest.id,
+                        binding_unit_id: "workunit-\(newest.id)", recorded_at: lastActivity))
+                wip = false
+            case .active:
+                wip = true
+            }
             return .init(
                 as_of_revision: snapshots.map(\.as_of_revision).max() ?? 1,
                 entity_version: snapshots.map(\.entity_version).max() ?? 1,
@@ -122,7 +139,8 @@ public enum TaskFixtures {
                         value1: .init(
                             run_id: newest.id, stage: newest.stages.last?.name,
                             hold_reason: newest.hold_reason.map { .init(value1: $0.value1) })),
-                    campaign_ids: campaigns, run_ids: runs.map(\.id)))
+                    campaign_ids: campaigns, run_ids: runs.map(\.id),
+                    wip: wip, lifecycle_facts: lifecycleFacts))
         }
     }
 }

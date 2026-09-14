@@ -595,10 +595,15 @@ func submitProductionRun(
 			return nil
 		}
 		observedInvocation := invocationID
-		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+		if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
 			RunID: spec.RunID, Kind: domain.MilestoneRunSubmitted,
 			InvocationID: &observedInvocation, RecordedAt: time.Now().UTC(),
-		})
+		}); err != nil {
+			return err
+		}
+		// An admitted implementation-run submission is a task start unless the
+		// task already holds its slot from its specification run (issue #1318 D3).
+		return tx.RecordTaskStart(ctx, spec.RunID, time.Now().UTC())
 	})
 	if err != nil {
 		return ProductionRun{}, fmt.Errorf("submit production run %q: %w", spec.RunID, err)

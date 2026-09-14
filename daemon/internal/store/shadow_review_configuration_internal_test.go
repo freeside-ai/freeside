@@ -23,8 +23,8 @@ func TestShadowReviewConfigurationApprovalMigrationAppliesFromPriorHead(t *testi
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 71 {
-		t.Fatalf("schema version = %d, want 71", got)
+	if got := rawVersion(t, db); got != 72 {
+		t.Fatalf("schema version = %d, want 72", got)
 	}
 	for _, table := range []string{
 		"shadow_review_configuration_approvals",

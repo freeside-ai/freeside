@@ -169,6 +169,21 @@
         "campaign_ids": [],
         "run_ids": [
           "run-569"
+        ],
+        "wip": false,
+        "lifecycle_facts": [
+          {
+            "kind": "started",
+            "run_id": "run-569",
+            "binding_unit_id": null,
+            "recorded_at": "2026-08-10T12:34:56Z"
+          },
+          {
+            "kind": "completed",
+            "run_id": "run-569",
+            "binding_unit_id": "workunit-run-569",
+            "recorded_at": "2026-08-10T15:34:56Z"
+          }
         ]
       }
     }
