@@ -154,6 +154,13 @@ type SpecificationRunSpec struct {
 	AttemptNumber       int
 	// SourceBytes is the submitted document, used only for its operator heading.
 	SourceBytes []byte
+	// OperatorName is an optional operator-chosen task name, set only by the
+	// client task-submission path (plan §5.11). When non-empty it names the
+	// task with source operator on the create path, taking precedence over the
+	// document-heading fallback; the CLI submit leaves it empty, so its naming
+	// is unchanged. It never enters the request payload or any run identity, so
+	// it does not affect convergence.
+	OperatorName string
 	// Source optionally names what this run specifies from as a typed union
 	// (plan §5.12, #720). SubmitSpecificationRun executes only the spec_artifact
 	// arm and requires it to agree with SourceArtifactID; the issue_subject arm
@@ -795,10 +802,16 @@ func submitSpecificationRunTx(
 		return domain.Run{}, err
 	}
 	// A revision campaign adopts the blocked run's existing task, which already
-	// carries its name; only the ordinary first submission names the task from
-	// the submitted document's heading.
+	// carries its name; only the ordinary first submission names the task. An
+	// operator-supplied name (the client submission path, plan §5.11) takes
+	// precedence over the document-heading fallback; both are operator-sourced,
+	// so a later fetch of the same task keeps whichever the first submission won.
 	if seed == nil {
-		if title, failure := taskHeadingName(spec.SourceBytes); failure == "" {
+		if spec.OperatorName != "" {
+			if err := tx.SetTaskName(ctx, want.TaskID, domain.DisplayName{Text: spec.OperatorName, Source: domain.DisplayNameSourceOperator}); err != nil {
+				return domain.Run{}, err
+			}
+		} else if title, failure := taskHeadingName(spec.SourceBytes); failure == "" {
 			if err := tx.SetTaskName(ctx, want.TaskID, domain.DisplayName{Text: title, Source: domain.DisplayNameSourceOperator}); err != nil {
 				return domain.Run{}, err
 			}

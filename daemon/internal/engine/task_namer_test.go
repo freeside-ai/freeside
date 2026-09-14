@@ -63,6 +63,63 @@ func taskNameForRun(t *testing.T, st *store.Store, id domain.RunID) domain.Displ
 	return task.Name
 }
 
+func TestSubmitSpecificationRunOperatorName(t *testing.T) {
+	setup := func(t *testing.T, body string) (specificationFixture, SpecificationRunSpec) {
+		t.Helper()
+		f := newSpecificationFixture(t, true, 3)
+		source := testSpecificationArtifact(t, "operator-name-source", domain.ArtifactKindSpecification,
+			domain.Digest(contentaddr.Sum([]byte(body))), domain.ProducerAgent, "submit")
+		if _, err := f.blobs.Put(source.Digest, strings.NewReader(body)); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+			return tx.PutArtifact(t.Context(), source)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		f.source = source
+		spec := f.specWithSource(domain.SpecificationSource{})
+		spec.SourceBytes = []byte(body)
+		return f, spec
+	}
+	t.Run("operator name wins over the heading fallback", func(t *testing.T) {
+		f, spec := setup(t, "# Heading name\n\nRequested work.")
+		spec.OperatorName = "Operator chose this"
+		if _, err := SubmitSpecificationRun(t.Context(), f.store, spec); err != nil {
+			t.Fatal(err)
+		}
+		if got := taskNameForRun(t, f.store, spec.SpecificationRunID); got !=
+			(domain.DisplayName{Text: "Operator chose this", Source: domain.DisplayNameSourceOperator}) {
+			t.Fatalf("name = %+v", got)
+		}
+	})
+	t.Run("empty operator name keeps the heading fallback", func(t *testing.T) {
+		f, spec := setup(t, "# Heading name\n\nRequested work.")
+		if _, err := SubmitSpecificationRun(t.Context(), f.store, spec); err != nil {
+			t.Fatal(err)
+		}
+		if got := taskNameForRun(t, f.store, spec.SpecificationRunID); got !=
+			(domain.DisplayName{Text: "Heading name", Source: domain.DisplayNameSourceOperator}) {
+			t.Fatalf("name = %+v", got)
+		}
+	})
+	t.Run("resubmission never replaces the first operator name", func(t *testing.T) {
+		f, spec := setup(t, "Body without a heading.")
+		spec.OperatorName = "First name"
+		if _, err := SubmitSpecificationRun(t.Context(), f.store, spec); err != nil {
+			t.Fatal(err)
+		}
+		spec.OperatorName = "Second name"
+		if _, err := SubmitSpecificationRun(t.Context(), f.store, spec); err != nil {
+			t.Fatal(err)
+		}
+		if got := taskNameForRun(t, f.store, spec.SpecificationRunID); got !=
+			(domain.DisplayName{Text: "First name", Source: domain.DisplayNameSourceOperator}) {
+			t.Fatalf("name = %+v", got)
+		}
+	})
+}
+
 func TestTaskNamingAfterSpecificationDispatch(t *testing.T) {
 	for _, tc := range []struct {
 		label, source, mode string
