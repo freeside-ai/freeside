@@ -1734,3 +1734,31 @@ Revision 57 ("API Contract Digest on /health"):
    detection; per-feature gating (#1266), version tolerance, and proactive
    skew polling are non-goals. (User assignment; implementation decision for
    #1265; devlog 2026-09-11-1012-contract-digest-skew.md.)
+
+Revision 58 ("Client Task Submission and the Sketch Round"):
+
+1. **A paired client may submit a task through the command surface.** The
+   clients become the ordinary way to start work: a `submit_task`
+   `ClientCommand` that reuses `freesided submit`'s intake path and key, so a
+   task typed on the phone has the same identity, idempotency, and
+   specification workflow as one submitted from the host. The command binds
+   to no entity and carries no version envelope; the intake key is its only
+   concurrency control. The daemon supplies the resolved policy and
+   publication metadata the CLI takes as files, recorded at creation, and a
+   `bound_pr_merged` work-unit declaration with declared paths from the
+   resolved policy; the client supplies none of them. The composer offers the
+   projects the client already knows; a project's first task stays on the host
+   CLI until #1332 lists configured projects in the bootstrap. Rejected: a new
+   endpoint outside `/commands`, and a conversation before a task exists.
+   (User decision; Section [5.11](../plan.md#511-github-integration-reconciliation-plus-intake),
+   Section [5.14](../plan.md#514-client-synchronization-and-conversations) test 17;
+   #1328, #1330; devlog 2026-09-12-1950-client-task-submission.md.)
+2. **A sketch gets a clarification round before a specification.** On a
+   submission that leaves outcome, scope, or non-goals unresolved, judged
+   from the source rather than its length or headings, the specifier's
+   first turn returns owner decisions on the `agent_question` card before
+   research or a specification, so a rough idea costs one short inference
+   to sanity-check and builds nothing. Prompt guidance under the existing
+   output contract; no flag, field, or attention type. (User decision;
+   Section [5.11](../plan.md#511-github-integration-reconciliation-plus-intake);
+   #1329; same devlog.)
