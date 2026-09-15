@@ -682,6 +682,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		signet.WithLogger(cfg.Logger),
 		signet.WithDoctorSchedule(doctorScheduleID, doctorAvailable.Load),
 		signet.WithBlobStore(blobs),
+		// Client task submission (plan §5.11) resolves each project's policy from
+		// its configured initiator. The list is empty on the host until the rein
+		// resolver populates it, so submission is refused there and works in
+		// test compositions that supply initiators directly.
+		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, manualInitiatorLookup(cfg.IntakeInitiators))),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: cfg.NtfyURL, TopicKey: topicKey,
 			ClickBaseURL: "http://" + listener.Addr().String(),
