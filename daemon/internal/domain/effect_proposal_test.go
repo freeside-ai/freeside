@@ -28,10 +28,10 @@ func proposalPolicy(t *testing.T) domain.ResolvedPolicy {
 
 func validEffectProposal(t *testing.T) domain.EffectProposal {
 	t.Helper()
-	p, err := domain.NewEffectProposal(domain.EffectRunProposal, domain.RunProposalParameters{
-		SubjectHandle: "subject-opaque-1", Intent: domain.RunProposalIntentImplement,
+	p, err := domain.NewEffectProposal(domain.EffectTaskProposal, domain.TaskProposalParameters{
+		SubjectHandle: "subject-opaque-1", Intent: domain.TaskProposalIntentImplement,
 		ExpectedCostUnits: 10,
-		Scope:             domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 4},
+		Scope:             domain.TaskProposalScope{ComponentCount: 1, DeclaredPathCount: 4},
 	}, proposalPolicy(t))
 	if err != nil {
 		t.Fatal(err)
@@ -55,17 +55,17 @@ func TestEffectProposalGoldenAndRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded.Digest != proposal.Digest || decoded.RunProposal.SubjectHandle != "subject-opaque-1" {
+	if decoded.Digest != proposal.Digest || decoded.TaskProposal.SubjectHandle != "subject-opaque-1" {
 		t.Fatalf("decoded = %#v", decoded)
 	}
 }
 
 func TestEffectProposalRegistryAndGateFailClosed(t *testing.T) {
 	policy := proposalPolicy(t)
-	if _, err := domain.NewEffectProposal("unknown", domain.RunProposalParameters{}, policy); !errors.Is(err, domain.ErrInvalidEffectKind) {
+	if _, err := domain.NewEffectProposal("unknown", domain.TaskProposalParameters{}, policy); !errors.Is(err, domain.ErrInvalidEffectKind) {
 		t.Fatalf("unknown kind error = %v", err)
 	}
-	if _, err := domain.NewEffectProposal(domain.EffectRunProposal, "wrong type", policy); !errors.Is(err, domain.ErrEffectProposalInconsistent) {
+	if _, err := domain.NewEffectProposal(domain.EffectTaskProposal, "wrong type", policy); !errors.Is(err, domain.ErrEffectProposalInconsistent) {
 		t.Fatalf("wrong type error = %v", err)
 	}
 	proposal := validEffectProposal(t)
@@ -106,10 +106,10 @@ func TestDecodeEffectProposalRejectsUntrustedShapes(t *testing.T) {
 }
 
 func TestProposalAdmissionKeyEnumeratesIdentitySpace(t *testing.T) {
-	if len(domain.AllEffectKinds) != 1 || domain.AllEffectKinds[0] != domain.EffectRunProposal {
+	if len(domain.AllEffectKinds) != 1 || domain.AllEffectKinds[0] != domain.EffectTaskProposal {
 		t.Fatalf("effect registry = %v", domain.AllEffectKinds)
 	}
-	if len(domain.AllProposalAdmissionSources) != 3 || len(domain.AllRunProposalIntents) != 1 {
+	if len(domain.AllProposalAdmissionSources) != 3 || len(domain.AllTaskProposalIntents) != 1 {
 		t.Fatalf("admission source registry = %v", domain.AllProposalAdmissionSources)
 	}
 	export := domain.Digest("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")

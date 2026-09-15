@@ -19,8 +19,8 @@ func TestEffectProposalMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 73 {
-		t.Fatalf("schema version = %d, want 73", got)
+	if got := rawVersion(t, db); got != 74 {
+		t.Fatalf("schema version = %d, want 74", got)
 	}
 	for _, table := range []string{
 		"effect_proposal_instances", "effect_proposal_items", "effect_proposal_revisions",
@@ -43,9 +43,9 @@ func TestProposalInstanceReconstructionRejectsTampering(t *testing.T) {
 		t.Fatal(err)
 	}
 	handles := []domain.OpaqueSubjectHandle{domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(policy.RunID))}
-	proposal, err := domain.NewEffectProposal(domain.EffectRunProposal, domain.RunProposalParameters{
-		SubjectHandle: handles[0], Intent: domain.RunProposalIntentImplement,
-		ExpectedCostUnits: 10, Scope: domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
+	proposal, err := domain.NewEffectProposal(domain.EffectTaskProposal, domain.TaskProposalParameters{
+		SubjectHandle: handles[0], Intent: domain.TaskProposalIntentImplement,
+		ExpectedCostUnits: 10, Scope: domain.TaskProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
 	}, policy)
 	if err != nil {
 		t.Fatal(err)
@@ -77,9 +77,9 @@ func TestProposalInstanceReconstructionRejectsTampering(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	mismatched, err := domain.NewEffectProposal(domain.EffectRunProposal, domain.RunProposalParameters{
-		SubjectHandle: handles[0], Intent: domain.RunProposalIntentImplement,
-		ExpectedCostUnits: 10, Scope: domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 2},
+	mismatched, err := domain.NewEffectProposal(domain.EffectTaskProposal, domain.TaskProposalParameters{
+		SubjectHandle: handles[0], Intent: domain.TaskProposalIntentImplement,
+		ExpectedCostUnits: 10, Scope: domain.TaskProposalScope{ComponentCount: 1, DeclaredPathCount: 2},
 	}, policy)
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +123,7 @@ func TestProposalInstanceReconstructionRejectsTampering(t *testing.T) {
 				created_at = ?, body = ? WHERE instance_id = ?`,
 				key, instance.ProposalBatchID, instance.Proposal.Kind, instance.Proposal.Digest,
 				instance.Proposal.ResolvedPolicyRunID, instance.Proposal.ResolvedPolicyDigest,
-				instance.Proposal.RunProposal.SubjectHandle, formatTime(instance.CreatedAt), string(body), instance.ID); restoreErr != nil {
+				instance.Proposal.TaskProposal.SubjectHandle, formatTime(instance.CreatedAt), string(body), instance.ID); restoreErr != nil {
 				t.Fatal(restoreErr)
 			}
 		})
@@ -182,7 +182,7 @@ func TestProposalInstanceReconstructionRejectsTampering(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	staleProposal, err := domain.NewEffectProposal(domain.EffectRunProposal, *instance.Proposal.RunProposal, historical)
+	staleProposal, err := domain.NewEffectProposal(domain.EffectTaskProposal, *instance.Proposal.TaskProposal, historical)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,16 +230,16 @@ func TestProposalLedgerRejectsMismatchedCommandAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	handles := []domain.OpaqueSubjectHandle{domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(policy.RunID))}
-	proposal, err := domain.NewEffectProposal(domain.EffectRunProposal, domain.RunProposalParameters{
-		SubjectHandle: handles[0], Intent: domain.RunProposalIntentImplement,
-		ExpectedCostUnits: 10, Scope: domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
+	proposal, err := domain.NewEffectProposal(domain.EffectTaskProposal, domain.TaskProposalParameters{
+		SubjectHandle: handles[0], Intent: domain.TaskProposalIntentImplement,
+		ExpectedCostUnits: 10, Scope: domain.TaskProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
 	}, policy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	revised, err := domain.NewEffectProposal(domain.EffectRunProposal, domain.RunProposalParameters{
-		SubjectHandle: handles[0], Intent: domain.RunProposalIntentImplement,
-		ExpectedCostUnits: 20, Scope: domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
+	revised, err := domain.NewEffectProposal(domain.EffectTaskProposal, domain.TaskProposalParameters{
+		SubjectHandle: handles[0], Intent: domain.TaskProposalIntentImplement,
+		ExpectedCostUnits: 20, Scope: domain.TaskProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
 	}, policy)
 	if err != nil {
 		t.Fatal(err)
@@ -299,7 +299,7 @@ func TestProposalLedgerRejectsMismatchedCommandAuthority(t *testing.T) {
 		item, err = domain.NewAttentionItem(domain.AttentionItemInput{
 			ID: domain.ItemID(instance.ID), ProjectID: "project-1",
 			Subject: domain.Subject{Type: domain.SubjectProposalBatch, ID: "batch-1"},
-			Type:    domain.AttentionRunProposal, Priority: domain.PriorityNormal,
+			Type:    domain.AttentionTaskProposal, Priority: domain.PriorityNormal,
 			Reason: "start the accepted work", RequestedDecision: []domain.Action{
 				domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze,
 			},
@@ -407,9 +407,9 @@ func TestProposalLedgerRejectsMismatchedCommandAuthority(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	substitutedPrior, err := domain.NewEffectProposal(domain.EffectRunProposal, domain.RunProposalParameters{
-		SubjectHandle: handles[0], Intent: domain.RunProposalIntentImplement,
-		ExpectedCostUnits: 15, Scope: domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
+	substitutedPrior, err := domain.NewEffectProposal(domain.EffectTaskProposal, domain.TaskProposalParameters{
+		SubjectHandle: handles[0], Intent: domain.TaskProposalIntentImplement,
+		ExpectedCostUnits: 15, Scope: domain.TaskProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
 	}, policy)
 	if err != nil {
 		t.Fatal(err)
@@ -444,7 +444,7 @@ func TestProposalLedgerRejectsMismatchedCommandAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	historicalRevision, err := domain.NewEffectProposal(
-		domain.EffectRunProposal, *revised.RunProposal, historical)
+		domain.EffectTaskProposal, *revised.TaskProposal, historical)
 	if err != nil {
 		t.Fatal(err)
 	}

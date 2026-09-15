@@ -216,14 +216,14 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
-  /attention/items/{item_id}/run-proposal:
+  /attention/items/{item_id}/task-proposal:
     get:
-      operationId: getRunProposalFacts
+      operationId: getTaskProposalFacts
       tags: [attention]
-      summary: Get authenticated run-proposal facts
+      summary: Get authenticated task-proposal facts
       description: >
-        Returns the exact digest-bound run-proposal facts rendered by a
-        run_proposal item. The daemon reconstructs the private proposal ledger,
+        Returns the exact digest-bound task-proposal facts rendered by a
+        task_proposal item. The daemon reconstructs the private proposal ledger,
         re-resolves the opaque work-unit handle through its durable declaration
         and current policy, and returns only bounded review facts. The version
         tuple lets the client prove the facts and card were read from the same
@@ -232,11 +232,11 @@ paths:
         - $ref: "#/components/parameters/ItemID"
       responses:
         "200":
-          description: Authenticated run-proposal facts.
+          description: Authenticated task-proposal facts.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RunProposalFactsSnapshot"
+                $ref: "#/components/schemas/TaskProposalFactsSnapshot"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -1013,7 +1013,7 @@ components:
         item:
           $ref: "#/components/schemas/AttentionItem"
 
-    RunProposalFactsSnapshot:
+    TaskProposalFactsSnapshot:
       type: object
       description: >
         Store-authenticated, digest-bound proposal facts matched to one exact
@@ -1041,20 +1041,20 @@ components:
         supersedes:
           nullable: true
           allOf:
-            - $ref: "#/components/schemas/RunProposalRevisionFacts"
+            - $ref: "#/components/schemas/TaskProposalRevisionFacts"
           description: >
             The exact authenticated prior facts for a revised card; null for
             the initially admitted proposal.
         intent:
-          $ref: "#/components/schemas/RunProposalIntent"
+          $ref: "#/components/schemas/TaskProposalIntent"
         expected_cost_units:
           type: integer
           minimum: 1
           maximum: 1000000
         scope:
-          $ref: "#/components/schemas/RunProposalScope"
+          $ref: "#/components/schemas/TaskProposalScope"
 
-    RunProposalRevisionFacts:
+    TaskProposalRevisionFacts:
       type: object
       description: One digest-bound, bounded side of a proposal revision comparison.
       additionalProperties: false
@@ -1063,15 +1063,15 @@ components:
         proposal_digest:
           $ref: "#/components/schemas/Digest"
         intent:
-          $ref: "#/components/schemas/RunProposalIntent"
+          $ref: "#/components/schemas/TaskProposalIntent"
         expected_cost_units:
           type: integer
           minimum: 1
           maximum: 1000000
         scope:
-          $ref: "#/components/schemas/RunProposalScope"
+          $ref: "#/components/schemas/TaskProposalScope"
 
-    RunProposalRevisionInput:
+    TaskProposalRevisionInput:
       type: object
       description: >
         Bounded public parameters an operator may revise; the opaque work-unit
@@ -1080,15 +1080,15 @@ components:
       required: [intent, expected_cost_units, scope]
       properties:
         intent:
-          $ref: "#/components/schemas/RunProposalIntent"
+          $ref: "#/components/schemas/TaskProposalIntent"
         expected_cost_units:
           type: integer
           minimum: 1
           maximum: 1000000
         scope:
-          $ref: "#/components/schemas/RunProposalScope"
+          $ref: "#/components/schemas/TaskProposalScope"
 
-    RunProposalScope:
+    TaskProposalScope:
       type: object
       description: Bounded aggregate scope facts with no paths or target identities.
       additionalProperties: false
@@ -1105,9 +1105,9 @@ components:
         touches_control_plane:
           type: boolean
 
-    RunProposalIntent:
+    TaskProposalIntent:
       type: string
-      description: Closed intent understood by the run-proposal registry.
+      description: Closed intent understood by the task-proposal registry.
       enum: [implement_subject]
 
     AttentionDeliverySnapshot:
@@ -2417,10 +2417,10 @@ components:
             /attachments/{digest}, referenced by the appended message. Unlike
             artifact_digests this is ordered message content, not a binding
             set: order is preserved, never canonicalized.
-        run_proposal_revision:
+        task_proposal_revision:
           nullable: true
           allOf:
-            - $ref: "#/components/schemas/RunProposalRevisionInput"
+            - $ref: "#/components/schemas/TaskProposalRevisionInput"
           description: >
             Typed replacement parameters, present only for
             start_with_changes. The daemon preserves the current opaque
@@ -5403,7 +5403,7 @@ components:
         - finding_adjudication
         - ready_for_final_review
         - publish_blocked
-        - run_proposal
+        - task_proposal
         - system_health
         - blocked
 

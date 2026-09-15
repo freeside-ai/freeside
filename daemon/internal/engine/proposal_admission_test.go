@@ -20,11 +20,11 @@ func proposalAdmissionFixture(t *testing.T, commandID string) ProposalAdmission 
 		AdmissionKey: domain.ProposalAdmissionKey{
 			Source: domain.ProposalSourceClientCommand, SubmissionCommandID: commandID,
 		},
-		Kind: domain.EffectRunProposal,
-		Parameters: domain.RunProposalParameters{
+		Kind: domain.EffectTaskProposal,
+		Parameters: domain.TaskProposalParameters{
 			SubjectHandle:     domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(policy.RunID)),
-			Intent:            domain.RunProposalIntentImplement,
-			ExpectedCostUnits: 10, Scope: domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
+			Intent:            domain.TaskProposalIntentImplement,
+			ExpectedCostUnits: 10, Scope: domain.TaskProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
 		},
 	}
 }
@@ -180,7 +180,7 @@ func TestProposalAdmissionRejectsScopeOutsideDurableDeclaration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parameters := request.Parameters.(domain.RunProposalParameters)
+	parameters := request.Parameters.(domain.TaskProposalParameters)
 	parameters.Scope.DeclaredPathCount++
 	request.Parameters = parameters
 	if _, err := (&Engine{store: st}).admitProposalAt(ctx, request, time.Now().UTC()); !errors.Is(err, domain.ErrEffectProposalInconsistent) {

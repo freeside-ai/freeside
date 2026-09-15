@@ -188,12 +188,12 @@ struct DecisionDetailView: View {
                 switch editor {
                 case .revision:
                     if let facts = model.proposalFacts {
-                        RunProposalRevisionSheet(facts: facts) { revision in
-                            Task { await model.submitRunProposalRevision(revision) }
+                        TaskProposalRevisionSheet(facts: facts) { revision in
+                            Task { await model.submitTaskProposalRevision(revision) }
                         }
                     }
                 case .snooze:
-                    RunProposalSnoozeSheet { until in
+                    TaskProposalSnoozeSheet { until in
                         Task { await model.snooze(until: until) }
                     }
                 }
@@ -442,7 +442,7 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func card(
         _ item: Components.Schemas.AttentionItem,
-        proposalFacts: Components.Schemas.RunProposalFactsSnapshot?,
+        proposalFacts: Components.Schemas.TaskProposalFactsSnapshot?,
         rendersInteractiveControls: Bool = true,
         accessibilityLayout: Bool,
         compactLayout: Bool,
@@ -652,7 +652,7 @@ struct DecisionDetailView: View {
         moduleIndex: Int,
         item: Components.Schemas.AttentionItem,
         composition: DecisionCardComposition,
-        proposalFacts: Components.Schemas.RunProposalFactsSnapshot?,
+        proposalFacts: Components.Schemas.TaskProposalFactsSnapshot?,
         rendersInteractiveControls: Bool,
         accessibilityLayout: Bool,
         inspectorPresented: Bool
@@ -1377,7 +1377,7 @@ struct DecisionDetailView: View {
     #endif
 
     @ViewBuilder
-    private func proposalRows(_ facts: Components.Schemas.RunProposalFactsSnapshot) -> some View {
+    private func proposalRows(_ facts: Components.Schemas.TaskProposalFactsSnapshot) -> some View {
         factRow("Intent", value: facts.intent.rawValue)
         factRow("Expected cost", value: "\(facts.expected_cost_units) units")
         factRow("Components", value: "\(facts.scope.component_count)")
@@ -1417,7 +1417,7 @@ struct DecisionDetailView: View {
     func screenshotCard(
         _ item: Components.Schemas.AttentionItem,
         at dynamicTypeSize: DynamicTypeSize,
-        proposalFacts: Components.Schemas.RunProposalFactsSnapshot? = nil,
+        proposalFacts: Components.Schemas.TaskProposalFactsSnapshot? = nil,
         compactLayout: Bool = false,
         detailWidth: CGFloat = 560,
         inspectorPresented: Bool = false,
@@ -1730,12 +1730,12 @@ struct DecisionDetailView: View {
         }
     }
 
-    static func runProposalRevision(
-        from facts: Components.Schemas.RunProposalFactsSnapshot,
+    static func taskProposalRevision(
+        from facts: Components.Schemas.TaskProposalFactsSnapshot,
         expectedCost: Int,
         componentCount: Int,
         touchesControlPlane: Bool
-    ) -> Components.Schemas.RunProposalRevisionInput? {
+    ) -> Components.Schemas.TaskProposalRevisionInput? {
         guard
             expectedCost != facts.expected_cost_units
                 || componentCount != facts.scope.component_count
@@ -1783,7 +1783,7 @@ struct DecisionDetailView: View {
 
     @ViewBuilder
     private func proposalRevisionRows(
-        _ prior: Components.Schemas.RunProposalRevisionFacts
+        _ prior: Components.Schemas.TaskProposalRevisionFacts
     ) -> some View {
         factRow("Prior intent", value: prior.intent.rawValue)
         factRow("Prior cost", value: "\(prior.expected_cost_units) units")
@@ -2934,17 +2934,17 @@ func screenshotMetricBase(
     #endif
 }
 
-struct RunProposalRevisionSheet: View {
+struct TaskProposalRevisionSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var expectedCostText: String
     @State private var componentCount: Int
     @State private var touchesControlPlane: Bool
-    private let originalFacts: Components.Schemas.RunProposalFactsSnapshot
-    let submit: (Components.Schemas.RunProposalRevisionInput) -> Void
+    private let originalFacts: Components.Schemas.TaskProposalFactsSnapshot
+    let submit: (Components.Schemas.TaskProposalRevisionInput) -> Void
 
     init(
-        facts: Components.Schemas.RunProposalFactsSnapshot,
-        submit: @escaping (Components.Schemas.RunProposalRevisionInput) -> Void
+        facts: Components.Schemas.TaskProposalFactsSnapshot,
+        submit: @escaping (Components.Schemas.TaskProposalRevisionInput) -> Void
     ) {
         _expectedCostText = State(initialValue: String(facts.expected_cost_units))
         _componentCount = State(initialValue: facts.scope.component_count)
@@ -2953,11 +2953,11 @@ struct RunProposalRevisionSheet: View {
         self.submit = submit
     }
 
-    private var revision: Components.Schemas.RunProposalRevisionInput? {
+    private var revision: Components.Schemas.TaskProposalRevisionInput? {
         guard let expectedCost = DecisionDetailView.parseExpectedCost(expectedCostText) else {
             return nil
         }
-        return DecisionDetailView.runProposalRevision(
+        return DecisionDetailView.taskProposalRevision(
             from: originalFacts,
             expectedCost: expectedCost,
             componentCount: componentCount,
@@ -3061,7 +3061,7 @@ struct RunProposalRevisionSheet: View {
     }
 }
 
-struct RunProposalSnoozeSheet: View {
+struct TaskProposalSnoozeSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var until: Date
     private let now: Date

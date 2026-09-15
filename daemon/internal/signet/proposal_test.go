@@ -41,9 +41,9 @@ func newProposalDecisionFixture(t *testing.T) proposalDecisionFixture {
 		t.Fatal(err)
 	}
 	handles := []domain.OpaqueSubjectHandle{domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(policy.RunID))}
-	proposal, err := domain.NewEffectProposal(domain.EffectRunProposal, domain.RunProposalParameters{
-		SubjectHandle: handles[0], Intent: domain.RunProposalIntentImplement, ExpectedCostUnits: 10,
-		Scope: domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
+	proposal, err := domain.NewEffectProposal(domain.EffectTaskProposal, domain.TaskProposalParameters{
+		SubjectHandle: handles[0], Intent: domain.TaskProposalIntentImplement, ExpectedCostUnits: 10,
+		Scope: domain.TaskProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
 	}, policy)
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +85,7 @@ func newProposalDecisionFixture(t *testing.T) proposalDecisionFixture {
 		item, err = domain.NewAttentionItem(domain.AttentionItemInput{
 			ID: domain.ItemID(instance.ID), ProjectID: "proj-1",
 			Subject: domain.Subject{Type: domain.SubjectProposalBatch, ID: "batch-1"},
-			Type:    domain.AttentionRunProposal, Priority: domain.PriorityNormal,
+			Type:    domain.AttentionTaskProposal, Priority: domain.PriorityNormal,
 			Reason:            "start this work",
 			RequestedDecision: []domain.Action{domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze},
 			EvidenceSnapshot:  []domain.Artifact{artifact}, ItemVersion: 1,
@@ -108,13 +108,13 @@ func newProposalDecisionFixture(t *testing.T) proposalDecisionFixture {
 	return proposalDecisionFixture{fixture: base, service: service, instance: instance, item: item, policy: policy, handles: handles}
 }
 
-func TestPutItemRejectsUnboundRunProposal(t *testing.T) {
+func TestPutItemRejectsUnboundTaskProposal(t *testing.T) {
 	ctx := context.Background()
 	f := newProposalDecisionFixture(t)
 	before := f.revision(t)
 
 	unbound := f.item
-	unbound.ID = "unbound-run-proposal"
+	unbound.ID = "unbound-task-proposal"
 	if err := f.service.PutItem(ctx, unbound); !errors.Is(err, signet.ErrProposalAdmissionRequired) {
 		t.Fatalf("PutItem error = %v, want ErrProposalAdmissionRequired", err)
 	}
@@ -139,7 +139,7 @@ func (f proposalDecisionFixture) proposalCommand(id string, action domain.Action
 	}
 }
 
-func TestRunProposalStartAndDeclineConcludePerInstance(t *testing.T) {
+func TestTaskProposalStartAndDeclineConcludePerInstance(t *testing.T) {
 	for _, action := range []domain.Action{domain.ActionStart, domain.ActionDecline} {
 		t.Run(string(action), func(t *testing.T) {
 			f := newProposalDecisionFixture(t)
@@ -166,14 +166,14 @@ func TestRunProposalStartAndDeclineConcludePerInstance(t *testing.T) {
 	}
 }
 
-// TestStartRunProposalUnattendedReportsStart proves the daemon-attributed start
+// TestStartTaskProposalUnattendedReportsStart proves the daemon-attributed start
 // records a decision and reports started only when the card is open, so the
 // label-intake caller launches only a start it actually made. A card an operator
 // declined between the caller's gate and this call reports started=false and
 // keeps its decline: an explicit non-start decision can never become a run. An
 // already-started card likewise reports no second start (convergence-launch is
 // the reconciler's already-decided path, not a second decision here).
-func TestStartRunProposalUnattendedReportsStart(t *testing.T) {
+func TestStartTaskProposalUnattendedReportsStart(t *testing.T) {
 	ctx := context.Background()
 	readStatus := func(t *testing.T, f proposalDecisionFixture) domain.ItemStatus {
 		t.Helper()
@@ -190,12 +190,12 @@ func TestStartRunProposalUnattendedReportsStart(t *testing.T) {
 
 	t.Run("open card starts", func(t *testing.T) {
 		f := newProposalDecisionFixture(t)
-		started, err := f.service.StartRunProposalUnattended(ctx, f.item.ID, "cmd-start-1")
+		started, err := f.service.StartTaskProposalUnattended(ctx, f.item.ID, "cmd-start-1")
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !started {
-			t.Fatal("an open run_proposal must report started")
+			t.Fatal("an open task_proposal must report started")
 		}
 		if status := readStatus(t, f); status != domain.StatusResolved {
 			t.Fatalf("item status = %q, want resolved", status)
@@ -207,12 +207,12 @@ func TestStartRunProposalUnattendedReportsStart(t *testing.T) {
 		if _, err := f.service.Submit(ctx, f.proposalCommand("decline-1", domain.ActionDecline)); err != nil {
 			t.Fatal(err)
 		}
-		started, err := f.service.StartRunProposalUnattended(ctx, f.item.ID, "cmd-start-2")
+		started, err := f.service.StartTaskProposalUnattended(ctx, f.item.ID, "cmd-start-2")
 		if err != nil {
 			t.Fatal(err)
 		}
 		if started {
-			t.Fatal("a declined run_proposal must not report started")
+			t.Fatal("a declined task_proposal must not report started")
 		}
 		if status := readStatus(t, f); status != domain.StatusDismissed {
 			t.Fatalf("item status = %q, want the decline preserved (dismissed)", status)
@@ -221,10 +221,10 @@ func TestStartRunProposalUnattendedReportsStart(t *testing.T) {
 
 	t.Run("already started card does not re-decide", func(t *testing.T) {
 		f := newProposalDecisionFixture(t)
-		if started, err := f.service.StartRunProposalUnattended(ctx, f.item.ID, "cmd-a"); err != nil || !started {
+		if started, err := f.service.StartTaskProposalUnattended(ctx, f.item.ID, "cmd-a"); err != nil || !started {
 			t.Fatalf("first start: started=%v err=%v", started, err)
 		}
-		started, err := f.service.StartRunProposalUnattended(ctx, f.item.ID, "cmd-b")
+		started, err := f.service.StartTaskProposalUnattended(ctx, f.item.ID, "cmd-b")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -234,7 +234,7 @@ func TestStartRunProposalUnattendedReportsStart(t *testing.T) {
 	})
 }
 
-func TestRunProposalSnoozeAdvancesVersionAndRetryConverges(t *testing.T) {
+func TestTaskProposalSnoozeAdvancesVersionAndRetryConverges(t *testing.T) {
 	f := newProposalDecisionFixture(t)
 	command := f.proposalCommand("command-snooze", domain.ActionSnooze)
 	until := (*f.now).Add(time.Hour)
@@ -339,22 +339,22 @@ func TestRunProposalSnoozeAdvancesVersionAndRetryConverges(t *testing.T) {
 	}
 }
 
-func TestRunProposalStartWithChangesBindsExactRevisedDigest(t *testing.T) {
+func TestTaskProposalStartWithChangesBindsExactRevisedDigest(t *testing.T) {
 	f := newProposalDecisionFixture(t)
-	revision := signet.RunProposalRevisionInput{
-		Intent:            domain.RunProposalIntentImplement,
-		ExpectedCostUnits: 5, Scope: domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
+	revision := signet.TaskProposalRevisionInput{
+		Intent:            domain.TaskProposalIntentImplement,
+		ExpectedCostUnits: 5, Scope: domain.TaskProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
 	}
 	command := f.proposalCommand("command-revise", domain.ActionStartWithChanges)
-	command.Payload.RunProposalRevision = &revision
+	command.Payload.TaskProposalRevision = &revision
 	if _, err := f.service.Submit(context.Background(), command); err != nil {
 		t.Fatal(err)
 	}
-	parameters := domain.RunProposalParameters{
+	parameters := domain.TaskProposalParameters{
 		SubjectHandle: f.handles[0], Intent: revision.Intent,
 		ExpectedCostUnits: revision.ExpectedCostUnits, Scope: revision.Scope,
 	}
-	revised, err := domain.NewEffectProposal(domain.EffectRunProposal, parameters, f.policy)
+	revised, err := domain.NewEffectProposal(domain.EffectTaskProposal, parameters, f.policy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +385,7 @@ func TestRunProposalStartWithChangesBindsExactRevisedDigest(t *testing.T) {
 	}
 }
 
-func TestRunProposalRevisionRemainsReadableAfterReleasedSnooze(t *testing.T) {
+func TestTaskProposalRevisionRemainsReadableAfterReleasedSnooze(t *testing.T) {
 	f := newProposalDecisionFixture(t)
 	until := (*f.now).Add(time.Hour)
 	snooze := f.proposalCommand("command-snooze-before-revision", domain.ActionSnooze)
@@ -398,14 +398,14 @@ func TestRunProposalRevisionRemainsReadableAfterReleasedSnooze(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	revision := signet.RunProposalRevisionInput{
-		Intent: domain.RunProposalIntentImplement, ExpectedCostUnits: 5,
-		Scope: domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
+	revision := signet.TaskProposalRevisionInput{
+		Intent: domain.TaskProposalIntentImplement, ExpectedCostUnits: 5,
+		Scope: domain.TaskProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
 	}
 	command := f.proposalCommand("command-revise-after-snooze", domain.ActionStartWithChanges)
 	command.ExpectedEntityVersion = 3
 	command.Payload.ItemVersion = 3
-	command.Payload.RunProposalRevision = &revision
+	command.Payload.TaskProposalRevision = &revision
 	if _, err := f.service.Submit(context.Background(), command); err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +413,7 @@ func TestRunProposalRevisionRemainsReadableAfterReleasedSnooze(t *testing.T) {
 	if _, err := f.service.GetAttentionItem(context.Background(), replacementID); err != nil {
 		t.Fatalf("get replacement after released snooze: %v", err)
 	}
-	if _, err := f.service.GetRunProposalFacts(context.Background(), replacementID); err != nil {
+	if _, err := f.service.GetTaskProposalFacts(context.Background(), replacementID); err != nil {
 		t.Fatalf("get replacement facts after released snooze: %v", err)
 	}
 	items, err := f.service.ListAttentionItems(context.Background())
@@ -428,17 +428,17 @@ func TestRunProposalRevisionRemainsReadableAfterReleasedSnooze(t *testing.T) {
 	t.Fatalf("replacement %q missing from list after released snooze", replacementID)
 }
 
-func TestRunProposalStartWithChangesRejectsNoOpAsRequestError(t *testing.T) {
+func TestTaskProposalStartWithChangesRejectsNoOpAsRequestError(t *testing.T) {
 	f := newProposalDecisionFixture(t)
 	before, err := f.store.ServerState(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	command := f.proposalCommand("command-no-op-revision", domain.ActionStartWithChanges)
-	command.Payload.RunProposalRevision = &signet.RunProposalRevisionInput{
-		Intent:            f.instance.Proposal.RunProposal.Intent,
-		ExpectedCostUnits: f.instance.Proposal.RunProposal.ExpectedCostUnits,
-		Scope:             f.instance.Proposal.RunProposal.Scope,
+	command.Payload.TaskProposalRevision = &signet.TaskProposalRevisionInput{
+		Intent:            f.instance.Proposal.TaskProposal.Intent,
+		ExpectedCostUnits: f.instance.Proposal.TaskProposal.ExpectedCostUnits,
+		Scope:             f.instance.Proposal.TaskProposal.Scope,
 	}
 	if _, err := f.service.Submit(context.Background(), command); !errors.Is(err, signet.ErrInvalidProposalDecisionPayload) {
 		t.Fatalf("no-op revision error = %v, want ErrInvalidProposalDecisionPayload", err)
@@ -466,16 +466,16 @@ func TestRunProposalStartWithChangesRejectsNoOpAsRequestError(t *testing.T) {
 	}
 }
 
-func TestRunProposalStartWithChangesRejectsDeclaredPathCountMismatch(t *testing.T) {
+func TestTaskProposalStartWithChangesRejectsDeclaredPathCountMismatch(t *testing.T) {
 	f := newProposalDecisionFixture(t)
 	before := f.revision(t)
-	revision := signet.RunProposalRevisionInput{
-		Intent: domain.RunProposalIntentImplement, ExpectedCostUnits: 20,
-		Scope: f.instance.Proposal.RunProposal.Scope,
+	revision := signet.TaskProposalRevisionInput{
+		Intent: domain.TaskProposalIntentImplement, ExpectedCostUnits: 20,
+		Scope: f.instance.Proposal.TaskProposal.Scope,
 	}
 	revision.Scope.DeclaredPathCount++
 	command := f.proposalCommand("command-scope-mismatch", domain.ActionStartWithChanges)
-	command.Payload.RunProposalRevision = &revision
+	command.Payload.TaskProposalRevision = &revision
 	if _, err := f.service.Submit(context.Background(), command); !errors.Is(err, signet.ErrInvalidProposalDecisionPayload) {
 		t.Fatalf("scope mismatch error = %v, want ErrInvalidProposalDecisionPayload", err)
 	}
@@ -491,33 +491,33 @@ func TestRunProposalStartWithChangesRejectsDeclaredPathCountMismatch(t *testing.
 	}
 }
 
-func TestRunProposalRevisionFactsExposeExactAuthenticatedDiff(t *testing.T) {
+func TestTaskProposalRevisionFactsExposeExactAuthenticatedDiff(t *testing.T) {
 	f := newProposalDecisionFixture(t)
-	revision := signet.RunProposalRevisionInput{
-		Intent: domain.RunProposalIntentImplement, ExpectedCostUnits: 25,
-		Scope: domain.RunProposalScope{
+	revision := signet.TaskProposalRevisionInput{
+		Intent: domain.TaskProposalIntentImplement, ExpectedCostUnits: 25,
+		Scope: domain.TaskProposalScope{
 			ComponentCount: 2, DeclaredPathCount: 1, TouchesControlPlane: true,
 		},
 	}
 	command := f.proposalCommand("command-revision-facts", domain.ActionStartWithChanges)
-	command.Payload.RunProposalRevision = &revision
+	command.Payload.TaskProposalRevision = &revision
 	if _, err := f.service.Submit(context.Background(), command); err != nil {
 		t.Fatal(err)
 	}
 	replacementID := domain.ItemID(string(f.instance.ID) + "/revision/" + command.CommandID)
-	facts, err := f.service.GetRunProposalFacts(context.Background(), replacementID)
+	facts, err := f.service.GetTaskProposalFacts(context.Background(), replacementID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if facts.Supersedes == nil || facts.Supersedes.ProposalDigest != f.instance.Proposal.Digest ||
-		facts.Supersedes.ExpectedCostUnits != 10 || facts.Supersedes.Scope != f.instance.Proposal.RunProposal.Scope ||
+		facts.Supersedes.ExpectedCostUnits != 10 || facts.Supersedes.Scope != f.instance.Proposal.TaskProposal.Scope ||
 		facts.ExpectedCostUnits != revision.ExpectedCostUnits || facts.Scope != revision.Scope ||
 		facts.ProposalDigest == facts.Supersedes.ProposalDigest {
 		t.Fatalf("revision facts = %#v, want exact prior/current diff", facts)
 	}
 }
 
-func TestRunProposalDecisionUsesStoreResolvedSubject(t *testing.T) {
+func TestTaskProposalDecisionUsesStoreResolvedSubject(t *testing.T) {
 	f := newProposalDecisionFixture(t)
 	service := signet.NewService(f.store, signet.WithClock(func() time.Time { return *f.now }))
 	_, err := service.Submit(context.Background(), f.proposalCommand("command-start", domain.ActionStart))
@@ -526,16 +526,16 @@ func TestRunProposalDecisionUsesStoreResolvedSubject(t *testing.T) {
 	}
 }
 
-func TestRunProposalFactsAreDigestAndVersionBoundWithoutAuthorityFields(t *testing.T) {
+func TestTaskProposalFactsAreDigestAndVersionBoundWithoutAuthorityFields(t *testing.T) {
 	f := newProposalDecisionFixture(t)
-	facts, err := f.service.GetRunProposalFacts(context.Background(), f.item.ID)
+	facts, err := f.service.GetTaskProposalFacts(context.Background(), f.item.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if facts.ItemVersion != f.item.ItemVersion || facts.ProposalDigest != f.instance.Proposal.Digest ||
-		facts.Intent != f.instance.Proposal.RunProposal.Intent ||
-		facts.ExpectedCostUnits != f.instance.Proposal.RunProposal.ExpectedCostUnits ||
-		facts.Scope != f.instance.Proposal.RunProposal.Scope || facts.Supersedes != nil {
+		facts.Intent != f.instance.Proposal.TaskProposal.Intent ||
+		facts.ExpectedCostUnits != f.instance.Proposal.TaskProposal.ExpectedCostUnits ||
+		facts.Scope != f.instance.Proposal.TaskProposal.Scope || facts.Supersedes != nil {
 		t.Fatalf("facts = %#v, want exact initial proposal projection", facts)
 	}
 	body, err := json.Marshal(facts)

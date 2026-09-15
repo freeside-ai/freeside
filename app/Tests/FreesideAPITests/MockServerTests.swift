@@ -110,11 +110,11 @@ import Testing
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
         let before = try await client.getAttentionItem(
-            path: .init(item_id: "item-run_proposal")
+            path: .init(item_id: "item-task_proposal")
         ).ok.body.json
         var command = Self.command(
             id: "cmd-revise-proposal", against: before, action: .start_with_changes)
-        command.payload.asDecision.run_proposal_revision = .init(
+        command.payload.asDecision.task_proposal_revision = .init(
             value1: .init(
                 intent: .implement_subject, expected_cost_units: 25,
                 scope: .init(
@@ -132,7 +132,7 @@ import Testing
         let replacement = try await client.getAttentionItem(
             path: .init(item_id: replacementID)
         ).ok.body.json
-        let facts = try await client.getRunProposalFacts(
+        let facts = try await client.getTaskProposalFacts(
             path: .init(item_id: replacementID)
         ).ok.body.json
         #expect(replacement.item.status == .resolved)
@@ -148,15 +148,15 @@ import Testing
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
         let before = try await client.getAttentionItem(
-            path: .init(item_id: "item-run_proposal")
+            path: .init(item_id: "item-task_proposal")
         ).ok.body.json
-        let facts = try await client.getRunProposalFacts(
+        let facts = try await client.getTaskProposalFacts(
             path: .init(item_id: before.item.id)
         ).ok.body.json
         let revisionBefore = try await client.getSyncRevision().ok.body.json.revision
         var command = Self.command(
             id: "cmd-no-op-proposal", against: before, action: .start_with_changes)
-        command.payload.asDecision.run_proposal_revision = .init(
+        command.payload.asDecision.task_proposal_revision = .init(
             value1: .init(
                 intent: facts.intent, expected_cost_units: facts.expected_cost_units,
                 scope: facts.scope))
@@ -178,7 +178,7 @@ import Testing
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
         let before = try await client.getAttentionItem(
-            path: .init(item_id: "item-run_proposal")
+            path: .init(item_id: "item-task_proposal")
         ).ok.body.json
         let until = Date(timeIntervalSince1970: 1_786_506_245)
         var command = Self.command(id: "cmd-snooze-proposal", against: before, action: .snooze)
@@ -447,12 +447,12 @@ import Testing
 
     @Test func parameterizedReplaysUseCanonicalDurableMessages() async throws {
         do {
-            let seed = AttentionFixtures.fixture(type: .run_proposal)
+            let seed = AttentionFixtures.fixture(type: .task_proposal)
             let server = MockServer(items: [seed])
             let client = APIClientFactory.mock(server: server)
             var command = Self.command(
                 id: "cmd-replay-revision", against: seed, action: .start_with_changes)
-            command.payload.asDecision.run_proposal_revision = .init(
+            command.payload.asDecision.task_proposal_revision = .init(
                 value1: .init(
                     intent: .implement_subject, expected_cost_units: 25,
                     scope: .init(
@@ -465,14 +465,14 @@ import Testing
             )
 
             var retry = command
-            retry.payload.asDecision.run_proposal_revision = nil
+            retry.payload.asDecision.task_proposal_revision = nil
             retry.payload.asDecision.message = first.record.asDecision.message
             let replay = try await client.submitCommand(body: .json(retry)).ok.body.json
             #expect(replay == first)
         }
 
         do {
-            let seed = AttentionFixtures.fixture(type: .run_proposal)
+            let seed = AttentionFixtures.fixture(type: .task_proposal)
             let server = MockServer(items: [seed])
             let client = APIClientFactory.mock(server: server)
             var command = Self.command(
@@ -703,7 +703,7 @@ import Testing
         claimReusesEvidenceID.item.agent_claims[0].artifact_id =
             claimReusesEvidenceID.item.evidence_snapshot[0].id
 
-        var negativeTiming = AttentionFixtures.fixture(type: .run_proposal)
+        var negativeTiming = AttentionFixtures.fixture(type: .task_proposal)
         negativeTiming.item.timing.delivery_count = -1
 
         // The scanner also rejects non-positive snapshot metadata.

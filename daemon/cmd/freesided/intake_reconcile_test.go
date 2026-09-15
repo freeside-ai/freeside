@@ -168,7 +168,7 @@ func (f intakeFixture) proposalItem(t *testing.T, o domain.IntakeOccurrence) dom
 }
 
 // TestIntakeProposeCreatesOneProposalPerOccurrence covers acceptance #1 and #2:
-// a labeled issue in propose mode yields exactly one open run_proposal, and
+// a labeled issue in propose mode yields exactly one open task_proposal, and
 // repeated passes and a restart converge on the same admission (no duplicate
 // proposal, no start).
 func TestIntakeProposeCreatesOneProposalPerOccurrence(t *testing.T) {
@@ -188,8 +188,8 @@ func TestIntakeProposeCreatesOneProposalPerOccurrence(t *testing.T) {
 		t.Fatal("occurrence was not admitted")
 	}
 	item := f.proposalItem(t, o)
-	if item.Type != domain.AttentionRunProposal || item.Status != domain.StatusOpen {
-		t.Fatalf("proposal item = type %q status %q, want open run_proposal", item.Type, item.Status)
+	if item.Type != domain.AttentionTaskProposal || item.Status != domain.StatusOpen {
+		t.Fatalf("proposal item = type %q status %q, want open task_proposal", item.Type, item.Status)
 	}
 	if f.started(t, o.Admission.Subject.SpecificationRunID) {
 		t.Fatal("propose mode must not start specification")
@@ -393,7 +393,7 @@ func TestIntakeAutoStartReleasesWIPWhenDecisionDoesNotTake(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Drive autoStart directly: its cap write records the start (claiming a slot),
-	// then StartRunProposalUnattended finds the card no longer open and records no
+	// then StartTaskProposalUnattended finds the card no longer open and records no
 	// start, so the compensating release must free the slot.
 	r := f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: "open"})
 	if err := r.autoStart(t.Context(), init, superseded, policy); err != nil {
@@ -608,7 +608,7 @@ func TestIntakeLaunchesDepartedDecidedStart(t *testing.T) {
 
 	// An operator decides start (records the decision, resolves the card); the
 	// loop has not launched it yet.
-	if _, err := f.attention.StartRunProposalUnattended(t.Context(),
+	if _, err := f.attention.StartTaskProposalUnattended(t.Context(),
 		domain.ItemID(o.Admission.ProposalInstanceID), "operator-start-7"); err != nil {
 		t.Fatal(err)
 	}
@@ -639,7 +639,7 @@ func TestIntakeDefersDepartureUntilDecidedStartLaunches(t *testing.T) {
 	o := f.latestOccurrence(t, 7)
 
 	// A start is decided (card resolved) but the run has not launched (no marker).
-	if _, err := f.attention.StartRunProposalUnattended(t.Context(),
+	if _, err := f.attention.StartTaskProposalUnattended(t.Context(),
 		domain.ItemID(o.Admission.ProposalInstanceID), "op-7"); err != nil {
 		t.Fatal(err)
 	}

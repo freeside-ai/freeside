@@ -45,7 +45,7 @@ func TestAllowedActionsByType(t *testing.T) {
 			domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionMarkSeen,
 			domain.ActionDismiss, domain.ActionStop,
 		},
-		domain.AttentionRunProposal: {
+		domain.AttentionTaskProposal: {
 			domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze,
 		},
 		domain.AttentionSystemHealth: {

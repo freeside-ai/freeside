@@ -72,7 +72,7 @@ func (s *Service) validateCommandContent(command domain.Command) error {
 		if command.Message == "" || len(command.Message) > domain.MaxEffectProposalBytes || len(command.Attachments) > 0 {
 			return fmt.Errorf("action %q: %w", command.Action, ErrInvalidProposalDecisionPayload)
 		}
-		var revision RunProposalRevisionInput
+		var revision TaskProposalRevisionInput
 		if err := strictjson.Decode([]byte(command.Message), &revision,
 			strictjson.RejectInvalidUTF8, domain.MaxEffectProposalBytes); err != nil {
 			return fmt.Errorf("action %q: %w: %w", command.Action, ErrInvalidProposalDecisionPayload, err)

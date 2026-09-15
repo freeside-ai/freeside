@@ -171,7 +171,7 @@ import Testing
             #expect(summaries.isEmpty)
         } else {
             #expect(composition.modules.contains(.summary))
-            if type == .run_proposal {
+            if type == .task_proposal {
                 #expect(summaries.isEmpty)
             } else {
                 #expect(summaries.count == 1)

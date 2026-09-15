@@ -588,7 +588,7 @@ import Testing
 
     @Test func visibilityRemovalRejectsStaleResponsesUntilANewerRelease() async throws {
         let store = await makeStore(server: MockServer())
-        let stale = try #require(store.snapshotsByID["item-run_proposal"])
+        let stale = try #require(store.snapshotsByID["item-task_proposal"])
 
         store.removeSnapshot(
             itemID: stale.item.id, atLeastEntityVersion: stale.entity_version)
@@ -607,7 +607,7 @@ import Testing
         async throws
     {
         let store = await makeStore(server: MockServer())
-        let stale = try #require(store.snapshotsByID["item-run_proposal"])
+        let stale = try #require(store.snapshotsByID["item-task_proposal"])
 
         store.replaceAll(with: [])
         store.removeSnapshot(

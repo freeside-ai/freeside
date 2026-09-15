@@ -111,7 +111,8 @@ func TestAdmittedAgentsMigrationNarrowsIdentities(t *testing.T) {
 			entry.Name() == "0069_successor_publication.sql" || entry.Name() == "0070_tasks.sql" ||
 			entry.Name() == "0071_production_attempt_revision_link.sql" ||
 			entry.Name() == "0072_task_lifecycle_facts.sql" ||
-			entry.Name() == "0073_task_submission_commands.sql" || entry.IsDir() {
+			entry.Name() == "0073_task_submission_commands.sql" ||
+			entry.Name() == "0074_task_proposal_vocabulary.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())

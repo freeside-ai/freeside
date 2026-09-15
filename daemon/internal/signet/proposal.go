@@ -21,7 +21,7 @@ func proposalSnoozed(
 	item domain.AttentionItem,
 	now time.Time,
 ) (bool, error) {
-	if item.Type != domain.AttentionRunProposal {
+	if item.Type != domain.AttentionTaskProposal {
 		return false, nil
 	}
 	return tx.ProposalSnoozed(ctx, item.ID, now)
@@ -43,8 +43,8 @@ func (s *Service) currentProposal(
 // device-gated operator Submit path, so no active device is implied.
 const UnattendedInitiatorDeviceID = domain.DeviceID("daemon-label-intake")
 
-// StartRunProposalUnattended records a daemon-attributed start decision on an
-// open run_proposal, through the same decision ledger an operator start uses
+// StartTaskProposalUnattended records a daemon-attributed start decision on an
+// open task_proposal, through the same decision ledger an operator start uses
 // (GQ2): it creates a reserved-device start command and applies it, resolving
 // the item and recording the effect_proposal_decisions row. It reports whether
 // it recorded the start: an item that is no longer open -- an operator declined
@@ -55,19 +55,19 @@ const UnattendedInitiatorDeviceID = domain.DeviceID("daemon-label-intake")
 // already-decided path, not here. It does not launch the run; the caller (the
 // label-intake loop) executes SubmitSpecificationRun after the decision is
 // durable, exactly as it does for an operator-decided start.
-func (s *Service) StartRunProposalUnattended(
+func (s *Service) StartTaskProposalUnattended(
 	ctx context.Context, itemID domain.ItemID, commandID string,
 ) (started bool, err error) {
 	if commandID == "" {
-		return false, fmt.Errorf("start run proposal unattended: %w", domain.ErrEmptyID)
+		return false, fmt.Errorf("start task proposal unattended: %w", domain.ErrEmptyID)
 	}
 	err = s.store.Write(ctx, func(tx *store.WriteTx) error {
 		item, err := tx.GetAttentionItem(ctx, itemID)
 		if err != nil {
-			return fmt.Errorf("start run proposal unattended: %w", err)
+			return fmt.Errorf("start task proposal unattended: %w", err)
 		}
-		if item.Type != domain.AttentionRunProposal {
-			return fmt.Errorf("start run proposal unattended: item %q is a %q, not a run proposal: %w",
+		if item.Type != domain.AttentionTaskProposal {
+			return fmt.Errorf("start task proposal unattended: item %q is a %q, not a task proposal: %w",
 				itemID, item.Type, domain.ErrParentKeyMismatch)
 		}
 		if item.Status != domain.StatusOpen {
@@ -84,10 +84,10 @@ func (s *Service) StartRunProposalUnattended(
 			ArtifactDigests: item.ArtifactDigests, Action: domain.ActionStart,
 		})
 		if err != nil {
-			return fmt.Errorf("start run proposal unattended: %w", err)
+			return fmt.Errorf("start task proposal unattended: %w", err)
 		}
 		if err := tx.PutCommand(ctx, command); err != nil {
-			return fmt.Errorf("start run proposal unattended: %w", err)
+			return fmt.Errorf("start task proposal unattended: %w", err)
 		}
 		if err := s.applyStartProposal(ctx, tx, command, item, s.now().UTC()); err != nil {
 			return err
@@ -167,7 +167,7 @@ func (s *Service) applyStartProposalWithChanges(
 	if err != nil {
 		return err
 	}
-	var revision RunProposalRevisionInput
+	var revision TaskProposalRevisionInput
 	if err := strictjson.Decode(
 		[]byte(command.Message), &revision, strictjson.RejectInvalidUTF8, domain.MaxEffectProposalBytes,
 	); err != nil {
@@ -176,8 +176,8 @@ func (s *Service) applyStartProposalWithChanges(
 	if err := revision.validate(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidProposalDecisionPayload, err)
 	}
-	parameters := domain.RunProposalParameters{
-		SubjectHandle: prior.RunProposal.SubjectHandle, Intent: revision.Intent,
+	parameters := domain.TaskProposalParameters{
+		SubjectHandle: prior.TaskProposal.SubjectHandle, Intent: revision.Intent,
 		ExpectedCostUnits: revision.ExpectedCostUnits, Scope: revision.Scope,
 	}
 	declaration, policy, err := tx.ResolveProposalSubject(ctx, parameters.SubjectHandle)
@@ -187,11 +187,11 @@ func (s *Service) applyStartProposalWithChanges(
 	if declaration.ProjectID != item.ProjectID {
 		return domain.ErrTransitionCommandMismatch
 	}
-	if err := domain.GateRunProposalScope(parameters.Scope, declaration); err != nil {
+	if err := domain.GateTaskProposalScope(parameters.Scope, declaration); err != nil {
 		return fmt.Errorf("%w: proposal scope differs from durable declaration: %w",
 			ErrInvalidProposalDecisionPayload, err)
 	}
-	revised, err := domain.NewEffectProposal(domain.EffectRunProposal, parameters, policy)
+	revised, err := domain.NewEffectProposal(domain.EffectTaskProposal, parameters, policy)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidProposalDecisionPayload, err)
 	}
@@ -239,13 +239,13 @@ func proposalReplacementItem(
 	commandID string,
 	now time.Time,
 ) (domain.AttentionItem, error) {
-	if revised.RunProposal == nil || commandID == "" {
-		return domain.AttentionItem{}, errors.New("revised run proposal is incomplete")
+	if revised.TaskProposal == nil || commandID == "" {
+		return domain.AttentionItem{}, errors.New("revised task proposal is incomplete")
 	}
 	replacement, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID:        domain.ItemID(string(instance.ID) + "/revision/" + commandID),
 		ProjectID: priorItem.ProjectID, Subject: priorItem.Subject,
-		Type: domain.AttentionRunProposal, Priority: priorItem.Priority,
+		Type: domain.AttentionTaskProposal, Priority: priorItem.Priority,
 		Reason: "Start the revised daemon-enumerated work subject",
 		RequestedDecision: []domain.Action{
 			domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze,

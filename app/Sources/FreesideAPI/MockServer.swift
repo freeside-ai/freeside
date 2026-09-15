@@ -102,7 +102,7 @@ public actor MockServer {
         [:]
     private var pendingSpecificationReplacements: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     private var pendingSpecificationComments: [String: String] = [:]
-    private var proposalFactsByItemID: [String: Components.Schemas.RunProposalFactsSnapshot] = [:]
+    private var proposalFactsByItemID: [String: Components.Schemas.TaskProposalFactsSnapshot] = [:]
     private var proposalSnoozesByItemID: [String: Date] = [:]
     private var currentTime = Date(timeIntervalSince1970: 1_786_502_645)
     private var revision: Int64 = 1
@@ -1209,10 +1209,10 @@ public actor MockServer {
         return projectingEvidenceAvailability(snapshot)
     }
 
-    func runProposalFacts(
+    func taskProposalFacts(
         itemID: String
-    ) throws -> Components.Schemas.RunProposalFactsSnapshot? {
-        guard let snapshot = try servedSnapshot(itemID: itemID), snapshot.item._type == .run_proposal,
+    ) throws -> Components.Schemas.TaskProposalFactsSnapshot? {
+        guard let snapshot = try servedSnapshot(itemID: itemID), snapshot.item._type == .task_proposal,
             let digest = snapshot.item.evidence_snapshot.first?.digest
         else { return nil }
         if let facts = proposalFactsByItemID[itemID] {
@@ -1422,14 +1422,14 @@ public actor MockServer {
                         replacement_item: projectingEvidenceAvailability(current)))
             }
         case .revisesProposal:
-            guard let revised = payload.run_proposal_revision?.value1 else {
+            guard let revised = payload.task_proposal_revision?.value1 else {
                 throw MalformedCommandError(
-                    commandID: command.command_id, reason: "missing run_proposal_revision")
+                    commandID: command.command_id, reason: "missing task_proposal_revision")
             }
-            guard let facts = try runProposalFacts(itemID: payload.item_id),
+            guard let facts = try taskProposalFacts(itemID: payload.item_id),
                 !Self.isSameProposal(revised, facts)
             else {
-                throw InvalidProposalDecisionError(reason: "run_proposal_revision is unchanged")
+                throw InvalidProposalDecisionError(reason: "task_proposal_revision is unchanged")
             }
         case .snoozesProposal:
             guard let until = payload.snooze_until, until > currentTime else {
@@ -1597,14 +1597,14 @@ public actor MockServer {
             // portion the mock can mirror.
             itemsByID[payload.item_id] = concluded(current, as: .resolved)
         case .revisesProposal:
-            guard let revised = payload.run_proposal_revision?.value1, payload.snooze_until == nil,
+            guard let revised = payload.task_proposal_revision?.value1, payload.snooze_until == nil,
                 (payload.message ?? "").isEmpty, (payload.attachments ?? []).isEmpty
             else {
                 throw MalformedCommandError(
                     commandID: command.command_id,
-                    reason: "start_with_changes requires only run_proposal_revision")
+                    reason: "start_with_changes requires only task_proposal_revision")
             }
-            guard let priorFacts = try runProposalFacts(itemID: payload.item_id),
+            guard let priorFacts = try taskProposalFacts(itemID: payload.item_id),
                 var artifact = current.item.evidence_snapshot.first
             else {
                 throw MalformedCommandError(
@@ -1653,7 +1653,7 @@ public actor MockServer {
                 scope: revised.scope)
         case .snoozesProposal:
             guard let until = payload.snooze_until,
-                payload.run_proposal_revision == nil, (payload.message ?? "").isEmpty,
+                payload.task_proposal_revision == nil, (payload.message ?? "").isEmpty,
                 (payload.attachments ?? []).isEmpty
             else {
                 throw MalformedCommandError(
@@ -2015,7 +2015,7 @@ public actor MockServer {
     }
 
     private static func proposalDigest(
-        _ revision: Components.Schemas.RunProposalRevisionInput
+        _ revision: Components.Schemas.TaskProposalRevisionInput
     ) -> String {
         MockContractValidation.sha256Digest(
             of: "\(revision.intent.rawValue)|\(revision.expected_cost_units)|"
@@ -2045,8 +2045,8 @@ public actor MockServer {
     }
 
     private static func isSameProposal(
-        _ revision: Components.Schemas.RunProposalRevisionInput,
-        _ facts: Components.Schemas.RunProposalFactsSnapshot
+        _ revision: Components.Schemas.TaskProposalRevisionInput,
+        _ facts: Components.Schemas.TaskProposalFactsSnapshot
     ) -> Bool {
         revision.intent == facts.intent
             && revision.expected_cost_units == facts.expected_cost_units

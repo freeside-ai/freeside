@@ -20,63 +20,63 @@ var EffectProposalRecipeDigest = Digest(contentaddr.Sum([]byte("freeside/effect-
 const (
 	EffectProposalEncodingVersion = 1
 	MaxEffectProposalBytes        = 128 << 10
-	MaxRunProposalCostUnits       = 1_000_000
-	MaxRunProposalComponentCount  = 32
-	MaxRunProposalPathCount       = 4096
+	MaxTaskProposalCostUnits      = 1_000_000
+	MaxTaskProposalComponentCount = 32
+	MaxTaskProposalPathCount      = 4096
 	MaxProposalOccurrenceIDBytes  = 512
 )
 
-// RunProposalParameters is the fixed parameter type for run_proposal. It
+// TaskProposalParameters is the fixed parameter type for task_proposal. It
 // contains bounded presentation facts and one opaque, daemon-enumerated
 // subject handle. Event bodies, target identities, and authority do not fit.
-type RunProposalParameters struct {
+type TaskProposalParameters struct {
 	SubjectHandle     OpaqueSubjectHandle `json:"subject_handle"`
-	Intent            RunProposalIntent   `json:"intent"`
+	Intent            TaskProposalIntent  `json:"intent"`
 	ExpectedCostUnits int                 `json:"expected_cost_units"`
-	Scope             RunProposalScope    `json:"scope"`
+	Scope             TaskProposalScope   `json:"scope"`
 }
 
-// RunProposalScope carries only bounded review facts. The declared-path count
+// TaskProposalScope carries only bounded review facts. The declared-path count
 // is re-bound to the durable work-unit declaration at every authority
 // boundary. Paths, target identities, event bodies, and authority have no
 // field.
-type RunProposalScope struct {
+type TaskProposalScope struct {
 	ComponentCount      int  `json:"component_count"`
 	DeclaredPathCount   int  `json:"declared_path_count"`
 	TouchesControlPlane bool `json:"touches_control_plane"`
 }
 
-func (s RunProposalScope) Validate() error {
-	if s.ComponentCount < 1 || s.ComponentCount > MaxRunProposalComponentCount ||
-		s.DeclaredPathCount < 1 || s.DeclaredPathCount > MaxRunProposalPathCount {
+func (s TaskProposalScope) Validate() error {
+	if s.ComponentCount < 1 || s.ComponentCount > MaxTaskProposalComponentCount ||
+		s.DeclaredPathCount < 1 || s.DeclaredPathCount > MaxTaskProposalPathCount {
 		return ErrProposalParameterTooLarge
 	}
 	return nil
 }
 
-// GateRunProposalScope binds the one scope fact represented exactly by the
+// GateTaskProposalScope binds the one scope fact represented exactly by the
 // durable declaration. Component grouping and control-plane classification
 // need repository policy that the declaration does not contain, so they stay
 // bounded review estimates rather than being guessed from path strings.
-func GateRunProposalScope(scope RunProposalScope, declaration WorkUnitDeclaration) error {
+func GateTaskProposalScope(scope TaskProposalScope, declaration WorkUnitDeclaration) error {
 	if scope.DeclaredPathCount != len(declaration.DeclaredPaths) {
 		return ErrEffectProposalInconsistent
 	}
 	return nil
 }
 
-func (p RunProposalParameters) Validate() error {
+func (p TaskProposalParameters) Validate() error {
 	if p.SubjectHandle == "" {
-		return fmt.Errorf("run proposal subject_handle: %w", ErrEmptyID)
+		return fmt.Errorf("task proposal subject_handle: %w", ErrEmptyID)
 	}
 	if !p.Intent.valid() {
-		return fmt.Errorf("run proposal intent %q: %w", p.Intent, ErrEffectProposalInconsistent)
+		return fmt.Errorf("task proposal intent %q: %w", p.Intent, ErrEffectProposalInconsistent)
 	}
-	if p.ExpectedCostUnits < 1 || p.ExpectedCostUnits > MaxRunProposalCostUnits {
-		return fmt.Errorf("run proposal expected_cost_units %d: %w", p.ExpectedCostUnits, ErrProposalParameterTooLarge)
+	if p.ExpectedCostUnits < 1 || p.ExpectedCostUnits > MaxTaskProposalCostUnits {
+		return fmt.Errorf("task proposal expected_cost_units %d: %w", p.ExpectedCostUnits, ErrProposalParameterTooLarge)
 	}
 	if err := p.Scope.Validate(); err != nil {
-		return fmt.Errorf("run proposal scope: %w", err)
+		return fmt.Errorf("task proposal scope: %w", err)
 	}
 	return nil
 }
@@ -85,12 +85,12 @@ func (p RunProposalParameters) Validate() error {
 // Exactly one registered parameter pointer is present. ResolvedPolicyDigest
 // is injected by the trusted constructor rather than accepted as a parameter.
 type EffectProposal struct {
-	EncodingVersion      int                    `json:"encoding_version"`
-	Kind                 EffectKind             `json:"kind"`
-	ResolvedPolicyRunID  RunID                  `json:"resolved_policy_run_id"`
-	ResolvedPolicyDigest Digest                 `json:"resolved_policy_digest"`
-	RunProposal          *RunProposalParameters `json:"run_proposal"`
-	Digest               Digest                 `json:"digest"`
+	EncodingVersion      int                     `json:"encoding_version"`
+	Kind                 EffectKind              `json:"kind"`
+	ResolvedPolicyRunID  RunID                   `json:"resolved_policy_run_id"`
+	ResolvedPolicyDigest Digest                  `json:"resolved_policy_digest"`
+	TaskProposal         *TaskProposalParameters `json:"run_proposal"`
+	Digest               Digest                  `json:"digest"`
 }
 
 // ProposalInstance is one admitted occurrence. Its admission key, not the
@@ -154,11 +154,11 @@ func (i ProposalInstance) EvidenceArtifact() (Artifact, error) {
 }
 
 type canonicalEffectProposal struct {
-	EncodingVersion      int                    `json:"encoding_version"`
-	Kind                 EffectKind             `json:"kind"`
-	ResolvedPolicyRunID  RunID                  `json:"resolved_policy_run_id"`
-	ResolvedPolicyDigest Digest                 `json:"resolved_policy_digest"`
-	RunProposal          *RunProposalParameters `json:"run_proposal"`
+	EncodingVersion      int                     `json:"encoding_version"`
+	Kind                 EffectKind              `json:"kind"`
+	ResolvedPolicyRunID  RunID                   `json:"resolved_policy_run_id"`
+	ResolvedPolicyDigest Digest                  `json:"resolved_policy_digest"`
+	TaskProposal         *TaskProposalParameters `json:"run_proposal"`
 }
 
 // NewEffectProposal dispatches construction through the kind's fixed Go type.
@@ -174,15 +174,15 @@ func NewEffectProposal(
 	}
 	var proposal EffectProposal
 	switch kind {
-	case EffectRunProposal:
-		params, ok := parameters.(RunProposalParameters)
+	case EffectTaskProposal:
+		params, ok := parameters.(TaskProposalParameters)
 		if !ok {
-			return EffectProposal{}, fmt.Errorf("effect kind %q requires RunProposalParameters: %w", kind, ErrEffectProposalInconsistent)
+			return EffectProposal{}, fmt.Errorf("effect kind %q requires TaskProposalParameters: %w", kind, ErrEffectProposalInconsistent)
 		}
 		proposal = EffectProposal{
 			EncodingVersion: EffectProposalEncodingVersion,
 			Kind:            kind, ResolvedPolicyRunID: policy.RunID,
-			ResolvedPolicyDigest: policy.Digest, RunProposal: &params,
+			ResolvedPolicyDigest: policy.Digest, TaskProposal: &params,
 		}
 	}
 	if proposal.Kind == "" {
@@ -216,11 +216,11 @@ func (p EffectProposal) Validate() error {
 		return fmt.Errorf("effect proposal resolved_policy_run_id: %w", ErrEmptyID)
 	}
 	switch p.Kind {
-	case EffectRunProposal:
-		if p.RunProposal == nil {
+	case EffectTaskProposal:
+		if p.TaskProposal == nil {
 			return fmt.Errorf("effect proposal kind %q has no parameters: %w", p.Kind, ErrEffectProposalInconsistent)
 		}
-		if err := p.RunProposal.Validate(); err != nil {
+		if err := p.TaskProposal.Validate(); err != nil {
 			return err
 		}
 	}
@@ -241,7 +241,7 @@ func (p EffectProposal) canonical() canonicalEffectProposal {
 	return canonicalEffectProposal{
 		EncodingVersion: p.EncodingVersion, Kind: p.Kind,
 		ResolvedPolicyRunID:  p.ResolvedPolicyRunID,
-		ResolvedPolicyDigest: p.ResolvedPolicyDigest, RunProposal: p.RunProposal,
+		ResolvedPolicyDigest: p.ResolvedPolicyDigest, TaskProposal: p.TaskProposal,
 	}
 }
 
@@ -307,11 +307,11 @@ func gateEffectProposal(
 		return fmt.Errorf("effect proposal policy %q, current %q: %w", proposal.ResolvedPolicyDigest, policy.Digest, ErrProposalPolicyMismatch)
 	}
 	switch proposal.Kind {
-	case EffectRunProposal:
-		if proposal.RunProposal == nil {
+	case EffectTaskProposal:
+		if proposal.TaskProposal == nil {
 			return ErrEffectProposalInconsistent
 		}
-		if err := proposal.RunProposal.Validate(); err != nil {
+		if err := proposal.TaskProposal.Validate(); err != nil {
 			return err
 		}
 		return nil

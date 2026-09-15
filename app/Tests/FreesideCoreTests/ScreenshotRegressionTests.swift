@@ -532,8 +532,8 @@
                     now: screenshotNow
                 )
                 let proposalFacts =
-                    snapshot.item._type == .run_proposal
-                    ? Components.Schemas.RunProposalFactsSnapshot(
+                    snapshot.item._type == .task_proposal
+                    ? Components.Schemas.TaskProposalFactsSnapshot(
                         as_of_revision: snapshot.as_of_revision,
                         entity_version: snapshot.entity_version,
                         item_version: snapshot.item.item_version,
@@ -1292,11 +1292,11 @@
                     view: AnyView(
                         PairingView(model: awaitingFacts) { _ in }.screenshotContent(now: screenshotNow))
                 ))
-            let runProposalFacts = Components.Schemas.RunProposalFactsSnapshot(
+            let taskProposalFacts = Components.Schemas.TaskProposalFactsSnapshot(
                 as_of_revision: 12,
                 entity_version: 12,
                 item_version: 3,
-                proposal_digest: "sha256:run-proposal-screenshot",
+                proposal_digest: "sha256:task-proposal-screenshot",
                 supersedes: nil,
                 intent: .implement_subject,
                 expected_cost_units: 12,
@@ -1306,72 +1306,72 @@
                     touches_control_plane: false))
             surfaces.append(
                 Surface(
-                    name: "run-proposal-revision-sheet",
+                    name: "task-proposal-revision-sheet",
                     width: 480,
                     view: AnyView(
-                        RunProposalRevisionSheet(facts: runProposalFacts) { _ in }
+                        TaskProposalRevisionSheet(facts: taskProposalFacts) { _ in }
                             .screenshotContent())))
             surfaces.append(
                 Surface(
-                    name: "run-proposal-revision-sheet-phone",
+                    name: "task-proposal-revision-sheet-phone",
                     width: 390,
                     view: AnyView(
-                        RunProposalRevisionSheet(facts: runProposalFacts) { _ in }
+                        TaskProposalRevisionSheet(facts: taskProposalFacts) { _ in }
                             .screenshotContent())))
             surfaces.append(
                 Surface(
-                    name: "run-proposal-revision-sheet-dark",
+                    name: "task-proposal-revision-sheet-dark",
                     width: 480,
                     colorScheme: .dark,
                     view: AnyView(
-                        RunProposalRevisionSheet(facts: runProposalFacts) { _ in }
+                        TaskProposalRevisionSheet(facts: taskProposalFacts) { _ in }
                             .screenshotContent())))
             surfaces.append(
                 Surface(
-                    name: "run-proposal-revision-sheet-phone-dark",
+                    name: "task-proposal-revision-sheet-phone-dark",
                     width: 390,
                     colorScheme: .dark,
                     view: AnyView(
-                        RunProposalRevisionSheet(facts: runProposalFacts) { _ in }
+                        TaskProposalRevisionSheet(facts: taskProposalFacts) { _ in }
                             .screenshotContent())))
             surfaces.append(
                 Surface(
-                    name: "run-proposal-snooze-sheet",
+                    name: "task-proposal-snooze-sheet",
                     width: 480,
                     view: AnyView(
-                        RunProposalSnoozeSheet(
+                        TaskProposalSnoozeSheet(
                             now: screenshotNow,
                             screenshotTimeZone: screenshotTimeZone
                         ) { _ in }
                         .screenshotContent())))
             surfaces.append(
                 Surface(
-                    name: "run-proposal-snooze-sheet-phone",
+                    name: "task-proposal-snooze-sheet-phone",
                     width: 390,
                     view: AnyView(
-                        RunProposalSnoozeSheet(
+                        TaskProposalSnoozeSheet(
                             now: screenshotNow,
                             screenshotTimeZone: screenshotTimeZone
                         ) { _ in }
                         .screenshotContent())))
             surfaces.append(
                 Surface(
-                    name: "run-proposal-snooze-sheet-dark",
+                    name: "task-proposal-snooze-sheet-dark",
                     width: 480,
                     colorScheme: .dark,
                     view: AnyView(
-                        RunProposalSnoozeSheet(
+                        TaskProposalSnoozeSheet(
                             now: screenshotNow,
                             screenshotTimeZone: screenshotTimeZone
                         ) { _ in }
                         .screenshotContent())))
             surfaces.append(
                 Surface(
-                    name: "run-proposal-snooze-sheet-phone-dark",
+                    name: "task-proposal-snooze-sheet-phone-dark",
                     width: 390,
                     colorScheme: .dark,
                     view: AnyView(
-                        RunProposalSnoozeSheet(
+                        TaskProposalSnoozeSheet(
                             now: screenshotNow,
                             screenshotTimeZone: screenshotTimeZone
                         ) { _ in }
@@ -1513,7 +1513,7 @@
             // bottom sheet by dusk. The binding line reads the fixture's
             // subject id and item version.
             let stopItem = AttentionFixtures.fixture(type: .execution_failure).item
-            let declineItem = AttentionFixtures.fixture(type: .run_proposal).item
+            let declineItem = AttentionFixtures.fixture(type: .task_proposal).item
             surfaces.append(
                 Surface(
                     name: "consequence-sheet-stop",
@@ -1787,7 +1787,7 @@
                         ]))
             case .spec_approval, .review_contradiction, .review_configuration,
                 .finding_adjudication, .agent_question, .publish_blocked,
-                .run_proposal, .system_health, .blocked:
+                .task_proposal, .system_health, .blocked:
                 return .init()
             }
         }

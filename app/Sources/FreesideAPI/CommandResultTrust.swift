@@ -49,7 +49,7 @@ public enum CommandResultTrust {
         case .retry_with_capabilities:
             return payload.capability_manifest_digest?.value1 ?? ""
         case .start_with_changes:
-            guard let revision = payload.run_proposal_revision?.value1 else {
+            guard let revision = payload.task_proposal_revision?.value1 else {
                 return payload.message ?? ""
             }
             let touchesControlPlane = revision.scope.touches_control_plane ? "true" : "false"

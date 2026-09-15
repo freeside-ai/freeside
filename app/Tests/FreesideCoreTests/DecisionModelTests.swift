@@ -301,7 +301,7 @@ import Testing
         var conclusions: [DecisionConclusion] = []
         let model = DecisionModel(
             store: store,
-            itemID: "item-run_proposal",
+            itemID: "item-task_proposal",
             onConclusion: { conclusions.append($0) })
         await model.validate()
         observedRevisions.removeAll()
@@ -314,7 +314,7 @@ import Testing
         #expect(model.canRetryLostResponse)
         #expect(observedRevisions.isEmpty)
         let snoozedRevision = try #require(
-            await server.snapshot(itemID: "item-run_proposal")?.as_of_revision)
+            await server.snapshot(itemID: "item-task_proposal")?.as_of_revision)
 
         await model.retryLostResponse()
 
@@ -329,7 +329,7 @@ import Testing
         var conclusions: [DecisionConclusion] = []
         let model = DecisionModel(
             store: store,
-            itemID: "item-run_proposal",
+            itemID: "item-task_proposal",
             onConclusion: { conclusions.append($0) })
         await model.validate()
 
@@ -971,10 +971,10 @@ import Testing
         #expect(model.snapshot?.item.status == .resolved)
     }
 
-    @Test func runProposalRendersAuthenticatedFactsAndSubmitsTypedRevision() async {
+    @Test func taskProposalRendersAuthenticatedFactsAndSubmitsTypedRevision() async {
         let server = MockServer()
         let store = await makeStore(server: server)
-        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        let model = DecisionModel(store: store, itemID: "item-task_proposal")
         await model.validate()
 
         #expect(model.proposalFacts?.intent == .implement_subject)
@@ -990,7 +990,7 @@ import Testing
         #expect(model.isSubmittable(.snooze))
 
         guard let facts = model.proposalFacts else { return }
-        await model.submitRunProposalRevision(
+        await model.submitTaskProposalRevision(
             .init(
                 intent: facts.intent,
                 expected_cost_units: 20,
@@ -1002,14 +1002,14 @@ import Testing
         #expect(model.snapshot?.item.status == .superseded)
     }
 
-    @Test func unchangedRunProposalFactsProduceNoRevision() async throws {
+    @Test func unchangedTaskProposalFactsProduceNoRevision() async throws {
         let store = await makeStore(server: MockServer())
-        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        let model = DecisionModel(store: store, itemID: "item-task_proposal")
         await model.validate()
         let facts = try #require(model.proposalFacts)
 
         #expect(
-            DecisionDetailView.runProposalRevision(
+            DecisionDetailView.taskProposalRevision(
                 from: facts,
                 expectedCost: facts.expected_cost_units,
                 componentCount: facts.scope.component_count,
@@ -1029,25 +1029,25 @@ import Testing
     @Test func snoozeRequiresAValueAfterTheCurrentTime() {
         let now = Date(timeIntervalSince1970: 1_786_506_245)
 
-        #expect(!RunProposalSnoozeSheet.isValidSnooze(until: now, now: now))
+        #expect(!TaskProposalSnoozeSheet.isValidSnooze(until: now, now: now))
         #expect(
-            !RunProposalSnoozeSheet.isValidSnooze(
+            !TaskProposalSnoozeSheet.isValidSnooze(
                 until: now.addingTimeInterval(-1), now: now))
         #expect(
-            RunProposalSnoozeSheet.isValidSnooze(
+            TaskProposalSnoozeSheet.isValidSnooze(
                 until: now.addingTimeInterval(1), now: now))
     }
 
     @Test func parsedOriginalExpectedCostProducesNoRevision() async throws {
         let store = await makeStore(server: MockServer())
-        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        let model = DecisionModel(store: store, itemID: "item-task_proposal")
         await model.validate()
         let facts = try #require(model.proposalFacts)
         let expectedCost = try #require(
             DecisionDetailView.parseExpectedCost(String(facts.expected_cost_units)))
 
         #expect(
-            DecisionDetailView.runProposalRevision(
+            DecisionDetailView.taskProposalRevision(
                 from: facts,
                 expectedCost: expectedCost,
                 componentCount: facts.scope.component_count,
@@ -1055,14 +1055,14 @@ import Testing
             ) == nil)
     }
 
-    @Test func runProposalRevisionPreservesAuthenticatedFactsOnMixedEdit() async throws {
+    @Test func taskProposalRevisionPreservesAuthenticatedFactsOnMixedEdit() async throws {
         let store = await makeStore(server: MockServer())
-        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        let model = DecisionModel(store: store, itemID: "item-task_proposal")
         await model.validate()
         let facts = try #require(model.proposalFacts)
 
         let revision = try #require(
-            DecisionDetailView.runProposalRevision(
+            DecisionDetailView.taskProposalRevision(
                 from: facts,
                 expectedCost: facts.expected_cost_units + 1,
                 componentCount: facts.scope.component_count + 1,
@@ -1075,14 +1075,14 @@ import Testing
         #expect(revision.scope.touches_control_plane == !facts.scope.touches_control_plane)
     }
 
-    @Test func runProposalRevisionPreservesDeclaredPathsOnPartialEdit() async throws {
+    @Test func taskProposalRevisionPreservesDeclaredPathsOnPartialEdit() async throws {
         let store = await makeStore(server: MockServer())
-        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        let model = DecisionModel(store: store, itemID: "item-task_proposal")
         await model.validate()
         let facts = try #require(model.proposalFacts)
 
         let revision = try #require(
-            DecisionDetailView.runProposalRevision(
+            DecisionDetailView.taskProposalRevision(
                 from: facts,
                 expectedCost: facts.expected_cost_units + 1,
                 componentCount: facts.scope.component_count,
@@ -1139,10 +1139,10 @@ import Testing
         #expect(model.snapshot?.item.status == .open)
     }
 
-    @Test func parameterizedRunProposalActionsCannotUseTheUntypedSubmitPath() async {
+    @Test func parameterizedTaskProposalActionsCannotUseTheUntypedSubmitPath() async {
         let server = MockServer()
         let store = await makeStore(server: server)
-        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        let model = DecisionModel(store: store, itemID: "item-task_proposal")
         await model.validate()
 
         await model.submit(.start_with_changes)
@@ -1153,14 +1153,14 @@ import Testing
         #expect(model.snapshot?.item.status == .open)
     }
 
-    @Test func unchangedRunProposalRevisionClearsTheDefinitivelyRejectedCommand() async {
+    @Test func unchangedTaskProposalRevisionClearsTheDefinitivelyRejectedCommand() async {
         let server = MockServer()
         let store = await makeStore(server: server)
-        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        let model = DecisionModel(store: store, itemID: "item-task_proposal")
         await model.validate()
         guard let facts = model.proposalFacts else { return }
 
-        await model.submitRunProposalRevision(
+        await model.submitTaskProposalRevision(
             .init(
                 intent: facts.intent, expected_cost_units: facts.expected_cost_units,
                 scope: facts.scope))
@@ -1172,10 +1172,10 @@ import Testing
     }
 
     @Test(arguments: [Components.Schemas.Action.start, .decline])
-    func runProposalTerminalControlsSubmit(action: Components.Schemas.Action) async {
+    func taskProposalTerminalControlsSubmit(action: Components.Schemas.Action) async {
         let server = MockServer()
         let store = await makeStore(server: server)
-        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        let model = DecisionModel(store: store, itemID: "item-task_proposal")
         await model.validate()
 
         await model.submit(action)
@@ -1184,13 +1184,13 @@ import Testing
         #expect(model.snapshot?.item.status == (action == .start ? .resolved : .dismissed))
     }
 
-    @Test func runProposalSnoozeControlSubmitsTypedInstant() async {
+    @Test func taskProposalSnoozeControlSubmitsTypedInstant() async {
         let server = MockServer()
         let store = await makeStore(server: server)
         var conclusions: [DecisionConclusion] = []
         let model = DecisionModel(
             store: store,
-            itemID: "item-run_proposal",
+            itemID: "item-task_proposal",
             onConclusion: { conclusions.append($0) })
         await model.validate()
 
@@ -1215,7 +1215,7 @@ import Testing
         var conclusions: [DecisionConclusion] = []
         let model = DecisionModel(
             store: store,
-            itemID: "item-run_proposal",
+            itemID: "item-task_proposal",
             onConclusion: { conclusions.append($0) })
         await model.validate()
 
@@ -1244,7 +1244,7 @@ import Testing
         var conclusions: [DecisionConclusion] = []
         let model = DecisionModel(
             store: store,
-            itemID: "item-run_proposal",
+            itemID: "item-task_proposal",
             onConclusion: { conclusions.append($0) })
         await model.validate()
 
@@ -1265,7 +1265,7 @@ import Testing
         #expect(conclusions.isEmpty)
 
         let otherStore = await makeStore(server: server)
-        let otherOperator = DecisionModel(store: otherStore, itemID: "item-run_proposal")
+        let otherOperator = DecisionModel(store: otherStore, itemID: "item-task_proposal")
         await otherOperator.validate()
         await otherOperator.submit(.start)
         await model.validate()
@@ -1280,7 +1280,7 @@ import Testing
         var conclusions: [DecisionConclusion] = []
         let model = DecisionModel(
             store: store,
-            itemID: "item-run_proposal",
+            itemID: "item-task_proposal",
             onConclusion: { conclusions.append($0) })
         await model.validate()
 
@@ -1296,7 +1296,7 @@ import Testing
 
         await server.advanceTime(to: snoozeUntil.addingTimeInterval(1))
         let otherStore = await makeStore(server: server)
-        let otherOperator = DecisionModel(store: otherStore, itemID: "item-run_proposal")
+        let otherOperator = DecisionModel(store: otherStore, itemID: "item-task_proposal")
         await otherOperator.validate()
         await otherOperator.submit(.start)
 
@@ -1315,7 +1315,7 @@ import Testing
         var conclusions: [DecisionConclusion] = []
         let model = DecisionModel(
             store: store,
-            itemID: "item-run_proposal",
+            itemID: "item-task_proposal",
             onConclusion: { conclusions.append($0) })
         await model.validate()
 
@@ -1339,7 +1339,7 @@ import Testing
     @Test func canceledSnoozeReconciliationReturnsTheCommandToRetry() async {
         let server = MockServer()
         let store = await makeStore(server: server)
-        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        let model = DecisionModel(store: store, itemID: "item-task_proposal")
         await model.validate()
 
         let failedRefetch = InjectedFailures(times: 1)
@@ -1354,7 +1354,7 @@ import Testing
         await model.retryLostResponse()
 
         #expect(model.appliedRecord == nil)
-        #expect(store.pendingCommandsByItemID["item-run_proposal"]?.state == .unresolved)
+        #expect(store.pendingCommandsByItemID["item-task_proposal"]?.state == .unresolved)
         #expect(model.canRetryLostResponse)
         #expect(model.phase == .idle)
     }
@@ -1362,7 +1362,7 @@ import Testing
     @Test func epochChurnDuringSnoozeReconciliationReturnsTheCommandToRetry() async {
         let server = MockServer()
         let store = await makeStore(server: server)
-        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        let model = DecisionModel(store: store, itemID: "item-task_proposal")
         await model.validate()
 
         let failedRefetch = InjectedFailures(times: 1)
@@ -1378,21 +1378,21 @@ import Testing
         await model.retryLostResponse()
 
         #expect(model.appliedRecord == nil)
-        #expect(store.pendingCommandsByItemID["item-run_proposal"]?.state == .unresolved)
+        #expect(store.pendingCommandsByItemID["item-task_proposal"]?.state == .unresolved)
         #expect(model.canRetryLostResponse)
         #expect(model.phase == .idle)
     }
 
-    @Test func selectedRunProposalRevalidatesWhenItsSnapshotTupleAdvances() async {
+    @Test func selectedTaskProposalRevalidatesWhenItsSnapshotTupleAdvances() async {
         let server = MockServer()
         let store = await makeStore(server: server)
-        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        let model = DecisionModel(store: store, itemID: "item-task_proposal")
         await model.validate()
         let beforeID = model.revalidationID
         #expect(model.actionsEnabled)
 
-        await server.advance(itemID: "item-run_proposal")
-        guard let advanced = await server.snapshot(itemID: "item-run_proposal") else {
+        await server.advance(itemID: "item-task_proposal")
+        guard let advanced = await server.snapshot(itemID: "item-task_proposal") else {
             Issue.record("advanced proposal snapshot disappeared")
             return
         }

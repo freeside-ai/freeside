@@ -660,7 +660,7 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		// request's, and must not read as a scripted 400 in a test log.
 		// ErrActionNotAllowedForType (a valid action wrong for the type) and
 		// ErrNoActions (a non-blocked type offering nothing) are per-type policy
-		// rejections. A valid run proposal reaches the later specialized-admission
+		// rejections. A valid task proposal reaches the later specialized-admission
 		// rejection because this generic test route cannot create its authority
 		// records atomically. All three are definitive client-visible 400s.
 		if errors.Is(err, signet.ErrActionNotAllowedForType) || errors.Is(err, domain.ErrNoActions) ||

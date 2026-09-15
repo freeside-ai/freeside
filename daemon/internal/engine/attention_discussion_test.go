@@ -150,7 +150,7 @@ func newAttentionDiscussionFixture(
 	case domain.AttentionSpecApproval, domain.AttentionAgentQuestion,
 		domain.AttentionReviewDiminishing, domain.AttentionReviewContradiction,
 		domain.AttentionFindingAdjudication, domain.AttentionReadyForFinalReview,
-		domain.AttentionPublishBlocked, domain.AttentionRunProposal,
+		domain.AttentionPublishBlocked, domain.AttentionTaskProposal,
 		domain.AttentionSystemHealth, domain.AttentionBlocked:
 		t.Fatalf("unsupported fixture type %q", itemType)
 	}

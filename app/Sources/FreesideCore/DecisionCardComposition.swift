@@ -88,7 +88,7 @@ struct DecisionCardComposition: Equatable {
             return true
         case .execution_failure, .agent_question, .review_diminishing_returns, .review_dispute,
             .review_contradiction, .review_configuration, .finding_adjudication,
-            .ready_for_final_review, .publish_blocked, .run_proposal, .system_health, .blocked:
+            .ready_for_final_review, .publish_blocked, .task_proposal, .system_health, .blocked:
             return false
         }
     }
@@ -189,7 +189,7 @@ struct DecisionCardComposition: Equatable {
                 actionInsertionIndex: 4,
                 reviewingActionInsertionIndex: nil)
         case .review_contradiction, .review_configuration,
-            .publish_blocked, .run_proposal:
+            .publish_blocked, .task_proposal:
             return .init(
                 modules: [
                     .recommendation, .facts, .factBlock, .summary, .claims, .evidence, .details,
