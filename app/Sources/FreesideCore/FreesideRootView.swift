@@ -289,10 +289,14 @@ public struct FreesideRootView: View {
                                 handleConclusion(conclusion, coordinator: coordinator)
                             })
                     }
-                }
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        decisionFlowMenu
+                    // The toolbar rides the stack's root content, not the
+                    // NavigationStack, so the gear renders in the inbox's
+                    // navigation bar and stays off the pushed decision detail.
+                    // iOS drops a toolbar attached to the NavigationStack.
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            decisionFlowMenu
+                        }
                     }
                 }
             }
