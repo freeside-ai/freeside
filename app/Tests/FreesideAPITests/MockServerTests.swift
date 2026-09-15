@@ -114,13 +114,13 @@ import Testing
         ).ok.body.json
         var command = Self.command(
             id: "cmd-revise-proposal", against: before, action: .start_with_changes)
-        command.payload.run_proposal_revision = .init(
+        command.payload.asDecision.run_proposal_revision = .init(
             value1: .init(
                 intent: .implement_subject, expected_cost_units: 25,
                 scope: .init(
                     component_count: 2, declared_path_count: 3,
                     touches_control_plane: true)))
-        command.payload.attachments = []
+        command.payload.asDecision.attachments = []
 
         _ = try await client.submitCommand(body: .json(command)).ok.body.json
 
@@ -156,7 +156,7 @@ import Testing
         let revisionBefore = try await client.getSyncRevision().ok.body.json.revision
         var command = Self.command(
             id: "cmd-no-op-proposal", against: before, action: .start_with_changes)
-        command.payload.run_proposal_revision = .init(
+        command.payload.asDecision.run_proposal_revision = .init(
             value1: .init(
                 intent: facts.intent, expected_cost_units: facts.expected_cost_units,
                 scope: facts.scope))
@@ -182,8 +182,8 @@ import Testing
         ).ok.body.json
         let until = Date(timeIntervalSince1970: 1_786_506_245)
         var command = Self.command(id: "cmd-snooze-proposal", against: before, action: .snooze)
-        command.payload.snooze_until = until
-        command.payload.attachments = []
+        command.payload.asDecision.snooze_until = until
+        command.payload.asDecision.attachments = []
 
         _ = try await client.submitCommand(body: .json(command)).ok.body.json
         _ = try await client.getAttentionItem(path: .init(item_id: before.item.id)).notFound
@@ -275,8 +275,8 @@ import Testing
             try await client
             .submitCommand(body: .json(Self.command(id: "cmd-1", against: before)))
             .ok.body.json
-        #expect(result.record.action == .approve)
-        #expect(result.record.item_id == "item-spec_approval")
+        #expect(result.record.asDecision.action == .approve)
+        #expect(result.record.asDecision.item_id == "item-spec_approval")
 
         let after =
             try await client
@@ -342,7 +342,7 @@ import Testing
 
         let first = try await client.submitCommand(body: .json(command)).ok.body.json
         var retry = command
-        retry.payload.alternative_choices = []
+        retry.payload.asDecision.alternative_choices = []
         let second = try await client.submitCommand(body: .json(retry)).ok.body.json
 
         #expect(second == first)
@@ -371,20 +371,20 @@ import Testing
                     var original = Self.command(
                         id: "cmd-replay-matrix", against: seed, action: action)
                     if action == .choose_alternative_route {
-                        original.payload.alternative_choices = [offered]
+                        original.payload.asDecision.alternative_choices = [offered]
                     }
                     let first = try await client.submitCommand(body: .json(original)).ok.body.json
 
                     var retry = original
                     switch choiceMode {
                     case "absent":
-                        retry.payload.alternative_choices = nil
+                        retry.payload.asDecision.alternative_choices = nil
                     case "empty":
-                        retry.payload.alternative_choices = []
+                        retry.payload.asDecision.alternative_choices = []
                     case "present":
-                        retry.payload.alternative_choices = [offered]
+                        retry.payload.asDecision.alternative_choices = [offered]
                     case "different":
-                        retry.payload.alternative_choices = [
+                        retry.payload.asDecision.alternative_choices = [
                             .init(finding_id: offered.finding_id, route: ._defer)
                         ]
                     default:
@@ -393,12 +393,12 @@ import Testing
                     if action == .choose_alternative_route,
                         choiceMode == "absent" || choiceMode == "empty"
                     {
-                        retry.payload.message = first.record.message
+                        retry.payload.asDecision.message = first.record.asDecision.message
                     }
                     switch attachmentMode {
-                    case "absent": retry.payload.attachments = nil
-                    case "empty": retry.payload.attachments = []
-                    case "present": retry.payload.attachments = ["sha256:changed"]
+                    case "absent": retry.payload.asDecision.attachments = nil
+                    case "empty": retry.payload.asDecision.attachments = []
+                    case "present": retry.payload.asDecision.attachments = ["sha256:changed"]
                     default: Issue.record("unknown attachment mode \(attachmentMode)")
                     }
 
@@ -434,9 +434,9 @@ import Testing
             let server = MockServer(items: [seed])
             let client = APIClientFactory.mock(server: server)
             var command = Self.command(id: "cmd-empty-message", against: seed, action: action)
-            command.payload.message = ""
+            command.payload.asDecision.message = ""
             if action == .choose_alternative_route {
-                command.payload.alternative_choices = [
+                command.payload.asDecision.alternative_choices = [
                     .init(finding_id: "review-finding-17", route: .dispute)
                 ]
             }
@@ -452,7 +452,7 @@ import Testing
             let client = APIClientFactory.mock(server: server)
             var command = Self.command(
                 id: "cmd-replay-revision", against: seed, action: .start_with_changes)
-            command.payload.run_proposal_revision = .init(
+            command.payload.asDecision.run_proposal_revision = .init(
                 value1: .init(
                     intent: .implement_subject, expected_cost_units: 25,
                     scope: .init(
@@ -460,13 +460,13 @@ import Testing
                         touches_control_plane: true)))
             let first = try await client.submitCommand(body: .json(command)).ok.body.json
             #expect(
-                first.record.message
+                first.record.asDecision.message
                     == #"{"intent":"implement_subject","expected_cost_units":25,"scope":{"component_count":2,"declared_path_count":3,"touches_control_plane":true}}"#
             )
 
             var retry = command
-            retry.payload.run_proposal_revision = nil
-            retry.payload.message = first.record.message
+            retry.payload.asDecision.run_proposal_revision = nil
+            retry.payload.asDecision.message = first.record.asDecision.message
             let replay = try await client.submitCommand(body: .json(retry)).ok.body.json
             #expect(replay == first)
         }
@@ -477,12 +477,12 @@ import Testing
             let client = APIClientFactory.mock(server: server)
             var command = Self.command(
                 id: "cmd-replay-snooze", against: seed, action: .snooze)
-            command.payload.snooze_until = Date(timeIntervalSince1970: 1_786_506_245)
+            command.payload.asDecision.snooze_until = Date(timeIntervalSince1970: 1_786_506_245)
             let first = try await client.submitCommand(body: .json(command)).ok.body.json
 
             var retry = command
-            retry.payload.snooze_until = nil
-            retry.payload.message = first.record.message
+            retry.payload.asDecision.snooze_until = nil
+            retry.payload.asDecision.message = first.record.asDecision.message
             let replay = try await client.submitCommand(body: .json(retry)).ok.body.json
             #expect(replay == first)
         }
@@ -541,7 +541,7 @@ import Testing
         // malforms the command and mismatches the bindings, and the
         // rejection is 422, not a 409 replacement — with no effect.
         var emptyDigest = Self.command(id: "cmd-empty-digest", against: before)
-        emptyDigest.payload.artifact_digests.append("")
+        emptyDigest.payload.asDecision.artifact_digests.append("")
         let rejected = try await client.submitCommand(body: .json(emptyDigest))
         guard case .undocumented(let emptyStatus, _) = rejected else {
             Issue.record("expected a malformed rejection, got \(rejected)")
@@ -563,7 +563,7 @@ import Testing
         let revisionBefore = try await client.getSyncRevision().ok.body.json.revision
         var command = Self.command(
             id: String(repeating: "c", count: 257), against: before, action: .request_changes)
-        command.payload.message = "Show the refusal path."
+        command.payload.asDecision.message = "Show the refusal path."
 
         let output = try await client.submitCommand(body: .json(command))
         guard case .undocumented(let statusCode, _) = output else {
@@ -591,7 +591,7 @@ import Testing
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         var command = Self.command(
             id: "cmd-pending-missing", against: before, action: .convert_to_policy)
-        command.payload.item_id = "item-none"
+        command.payload.asDecision.item_id = "item-none"
 
         let output = try await client.submitCommand(body: .json(command))
         guard case .undocumented(let statusCode, _) = output else {
@@ -618,12 +618,12 @@ import Testing
 
         var retry = Self.command(id: "cmd-refresh", against: before)
         retry.expected_entity_version = before.entity_version + 1
-        retry.payload.artifact_digests = retry.payload.artifact_digests.reversed()
+        retry.payload.asDecision.artifact_digests = retry.payload.asDecision.artifact_digests.reversed()
         let second = try await client.submitCommand(body: .json(retry)).ok.body.json
         #expect(first == second)
         // The record carries the canonical digest set (domain.NewCommand),
         // regardless of the order the payload submitted.
-        #expect(second.record.artifact_digests == before.item.artifact_digests)
+        #expect(second.record.asDecision.artifact_digests == before.item.artifact_digests)
 
         let after =
             try await client
@@ -990,7 +990,7 @@ import Testing
             try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         var command = Self.command(id: "cmd-unknown-item", against: before)
-        command.payload.item_id = "item-unknown"
+        command.payload.asDecision.item_id = "item-unknown"
 
         let output = try await client.submitCommand(body: .json(command))
         guard case .undocumented(let statusCode, _) = output else {
@@ -1152,16 +1152,16 @@ import Testing
             }
             #expect(statusCode == 422)
 
-            missing.payload.message = "Operator feedback"
+            missing.payload.asDecision.message = "Operator feedback"
             if action == .answer_and_retry {
                 // The fixture question is implementation-stage, so the answer
                 // names its route (the daemon's validateAnswerRoute).
-                missing.payload.answer_route = .init(value1: .retry_implementation)
+                missing.payload.asDecision.answer_route = .init(value1: .retry_implementation)
             }
             let first = try await client.submitCommand(body: .json(missing)).ok.body.json
             let replay = try await client.submitCommand(body: .json(missing)).ok.body.json
             #expect(replay == first)
-            #expect(first.record.message == "Operator feedback")
+            #expect(first.record.asDecision.message == "Operator feedback")
             let after = try await client.getAttentionItem(path: .init(item_id: itemID)).ok.body.json
             #expect(after.item.status == status)
         }
@@ -1249,21 +1249,21 @@ import Testing
             let server = MockServer(items: [seed])
             let client = APIClientFactory.mock(server: server)
             var command = Self.command(id: id, against: seed, action: action)
-            command.payload.alternative_choices = choices
-            command.payload.attachments = []
+            command.payload.asDecision.alternative_choices = choices
+            command.payload.asDecision.attachments = []
 
             let result = try await client.submitCommand(body: .json(command)).ok.body.json
             let resolved = try await client.getAttentionItem(
                 path: .init(item_id: seed.item.id)
             ).ok.body.json
 
-            #expect(result.record.action == action)
+            #expect(result.record.asDecision.action == action)
             if action == .choose_alternative_route {
                 #expect(
-                    result.record.message
+                    result.record.asDecision.message
                         == #"[{"finding_id":"review-finding-17","route":"dispute"}]"#)
             } else {
-                #expect(result.record.message.isEmpty)
+                #expect(result.record.asDecision.message.isEmpty)
             }
             #expect(resolved.item.status == .resolved)
         }
@@ -1275,7 +1275,7 @@ import Testing
         let client = APIClientFactory.mock(server: server)
         var command = Self.command(
             id: "cmd-unoffered-finding", against: seed, action: .choose_alternative_route)
-        command.payload.alternative_choices = [
+        command.payload.asDecision.alternative_choices = [
             .init(finding_id: "review-finding-17", route: .decline)
         ]
 
@@ -1312,13 +1312,15 @@ import Testing
             device_id: "device-mock",
             expected_entity_version: snapshot.entity_version,
             expected_bindings: .init(additionalProperties: [:]),
-            payload: .init(
-                item_id: snapshot.item.id,
-                action: action ?? snapshot.item.requested_decision[0],
-                item_version: snapshot.item.item_version,
-                pr_head_sha: snapshot.item.pr_head_sha,
-                artifact_digests: snapshot.item.artifact_digests
-            )
+            payload: .decision(
+                .init(
+                    kind: .decision,
+                    item_id: snapshot.item.id,
+                    action: action ?? snapshot.item.requested_decision[0],
+                    item_version: snapshot.item.item_version,
+                    pr_head_sha: snapshot.item.pr_head_sha,
+                    artifact_digests: snapshot.item.artifact_digests
+                ))
         )
     }
 }
@@ -1331,7 +1333,7 @@ extension MockServerTests {
         #expect(before.item.agent_question?.value1.stage == .implementation)
 
         var command = Self.command(id: "cmd-route-missing", against: before, action: .answer_and_retry)
-        command.payload.message = "Store first."
+        command.payload.asDecision.message = "Store first."
         let missing = try await client.submitCommand(body: .json(command))
         guard case .undocumented(let missingStatus, _) = missing else {
             Issue.record("expected missing-route rejection, got \(missing)")
@@ -1342,7 +1344,7 @@ extension MockServerTests {
         // A route on any other command is refused while the item is still
         // open, before the accepted answer supersedes it.
         var stop = Self.command(id: "cmd-route-stop", against: before, action: .stop)
-        stop.payload.answer_route = .init(value1: .retry_implementation)
+        stop.payload.asDecision.answer_route = .init(value1: .retry_implementation)
         let stopped = try await client.submitCommand(body: .json(stop))
         guard case .undocumented(let stopStatus, _) = stopped else {
             Issue.record("expected a routed stop to be rejected, got \(stopped)")
@@ -1354,9 +1356,9 @@ extension MockServerTests {
         // feedback, supersedes the question, and a revised spec_approval names
         // the question with the answer as its prior comment.
         command.command_id = "cmd-route-revise"
-        command.payload.answer_route = .init(value1: .revise_specification)
+        command.payload.asDecision.answer_route = .init(value1: .revise_specification)
         let accepted = try await client.submitCommand(body: .json(command)).ok.body.json
-        #expect(accepted.record.answer_route?.value1 == .revise_specification)
+        #expect(accepted.record.asDecision.answer_route?.value1 == .revise_specification)
         let concluded = try await client.getAttentionItem(path: .init(item_id: "item-agent_question")).ok.body.json
         #expect(concluded.item.status == .superseded)
 
@@ -1371,5 +1373,97 @@ extension MockServerTests {
         #expect(revised.item.status == .open)
         #expect(revision.prior_comments.last?.body == "Store first.")
         #expect(revision.prior_comments.last?.raised_on_item_id == "item-agent_question")
+    }
+
+    private func submitTaskCommand(
+        _ commandID: String, project: String, source: String, name: String? = nil
+    ) -> Components.Schemas.ClientCommand {
+        .init(
+            command_id: commandID, device_id: "device-1",
+            payload: .submit_task(
+                .init(kind: .submit_task, project_id: project, source: source, name: name)))
+    }
+
+    @Test func submitTaskCreatesReplaysAndConverges() async throws {
+        let client = APIClientFactory.mock(server: MockServer())
+        let first = try await client.submitCommand(
+            body: .json(submitTaskCommand("cmd-1", project: "project-1", source: "Add retries."))
+        ).ok.body.json
+        guard case .submit_task(let record) = first.record else {
+            Issue.record("expected a submit_task record")
+            return
+        }
+        #expect(!record.task_id.isEmpty)
+        #expect(!record.specification_run_id.isEmpty)
+        #expect(record.source_digest.value1.hasPrefix("sha256:"))
+
+        // Read-your-write: the submitted task's timeline resolves and names its
+        // specification run, so the task's run membership agrees with the run
+        // store instead of throwing on the newly submitted task.
+        let timeline = try await client.getTaskTimeline(
+            path: .init(task_id: record.task_id)
+        ).ok.body.json
+        #expect(timeline.sections.flatMap(\.runs).contains { $0.run_id == record.specification_run_id })
+
+        // A retried command_id replays the recorded result.
+        let replay = try await client.submitCommand(
+            body: .json(submitTaskCommand("cmd-1", project: "project-1", source: "Add retries."))
+        ).ok.body.json
+        #expect(replay.record.asSubmitTask.task_id == record.task_id)
+
+        // A distinct command_id with the same source converges on the same task.
+        let converged = try await client.submitCommand(
+            body: .json(submitTaskCommand("cmd-2", project: "project-1", source: "Add retries."))
+        ).ok.body.json
+        #expect(converged.record.asSubmitTask.task_id == record.task_id)
+
+        // The same source in another project is a distinct task.
+        let other = try await client.submitCommand(
+            body: .json(submitTaskCommand("cmd-3", project: "project-2", source: "Add retries."))
+        ).ok.body.json
+        #expect(other.record.asSubmitTask.task_id != record.task_id)
+    }
+
+    @Test func submitTaskConflictsOnAChangedSourceUnderTheSameCommandID() async throws {
+        let client = APIClientFactory.mock(server: MockServer())
+        _ = try await client.submitCommand(
+            body: .json(submitTaskCommand("cmd-1", project: "project-1", source: "First source."))
+        ).ok.body.json
+        let response = try await client.submitCommand(
+            body: .json(submitTaskCommand("cmd-1", project: "project-1", source: "Different source.")))
+        guard case .undocumented(let status, _) = response else {
+            Issue.record("expected an undocumented conflict status")
+            return
+        }
+        #expect(status == 422)
+    }
+
+    @Test func submitTaskConflictsOnACrossDeviceReplay() async throws {
+        let client = APIClientFactory.mock(server: MockServer())
+        _ = try await client.submitCommand(
+            body: .json(submitTaskCommand("cmd-1", project: "project-1", source: "Add retries."))
+        ).ok.body.json
+        // A second device reusing the command_id with the same project and
+        // source is an immutable conflict, matching the daemon replay guard.
+        let response = try await client.submitCommand(
+            body: .json(
+                .init(
+                    command_id: "cmd-1", device_id: "device-2",
+                    payload: .submit_task(
+                        .init(kind: .submit_task, project_id: "project-1", source: "Add retries.")))))
+        guard case .undocumented(let status, _) = response else {
+            Issue.record("expected an undocumented conflict status")
+            return
+        }
+        #expect(status == 422)
+    }
+}
+
+extension Components.Schemas.CommandResult.recordPayload {
+    fileprivate var asSubmitTask: Components.Schemas.TaskSubmissionRecord {
+        guard case .submit_task(let record) = self else {
+            preconditionFailure("expected a submit_task record")
+        }
+        return record
     }
 }

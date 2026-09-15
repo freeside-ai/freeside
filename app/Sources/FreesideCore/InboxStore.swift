@@ -534,7 +534,9 @@ public final class InboxStore {
     public func registerPendingCommand(
         _ command: Components.Schemas.ClientCommand
     ) -> PendingCommandRegistration {
-        let itemID = command.payload.item_id
+        // Only decision commands use the per-item pending ledger; a
+        // submit_task command binds to no item and is never registered here.
+        guard let itemID = command.decisionItemID else { return .notPersisted }
         guard pendingCommandsByItemID[itemID] == nil,
             !navigationReservations.contains(itemID)
         else { return .slotOccupied }
@@ -591,7 +593,7 @@ public final class InboxStore {
             // recorded" — and a key naming a different item than its
             // command would block one item with another's command.
             guard entry.command.device_id == device.deviceID,
-                entry.command.payload.item_id == itemID
+                entry.command.decisionItemID == itemID
             else { continue }
             pendingCommandsByItemID[itemID] =
                 PendingCommandEntry(command: entry.command, state: .unresolved)

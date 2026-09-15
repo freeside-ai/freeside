@@ -412,7 +412,7 @@ public final class DecisionModel {
         validation = .pending
         var reconciledSnoozeCommandID: String?
         if let entry = store.pendingCommandsByItemID[itemID],
-            entry.command.payload.action == .snooze,
+            entry.command.decisionAction == .snooze,
             entry.state == .unresolved
         {
             reconciledSnoozeCommandID = entry.command.command_id
@@ -746,24 +746,26 @@ public final class DecisionModel {
             // payload's item_version, pr_head_sha, and artifact_digests;
             // the named-bindings map stays empty here per the contract.
             expected_bindings: .init(additionalProperties: [:]),
-            payload: .init(
-                item_id: itemID,
-                action: action,
-                item_version: snapshot.item.item_version,
-                pr_head_sha: snapshot.item.pr_head_sha,
-                artifact_digests: snapshot.item.artifact_digests,
-                message: message,
-                capability_manifest_digest: capabilityManifestDigest.map {
-                    .init(value1: $0)
-                },
-                answer_route: answerRoute.map { .init(value1: $0) },
-                run_proposal_revision: revision.map {
-                    .init(value1: $0)
-                },
-                snooze_until: snoozeUntil,
-                alternative_choices: alternativeChoices,
-                decision_action_surface_digest: submittedSurface?.digest
-            )
+            payload: .decision(
+                .init(
+                    kind: .decision,
+                    item_id: itemID,
+                    action: action,
+                    item_version: snapshot.item.item_version,
+                    pr_head_sha: snapshot.item.pr_head_sha,
+                    artifact_digests: snapshot.item.artifact_digests,
+                    message: message,
+                    capability_manifest_digest: capabilityManifestDigest.map {
+                        .init(value1: $0)
+                    },
+                    answer_route: answerRoute.map { .init(value1: $0) },
+                    run_proposal_revision: revision.map {
+                        .init(value1: $0)
+                    },
+                    snooze_until: snoozeUntil,
+                    alternative_choices: alternativeChoices,
+                    decision_action_surface_digest: submittedSurface?.digest
+                ))
         )
         if let urlToOpen {
             // Opening suspends on iOS. Coordinate every model through a
@@ -844,7 +846,9 @@ public final class DecisionModel {
                 // idempotent by id, and the daemon re-validates each against the
                 // recorded command, so an emit for a command a later restore
                 // rolls back is harmlessly poison-dropped.
-                await emitDecisionEvents(for: result.record, surface: submittedSurface)
+                if let decisionRecord = result.decisionRecord {
+                    await emitDecisionEvents(for: decisionRecord, surface: submittedSurface)
+                }
                 // Read-your-write BEFORE settling. Not every action resolves
                 // its item (plan §4: viewing a PR is navigation, acknowledge
                 // means seen, never resolved), so read-your-write is a
@@ -909,7 +913,7 @@ public final class DecisionModel {
                         submissionError =
                             "the snooze was recorded but current state could not be confirmed"
                     } else {
-                        appliedRecord = result.record
+                        appliedRecord = result.decisionRecord
                         store.clearPendingCommand(
                             itemID: itemID, commandID: command.command_id)
                         phase = .applied
@@ -927,7 +931,7 @@ public final class DecisionModel {
                     return
                 }
                 store.revisionObserver?(result.revision)
-                appliedRecord = result.record
+                appliedRecord = result.decisionRecord
                 store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
                 guard store.apply(refetched) else {
                     // A higher rendered version refuses the refetch within
@@ -1220,7 +1224,7 @@ public final class DecisionModel {
             itemID: itemID, commandID: command.command_id, state: .unresolved)
         phase = .idle
         submissionError = message
-        if command.payload.action == .snooze {
+        if command.decisionAction == .snooze {
             // Snooze validation performs the one immediate replay before
             // the canonical read that can settle it. The replay may be the
             // attempt that first commits the command.
@@ -1246,7 +1250,7 @@ public final class DecisionModel {
             // Settled by a 409: the applied replacement is canonical and
             // presents exactly as a live conflict would.
             let discussionIsAwaiting =
-                awaitingAgent && ActionOutcome.of(command.payload.action) == .discusses
+                awaitingAgent && (command.decisionAction.map { ActionOutcome.of($0) } == .discusses)
             phase = discussionIsAwaiting ? .idle : .superseded
             markValidated()
             submissionError =
@@ -1276,10 +1280,12 @@ public final class DecisionModel {
     }
 
     public func retryLostResponse() async {
-        guard canRetryLostResponse, let pending = pendingCommand else { return }
+        guard canRetryLostResponse, let pending = pendingCommand,
+            let pendingAction = pending.decisionAction
+        else { return }
         submissionError = nil
-        phase = .submitting(pending.payload.action)
-        if pending.payload.action == .snooze {
+        phase = .submitting(pendingAction)
+        if pendingAction == .snooze {
             // validate() claims the unresolved slot and performs replay
             // before the canonical read that can settle it.
             await validate()
@@ -1306,7 +1312,7 @@ public final class DecisionModel {
                 break
             }
             let discussionIsAwaiting =
-                awaitingAgent && ActionOutcome.of(pending.payload.action) == .discusses
+                awaitingAgent && ActionOutcome.of(pendingAction) == .discusses
             phase = discussionIsAwaiting ? .idle : .superseded
             markValidated()
             submissionError =
@@ -1380,7 +1386,7 @@ public final class DecisionModel {
                     return .lost
                 }
                 store.revisionObserver?(result.revision)
-                appliedRecord = result.record
+                appliedRecord = result.decisionRecord
                 submissionError = nil
                 phase = .applied
                 // The original submit lost its response before it could emit, so
@@ -1393,10 +1399,12 @@ public final class DecisionModel {
                 // the surface-referenced events an accepted best-effort loss
                 // rather than an emit the daemon rejects as unbacked.
                 let replaySurface =
-                    actionSurface?.digest == command.payload.decision_action_surface_digest
+                    actionSurface?.digest == command.decisionPayload?.decision_action_surface_digest
                     ? actionSurface : nil
-                await emitDecisionEvents(for: result.record, surface: replaySurface)
-                if command.payload.action != .snooze {
+                if let decisionRecord = result.decisionRecord {
+                    await emitDecisionEvents(for: decisionRecord, surface: replaySurface)
+                }
+                if command.decisionAction != .snooze {
                     store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
                 }
                 return .recovered
@@ -1465,5 +1473,24 @@ public final class DecisionModel {
             let ownsSlot = pendingCommand?.command_id == command.command_id
             return ownsSlot ? .lost : .displaced
         }
+    }
+}
+
+extension Components.Schemas.ClientCommand {
+    /// The decision payload this command carries, or nil for a non-decision
+    /// command. DecisionModel only ever builds and stores decision commands.
+    var decisionPayload: Components.Schemas.DecisionPayload? {
+        if case .decision(let decision) = payload { return decision }
+        return nil
+    }
+    var decisionAction: Components.Schemas.Action? { decisionPayload?.action }
+    var decisionItemID: String? { decisionPayload?.item_id }
+}
+
+extension Components.Schemas.CommandResult {
+    /// The decision record this result carries, or nil for a submit_task result.
+    var decisionRecord: Components.Schemas.CommandRecord? {
+        if case .decision(let record) = record { return record }
+        return nil
     }
 }

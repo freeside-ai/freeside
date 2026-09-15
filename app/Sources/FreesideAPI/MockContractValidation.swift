@@ -914,26 +914,40 @@ enum MockContractValidation {
         }
         guard !command.command_id.isEmpty else { throw malformed("empty command_id") }
         guard !command.device_id.isEmpty else { throw malformed("empty device_id") }
-        guard !command.payload.item_id.isEmpty else { throw malformed("empty item_id") }
-        guard command.payload.item_version >= 1 else {
-            throw malformed("non-positive item_version")
-        }
-        guard command.expected_entity_version >= 1 else {
-            throw malformed("non-positive expected_entity_version")
-        }
-        guard !command.payload.artifact_digests.contains("") else {
-            throw malformed("empty artifact digest")
-        }
-        // Attachments mirror domain.NewCommand: entries are content
-        // addresses (empty is malformed) and a repeat is rejected rather
-        // than deduplicated, since order is authored content the daemon
-        // never canonicalizes.
-        if let attachments = command.payload.attachments {
-            guard !attachments.contains("") else {
-                throw malformed("empty attachment digest")
+        switch command.payload {
+        case .decision(let payload):
+            guard !payload.item_id.isEmpty else { throw malformed("empty item_id") }
+            guard payload.item_version >= 1 else {
+                throw malformed("non-positive item_version")
             }
-            guard Set(attachments).count == attachments.count else {
-                throw malformed("duplicate attachment digest")
+            guard let expected = command.expected_entity_version, expected >= 1 else {
+                throw malformed("non-positive expected_entity_version")
+            }
+            guard !payload.artifact_digests.contains("") else {
+                throw malformed("empty artifact digest")
+            }
+            // Attachments mirror domain.NewCommand: entries are content
+            // addresses (empty is malformed) and a repeat is rejected rather
+            // than deduplicated, since order is authored content the daemon
+            // never canonicalizes.
+            if let attachments = payload.attachments {
+                guard !attachments.contains("") else {
+                    throw malformed("empty attachment digest")
+                }
+                guard Set(attachments).count == attachments.count else {
+                    throw malformed("duplicate attachment digest")
+                }
+            }
+        case .submit_task(let payload):
+            guard !payload.project_id.isEmpty else { throw malformed("empty project_id") }
+            guard !payload.source.isEmpty else { throw malformed("empty source") }
+            // A submit_task command binds to no entity, so the decision envelope
+            // must be absent; carrying it is malformed (api/openapi.yaml).
+            guard command.expected_entity_version == nil, command.expected_bindings == nil else {
+                throw malformed("submit_task must not carry expected_entity_version or expected_bindings")
+            }
+            if let name = payload.name {
+                guard !name.isEmpty else { throw malformed("empty name") }
             }
         }
     }
@@ -942,53 +956,54 @@ enum MockContractValidation {
         func malformed(_ reason: String) -> MockServer.MalformedCommandError {
             MockServer.MalformedCommandError(commandID: command.command_id, reason: reason)
         }
-        switch command.payload.action {
+        guard case .decision(let payload) = command.payload else { return }
+        switch payload.action {
         case .retry_with_capabilities:
-            guard let digest = command.payload.capability_manifest_digest?.value1,
+            guard let digest = payload.capability_manifest_digest?.value1,
                 !digest.isEmpty,
-                (command.payload.message ?? "").isEmpty,
-                (command.payload.attachments ?? []).isEmpty,
-                command.payload.run_proposal_revision == nil,
-                command.payload.snooze_until == nil,
-                command.payload.alternative_choices == nil
+                (payload.message ?? "").isEmpty,
+                (payload.attachments ?? []).isEmpty,
+                payload.run_proposal_revision == nil,
+                payload.snooze_until == nil,
+                payload.alternative_choices == nil
             else { throw malformed("invalid capability manifest selection") }
         case .discuss:
-            guard let message = command.payload.message,
+            guard let message = payload.message,
                 !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                command.payload.capability_manifest_digest == nil,
-                command.payload.run_proposal_revision == nil,
-                command.payload.snooze_until == nil,
-                command.payload.alternative_choices == nil
+                payload.capability_manifest_digest == nil,
+                payload.run_proposal_revision == nil,
+                payload.snooze_until == nil,
+                payload.alternative_choices == nil
             else { throw malformed("invalid discuss message") }
         case .request_changes:
-            guard let message = command.payload.message,
+            guard let message = payload.message,
                 !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                 message.lengthOfBytes(using: .utf8) <= 8192,
                 command.command_id.lengthOfBytes(using: .utf8) <= 256,
-                (command.payload.attachments ?? []).isEmpty,
-                command.payload.capability_manifest_digest == nil,
-                command.payload.run_proposal_revision == nil,
-                command.payload.snooze_until == nil,
-                command.payload.alternative_choices == nil
+                (payload.attachments ?? []).isEmpty,
+                payload.capability_manifest_digest == nil,
+                payload.run_proposal_revision == nil,
+                payload.snooze_until == nil,
+                payload.alternative_choices == nil
             else { throw malformed("invalid request_changes message") }
         case .answer_and_retry, .answer_without_retry, .return_to_agent:
-            guard let message = command.payload.message,
+            guard let message = payload.message,
                 !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                 message.lengthOfBytes(using: .utf8) <= 8192,
                 command.command_id.lengthOfBytes(using: .utf8) <= 256,
-                (command.payload.attachments ?? []).isEmpty,
-                command.payload.capability_manifest_digest == nil,
-                command.payload.run_proposal_revision == nil,
-                command.payload.snooze_until == nil,
-                command.payload.alternative_choices == nil
+                (payload.attachments ?? []).isEmpty,
+                payload.capability_manifest_digest == nil,
+                payload.run_proposal_revision == nil,
+                payload.snooze_until == nil,
+                payload.alternative_choices == nil
             else { throw malformed("invalid answer or return feedback") }
         case .start_with_changes:
-            guard let revision = command.payload.run_proposal_revision?.value1,
-                command.payload.snooze_until == nil,
-                (command.payload.message ?? "").isEmpty,
-                (command.payload.attachments ?? []).isEmpty,
-                command.payload.alternative_choices == nil,
-                command.payload.capability_manifest_digest == nil,
+            guard let revision = payload.run_proposal_revision?.value1,
+                payload.snooze_until == nil,
+                (payload.message ?? "").isEmpty,
+                (payload.attachments ?? []).isEmpty,
+                payload.alternative_choices == nil,
+                payload.capability_manifest_digest == nil,
                 revision.expected_cost_units >= 1,
                 revision.expected_cost_units <= 1_000_000,
                 revision.scope.component_count >= 1,
@@ -997,38 +1012,38 @@ enum MockContractValidation {
                 revision.scope.declared_path_count <= 4096
             else { throw malformed("invalid run_proposal_revision") }
         case .snooze:
-            guard command.payload.snooze_until != nil,
-                command.payload.run_proposal_revision == nil,
-                (command.payload.message ?? "").isEmpty,
-                (command.payload.attachments ?? []).isEmpty,
-                command.payload.alternative_choices == nil,
-                command.payload.capability_manifest_digest == nil
+            guard payload.snooze_until != nil,
+                payload.run_proposal_revision == nil,
+                (payload.message ?? "").isEmpty,
+                (payload.attachments ?? []).isEmpty,
+                payload.alternative_choices == nil,
+                payload.capability_manifest_digest == nil
             else { throw malformed("invalid snooze_until") }
         case .choose_alternative_route:
-            guard let choices = command.payload.alternative_choices, !choices.isEmpty,
+            guard let choices = payload.alternative_choices, !choices.isEmpty,
                 choices.allSatisfy({ !$0.finding_id.isEmpty }),
                 Set(choices.map(\.finding_id)).count == choices.count,
-                (command.payload.message ?? "").isEmpty,
-                (command.payload.attachments ?? []).isEmpty,
-                command.payload.run_proposal_revision == nil,
-                command.payload.snooze_until == nil,
-                command.payload.capability_manifest_digest == nil
+                (payload.message ?? "").isEmpty,
+                (payload.attachments ?? []).isEmpty,
+                payload.run_proposal_revision == nil,
+                payload.snooze_until == nil,
+                payload.capability_manifest_digest == nil
             else { throw malformed("invalid alternative_choices") }
         case .accept_recommended_route:
-            guard command.payload.alternative_choices == nil,
-                (command.payload.message ?? "").isEmpty,
-                (command.payload.attachments ?? []).isEmpty,
-                command.payload.run_proposal_revision == nil,
-                command.payload.snooze_until == nil,
-                command.payload.capability_manifest_digest == nil
+            guard payload.alternative_choices == nil,
+                (payload.message ?? "").isEmpty,
+                (payload.attachments ?? []).isEmpty,
+                payload.run_proposal_revision == nil,
+                payload.snooze_until == nil,
+                payload.capability_manifest_digest == nil
             else { throw malformed("finding adjudication input on accept") }
         default:
-            guard command.payload.run_proposal_revision == nil,
-                command.payload.snooze_until == nil,
-                command.payload.alternative_choices == nil,
-                command.payload.capability_manifest_digest == nil,
-                (command.payload.message ?? "").isEmpty,
-                (command.payload.attachments ?? []).isEmpty
+            guard payload.run_proposal_revision == nil,
+                payload.snooze_until == nil,
+                payload.alternative_choices == nil,
+                payload.capability_manifest_digest == nil,
+                (payload.message ?? "").isEmpty,
+                (payload.attachments ?? []).isEmpty
             else { throw malformed("proposal input on unrelated action") }
         }
     }

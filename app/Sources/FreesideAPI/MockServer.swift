@@ -71,19 +71,23 @@ public actor MockServer {
         let message: String
         let attachments: [String]
 
-        init(_ command: Components.Schemas.ClientCommand, message: String) {
+        init(
+            _ command: Components.Schemas.ClientCommand,
+            _ payload: Components.Schemas.DecisionPayload,
+            message: String
+        ) {
             commandID = command.command_id
             deviceID = command.device_id
-            itemID = command.payload.item_id
-            action = command.payload.action
-            itemVersion = command.payload.item_version
-            prHeadSHA = command.payload.pr_head_sha
-            artifactDigests = Array(Set(command.payload.artifact_digests)).sorted()
+            itemID = payload.item_id
+            action = payload.action
+            itemVersion = payload.item_version
+            prHeadSHA = payload.pr_head_sha
+            artifactDigests = Array(Set(payload.artifact_digests)).sorted()
             // Content fields normalize absent to empty (the daemon's record
             // shape); attachment order is authored, so it is compared as
             // sent, never canonicalized.
             self.message = message
-            attachments = command.payload.attachments ?? []
+            attachments = payload.attachments ?? []
         }
     }
 
@@ -91,6 +95,11 @@ public actor MockServer {
     private var conversationsByID: [String: Components.Schemas.ConversationSnapshot] = [:]
     private var commandsByID: [String: NormalizedCommand] = [:]
     private var resultsByCommandID: [String: Components.Schemas.CommandResult] = [:]
+    // Submitted tasks keyed by project id and source digest: the project-scoped
+    // intake key a second submission of the same source fetches rather than
+    // creating a second task (plan §5.11).
+    private var submittedTasksByKey: [String: (taskID: String, runID: String, name: Components.Schemas.DisplayName)] =
+        [:]
     private var pendingSpecificationReplacements: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     private var pendingSpecificationComments: [String: String] = [:]
     private var proposalFactsByItemID: [String: Components.Schemas.RunProposalFactsSnapshot] = [:]
@@ -599,11 +608,22 @@ public actor MockServer {
     func recordedResultForRevokedRetry(
         _ command: Components.Schemas.ClientCommand, deviceID: String
     ) -> Components.Schemas.CommandResult? {
-        guard let original = commandsByID[command.command_id],
-            original == Self.normalizedReplayCommand(command),
-            original.deviceID == deviceID
-        else { return nil }
-        return resultsByCommandID[command.command_id]
+        switch command.payload {
+        case .decision(let payload):
+            guard let original = commandsByID[command.command_id],
+                original == Self.normalizedReplayCommand(command, payload),
+                original.deviceID == deviceID
+            else { return nil }
+            return resultsByCommandID[command.command_id]
+        case .submit_task:
+            // A submit_task record carries no normalized body; its recorded
+            // result replays for the same device.
+            guard let recorded = resultsByCommandID[command.command_id],
+                case .submit_task(let record) = recorded.record,
+                record.device_id == deviceID
+            else { return nil }
+            return recorded
+        }
     }
 
     // MARK: - Contract semantics
@@ -1016,9 +1036,12 @@ public actor MockServer {
             guard let commandID = input.command_id, !commandID.isEmpty,
                 let surfaceDigest = input.decision_action_surface_digest,
                 let recorded = resultsByCommandID[commandID],
-                recorded.record.device_id == deviceID,
-                recorded.record.item_id == input.item_id,
-                let evidence = recorded.record.decision_evidence,
+                // Comprehension events reference an accepted decision command; a
+                // task submission carries no item or decision evidence.
+                case .decision(let record) = recorded.record,
+                record.device_id == deviceID,
+                record.item_id == input.item_id,
+                let evidence = record.decision_evidence,
                 evidence.value1.action_surface_digest == surfaceDigest
             else {
                 throw InvalidComprehensionEventError(
@@ -1049,6 +1072,7 @@ public actor MockServer {
         for command: Components.Schemas.ClientCommand,
         item current: Components.Schemas.AttentionItemSnapshot
     ) throws -> Components.Schemas.CommandDecisionEvidence? {
+        guard case .decision(let payload) = command.payload else { return nil }
         var recommendedAction: Components.Schemas.Action?
         var recommendationSource: Components.Schemas.RecommendationSource?
         if let rec = current.item.recommendation {
@@ -1056,14 +1080,14 @@ public actor MockServer {
             recommendationSource = rec.value1.source
         }
         var surfaceDigest = ""
-        if let digest = command.payload.decision_action_surface_digest {
+        if let digest = payload.decision_action_surface_digest {
             guard let surface = actionSurfacesByDigest[digest],
                 surface.device_id == command.device_id,
-                surface.item_id == command.payload.item_id,
+                surface.item_id == payload.item_id,
                 surface.item_decision_surface_digest == current.item.decision_surface.digest,
                 let contract = capabilityContractsByDevice[command.device_id],
                 surface.client_capability_digest == contract.digest,
-                surface.actions.contains(command.payload.action)
+                surface.actions.contains(payload.action)
             else {
                 throw ActionSurfaceMismatchError(commandID: command.command_id)
             }
@@ -1254,19 +1278,30 @@ public actor MockServer {
         // and digests content-address. Parameterized action content is
         // interpreted only for a genuinely new command below.
         try MockContractValidation.validateStructure(command)
+        switch command.payload {
+        case .submit_task(let payload):
+            return try submitTaskCommand(command, payload)
+        case .decision(let payload):
+            return try submitDecisionCommand(command, payload)
+        }
+    }
+
+    private func submitDecisionCommand(
+        _ command: Components.Schemas.ClientCommand,
+        _ payload: Components.Schemas.DecisionPayload
+    ) throws -> SubmitOutcome {
         if let original = commandsByID[command.command_id] {
             // Replay is determined first, as the daemon orders it: a
             // reused id converges only on an identical normalized body,
             // and a different one is an immutable conflict even when its
             // new action would be rejected on other grounds.
-            guard original == Self.normalizedReplayCommand(command),
+            guard original == Self.normalizedReplayCommand(command, payload),
                 let recorded = resultsByCommandID[command.command_id]
             else {
                 throw ImmutableConflictError(commandID: command.command_id)
             }
             return .ok(commandResultTransform?(recorded) ?? recorded)
         }
-        let payload = command.payload
         guard let current = itemsByID[payload.item_id] else {
             throw UnknownItemError(itemID: payload.item_id)
         }
@@ -1642,31 +1677,165 @@ public actor MockServer {
         }
         let recordedMessage = try CommandResultTrust.recordedMessage(payload)
         let result = Components.Schemas.CommandResult(
-            record: .init(
-                command_id: command.command_id,
-                device_id: command.device_id,
-                item_id: payload.item_id,
-                item_version: payload.item_version,
-                pr_head_sha: payload.pr_head_sha,
-                // The record persists the canonical set (domain.NewCommand),
-                // whatever order or duplication the payload carried.
-                artifact_digests: Array(Set(payload.artifact_digests)).sorted(),
-                action: payload.action,
-                // Conversation content renders in the record even when empty
-                // (one byte-form per write-once record, domain.NewCommand);
-                // attachment order is authored, never canonicalized.
-                message: recordedMessage,
-                attachments: payload.attachments ?? [],
-                answer_route: payload.answer_route.map { .init(value1: $0.value1) },
-                decision_evidence: stampedEvidence.map { .init(value1: $0) }
-            ),
+            record: .decision(
+                .init(
+                    kind: .decision,
+                    command_id: command.command_id,
+                    device_id: command.device_id,
+                    item_id: payload.item_id,
+                    item_version: payload.item_version,
+                    pr_head_sha: payload.pr_head_sha,
+                    // The record persists the canonical set (domain.NewCommand),
+                    // whatever order or duplication the payload carried.
+                    artifact_digests: Array(Set(payload.artifact_digests)).sorted(),
+                    action: payload.action,
+                    // Conversation content renders in the record even when empty
+                    // (one byte-form per write-once record, domain.NewCommand);
+                    // attachment order is authored, never canonicalized.
+                    message: recordedMessage,
+                    attachments: payload.attachments ?? [],
+                    answer_route: payload.answer_route.map { .init(value1: $0.value1) },
+                    decision_evidence: stampedEvidence.map { .init(value1: $0) }
+                )),
             revision: revision
         )
         commandsByID[command.command_id] = NormalizedCommand(
-            command, message: recordedMessage)
+            command, payload, message: recordedMessage)
         resultsByCommandID[command.command_id] = result
         scheduleAutomaticAgentCompletionIfNeeded(for: payload.action)
         return .ok(commandResultTransform?(result) ?? result)
+    }
+
+    /// submitTaskCommand creates or fetches the task for a submitted source and
+    /// records the result. It mirrors the daemon: the project-scoped intake key
+    /// (project id plus source digest) fetches an existing task, so a distinct
+    /// command_id with the same source returns the same task and starts no
+    /// second run; a retried command_id replays the recorded result. The mock
+    /// does not resolve per-project policy, so it accepts any project. The
+    /// revoked-device refusal is the transport's, as for a decision command.
+    private func submitTaskCommand(
+        _ command: Components.Schemas.ClientCommand,
+        _ payload: Components.Schemas.SubmitTaskPayload
+    ) throws -> SubmitOutcome {
+        let digest = MockContractValidation.sha256Digest(of: payload.source)
+        if let recorded = resultsByCommandID[command.command_id] {
+            // A reused command_id replays only a submit_task result for the same
+            // device, project, and source; anything else is an immutable
+            // conflict, matching the daemon's replay guard (only the optional
+            // name is ignored).
+            guard case .submit_task(let record) = recorded.record,
+                record.device_id == command.device_id,
+                record.project_id == payload.project_id,
+                record.source_digest.value1 == digest
+            else {
+                throw ImmutableConflictError(commandID: command.command_id)
+            }
+            return .ok(commandResultTransform?(recorded) ?? recorded)
+        }
+        let key = payload.project_id + "\u{0}" + digest
+        let taskID: String
+        let runID: String
+        let name: Components.Schemas.DisplayName
+        if let existing = submittedTasksByKey[key] {
+            (taskID, runID, name) = existing
+        } else {
+            // Derive the identity from the whole intake key so the same source
+            // in two projects yields two distinct tasks (the daemon mints a
+            // random id; the mock keeps a stable one per key).
+            let suffix = String(
+                MockContractValidation.sha256Digest(of: key).dropFirst("sha256:".count).suffix(12))
+            taskID = "task-submitted-\(suffix)"
+            runID = "run-submitted-\(suffix)"
+            name = Self.submittedTaskName(operatorName: payload.name, source: payload.source, fallback: taskID)
+            revision += 1
+            materializeSubmittedTask(
+                taskID: taskID, runID: runID, campaignID: "campaign-submitted-\(suffix)",
+                projectID: payload.project_id, name: name, sourceDigest: digest)
+            submittedTasksByKey[key] = (taskID, runID, name)
+        }
+        revision += 1
+        let record = Components.Schemas.TaskSubmissionRecord(
+            kind: .submit_task, command_id: command.command_id, device_id: command.device_id,
+            project_id: payload.project_id, source_digest: .init(value1: digest),
+            task_id: taskID, specification_run_id: runID, name: .init(value1: name))
+        let result = Components.Schemas.CommandResult(record: .submit_task(record), revision: revision)
+        resultsByCommandID[command.command_id] = result
+        return .ok(commandResultTransform?(result) ?? result)
+    }
+
+    /// submittedTaskName mirrors the daemon: an operator-supplied name wins; a
+    /// source whose first non-empty line is a Markdown heading names the task
+    /// from that heading; anything else keeps the identifier fallback.
+    private static func submittedTaskName(
+        operatorName: String?, source: String, fallback: String
+    ) -> Components.Schemas.DisplayName {
+        if let operatorName, !operatorName.isEmpty {
+            return .init(text: operatorName, source: ._operator)
+        }
+        for rawLine in source.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            guard line.hasPrefix("#") else { break }
+            let title = line.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces)
+            if !title.isEmpty {
+                return .init(text: title, source: ._operator)
+            }
+            break
+        }
+        return .init(text: fallback, source: .identifier)
+    }
+
+    /// materializeSubmittedTask makes the created task and its specification run
+    /// visible to the read endpoints so a submission is followed by read-your-
+    /// write. The run is templated from a fixture to keep a valid shape.
+    private func materializeSubmittedTask(
+        taskID: String, runID: String, campaignID: String,
+        projectID: String, name: Components.Schemas.DisplayName, sourceDigest: String
+    ) {
+        let displayNames = Components.Schemas.DisplayNames(
+            project: .init(text: projectID, source: .identifier), task: name)
+        // Template the run from a fixture for a valid shape, then clear the
+        // stages so their bindings do not name the fixture's run (a contract
+        // breach the read endpoints reject).
+        if var template = RunFixtures.defaultRuns().first?.run {
+            template.id = runID
+            template.project_id = projectID
+            template.task_id = taskID
+            template.campaign_id = campaignID
+            template.attempt_number = 1
+            template.attempt_reason = nil
+            template.parent_run_id = nil
+            template.spec_digest = sourceDigest
+            template.display_names = .init(value1: displayNames)
+            template.created_at = currentTime
+            template.last_activity_at = currentTime
+            template.stages = []
+            runsByID[runID] = .init(as_of_revision: revision, entity_version: 1, run: template)
+        }
+        // The specification run's timeline carries its submission milestone. A
+        // campaign-backed run must show run-submitted evidence, so without this
+        // taskTimeline throws when the newly submitted task's timeline is opened.
+        timelinesByRunID[runID] = .init(
+            as_of_revision: revision, as_of: currentTime, run_id: runID,
+            milestones: [
+                .init(
+                    run_id: runID, kind: .run_submitted,
+                    invocation_id: "inv-\(runID)-1", recorded_at: currentTime)
+            ],
+            invocations: [])
+        // The task projects its one specification run: an active, work-in-progress
+        // task positioned at that run, with the run and its campaign in the task's
+        // membership so taskTimeline agrees with the run store (mirrors the daemon
+        // and TaskFixtures.defaultTasks). Without the membership and position the
+        // task read is self-inconsistent and read-your-write on the timeline fails.
+        let task = Components.Schemas.Task(
+            id: taskID, project_id: projectID, display_names: displayNames,
+            created_at: currentTime, last_activity_at: currentTime,
+            lifecycle: .active,
+            current_position: .init(value1: .init(run_id: runID)),
+            campaign_ids: [campaignID], run_ids: [runID], wip: true,
+            lifecycle_facts: [.init(kind: .started, run_id: runID, recorded_at: currentTime)])
+        tasksByID[taskID] = .init(as_of_revision: revision, entity_version: 1, task: task)
     }
 
     /// Completes asynchronous mock work explicitly. Read endpoints never call
@@ -1819,16 +1988,17 @@ public actor MockServer {
     /// input falls back to the raw structural message, so the already-written
     /// command remains the sole replay authority.
     private static func normalizedReplayCommand(
-        _ command: Components.Schemas.ClientCommand
+        _ command: Components.Schemas.ClientCommand,
+        _ payload: Components.Schemas.DecisionPayload
     ) -> NormalizedCommand {
         let message: String
         do {
             try MockContractValidation.validateActionInput(command)
-            message = try CommandResultTrust.recordedMessage(command.payload)
+            message = try CommandResultTrust.recordedMessage(payload)
         } catch {
-            message = command.payload.message ?? ""
+            message = payload.message ?? ""
         }
-        return NormalizedCommand(command, message: message)
+        return NormalizedCommand(command, payload, message: message)
     }
 
     private func convergeProposalSnoozes() {

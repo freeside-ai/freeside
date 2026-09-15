@@ -8,20 +8,33 @@ public enum CommandResultTrust {
         _ result: Components.Schemas.CommandResult,
         for command: Components.Schemas.ClientCommand
     ) -> Bool {
-        let payload = command.payload
-        guard result.revision >= 1,
-            let expectedMessage = try? recordedMessage(payload)
-        else { return false }
-        let record = result.record
-        return record.command_id == command.command_id
-            && record.device_id == command.device_id
-            && record.item_id == payload.item_id
-            && record.item_version == payload.item_version
-            && record.pr_head_sha == payload.pr_head_sha
-            && record.artifact_digests == Array(Set(payload.artifact_digests)).sorted()
-            && record.action == payload.action
-            && record.message == expectedMessage
-            && record.attachments == (payload.attachments ?? [])
+        guard result.revision >= 1 else { return false }
+        switch command.payload {
+        case .decision(let payload):
+            guard case .decision(let record) = result.record,
+                let expectedMessage = try? recordedMessage(payload)
+            else { return false }
+            return record.command_id == command.command_id
+                && record.device_id == command.device_id
+                && record.item_id == payload.item_id
+                && record.item_version == payload.item_version
+                && record.pr_head_sha == payload.pr_head_sha
+                && record.artifact_digests == Array(Set(payload.artifact_digests)).sorted()
+                && record.action == payload.action
+                && record.message == expectedMessage
+                && record.attachments == (payload.attachments ?? [])
+        case .submit_task(let payload):
+            // A submit_task result names the created-or-fetched task; its source
+            // digest must be the sha256 of exactly the submitted source, and its
+            // task and specification-run identities must be present.
+            guard case .submit_task(let record) = result.record else { return false }
+            return record.command_id == command.command_id
+                && record.device_id == command.device_id
+                && record.project_id == payload.project_id
+                && record.source_digest.value1 == MockContractValidation.sha256Digest(of: payload.source)
+                && !record.task_id.isEmpty
+                && !record.specification_run_id.isEmpty
+        }
     }
 
     /// The daemon's durable command-message normalization. Keeping the mock
