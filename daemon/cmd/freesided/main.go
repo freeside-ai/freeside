@@ -143,6 +143,7 @@ func main() {
 	flags := flag.NewFlagSet("freesided", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	dbPath := flags.String("db", "", "SQLite database path (required; created if absent)")
+	manualSubmissionConfigPath := flags.String("manual-submission-config", "", "operator JSON project policies for new client tasks (loaded once at startup)")
 	driverDir := flags.String("fake-driver-dir", "", "permanent fake StageDriver state directory (defaults beside -db)")
 	listenAddr := flags.String("listen", "127.0.0.1:0", "signet listener address (loopback or Tailscale-owned address only)")
 	ntfyURL := flags.String("ntfy-url", defaultNtfyURL, "ntfy server URL for device notifications")
@@ -257,7 +258,8 @@ func main() {
 		return
 	}
 	daemonConfig := config{
-		DBPath: *dbPath, FakeDriverDir: *driverDir, StateDir: *stateDir,
+		ManualSubmissionConfigPath: *manualSubmissionConfigPath,
+		DBPath:                     *dbPath, FakeDriverDir: *driverDir, StateDir: *stateDir,
 		ListenAddr: *listenAddr, NtfyURL: *ntfyURL, ReconcileInterval: *interval,
 		DoctorInterval:                     *doctorInterval,
 		SchedulerInterval:                  *schedulerInterval,
@@ -369,6 +371,7 @@ func serve(ctx context.Context, stop func(), h *daemon) error {
 }
 
 type config struct {
+	ManualSubmissionConfigPath         string
 	DBPath                             string
 	FakeDriverEnabled                  bool
 	FakeDriverDir                      string
@@ -512,6 +515,10 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	if cfg.SeedWalkingSkeleton && !cfg.FakeDriverEnabled {
 		return nil, errors.New("-seed-walking-skeleton requires -driver fake")
+	}
+	manualInitiator, err := loadManualSubmissionConfig(cfg.ManualSubmissionConfigPath)
+	if err != nil {
+		return nil, err
 	}
 	lock, err := daemonlock.Acquire(cfg.DBPath)
 	if err != nil {
@@ -683,10 +690,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		signet.WithDoctorSchedule(doctorScheduleID, doctorAvailable.Load),
 		signet.WithBlobStore(blobs),
 		// Client task submission (plan §5.11) resolves each project's policy from
-		// its configured initiator. The list is empty on the host until the rein
-		// resolver populates it, so submission is refused there and works in
-		// test compositions that supply initiators directly.
-		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, manualInitiatorLookup(cfg.IntakeInitiators))),
+		// its operator-configured startup snapshot, independently of label intake.
+		// An omitted manual-submission file disables new client tasks.
+		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, manualInitiator)),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: cfg.NtfyURL, TopicKey: topicKey,
 			ClickBaseURL: "http://" + listener.Addr().String(),

@@ -242,6 +242,55 @@ Every state directory is owner-only, including the corrected
 The static binary and supervisor may be installed through a one-time narrow
 elevation step, but the stateful daemon always runs as the non-root operator.
 
+### Configure Client Task Submission
+
+Pass `-manual-submission-config /absolute/manual-submission.json` to the
+long-running daemon to enable new tasks from paired clients. The operator
+supplies a UTF-8 JSON file with this version-1 shape:
+
+```json
+{
+  "version": 1,
+  "projects": [
+    {
+      "project_id": "operator-configured-project",
+      "policy_keys": [],
+      "commit_author": {"app_slug": "configured-app", "bot_user_id": 1}
+    }
+  ]
+}
+```
+
+This shows the schema only. Replace the empty policy and example attribution
+with approved operator inputs. Each policy key has `key`, `value`, and
+`provenance: {"source": "preset" | "override", "digest": "sha256:..."}`.
+Supply the complete resolved policy, including the specification settings and
+an explicit `paths` boundary. Keys may arrive in any order. The daemon uses
+the existing resolved-policy, specification-policy, path, and commit-author
+validators; it never creates provenance or chooses defaults for this file.
+
+The daemon loads and validates the whole file once, before opening its command
+listener. Files over 4 MiB, invalid UTF-8 or JSON, duplicate JSON members,
+unknown fields, unsupported versions, missing or repeated project IDs,
+invalid policies, missing or unenforceable paths, and invalid author syntax
+fail startup with a `manual submission config` error. A null project list or
+entry is invalid. `{"version":1,"projects":[]}` or omission of the flag
+disables new client submissions. An unconfigured project returns HTTP 404
+without a durable task, run, or command record.
+
+A client supplies only project, source, and optional name. This configuration
+is independent of label intake: neither configuration falls back to the other.
+Attribution syntax and provenance claims do not grant publication authority.
+Production still authenticates the author against the selected GitHub App and
+enforces recipe approval, conformance, admission, and specification approval.
+
+Changing the file requires a daemon restart and affects only new tasks. Both
+command replay and a new command with the same project/source reuse the stored
+task, first name, specification run, and policy/publication bindings, even if
+the configuration changed or was removed. Existing CLI submit flags and
+identity rules are unchanged. For private staging and retained-session
+recovery, use the [production walkthrough](../docs/production-walkthrough.md#submit-a-new-task-from-a-client).
+
 ### Enroll A Codex Subscription Identity
 
 `freesided enroll-codex` bootstraps a Codex subscription identity and repairs

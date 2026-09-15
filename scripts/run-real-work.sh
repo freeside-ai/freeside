@@ -67,6 +67,10 @@
 #                                    agent may rewrite (no match-everything
 #                                    default: it is a containment control)
 # Optional environment:
+#   FREESIDE_REAL_RUN_MANUAL_SUBMISSION_CONFIG operator JSON project policy
+#                                    for new client tasks; privately retained.
+#                                    Resume reuses the retained file unless an
+#                                    explicit reviewed replacement is supplied.
 #   FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN absolute native Claude CLI path
 #   FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256 exact executable content pin
 #   FREESIDE_REAL_RUN_JUDGMENT_MODEL explicit Claude model for daemon judgments
@@ -420,6 +424,10 @@ if [[ -n "$work_unit_file" ]]; then
 	cp "$work_unit_file" "$submission_inputs/work-unit.json"
 	work_unit_file="$submission_inputs/work-unit.json"
 fi
+# shellcheck source=scripts/real-work-manual-submission.sh
+source "$repo_root/scripts/real-work-manual-submission.sh"
+real_work_stage_manual_submission \
+  "${FREESIDE_REAL_RUN_MANUAL_SUBMISSION_CONFIG:-}" "$retained_session" "$workdir"
 
 if [[ -n "$retained_session" ]]; then
   printf '%s\n' "$retained_session" > "$workdir/predecessor-session"
@@ -568,6 +576,7 @@ if [[ -n "${FREESIDE_REAL_RUN_BUILD_PROXY:-}" ]]; then
 fi
 if [[ -n "$retained_session" ]]; then
   receipt_args=("$build_version" "$spec_file" "$policy_file" "$publication_file" "$work_unit_file"
+    --manual-submission-config "$manual_submission_file"
     "${required[@]}" FREESIDE_REAL_RUN_BUILD_PROXY "${judgment_names[@]}")
   if [[ "$(cat "$retained_session/status")" == recovery-required &&
     -f "$retained_session/runtime-upgrade-started" &&
@@ -727,8 +736,10 @@ echo "starting the daemon with the production Claude driver" >&2
 require_live_rig
 # FREESIDE_REAL_RUN_LISTEN pins the exact leased listener so an operator's
 # paired client can reach the specification-approval gate.
+python3 "$workdir/real-work-retained.py" check-manual "$workdir" >/dev/null
 "$workdir/freesided" \
   "${judgment_args[@]}" \
+  "${manual_submission_args[@]}" \
   -listen "$listen_address" \
   -db "$db_path" \
   -driver claude \

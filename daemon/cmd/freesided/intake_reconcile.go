@@ -82,43 +82,6 @@ type intakeInitiator struct {
 	ComponentCount    int
 }
 
-// manualInitiatorLookup adapts the configured label initiators into the
-// per-project submission-policy resolver the client task-submission path needs.
-// It reuses the same policy keys and commit author the label intake holds. When
-// two initiators for one project disagree on either, it refuses rather than
-// guess which policy a client submission should run under.
-func manualInitiatorLookup(initiators []intakeInitiator) func(domain.ProjectID) (engine.ManualInitiator, bool) {
-	return func(projectID domain.ProjectID) (engine.ManualInitiator, bool) {
-		var found *engine.ManualInitiator
-		for _, init := range initiators {
-			if init.ProjectID != projectID {
-				continue
-			}
-			candidate := engine.ManualInitiator{PolicyKeys: init.PolicyKeys, CommitAuthor: init.CommitAuthor}
-			if found == nil {
-				resolved := candidate
-				found = &resolved
-				continue
-			}
-			// Compare policies by their order-independent digest, the same
-			// identity a resolved policy carries downstream
-			// (domain.NewResolvedPolicy sorts keys before hashing): two
-			// initiators listing identical keys in a different order are the
-			// same policy, not a conflict. Fail closed on a digest error.
-			foundDigest, foundErr := (domain.ResolvedPolicy{Keys: found.PolicyKeys}).ComputeDigest()
-			candidateDigest, candidateErr := (domain.ResolvedPolicy{Keys: candidate.PolicyKeys}).ComputeDigest()
-			if foundErr != nil || candidateErr != nil ||
-				foundDigest != candidateDigest || found.CommitAuthor != candidate.CommitAuthor {
-				return engine.ManualInitiator{}, false
-			}
-		}
-		if found == nil {
-			return engine.ManualInitiator{}, false
-		}
-		return *found, true
-	}
-}
-
 func (i intakeInitiator) validate() error {
 	switch {
 	case i.Repo == "":

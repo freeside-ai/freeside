@@ -17,9 +17,8 @@ import (
 
 // ManualInitiator is a project's configured client-submission policy: the
 // resolved policy keys a submitted task runs under and the commit author its
-// publication is attributed to. It is the same per-project material the label
-// initiators hold; until a rein resolver populates it in a real deployment,
-// client submission works in test compositions and is refused on the host.
+// publication is attributed to. The daemon loads this operator-owned snapshot
+// separately from label intake; a paired client cannot choose these bindings.
 type ManualInitiator struct {
 	PolicyKeys   []domain.PolicyKey
 	CommitAuthor ProductionCommitAuthor
