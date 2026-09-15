@@ -4562,7 +4562,7 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload/source`.
             public var source: Swift.String
-            /// Optional operator-chosen task name, stored with source operator so the namer never runs for it. Applied only on creation; ignored when the command fetches an existing task.
+            /// Optional operator-chosen task name, stored with source operator so the namer never runs for it. The daemon trims surrounding whitespace, then requires one line of 1 to 60 characters (Unicode code points), valid UTF-8, with no credential-shaped token. A name that fails after trimming is rejected with 400 and nothing is written; the daemon never truncates it or drops it. The name is applied only when the command creates the task and is ignored, but still validated, when the command fetches an existing task.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload/name`.
@@ -4573,7 +4573,7 @@ public enum Components {
             ///   - kind:
             ///   - project_id: The project the task is submitted into.
             ///   - source: The task's source text, registered as a digest-addressed artifact.
-            ///   - name: Optional operator-chosen task name, stored with source operator so the namer never runs for it. Applied only on creation; ignored when the command fetches an existing task.
+            ///   - name: Optional operator-chosen task name, stored with source operator so the namer never runs for it. The daemon trims surrounding whitespace, then requires one line of 1 to 60 characters (Unicode code points), valid UTF-8, with no credential-shaped token. A name that fails after trimming is rejected with 400 and nothing is written; the daemon never truncates it or drops it. The name is applied only when the command creates the task and is ignored, but still validated, when the command fetches an existing task.
             public init(
                 kind: Components.Schemas.SubmitTaskPayload.kindPayload,
                 project_id: Swift.String,
