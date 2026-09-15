@@ -22,6 +22,15 @@ enum TaskDisplay {
         let hold: String?
     }
 
+    /// The sorted, unique project ids the synced tasks name: the set the
+    /// Tasks filter offers and the same set the New Task composer's project
+    /// picker draws from, so a task's home project appears once the client
+    /// has synced a task in it. A configured project with no synced task is
+    /// not offered until #1332 lists configured projects in the bootstrap.
+    static func knownProjects(in tasks: [Components.Schemas.TaskSnapshot]) -> [String] {
+        Array(Set(tasks.map(\.task.project_id))).sorted()
+    }
+
     /// Newest activity first, the id as the tie-breaker. A task always
     /// carries its last activity, so unlike the run list no row is undated.
     static func sortedTasks(

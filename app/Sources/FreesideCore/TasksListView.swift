@@ -33,7 +33,7 @@ struct TasksListView: View {
     }
 
     private var projects: [String] {
-        Array(Set(tasks.map(\.task.project_id))).sorted()
+        TaskDisplay.knownProjects(in: tasks)
     }
 
     private var visibleTasks: [Components.Schemas.TaskSnapshot] {

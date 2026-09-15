@@ -17,6 +17,12 @@ import Testing
             })
     }
 
+    @Test func newTaskCommandCarriesCommandN() {
+        let descriptor = FreesideCommandDescriptor.all.first { $0.id == .newTask }
+        #expect(descriptor?.shortcut?.key == "n")
+        #expect(descriptor?.shortcut?.modifiers == .command)
+    }
+
     @Test func returnRequiresTheValidatedAuthoritativeRecommendation() {
         #expect(
             DecisionKeyboardGate.canTakeRecommendation(

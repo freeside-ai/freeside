@@ -28,6 +28,10 @@ public final class NavigationModel {
     public var taskSelection: String?
     public var runSelection: String?
     public var inspectorPresented: Bool
+    /// The New Task composer's presentation flag, shared by the Tasks toolbar
+    /// button, ⌘N, and the File > New Task menu item, so all three open the one
+    /// sheet through the same gated path.
+    public var newTaskComposerPresented = false
     public private(set) var operatorNavigationRevision = 0
 
     public init(launchInputs: LaunchInputs) {

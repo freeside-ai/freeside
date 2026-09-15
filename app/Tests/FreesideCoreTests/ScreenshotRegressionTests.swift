@@ -307,6 +307,41 @@
                             rendersInteractiveControls: false,
                             submit: { _, _ in true }))))
 
+            // The New Task composer (#1330): the project picker trigger, the
+            // source field, and the optional name, empty and filled, on Mac
+            // and phone. ImageRenderer draws the static stand-ins, not the live
+            // TextEditor or Picker; the toolbar action and open sheet are in
+            // the PR's real-app screenshots.
+            let newTaskProjects = TaskDisplay.knownProjects(in: TaskFixtures.defaultTasks())
+            // The composer only opens on a settled sync, so the goldens depict
+            // that state: a fresh coordinator keeps the filled surface's Submit
+            // enabled (the action is gated on `.fresh`).
+            let newTaskCoordinator = SyncCoordinator(client: client, cache: InMemoryCacheStore())
+            newTaskCoordinator.store.freshness = .fresh
+            let newTaskModel = TaskSubmissionModel(coordinator: newTaskCoordinator)
+            let filledSource =
+                "Add a /health endpoint returning the daemon version and uptime, with a test."
+            for (name, width, scheme, draftSource, draftName) in [
+                ("new-task-sheet", CGFloat(380), ColorScheme.light, "", ""),
+                ("new-task-sheet-filled-dark", CGFloat(380), ColorScheme.dark, filledSource, "Health endpoint"),
+                ("new-task-sheet-phone", CGFloat(390), ColorScheme.light, "", ""),
+                ("new-task-sheet-phone-filled-dark", CGFloat(390), ColorScheme.dark, filledSource, "Health endpoint"),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: name,
+                        width: width,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            NewTaskSheet(
+                                projects: newTaskProjects,
+                                model: newTaskModel,
+                                onSubmitted: { _ in },
+                                rendersInteractiveControls: false,
+                                initialSource: draftSource,
+                                initialName: draftName))))
+            }
+
             // The Answer-and-retry composer with the route picker (#1083): the
             // operator answers and chooses whether to retry the implementer or
             // revise the specification. Captured on Mac and phone, light and dark.

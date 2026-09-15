@@ -216,6 +216,21 @@ public struct FreesideRootView: View {
                 }
             }
             .toolbar {
+                ToolbarItem(placement: .navigation) {
+                    // The composer lives on the Tasks screen, so its action
+                    // shows only there. Setting the shared flag is the one way
+                    // the sheet opens, so this gate covers ⌘N and the menu too.
+                    if selectedTab.wrappedValue == .tasks {
+                        Button {
+                            navigation.newTaskComposerPresented = true
+                        } label: {
+                            Label("New task", systemImage: "plus")
+                        }
+                        .help("New task")
+                        .disabled(
+                            !TaskSubmissionModel.canCompose(freshness: coordinator.store.freshness))
+                    }
+                }
                 ToolbarItemGroup {
                     Button {
                         Task { await coordinator.refresh() }
@@ -232,6 +247,12 @@ public struct FreesideRootView: View {
                     .help(
                         navigation.inspectorPresented ? "Hide Inspector" : "Show Inspector")
                 }
+            }
+            .sheet(isPresented: Bindable(navigation).newTaskComposerPresented) {
+                NewTaskSheet(
+                    projects: TaskDisplay.knownProjects(in: coordinator.tasks),
+                    model: TaskSubmissionModel(coordinator: coordinator),
+                    onSubmitted: { routeToSubmittedTask($0, coordinator: coordinator) })
             }
         #endif
     }
@@ -293,6 +314,27 @@ public struct FreesideRootView: View {
                     navigationPath: rawTasksPathBinding,
                     onRefresh: coordinator.refresh
                 )
+                // The toolbar and sheet ride the stack's root content, not the
+                // NavigationStack, so the trailing items render in the list's
+                // navigation bar and stay off the pushed task and run detail.
+                .toolbar {
+                    ToolbarItemGroup(placement: .topBarTrailing) {
+                        Button {
+                            navigation.newTaskComposerPresented = true
+                        } label: {
+                            Label("New task", systemImage: "plus")
+                        }
+                        .disabled(
+                            !TaskSubmissionModel.canCompose(freshness: coordinator.store.freshness))
+                        decisionFlowMenu
+                    }
+                }
+                .sheet(isPresented: Bindable(navigation).newTaskComposerPresented) {
+                    NewTaskSheet(
+                        projects: TaskDisplay.knownProjects(in: coordinator.tasks),
+                        model: TaskSubmissionModel(coordinator: coordinator),
+                        onSubmitted: { routeToSubmittedTask($0, coordinator: coordinator) })
+                }
                 .navigationDestination(for: String.self) { id in
                     if let task = coordinator.tasks.first(where: { $0.task.id == id }) {
                         TaskTimelineView(
@@ -306,11 +348,6 @@ public struct FreesideRootView: View {
                             systemImage: "questionmark.circle",
                             description: "This task or run is no longer available.")
                     }
-                }
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    decisionFlowMenu
                 }
             }
         }
@@ -508,6 +545,18 @@ public struct FreesideRootView: View {
 
     private func consumeTechnicalDetailsRequest(_ nonce: UUID) {
         technicalDetailsRequest = technicalDetailsRequest?.consuming(nonce)
+    }
+
+    /// Routes to the newly created task after a submit. The model confirms the
+    /// task is synced before reporting success, but a failed post-submit
+    /// refresh can still leave it absent from the cache; fall back to the Tasks
+    /// list so a successful submission never lands on a "Not available" detail.
+    private func routeToSubmittedTask(_ taskID: String, coordinator: SyncCoordinator) {
+        if coordinator.tasks.contains(where: { $0.task.id == taskID }) {
+            navigation.route(to: .task(taskID))
+        } else {
+            navigation.showActiveTasks()
+        }
     }
 
 }

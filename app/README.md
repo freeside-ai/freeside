@@ -39,7 +39,7 @@ Launch arguments also pin the presentation per launch (`LaunchInputs`), so scree
 
 ## macOS Keyboard Commands
 
-- ⌘1 shows Inbox; ⌘2 shows Tasks; ⌘R refreshes; ⌥⌘I toggles the inspector.
+- ⌘1 shows Inbox; ⌘2 shows Tasks; ⌘R refreshes; ⌥⌘I toggles the inspector; ⌘N opens the New Task composer on the Tasks screen (File > New Task), enabled only while the sync is fresh.
 - With the inbox list focused, J selects the next item and K the previous one; the arrow keys keep their native list behavior.
 - Return takes only a validated authoritative recommendation. Esc dismisses pending action UI without resolving the item. Space is unbound.
 
