@@ -97,6 +97,36 @@ resumable. It does not submit work or issue a client command.
 Pairing, signing material, approvals, attempts and prior session evidence remain
 in their existing locations. The new session records its predecessor.
 
+### Retain Client Submission Configuration
+
+`FREESIDE_REAL_RUN_MANUAL_SUBMISSION_CONFIG` is an optional absolute path to
+the operator-owned JSON described in the
+[daemon guide](../daemon/README.md#configure-client-task-submission).
+On a fresh run, set it explicitly to enable new client tasks. The harness
+copies those bytes to `submission-inputs/manual-submission.json` in the private
+session directory, records their digest and presence in
+`manual-submission-input.json`, and passes the staged path through the
+daemon-only `-manual-submission-config` flag. It never derives this input from
+the seed task's policy, publication file, or database.
+
+A normal `--resume-session` with the variable unset reuses the retained bytes.
+Edits to the original operator file have no effect. Sessions that predate this
+input, and sessions created without it, remain disabled. Missing or changed
+retained bytes fail the resume instead of silently dropping configuration.
+
+To add configuration to an older session or replace it, complete/recover and
+restore the prior session as described above, review the new file and current
+build, then set the variable explicitly for `--resume-session`. To disable
+new submissions, supply a valid file with an empty `projects` array. The
+restart records a fresh input receipt; it does not change existing task or run
+bindings. The old binary's composition preflight receives no new flag. An
+interrupted upgrade must retry the same build and inputs, including the
+manual file's presence and digest. It refuses a replacement, addition, or
+missing file during that retry. Configuration is also rechecked immediately
+before the new daemon launch.
+
+### Verify The Resumed Endpoint
+
 Startup checks the listener's build and an authenticated retained publication
 checkpoint, including the remote PR head through the operator's `gh` access.
 A failed or pending feedback attempt may leave the previous ready item
@@ -269,3 +299,30 @@ choosing a recovery binary does not install it or authorize a runtime upgrade.
 earlier diagnostics. Keep the entire private session until recovery and the
 operator's evidence review are finished. There is no detached daemon continuation
 promise and no dependency on the former scratch `serve-78.sh`.
+
+## Submit A New Task From A Client
+
+This is the live creation exercise for #1360 and the Mac/physical-iPhone
+acceptance retained by #1211. Use a production session configured with the
+explicit manual-submission file above, current installed clients, and the
+normal authenticated App, policy, admission, and specification-approval gates.
+Hermetic HTTP tests do not replace this evidence.
+
+1. Choose a configured project already visible in sync. Project discovery is
+   tracked separately in #1332. If visibility needs a CLI seed, use different
+   source from the client exercise.
+2. Confirm the chosen project/source has no existing task. For the requested
+   gh-imgup exercise, use `Please handle
+   https://github.com/freeasinbird/gh-imgup/issues/82.` as one line. Never
+   pre-create that source through the CLI.
+3. Enter that source in the client composer and submit. Record the command
+   result, new task ID, specification-run ID, and the returned sync state.
+   Verify the task name and run timeline on the Mac and physical iPhone.
+4. Follow the normal clarification or specification flow. Leave the human
+   specification approval gate in place. Submitting the same project/source
+   from the second device proves reuse, not a second task creation.
+
+The retained harness's publication verifier checks its original run. It is
+not evidence that this new client task was created or published. Record the
+new task's evidence separately, and leave live acceptance outstanding if the
+approved inputs or either physical client are unavailable.

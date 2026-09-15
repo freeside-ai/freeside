@@ -155,5 +155,74 @@ with tempfile.TemporaryDirectory() as temp:
         path.write_text(saved)
     os.environ['FREESIDE_REAL_RUN_JUDGMENT_MODEL'] = 'another'
     assert receipt != module.upgrade_receipt('reviewed-version', inputs, names)
+with tempfile.TemporaryDirectory() as temp:
+    root = Path(temp)
+    operator = root / 'operator.json'
+    operator.write_text('{"version":1,"projects":[]}')
+    original = root / 'original'
+    original.mkdir()
+    snapshot = module.stage_manual_submission(str(operator), '', original)
+    assert Path(snapshot).read_bytes() == operator.read_bytes()
+    # New input is a distinct receipt dimension; old receipts remain compatible.
+    names = ['FREESIDE_REAL_RUN_PROMPT_PACKAGE', 'FREESIDE_REAL_RUN_SPECIFICATION_PROMPT_PACKAGE',
+             'FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE', 'FREESIDE_REAL_RUN_INSTRUCTIONS',
+             'FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT', 'FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS',
+             'FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT']
+    for name in names:
+        os.environ[name] = str(operator)
+    os.environ['FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT'] = str(root)
+    old = module.upgrade_receipt('version', [str(operator)] * 3 + [''], names)
+    configured = module.upgrade_receipt('version', [str(operator)] * 3 + [''], names, snapshot)
+    assert 'manual_submission_digest' not in old
+    assert configured != old
+    # A reviewed completed-session restart may replace or add configuration.
+    (original / 'status').write_text('completed')
+    (original / 'runtime-upgrade-started').touch()
+    operator.write_text('{"version":1,"projects":[]}\n')
+    replaced = root / 'replaced'
+    replaced.mkdir()
+    replacement = module.stage_manual_submission(str(operator), str(original), replaced)
+    assert Path(replacement).read_bytes() == operator.read_bytes()
+    assert Path(snapshot).read_bytes() != operator.read_bytes()
+    legacy = root / 'legacy'
+    legacy.mkdir()
+    added = root / 'added'
+    added.mkdir()
+    assert module.stage_manual_submission(str(operator), str(legacy), added)
+    # Interrupted upgrades cannot change bytes, add a file, or lose a snapshot.
+    (original / 'status').write_text('recovery-required')
+    refuses(lambda: module.stage_manual_submission(str(operator), str(original), root / 'bad'))
+    same = root / 'same'
+    same.mkdir()
+    assert module.stage_manual_submission('', str(original), same)
+    # A retry that failed before opening writable still inherits the original
+    # interrupted upgrade's input constraint.
+    (original / 'runtime-upgrade-started').rename(original / 'runtime-upgrade-inherited')
+    refuses(lambda: module.stage_manual_submission(str(operator), str(original), root / 'changed-inherited'))
+    inherited = root / 'inherited'
+    inherited.mkdir()
+    assert module.stage_manual_submission('', str(original), inherited)
+    saved = Path(snapshot).read_bytes()
+    Path(snapshot).write_text('tampered')
+    refuses(lambda: module.manual_submission_path(original))
+    refuses(lambda: module.stage_manual_submission('', str(original), root / 'bad2'))
+    assert configured != module.upgrade_receipt('version', [str(operator)] * 3 + [''], names, snapshot)
+    Path(snapshot).unlink()
+    refuses(lambda: module.manual_submission_path(original))
+    refuses(lambda: module.stage_manual_submission('', str(original), root / 'bad3'))
+    refuses(lambda: module.upgrade_receipt('version', [str(operator)] * 3 + [''], names, snapshot))
+    (legacy / 'status').write_text('recovery-required')
+    (legacy / 'runtime-upgrade-started').touch()
+    refuses(lambda: module.stage_manual_submission(str(operator), str(legacy), root / 'bad4'))
+    (legacy / 'runtime-upgrade-started').rename(legacy / 'runtime-upgrade-inherited')
+    refuses(lambda: module.stage_manual_submission(str(operator), str(legacy), root / 'added-inherited'))
+    still_disabled = root / 'still-disabled'
+    still_disabled.mkdir()
+    assert module.stage_manual_submission('', str(legacy), still_disabled) == ''
+    Path(snapshot).write_bytes(saved)
+    (original / 'manual-submission-input.json').unlink()
+    refuses(lambda: module.manual_submission_path(original))
+    operator.write_bytes(b'x' * ((4 << 20) + 1))
+    refuses(lambda: module.stage_manual_submission(str(operator), '', root / 'too-large'))
 print("PASS: retained identities/composition and exact remote publication checks")
 PY

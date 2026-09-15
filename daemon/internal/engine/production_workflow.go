@@ -163,7 +163,9 @@ func (a ProductionCommitAuthor) Email() string {
 	return fmt.Sprintf("%d+%s@users.noreply.github.com", a.BotUserID, a.Name())
 }
 
-func (a ProductionCommitAuthor) validate() error {
+// Validate checks attribution syntax, not the selected App's authority. The
+// production composition must still authenticate this claim before using it.
+func (a ProductionCommitAuthor) Validate() error {
 	if a.BotUserID <= 0 || a.AppSlug == "" || len(a.AppSlug) > 34 {
 		return errors.New("production commit author requires a canonical App slug and positive bot user id")
 	}
@@ -216,7 +218,7 @@ func (p ProductionPublication) validateRetained() error {
 	if len(p.Body) > 64<<10 {
 		return errors.New("production publication body exceeds the retained metadata limit")
 	}
-	if err := p.CommitAuthor.validate(); err != nil {
+	if err := p.CommitAuthor.Validate(); err != nil {
 		return err
 	}
 	return nil

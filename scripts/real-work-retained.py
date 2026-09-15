@@ -47,7 +47,56 @@ def approved_composition(session):
     return original if original.is_file() else session / "composition-manifest.json"
 
 
-def upgrade_receipt(version, inputs, names):
+def manual_submission_path(session):
+    """Verify presence and bytes before reusing a retained startup snapshot."""
+    path = session / "submission-inputs/manual-submission.json"
+    marker = session / "manual-submission-input.json"
+    if not marker.exists():
+        if path.exists():
+            raise ValueError("manual submission snapshot has no input receipt")
+        return ""  # Sessions predating this input remain disabled.
+    receipt = read_json(marker)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+    if receipt != {"sha256": digest}:
+        raise ValueError("retained manual submission configuration changed or is missing")
+    return str(path) if digest is not None else ""
+
+
+def stage_manual_submission(explicit, retained, destination):
+    """An explicit input replaces policy only for a newly reviewed restart."""
+    previous = manual_submission_path(Path(retained)) if retained else ""
+    source = explicit or previous
+    body = None
+    if source:
+        with Path(source).open("rb") as input_file:
+            body = input_file.read((4 << 20) + 1)
+    if body is not None and len(body) > 4 << 20:
+        raise ValueError("manual submission configuration exceeds 4 MiB")
+    receipt = {"sha256": hashlib.sha256(body).hexdigest() if body is not None else None}
+    if (retained and ((Path(retained) / "runtime-upgrade-started").exists()
+                     or (Path(retained) / "runtime-upgrade-inherited").exists())
+            and (Path(retained) / "status").read_text().strip() == "recovery-required"):
+        # An interrupted attempt may resume only its already-recorded input,
+        # including absence. A fresh completed-session restart may replace it.
+        old_marker = Path(retained) / "manual-submission-input.json"
+        old = read_json(old_marker) if old_marker.exists() else {"sha256": None}
+        if receipt != old:
+            raise ValueError("interrupted upgrade manual submission input changed")
+    directory = destination / "submission-inputs"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = directory / "manual-submission.json"
+    if body is not None:
+        with path.open("xb") as output:
+            os.fchmod(output.fileno(), 0o600)
+            output.write(body)
+    marker = destination / "manual-submission-input.json"
+    with marker.open("x") as output:
+        os.fchmod(output.fileno(), 0o600)
+        output.write(json.dumps(receipt) + "\n")
+    return str(path) if body is not None else ""
+
+
+def upgrade_receipt(version, inputs, names, manual_config=""):
     values = {name: os.environ.get(name, "") for name in names}
     paths = [Path(path) for path in inputs if path]
     for name in ("FREESIDE_REAL_RUN_PROMPT_PACKAGE",
@@ -68,7 +117,11 @@ def upgrade_receipt(version, inputs, names):
         content.extend(hashlib.sha256(path.read_bytes()).hexdigest()
                        for path in paths_for_judgment)
     canonical = json.dumps({"values": values, "content": content}, sort_keys=True).encode()
-    return {"version": version, "inputs_digest": hashlib.sha256(canonical).hexdigest()}
+    receipt = {"version": version, "inputs_digest": hashlib.sha256(canonical).hexdigest()}
+    # Preserve compatibility with an older receipt when this input is absent.
+    if manual_config:
+        receipt["manual_submission_digest"] = hashlib.sha256(Path(manual_config).read_bytes()).hexdigest()
+    return receipt
 
 
 def compare_composition(old, new):
@@ -111,7 +164,11 @@ def check_remote(checkpoint, observed):
 
 def main():
     action = sys.argv[1]
-    if action == "validate":
+    if action == "stage-manual":
+        print(stage_manual_submission(sys.argv[2], sys.argv[3], Path(sys.argv[4])))
+    elif action == "check-manual":
+        print(manual_submission_path(Path(sys.argv[2])))
+    elif action == "validate":
         validate_session(Path(sys.argv[2]))
     elif action == "identity":
         value = read_json(Path(sys.argv[2]) / "submit.json").get(sys.argv[3], "")
@@ -125,7 +182,11 @@ def main():
         if health.get("status") != "ok" or health.get("version") != sys.argv[3]:
             raise ValueError("listener does not serve the expected healthy daemon build")
     elif action in ("receipt-write", "receipt-check"):
-        receipt = upgrade_receipt(sys.argv[3], sys.argv[4:8], sys.argv[8:])
+        names = sys.argv[8:]
+        manual_config = ""
+        if names[:1] == ["--manual-submission-config"]:
+            manual_config, names = names[1], names[2:]
+        receipt = upgrade_receipt(sys.argv[3], sys.argv[4:8], names, manual_config)
         if action == "receipt-check":
             if read_json(sys.argv[2]) != receipt:
                 raise ValueError("interrupted migration inputs or reviewed build changed")
