@@ -162,8 +162,17 @@ private struct FreesideAppCommands: Commands {
     @FocusedValue(\.decisionCommandActions) private var decisionActions
 
     var body: some Commands {
+        // New Task takes the File > New slot (⌘N) instead of a Navigate row,
+        // so it reads as document creation rather than navigation.
+        CommandGroup(replacing: .newItem) {
+            if let descriptor = FreesideCommandDescriptor.all.first(where: { $0.id == .newTask }) {
+                Button(descriptor.title) { perform(.newTask) }
+                    .keyboardShortcut(descriptor.shortcut)
+                    .disabled(isDisabled(.newTask))
+            }
+        }
         CommandMenu("Navigate") {
-            ForEach(FreesideCommandDescriptor.all) { descriptor in
+            ForEach(FreesideCommandDescriptor.all.filter { $0.id != .newTask }) { descriptor in
                 Button(descriptor.title) { perform(descriptor.id) }
                     .keyboardShortcut(descriptor.shortcut)
                     .disabled(isDisabled(descriptor.id))
@@ -188,6 +197,8 @@ private struct FreesideAppCommands: Commands {
             decisionActions?.canTakeRecommendation != true
         case .cancelPendingAction:
             decisionActions == nil
+        case .newTask:
+            coordinator.map { !TaskSubmissionModel.canCompose(freshness: $0.store.freshness) } ?? true
         }
     }
 
@@ -212,6 +223,9 @@ private struct FreesideAppCommands: Commands {
             decisionActions?.takeRecommendation()
         case .cancelPendingAction:
             decisionActions?.cancelPendingAction()
+        case .newTask:
+            navigation.selectTab(.tasks)
+            navigation.newTaskComposerPresented = true
         }
     }
 }

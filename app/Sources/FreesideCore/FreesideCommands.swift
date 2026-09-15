@@ -25,6 +25,7 @@ public enum FreesideCommandAction: String, CaseIterable, Identifiable, Sendable 
     case previousItem
     case takeRecommendation
     case cancelPendingAction
+    case newTask
 
     public var id: Self { self }
 }
@@ -47,6 +48,7 @@ public struct FreesideCommandDescriptor: Identifiable {
         .init(
             id: .cancelPendingAction, title: "Cancel Pending Action",
             shortcut: .init(.escape, modifiers: [])),
+        .init(id: .newTask, title: "New Task", shortcut: .init("n", modifiers: .command)),
     ]
 }
 
