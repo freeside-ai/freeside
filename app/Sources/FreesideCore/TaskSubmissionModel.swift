@@ -47,6 +47,13 @@ public final class TaskSubmissionModel {
         freshness == .fresh
     }
 
+    /// The coordinator's current sync freshness, observed so the composer can
+    /// keep its submit action gated on `.fresh` for the sheet's whole lifetime,
+    /// not only when it opens: a heartbeat or foreground refresh can degrade
+    /// freshness while the operator composes, and a stale-epoch submit would
+    /// carry an out-of-date project selection.
+    public var freshness: InboxStore.Freshness { coordinator.store.freshness }
+
     /// Submits `source` under `projectID` with an optional operator name and
     /// returns the created-or-fetched task id, or nil on failure (state carries
     /// the outcome). Each call mints a fresh command id; `retry` reuses the
@@ -88,8 +95,16 @@ public final class TaskSubmissionModel {
                     state = .rejected("the daemon returned an invalid task-submission result")
                     return nil
                 }
-                // Read-your-write: the task and its run are visible on the next sync.
+                // Read-your-write: the task and its run must be visible before
+                // the caller routes to the task detail. A first refresh can
+                // coalesce with a read begun before the commit and return
+                // without the new task; a second refresh cannot join that
+                // pre-commit read, so it observes the committed task. Bounded to
+                // one extra refresh so a genuinely lagging daemon cannot spin.
                 await coordinator.refresh()
+                if !coordinator.tasks.contains(where: { $0.task.id == record.task_id }) {
+                    await coordinator.refresh()
+                }
                 state = .submitted(taskID: record.task_id)
                 return record.task_id
             case .conflict:
