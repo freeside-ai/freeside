@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 58
+revision: 59
 status: active
-updated: 2026-09-12
+updated: 2026-09-15
 ---
 
 # Freeside
@@ -2283,15 +2283,18 @@ Additional rules:
   takes precedence and skips the namer. Otherwise the advisory task namer
   (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) supplies the first name; until a name is
   available, including when inference fails, the task displays its identifier.
-  The first produced name is stored, never regenerated on read. At
-  specification submission, the specifier may refine an agent-provided name
-  once. It never replaces an operator-provided name. If only the identifier
-  fallback exists, the approved specification may supply the first name at
-  approval. That first name is frozen immediately, with no later automatic
-  refinement. Approval freezes every name; subsequent specification revisions and
-  retries do not rename the task. After approval, only an explicit operator
-  rename changes it. Agent-produced names retain producer-labeled claim
-  provenance. Names grant no execution, approval, or publication authority.
+  The first produced name is stored, never regenerated on read. When the
+  task's first specification is accepted, the specifier's title may replace an
+  agent-produced name or the identifier fallback, once. It never replaces an
+  operator-provided name, and a revised specification does not rename.
+  When the approved body opens with a heading, approval names the task from
+  that heading, replacing an identifier or agent name, so a task still on its
+  identifier at approval gets its first name there. Approval freezes every
+  name; subsequent specification revisions and retries do not rename the task.
+  After approval, only an
+  explicit operator rename changes it. Agent-produced names retain
+  producer-labeled claim provenance. Names grant no execution, approval, or
+  publication authority.
 - **Task name and PR title are separate fields.** Each has its own length
   bound and validation contract; neither supplies the other's identity or
   approval binding. The downstream field contracts define those bounds.
@@ -4465,31 +4468,22 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 58 ("Client Task Submission and the Sketch Round"):
+Revision 59 ("First-Acceptance Task Naming"):
 
-1. **A paired client may submit a task through the command surface.** The
-   clients become the ordinary way to start work: a `submit_task`
-   `ClientCommand` that reuses `freesided submit`'s intake path and key, so a
-   task typed on the phone has the same identity, idempotency, and
-   specification workflow as one submitted from the host. The command binds
-   to no entity and carries no version envelope; the intake key is its only
-   concurrency control. The daemon supplies the resolved policy and
-   publication metadata the CLI takes as files, recorded at creation, and a
-   `bound_pr_merged` work-unit declaration with declared paths from the
-   resolved policy; the client supplies none of them. The composer offers the projects the client already
-   knows; a project's first task stays on the host CLI until #1332 lists
-   configured projects in the bootstrap. Rejected: a new endpoint outside
-   `/commands`, and a conversation before a task exists. (User decision;
-   Section [5.11](#511-github-integration-reconciliation-plus-intake), Section [5.14](#514-client-synchronization-and-conversations) test 17; #1328,
-   #1330; devlog 2026-09-12-1950-client-task-submission.md.)
-2. **A sketch gets a clarification round before a specification.** On a
-   submission that leaves outcome, scope, or non-goals unresolved, judged
-   from the source rather than its length or headings, the specifier's
-   first turn returns owner decisions on the `agent_question` card before
-   research or a specification, so a rough idea costs one short inference
-   to sanity-check and builds nothing. Prompt guidance under the existing
-   output contract; no flag, field, or attention type. (User decision;
-   Section [5.11](#511-github-integration-reconciliation-plus-intake); #1329; same devlog.)
+1. **The first accepted specification may name an identifier-only task.** The
+   specifier's `title` replaces an agent-produced name or the identifier
+   fallback once, when the task's first specification is accepted, and never
+   an operator name; a revised specification does not rename. When the approved
+   body opens with a heading, approval still names the task from it, so a task
+   still on its identifier at approval gets its name there, and approval still
+   freezes every name.
+   This amends revision 48, item 3, which let the refinement touch only an
+   agent name and deferred an identifier-only task's first name to approval.
+   The owner's #1208 contract chose the wider rule and PR #1326 shipped it;
+   the plan follows the contract. Rejected: narrowing the code to agent-only
+   refinement, as the PR #1326 review proposed. (User decision;
+   Section [5.12](#512-workflow-definition-initiators-and-artifacts); #1208,
+   #1327; devlog 2026-09-15-0914-first-acceptance-naming.md.)
 
 ## 14. Risks
 
