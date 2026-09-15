@@ -248,8 +248,8 @@ func TestCodexReenrollmentMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 72 {
-		t.Fatalf("schema version = %d, want 72", got)
+	if got := rawVersion(t, db); got != 73 {
+		t.Fatalf("schema version = %d, want 73", got)
 	}
 	for _, table := range []string{
 		"codex_reenrollment_operations", "codex_reenrollment_recovery_transitions",

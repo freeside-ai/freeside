@@ -87,6 +87,7 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 				"DROP TRIGGER runs_task_insert", "DROP TRIGGER runs_task_update", "DROP INDEX runs_task",
 				"ALTER TABLE attention_items DROP COLUMN subject_task_id", "ALTER TABLE runs DROP COLUMN task_id",
 				"DROP TABLE task_lifecycle_facts",
+				"DROP TABLE task_submission_commands",
 				"DROP TABLE task_runs", "DROP TABLE task_intake_keys", "DROP TABLE tasks",
 				"DROP TABLE review_requests", "DELETE FROM schema_migrations WHERE version >= 67",
 			} {
