@@ -306,7 +306,42 @@ public final class SyncCoordinator {
             await refreshTask.value
             return
         }
+        await startRefreshRound()
+    }
 
+    /// Read-your-write refresh: always runs a sync round whose first daemon
+    /// read is issued after this call, so a caller that just committed a
+    /// command can await it and then trust the cache to reflect the commit
+    /// (plan §5.14). A round already in flight may have read its bootstrap
+    /// before the commit, so unlike `refresh()` this call never returns on the
+    /// strength of it: it waits for that round to finish, then starts a fresh
+    /// round, or joins one that another caller started after this call.
+    ///
+    /// It waits rather than cancels because cancelling the in-flight round
+    /// would bump `syncGeneration` under that round's caller and return it
+    /// without a stamp, which the `heartbeatLoop` comment forbids. The cost is
+    /// one extra round of latency when a refresh is mid-flight at commit time.
+    public func refreshAfterCommit() async {
+        // A round tagged with the token observed at entry began before this
+        // call. Awaiting it drains that pre-commit round; only a round whose
+        // token differs started after the call and may be joined.
+        let entryToken = refreshToken
+        if let refreshTask {
+            await refreshTask.value
+        }
+        if let refreshTask, refreshToken != entryToken {
+            await refreshTask.value
+            return
+        }
+        await startRefreshRound()
+    }
+
+    /// Starts and awaits one daemon round, publishing its task and token so
+    /// concurrent `refresh()` callers coalesce onto it. Every round awaits its
+    /// own `heartbeat()` before finishing, and nothing outside a round calls
+    /// `heartbeat()`, so a later `refreshAfterCommit()` that awaits this round
+    /// observes reads it issued, never a stale heartbeat from an earlier round.
+    private func startRefreshRound() async {
         let token = UUID()
         let task = Task { @MainActor [weak self] in
             guard let self else { return }

@@ -11,6 +11,30 @@ private func makeCoordinator(
     SyncCoordinator(client: APIClientFactory.mock(server: server), cache: cache)
 }
 
+/// The mock answered a submit_task command with a non-submission record.
+private struct UnexpectedCommandRecord: Error {}
+
+/// Commits a task through the raw client, exactly as `TaskSubmissionModel`
+/// builds the command, and returns its task id. The read-your-write tests use
+/// it to land a commit while a pre-commit sync round is held.
+@MainActor
+private func submitTask(
+    through coordinator: SyncCoordinator,
+    projectID: String = "project-1",
+    source: String
+) async throws -> String {
+    let command = Components.Schemas.ClientCommand(
+        command_id: UUID().uuidString,
+        device_id: coordinator.store.device.deviceID,
+        payload: .submit_task(
+            .init(kind: .submit_task, project_id: projectID, source: source, name: nil)))
+    let result = try await coordinator.store.client.submitCommand(body: .json(command)).ok.body.json
+    guard case .submit_task(let record) = result.record else {
+        throw UnexpectedCommandRecord()
+    }
+    return record.task_id
+}
+
 /// A cache whose saves fail on demand, to drive the durable-persistence
 /// submission precondition (#163). Loads and discards delegate to an
 /// in-memory backing, so whatever did persist is still visible to a
@@ -1500,6 +1524,122 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         #expect(await heartbeatCalls.count == 1)
         #expect(await bootstrapCalls.count == 1)
         #expect(await runCalls.count == 1)
+    }
+
+    @Test func refreshAfterCommitNeverJoinsARoundBegunBeforeTheCall() async throws {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        let bootstrapCalls = Counter()
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        // Hold the pre-commit round on its run-list read, its last daemon read,
+        // so every read it makes precedes the commit: its bootstrap ran, and
+        // its run list observes no new revision, so it cannot close the gap
+        // itself. Only a round begun after the commit can surface the task.
+        // Holding earlier (on the bootstrap) would let this round's own later
+        // run-list read see the commit and re-bootstrap, masking coalescing.
+        let firstRunList = ScriptedResponses([.hold(reached: reached, release: release)])
+        await server.setAfterRespond { operationID in
+            switch operationID {
+            case "getSyncBootstrap":
+                await bootstrapCalls.increment()
+            case "listRuns":
+                try await firstRunList.next()
+            default:
+                break
+            }
+        }
+
+        // The pre-commit round: bootstrap, then hold on the run-list read.
+        let preCommitRound = Task { await coordinator.refresh() }
+        await reached.wait()
+
+        // Commit a task while that round is held on its pre-commit reads.
+        let taskID = try await submitTask(through: coordinator, source: "# Health check")
+
+        // The read-your-write refresh enters while the pre-commit round is
+        // still in flight. `Task.yield` lets it reach its wait on that round
+        // before we release it, so a regression that coalesced (returning on
+        // the pre-commit round) would leave the task unseen with one bootstrap.
+        let afterCommit = Task { await coordinator.refreshAfterCommit() }
+        await Task.yield()
+        await release.open()
+        await preCommitRound.value
+        await afterCommit.value
+
+        #expect(coordinator.tasks.contains { $0.task.id == taskID })
+        #expect(await bootstrapCalls.count == 2)
+    }
+
+    @Test func refreshAfterCommitWithNoRoundInFlightRunsOneRound() async {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        let heartbeatCalls = Counter()
+        let bootstrapCalls = Counter()
+        let runCalls = Counter()
+        await server.setBeforeRespond { operationID in
+            switch operationID {
+            case "getSyncRevision":
+                await heartbeatCalls.increment()
+            case "getSyncBootstrap":
+                await bootstrapCalls.increment()
+            case "listRuns":
+                await runCalls.increment()
+            default:
+                break
+            }
+        }
+
+        // With nothing in flight it behaves exactly like `refresh()`.
+        await coordinator.refreshAfterCommit()
+
+        #expect(await heartbeatCalls.count == 1)
+        #expect(await bootstrapCalls.count == 1)
+        #expect(await runCalls.count == 1)
+        #expect(coordinator.lastUpdatedAt != nil)
+    }
+
+    @Test func manualRefreshJoinsTheRoundRefreshAfterCommitStarted() async {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        let heartbeatCalls = Counter()
+        let reachedFirst = AsyncGate()
+        let releaseFirst = AsyncGate()
+        let reachedSecond = AsyncGate()
+        let releaseSecond = AsyncGate()
+        // Hold each round on its heartbeat: the first is the pre-call round the
+        // read-your-write call must drain, the second is the round it starts.
+        let heartbeats = ScriptedResponses([
+            .hold(reached: reachedFirst, release: releaseFirst),
+            .hold(reached: reachedSecond, release: releaseSecond),
+        ])
+        await server.setBeforeRespond { operationID in
+            if operationID == "getSyncRevision" {
+                await heartbeatCalls.increment()
+                try await heartbeats.next()
+            }
+        }
+
+        let preCommitRound = Task { await coordinator.refresh() }
+        await reachedFirst.wait()
+
+        // The read-your-write call waits for the pre-call round, then starts
+        // its own; `reachedSecond` fires once that post-call round is in flight.
+        let afterCommit = Task { await coordinator.refreshAfterCommit() }
+        await releaseFirst.open()
+        await reachedSecond.wait()
+
+        // A plain refresh coalesces onto the post-call round rather than
+        // opening a third round.
+        let manual = Task { await coordinator.refresh() }
+        await Task.yield()
+        await releaseSecond.open()
+        await preCommitRound.value
+        await afterCommit.value
+        await manual.value
+
+        #expect(await heartbeatCalls.count == 2)
+        #expect(coordinator.lastUpdatedAt != nil)
     }
 
     @Test func refreshClosesAGapObservedByTheRunList() async throws {
