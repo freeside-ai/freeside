@@ -49,10 +49,24 @@ func NewTaskSubmitter(blobs *signet.BlobStore, initiator func(domain.ProjectID) 
 // no existing identity; only the first submission composes the policy,
 // publication, and work-unit declaration and starts the specification run. A
 // project with no configured initiator is reported as store.ErrNotFound so the
-// boundary answers 404 without enumerating projects.
+// boundary answers 404 without enumerating projects. An operator name that
+// fails the canonical bound is refused as ErrInvalidSubmitTaskPayload before
+// any write, whether the source would create or fetch a task.
 func (t *TaskSubmitter) SubmitTask(ctx context.Context, tx *store.WriteTx, in signet.TaskSubmissionInput) (signet.TaskSubmissionResult, error) {
 	if t.blobs == nil {
 		return signet.TaskSubmissionResult{}, errors.New("task submitter has no blob store")
+	}
+	// Canonicalize the operator name before any write, so an invalid name is
+	// refused whether the source creates a new task or fetches an existing one,
+	// and never leaves a durable row. The error carries no name text (it may be
+	// the refused secret) and wraps ErrInvalidSubmitTaskPayload so the boundary
+	// answers 400.
+	operatorName := in.OperatorName
+	if operatorName != "" {
+		var nameErr error
+		if operatorName, nameErr = operatorTaskName(operatorName); nameErr != nil {
+			return signet.TaskSubmissionResult{}, fmt.Errorf("submit task: %w: %w", signet.ErrInvalidSubmitTaskPayload, nameErr)
+		}
 	}
 	sourceArtifact, err := SubmissionArtifact(
 		domain.ArtifactKindSpecification, in.SourceDigest, domain.EvidenceMediaTextMarkdown, int64(len(in.Source)))
@@ -85,7 +99,7 @@ func (t *TaskSubmitter) SubmitTask(ctx context.Context, tx *store.WriteTx, in si
 		return signet.TaskSubmissionResult{}, fmt.Errorf("project %q has no configured submission policy: %w", in.ProjectID, store.ErrNotFound)
 	}
 	publication := ProductionPublication{
-		Title:        submissionTitle(in.OperatorName, in.Source),
+		Title:        submissionTitle(operatorName, in.Source),
 		Body:         "Implements the operator-submitted task specification.",
 		CommitAuthor: init.CommitAuthor,
 	}
@@ -154,7 +168,7 @@ func (t *TaskSubmitter) SubmitTask(ctx context.Context, tx *store.WriteTx, in si
 		WorkUnit:            workUnit,
 		CampaignID:          campaignID,
 		AttemptNumber:       1,
-		OperatorName:        in.OperatorName,
+		OperatorName:        operatorName,
 		Source:              domain.SpecificationSource{Kind: domain.SpecificationSourceWorkItemArtifact, WorkItemArtifactID: sourceArtifact.ID},
 	})
 	if err != nil {

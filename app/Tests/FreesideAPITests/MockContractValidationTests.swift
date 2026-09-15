@@ -1299,6 +1299,21 @@ import Testing
                 hasParentItem: true) == "submitted_at is unset")
     }
 
+    @Test func submitTaskRejectsMalformedOperatorNames() {
+        func submit(name: String) -> Components.Schemas.ClientCommand {
+            .init(
+                command_id: "cmd-1", device_id: "device-1",
+                payload: .submit_task(
+                    .init(kind: .submit_task, project_id: "project-1", source: "Body.", name: name)))
+        }
+        // The mock mirrors the daemon's operator-name bound (blank, multiline,
+        // over 60 code points). The daemon's credential check has no mock
+        // counterpart, so it is not exercised here.
+        expectMalformed(reason: "blank name") { submit(name: "   ") }
+        expectMalformed(reason: "multiline name") { submit(name: "line one\nline two") }
+        expectMalformed(reason: "name exceeds 60 characters") { submit(name: String(repeating: "a", count: 61)) }
+    }
+
     // MARK: - Helpers
 
     /// A well-formed client command bound to `snapshot`, matching the

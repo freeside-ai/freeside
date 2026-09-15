@@ -947,7 +947,19 @@ enum MockContractValidation {
                 throw malformed("submit_task must not carry expected_entity_version or expected_bindings")
             }
             if let name = payload.name {
-                guard !name.isEmpty else { throw malformed("empty name") }
+                // Mirror the daemon's operator-name bound (daemon operatorTaskName):
+                // trim surrounding whitespace, then require one line of 1 to 60
+                // Unicode code points. unicodeScalars, not String.count, because
+                // Swift counts grapheme clusters while the daemon counts runes, so a
+                // grapheme count would accept names the daemon refuses. The mock has
+                // no secret scanner, so the daemon's credential check has no mock
+                // counterpart; a secret-shaped name is refused only by the daemon.
+                let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { throw malformed("blank name") }
+                guard !trimmed.unicodeScalars.contains(where: { $0 == "\r" || $0 == "\n" }) else {
+                    throw malformed("multiline name")
+                }
+                guard trimmed.unicodeScalars.count <= 60 else { throw malformed("name exceeds 60 characters") }
             }
         }
     }

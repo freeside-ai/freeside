@@ -7,12 +7,15 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -280,5 +283,129 @@ func TestSubmitTaskCommandHTTPRoundTripAndEnvelopeRejection(t *testing.T) {
 	bad := post(`{"command_id":"cmd-2","device_id":"device-1","expected_entity_version":1,"payload":{"kind":"submit_task","project_id":"project-1","source":"work"}}`)
 	if bad.Code != http.StatusBadRequest {
 		t.Fatalf("envelope-carrying submit_task status = %d, want 400", bad.Code)
+	}
+}
+
+// newRealSubmitTaskHandler wires the engine-backed submitter behind the HTTP
+// handler so the operator-name validation runs end to end (the fake submitter
+// stores names verbatim). It shares one blob store between the service and the
+// submitter, as the daemon composition does.
+func newRealSubmitTaskHandler(t *testing.T) http.Handler {
+	t.Helper()
+	ctx := context.Background()
+	s := storetest.Open(t, t.TempDir()+"/signet-real.db", store.Options{})
+	t.Cleanup(func() { _ = s.Close() })
+	blobs, err := signet.NewBlobStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewBlobStore: %v", err)
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutDevice(ctx, domain.Device{
+			ID: "device-1", DisplayName: "Mac", Status: domain.DeviceActive,
+			PairedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		})
+	}); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+	prov := domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: domain.Digest(contentaddr.Sum([]byte("submit-task-http-policy")))}
+	initiator := engine.ManualInitiator{
+		PolicyKeys: []domain.PolicyKey{
+			{Key: specify.PolicySpecApproval, Value: "true", Provenance: prov},
+			{Key: specify.PolicyMaxIterations, Value: "4", Provenance: prov},
+			{Key: specify.PolicyStageActiveTime, Value: "1m", Provenance: prov},
+			{Key: specify.PolicyApprovalWait, Value: "1m", Provenance: prov},
+			{Key: specify.PolicyResearchAllowlist, Value: "https://docs.example", Provenance: prov},
+			{Key: specify.PolicyResearchMaxBytes, Value: "1024", Provenance: prov},
+			{Key: "paths", Value: "daemon/**", Provenance: prov},
+		},
+		CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
+	}
+	submitter := engine.NewTaskSubmitter(blobs, func(domain.ProjectID) (engine.ManualInitiator, bool) {
+		return initiator, true
+	})
+	service := signet.NewService(s, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(submitter))
+	return signet.NewHTTPHandler(service, testAuthorizer)
+}
+
+func TestSubmitTaskCommandHTTPValidatesOperatorName(t *testing.T) {
+	t.Parallel()
+	handler := newRealSubmitTaskHandler(t)
+	post := func(body string) *httptest.ResponseRecorder {
+		return authenticatedRequest(t, handler, http.MethodPost, "/commands", bytes.NewReader([]byte(body)))
+	}
+
+	// A padded name answers 200 and records the trimmed operator name.
+	ok := post(`{"command_id":"cmd-ok","device_id":"device-1","payload":{"kind":"submit_task","project_id":"project-1","source":"Add a health endpoint.","name":"  Health endpoint  "}}`)
+	if ok.Code != http.StatusOK {
+		t.Fatalf("padded name status = %d body=%s, want 200", ok.Code, ok.Body.String())
+	}
+	var envelope struct {
+		Record json.RawMessage `json:"record"`
+	}
+	if err := json.Unmarshal(ok.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	var record struct {
+		Name domain.DisplayName `json:"name"`
+	}
+	if err := json.Unmarshal(envelope.Record, &record); err != nil {
+		t.Fatalf("decode record: %v", err)
+	}
+	if record.Name != (domain.DisplayName{Text: "Health endpoint", Source: domain.DisplayNameSourceOperator}) {
+		t.Fatalf("recorded name = %+v, want the trimmed operator name", record.Name)
+	}
+
+	// Each invalid name answers 400 with a message that never contains the name
+	// (the name may be the refused secret). The exactly-empty case is covered by
+	// the HTTP boundary check; these non-empty names reach the submitter.
+	for _, bad := range []struct{ label, name string }{
+		{"whitespace only", "   "},
+		{"multiline", "line one\nline two"},
+		{"too long", strings.Repeat("é", 61)},
+		{"credential", "ghp_" + strings.Repeat("A", 36)},
+	} {
+		t.Run(bad.label, func(t *testing.T) {
+			payload, err := json.Marshal(map[string]any{
+				"command_id": "cmd-" + bad.label, "device_id": "device-1",
+				"payload": map[string]any{
+					"kind": "submit_task", "project_id": "project-1", "source": "Body.", "name": bad.name,
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp := post(string(payload))
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body=%s, want 400", resp.Code, resp.Body.String())
+			}
+			if strings.Contains(resp.Body.String(), bad.name) {
+				t.Fatalf("400 body echoes the submitted name: %s", resp.Body.String())
+			}
+		})
+	}
+}
+
+// TestSubmitTaskCommandHTTPRejectsInvalidUTF8Name covers the raw wire path a Go
+// string literal cannot: an invalid UTF-8 byte in payload.name must be rejected
+// with 400, not silently substituted with U+FFFD and stored. The submit_task
+// arm decodes with RejectInvalidUTF8, so the whole body is refused before the
+// name reaches operatorTaskName. A "\xff" Go literal would already be a valid
+// Go string by the time the namer ran, so the byte has to ride in the raw body.
+func TestSubmitTaskCommandHTTPRejectsInvalidUTF8Name(t *testing.T) {
+	t.Parallel()
+	handler := newRealSubmitTaskHandler(t)
+
+	body := []byte(`{"command_id":"cmd-badutf8","device_id":"device-1","payload":{"kind":"submit_task","project_id":"project-1","source":"Body.","name":"`)
+	body = append(body, 0xff) // a lone continuation byte: never valid UTF-8
+	body = append(body, []byte(`"}}`)...)
+
+	resp := authenticatedRequest(t, handler, http.MethodPost, "/commands", bytes.NewReader(body))
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid-UTF-8 name status = %d body=%s, want 400", resp.Code, resp.Body.String())
+	}
+	// The name must not leak, neither the raw byte nor the U+FFFD it would have
+	// become under tolerant decoding.
+	if bytes.Contains(resp.Body.Bytes(), []byte{0xff}) || strings.ContainsRune(resp.Body.String(), '�') {
+		t.Fatalf("400 body leaks the submitted name bytes: %s", resp.Body.String())
 	}
 }

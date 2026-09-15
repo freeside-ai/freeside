@@ -158,8 +158,10 @@ type SpecificationRunSpec struct {
 	// client task-submission path (plan §5.11). When non-empty it names the
 	// task with source operator on the create path, taking precedence over the
 	// document-heading fallback; the CLI submit leaves it empty, so its naming
-	// is unchanged. It never enters the request payload or any run identity, so
-	// it does not affect convergence.
+	// is unchanged. It is stored only in its canonical form (operatorTaskName):
+	// a name that fails that bound fails the submission, storing nothing. It
+	// never enters the request payload or any run identity, so it does not
+	// affect convergence.
 	OperatorName string
 	// Source optionally names what this run specifies from as a typed union
 	// (plan §5.12, #720). SubmitSpecificationRun executes only the spec_artifact
@@ -808,7 +810,15 @@ func submitSpecificationRunTx(
 	// so a later fetch of the same task keeps whichever the first submission won.
 	if seed == nil {
 		if spec.OperatorName != "" {
-			if err := tx.SetTaskName(ctx, want.TaskID, domain.DisplayName{Text: spec.OperatorName, Source: domain.DisplayNameSourceOperator}); err != nil {
+			// Fail closed for any caller: the client path pre-canonicalizes and the
+			// helper is idempotent on the already-canonical name, but a future
+			// caller supplying a raw name is refused here rather than storing a
+			// name that bypasses the operator-name bound.
+			name, err := operatorTaskName(spec.OperatorName)
+			if err != nil {
+				return domain.Run{}, err
+			}
+			if err := tx.SetTaskName(ctx, want.TaskID, domain.DisplayName{Text: name, Source: domain.DisplayNameSourceOperator}); err != nil {
 				return domain.Run{}, err
 			}
 		} else if title, failure := taskHeadingName(spec.SourceBytes); failure == "" {
@@ -2994,7 +3004,7 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 			}
 		}
 		if title := specification.Title; title != nil && request.PriorSpecArtifactID == nil &&
-			utf8.RuneCountInString(*title) <= 60 && !importer.ContainsSecret([]byte(*title)) {
+			utf8.RuneCountInString(*title) <= maxTaskNameRunes && !importer.ContainsSecret([]byte(*title)) {
 			if err := tx.SetTaskName(ctx, run.TaskID, domain.DisplayName{Text: *title, Source: domain.DisplayNameSourceAgent}); err != nil && !errors.Is(err, domain.ErrImmutableTransition) {
 				return err
 			}
