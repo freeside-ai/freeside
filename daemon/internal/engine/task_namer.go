@@ -11,6 +11,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -19,6 +20,41 @@ import (
 // A full advisory queue leaves the identifier fallback; dispatch never waits
 // for naming. The queue is process-local and deliberately not recovery state.
 const taskNameQueueCapacity = 32
+
+// maxTaskNameRunes bounds every stored task display name by Unicode code point
+// (rune), the count the agent namer and the heading fallback already apply. The
+// OpenAPI maxLength and the mock validator mirror this exact value.
+const maxTaskNameRunes = 60
+
+// errInvalidOperatorName marks an operator-supplied name that fails the canonical
+// rule. Its messages never include the name text, because the text may be the
+// secret the credential check refused; callers at the request boundary surface
+// the message verbatim.
+var errInvalidOperatorName = errors.New("operator task name")
+
+// operatorTaskName canonicalizes an operator-supplied task name into the single
+// bounded form the daemon stores, or rejects it. It trims surrounding whitespace
+// (the one repair, since trailing whitespace is never intended), then requires
+// one line of 1 to maxTaskNameRunes code points, valid UTF-8, with no
+// credential-shaped token. An operator name is permanent (store.SetTaskName
+// treats source operator as final), so a name that fails is refused rather than
+// silently truncated or first-lined into a name the operator never chose.
+func operatorTaskName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	switch {
+	case name == "":
+		return "", fmt.Errorf("%w is blank", errInvalidOperatorName)
+	case !utf8.ValidString(name):
+		return "", fmt.Errorf("%w is not valid UTF-8", errInvalidOperatorName)
+	case strings.ContainsAny(name, "\r\n"):
+		return "", fmt.Errorf("%w is multiline", errInvalidOperatorName)
+	case utf8.RuneCountInString(name) > maxTaskNameRunes:
+		return "", fmt.Errorf("%w is longer than %d characters", errInvalidOperatorName, maxTaskNameRunes)
+	case importer.ContainsSecret([]byte(name)):
+		return "", fmt.Errorf("%w contains a credential", errInvalidOperatorName)
+	}
+	return name, nil
+}
 
 func (e *Engine) enqueueTaskName(run domain.Run) {
 	if !e.inference.SupportsSite(inference.TaskNamerSiteID) {
@@ -51,7 +87,7 @@ func taskHeadingName(body []byte) (string, string) {
 	title, failure := fallbackSpecificationTitle(body)
 	count := 0
 	for offset := range title {
-		if count == 60 {
+		if count == maxTaskNameRunes {
 			title = title[:offset]
 			break
 		}

@@ -3,6 +3,7 @@ package engine_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -286,6 +287,84 @@ func TestSubmitTaskConfigChangeMovesNoExistingIdentity(t *testing.T) {
 		second.Submission.SpecificationRunID != first.Submission.SpecificationRunID {
 		t.Fatalf("config change moved identity: %+v vs %+v", *second.Submission, *first.Submission)
 	}
+}
+
+func TestSubmitTaskRejectsInvalidOperatorName(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	badNames := []struct{ label, name string }{
+		{"blank", "   "},
+		{"multiline", "line one\nline two"},
+		{"too long", strings.Repeat("é", 61)},
+		{"credential", "ghp_" + strings.Repeat("A", 36)},
+	}
+	t.Run("rejected before any write", func(t *testing.T) {
+		for _, bad := range badNames {
+			t.Run(bad.label, func(t *testing.T) {
+				service, s, _ := newSubmitTaskHarness(t)
+				const source = "Work whose operator name is invalid."
+				if _, err := service.Submit(ctx, submitCmd("cmd-1", "project-1", source, bad.name)); !errors.Is(err, signet.ErrInvalidSubmitTaskPayload) {
+					t.Fatalf("error = %v, want signet.ErrInvalidSubmitTaskPayload", err)
+				}
+				// The name is refused before the intake-key fetch and every write, so
+				// nothing persisted: no submission record, source artifact, or task.
+				digest := domain.Digest(contentaddr.Sum([]byte(source)))
+				if err := s.Read(ctx, func(tx *store.ReadTx) error {
+					if _, err := tx.GetTaskSubmission(ctx, "cmd-1"); !errors.Is(err, store.ErrNotFound) {
+						t.Fatalf("submission record error = %v, want ErrNotFound", err)
+					}
+					if _, err := tx.GetArtifact(ctx, domain.ArtifactID("artifact-specification-"+contentaddr.Hex(string(digest)))); !errors.Is(err, store.ErrNotFound) {
+						t.Fatalf("source artifact error = %v, want ErrNotFound", err)
+					}
+					if _, err := tx.GetTaskByIntakeKey(ctx, "project-1", "source:"+string(digest)); !errors.Is(err, store.ErrNotFound) {
+						t.Fatalf("task intake key error = %v, want ErrNotFound", err)
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	})
+	t.Run("rejected even when the source already fetched a task", func(t *testing.T) {
+		service, _, _ := newSubmitTaskHarness(t)
+		const source = "# Existing task\n\nBody."
+		if _, err := service.Submit(ctx, submitCmd("cmd-1", "project-1", source, "")); err != nil {
+			t.Fatalf("seed submit: %v", err)
+		}
+		// The same source now fetches the existing task, but the bad name is refused
+		// before the fetch, so the command fails and does not return the task.
+		if _, err := service.Submit(ctx, submitCmd("cmd-2", "project-1", source, strings.Repeat("é", 61))); !errors.Is(err, signet.ErrInvalidSubmitTaskPayload) {
+			t.Fatalf("error = %v, want signet.ErrInvalidSubmitTaskPayload", err)
+		}
+	})
+	t.Run("padded name is stored trimmed", func(t *testing.T) {
+		service, s, _ := newSubmitTaskHarness(t)
+		const source = "Padded operator name body."
+		res, err := service.Submit(ctx, submitCmd("cmd-1", "project-1", source, "  Padded name  "))
+		if err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		// The stored task name is the trimmed name; the composed publication title
+		// derives from the same canonical value in SubmitTask, so the
+		// reviewer-facing title and the stored name agree.
+		want := domain.DisplayName{Text: "Padded name", Source: domain.DisplayNameSourceOperator}
+		if res.Submission.Name != want {
+			t.Fatalf("result name = %+v, want %+v", res.Submission.Name, want)
+		}
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			task, err := tx.GetTask(ctx, res.Submission.TaskID)
+			if err != nil {
+				return err
+			}
+			if task.Name != want {
+				t.Fatalf("stored task name = %+v, want %+v", task.Name, want)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func TestSubmitTaskUnconfiguredProjectRefusedBeforeWrite(t *testing.T) {

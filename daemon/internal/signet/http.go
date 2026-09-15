@@ -487,7 +487,12 @@ func (h httpHandler) submitTaskCommand(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	var arm submitTaskPayloadRequest
-	if err := strictjson.Decode(request.Payload, &arm, strictjson.TolerateInvalidUTF8, strictjson.Limit(maxCommandBodyBytes)); err != nil {
+	// RejectInvalidUTF8, not TolerateInvalidUTF8: an operator name must be valid
+	// UTF-8, and tolerating would substitute U+FFFD for invalid bytes before
+	// operatorTaskName sees them, storing a name the reject-invalid-UTF-8
+	// contract forbids. This also requires valid UTF-8 for project_id and
+	// source, which submit_task equally expects.
+	if err := strictjson.Decode(request.Payload, &arm, strictjson.RejectInvalidUTF8, strictjson.Limit(maxCommandBodyBytes)); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
 		return
 	}

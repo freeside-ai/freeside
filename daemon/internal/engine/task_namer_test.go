@@ -118,6 +118,68 @@ func TestSubmitSpecificationRunOperatorName(t *testing.T) {
 			t.Fatalf("name = %+v", got)
 		}
 	})
+	t.Run("padded operator name is stored trimmed", func(t *testing.T) {
+		f, spec := setup(t, "Body without a heading.")
+		spec.OperatorName = "  Padded name  "
+		if _, err := SubmitSpecificationRun(t.Context(), f.store, spec); err != nil {
+			t.Fatal(err)
+		}
+		if got := taskNameForRun(t, f.store, spec.SpecificationRunID); got !=
+			(domain.DisplayName{Text: "Padded name", Source: domain.DisplayNameSourceOperator}) {
+			t.Fatalf("name = %+v", got)
+		}
+	})
+	t.Run("invalid operator name fails and persists no run", func(t *testing.T) {
+		f, spec := setup(t, "Body without a heading.")
+		spec.OperatorName = strings.Repeat("é", 61)
+		if _, err := SubmitSpecificationRun(t.Context(), f.store, spec); !errors.Is(err, errInvalidOperatorName) {
+			t.Fatalf("err = %v, want errInvalidOperatorName", err)
+		}
+		// The name is set inside the accepting transaction before PutRun, so the
+		// rejection rolls the whole submission back: no run or task remains.
+		if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+			_, err := tx.GetRun(t.Context(), spec.SpecificationRunID)
+			return err
+		}); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("run read after rejection = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+func TestOperatorTaskName(t *testing.T) {
+	for _, tc := range []struct {
+		label string
+		raw   string
+		want  string // empty want means the name must be rejected
+	}{
+		{"trims surrounding whitespace", "  Health endpoint  ", "Health endpoint"},
+		{"rejects whitespace only", "   ", ""},
+		{"rejects a newline", "line one\nline two", ""},
+		{"rejects a carriage return", "a\rb", ""},
+		{"accepts 60 multibyte runes", strings.Repeat("é", 60), strings.Repeat("é", 60)},
+		{"rejects 61 multibyte runes", strings.Repeat("é", 61), ""},
+		{"rejects a credential", "ghp_" + strings.Repeat("A", 36), ""},
+		{"rejects invalid UTF-8", "\xff", ""},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			got, err := operatorTaskName(tc.raw)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatalf("operatorTaskName(%q) = %q, want rejection", tc.raw, got)
+				}
+				if !errors.Is(err, errInvalidOperatorName) {
+					t.Fatalf("error = %v, want errInvalidOperatorName", err)
+				}
+				if strings.Contains(err.Error(), tc.raw) {
+					t.Fatalf("error text %q must not contain the input", err.Error())
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("operatorTaskName(%q) = %q, %v, want %q", tc.raw, got, err, tc.want)
+			}
+		})
+	}
 }
 
 func TestTaskNamingAfterSpecificationDispatch(t *testing.T) {
