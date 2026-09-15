@@ -20,11 +20,32 @@ type ClientCommand struct {
 	// CommandID returns the original recorded result, never a second effect.
 	CommandID string
 	DeviceID  domain.DeviceID
+	// Kind discriminates the payload (plan §5.14). A decision command decides an
+	// attention item and carries ExpectedEntityVersion and Payload; a
+	// submit_task command creates or fetches a task from source text (plan
+	// §5.11) and carries SubmitTask instead. The empty zero value is treated as
+	// a decision so existing decision callers stay unchanged; the HTTP boundary
+	// sets it from the payload discriminator.
+	Kind domain.CommandKind
 	// ExpectedEntityVersion is the store's per-row entity_version the command
 	// was prepared against; distinct from the payload's domain ItemVersion. A
-	// mismatch rejects the command with the replacement item.
+	// mismatch rejects the command with the replacement item. Decision only.
 	ExpectedEntityVersion int64
 	Payload               DecisionPayload
+	// SubmitTask carries the submit_task payload; the zero value for a decision.
+	SubmitTask SubmitTaskPayload
+}
+
+// SubmitTaskPayload mirrors the API contract's SubmitTaskPayload: the project
+// to submit into, the task's source text, and an optional operator-chosen name.
+// It binds to no attention item and no other entity, so a submit_task command
+// carries none of the decision envelope.
+type SubmitTaskPayload struct {
+	ProjectID domain.ProjectID
+	Source    string
+	// Name is an optional operator-chosen task name; empty means none, and the
+	// daemon falls back to the source's heading or an identifier.
+	Name string
 }
 
 // DecisionPayload mirrors the API contract's DecisionPayload: the decision and
@@ -141,9 +162,42 @@ func decisionMessage(payload DecisionPayload) (string, error) {
 }
 
 // CommandResult is the committed outcome of an accepted command: the durable
-// decision record and the server revision of the transaction that applied it.
-// A retry of the same CommandID returns this exact value (§5.14 test 4).
+// record and the server revision of the transaction that applied it. A retry of
+// the same CommandID returns this exact value (§5.14 test 4). The record is a
+// tagged union: Record holds a decision command, or Submission holds a task
+// submission when it is non-nil. MarshalJSON renders the wire record with its
+// kind discriminator so the client can decode the matching arm.
 type CommandResult struct {
-	Record   domain.Command `json:"record"`
-	Revision int64          `json:"revision"`
+	Record domain.Command
+	// Submission is set only for an accepted submit_task command; when non-nil
+	// the wire record is the submission with kind submit_task instead of the
+	// decision Record.
+	Submission *domain.TaskSubmission
+	Revision   int64
+}
+
+// kindedCommandRecord and kindedSubmissionRecord embed the domain record so its
+// json-tagged fields flatten alongside the kind discriminator, producing the
+// wire CommandRecord and TaskSubmissionRecord shapes (api/openapi.yaml).
+type kindedCommandRecord struct {
+	Kind domain.CommandKind `json:"kind"`
+	domain.Command
+}
+
+type kindedSubmissionRecord struct {
+	Kind domain.CommandKind `json:"kind"`
+	domain.TaskSubmission
+}
+
+func (r CommandResult) MarshalJSON() ([]byte, error) {
+	wire := struct {
+		Record   any   `json:"record"`
+		Revision int64 `json:"revision"`
+	}{Revision: r.Revision}
+	if r.Submission != nil {
+		wire.Record = kindedSubmissionRecord{Kind: domain.CommandKindSubmitTask, TaskSubmission: *r.Submission}
+	} else {
+		wire.Record = kindedCommandRecord{Kind: domain.CommandKindDecision, Command: r.Record}
+	}
+	return json.Marshal(wire)
 }

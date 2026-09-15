@@ -1,0 +1,16 @@
+{
+  "record": {
+    "kind": "submit_task",
+    "command_id": "cmd-570",
+    "device_id": "device-569",
+    "project_id": "project-569",
+    "source_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+    "task_id": "task-570",
+    "specification_run_id": "run-570",
+    "name": {
+      "text": "Add a health endpoint",
+      "source": "operator"
+    }
+  },
+  "revision": 26
+}
