@@ -1424,6 +1424,21 @@ extension MockServerTests {
         #expect(other.record.asSubmitTask.task_id != record.task_id)
     }
 
+    @Test func submitTaskRecordsTrimmedOperatorName() async throws {
+        let client = APIClientFactory.mock(server: MockServer())
+        // A padded operator name is recorded trimmed, mirroring the daemon's
+        // stored canonical form.
+        let result = try await client.submitCommand(
+            body: .json(
+                submitTaskCommand(
+                    "cmd-1", project: "project-1", source: "Add a health endpoint.",
+                    name: "  Health endpoint  "))
+        ).ok.body.json
+        let name = result.record.asSubmitTask.name.value1
+        #expect(name.text == "Health endpoint")
+        #expect(name.source == ._operator)
+    }
+
     @Test func submitTaskConflictsOnAChangedSourceUnderTheSameCommandID() async throws {
         let client = APIClientFactory.mock(server: MockServer())
         _ = try await client.submitCommand(

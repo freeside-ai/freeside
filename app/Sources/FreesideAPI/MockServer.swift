@@ -1763,14 +1763,19 @@ public actor MockServer {
         return .ok(commandResultTransform?(result) ?? result)
     }
 
-    /// submittedTaskName mirrors the daemon: an operator-supplied name wins; a
-    /// source whose first non-empty line is a Markdown heading names the task
-    /// from that heading; anything else keeps the identifier fallback.
+    /// submittedTaskName mirrors the daemon: a trimmed operator-supplied name
+    /// wins (the daemon stores the whitespace-trimmed canonical form); a source
+    /// whose first non-empty line is a Markdown heading names the task from that
+    /// heading; anything else keeps the identifier fallback. The name has already
+    /// passed validateCommand, so a non-empty trim is guaranteed here.
     private static func submittedTaskName(
         operatorName: String?, source: String, fallback: String
     ) -> Components.Schemas.DisplayName {
-        if let operatorName, !operatorName.isEmpty {
-            return .init(text: operatorName, source: ._operator)
+        if let operatorName {
+            let trimmed = operatorName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return .init(text: trimmed, source: ._operator)
+            }
         }
         for rawLine in source.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
