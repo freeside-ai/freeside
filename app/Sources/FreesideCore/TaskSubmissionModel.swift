@@ -96,15 +96,11 @@ public final class TaskSubmissionModel {
                     return nil
                 }
                 // Read-your-write: the task and its run must be visible before
-                // the caller routes to the task detail. A first refresh can
-                // coalesce with a read begun before the commit and return
-                // without the new task; a second refresh cannot join that
-                // pre-commit read, so it observes the committed task. Bounded to
-                // one extra refresh so a genuinely lagging daemon cannot spin.
-                await coordinator.refresh()
-                if !coordinator.tasks.contains(where: { $0.task.id == record.task_id }) {
-                    await coordinator.refresh()
-                }
+                // the caller routes to the task detail. `refreshAfterCommit`
+                // guarantees a sync round whose first daemon read is issued
+                // after this committed submission, so one await observes the
+                // task even if a refresh begun before the commit was in flight.
+                await coordinator.refreshAfterCommit()
                 state = .submitted(taskID: record.task_id)
                 return record.task_id
             case .conflict:

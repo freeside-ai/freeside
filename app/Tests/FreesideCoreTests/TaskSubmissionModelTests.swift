@@ -28,6 +28,53 @@ import Testing
         #expect(runs.contains { $0.run.task_id == taskID })
     }
 
+    @Test func submitSeesTheTaskEvenWhenARefreshWasAlreadyInFlight() async throws {
+        let server = MockServer()
+        let coordinator = coordinator(server: server)
+        let model = TaskSubmissionModel(coordinator: coordinator)
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        let committed = AsyncGate()
+        // Hold the in-flight refresh on its run-list read, its last daemon read,
+        // so all of its reads precede the commit and it cannot close the gap
+        // itself; only a round begun after the commit surfaces the task. Signal
+        // the commit from an after-respond hook: the transport runs
+        // before-respond ahead of routing (MockServerTransport), so a
+        // before-respond signal would open `committed` before submitCommand has
+        // actually committed.
+        let firstRunList = ScriptedResponses([.hold(reached: reached, release: release)])
+        await server.setAfterRespond { operationID in
+            switch operationID {
+            case "submitCommand": await committed.open()
+            case "listRuns": try await firstRunList.next()
+            default: break
+            }
+        }
+
+        // A refresh begun before the submit, held on its pre-commit reads.
+        let preCommitRound = Task { await coordinator.refresh() }
+        await reached.wait()
+
+        // Submit through the model while that round is in flight. `submit`
+        // awaits `refreshAfterCommit`, which must run a round that observes the
+        // committed task rather than coalescing onto the pre-commit round.
+        let submission = Task {
+            await model.submit(projectID: "project-1", source: "# Health check")
+        }
+        await committed.wait()
+        // Let submit's refreshAfterCommit reach its wait on the pre-commit round
+        // before releasing it, so a regression that coalesced onto that round
+        // would leave the task unseen, as the SyncCoordinator coalescing test does.
+        await Task.yield()
+        await release.open()
+        await preCommitRound.value
+        let taskID = await submission.value
+
+        let id = try #require(taskID)
+        #expect(model.state == .submitted(taskID: id))
+        #expect(coordinator.tasks.contains { $0.task.id == id })
+    }
+
     @Test func sameSourceConvergesOnOneTask() async {
         let coordinator = coordinator()
         let model = TaskSubmissionModel(coordinator: coordinator)
