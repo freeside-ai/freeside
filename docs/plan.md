@@ -2199,7 +2199,8 @@ Additional rules:
 - **A paired client may submit a task.** The clients are a decision surface
   and also the ordinary way to start work. A `submit_task` command on the
   Section [5.14](#514-client-synchronization-and-conversations) command surface, the second `ClientCommand` type,
-  names a project, a source text, and an optional operator name. It is the
+  names a project, a source text, and an optional operator name, one line of
+  at most 60 characters. It is the
   same intake path as `freesided submit`, not a parallel one. The daemon
   registers the source as a digest-addressed artifact, creates or fetches the
   task by the same project-scoped intake key, starts the specification
