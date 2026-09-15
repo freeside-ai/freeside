@@ -300,6 +300,77 @@ earlier diagnostics. Keep the entire private session until recovery and the
 operator's evidence review are finished. There is no detached daemon continuation
 promise and no dependency on the former scratch `serve-78.sh`.
 
+## Recover Expired Reviewer Credentials
+
+If composition preflight fails `codex_credentials`, use the matching recovery
+hint. Preflight still enforces its lifetime floor, identity binding, and
+re-enrollment hold. Recovery creates no task and starts no agent execution.
+
+### Renew An Existing Store
+
+Complete or recover any prior harness session, then stop the supervised daemon
+as described above. Use a retained binary containing `renew-codex`, or build
+the current reviewed version with `go -C daemon build -o /tmp/freesided
+./cmd/freesided`. With the exercise's approved environment loaded, run:
+
+```sh
+/tmp/freesided renew-codex \
+  -db "$FREESIDE_REAL_RUN_STATE_ROOT/freeside.db" \
+  -auth-identity "$FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY" \
+  -auth-store-root "$FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT" \
+  -auth-store "$FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT" \
+  -approved-recipe "$FREESIDE_REAL_RUN_APPROVED_RECIPE"
+```
+
+Substitute the retained binary's path if using it. Pass every approved recipe
+when the production store uses more than one. Success reports only readiness
+coordinates and creates no hold. Rerun the intended harness command; its
+composition preflight must now pass `codex_credentials`. If renewal was
+interrupted, rerun it first to recover any pending rotation.
+
+### Replace A Revoked Chain And Resolve Its Hold
+
+When renewal reports a rejected or unavailable refresh chain, follow
+[Enroll A Codex Subscription Identity](../daemon/README.md#enroll-a-codex-subscription-identity):
+run `codex login`, stage its output in a separate private input root, and run
+`enroll-codex` against the production database and live store. Enrollment
+leaves a hold that requires a paired-device command.
+
+With the same required exercise environment loaded, start the recovery service:
+
+```sh
+bash scripts/run-real-work.sh --recover-codex-credentials
+```
+
+The recovery daemon receives `FREESIDE_REAL_RUN_APPROVED_RECIPE`. If the
+database also contains evidence for other approved recipes, pass each with a
+repeatable `--approved-recipe sha256:<digest>` argument so paired-client sync
+can reconstruct all retained evidence. These additional approvals apply only
+to this recovery session.
+
+This mode requires no submission files. It reuses the harness's environment
+validation, clean build, and rig acquisition, then serves the production
+database with `-driver disabled`. Before startup, a read-only schema check
+refuses a database that this binary would migrate; use a schema-compatible
+build or complete the supported runtime upgrade first. It skips identity
+seeding, composition
+preflight, submission, and the production driver. The full exercise environment
+is still required, including values recovery does not otherwise use.
+
+Use the printed endpoint and pairing-code command. In the paired client,
+inspect the hold's exact digest, fence, and expiry, then choose **Resolve
+re-enrollment**. The recovery service cannot accept the hold on your behalf.
+Use its printed `real-work-session.sh complete` command when finished. Normal
+completion and interruption stop the daemon, release the rig, and restore the
+supervised service through the existing cleanup path. If cleanup fails, follow
+the printed recovery command before retrying.
+
+Stop the restored supervised daemon again before rerunning the exercise.
+Recovery has left the task count unchanged; for an exercise requiring its
+first task from the client composer, keep the database at zero tasks and use
+the client-submission path below. The ordinary harness invocation with source
+files submits a task and is not a substitute for that exercise.
+
 ## Submit A New Task From A Client
 
 This is the live creation exercise for #1360 and the Mac/physical-iPhone

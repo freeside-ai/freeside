@@ -129,3 +129,129 @@ set -e
 grep -q "could not inspect process group" <<<"$err"
 
 echo "test-real-work-lifecycle: all cases passed"
+
+# Credential recovery uses the harness's real cleanup trap. Extract that trap
+# without executing the production entry point, and stub only its rig and
+# supervised-service boundaries. A real child process proves daemon shutdown.
+python3 - "$root/scripts/run-real-work.sh" "$tmp/recovery-cleanup.sh" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text()
+start = source.index('\ncleanup() {\n') + 1
+end = source.index("trap 'exit 143' TERM", start) + len("trap 'exit 143' TERM")
+pathlib.Path(sys.argv[2]).write_text(source[start:end] + '\n')
+PY
+python3 - "$root/scripts/run-real-work.sh" "$tmp/recovery-args.sh" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text()
+start = source.index('retained_session=""')
+end = source.index('spec_file=', start)
+pathlib.Path(sys.argv[2]).write_text('set -euo pipefail\n' + source[start:end] +
+    'printf "%s\\n" ${recovery_approved_recipe_args[@]+"${recovery_approved_recipe_args[@]}"}\n')
+PY
+recipe_a="sha256:$(printf '%064d' 1)"
+recipe_b="sha256:$(printf '%064d' 2)"
+actual=$(bash "$tmp/recovery-args.sh" --recover-codex-credentials \
+  --approved-recipe "$recipe_a" --approved-recipe "$recipe_b" --approved-recipe "$recipe_a")
+expected=$(printf '%s\n' -approved-recipe "$recipe_a" -approved-recipe "$recipe_b" -approved-recipe "$recipe_a")
+[[ "$actual" == "$expected" ]]
+[[ -z "$(bash "$tmp/recovery-args.sh" --recover-codex-credentials)" ]]
+for invalid in '' sha256:short "SHA256:${recipe_a#sha256:}" " $recipe_a" "$recipe_a " "$recipe_a/extra"; do
+  if bash "$tmp/recovery-args.sh" --recover-codex-credentials --approved-recipe "$invalid" >/dev/null 2>&1; then
+    echo 'FAIL: recovery accepted a malformed recipe digest' >&2
+    exit 1
+  fi
+done
+if bash "$tmp/recovery-args.sh" --recover-codex-credentials --approved-recipe >/dev/null 2>&1 ||
+  bash "$tmp/recovery-args.sh" --recover-codex-credentials --unknown "$recipe_a" >/dev/null 2>&1; then
+  echo 'FAIL: recovery accepted missing or unknown arguments' >&2
+  exit 1
+fi
+cat >"$tmp/recovery-case.sh" <<'CASE'
+set -euo pipefail
+source "$ROOT/scripts/real-work-lifecycle.sh"
+workdir=$CASE_DIR
+mkdir -p "$workdir"
+printf 'starting\n' >"$workdir/status"
+db_path="$workdir/freeside.db"
+listen_address=127.0.0.1:7339
+FREESIDE_REAL_RUN_STATE_ROOT="$workdir/state"
+FREESIDE_REAL_RUN_APPROVED_RECIPE=sha256:fixture
+rig_release_timeout=1
+composition_evidence_tmp=""
+rig_acquired=true
+daemon_pid=""
+# A held rig is an external service; the stub records exact cleanup and release.
+rig_pid=""
+rig_child_exists() { [[ -f "$workdir/rig-held" ]]; }
+run_rig_cleanup() { rm "$workdir/rig-held"; touch "$workdir/rig-cleaned"; }
+real_work_restore_supervised() { touch "$workdir/supervised-restored"; }
+write_diagnostic() { return 0; }
+child_job_exists() { jobs -pr | grep -qx -- "$1"; }
+require_live_rig() { rig_child_exists; }
+curl() { [[ -f "$workdir/daemon-started" ]]; }
+sleep() {
+  if [[ "$(cat "$workdir/status")" == walkthrough ]]; then
+    if [[ "$MODE" == interrupt ]]; then kill -TERM "$$"; else
+      bash "$ROOT/scripts/real-work-session.sh" complete "$workdir" >/dev/null
+    fi
+  fi
+  /bin/sleep 0.05
+}
+cat >"$workdir/freesided" <<'DAEMON'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"$CASE_DIR/daemon-args"
+trap 'exit 0' TERM
+: >"$CASE_DIR/daemon-started"
+while :; do /bin/sleep 0.05; done
+DAEMON
+chmod +x "$workdir/freesided"
+cat >"$workdir/verify-real-run" <<'VERIFIER'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$FREESIDE_REAL_RUN_SCHEMA_TEST" == 1 && "$FREESIDE_REAL_RUN_STATE_ROOT" == "$CASE_DIR/state" ]]
+[[ "$*" == '-test.run ^TestRealRunRetainedSchema$ -test.count=1' ]]
+: >"$CASE_DIR/schema-checked"
+[[ "$MODE" != schema-mismatch ]]
+VERIFIER
+chmod +x "$workdir/verify-real-run"
+# The rig waiter completes after the cleanup boundary removes its held marker.
+touch "$workdir/rig-held"
+(while [[ -f "$workdir/rig-held" ]]; do /bin/sleep 0.05; done) &
+rig_pid=$!
+source "$CLEANUP"
+real_work_recover_codex_credentials "$workdir" "$db_path" "$listen_address" \
+  -approved-recipe sha256:second-approved
+CASE
+for mode in complete interrupt schema-mismatch; do
+  case_dir="$tmp/recovery-$mode"
+  set +e
+  ROOT="$root" CASE_DIR="$case_dir" MODE="$mode" CLEANUP="$tmp/recovery-cleanup.sh" \
+    bash "$tmp/recovery-case.sh" >"$tmp/recovery-$mode.log" 2>&1
+  rc=$?
+  set -e
+  expected_rc=0
+  [[ "$mode" != interrupt ]] || expected_rc=143
+  [[ "$mode" != schema-mismatch ]] || expected_rc=1
+  if [[ "$rc" != "$expected_rc" ]]; then
+    cat "$tmp/recovery-$mode.log" >&2
+    echo "FAIL: recovery $mode exited $rc, expected $expected_rc" >&2
+    exit 1
+  fi
+  [[ "$(cat "$case_dir/status")" == completed ]]
+  [[ -f "$case_dir/rig-cleaned" && -f "$case_dir/rig-release-verified" && -f "$case_dir/supervised-restored" ]]
+  [[ -f "$case_dir/schema-checked" ]]
+  if [[ "$mode" == schema-mismatch ]]; then
+    [[ ! -f "$case_dir/daemon-started" && ! -f "$case_dir/daemon-args" ]]
+    continue
+  fi
+  python3 - "$case_dir" <<'PY'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+args = (root / 'daemon-args').read_text().splitlines()
+assert args == ['-listen', '127.0.0.1:7339', '-db', str(root / 'freeside.db'),
+                '-state-dir', str(root / 'state'), '-driver', 'disabled',
+                '-approved-recipe', 'sha256:fixture',
+                '-approved-recipe', 'sha256:second-approved'], args
+PY
+done
+echo 'PASS: credential recovery completion, interruption, and schema refusal clean up daemon and rig'

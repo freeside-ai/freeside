@@ -346,6 +346,45 @@ operator inspects the displayed digest, fence, and expiry and accepts the
 item's `Resolve re-enrollment` action. That command-backed decision, not this
 maintenance command alone, clears the revoked-identity marker.
 
+### Renew A Codex Subscription Credential
+
+Use `freesided renew-codex` when an existing subscription store has an expired
+access token but still has a refresh token. Stop the daemon first. Renewal
+holds the identity's mutation lease and uses the same durable refresh
+transaction as review launch. It creates no re-enrollment hold and does not
+create a task or start execution.
+
+```sh
+freesided renew-codex \
+  -db /path/to/freeside.db \
+  -auth-identity codex-primary \
+  -auth-store-root /path/to/freeside/review-inputs \
+  -auth-store /path/to/freeside/review-inputs/codex-primary.json \
+  -approved-recipe sha256:<approved-verify-recipe-digest>
+```
+
+Pass the daemon's approved recipe set, repeating `-approved-recipe` as needed.
+Renewal requires the existing database to match the binary's schema and never
+migrates it. Use a schema-compatible binary or the supported runtime upgrade
+before retrying a schema refusal.
+The existing identity must be configured for on-demand refresh and
+bound to this exact private store. The command leaves a token with at least
+two hours remaining unchanged. Otherwise it refreshes and checks the same
+one-hour lifetime floor used by production preflight. Success prints JSON
+containing only the identity, store path, digest, expiry, and `rotated` flag.
+
+After interruption, rerun the command: a persisted pending rotation is
+recovered without spending the old refresh token again. A revoked chain or
+an ambiguous provider result without a recoverable response requires a fresh
+`codex login` and `enroll-codex`. An existing re-enrollment hold refuses
+renewal. To resolve that hold before production preflight can pass, use
+`scripts/run-real-work.sh --recover-codex-credentials` and accept the exact
+digest, fence, and expiry in a paired client. See
+[Recover Expired Reviewer Credentials](../docs/production-walkthrough.md#recover-expired-reviewer-credentials).
+Pass any additional approved recipes to the recovery harness with repeatable
+`--approved-recipe` arguments so it can reconstruct retained evidence during
+paired-client sync.
+
 `freesided onboard <owner/name>` packages the previously manual path. It:
 
 1. resolves the repository ID through exactly one selected installation across

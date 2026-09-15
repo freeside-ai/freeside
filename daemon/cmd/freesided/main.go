@@ -126,6 +126,9 @@ func main() {
 		case "pairing-code":
 			runPairingCodeMain(os.Args[2:])
 			return
+		case "renew-codex":
+			runRenewCodexMain(os.Args[2:])
+			return
 		case "enroll-codex":
 			runEnrollCodexMain(os.Args[2:])
 			return

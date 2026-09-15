@@ -446,6 +446,12 @@ func TestPreflightFailureFixtures(t *testing.T) {
 		{"invalid Codex auth identity", func(_ *[]string, env *fakePreflightEnvironment) {
 			env.database.ReviewCredentialError = errors.New("wrong provider")
 		}, "codex_credentials"},
+		{"expired Codex credential", func(_ *[]string, env *fakePreflightEnvironment) {
+			env.codexError = errors.New("below lifetime floor")
+		}, "codex_credentials"},
+		{"invalid Codex snapshot", func(_ *[]string, env *fakePreflightEnvironment) {
+			env.codexError = errors.New("invalid credential JSON")
+		}, "codex_credentials"},
 		{"Codex re-enrollment hold", func(_ *[]string, env *fakePreflightEnvironment) {
 			env.database.ReviewReenrollmentError = errors.New("needs re-enrollment")
 		}, "codex_credentials"},
@@ -481,6 +487,29 @@ func TestPreflightFailureFixtures(t *testing.T) {
 			}
 			if checkStatus(manifest, tt.check) != compositionFailed {
 				t.Fatalf("%s status = %s, want failed", tt.check, checkStatus(manifest, tt.check))
+			}
+			if tt.check == "codex_credentials" {
+				want := "enroll-codex"
+				if tt.name == "expired Codex credential" {
+					want = "renew-codex"
+				}
+				if tt.name == "Codex re-enrollment hold" {
+					want = "--recover-codex-credentials"
+				}
+				for _, check := range manifest.Checks {
+					if check.Name == tt.check && !strings.Contains(check.Remediation, want) {
+						t.Fatalf("wrong recovery hint: %s", check.Remediation)
+					}
+					if check.Name == tt.check && tt.name == "invalid Codex snapshot" && !strings.Contains(check.Remediation, "codex login") {
+						t.Fatal("invalid subscription snapshot lacks the login and enrollment fallback")
+					}
+					if check.Name == tt.check && tt.name == "expired Codex credential" && !strings.Contains(check.Evidence, "lifetime floor") {
+						t.Fatal("expiry condition missing")
+					}
+					if check.Name == tt.check && tt.name == "Codex re-enrollment hold" && !strings.Contains(check.Evidence, "hold") {
+						t.Fatal("hold condition missing")
+					}
+				}
 			}
 			if tt.name == "unrecorded implementer image" && environment.imageCalls["claude"] != 0 {
 				t.Fatalf("unrecorded implementer image executed %d probes", environment.imageCalls["claude"])

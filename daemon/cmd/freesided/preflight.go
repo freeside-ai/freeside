@@ -662,13 +662,16 @@ func evaluateComposition(
 		notRunCheck(manifest, "codex_credentials", "approved shadow review configuration is required before credential probing")
 	} else if cfg.DBPath == "" || database.OpenError != nil {
 		notRunCheck(manifest, "codex_credentials", "database inspection did not complete")
+	} else if database.ReviewCredentialError != nil {
+		failCheck(manifest, "codex_credentials", "Codex auth identity cannot support the configured leased store", "see daemon/README.md: Enroll A Codex Subscription Identity (freesided enroll-codex)")
+	} else if database.ReviewReenrollmentError != nil {
+		failCheck(manifest, "codex_credentials", "Codex re-enrollment hold is active or could not be verified", "run scripts/run-real-work.sh --recover-codex-credentials and resolve the hold from a paired client")
 	} else if credential := environment.InspectCodexCredential(
 		ctx, cfg, now, database.ReviewRefreshStrategy == domain.RefreshOnDemand,
-	); credential.Error != nil || database.ReviewCredentialError != nil ||
-		database.ReviewReenrollmentError != nil ||
-		(cfg.ReviewAuthMode == ward.CodexAuthSubscription &&
-			database.ReviewAuthStoreVolume != credential.ResolvedPath) {
-		failCheck(manifest, "codex_credentials", "Codex auth identity or credential snapshot is absent, invalid, or below its lifetime floor", "refresh or re-enroll the Codex credential (#599)")
+	); credential.Error != nil {
+		failCheck(manifest, "codex_credentials", "Codex credential snapshot is absent, invalid, or below its lifetime floor", "for an expired subscription snapshot, run freesided renew-codex; for an absent or invalid subscription snapshot, run codex login then freesided enroll-codex; for an API-key snapshot, replace it with a valid key")
+	} else if cfg.ReviewAuthMode == ward.CodexAuthSubscription && database.ReviewAuthStoreVolume != credential.ResolvedPath {
+		failCheck(manifest, "codex_credentials", "Codex auth identity is bound to a different host store", "see daemon/README.md: Enroll A Codex Subscription Identity (freesided enroll-codex)")
 	} else if credential.ExpiresAt == nil {
 		passCheck(manifest, "codex_credentials", "Codex API-key snapshot is ready; no expiry is declared")
 	} else {
@@ -1246,7 +1249,7 @@ func (productionPreflightEnvironment) InspectCodexCredential(
 	resolvedPath, expiresAt, err := ward.InspectCodexAuthReadiness(
 		cfg.ReviewInputRoot, cfg.ReviewAuthSnapshot, cfg.ReviewAuthMode,
 		cfg.ReviewAuthIdentityID, now,
-		time.Hour, 2*time.Hour, refreshOnDemand,
+		ward.CodexAuthProductionLifetimeFloor, ward.CodexAuthProductionRefreshThreshold, refreshOnDemand,
 	)
 	return codexCredentialInspection{
 		ResolvedPath: resolvedPath, ExpiresAt: expiresAt, Error: err,

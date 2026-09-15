@@ -3,7 +3,10 @@
 #
 # Usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json> [work-unit.json]
 #        run-real-work.sh --resume-session <completed-session-directory>
+#        run-real-work.sh --recover-codex-credentials [--approved-recipe <digest>]...
 # Resume keeps the existing run and starts no submission or client command.
+# Recovery serves paired-client credential recovery with execution disabled.
+# It uses the same required environment, but takes no submission files.
 #
 # Submits one task's source specification through `freesided submit`, runs
 # the daemon with the production Claude driver, and pauses at the human
@@ -131,6 +134,20 @@ set -euo pipefail
 umask 077
 
 retained_session=""
+recover_codex_credentials=false
+recovery_approved_recipe_args=()
+if [[ "${1:-}" == --recover-codex-credentials ]]; then
+  recover_codex_credentials=true
+  shift
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" != --approved-recipe || ! "${2:-}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      echo 'usage: run-real-work.sh --recover-codex-credentials [--approved-recipe sha256:<64 lowercase hex digits>]...' >&2
+      exit 2
+    fi
+    recovery_approved_recipe_args+=(-approved-recipe "$2")
+    shift 2
+  done
+fi
 if [[ "${1:-}" == --resume-session ]]; then
   [[ $# == 2 && -d "$2" ]] || { echo 'usage: run-real-work.sh --resume-session <completed-session>' >&2; exit 2; }
   retained_session=$(cd "$2" && pwd)
@@ -142,16 +159,18 @@ spec_file="${1:-}"
 policy_file="${2:-}"
 publication_file="${3:-}"
 work_unit_file="${4:-}"
-if [[ -z "$spec_file" || -z "$policy_file" || -z "$publication_file" ]]; then
-  echo "usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json> [work-unit.json]" >&2
-  exit 2
-fi
-for path in "$spec_file" "$policy_file" "$publication_file" ${work_unit_file:+"$work_unit_file"}; do
-  if [[ ! -f "$path" ]]; then
-    echo "run-real-work: $path is not a file" >&2
+if [[ "$recover_codex_credentials" == false ]]; then
+  if [[ -z "$spec_file" || -z "$policy_file" || -z "$publication_file" ]]; then
+    echo "usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json> [work-unit.json]" >&2
     exit 2
   fi
-done
+  for path in "$spec_file" "$policy_file" "$publication_file" ${work_unit_file:+"$work_unit_file"}; do
+    if [[ ! -f "$path" ]]; then
+      echo "run-real-work: $path is not a file" >&2
+      exit 2
+    fi
+  done
+fi
 
 required=(
   FREESIDE_REAL_RUN_STATE_ROOT FREESIDE_REAL_RUN_LISTEN
@@ -413,21 +432,23 @@ trap 'exit 143' TERM
 # and the durable submit consume the same bytes even if the original files
 # change between the two steps.
 submission_inputs="$workdir/submission-inputs"
-mkdir -p "$submission_inputs"
-cp "$spec_file" "$submission_inputs/spec.json"
-spec_file="$submission_inputs/spec.json"
-cp "$policy_file" "$submission_inputs/policy.json"
-policy_file="$submission_inputs/policy.json"
-cp "$publication_file" "$submission_inputs/publication.json"
-publication_file="$submission_inputs/publication.json"
-if [[ -n "$work_unit_file" ]]; then
-	cp "$work_unit_file" "$submission_inputs/work-unit.json"
-	work_unit_file="$submission_inputs/work-unit.json"
+if [[ "$recover_codex_credentials" == false ]]; then
+  mkdir -p "$submission_inputs"
+  cp "$spec_file" "$submission_inputs/spec.json"
+  spec_file="$submission_inputs/spec.json"
+  cp "$policy_file" "$submission_inputs/policy.json"
+  policy_file="$submission_inputs/policy.json"
+  cp "$publication_file" "$submission_inputs/publication.json"
+  publication_file="$submission_inputs/publication.json"
+  if [[ -n "$work_unit_file" ]]; then
+    cp "$work_unit_file" "$submission_inputs/work-unit.json"
+    work_unit_file="$submission_inputs/work-unit.json"
+  fi
+  # shellcheck source=scripts/real-work-manual-submission.sh
+  source "$repo_root/scripts/real-work-manual-submission.sh"
+  real_work_stage_manual_submission \
+    "${FREESIDE_REAL_RUN_MANUAL_SUBMISSION_CONFIG:-}" "$retained_session" "$workdir"
 fi
-# shellcheck source=scripts/real-work-manual-submission.sh
-source "$repo_root/scripts/real-work-manual-submission.sh"
-real_work_stage_manual_submission \
-  "${FREESIDE_REAL_RUN_MANUAL_SUBMISSION_CONFIG:-}" "$retained_session" "$workdir"
 
 if [[ -n "$retained_session" ]]; then
   printf '%s\n' "$retained_session" > "$workdir/predecessor-session"
@@ -509,6 +530,12 @@ printf '%s\n' "$FREESIDE_REAL_RUN_STATE_ROOT" >"$workdir/state-root"
 printf '%s\n' "$rig_release_timeout" >"$workdir/rig-timeout"
 printf '%s\n' "$listen_address" >"$workdir/listener"
 require_live_rig
+
+if [[ "$recover_codex_credentials" == true ]]; then
+  real_work_recover_codex_credentials "$workdir" "$db_path" "$listen_address" \
+    ${recovery_approved_recipe_args[@]+"${recovery_approved_recipe_args[@]}"}
+  exit 0
+fi
 
 if [[ -n "$retained_session" ]]; then
   # The daemon is stopped and the fresh rig proves exclusion. Preserve the
