@@ -77,8 +77,8 @@ func TestCurrentImportStartsMigrationAndReconstruction(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 73 {
-		t.Fatalf("schema version = %d, want 73", got)
+	if got := rawVersion(t, db); got != 74 {
+		t.Fatalf("schema version = %d, want 74", got)
 	}
 
 	s, admission := seedAdmission(t, nil)

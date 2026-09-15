@@ -341,7 +341,7 @@ func bindAdmittedOccurrence(
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: domain.ItemID(instance.ID), ProjectID: "project-1",
 		Subject: domain.Subject{Type: domain.SubjectProposalBatch, ID: "batch-1"},
-		Type:    domain.AttentionRunProposal, Priority: domain.PriorityNormal,
+		Type:    domain.AttentionTaskProposal, Priority: domain.PriorityNormal,
 		Reason:            "start the accepted work",
 		RequestedDecision: []domain.Action{domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze},
 		EvidenceSnapshot:  []domain.Artifact{artifact}, ItemVersion: 1,

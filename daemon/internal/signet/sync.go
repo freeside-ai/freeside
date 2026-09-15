@@ -51,28 +51,28 @@ type AttentionItemSnapshot struct {
 	Item          domain.AttentionItem `json:"item"`
 }
 
-// RunProposalFactsSnapshot is the authenticated, bounded review projection
-// for one run-proposal card. The opaque subject handle and policy identities
+// TaskProposalFactsSnapshot is the authenticated, bounded review projection
+// for one task-proposal card. The opaque subject handle and policy identities
 // remain server-side; this tuple proves the facts match the rendered item and
 // its digest-bound proposal revision.
-type RunProposalFactsSnapshot struct {
-	AsOfRevision      int64                     `json:"as_of_revision"`
-	EntityVersion     int64                     `json:"entity_version"`
-	ItemVersion       int                       `json:"item_version"`
-	ProposalDigest    domain.Digest             `json:"proposal_digest"`
-	Supersedes        *RunProposalRevisionFacts `json:"supersedes"`
-	Intent            domain.RunProposalIntent  `json:"intent"`
-	ExpectedCostUnits int                       `json:"expected_cost_units"`
-	Scope             domain.RunProposalScope   `json:"scope"`
+type TaskProposalFactsSnapshot struct {
+	AsOfRevision      int64                      `json:"as_of_revision"`
+	EntityVersion     int64                      `json:"entity_version"`
+	ItemVersion       int                        `json:"item_version"`
+	ProposalDigest    domain.Digest              `json:"proposal_digest"`
+	Supersedes        *TaskProposalRevisionFacts `json:"supersedes"`
+	Intent            domain.TaskProposalIntent  `json:"intent"`
+	ExpectedCostUnits int                        `json:"expected_cost_units"`
+	Scope             domain.TaskProposalScope   `json:"scope"`
 }
 
-// RunProposalRevisionFacts is one bounded side of a revision comparison.
+// TaskProposalRevisionFacts is one bounded side of a revision comparison.
 // It contains no opaque handle or policy authority.
-type RunProposalRevisionFacts struct {
-	ProposalDigest    domain.Digest            `json:"proposal_digest"`
-	Intent            domain.RunProposalIntent `json:"intent"`
-	ExpectedCostUnits int                      `json:"expected_cost_units"`
-	Scope             domain.RunProposalScope  `json:"scope"`
+type TaskProposalRevisionFacts struct {
+	ProposalDigest    domain.Digest             `json:"proposal_digest"`
+	Intent            domain.TaskProposalIntent `json:"intent"`
+	ExpectedCostUnits int                       `json:"expected_cost_units"`
+	Scope             domain.TaskProposalScope  `json:"scope"`
 }
 
 // AttentionDeliverySnapshot is an AttentionDelivery with its store-stamped
@@ -421,15 +421,15 @@ func (s *Service) GetAttentionItem(ctx context.Context, id domain.ItemID) (Atten
 	return out, nil
 }
 
-// GetRunProposalFacts returns only store-authenticated proposal facts whose
+// GetTaskProposalFacts returns only store-authenticated proposal facts whose
 // item/entity/digest tuple can be matched to the decision card. It follows the
 // same active-snooze visibility rule as the item reads.
-func (s *Service) GetRunProposalFacts(ctx context.Context, id domain.ItemID) (RunProposalFactsSnapshot, error) {
+func (s *Service) GetTaskProposalFacts(ctx context.Context, id domain.ItemID) (TaskProposalFactsSnapshot, error) {
 	now := s.now().UTC()
 	if err := s.convergeProposalSnoozes(ctx, now); err != nil {
-		return RunProposalFactsSnapshot{}, fmt.Errorf("get run proposal facts %q snoozes: %w", id, err)
+		return TaskProposalFactsSnapshot{}, fmt.Errorf("get task proposal facts %q snoozes: %w", id, err)
 	}
-	var out RunProposalFactsSnapshot
+	var out TaskProposalFactsSnapshot
 	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
 		state, err := tx.ServerState(ctx)
 		if err != nil {
@@ -442,7 +442,7 @@ func (s *Service) GetRunProposalFacts(ctx context.Context, id domain.ItemID) (Ru
 		if err := validateSnapshot(state, snapshot); err != nil {
 			return err
 		}
-		if item.Type != domain.AttentionRunProposal {
+		if item.Type != domain.AttentionTaskProposal {
 			return store.ErrNotFound
 		}
 		snoozed, err := proposalSnoozed(ctx, tx, item, now)
@@ -456,29 +456,29 @@ func (s *Service) GetRunProposalFacts(ctx context.Context, id domain.ItemID) (Ru
 		if err != nil {
 			return err
 		}
-		if proposal.RunProposal == nil || len(item.ArtifactDigests) != 1 ||
+		if proposal.TaskProposal == nil || len(item.ArtifactDigests) != 1 ||
 			item.ArtifactDigests[0] != proposal.Digest {
 			return ErrInvalidSyncSnapshot
 		}
-		var supersedes *RunProposalRevisionFacts
+		var supersedes *TaskProposalRevisionFacts
 		if superseded != nil {
-			supersedes = &RunProposalRevisionFacts{
-				ProposalDigest: superseded.Digest, Intent: superseded.RunProposal.Intent,
-				ExpectedCostUnits: superseded.RunProposal.ExpectedCostUnits,
-				Scope:             superseded.RunProposal.Scope,
+			supersedes = &TaskProposalRevisionFacts{
+				ProposalDigest: superseded.Digest, Intent: superseded.TaskProposal.Intent,
+				ExpectedCostUnits: superseded.TaskProposal.ExpectedCostUnits,
+				Scope:             superseded.TaskProposal.Scope,
 			}
 		}
-		out = RunProposalFactsSnapshot{
+		out = TaskProposalFactsSnapshot{
 			AsOfRevision: snapshot.AsOfRevision, EntityVersion: snapshot.EntityVersion,
 			ItemVersion: item.ItemVersion, ProposalDigest: proposal.Digest,
-			Supersedes: supersedes, Intent: proposal.RunProposal.Intent,
-			ExpectedCostUnits: proposal.RunProposal.ExpectedCostUnits,
-			Scope:             proposal.RunProposal.Scope,
+			Supersedes: supersedes, Intent: proposal.TaskProposal.Intent,
+			ExpectedCostUnits: proposal.TaskProposal.ExpectedCostUnits,
+			Scope:             proposal.TaskProposal.Scope,
 		}
 		return nil
 	})
 	if err != nil {
-		return RunProposalFactsSnapshot{}, fmt.Errorf("get run proposal facts %q: %w", id, err)
+		return TaskProposalFactsSnapshot{}, fmt.Errorf("get task proposal facts %q: %w", id, err)
 	}
 	return out, nil
 }
@@ -1334,7 +1334,7 @@ func authenticateRunObservation(
 			domain.AttentionAgentQuestion, domain.AttentionReviewDiminishing,
 			domain.AttentionReviewDispute, domain.AttentionReviewContradiction,
 			domain.AttentionReviewConfiguration, domain.AttentionFindingAdjudication,
-			domain.AttentionRunProposal,
+			domain.AttentionTaskProposal,
 			domain.AttentionSystemHealth, domain.AttentionBlocked:
 		}
 	}

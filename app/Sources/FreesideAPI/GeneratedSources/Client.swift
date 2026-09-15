@@ -420,20 +420,20 @@ public struct Client: APIProtocol {
             }
         )
     }
-    /// Get authenticated run-proposal facts
+    /// Get authenticated task-proposal facts
     ///
-    /// Returns the exact digest-bound run-proposal facts rendered by a run_proposal item. The daemon reconstructs the private proposal ledger, re-resolves the opaque work-unit handle through its durable declaration and current policy, and returns only bounded review facts. The version tuple lets the client prove the facts and card were read from the same item state. Active snoozes remain hidden as 404.
+    /// Returns the exact digest-bound task-proposal facts rendered by a task_proposal item. The daemon reconstructs the private proposal ledger, re-resolves the opaque work-unit handle through its durable declaration and current policy, and returns only bounded review facts. The version tuple lets the client prove the facts and card were read from the same item state. Active snoozes remain hidden as 404.
     ///
     ///
-    /// - Remark: HTTP `GET /attention/items/{item_id}/run-proposal`.
-    /// - Remark: Generated from `#/paths//attention/items/{item_id}/run-proposal/get(getRunProposalFacts)`.
-    public func getRunProposalFacts(_ input: Operations.getRunProposalFacts.Input) async throws -> Operations.getRunProposalFacts.Output {
+    /// - Remark: HTTP `GET /attention/items/{item_id}/task-proposal`.
+    /// - Remark: Generated from `#/paths//attention/items/{item_id}/task-proposal/get(getTaskProposalFacts)`.
+    public func getTaskProposalFacts(_ input: Operations.getTaskProposalFacts.Input) async throws -> Operations.getTaskProposalFacts.Output {
         try await client.send(
             input: input,
-            forOperation: Operations.getRunProposalFacts.id,
+            forOperation: Operations.getTaskProposalFacts.id,
             serializer: { input in
                 let path = try converter.renderedPath(
-                    template: "/attention/items/{}/run-proposal",
+                    template: "/attention/items/{}/task-proposal",
                     parameters: [
                         input.path.item_id
                     ]
@@ -453,7 +453,7 @@ public struct Client: APIProtocol {
                 switch response.status.code {
                 case 200:
                     let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
-                    let body: Operations.getRunProposalFacts.Output.Ok.Body
+                    let body: Operations.getTaskProposalFacts.Output.Ok.Body
                     let chosenContentType = try converter.bestContentType(
                         received: contentType,
                         options: [
@@ -463,7 +463,7 @@ public struct Client: APIProtocol {
                     switch chosenContentType {
                     case "application/json":
                         body = try await converter.getResponseBodyAsJSON(
-                            Components.Schemas.RunProposalFactsSnapshot.self,
+                            Components.Schemas.TaskProposalFactsSnapshot.self,
                             from: responseBody,
                             transforming: { value in
                                 .json(value)

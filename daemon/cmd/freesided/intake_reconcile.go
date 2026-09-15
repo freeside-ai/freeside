@@ -25,7 +25,7 @@ import (
 // Label-initiator intake reconciliation (plan §5.11, §5.12, issue #659). A
 // standalone process loop, beside the active-resource reconciler, that observes
 // each configured initiator's labeled open issues and, per occurrence,
-// admits exactly one run proposal (idempotent across restarts and re-observation),
+// admits exactly one task proposal (idempotent across restarts and re-observation),
 // starts it under WIP caps when the recorded mode authorizes auto_start, and
 // supersedes an open proposal whose issue lost the label or closed. It observes
 // no issue content: only the issue number, its lifecycle state, and label
@@ -278,7 +278,7 @@ func (r *intakeReconciler) reconcilePresent(ctx context.Context, init intakeInit
 // idempotent and replay-convergent: derive the run identities, build the
 // resolved policy, synthesize and store the coordinates-only work-item document,
 // persist the reserved specification run, register the project authority, mint the
-// declaration, admit the run proposal under the occurrence's derived key, and
+// declaration, admit the task proposal under the occurrence's derived key, and
 // bind the admission. See the decision note for the reserved-run adoption model.
 func (r *intakeReconciler) admit(
 	ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence,
@@ -381,12 +381,12 @@ func (r *intakeReconciler) admit(
 		ProjectID:       init.ProjectID,
 		ProposalBatchID: intakeProposalBatchID(occurrence),
 		AdmissionKey:    occurrence.ProposalAdmissionKey(),
-		Kind:            domain.EffectRunProposal,
-		Parameters: domain.RunProposalParameters{
+		Kind:            domain.EffectTaskProposal,
+		Parameters: domain.TaskProposalParameters{
 			SubjectHandle:     domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(specificationRunID)),
-			Intent:            domain.RunProposalIntentImplement,
+			Intent:            domain.TaskProposalIntentImplement,
 			ExpectedCostUnits: init.ExpectedCostUnits,
-			Scope: domain.RunProposalScope{
+			Scope: domain.TaskProposalScope{
 				ComponentCount:    max(init.ComponentCount, 1),
 				DeclaredPathCount: len(declaredPaths),
 			},
@@ -519,11 +519,11 @@ func (r *intakeReconciler) autoStart(
 	// Record the daemon-attributed start through the decision ledger (GQ2), then
 	// launch only the decision this call actually made. If an operator declined
 	// the card or a departure superseded it between the WIP gate and here,
-	// StartRunProposalUnattended records no start and reports started=false: an
+	// StartTaskProposalUnattended records no start and reports started=false: an
 	// explicit non-start decision must never become an autonomous run. A
 	// concurrent decided-start is relaunched by decide's already-decided path on
 	// the next pass; launch is idempotent.
-	started, err := r.attention.StartRunProposalUnattended(ctx,
+	started, err := r.attention.StartTaskProposalUnattended(ctx,
 		domain.ItemID(occurrence.Admission.ProposalInstanceID), intakeStartCommandID(occurrence))
 	if err != nil {
 		return fmt.Errorf("record auto_start decision: %w", err)

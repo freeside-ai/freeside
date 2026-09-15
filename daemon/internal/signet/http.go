@@ -54,7 +54,7 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 	mux.Handle("GET /sync/revision", h.authenticated(h.getRevision))
 	mux.Handle("GET /attention/items", h.authenticated(h.listAttentionItems))
 	mux.Handle("GET /attention/items/{item_id}", h.authenticated(h.getAttentionItem))
-	mux.Handle("GET /attention/items/{item_id}/run-proposal", h.authenticated(h.getRunProposalFacts))
+	mux.Handle("GET /attention/items/{item_id}/task-proposal", h.authenticated(h.getTaskProposalFacts))
 	mux.Handle("GET /attention/items/{item_id}/deliveries", h.authenticated(h.listAttentionItemDeliveries))
 	mux.Handle("PUT /attention/items/{item_id}/deliveries/{channel}/{attempt}/opened", h.authenticated(h.reportDeliveryOpened))
 	mux.Handle("GET /runs", h.authenticated(h.listRuns))
@@ -153,8 +153,8 @@ func (h httpHandler) getAttentionItem(w http.ResponseWriter, r *http.Request, _ 
 	writeJSON(w, http.StatusOK, item)
 }
 
-func (h httpHandler) getRunProposalFacts(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
-	facts, err := h.service.GetRunProposalFacts(r.Context(), domain.ItemID(r.PathValue("item_id")))
+func (h httpHandler) getTaskProposalFacts(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
+	facts, err := h.service.GetTaskProposalFacts(r.Context(), domain.ItemID(r.PathValue("item_id")))
 	if err != nil {
 		writeReadError(w, err)
 		return
@@ -352,14 +352,14 @@ type decisionPayloadRequest struct {
 	// pure decisions omit them); the service's per-action content policy
 	// decides whether their presence or absence is an error, so nil maps to
 	// the zero values rather than a required-field 400 here.
-	Message                     *string                   `json:"message"`
-	Attachments                 *[]domain.Digest          `json:"attachments"`
-	RunProposalRevision         *RunProposalRevisionInput `json:"run_proposal_revision"`
-	SnoozeUntil                 *time.Time                `json:"snooze_until"`
-	AlternativeChoices          []AlternativeChoice       `json:"alternative_choices"`
-	CapabilityManifestDigest    *domain.Digest            `json:"capability_manifest_digest"`
-	AnswerRoute                 *domain.AnswerRoute       `json:"answer_route"`
-	DecisionActionSurfaceDigest *domain.Digest            `json:"decision_action_surface_digest"`
+	Message                     *string                    `json:"message"`
+	Attachments                 *[]domain.Digest           `json:"attachments"`
+	TaskProposalRevision        *TaskProposalRevisionInput `json:"task_proposal_revision"`
+	SnoozeUntil                 *time.Time                 `json:"snooze_until"`
+	AlternativeChoices          []AlternativeChoice        `json:"alternative_choices"`
+	CapabilityManifestDigest    *domain.Digest             `json:"capability_manifest_digest"`
+	AnswerRoute                 *domain.AnswerRoute        `json:"answer_route"`
+	DecisionActionSurfaceDigest *domain.Digest             `json:"decision_action_surface_digest"`
 }
 
 type submitTaskPayloadRequest struct {
@@ -441,10 +441,10 @@ func (h httpHandler) submitDecisionCommand(w http.ResponseWriter, r *http.Reques
 	payload := DecisionPayload{
 		ItemID: arm.ItemID, Action: arm.Action,
 		ItemVersion: arm.ItemVersion, PRHeadSHA: *arm.PRHeadSHA,
-		ArtifactDigests:     *arm.ArtifactDigests,
-		RunProposalRevision: arm.RunProposalRevision,
-		SnoozeUntil:         arm.SnoozeUntil,
-		AlternativeChoices:  arm.AlternativeChoices,
+		ArtifactDigests:      *arm.ArtifactDigests,
+		TaskProposalRevision: arm.TaskProposalRevision,
+		SnoozeUntil:          arm.SnoozeUntil,
+		AlternativeChoices:   arm.AlternativeChoices,
 	}
 	if arm.CapabilityManifestDigest != nil {
 		digest := *arm.CapabilityManifestDigest

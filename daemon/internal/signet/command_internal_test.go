@@ -10,10 +10,10 @@ import (
 
 func TestDecisionMessageRejectsPresentEmptyAlternativeChoices(t *testing.T) {
 	snoozeUntil := time.Date(2026, 8, 22, 1, 0, 0, 0, time.UTC)
-	revision := &RunProposalRevisionInput{
-		Intent:            domain.RunProposalIntentImplement,
+	revision := &TaskProposalRevisionInput{
+		Intent:            domain.TaskProposalIntentImplement,
 		ExpectedCostUnits: 1,
-		Scope: domain.RunProposalScope{
+		Scope: domain.TaskProposalScope{
 			ComponentCount: 1, DeclaredPathCount: 1,
 		},
 	}
@@ -26,7 +26,7 @@ func TestDecisionMessageRejectsPresentEmptyAlternativeChoices(t *testing.T) {
 			Action: domain.ActionAcceptRecommendedRoute, AlternativeChoices: []AlternativeChoice{},
 		}, ErrInvalidFindingAdjudicationDecisionPayload},
 		{"start with changes", DecisionPayload{
-			Action: domain.ActionStartWithChanges, RunProposalRevision: revision,
+			Action: domain.ActionStartWithChanges, TaskProposalRevision: revision,
 			AlternativeChoices: []AlternativeChoice{},
 		}, ErrInvalidProposalDecisionPayload},
 		{"snooze", DecisionPayload{

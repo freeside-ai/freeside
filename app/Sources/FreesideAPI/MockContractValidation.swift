@@ -963,7 +963,7 @@ enum MockContractValidation {
                 !digest.isEmpty,
                 (payload.message ?? "").isEmpty,
                 (payload.attachments ?? []).isEmpty,
-                payload.run_proposal_revision == nil,
+                payload.task_proposal_revision == nil,
                 payload.snooze_until == nil,
                 payload.alternative_choices == nil
             else { throw malformed("invalid capability manifest selection") }
@@ -971,7 +971,7 @@ enum MockContractValidation {
             guard let message = payload.message,
                 !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                 payload.capability_manifest_digest == nil,
-                payload.run_proposal_revision == nil,
+                payload.task_proposal_revision == nil,
                 payload.snooze_until == nil,
                 payload.alternative_choices == nil
             else { throw malformed("invalid discuss message") }
@@ -982,7 +982,7 @@ enum MockContractValidation {
                 command.command_id.lengthOfBytes(using: .utf8) <= 256,
                 (payload.attachments ?? []).isEmpty,
                 payload.capability_manifest_digest == nil,
-                payload.run_proposal_revision == nil,
+                payload.task_proposal_revision == nil,
                 payload.snooze_until == nil,
                 payload.alternative_choices == nil
             else { throw malformed("invalid request_changes message") }
@@ -993,12 +993,12 @@ enum MockContractValidation {
                 command.command_id.lengthOfBytes(using: .utf8) <= 256,
                 (payload.attachments ?? []).isEmpty,
                 payload.capability_manifest_digest == nil,
-                payload.run_proposal_revision == nil,
+                payload.task_proposal_revision == nil,
                 payload.snooze_until == nil,
                 payload.alternative_choices == nil
             else { throw malformed("invalid answer or return feedback") }
         case .start_with_changes:
-            guard let revision = payload.run_proposal_revision?.value1,
+            guard let revision = payload.task_proposal_revision?.value1,
                 payload.snooze_until == nil,
                 (payload.message ?? "").isEmpty,
                 (payload.attachments ?? []).isEmpty,
@@ -1010,10 +1010,10 @@ enum MockContractValidation {
                 revision.scope.component_count <= 32,
                 revision.scope.declared_path_count >= 1,
                 revision.scope.declared_path_count <= 4096
-            else { throw malformed("invalid run_proposal_revision") }
+            else { throw malformed("invalid task_proposal_revision") }
         case .snooze:
             guard payload.snooze_until != nil,
-                payload.run_proposal_revision == nil,
+                payload.task_proposal_revision == nil,
                 (payload.message ?? "").isEmpty,
                 (payload.attachments ?? []).isEmpty,
                 payload.alternative_choices == nil,
@@ -1025,7 +1025,7 @@ enum MockContractValidation {
                 Set(choices.map(\.finding_id)).count == choices.count,
                 (payload.message ?? "").isEmpty,
                 (payload.attachments ?? []).isEmpty,
-                payload.run_proposal_revision == nil,
+                payload.task_proposal_revision == nil,
                 payload.snooze_until == nil,
                 payload.capability_manifest_digest == nil
             else { throw malformed("invalid alternative_choices") }
@@ -1033,12 +1033,12 @@ enum MockContractValidation {
             guard payload.alternative_choices == nil,
                 (payload.message ?? "").isEmpty,
                 (payload.attachments ?? []).isEmpty,
-                payload.run_proposal_revision == nil,
+                payload.task_proposal_revision == nil,
                 payload.snooze_until == nil,
                 payload.capability_manifest_digest == nil
             else { throw malformed("finding adjudication input on accept") }
         default:
-            guard payload.run_proposal_revision == nil,
+            guard payload.task_proposal_revision == nil,
                 payload.snooze_until == nil,
                 payload.alternative_choices == nil,
                 payload.capability_manifest_digest == nil,

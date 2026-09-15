@@ -43,7 +43,7 @@ var allowedActionsByType = map[domain.AttentionType]map[domain.Action]struct{}{
 		domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionMarkSeen,
 		domain.ActionDismiss, domain.ActionStop,
 	),
-	domain.AttentionRunProposal: actionSet(
+	domain.AttentionTaskProposal: actionSet(
 		domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze,
 	),
 	domain.AttentionSystemHealth: actionSet(

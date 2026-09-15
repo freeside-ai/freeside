@@ -986,7 +986,7 @@ import Testing
     // Every fixture passes the full validity check, each text claim's digest
     // recomputes from its content, and the summary claim appears exactly on
     // the types that carry §9's summary layer (the purely mechanical
-    // system_health, blocked, and the exact one-carrier run proposal stay text-free).
+    // system_health, blocked, and the exact one-carrier task proposal stay text-free).
     @Test(arguments: AttentionFixtures.phase1Types)
     func fixtureTextClaimsBindTheirContent(type: Components.Schemas.AttentionType) {
         let item = AttentionFixtures.fixture(type: type).item
@@ -996,7 +996,7 @@ import Testing
             #expect(claim.digest == MockContractValidation.sha256Digest(of: text.content))
         }
         let hasText = item.agent_claims.contains { $0.text != nil }
-        #expect(hasText == (type != .system_health && type != .blocked && type != .run_proposal))
+        #expect(hasText == (type != .system_health && type != .blocked && type != .task_proposal))
     }
 
     // MARK: - itemPolicyBreach
@@ -1117,10 +1117,10 @@ import Testing
             ]
             return c
         }
-        expectMalformed(reason: "invalid run_proposal_revision") {
-            var c = command(against: AttentionFixtures.fixture(type: .run_proposal))
+        expectMalformed(reason: "invalid task_proposal_revision") {
+            var c = command(against: AttentionFixtures.fixture(type: .task_proposal))
             c.payload.asDecision.action = .start_with_changes
-            c.payload.asDecision.run_proposal_revision = .init(
+            c.payload.asDecision.task_proposal_revision = .init(
                 value1: .init(
                     intent: .implement_subject,
                     expected_cost_units: 25,
@@ -1137,7 +1137,7 @@ import Testing
             return c
         }
         expectMalformed(reason: "invalid snooze_until") {
-            var c = command(against: AttentionFixtures.fixture(type: .run_proposal))
+            var c = command(against: AttentionFixtures.fixture(type: .task_proposal))
             c.payload.asDecision.action = .snooze
             c.payload.asDecision.snooze_until = Date(timeIntervalSince1970: 1_786_506_245)
             c.payload.asDecision.alternative_choices = [

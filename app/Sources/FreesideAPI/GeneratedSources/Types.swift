@@ -78,14 +78,14 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /attention/items/{item_id}`.
     /// - Remark: Generated from `#/paths//attention/items/{item_id}/get(getAttentionItem)`.
     func getAttentionItem(_ input: Operations.getAttentionItem.Input) async throws -> Operations.getAttentionItem.Output
-    /// Get authenticated run-proposal facts
+    /// Get authenticated task-proposal facts
     ///
-    /// Returns the exact digest-bound run-proposal facts rendered by a run_proposal item. The daemon reconstructs the private proposal ledger, re-resolves the opaque work-unit handle through its durable declaration and current policy, and returns only bounded review facts. The version tuple lets the client prove the facts and card were read from the same item state. Active snoozes remain hidden as 404.
+    /// Returns the exact digest-bound task-proposal facts rendered by a task_proposal item. The daemon reconstructs the private proposal ledger, re-resolves the opaque work-unit handle through its durable declaration and current policy, and returns only bounded review facts. The version tuple lets the client prove the facts and card were read from the same item state. Active snoozes remain hidden as 404.
     ///
     ///
-    /// - Remark: HTTP `GET /attention/items/{item_id}/run-proposal`.
-    /// - Remark: Generated from `#/paths//attention/items/{item_id}/run-proposal/get(getRunProposalFacts)`.
-    func getRunProposalFacts(_ input: Operations.getRunProposalFacts.Input) async throws -> Operations.getRunProposalFacts.Output
+    /// - Remark: HTTP `GET /attention/items/{item_id}/task-proposal`.
+    /// - Remark: Generated from `#/paths//attention/items/{item_id}/task-proposal/get(getTaskProposalFacts)`.
+    func getTaskProposalFacts(_ input: Operations.getTaskProposalFacts.Input) async throws -> Operations.getTaskProposalFacts.Output
     /// List an item's delivery attempts
     ///
     /// Lists the item's per-channel, per-attempt delivery records (plan §4). Delivery rows are created and advanced by the daemon's delivery pipeline; the single client write is the opened receipt (reportDeliveryOpened), which advances an existing attempt and never creates one.
@@ -404,18 +404,18 @@ extension APIProtocol {
             headers: headers
         ))
     }
-    /// Get authenticated run-proposal facts
+    /// Get authenticated task-proposal facts
     ///
-    /// Returns the exact digest-bound run-proposal facts rendered by a run_proposal item. The daemon reconstructs the private proposal ledger, re-resolves the opaque work-unit handle through its durable declaration and current policy, and returns only bounded review facts. The version tuple lets the client prove the facts and card were read from the same item state. Active snoozes remain hidden as 404.
+    /// Returns the exact digest-bound task-proposal facts rendered by a task_proposal item. The daemon reconstructs the private proposal ledger, re-resolves the opaque work-unit handle through its durable declaration and current policy, and returns only bounded review facts. The version tuple lets the client prove the facts and card were read from the same item state. Active snoozes remain hidden as 404.
     ///
     ///
-    /// - Remark: HTTP `GET /attention/items/{item_id}/run-proposal`.
-    /// - Remark: Generated from `#/paths//attention/items/{item_id}/run-proposal/get(getRunProposalFacts)`.
-    public func getRunProposalFacts(
-        path: Operations.getRunProposalFacts.Input.Path,
-        headers: Operations.getRunProposalFacts.Input.Headers = .init()
-    ) async throws -> Operations.getRunProposalFacts.Output {
-        try await getRunProposalFacts(Operations.getRunProposalFacts.Input(
+    /// - Remark: HTTP `GET /attention/items/{item_id}/task-proposal`.
+    /// - Remark: Generated from `#/paths//attention/items/{item_id}/task-proposal/get(getTaskProposalFacts)`.
+    public func getTaskProposalFacts(
+        path: Operations.getTaskProposalFacts.Input.Path,
+        headers: Operations.getTaskProposalFacts.Input.Headers = .init()
+    ) async throws -> Operations.getTaskProposalFacts.Output {
+        try await getTaskProposalFacts(Operations.getTaskProposalFacts.Input(
             path: path,
             headers: headers
         ))
@@ -921,28 +921,28 @@ public enum Components {
         /// Store-authenticated, digest-bound proposal facts matched to one exact attention-item snapshot before the client enables a decision.
         ///
         ///
-        /// - Remark: Generated from `#/components/schemas/RunProposalFactsSnapshot`.
-        public struct RunProposalFactsSnapshot: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/RunProposalFactsSnapshot/as_of_revision`.
+        /// - Remark: Generated from `#/components/schemas/TaskProposalFactsSnapshot`.
+        public struct TaskProposalFactsSnapshot: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskProposalFactsSnapshot/as_of_revision`.
             public var as_of_revision: Components.Schemas.AsOfRevision
-            /// - Remark: Generated from `#/components/schemas/RunProposalFactsSnapshot/entity_version`.
+            /// - Remark: Generated from `#/components/schemas/TaskProposalFactsSnapshot/entity_version`.
             public var entity_version: Components.Schemas.EntityVersion
-            /// - Remark: Generated from `#/components/schemas/RunProposalFactsSnapshot/item_version`.
+            /// - Remark: Generated from `#/components/schemas/TaskProposalFactsSnapshot/item_version`.
             public var item_version: Swift.Int
-            /// - Remark: Generated from `#/components/schemas/RunProposalFactsSnapshot/proposal_digest`.
+            /// - Remark: Generated from `#/components/schemas/TaskProposalFactsSnapshot/proposal_digest`.
             public var proposal_digest: Components.Schemas.Digest
             /// The exact authenticated prior facts for a revised card; null for the initially admitted proposal.
             ///
             ///
-            /// - Remark: Generated from `#/components/schemas/RunProposalFactsSnapshot/supersedes`.
+            /// - Remark: Generated from `#/components/schemas/TaskProposalFactsSnapshot/supersedes`.
             public struct supersedesPayload: Codable, Hashable, Sendable {
-                /// - Remark: Generated from `#/components/schemas/RunProposalFactsSnapshot/supersedes/value1`.
-                public var value1: Components.Schemas.RunProposalRevisionFacts
+                /// - Remark: Generated from `#/components/schemas/TaskProposalFactsSnapshot/supersedes/value1`.
+                public var value1: Components.Schemas.TaskProposalRevisionFacts
                 /// Creates a new `supersedesPayload`.
                 ///
                 /// - Parameters:
                 ///   - value1:
-                public init(value1: Components.Schemas.RunProposalRevisionFacts) {
+                public init(value1: Components.Schemas.TaskProposalRevisionFacts) {
                     self.value1 = value1
                 }
                 public init(from decoder: any Swift.Decoder) throws {
@@ -955,15 +955,15 @@ public enum Components {
             /// The exact authenticated prior facts for a revised card; null for the initially admitted proposal.
             ///
             ///
-            /// - Remark: Generated from `#/components/schemas/RunProposalFactsSnapshot/supersedes`.
-            public var supersedes: Components.Schemas.RunProposalFactsSnapshot.supersedesPayload?
-            /// - Remark: Generated from `#/components/schemas/RunProposalFactsSnapshot/intent`.
-            public var intent: Components.Schemas.RunProposalIntent
-            /// - Remark: Generated from `#/components/schemas/RunProposalFactsSnapshot/expected_cost_units`.
+            /// - Remark: Generated from `#/components/schemas/TaskProposalFactsSnapshot/supersedes`.
+            public var supersedes: Components.Schemas.TaskProposalFactsSnapshot.supersedesPayload?
+            /// - Remark: Generated from `#/components/schemas/TaskProposalFactsSnapshot/intent`.
+            public var intent: Components.Schemas.TaskProposalIntent
+            /// - Remark: Generated from `#/components/schemas/TaskProposalFactsSnapshot/expected_cost_units`.
             public var expected_cost_units: Swift.Int
-            /// - Remark: Generated from `#/components/schemas/RunProposalFactsSnapshot/scope`.
-            public var scope: Components.Schemas.RunProposalScope
-            /// Creates a new `RunProposalFactsSnapshot`.
+            /// - Remark: Generated from `#/components/schemas/TaskProposalFactsSnapshot/scope`.
+            public var scope: Components.Schemas.TaskProposalScope
+            /// Creates a new `TaskProposalFactsSnapshot`.
             ///
             /// - Parameters:
             ///   - as_of_revision:
@@ -979,10 +979,10 @@ public enum Components {
                 entity_version: Components.Schemas.EntityVersion,
                 item_version: Swift.Int,
                 proposal_digest: Components.Schemas.Digest,
-                supersedes: Components.Schemas.RunProposalFactsSnapshot.supersedesPayload? = nil,
-                intent: Components.Schemas.RunProposalIntent,
+                supersedes: Components.Schemas.TaskProposalFactsSnapshot.supersedesPayload? = nil,
+                intent: Components.Schemas.TaskProposalIntent,
                 expected_cost_units: Swift.Int,
-                scope: Components.Schemas.RunProposalScope
+                scope: Components.Schemas.TaskProposalScope
             ) {
                 self.as_of_revision = as_of_revision
                 self.entity_version = entity_version
@@ -1022,11 +1022,11 @@ public enum Components {
                     forKey: .proposal_digest
                 )
                 self.supersedes = try container.decodeIfPresent(
-                    Components.Schemas.RunProposalFactsSnapshot.supersedesPayload.self,
+                    Components.Schemas.TaskProposalFactsSnapshot.supersedesPayload.self,
                     forKey: .supersedes
                 )
                 self.intent = try container.decode(
-                    Components.Schemas.RunProposalIntent.self,
+                    Components.Schemas.TaskProposalIntent.self,
                     forKey: .intent
                 )
                 self.expected_cost_units = try container.decode(
@@ -1034,7 +1034,7 @@ public enum Components {
                     forKey: .expected_cost_units
                 )
                 self.scope = try container.decode(
-                    Components.Schemas.RunProposalScope.self,
+                    Components.Schemas.TaskProposalScope.self,
                     forKey: .scope
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
@@ -1051,17 +1051,17 @@ public enum Components {
         }
         /// One digest-bound, bounded side of a proposal revision comparison.
         ///
-        /// - Remark: Generated from `#/components/schemas/RunProposalRevisionFacts`.
-        public struct RunProposalRevisionFacts: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/RunProposalRevisionFacts/proposal_digest`.
+        /// - Remark: Generated from `#/components/schemas/TaskProposalRevisionFacts`.
+        public struct TaskProposalRevisionFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskProposalRevisionFacts/proposal_digest`.
             public var proposal_digest: Components.Schemas.Digest
-            /// - Remark: Generated from `#/components/schemas/RunProposalRevisionFacts/intent`.
-            public var intent: Components.Schemas.RunProposalIntent
-            /// - Remark: Generated from `#/components/schemas/RunProposalRevisionFacts/expected_cost_units`.
+            /// - Remark: Generated from `#/components/schemas/TaskProposalRevisionFacts/intent`.
+            public var intent: Components.Schemas.TaskProposalIntent
+            /// - Remark: Generated from `#/components/schemas/TaskProposalRevisionFacts/expected_cost_units`.
             public var expected_cost_units: Swift.Int
-            /// - Remark: Generated from `#/components/schemas/RunProposalRevisionFacts/scope`.
-            public var scope: Components.Schemas.RunProposalScope
-            /// Creates a new `RunProposalRevisionFacts`.
+            /// - Remark: Generated from `#/components/schemas/TaskProposalRevisionFacts/scope`.
+            public var scope: Components.Schemas.TaskProposalScope
+            /// Creates a new `TaskProposalRevisionFacts`.
             ///
             /// - Parameters:
             ///   - proposal_digest:
@@ -1070,9 +1070,9 @@ public enum Components {
             ///   - scope:
             public init(
                 proposal_digest: Components.Schemas.Digest,
-                intent: Components.Schemas.RunProposalIntent,
+                intent: Components.Schemas.TaskProposalIntent,
                 expected_cost_units: Swift.Int,
-                scope: Components.Schemas.RunProposalScope
+                scope: Components.Schemas.TaskProposalScope
             ) {
                 self.proposal_digest = proposal_digest
                 self.intent = intent
@@ -1092,7 +1092,7 @@ public enum Components {
                     forKey: .proposal_digest
                 )
                 self.intent = try container.decode(
-                    Components.Schemas.RunProposalIntent.self,
+                    Components.Schemas.TaskProposalIntent.self,
                     forKey: .intent
                 )
                 self.expected_cost_units = try container.decode(
@@ -1100,7 +1100,7 @@ public enum Components {
                     forKey: .expected_cost_units
                 )
                 self.scope = try container.decode(
-                    Components.Schemas.RunProposalScope.self,
+                    Components.Schemas.TaskProposalScope.self,
                     forKey: .scope
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
@@ -1114,24 +1114,24 @@ public enum Components {
         /// Bounded public parameters an operator may revise; the opaque work-unit handle and current policy remain store-derived authority.
         ///
         ///
-        /// - Remark: Generated from `#/components/schemas/RunProposalRevisionInput`.
-        public struct RunProposalRevisionInput: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/RunProposalRevisionInput/intent`.
-            public var intent: Components.Schemas.RunProposalIntent
-            /// - Remark: Generated from `#/components/schemas/RunProposalRevisionInput/expected_cost_units`.
+        /// - Remark: Generated from `#/components/schemas/TaskProposalRevisionInput`.
+        public struct TaskProposalRevisionInput: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskProposalRevisionInput/intent`.
+            public var intent: Components.Schemas.TaskProposalIntent
+            /// - Remark: Generated from `#/components/schemas/TaskProposalRevisionInput/expected_cost_units`.
             public var expected_cost_units: Swift.Int
-            /// - Remark: Generated from `#/components/schemas/RunProposalRevisionInput/scope`.
-            public var scope: Components.Schemas.RunProposalScope
-            /// Creates a new `RunProposalRevisionInput`.
+            /// - Remark: Generated from `#/components/schemas/TaskProposalRevisionInput/scope`.
+            public var scope: Components.Schemas.TaskProposalScope
+            /// Creates a new `TaskProposalRevisionInput`.
             ///
             /// - Parameters:
             ///   - intent:
             ///   - expected_cost_units:
             ///   - scope:
             public init(
-                intent: Components.Schemas.RunProposalIntent,
+                intent: Components.Schemas.TaskProposalIntent,
                 expected_cost_units: Swift.Int,
-                scope: Components.Schemas.RunProposalScope
+                scope: Components.Schemas.TaskProposalScope
             ) {
                 self.intent = intent
                 self.expected_cost_units = expected_cost_units
@@ -1145,7 +1145,7 @@ public enum Components {
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 self.intent = try container.decode(
-                    Components.Schemas.RunProposalIntent.self,
+                    Components.Schemas.TaskProposalIntent.self,
                     forKey: .intent
                 )
                 self.expected_cost_units = try container.decode(
@@ -1153,7 +1153,7 @@ public enum Components {
                     forKey: .expected_cost_units
                 )
                 self.scope = try container.decode(
-                    Components.Schemas.RunProposalScope.self,
+                    Components.Schemas.TaskProposalScope.self,
                     forKey: .scope
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
@@ -1165,15 +1165,15 @@ public enum Components {
         }
         /// Bounded aggregate scope facts with no paths or target identities.
         ///
-        /// - Remark: Generated from `#/components/schemas/RunProposalScope`.
-        public struct RunProposalScope: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/RunProposalScope/component_count`.
+        /// - Remark: Generated from `#/components/schemas/TaskProposalScope`.
+        public struct TaskProposalScope: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskProposalScope/component_count`.
             public var component_count: Swift.Int
-            /// - Remark: Generated from `#/components/schemas/RunProposalScope/declared_path_count`.
+            /// - Remark: Generated from `#/components/schemas/TaskProposalScope/declared_path_count`.
             public var declared_path_count: Swift.Int
-            /// - Remark: Generated from `#/components/schemas/RunProposalScope/touches_control_plane`.
+            /// - Remark: Generated from `#/components/schemas/TaskProposalScope/touches_control_plane`.
             public var touches_control_plane: Swift.Bool
-            /// Creates a new `RunProposalScope`.
+            /// Creates a new `TaskProposalScope`.
             ///
             /// - Parameters:
             ///   - component_count:
@@ -1214,10 +1214,10 @@ public enum Components {
                 ])
             }
         }
-        /// Closed intent understood by the run-proposal registry.
+        /// Closed intent understood by the task-proposal registry.
         ///
-        /// - Remark: Generated from `#/components/schemas/RunProposalIntent`.
-        @frozen public enum RunProposalIntent: String, Codable, Hashable, Sendable, CaseIterable {
+        /// - Remark: Generated from `#/components/schemas/TaskProposalIntent`.
+        @frozen public enum TaskProposalIntent: String, Codable, Hashable, Sendable, CaseIterable {
             case implement_subject = "implement_subject"
         }
         /// A resource snapshot wrapping one attention delivery (plan §5.14).
@@ -4365,15 +4365,15 @@ public enum Components {
             /// Typed replacement parameters, present only for start_with_changes. The daemon preserves the current opaque subject handle, re-resolves its declaration and policy, and computes the revised digest inside the accepting transaction.
             ///
             ///
-            /// - Remark: Generated from `#/components/schemas/DecisionPayload/run_proposal_revision`.
-            public struct run_proposal_revisionPayload: Codable, Hashable, Sendable {
-                /// - Remark: Generated from `#/components/schemas/DecisionPayload/run_proposal_revision/value1`.
-                public var value1: Components.Schemas.RunProposalRevisionInput
-                /// Creates a new `run_proposal_revisionPayload`.
+            /// - Remark: Generated from `#/components/schemas/DecisionPayload/task_proposal_revision`.
+            public struct task_proposal_revisionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/DecisionPayload/task_proposal_revision/value1`.
+                public var value1: Components.Schemas.TaskProposalRevisionInput
+                /// Creates a new `task_proposal_revisionPayload`.
                 ///
                 /// - Parameters:
                 ///   - value1:
-                public init(value1: Components.Schemas.RunProposalRevisionInput) {
+                public init(value1: Components.Schemas.TaskProposalRevisionInput) {
                     self.value1 = value1
                 }
                 public init(from decoder: any Swift.Decoder) throws {
@@ -4386,8 +4386,8 @@ public enum Components {
             /// Typed replacement parameters, present only for start_with_changes. The daemon preserves the current opaque subject handle, re-resolves its declaration and policy, and computes the revised digest inside the accepting transaction.
             ///
             ///
-            /// - Remark: Generated from `#/components/schemas/DecisionPayload/run_proposal_revision`.
-            public var run_proposal_revision: Components.Schemas.DecisionPayload.run_proposal_revisionPayload?
+            /// - Remark: Generated from `#/components/schemas/DecisionPayload/task_proposal_revision`.
+            public var task_proposal_revision: Components.Schemas.DecisionPayload.task_proposal_revisionPayload?
             /// Typed UTC deferral instant, present only for snooze. The daemon requires a future canonical instant and records it in the proposal ledger.
             ///
             ///
@@ -4416,7 +4416,7 @@ public enum Components {
             ///   - capability_manifest_digest: The offered capability manifest selected by retry_with_capabilities. Required only for that action; the daemon re-derives the manifest from the run's current resolved policy.
             ///   - answer_route: Where the answer goes. Required for answer_and_retry on an agent_question whose facts name the implementation stage, and absent for every other command. retry_implementation re-invokes the implementer with the answer as operator feedback against the unchanged specification; revise_specification files the answer as specification feedback and starts a fresh campaign under the same task, whose revised specification, once approved, begins a new implementation run.
             ///   - attachments: Digest addresses of attachments already uploaded via PUT /attachments/{digest}, referenced by the appended message. Unlike artifact_digests this is ordered message content, not a binding set: order is preserved, never canonicalized.
-            ///   - run_proposal_revision: Typed replacement parameters, present only for start_with_changes. The daemon preserves the current opaque subject handle, re-resolves its declaration and policy, and computes the revised digest inside the accepting transaction.
+            ///   - task_proposal_revision: Typed replacement parameters, present only for start_with_changes. The daemon preserves the current opaque subject handle, re-resolves its declaration and policy, and computes the revised digest inside the accepting transaction.
             ///   - snooze_until: Typed UTC deferral instant, present only for snooze. The daemon requires a future canonical instant and records it in the proposal ledger.
             ///   - alternative_choices: Per-finding offered routes selected by choose_alternative_route. Findings omitted from this list retain their recommended route. Absent for every other action; finding IDs must be distinct.
             ///   - decision_action_surface_digest: The digest of the DecisionActionSurface the client rendered the decision from (plan §8). Optional comprehension telemetry: the daemon revalidates it against the live device, item decision surface, capability contract, and offered-action set, and stamps it onto the command's decision_evidence. It never widens the offered actions; it can only reject. Absent for a client build that does not adopt the action surface.
@@ -4431,7 +4431,7 @@ public enum Components {
                 capability_manifest_digest: Components.Schemas.DecisionPayload.capability_manifest_digestPayload? = nil,
                 answer_route: Components.Schemas.DecisionPayload.answer_routePayload? = nil,
                 attachments: [Components.Schemas.Digest]? = nil,
-                run_proposal_revision: Components.Schemas.DecisionPayload.run_proposal_revisionPayload? = nil,
+                task_proposal_revision: Components.Schemas.DecisionPayload.task_proposal_revisionPayload? = nil,
                 snooze_until: Foundation.Date? = nil,
                 alternative_choices: [Components.Schemas.AlternativeChoice]? = nil,
                 decision_action_surface_digest: Swift.String? = nil
@@ -4446,7 +4446,7 @@ public enum Components {
                 self.capability_manifest_digest = capability_manifest_digest
                 self.answer_route = answer_route
                 self.attachments = attachments
-                self.run_proposal_revision = run_proposal_revision
+                self.task_proposal_revision = task_proposal_revision
                 self.snooze_until = snooze_until
                 self.alternative_choices = alternative_choices
                 self.decision_action_surface_digest = decision_action_surface_digest
@@ -4462,7 +4462,7 @@ public enum Components {
                 case capability_manifest_digest
                 case answer_route
                 case attachments
-                case run_proposal_revision
+                case task_proposal_revision
                 case snooze_until
                 case alternative_choices
                 case decision_action_surface_digest
@@ -4509,9 +4509,9 @@ public enum Components {
                     [Components.Schemas.Digest].self,
                     forKey: .attachments
                 )
-                self.run_proposal_revision = try container.decodeIfPresent(
-                    Components.Schemas.DecisionPayload.run_proposal_revisionPayload.self,
-                    forKey: .run_proposal_revision
+                self.task_proposal_revision = try container.decodeIfPresent(
+                    Components.Schemas.DecisionPayload.task_proposal_revisionPayload.self,
+                    forKey: .task_proposal_revision
                 )
                 self.snooze_until = try container.decodeIfPresent(
                     Foundation.Date.self,
@@ -4536,7 +4536,7 @@ public enum Components {
                     "capability_manifest_digest",
                     "answer_route",
                     "attachments",
-                    "run_proposal_revision",
+                    "task_proposal_revision",
                     "snooze_until",
                     "alternative_choices",
                     "decision_action_surface_digest"
@@ -10756,7 +10756,7 @@ public enum Components {
             case finding_adjudication = "finding_adjudication"
             case ready_for_final_review = "ready_for_final_review"
             case publish_blocked = "publish_blocked"
-            case run_proposal = "run_proposal"
+            case task_proposal = "task_proposal"
             case system_health = "system_health"
             case blocked = "blocked"
         }
@@ -12493,21 +12493,21 @@ public enum Operations {
             }
         }
     }
-    /// Get authenticated run-proposal facts
+    /// Get authenticated task-proposal facts
     ///
-    /// Returns the exact digest-bound run-proposal facts rendered by a run_proposal item. The daemon reconstructs the private proposal ledger, re-resolves the opaque work-unit handle through its durable declaration and current policy, and returns only bounded review facts. The version tuple lets the client prove the facts and card were read from the same item state. Active snoozes remain hidden as 404.
+    /// Returns the exact digest-bound task-proposal facts rendered by a task_proposal item. The daemon reconstructs the private proposal ledger, re-resolves the opaque work-unit handle through its durable declaration and current policy, and returns only bounded review facts. The version tuple lets the client prove the facts and card were read from the same item state. Active snoozes remain hidden as 404.
     ///
     ///
-    /// - Remark: HTTP `GET /attention/items/{item_id}/run-proposal`.
-    /// - Remark: Generated from `#/paths//attention/items/{item_id}/run-proposal/get(getRunProposalFacts)`.
-    public enum getRunProposalFacts {
-        public static let id: Swift.String = "getRunProposalFacts"
+    /// - Remark: HTTP `GET /attention/items/{item_id}/task-proposal`.
+    /// - Remark: Generated from `#/paths//attention/items/{item_id}/task-proposal/get(getTaskProposalFacts)`.
+    public enum getTaskProposalFacts {
+        public static let id: Swift.String = "getTaskProposalFacts"
         public struct Input: Sendable, Hashable {
-            /// - Remark: Generated from `#/paths/attention/items/{item_id}/run-proposal/GET/path`.
+            /// - Remark: Generated from `#/paths/attention/items/{item_id}/task-proposal/GET/path`.
             public struct Path: Sendable, Hashable {
                 /// The attention item's identifier.
                 ///
-                /// - Remark: Generated from `#/paths/attention/items/{item_id}/run-proposal/GET/path/item_id`.
+                /// - Remark: Generated from `#/paths/attention/items/{item_id}/task-proposal/GET/path/item_id`.
                 public var item_id: Components.Parameters.ItemID
                 /// Creates a new `Path`.
                 ///
@@ -12517,27 +12517,27 @@ public enum Operations {
                     self.item_id = item_id
                 }
             }
-            public var path: Operations.getRunProposalFacts.Input.Path
-            /// - Remark: Generated from `#/paths/attention/items/{item_id}/run-proposal/GET/header`.
+            public var path: Operations.getTaskProposalFacts.Input.Path
+            /// - Remark: Generated from `#/paths/attention/items/{item_id}/task-proposal/GET/header`.
             public struct Headers: Sendable, Hashable {
-                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getRunProposalFacts.AcceptableContentType>]
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getTaskProposalFacts.AcceptableContentType>]
                 /// Creates a new `Headers`.
                 ///
                 /// - Parameters:
                 ///   - accept:
-                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getRunProposalFacts.AcceptableContentType>] = .defaultValues()) {
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getTaskProposalFacts.AcceptableContentType>] = .defaultValues()) {
                     self.accept = accept
                 }
             }
-            public var headers: Operations.getRunProposalFacts.Input.Headers
+            public var headers: Operations.getTaskProposalFacts.Input.Headers
             /// Creates a new `Input`.
             ///
             /// - Parameters:
             ///   - path:
             ///   - headers:
             public init(
-                path: Operations.getRunProposalFacts.Input.Path,
-                headers: Operations.getRunProposalFacts.Input.Headers = .init()
+                path: Operations.getTaskProposalFacts.Input.Path,
+                headers: Operations.getTaskProposalFacts.Input.Headers = .init()
             ) {
                 self.path = path
                 self.headers = headers
@@ -12545,15 +12545,15 @@ public enum Operations {
         }
         @frozen public enum Output: Sendable, Hashable {
             public struct Ok: Sendable, Hashable {
-                /// - Remark: Generated from `#/paths/attention/items/{item_id}/run-proposal/GET/responses/200/content`.
+                /// - Remark: Generated from `#/paths/attention/items/{item_id}/task-proposal/GET/responses/200/content`.
                 @frozen public enum Body: Sendable, Hashable {
-                    /// - Remark: Generated from `#/paths/attention/items/{item_id}/run-proposal/GET/responses/200/content/application\/json`.
-                    case json(Components.Schemas.RunProposalFactsSnapshot)
+                    /// - Remark: Generated from `#/paths/attention/items/{item_id}/task-proposal/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.TaskProposalFactsSnapshot)
                     /// The associated value of the enum case if `self` is `.json`.
                     ///
                     /// - Throws: An error if `self` is not `.json`.
                     /// - SeeAlso: `.json`.
-                    public var json: Components.Schemas.RunProposalFactsSnapshot {
+                    public var json: Components.Schemas.TaskProposalFactsSnapshot {
                         get throws {
                             switch self {
                             case let .json(body):
@@ -12563,26 +12563,26 @@ public enum Operations {
                     }
                 }
                 /// Received HTTP response body
-                public var body: Operations.getRunProposalFacts.Output.Ok.Body
+                public var body: Operations.getTaskProposalFacts.Output.Ok.Body
                 /// Creates a new `Ok`.
                 ///
                 /// - Parameters:
                 ///   - body: Received HTTP response body
-                public init(body: Operations.getRunProposalFacts.Output.Ok.Body) {
+                public init(body: Operations.getTaskProposalFacts.Output.Ok.Body) {
                     self.body = body
                 }
             }
-            /// Authenticated run-proposal facts.
+            /// Authenticated task-proposal facts.
             ///
-            /// - Remark: Generated from `#/paths//attention/items/{item_id}/run-proposal/get(getRunProposalFacts)/responses/200`.
+            /// - Remark: Generated from `#/paths//attention/items/{item_id}/task-proposal/get(getTaskProposalFacts)/responses/200`.
             ///
             /// HTTP response code: `200 ok`.
-            case ok(Operations.getRunProposalFacts.Output.Ok)
+            case ok(Operations.getTaskProposalFacts.Output.Ok)
             /// The associated value of the enum case if `self` is `.ok`.
             ///
             /// - Throws: An error if `self` is not `.ok`.
             /// - SeeAlso: `.ok`.
-            public var ok: Operations.getRunProposalFacts.Output.Ok {
+            public var ok: Operations.getTaskProposalFacts.Output.Ok {
                 get throws {
                     switch self {
                     case let .ok(response):
@@ -12597,7 +12597,7 @@ public enum Operations {
             }
             /// No entity exists under the identifier.
             ///
-            /// - Remark: Generated from `#/paths//attention/items/{item_id}/run-proposal/get(getRunProposalFacts)/responses/404`.
+            /// - Remark: Generated from `#/paths//attention/items/{item_id}/task-proposal/get(getTaskProposalFacts)/responses/404`.
             ///
             /// HTTP response code: `404 notFound`.
             case notFound(Components.Responses.NotFound)

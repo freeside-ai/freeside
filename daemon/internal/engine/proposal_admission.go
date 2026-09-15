@@ -22,7 +22,7 @@ type ProposalAdmission struct {
 	Parameters      any
 	Priority        domain.Priority
 	// RequestedDecision, when set, is the exact offered-action set for the
-	// created item; empty defaults to the full run_proposal set. Label intake
+	// created item; empty defaults to the full task_proposal set. Label intake
 	// omits start_with_changes because a label proposal's subject is fixed to
 	// the occurrence's own issue, so revising the subject is not a label-intake
 	// flow and offering it would strand the occurrence (#659, decision note
@@ -32,7 +32,7 @@ type ProposalAdmission struct {
 }
 
 // ProposalAdmissionResult is the atomically committed occurrence and its
-// digest-bound run_proposal attention item.
+// digest-bound task_proposal attention item.
 type ProposalAdmissionResult struct {
 	Instance domain.ProposalInstance
 	Item     domain.AttentionItem
@@ -65,7 +65,7 @@ func (e *Engine) admitProposalAt(
 	}
 	var result ProposalAdmissionResult
 	err := e.store.Write(ctx, func(tx *store.WriteTx) error {
-		parameters, ok := request.Parameters.(domain.RunProposalParameters)
+		parameters, ok := request.Parameters.(domain.TaskProposalParameters)
 		if !ok {
 			return domain.ErrEffectProposalInconsistent
 		}
@@ -77,7 +77,7 @@ func (e *Engine) admitProposalAt(
 			return fmt.Errorf("proposal subject project %q differs from request %q: %w",
 				declaration.ProjectID, request.ProjectID, domain.ErrParentKeyMismatch)
 		}
-		if err := domain.GateRunProposalScope(parameters.Scope, declaration); err != nil {
+		if err := domain.GateTaskProposalScope(parameters.Scope, declaration); err != nil {
 			return fmt.Errorf("proposal scope differs from durable declaration: %w", err)
 		}
 		proposal, err := domain.NewEffectProposal(request.Kind, parameters, policy)
@@ -154,7 +154,7 @@ func newProposalItem(
 	requestedDecision []domain.Action,
 	displayNames *domain.DisplayNames,
 ) (domain.AttentionItem, error) {
-	if instance.Proposal.Kind != domain.EffectRunProposal || instance.Proposal.RunProposal == nil {
+	if instance.Proposal.Kind != domain.EffectTaskProposal || instance.Proposal.TaskProposal == nil {
 		return domain.AttentionItem{}, domain.ErrEffectProposalInconsistent
 	}
 	// The default full set; a caller may narrow it (label intake drops
@@ -169,7 +169,7 @@ func newProposalItem(
 		Subject: domain.Subject{
 			Type: domain.SubjectProposalBatch, ID: domain.SubjectID(instance.ProposalBatchID),
 		},
-		Type: domain.AttentionRunProposal, Priority: priority,
+		Type: domain.AttentionTaskProposal, Priority: priority,
 		Reason:            "Start the daemon-enumerated work subject",
 		RequestedDecision: slices.Clone(requestedDecision),
 		EvidenceSnapshot:  []domain.Artifact{artifact}, ItemVersion: 1,
@@ -180,7 +180,7 @@ func newProposalItem(
 }
 
 func validateProposalItem(instance domain.ProposalInstance, item domain.AttentionItem) error {
-	if item.ID != domain.ItemID(instance.ID) || item.Type != domain.AttentionRunProposal ||
+	if item.ID != domain.ItemID(instance.ID) || item.Type != domain.AttentionTaskProposal ||
 		item.Subject.Type != domain.SubjectProposalBatch ||
 		item.Subject.ID != domain.SubjectID(instance.ProposalBatchID) ||
 		len(item.ArtifactDigests) != 1 || item.ArtifactDigests[0] != instance.Proposal.Digest {

@@ -40,7 +40,7 @@ public final class DecisionModel {
     public private(set) var phase: SubmissionPhase = .idle
     public private(set) var appliedRecord: Components.Schemas.CommandRecord?
     public private(set) var submissionError: String?
-    public private(set) var proposalFacts: Components.Schemas.RunProposalFactsSnapshot?
+    public private(set) var proposalFacts: Components.Schemas.TaskProposalFactsSnapshot?
 
     private let store: InboxStore
     private let openURL: (URL) async -> Bool
@@ -228,7 +228,7 @@ public final class DecisionModel {
         // (plan §5.14 cache eviction on epoch change; issue #162).
         guard store.cacheGeneration == validatedCacheGeneration else { return false }
         guard snapshot.item.status == .open else { return false }
-        if snapshot.item._type == .run_proposal {
+        if snapshot.item._type == .task_proposal {
             guard let proposalFacts, proposalFactsMatch(snapshot, proposalFacts) else { return false }
         }
         guard !store.isNavigationReserved(itemID: itemID) else { return false }
@@ -527,8 +527,8 @@ public final class DecisionModel {
                         // proves this local snooze no longer owns its state.
                         appliedRecord = nil
                     }
-                    if current.item._type == .run_proposal {
-                        let facts = try await store.client.getRunProposalFacts(
+                    if current.item._type == .task_proposal {
+                        let facts = try await store.client.getTaskProposalFacts(
                             path: .init(item_id: itemID)
                         ).ok.body.json
                         guard generation == validationGeneration,
@@ -570,7 +570,7 @@ public final class DecisionModel {
 
     private func proposalFactsMatch(
         _ snapshot: Components.Schemas.AttentionItemSnapshot,
-        _ facts: Components.Schemas.RunProposalFactsSnapshot
+        _ facts: Components.Schemas.TaskProposalFactsSnapshot
     ) -> Bool {
         facts.as_of_revision == snapshot.as_of_revision
             && facts.entity_version == snapshot.entity_version
@@ -578,8 +578,8 @@ public final class DecisionModel {
             && snapshot.item.artifact_digests == [facts.proposal_digest]
     }
 
-    public func submitRunProposalRevision(
-        _ revision: Components.Schemas.RunProposalRevisionInput
+    public func submitTaskProposalRevision(
+        _ revision: Components.Schemas.TaskProposalRevisionInput
     ) async {
         await submit(.start_with_changes, revision: revision)
     }
@@ -700,7 +700,7 @@ public final class DecisionModel {
     private func submit(
         _ action: Components.Schemas.Action,
         capabilityManifestDigest: String? = nil,
-        revision: Components.Schemas.RunProposalRevisionInput? = nil,
+        revision: Components.Schemas.TaskProposalRevisionInput? = nil,
         snoozeUntil: Date? = nil,
         alternativeChoices: [Components.Schemas.AlternativeChoice]? = nil,
         message: String? = nil,
@@ -759,7 +759,7 @@ public final class DecisionModel {
                         .init(value1: $0)
                     },
                     answer_route: answerRoute.map { .init(value1: $0) },
-                    run_proposal_revision: revision.map {
+                    task_proposal_revision: revision.map {
                         .init(value1: $0)
                     },
                     snooze_until: snoozeUntil,

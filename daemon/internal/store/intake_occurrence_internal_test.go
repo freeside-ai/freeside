@@ -37,9 +37,9 @@ func seedBoundIntakeOccurrence(t *testing.T, ctx context.Context, tx *WriteTx) d
 		t.Fatalf("resolved policy: %v", err)
 	}
 	handle := domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(policy.RunID))
-	proposal, err := domain.NewEffectProposal(domain.EffectRunProposal, domain.RunProposalParameters{
-		SubjectHandle: handle, Intent: domain.RunProposalIntentImplement,
-		ExpectedCostUnits: 10, Scope: domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
+	proposal, err := domain.NewEffectProposal(domain.EffectTaskProposal, domain.TaskProposalParameters{
+		SubjectHandle: handle, Intent: domain.TaskProposalIntentImplement,
+		ExpectedCostUnits: 10, Scope: domain.TaskProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
 	}, policy)
 	if err != nil {
 		t.Fatalf("proposal: %v", err)
@@ -94,7 +94,7 @@ func seedBoundIntakeOccurrence(t *testing.T, ctx context.Context, tx *WriteTx) d
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: domain.ItemID(instance.ID), ProjectID: "project-1",
 		Subject: domain.Subject{Type: domain.SubjectProposalBatch, ID: "batch-1"},
-		Type:    domain.AttentionRunProposal, Priority: domain.PriorityNormal,
+		Type:    domain.AttentionTaskProposal, Priority: domain.PriorityNormal,
 		Reason:            "start the accepted work",
 		RequestedDecision: []domain.Action{domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze},
 		EvidenceSnapshot:  []domain.Artifact{artifact}, ItemVersion: 1,
@@ -302,11 +302,11 @@ func TestIntakeReGateRejectsTamperedPolicyArtifactID(t *testing.T) {
 }
 
 // TestIntakeReGateRejectsTamperedItemType proves the item authentication requires
-// the bound card to remain a run proposal over a proposal batch: a tampered
+// the bound card to remain a task proposal over a proposal batch: a tampered
 // attention_items row that keeps the id, project, and digest binding but changes
 // the subject type still resolves through ProposalForItem, so without the
 // semantic-type guard a supersession could withdraw a card that is no longer a
-// run proposal. Written directly (the transition gate forbids the shape through
+// task proposal. Written directly (the transition gate forbids the shape through
 // PutAttentionItem).
 func TestIntakeReGateRejectsTamperedItemType(t *testing.T) {
 	t.Parallel()
@@ -527,9 +527,9 @@ func TestIntakeReGateRejectsCrossRepositoryProject(t *testing.T) {
 			return err
 		}
 		handle := domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(policy.RunID))
-		proposal, err := domain.NewEffectProposal(domain.EffectRunProposal, domain.RunProposalParameters{
-			SubjectHandle: handle, Intent: domain.RunProposalIntentImplement,
-			ExpectedCostUnits: 10, Scope: domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
+		proposal, err := domain.NewEffectProposal(domain.EffectTaskProposal, domain.TaskProposalParameters{
+			SubjectHandle: handle, Intent: domain.TaskProposalIntentImplement,
+			ExpectedCostUnits: 10, Scope: domain.TaskProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
 		}, policy)
 		if err != nil {
 			return err

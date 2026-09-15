@@ -157,14 +157,14 @@ public struct MockServerTransport: ClientTransport {
                         message: "no entity exists under the identifier"))
             }
             return try Self.json(status: .ok, body: conversation)
-        case "getRunProposalFacts":
-            guard let itemID = Self.runProposalItemID(request.path),
-                let facts = try await server.runProposalFacts(itemID: itemID)
+        case "getTaskProposalFacts":
+            guard let itemID = Self.taskProposalItemID(request.path),
+                let facts = try await server.taskProposalFacts(itemID: itemID)
             else {
                 return try Self.json(
                     status: .notFound,
                     body: Components.Schemas._Error(
-                        message: "no visible run proposal exists under the identifier"))
+                        message: "no visible task proposal exists under the identifier"))
             }
             return try Self.json(status: .ok, body: facts)
         case "listRuns":
@@ -614,10 +614,10 @@ public struct MockServerTransport: ClientTransport {
         return parts[2]
     }
 
-    private static func runProposalItemID(_ path: String?) -> String? {
+    private static func taskProposalItemID(_ path: String?) -> String? {
         guard let path else { return nil }
         let parts = path.split(separator: "/")
-        guard parts.count >= 4, parts.last == "run-proposal" else { return nil }
+        guard parts.count >= 4, parts.last == "task-proposal" else { return nil }
         return String(parts[parts.count - 2]).removingPercentEncoding
     }
 

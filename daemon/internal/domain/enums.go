@@ -28,7 +28,7 @@ const (
 	AttentionFindingAdjudication AttentionType = "finding_adjudication"
 	AttentionReadyForFinalReview AttentionType = "ready_for_final_review"
 	AttentionPublishBlocked      AttentionType = "publish_blocked"
-	AttentionRunProposal         AttentionType = "run_proposal"
+	AttentionTaskProposal        AttentionType = "task_proposal"
 	AttentionSystemHealth        AttentionType = "system_health"
 	AttentionBlocked             AttentionType = "blocked"
 )
@@ -46,7 +46,7 @@ var AllAttentionTypes = []AttentionType{
 	AttentionFindingAdjudication,
 	AttentionReadyForFinalReview,
 	AttentionPublishBlocked,
-	AttentionRunProposal,
+	AttentionTaskProposal,
 	AttentionSystemHealth,
 	AttentionBlocked,
 }
@@ -56,7 +56,7 @@ func (t AttentionType) valid() bool {
 	case AttentionSpecApproval, AttentionExecutionFailure, AttentionAgentQuestion,
 		AttentionReviewDiminishing, AttentionReviewDispute, AttentionReviewContradiction,
 		AttentionReviewConfiguration, AttentionFindingAdjudication, AttentionReadyForFinalReview,
-		AttentionPublishBlocked, AttentionRunProposal, AttentionSystemHealth, AttentionBlocked:
+		AttentionPublishBlocked, AttentionTaskProposal, AttentionSystemHealth, AttentionBlocked:
 		return true
 	default:
 		return false
@@ -68,15 +68,21 @@ func (t AttentionType) valid() bool {
 type EffectKind string
 
 const (
-	EffectRunProposal EffectKind = "run_proposal"
+	// EffectTaskProposal keeps the wire value "run_proposal": it is the
+	// digest-bound effect-registry encoding hashed into the proposal content
+	// digest that binds approvals and addresses the proposal artifact
+	// (effect_proposal.go). Renaming the literal would need a new encoding
+	// version and a digest re-binding migration, so the identifier renamed
+	// to the task_proposal vocabulary while the encoding did not (#1210).
+	EffectTaskProposal EffectKind = "run_proposal"
 )
 
 // AllEffectKinds is the single registration point for effect kinds.
-var AllEffectKinds = []EffectKind{EffectRunProposal}
+var AllEffectKinds = []EffectKind{EffectTaskProposal}
 
 func (k EffectKind) valid() bool {
 	switch k {
-	case EffectRunProposal:
+	case EffectTaskProposal:
 		return true
 	default:
 		return false
@@ -107,18 +113,18 @@ func (s ProposalAdmissionSource) valid() bool {
 	}
 }
 
-// RunProposalIntent is the bounded action requested by run_proposal. The
+// TaskProposalIntent is the bounded action requested by task_proposal. The
 // daemon resolves the opaque subject into display facts; arbitrary event text
 // never enters the parameter object.
-type RunProposalIntent string
+type TaskProposalIntent string
 
-const RunProposalIntentImplement RunProposalIntent = "implement_subject"
+const TaskProposalIntentImplement TaskProposalIntent = "implement_subject"
 
-var AllRunProposalIntents = []RunProposalIntent{RunProposalIntentImplement}
+var AllTaskProposalIntents = []TaskProposalIntent{TaskProposalIntentImplement}
 
-func (i RunProposalIntent) valid() bool {
+func (i TaskProposalIntent) valid() bool {
 	switch i {
-	case RunProposalIntentImplement:
+	case TaskProposalIntentImplement:
 		return true
 	default:
 		return false

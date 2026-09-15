@@ -20,7 +20,7 @@ Mac and iOS match on every line unless a line says otherwise.
 - **Done:** first-launch daemon address entry (no implicit sample data), pairing,
   inbox, decision detail, task list, task timeline, run timeline,
   freshness banner, Mac menu bar, the sync
-  and command-retry machinery, and the run-proposal card with its
+  and command-retry machinery, and the task-proposal card with its
   "start with changes" and snooze sheets (its full-artifact view is not),
   plus the shared ask-first decision shell, the contract recommendation
   rendered in its source register, action hierarchy, per-type typed card
@@ -76,7 +76,7 @@ lists open issues that will change the card.
 | `agent_question` | answer and retry, stop (the producers do not offer answer without retry) | Done: the card leads with the daemon-typed decisions, each rendered in the unverified claim register the question prose comes from and opening with its own question in the serif, then what it blocks, then the enumerated options with the agent's recommendation marked as an unverified claim on that option alone; the asking stage and the blocker kind render once as fact rows below the decisions, never as a preface above them; on an implementation-stage question the answer-and-retry composer offers a route picker, retry_implementation or revise_specification, defaulting to retry (#1083) | — |
 | `publish_blocked` | rerun trust check, inspect the failure, stop | Done: the card leads with the failed trust rule or hold reason from the typed field; inspection opens expanded technical details in the Mac inspector or scrolls to inline details on iPhone before recording engagement, preserving the publication hold; the alternate-profile action is retired from the vocabulary (#936, plan revision 44) | |
 | `ready_for_final_review` | view PR, return to agent, mark seen, dismiss, stop | Done: the card leads with the readiness checklist. Its first line is the verdict word followed by the counts of the rows beneath it; those rows run failed and waived first, then advisory, then notes, with the passed ones behind a disclosure closed by default whose closed line still names each. The checklist carries the bound head and base, every requirement of the evaluated set with its state, each waiver's id, dimension, and granting authority, and a stale verdict shown against the observed head or base. Per-round yield follows, keeping the typed diff stats last before the actions, alone: the bound head and base render in the checklist's "Bound to" row and in Details, never a third time as facts. That row sits inside the collapsed passed disclosure while the binding is current, its label still on the closed line and its coordinates one disclosure away; it leads the checklist as a failed row once the daemon marks the binding stale, so the coordinates are on the face of the card exactly when they contradict the verdict. Change summary remains data-gated and return to agent is omitted until #919 | |
-| `run_proposal` | start, start with changes, decline, snooze | Done for actions and facts, including the declaration-bound path count shown read-only in revisions; the full proposal artifact and the revised-digest diff are Not yet | Batch grouping (see Screens) |
+| `task_proposal` | start, start with changes, decline, snooze | Done for actions and facts, including the declaration-bound path count shown read-only in revisions; the full proposal artifact and the revised-digest diff are Not yet | Batch grouping (see Screens) |
 | `effect_proposal` | approve, approve with changes, decline, snooze; target picked from a daemon-supplied list | Not yet | Lands with the §5.13 effect registry in 1B |
 | `system_health` | acknowledge, run doctor, stop or resume unattended, resolve re-enrollment | Done: the card and row lead with the typed diagnostic code and the capability it impairs, daemon facts only (posture badge and re-enrollment details shown) | #868 (account-probe items), #867 (retired-identity items) |
 | `blocked` | read only | Done: the card and row lead with the typed wait, its coarse duration, and the blocking item or pull request, daemon facts only; the exact wait start stays in the technical bindings | |
@@ -146,7 +146,7 @@ both dismiss (`devlog/2026-09-12-0945-chrome-under-design-language.md`).
 The plan implies each of these but doesn't say where it lives. They stay
 open until a unit answers them; answering is a design decision.
 
-1. **Editing a proposal before approving.** Today a sheet on `run_proposal`. Is that also right for `effect_proposal` and for batches?
+1. **Editing a proposal before approving.** Today a sheet on `task_proposal`. Is that also right for `effect_proposal` and for batches?
 2. **Where project- and system-level items go.** There is no project or system screen until the deferred ones land.
 3. **Turning a repeated preference into a policy PR.** One action today; no authoring or preview flow is described.
 4. **A standing "unattended stopped" indicator.** A stop is a durable state; one inbox item isn't a persistent signal. Menu bar, banner, or both? Tracked by #980 (plan §11, wave 8).

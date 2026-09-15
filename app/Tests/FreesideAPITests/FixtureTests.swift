@@ -41,7 +41,7 @@ import Testing
             .rerun_trust_evaluation, .inspect_trust_failure, .stop,
         ],
         .ready_for_final_review: [.open_pr, .return_to_agent, .mark_seen, .dismiss, .stop],
-        .run_proposal: [.start, .start_with_changes, .decline, .snooze],
+        .task_proposal: [.start, .start_with_changes, .decline, .snooze],
         .system_health: [
             .acknowledge, .run_doctor, .stop_unattended, .resume_unattended,
             .resolve_reenrollment,
@@ -188,7 +188,7 @@ import Testing
                 "item-finding_adjudication",
                 "item-ready_for_final_review",
                 "item-publish_blocked",
-                "item-run_proposal",
+                "item-task_proposal",
                 "item-system_health",
                 "item-blocked",
             ])

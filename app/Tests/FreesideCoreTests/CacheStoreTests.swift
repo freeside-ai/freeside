@@ -157,6 +157,87 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(decoded.item_id == "item-a")
     }
 
+    @Test func aLegacyRunProposalSnapshotDecodesAsTaskProposal() throws {
+        // The run_proposal -> task_proposal attention-vocabulary rename (#1210)
+        // changed a persisted AttentionType value. AttentionType decodes
+        // strictly, so a format-5 cache written before the rename would throw
+        // on decode and discard the whole cache, including the retryable
+        // command ledger. The load path translates the stored type in place.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.attentionItems = [AttentionFixtures.fixture(type: .task_proposal)]
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var persistedState = try #require(object["state"] as? [String: Any])
+        var snapshots = try #require(persistedState["attentionItems"] as? [[String: Any]])
+        var item = try #require(snapshots[0]["item"] as? [String: Any])
+        item["type"] = "run_proposal"
+        snapshots[0]["item"] = item
+        persistedState["attentionItems"] = snapshots
+        object["state"] = persistedState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.attentionItems.count == 1)
+        #expect(migrated.attentionItems[0].item._type == .task_proposal)
+        #expect(migrated.pendingCommands == state.pendingCommands)
+    }
+
+    @Test func aLegacyRunProposalRevisionKeyReloadsAsTaskProposalRevision() throws {
+        // The same rename changed the run_proposal_revision decision-payload
+        // key. The generated decoder ignores the unknown old key rather than
+        // rejecting it, so a committed start_with_changes command persisted
+        // before the rename would silently reload without its revision and fail
+        // its verbatim retry. The load path renames the key in place.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var command = makeCommand(itemID: "item-a")
+        command.payload.asDecision.action = .start_with_changes
+        command.payload.asDecision.task_proposal_revision = .init(
+            value1: .init(
+                intent: .implement_subject, expected_cost_units: 25,
+                scope: .init(
+                    component_count: 2, declared_path_count: 3, touches_control_plane: true)))
+        var state = sampleState()
+        state.pendingCommands = ["item-a": .init(command: command, state: .unresolved)]
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var persistedState = try #require(object["state"] as? [String: Any])
+        var pending = try #require(persistedState["pendingCommands"] as? [String: Any])
+        var entry = try #require(pending["item-a"] as? [String: Any])
+        var commandJSON = try #require(entry["command"] as? [String: Any])
+        var payload = try #require(commandJSON["payload"] as? [String: Any])
+        let revision = try #require(payload["task_proposal_revision"])
+        payload.removeValue(forKey: "task_proposal_revision")
+        payload["run_proposal_revision"] = revision
+        commandJSON["payload"] = payload
+        entry["command"] = commandJSON
+        pending["item-a"] = entry
+        persistedState["pendingCommands"] = pending
+        object["state"] = persistedState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.pendingCommands == state.pendingCommands)
+        guard case .decision(let decoded)? = migrated.pendingCommands?["item-a"]?.command.payload
+        else {
+            Issue.record("expected a decision command")
+            return
+        }
+        #expect(decoded.action == .start_with_changes)
+        #expect(decoded.task_proposal_revision?.value1.expected_cost_units == 25)
+    }
+
     @Test func aPreTasksFormatFourCacheKeepsTheLedgerAndTelemetrySections() throws {
         // Format 4 predates task snapshots and task timelines. Its cursors
         // must not make an upgraded client consider an empty task list

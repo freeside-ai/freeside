@@ -179,10 +179,10 @@ func ValidateItemIntake(item domain.AttentionItem) error {
 	if err := validateRequestedActions(item.Type, item.RequestedDecision); err != nil {
 		return fmt.Errorf("put item %q: %w", item.ID, err)
 	}
-	// A run proposal is authoritative only when Engine.AdmitProposal creates
+	// A task proposal is authoritative only when Engine.AdmitProposal creates
 	// its instance, evidence carrier, item, and immutable item binding in one
 	// transaction. Generic intake has none of that trusted admission context.
-	if item.Type == domain.AttentionRunProposal {
+	if item.Type == domain.AttentionTaskProposal {
 		return fmt.Errorf("put item %q: %w", item.ID, ErrProposalAdmissionRequired)
 	}
 	return nil

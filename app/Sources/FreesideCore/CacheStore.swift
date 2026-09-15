@@ -177,7 +177,7 @@ public struct DiskCacheStore: CacheStore {
     public func load() -> CachedState? {
         guard let data = try? Data(contentsOf: fileURL),
             let file = try? Self.decoder.decode(
-                CacheFile.self, from: Self.migratingLegacyCommandKinds(data))
+                CacheFile.self, from: Self.migratingLegacyEncodings(data))
         else { return nil }
         switch file.format {
         case Self.format:
@@ -204,36 +204,80 @@ public struct DiskCacheStore: CacheStore {
         }
     }
 
-    /// Injects the client-command payload discriminator into legacy ledger
-    /// entries so they survive the upgrade that added it. Before the payload
-    /// became a `kind`-discriminated union (submit_task), a persisted decision
-    /// command encoded a bare, `kind`-less payload; the generated decoder now
-    /// requires the discriminator, so one such entry would fail
-    /// `PendingCommandEntry` decoding and drop the whole ledger with its
-    /// retryable command IDs (plan §5.14 sync test 4, #115). Decision was the
-    /// only pre-union kind, so a missing discriminator is `decision`. The bytes
-    /// are returned unchanged when nothing needs migrating or they are not the
-    /// expected object shape (a corrupt file still fails the normal decode).
-    private static func migratingLegacyCommandKinds(_ data: Data) -> Data {
+    /// Rewrites persisted tokens that a later schema change would otherwise
+    /// reject or silently drop, before the strict generated decoder runs, so an
+    /// in-place upgrade keeps the retryable command ledger and the cached
+    /// attention snapshots intact (plan §5.14 sync test 4, #115). Each
+    /// translation is anchored to a structural location, never a blind string
+    /// swap, and the bytes are returned unchanged when nothing matched or the
+    /// shape is unexpected (a corrupt file still fails the normal decode).
+    ///
+    /// 1. Legacy ledger entries predate the client-command payload's
+    ///    `kind`-discriminated union (submit_task). A bare, `kind`-less payload
+    ///    was a decision, so the discriminator is injected as `decision`;
+    ///    without it `PendingCommandEntry` decoding fails and the whole ledger
+    ///    with its retryable command IDs is dropped.
+    /// 2. The `run_proposal` -> `task_proposal` attention-vocabulary rename
+    ///    (#1210) changed a persisted enum value. `AttentionType` decodes
+    ///    strictly, so a cached `run_proposal` snapshot would throw and discard
+    ///    the entire cache, ledger included; the item `type` value is
+    ///    translated in place.
+    /// 3. The same rename changed the `run_proposal_revision` decision-payload
+    ///    key to `task_proposal_revision`. The decoder ignores the unknown old
+    ///    key, so a committed start_with_changes command would silently reload
+    ///    without its revision and fail its verbatim retry; the key is renamed
+    ///    in place.
+    private static func migratingLegacyEncodings(_ data: Data) -> Data {
         guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-            var state = root["state"] as? [String: Any],
-            var pending = state["pendingCommands"] as? [String: Any]
+            var state = root["state"] as? [String: Any]
         else { return data }
         var changed = false
-        for (itemID, entryValue) in pending {
-            guard var entry = entryValue as? [String: Any],
-                var command = entry["command"] as? [String: Any],
-                var payload = command["payload"] as? [String: Any],
-                payload["kind"] == nil
-            else { continue }
-            payload["kind"] = "decision"
-            command["payload"] = payload
-            entry["command"] = command
-            pending[itemID] = entry
-            changed = true
+
+        if var pending = state["pendingCommands"] as? [String: Any] {
+            var pendingChanged = false
+            for (itemID, entryValue) in pending {
+                guard var entry = entryValue as? [String: Any],
+                    var command = entry["command"] as? [String: Any],
+                    var payload = command["payload"] as? [String: Any]
+                else { continue }
+                var payloadChanged = false
+                if payload["kind"] == nil {
+                    payload["kind"] = "decision"
+                    payloadChanged = true
+                }
+                if let revision = payload.removeValue(forKey: "run_proposal_revision") {
+                    payload["task_proposal_revision"] = revision
+                    payloadChanged = true
+                }
+                guard payloadChanged else { continue }
+                command["payload"] = payload
+                entry["command"] = command
+                pending[itemID] = entry
+                pendingChanged = true
+            }
+            if pendingChanged {
+                state["pendingCommands"] = pending
+                changed = true
+            }
         }
+
+        if var snapshots = state["attentionItems"] as? [[String: Any]] {
+            var snapshotsChanged = false
+            for index in snapshots.indices {
+                guard var item = snapshots[index]["item"] as? [String: Any],
+                    item["type"] as? String == "run_proposal"
+                else { continue }
+                item["type"] = "task_proposal"
+                snapshots[index]["item"] = item
+                snapshotsChanged = true
+            }
+            if snapshotsChanged {
+                state["attentionItems"] = snapshots
+                changed = true
+            }
+        }
+
         guard changed else { return data }
-        state["pendingCommands"] = pending
         root["state"] = state
         return (try? JSONSerialization.data(withJSONObject: root)) ?? data
     }

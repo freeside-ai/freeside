@@ -66,7 +66,7 @@ func (tx *WriteTx) AllocateProposalInstance(
 	returned, returnedKey, err := scanProposalInstance(tx.tx.QueryRowContext(ctx,
 		allocateProposalInstanceSQL,
 		want.ID, admissionKey, batchID, proposal.Kind, proposal.Digest,
-		proposal.ResolvedPolicyRunID, proposal.ResolvedPolicyDigest, proposal.RunProposal.SubjectHandle,
+		proposal.ResolvedPolicyRunID, proposal.ResolvedPolicyDigest, proposal.TaskProposal.SubjectHandle,
 		formatTime(want.CreatedAt), body,
 	))
 	if err != nil {
@@ -181,7 +181,7 @@ func scanProposalInstance(sc scanner) (domain.ProposalInstance, string, error) {
 		string(instance.Proposal.Digest) != contentDigest ||
 		string(instance.Proposal.ResolvedPolicyRunID) != policyRunID ||
 		string(instance.Proposal.ResolvedPolicyDigest) != policyDigest ||
-		instance.Proposal.RunProposal == nil || string(instance.Proposal.RunProposal.SubjectHandle) != subjectHandle ||
+		instance.Proposal.TaskProposal == nil || string(instance.Proposal.TaskProposal.SubjectHandle) != subjectHandle ||
 		!instance.CreatedAt.Equal(storedCreatedAt) {
 		return domain.ProposalInstance{}, "", errRowInconsistent
 	}
@@ -219,7 +219,7 @@ func (tx *WriteTx) BindProposalItem(
 	if err != nil {
 		return fmt.Errorf("bind proposal item %q: %w", itemID, err)
 	}
-	if item.Type != domain.AttentionRunProposal || len(item.ArtifactDigests) != 1 || item.ArtifactDigests[0] != digest {
+	if item.Type != domain.AttentionTaskProposal || len(item.ArtifactDigests) != 1 || item.ArtifactDigests[0] != digest {
 		return fmt.Errorf("bind proposal item %q: %w", itemID, errRowInconsistent)
 	}
 	res, err := tx.tx.ExecContext(ctx, `INSERT INTO effect_proposal_items
@@ -358,9 +358,9 @@ func (tx *ReadTx) authenticatedProposalRevision(
 		return domain.EffectProposal{}, domain.EffectProposal{}, errRowInconsistent
 	}
 	var revision struct {
-		Intent            domain.RunProposalIntent `json:"intent"`
-		ExpectedCostUnits int                      `json:"expected_cost_units"`
-		Scope             domain.RunProposalScope  `json:"scope"`
+		Intent            domain.TaskProposalIntent `json:"intent"`
+		ExpectedCostUnits int                       `json:"expected_cost_units"`
+		Scope             domain.TaskProposalScope  `json:"scope"`
 	}
 	if err := strictjson.Decode(
 		[]byte(command.Message), &revision, strictjson.RejectInvalidUTF8, domain.MaxEffectProposalBytes,
@@ -371,11 +371,11 @@ func (tx *ReadTx) authenticatedProposalRevision(
 	if err != nil || string(canonical) != command.Message {
 		return domain.EffectProposal{}, domain.EffectProposal{}, errRowInconsistent
 	}
-	declaration, policy, err := tx.ResolveProposalSubject(ctx, prior.RunProposal.SubjectHandle)
+	declaration, policy, err := tx.ResolveProposalSubject(ctx, prior.TaskProposal.SubjectHandle)
 	if err != nil {
 		return domain.EffectProposal{}, domain.EffectProposal{}, err
 	}
-	if err := domain.GateRunProposalScope(revision.Scope, declaration); err != nil {
+	if err := domain.GateTaskProposalScope(revision.Scope, declaration); err != nil {
 		return domain.EffectProposal{}, domain.EffectProposal{}, errRowInconsistent
 	}
 	// The authoring item is historical authentication input, not evidence to
@@ -391,8 +391,8 @@ func (tx *ReadTx) authenticatedProposalRevision(
 		!slices.Equal(item.ArtifactDigests, command.ArtifactDigests) {
 		return domain.EffectProposal{}, domain.EffectProposal{}, errRowInconsistent
 	}
-	expected, err := domain.NewEffectProposal(domain.EffectRunProposal, domain.RunProposalParameters{
-		SubjectHandle: prior.RunProposal.SubjectHandle, Intent: revision.Intent,
+	expected, err := domain.NewEffectProposal(domain.EffectTaskProposal, domain.TaskProposalParameters{
+		SubjectHandle: prior.TaskProposal.SubjectHandle, Intent: revision.Intent,
 		ExpectedCostUnits: revision.ExpectedCostUnits, Scope: revision.Scope,
 	}, policy)
 	if err != nil || expected.Digest != proposal.Digest {
@@ -445,11 +445,11 @@ func (tx *ReadTx) gateProposalSubject(
 	ctx context.Context,
 	proposal domain.EffectProposal,
 ) (domain.WorkUnitDeclaration, error) {
-	declaration, policy, err := tx.ResolveProposalSubject(ctx, proposal.RunProposal.SubjectHandle)
+	declaration, policy, err := tx.ResolveProposalSubject(ctx, proposal.TaskProposal.SubjectHandle)
 	if err != nil {
 		return domain.WorkUnitDeclaration{}, err
 	}
-	if err := domain.GateRunProposalScope(proposal.RunProposal.Scope, declaration); err != nil {
+	if err := domain.GateTaskProposalScope(proposal.TaskProposal.Scope, declaration); err != nil {
 		return domain.WorkUnitDeclaration{}, err
 	}
 	if err := domain.GateEffectProposal(proposal, policy); err != nil {
@@ -491,10 +491,10 @@ func (tx *WriteTx) PutProposalRevision(
 		return fmt.Errorf("put proposal revision command %q prior: %w", commandID, err)
 	}
 	if storedPrior.Digest != prior.Digest ||
-		revised.RunProposal.SubjectHandle != storedPrior.RunProposal.SubjectHandle {
+		revised.TaskProposal.SubjectHandle != storedPrior.TaskProposal.SubjectHandle {
 		return fmt.Errorf("put proposal revision command %q subject: %w", commandID, domain.ErrTransitionCommandMismatch)
 	}
-	declaration, policy, err := tx.ResolveProposalSubject(ctx, revised.RunProposal.SubjectHandle)
+	declaration, policy, err := tx.ResolveProposalSubject(ctx, revised.TaskProposal.SubjectHandle)
 	if err != nil {
 		return err
 	}
@@ -505,7 +505,7 @@ func (tx *WriteTx) PutProposalRevision(
 	if declaration.ProjectID != item.ProjectID {
 		return fmt.Errorf("put proposal revision command %q project: %w", commandID, domain.ErrTransitionCommandMismatch)
 	}
-	if err := domain.GateRunProposalScope(revised.RunProposal.Scope, declaration); err != nil {
+	if err := domain.GateTaskProposalScope(revised.TaskProposal.Scope, declaration); err != nil {
 		return fmt.Errorf("put proposal revision command %q scope: %w", commandID, domain.ErrTransitionCommandMismatch)
 	}
 	if err := domain.GateEffectProposal(revised, policy); err != nil {

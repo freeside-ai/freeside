@@ -589,18 +589,18 @@ struct RealDaemonConvergenceTests {
         let constructibleAllowed = allowed.filter { $0 != .retry_with_capabilities }
 
         // The whole allowed set reaches the post-policy boundary (blocked: the
-        // empty set). Run proposals then fail with the specialized-admission
+        // empty set). Task proposals then fail with the specialized-admission
         // sentinel because this generic fixture route cannot atomically create
         // their instance, carrier, and binding. Any disallowed action would fail
         // earlier with the distinct policy error.
         let whole = try await control.seedItemOutcome(
             id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-all"),
             type: type, actions: constructibleAllowed)
-        if type == .run_proposal {
+        if type == .task_proposal {
             #expect(whole.statusCode == 400)
             #expect(
                 whole.message?.contains("requires atomic proposal admission") == true,
-                "allowed run-proposal set did not reach admission: \(whole.message ?? "")")
+                "allowed task-proposal set did not reach admission: \(whole.message ?? "")")
         } else {
             #expect(
                 whole.statusCode == 200,
@@ -616,11 +616,11 @@ struct RealDaemonConvergenceTests {
                 id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-\(action.rawValue)"),
                 type: type, actions: [action])
             if allowedSet.contains(action) {
-                if type == .run_proposal {
+                if type == .task_proposal {
                     #expect(outcome.statusCode == 400)
                     #expect(
                         outcome.message?.contains("requires atomic proposal admission") == true,
-                        "\(action.rawValue) did not pass run-proposal policy: \(outcome.message ?? "")")
+                        "\(action.rawValue) did not pass task-proposal policy: \(outcome.message ?? "")")
                 } else {
                     #expect(
                         outcome.statusCode == 200,

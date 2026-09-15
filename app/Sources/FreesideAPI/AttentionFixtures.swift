@@ -26,7 +26,7 @@ public enum AttentionFixtures {
         .finding_adjudication,
         .ready_for_final_review,
         .publish_blocked,
-        .run_proposal,
+        .task_proposal,
         .system_health,
         .blocked,
     ]
@@ -52,7 +52,7 @@ public enum AttentionFixtures {
         .publish_blocked: [
             .rerun_trust_evaluation, .inspect_trust_failure, .stop,
         ],
-        .run_proposal: [.start, .start_with_changes, .decline, .snooze],
+        .task_proposal: [.start, .start_with_changes, .decline, .snooze],
         .system_health: [
             .acknowledge, .run_doctor, .stop_unattended, .resume_unattended,
             .resolve_reenrollment,
@@ -400,7 +400,7 @@ public enum AttentionFixtures {
         let provenance: Components.Schemas.EvidenceProvenance
         let claimProvenance: Components.Schemas.ClaimProvenance
         switch type {
-        case .run_proposal:
+        case .task_proposal:
             subject = .proposal_batch(
                 .init(subject_type: .proposal_batch, subject_id: "batch-\(key)", run_id: nil))
             prHeadSHA = ""
@@ -438,7 +438,7 @@ public enum AttentionFixtures {
         let priority: Components.Schemas.Priority
         let interruption: Components.Schemas.InterruptionClass
         switch type {
-        case .spec_approval, .ready_for_final_review, .run_proposal,
+        case .spec_approval, .ready_for_final_review, .task_proposal,
             .review_diminishing_returns, .finding_adjudication:
             priority = type == .spec_approval ? .high : .normal
             interruption = .planned_gate
@@ -524,7 +524,7 @@ public enum AttentionFixtures {
                     specApprovalSummary
                 case .agent_question, .review_diminishing_returns,
                     .review_contradiction, .review_configuration, .finding_adjudication,
-                    .ready_for_final_review, .publish_blocked, .run_proposal:
+                    .ready_for_final_review, .publish_blocked, .task_proposal:
                     "Work on **\(key)** is ready; one decision is open."
                 case .system_health, .blocked:
                     preconditionFailure("Mechanical cards never carry agent claims")
@@ -535,7 +535,7 @@ public enum AttentionFixtures {
                 case .execution_failure: "Likely cause (unverified)"
                 case .spec_approval, .agent_question, .review_diminishing_returns,
                     .review_contradiction, .review_configuration, .finding_adjudication,
-                    .ready_for_final_review, .publish_blocked, .run_proposal:
+                    .ready_for_final_review, .publish_blocked, .task_proposal:
                     "freeside.summary"
                 case .system_health, .blocked:
                     preconditionFailure("Mechanical cards never carry agent claims")
@@ -560,11 +560,11 @@ public enum AttentionFixtures {
                     ))
             }
         }
-        // A run-proposal item is the exact store-derived carrier for one
+        // A task-proposal item is the exact store-derived carrier for one
         // proposal digest. Unlike ordinary attention cards it has no agent
         // claims, so the client's authenticated-facts tuple can require the
         // sole command binding to equal that proposal digest.
-        if type == .run_proposal {
+        if type == .task_proposal {
             agentClaims = []
         }
 
@@ -630,7 +630,7 @@ public enum AttentionFixtures {
                 ))
         case .spec_approval, .execution_failure, .agent_question, .review_dispute,
             .review_contradiction, .review_configuration, .finding_adjudication,
-            .publish_blocked, .run_proposal, .system_health, .blocked:
+            .publish_blocked, .task_proposal, .system_health, .blocked:
             yieldHistory = nil
         }
         let reviewRecoveryBinding: Components.Schemas.AttentionItem.review_recovery_bindingPayload? =
@@ -1073,7 +1073,7 @@ public enum AttentionFixtures {
             return "checks are green and the diff is ready"
         case .publish_blocked:
             return "trust evaluation failed for the candidate branch"
-        case .run_proposal:
+        case .task_proposal:
             return "a scan proposes a dependency-update run"
         case .system_health:
             return "active-resource observation is temporarily unavailable"

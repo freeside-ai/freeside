@@ -51,7 +51,7 @@ var (
 	ErrAlternativeNotOffered                     = errors.New("finding adjudication alternative was not offered")
 	ErrInvalidCapabilityRetryDecisionPayload     = errors.New("capability retry decision payload is invalid")
 	ErrCapabilityManifestNotOffered              = errors.New("capability manifest was not offered")
-	ErrProposalAdmissionRequired                 = errors.New("run proposal requires atomic proposal admission")
+	ErrProposalAdmissionRequired                 = errors.New("task proposal requires atomic proposal admission")
 	ErrProposalSnoozed                           = errors.New("proposal is snoozed")
 )
 

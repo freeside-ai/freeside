@@ -22,9 +22,9 @@ func proposalFixture(t *testing.T) (domain.ResolvedPolicy, domain.EffectProposal
 		t.Fatal(err)
 	}
 	handles := []domain.OpaqueSubjectHandle{domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(policy.RunID))}
-	proposal, err := domain.NewEffectProposal(domain.EffectRunProposal, domain.RunProposalParameters{
-		SubjectHandle: handles[0], Intent: domain.RunProposalIntentImplement,
-		ExpectedCostUnits: 10, Scope: domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
+	proposal, err := domain.NewEffectProposal(domain.EffectTaskProposal, domain.TaskProposalParameters{
+		SubjectHandle: handles[0], Intent: domain.TaskProposalIntentImplement,
+		ExpectedCostUnits: 10, Scope: domain.TaskProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
 	}, policy)
 	if err != nil {
 		t.Fatal(err)
@@ -132,9 +132,9 @@ func TestAllocateProposalInstanceRefusesOccurrenceRewrite(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	revised, err := domain.NewEffectProposal(domain.EffectRunProposal, domain.RunProposalParameters{
-		SubjectHandle: handles[0], Intent: domain.RunProposalIntentImplement,
-		ExpectedCostUnits: 20, Scope: domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
+	revised, err := domain.NewEffectProposal(domain.EffectTaskProposal, domain.TaskProposalParameters{
+		SubjectHandle: handles[0], Intent: domain.TaskProposalIntentImplement,
+		ExpectedCostUnits: 20, Scope: domain.TaskProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
 	}, policy)
 	if err != nil {
 		t.Fatal(err)
@@ -157,9 +157,9 @@ func TestAllocateProposalInstanceUsesSubjectPolicyNotProposalClaim(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	proposal, err := domain.NewEffectProposal(domain.EffectRunProposal, domain.RunProposalParameters{
-		SubjectHandle: handles[0], Intent: domain.RunProposalIntentImplement,
-		ExpectedCostUnits: 10, Scope: domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
+	proposal, err := domain.NewEffectProposal(domain.EffectTaskProposal, domain.TaskProposalParameters{
+		SubjectHandle: handles[0], Intent: domain.TaskProposalIntentImplement,
+		ExpectedCostUnits: 10, Scope: domain.TaskProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
 	}, historical)
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +203,7 @@ func TestProposalBuiltInRecipeBindsAttentionItem(t *testing.T) {
 		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 			ID: domain.ItemID(instance.ID), ProjectID: "project-1",
 			Subject: domain.Subject{Type: domain.SubjectProposalBatch, ID: "batch-1"},
-			Type:    domain.AttentionRunProposal, Priority: domain.PriorityNormal,
+			Type:    domain.AttentionTaskProposal, Priority: domain.PriorityNormal,
 			Reason:            "start the accepted work",
 			RequestedDecision: []domain.Action{domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze},
 			EvidenceSnapshot:  []domain.Artifact{artifact}, ItemVersion: 1,

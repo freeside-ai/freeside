@@ -338,7 +338,7 @@ func (tx *ReadTx) regateIntakeAdmissionColumns(
 // authenticatedIntakeProposal authenticates the proposal admitted for an
 // occurrence and returns it. The proposal must be admitted under the occurrence's
 // own derived key (which carries repository, issue, label, and ordinal, so a
-// foreign-repo or foreign-issue proposal never matches), must be a run proposal,
+// foreign-repo or foreign-issue proposal never matches), must be a task proposal,
 // and its two run references — the resolved-policy run and the subject handle —
 // must agree, so the subject a start assembles is the proposal's own, not a
 // caller's claim. Fails closed with ErrIntakeAdmissionInconsistent.
@@ -361,11 +361,11 @@ func (tx *ReadTx) authenticatedIntakeProposal(
 		return domain.ProposalInstance{}, fmt.Errorf(
 			"intake admission binds a foreign proposal: %w", ErrIntakeAdmissionInconsistent)
 	}
-	if instance.Proposal.RunProposal == nil {
+	if instance.Proposal.TaskProposal == nil {
 		return domain.ProposalInstance{}, fmt.Errorf(
-			"intake admission proposal is not a run proposal: %w", ErrIntakeAdmissionInconsistent)
+			"intake admission proposal is not a task proposal: %w", ErrIntakeAdmissionInconsistent)
 	}
-	if domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(instance.Proposal.ResolvedPolicyRunID)) != instance.Proposal.RunProposal.SubjectHandle {
+	if domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(instance.Proposal.ResolvedPolicyRunID)) != instance.Proposal.TaskProposal.SubjectHandle {
 		return domain.ProposalInstance{}, fmt.Errorf(
 			"intake admission proposal subject handle and resolved-policy run disagree: %w", ErrIntakeAdmissionInconsistent)
 	}
@@ -405,7 +405,7 @@ func (tx *ReadTx) deriveIntakeAdmission(
 	if err != nil {
 		return domain.IntakeAdmission{}, err
 	}
-	handle := instance.Proposal.RunProposal.SubjectHandle
+	handle := instance.Proposal.TaskProposal.SubjectHandle
 	declaration, policy, err := tx.ResolveProposalSubject(ctx, handle)
 	if err != nil {
 		return domain.IntakeAdmission{}, fmt.Errorf("intake admission subject: %w", err)
@@ -955,11 +955,11 @@ func (tx *ReadTx) authenticatedProposalItem(
 	// but not the item's semantic type, so a tampered attention_items row that
 	// keeps the id, project, and digest while changing Type or Subject.Type would
 	// still resolve here. A label admission withdraws or freshness-checks only a
-	// run proposal card over a proposal batch, so require both, else a
+	// task proposal card over a proposal batch, so require both, else a
 	// supersession could act on a card of another kind. Fail closed.
-	if item.Type != domain.AttentionRunProposal || item.Subject.Type != domain.SubjectProposalBatch {
+	if item.Type != domain.AttentionTaskProposal || item.Subject.Type != domain.SubjectProposalBatch {
 		return domain.AttentionItem{}, fmt.Errorf(
-			"intake proposal item %q is not a run proposal over a proposal batch: %w", itemID, ErrIntakeAdmissionInconsistent)
+			"intake proposal item %q is not a task proposal over a proposal batch: %w", itemID, ErrIntakeAdmissionInconsistent)
 	}
 	return item, nil
 }

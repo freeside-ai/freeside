@@ -211,7 +211,7 @@ import Testing
         // module, so they contribute no fact rows.
         for type in [
             Components.Schemas.AttentionType.spec_approval,
-            .finding_adjudication, .run_proposal, .review_contradiction, .review_configuration,
+            .finding_adjudication, .task_proposal, .review_contradiction, .review_configuration,
         ] {
             #expect(
                 AttentionDisplay.cardFacts(
@@ -322,10 +322,10 @@ import Testing
             AttentionDisplay.copyableSubjectReference(run)
                 == .init(label: "Copy run reference", value: "run-execution_failure"))
 
-        let proposal = AttentionFixtures.fixture(type: .run_proposal).item
+        let proposal = AttentionFixtures.fixture(type: .task_proposal).item
         #expect(
             AttentionDisplay.copyableSubjectReference(proposal)
-                == .init(label: "Copy proposal batch reference", value: "batch-run_proposal"))
+                == .init(label: "Copy proposal batch reference", value: "batch-task_proposal"))
 
         let system = AttentionFixtures.fixture(type: .system_health).item
         #expect(AttentionDisplay.copyableSubjectReference(system) == nil)
@@ -494,7 +494,7 @@ import Testing
     }
 
     @Test func proposalBindingSurvivesMatchingAttachmentDigest() {
-        let item = AttentionFixtures.fixture(type: .run_proposal).item
+        let item = AttentionFixtures.fixture(type: .task_proposal).item
         let digest = item.artifact_digests[0]
 
         let rows = AttentionDisplay.detailBindingRows(item, proposalDigest: digest)

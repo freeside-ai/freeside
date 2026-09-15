@@ -62,7 +62,7 @@ enum AttentionDisplay {
         case .finding_adjudication: return "Finding adjudication"
         case .ready_for_final_review: return "Ready for final review"
         case .publish_blocked: return "Publish blocked"
-        case .run_proposal: return "Run proposal"
+        case .task_proposal: return "Task proposal"
         case .system_health: return "System health"
         case .blocked: return "Blocked"
         }
@@ -97,7 +97,7 @@ enum AttentionDisplay {
             return "Is this change ready for final GitHub review?"
         case .publish_blocked:
             return "How should publication recover from this trust failure?"
-        case .run_proposal:
+        case .task_proposal:
             return "Start this proposed run?"
         case .system_health:
             return "How should this system-health condition be handled?"
@@ -141,7 +141,7 @@ enum AttentionDisplay {
             return "Verification is clean and ready for final review."
         case .publish_blocked:
             return "Publication is blocked by a trust-policy check."
-        case .run_proposal:
+        case .task_proposal:
             return "A proposed run is ready to start."
         case .system_health:
             guard let diagnostic = item.health_diagnostic?.value1 else {
@@ -243,9 +243,9 @@ enum AttentionDisplay {
             return rows
         // The ask leads a spec approval, the adjudication artifact leads
         // finding_adjudication, the authenticated proposal snapshot leads
-        // run_proposal, and the recovery bindings these two recovery types
+        // task_proposal, and the recovery bindings these two recovery types
         // lead with are already their own rows.
-        case .spec_approval, .finding_adjudication, .run_proposal,
+        case .spec_approval, .finding_adjudication, .task_proposal,
             .review_contradiction, .review_configuration:
             return []
         }
@@ -332,7 +332,7 @@ enum AttentionDisplay {
                 return "The run concludes as a configuration failure; no replacement review configuration is adopted."
             case .spec_approval, .review_diminishing_returns, .review_dispute,
                 .review_contradiction, .execution_failure, .agent_question,
-                .publish_blocked, .ready_for_final_review, .run_proposal,
+                .publish_blocked, .ready_for_final_review, .task_proposal,
                 .system_health, .blocked:
                 break
             }
