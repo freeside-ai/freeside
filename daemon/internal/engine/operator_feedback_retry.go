@@ -218,6 +218,6 @@ func (e *Engine) enqueueOperatorFeedbackRetry(ctx context.Context, command domai
 }
 
 func (e *Engine) recordCompletedOperatorFeedbackRetry(ctx context.Context, source domain.AttentionItem, command domain.Command) (bool, error) {
-	return e.recordOperatorFeedbackFailure(ctx, source, command, domain.AttentionSystemHealth,
+	return e.recordOperatorFeedbackFailure(ctx, source, command,
 		"The accepted feedback Retry cannot start because the published work unit completed before the retry was queued.")
 }

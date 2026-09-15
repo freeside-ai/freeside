@@ -123,7 +123,14 @@ func TestProductionReturnToAgentPreflightsCompletePrompt(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				if item.Type != domain.AttentionExecutionFailure || item.Status != domain.StatusOpen {
+				// The fresh refusal reads the shared undeliverable notice, now a
+				// system_health advisory (#1342). The persisted branch reads an
+				// execution-failure-<invocation> item written by another creator.
+				expectedType := domain.AttentionSystemHealth
+				if persisted {
+					expectedType = domain.AttentionExecutionFailure
+				}
+				if item.Type != expectedType || item.Status != domain.StatusOpen {
 					t.Fatalf("failure item: %#v", item)
 				}
 				entry, err := tx.GetOutbox(p.ctx, string(invocation))

@@ -189,11 +189,11 @@ func (e *Engine) enqueuePublicationContinuation(ctx context.Context, command dom
 		return tx.AuthenticatePublicationContinuation(ctx, r)
 	})
 	if errors.Is(err, store.ErrPublicationCompleted) {
-		return e.recordOperatorFeedbackFailure(ctx, item, command, domain.AttentionSystemHealth,
+		return e.recordOperatorFeedbackFailure(ctx, item, command,
 			"The accepted remediation continuation cannot start because the published work unit completed before remediation was queued.")
 	}
 	if errors.Is(err, store.ErrNoPublishedContinuationTarget) {
-		return e.recordOperatorFeedbackFailure(ctx, item, command, domain.AttentionSystemHealth,
+		return e.recordOperatorFeedbackFailure(ctx, item, command,
 			"The accepted remediation continuation cannot start because this run has no published pull request to update. A continuation does not authorize creating the first pull request.")
 	}
 	if err != nil || replayed {
@@ -226,7 +226,7 @@ func (e *Engine) enqueuePublicationContinuation(ctx context.Context, command dom
 		return nil
 	})
 	if errors.Is(err, store.ErrPublicationCompleted) {
-		return e.recordOperatorFeedbackFailure(ctx, item, command, domain.AttentionSystemHealth,
+		return e.recordOperatorFeedbackFailure(ctx, item, command,
 			"The accepted remediation continuation cannot start because the published work unit completed before remediation was queued.")
 	}
 	return created, err
@@ -341,7 +341,7 @@ func (w *productionPublicationWorkflow) refusePublicationContinuation(ctx contex
 		return productionTaskOutcome{}, err
 	}
 	e := &Engine{store: w.store, productionPublication: w}
-	if _, err := e.recordOperatorFeedbackFailure(ctx, item, command, domain.AttentionSystemHealth, reason); err != nil {
+	if _, err := e.recordOperatorFeedbackFailure(ctx, item, command, reason); err != nil {
 		return productionTaskOutcome{}, err
 	}
 	err := w.store.Write(ctx, func(tx *store.WriteTx) error { return tx.MarkOutboxDispatched(ctx, task.continuation.Key()) })

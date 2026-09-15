@@ -713,7 +713,7 @@ func (e *Engine) recordSpecificationRevisionUndeliverable(
 		source.Subject.RunID == nil {
 		return false, domain.ErrParentKeyMismatch
 	}
-	return e.recordOperatorFeedbackFailure(ctx, source, command, domain.AttentionExecutionFailure,
+	return e.recordOperatorFeedbackFailure(ctx, source, command,
 		"The revised specification request exceeds the specification contract size "+
 			"limit, so a revision campaign cannot be started from this answer.")
 }
@@ -962,7 +962,7 @@ func (e *Engine) operatorFeedbackUndeliverableRecorded(
 		if err != nil {
 			return err
 		}
-		if err := verifyOperatorFeedbackUndeliverableItem(item, source, command, domain.AttentionExecutionFailure); err != nil {
+		if err := verifyOperatorFeedbackUndeliverableItem(item, source, command); err != nil {
 			return err
 		}
 		recorded = true
@@ -1014,22 +1014,24 @@ func (e *Engine) recordOperatorFeedbackUndeliverable(
 // The caller authenticates its accepted command before using the shared
 // immutable delivery-failure recorder.
 func (e *Engine) recordOperatorFeedbackDeliveryFailure(ctx context.Context, source domain.AttentionItem, command domain.Command) (bool, error) {
-	return e.recordOperatorFeedbackFailure(ctx, source, command, domain.AttentionExecutionFailure,
+	return e.recordOperatorFeedbackFailure(ctx, source, command,
 		"Operator feedback input cannot be delivered to the implementation agent because the cumulative input exceeds delivery limits.")
 }
 
-func (e *Engine) recordOperatorFeedbackFailure(ctx context.Context, source domain.AttentionItem, command domain.Command, typ domain.AttentionType, reason string) (bool, error) {
+// recordOperatorFeedbackFailure records the shared undeliverable-feedback
+// notice as a system_health advisory offering acknowledge. Every caller records
+// the same type: the signet policy table excludes acknowledge from
+// execution_failure, so an execution_failure notice offering only acknowledge
+// would be an item nothing can close (#1342).
+func (e *Engine) recordOperatorFeedbackFailure(ctx context.Context, source domain.AttentionItem, command domain.Command, reason string) (bool, error) {
 	itemID := operatorFeedbackUndeliverableItemID(command.CommandID)
 	created := false
 	err := e.store.Write(ctx, func(tx *store.WriteTx) error {
 		existing, err := tx.GetAttentionItem(ctx, itemID)
 		if err == nil {
-			// Completion can follow an already recorded delivery refusal.
-			// Preserve that command's first notice, including its reason.
-			if typ == domain.AttentionSystemHealth && existing.Type == domain.AttentionExecutionFailure {
-				return verifyOperatorFeedbackUndeliverableItem(existing, source, command, domain.AttentionExecutionFailure)
-			}
-			return verifyOperatorFeedbackUndeliverableItem(existing, source, command, typ)
+			// A later notice for the same command preserves the first one,
+			// including its reason: the verifier never compares reasons.
+			return verifyOperatorFeedbackUndeliverableItem(existing, source, command)
 		}
 		if !errors.Is(err, store.ErrNotFound) {
 			return err
@@ -1041,18 +1043,20 @@ func (e *Engine) recordOperatorFeedbackFailure(ctx context.Context, source domai
 			return err
 		}
 		createdAt := e.productionPublication.attentionCreatedAt()
-		var posture *domain.HealthPosture
-		if typ == domain.AttentionSystemHealth {
-			advisory := domain.HealthPostureAdvisory
-			posture = &advisory
-		}
+		advisory := domain.HealthPostureAdvisory
 		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 			ID: itemID, ProjectID: source.ProjectID,
-			Subject: subject, Type: typ, Priority: domain.PriorityHigh,
+			Subject: subject, Type: domain.AttentionSystemHealth, Priority: domain.PriorityHigh,
 			Reason:            reason,
 			RequestedDecision: []domain.Action{domain.ActionAcknowledge},
-			ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
-			CreatedAt: &createdAt, DisplayNames: names, Status: domain.StatusOpen, Posture: posture,
+			// Advisory: the run is already superseded or concluded, so no
+			// operator capability is degraded; the notice only reports that an
+			// accepted feedback action could not be delivered.
+			HealthDiagnostic: &domain.HealthDiagnostic{
+				Code: "operator_feedback_undeliverable", Impairs: domain.ImpairedCapabilityNone,
+			},
+			ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+			CreatedAt: &createdAt, DisplayNames: names, Status: domain.StatusOpen, Posture: &advisory,
 		}, e.productionPublication.approvedRecipes)
 		if err != nil {
 			return err
@@ -1067,16 +1071,25 @@ func (e *Engine) recordOperatorFeedbackFailure(ctx context.Context, source domai
 }
 
 func verifyOperatorFeedbackUndeliverableItem(
-	item domain.AttentionItem, source domain.AttentionItem, command domain.Command, typ domain.AttentionType,
+	item domain.AttentionItem, source domain.AttentionItem, command domain.Command,
 ) error {
 	validSubject := source.Subject.RunID != nil && item.Subject.Type == domain.SubjectRun &&
 		item.Subject.ID == domain.SubjectID(*source.Subject.RunID) && item.Subject.RunID != nil &&
 		*item.Subject.RunID == *source.Subject.RunID
+	// The write path creates the notice as a system_health advisory. A legacy
+	// execution_failure row is tolerated as a transitional backward-compat
+	// case: before #1342 the pre-existing retry-overflow path persisted this
+	// notice as execution_failure under the same deterministic ID, and
+	// rejecting it here would loop reconcile on ErrParentKeyMismatch after an
+	// in-place upgrade. Migration 0075 rewrites those rows to system_health and
+	// removes this tolerance (#1358).
 	if item.ID != operatorFeedbackUndeliverableItemID(command.CommandID) ||
-		item.Type != typ || item.ProjectID != source.ProjectID || !validSubject {
+		(item.Type != domain.AttentionSystemHealth && item.Type != domain.AttentionExecutionFailure) ||
+		item.ProjectID != source.ProjectID || !validSubject {
 		return domain.ErrParentKeyMismatch
 	}
-	if typ == domain.AttentionSystemHealth && (item.Posture == nil || *item.Posture != domain.HealthPostureAdvisory) {
+	if item.Type == domain.AttentionSystemHealth &&
+		(item.Posture == nil || *item.Posture != domain.HealthPostureAdvisory) {
 		return domain.ErrParentKeyMismatch
 	}
 	return nil

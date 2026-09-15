@@ -678,7 +678,22 @@ func TestUndeliverableSpecificationAnswerRecordsFailure(t *testing.T) {
 	}
 }
 
-func TestOversizedOperatorFeedbackInputParksOnlyItsRun(t *testing.T) {
+// oversizedFeedbackScenario is a run driven to a concluded return-to-agent
+// command whose feedback delivery will overflow. It is the shared setup behind
+// both the oversized-parking test and the acknowledge-recovery test.
+type oversizedFeedbackScenario struct {
+	f         specificationFixture
+	engine    *Engine
+	run       domain.Run
+	root      domain.AgentInvocation
+	sourceID  domain.InvocationID
+	head      string
+	concluded domain.AttentionItem
+	command   domain.Command
+}
+
+func newOversizedFeedbackScenario(t *testing.T) oversizedFeedbackScenario {
+	t.Helper()
 	f := newSpecificationFixture(t, false, 4)
 	runID := domain.RunID("run-oversized-operator-feedback")
 	sourceID := productionInvocationID(runID)
@@ -755,31 +770,201 @@ func TestOversizedOperatorFeedbackInputParksOnlyItsRun(t *testing.T) {
 	if transitions, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || transitions != 0 {
 		t.Fatalf("global feedback reconciliation = %d, %v", transitions, err)
 	}
+	return oversizedFeedbackScenario{
+		f: f, engine: engine, run: run, root: root,
+		sourceID: sourceID, head: head, concluded: concluded, command: result.Record,
+	}
+}
+
+// TestUndeliverableOperatorFeedbackNoticeAcceptsAcknowledge covers #1342: the
+// shared undeliverable notice created by both the retry route
+// (recordOperatorFeedbackDeliveryFailure) and the revise route
+// (recordSpecificationRevisionUndeliverable) is a system_health advisory whose
+// offered acknowledge the signet policy accepts, and the notice parks the route
+// so a second reconcile creates nothing.
+func TestUndeliverableOperatorFeedbackNoticeAcceptsAcknowledge(t *testing.T) {
+	t.Run("delivery-failure", func(t *testing.T) {
+		s := newOversizedFeedbackScenario(t)
+		created, err := s.engine.recordOperatorFeedbackDeliveryFailure(t.Context(), s.concluded, s.command)
+		if err != nil || !created {
+			t.Fatalf("recordOperatorFeedbackDeliveryFailure = %t, %v", created, err)
+		}
+		acknowledgeUndeliverableNotice(t, s.f.signet, s.command.CommandID)
+		if parked, err := s.engine.operatorFeedbackUndeliverableRecorded(t.Context(), s.concluded, s.command); err != nil || !parked {
+			t.Fatalf("operatorFeedbackUndeliverableRecorded = %t, %v", parked, err)
+		}
+		if transitions, err := s.engine.reconcileOperatorFeedback(t.Context()); err != nil || transitions != 0 {
+			t.Fatalf("second reconcile = %d, %v", transitions, err)
+		}
+	})
+
+	t.Run("specification-revision", func(t *testing.T) {
+		f := newBlockedImplementationCampaignFixture(t, domain.BlockedKindOwnerDecision, decisionsFixture()[0].Question)
+		if _, err := f.engine.Reconcile(t.Context()); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+		f.assertQuestion(t)
+		snapshot, err := f.signet.GetAttentionItem(t.Context(), f.questionID())
+		if err != nil {
+			t.Fatal(err)
+		}
+		route := domain.AnswerRouteReviseSpecification
+		const commandID = "answer-revise"
+		if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+			CommandID: commandID, DeviceID: "device-1", ExpectedEntityVersion: snapshot.EntityVersion,
+			Payload: signet.DecisionPayload{
+				ItemID: f.questionID(), Action: domain.ActionAnswerAndRetry,
+				ItemVersion: snapshot.Item.ItemVersion, ArtifactDigests: snapshot.Item.ArtifactDigests,
+				Message: "Narrow the scope to the current adapter only.", AnswerRoute: &route,
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// Pass the superseded question and its stored answer command, exactly as
+		// the revise route (enqueueSpecificationRevisionCampaign) does on overflow.
+		var (
+			question domain.AttentionItem
+			command  domain.Command
+		)
+		if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+			var readErr error
+			if question, readErr = tx.GetAttentionItem(t.Context(), f.questionID()); readErr != nil {
+				return readErr
+			}
+			commands, readErr := tx.ListCommandsForItem(t.Context(), f.questionID())
+			if readErr != nil {
+				return readErr
+			}
+			for _, c := range commands {
+				if c.CommandID == commandID {
+					command = c
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// The blocked-campaign fixture leaves productionPublication unwired; the
+		// real daemon always has it, and the shared notice recorder needs it.
+		f.engine.productionPublication = &productionPublicationWorkflow{
+			store: f.store, attention: f.signet, artifacts: f.blobs,
+			now: func() time.Time { return *f.now },
+		}
+		created, err := f.engine.recordSpecificationRevisionUndeliverable(t.Context(), question, command)
+		if err != nil || !created {
+			t.Fatalf("recordSpecificationRevisionUndeliverable = %t, %v", created, err)
+		}
+		acknowledgeUndeliverableNotice(t, f.signet, command.CommandID)
+		if parked, err := f.engine.operatorFeedbackUndeliverableRecorded(t.Context(), question, command); err != nil || !parked {
+			t.Fatalf("operatorFeedbackUndeliverableRecorded = %t, %v", parked, err)
+		}
+		if transitions, err := f.engine.reconcileOperatorFeedback(t.Context()); err != nil || transitions != 0 {
+			t.Fatalf("second reconcile = %d, %v", transitions, err)
+		}
+	})
+}
+
+// TestUndeliverableNoticeToleratesLegacyExecutionFailureRow proves the
+// idempotence guard does not loop reconcile on ErrParentKeyMismatch when it
+// meets a notice persisted as execution_failure before #1342. Such a row
+// survives an in-place upgrade under the same deterministic ID; the verifier
+// tolerates it so the retry route parks instead of erroring. Migration 0075
+// rewrites the row to system_health and drops the tolerance (#1358).
+func TestUndeliverableNoticeToleratesLegacyExecutionFailureRow(t *testing.T) {
+	s := newOversizedFeedbackScenario(t)
+	seedLegacyExecutionFailureNotice(t, s)
+	if parked, err := s.engine.operatorFeedbackUndeliverableRecorded(
+		t.Context(), s.concluded, s.command); err != nil || !parked {
+		t.Fatalf("operatorFeedbackUndeliverableRecorded over legacy row = %t, %v", parked, err)
+	}
+	if transitions, err := s.engine.reconcileOperatorFeedback(t.Context()); err != nil || transitions != 0 {
+		t.Fatalf("reconcile over legacy row = %d, %v", transitions, err)
+	}
+}
+
+// seedLegacyExecutionFailureNotice writes the scenario's undeliverable notice
+// in its pre-#1342 shape: type execution_failure, offering acknowledge, with no
+// advisory posture, under the same deterministic ID the current write path uses.
+func seedLegacyExecutionFailureNotice(t *testing.T, s oversizedFeedbackScenario) {
+	t.Helper()
+	itemID := operatorFeedbackUndeliverableItemID(s.command.CommandID)
+	runID := *s.concluded.Subject.RunID
+	subject := domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID}
+	if err := s.f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		names, err := tx.DisplayNamesFor(t.Context(), s.concluded.ProjectID, subject)
+		if err != nil {
+			return err
+		}
+		createdAt := s.engine.productionPublication.attentionCreatedAt()
+		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+			ID: itemID, ProjectID: s.concluded.ProjectID,
+			Subject: subject, Type: domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
+			Reason:            "Operator feedback input cannot be delivered to the implementation agent.",
+			RequestedDecision: []domain.Action{domain.ActionAcknowledge},
+			ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
+			CreatedAt: &createdAt, DisplayNames: names, Status: domain.StatusOpen,
+		}, s.engine.productionPublication.approvedRecipes)
+		if err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(t.Context(), item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// acknowledgeUndeliverableNotice submits acknowledge against the shared
+// undeliverable notice for a command and requires the policy to accept it. It
+// does not assert the item closes: acknowledge on a system_health item records
+// the decision without a status transition (signet actionOutcome outcomeRecords).
+func acknowledgeUndeliverableNotice(t *testing.T, attention *signet.Service, commandID string) {
+	t.Helper()
+	noticeID := operatorFeedbackUndeliverableItemID(commandID)
+	notice, err := attention.GetAttentionItem(t.Context(), noticeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := attention.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "ack-" + commandID, DeviceID: "device-1",
+		ExpectedEntityVersion: notice.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: notice.Item.ID, ItemVersion: notice.Item.ItemVersion,
+			PRHeadSHA: notice.Item.PRHeadSHA, ArtifactDigests: notice.Item.ArtifactDigests,
+			Action: domain.ActionAcknowledge,
+		},
+	}); err != nil {
+		t.Fatalf("acknowledge undeliverable notice: %v", err)
+	}
+}
+
+func TestOversizedOperatorFeedbackInputParksOnlyItsRun(t *testing.T) {
+	s := newOversizedFeedbackScenario(t)
 	patch := bytes.Repeat([]byte("x"), int(exec.ProductionMaxInputBytes))
-	created, err := engine.persistImplementationFeedback(
-		t.Context(), concluded, result.Record, run, root, sourceID,
-		strings.Repeat("1", 40), head, patch,
+	created, err := s.engine.persistImplementationFeedback(
+		t.Context(), s.concluded, s.command, s.run, s.root, s.sourceID,
+		strings.Repeat("1", 40), s.head, patch,
 	)
 	if err != nil || !created {
 		t.Fatalf("oversized feedback persistence = %t, %v", created, err)
 	}
 
-	failureID := operatorFeedbackUndeliverableItemID(result.Record.CommandID)
+	failureID := operatorFeedbackUndeliverableItemID(s.command.CommandID)
 	var failure domain.AttentionItem
-	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+	if err := s.f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		var readErr error
 		failure, readErr = tx.GetAttentionItem(t.Context(), failureID)
 		return readErr
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if failure.Type != domain.AttentionExecutionFailure || failure.Status != domain.StatusOpen ||
+	if failure.Type != domain.AttentionSystemHealth || failure.Status != domain.StatusOpen ||
+		failure.Posture == nil || *failure.Posture != domain.HealthPostureAdvisory ||
 		!slices.Equal(failure.RequestedDecision, []domain.Action{domain.ActionAcknowledge}) {
 		t.Fatalf("oversized feedback failure = %#v", failure)
 	}
 	var markerErr error
-	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
-		_, markerErr = tx.GetOutbox(t.Context(), string(operatorFeedbackInvocationID(result.Record.CommandID)))
+	if err := s.f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		_, markerErr = tx.GetOutbox(t.Context(), string(operatorFeedbackInvocationID(s.command.CommandID)))
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -787,18 +972,18 @@ func TestOversizedOperatorFeedbackInputParksOnlyItsRun(t *testing.T) {
 	if !errors.Is(markerErr, store.ErrNotFound) {
 		t.Fatalf("feedback invocation marker = %v, want ErrNotFound", markerErr)
 	}
-	parked, err := engine.operatorFeedbackUndeliverableRecorded(t.Context(), concluded, result.Record)
+	parked, err := s.engine.operatorFeedbackUndeliverableRecorded(t.Context(), s.concluded, s.command)
 	if err != nil || !parked {
 		t.Fatalf("operatorFeedbackUndeliverableRecorded = %t, %v", parked, err)
 	}
-	if transitions, err := engine.productionPublication.reconcileOperatorFeedback(
+	if transitions, err := s.engine.productionPublication.reconcileOperatorFeedback(
 		t.Context(),
 	); err != nil || transitions != 0 {
 		t.Fatalf("publication feedback reconciliation = %d, %v", transitions, err)
 	}
-	if replay, err := engine.persistImplementationFeedback(
-		t.Context(), concluded, result.Record, run, root, sourceID,
-		strings.Repeat("1", 40), head, patch,
+	if replay, err := s.engine.persistImplementationFeedback(
+		t.Context(), s.concluded, s.command, s.run, s.root, s.sourceID,
+		strings.Repeat("1", 40), s.head, patch,
 	); err != nil || replay {
 		t.Fatalf("replayed oversized feedback persistence = %t, %v", replay, err)
 	}
